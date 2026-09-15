@@ -30,6 +30,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
+from robothor.flags.store import GOVERNED_FLAGS
+
+
 def _norm(value: object) -> str:
     """A flag value as the store and the API spell it."""
     if value is True:
@@ -39,76 +42,23 @@ def _norm(value: object) -> str:
     return str(value)
 
 
-def _engine_readers() -> dict[str, tuple[object, str]]:
-    """flag -> (the engine accessor, the env var that gates it, or "").
-
-    Enumerated, not derived, so adding a governed flag stops HERE and is
-    considered rather than being silently absent from the comparison. The gate
-    matters: a two-var ladder's accessor returns ``off`` while its
-    subsystem-enabled var is unset, which is a fact about that OTHER flag, not
-    about the value of the one this page is rendering. Setting the gate isolates
-    the question to "what does this flag resolve to when nobody has written it".
-    """
-    from robothor.engine import feature_flags as ff
-
-    return {
-        "ROBOTHOR_ADMISSION_MODE": (ff.execution_mode_admission_mode, "ROBOTHOR_ADMISSION_ENABLED"),
-        "ROBOTHOR_APPROVAL_MODE": (ff.approval_mode, "ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED"),
-        "ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE": (
-            ff.benchmark_decontamination_mode,
-            "ROBOTHOR_BENCHMARK_DECONTAMINATION_ENABLED",
-        ),
-        "ROBOTHOR_BENCHMARK_SANDBOX_MODE": (
-            ff.benchmark_sandbox_mode,
-            "ROBOTHOR_BENCHMARK_SANDBOX_ENABLED",
-        ),
-        "ROBOTHOR_COMPLETION_CONTRACTS_MODE": (
-            ff.completion_contract_mode,
-            "ROBOTHOR_COMPLETION_CONTRACTS_ENABLED",
-        ),
-        "ROBOTHOR_DELIVERABLE_CONTRACT_MODE": (
-            ff.deliverable_contract_mode,
-            "ROBOTHOR_DELIVERABLE_CONTRACT_ENABLED",
-        ),
-        "ROBOTHOR_DNC_MODE": (ff.do_not_contact_mode, ""),
-        "ROBOTHOR_EXEC_ALLOWLIST_STRICT_MODE": (
-            ff.exec_allowlist_mode,
-            "ROBOTHOR_EXEC_ALLOWLIST_STRICT_ENABLED",
-        ),
-        "ROBOTHOR_HONESTY_SUITE_MODE": (ff.honesty_suite_mode, ""),
-        "ROBOTHOR_INJECTION_SCAN_MODE": (ff.injection_scan_mode, "ROBOTHOR_INJECTION_SCAN_ENABLED"),
-        "ROBOTHOR_JUDGE_ENABLED": (ff.goal_judge_enabled, ""),
-        "ROBOTHOR_PER_USER_SESSIONS": (ff.per_user_sessions_mode, ""),
-        "ROBOTHOR_RBAC_MODE": (ff.rbac_enforcement_mode, "ROBOTHOR_RBAC_ENABLED"),
-        "ROBOTHOR_RIP_13_MODE": (ff.symbolic_memory_mode, "ROBOTHOR_RIP_13_ENABLED"),
-        "ROBOTHOR_RIP_1_ENABLED": (lambda: ff.is_rip_enabled(1), ""),
-        "ROBOTHOR_RIP_4_ENABLED": (lambda: ff.is_rip_enabled(4), ""),
-        "ROBOTHOR_RIP_5_ENABLED": (ff.curator_enabled, ""),
-        "ROBOTHOR_RIP_7_MODE": (ff.rip_7_enforcement_mode, "ROBOTHOR_RIP_7_ENABLED"),
-        "ROBOTHOR_RUN_VERIFICATION_MODE": (
-            ff.run_verification_mode,
-            "ROBOTHOR_RUN_VERIFICATION_ENABLED",
-        ),
-        "ROBOTHOR_SANDBOX_DEFAULT_MODE": (
-            ff.sandbox_default_mode,
-            "ROBOTHOR_SANDBOX_DEFAULT_ENABLED",
-        ),
-        "ROBOTHOR_TOOL_VERIFY_MODE": (ff.tool_verify_mode, "ROBOTHOR_TOOL_VERIFY_ENABLED"),
-    }
+# The flag -> engine-accessor table moved to ``conftest.py`` as the
+# ``engine_readers`` fixture: a second suite (``test_settings_router.py``) now
+# needs it, for the same reason this one does, and two copies of a
+# hand-maintained table is the drift this file exists to close. The guard below
+# is unchanged -- a governed flag nobody mapped still stops here.
 
 
-def test_every_governed_flag_has_an_engine_reader_here():
+def test_every_governed_flag_has_an_engine_reader_here(engine_readers):
     """A governed flag nobody mapped is a flag this comparison cannot make."""
-    from robothor.flags.store import GOVERNED_FLAGS
-
-    assert set(_engine_readers()) == set(GOVERNED_FLAGS), (
+    assert set(engine_readers) == set(GOVERNED_FLAGS), (
         "a governed flag was added or removed without updating this table — "
         "the page's unset default would then go unchecked against the engine"
     )
 
 
-@pytest.mark.parametrize("name", sorted(_engine_readers()))
-def test_the_displayed_unset_default_is_the_engines_own(name):
+@pytest.mark.parametrize("name", sorted(GOVERNED_FLAGS))
+def test_the_displayed_unset_default_is_the_engines_own(name, engine_readers):
     """The one assertion: what the page shows == what the engine runs.
 
     Both sides are computed with the environment cleared and the store answering
@@ -118,7 +68,7 @@ def test_the_displayed_unset_default_is_the_engines_own(name):
 
     from robothor.flags import store
 
-    reader, gate = _engine_readers()[name]
+    reader, gate = engine_readers[name]
     env = {gate: "1"} if gate else {}
     with (
         patch.dict(os.environ, env, clear=True),
@@ -133,7 +83,7 @@ def test_the_displayed_unset_default_is_the_engines_own(name):
     )
 
 
-@pytest.mark.parametrize("name", sorted(_engine_readers()))
+@pytest.mark.parametrize("name", sorted(GOVERNED_FLAGS))
 def test_the_displayed_unset_default_is_a_value_the_flag_accepts(name):
     """It must also be settable. A default outside ``valid_values`` renders a
     picker whose current selection is not one of its options, and the PATCH that

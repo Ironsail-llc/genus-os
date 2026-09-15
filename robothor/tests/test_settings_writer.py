@@ -24,7 +24,8 @@ from pathlib import Path  # noqa: TC003 - used in runtime annotations below
 import pytest
 import yaml
 
-from robothor.settings.sources import write_setting
+from robothor.settings.config_file import write_top_level
+from robothor.settings.sources import write_setting, write_settings
 
 
 @pytest.fixture
@@ -132,15 +133,19 @@ def test_returns_the_path_it_wrote(config_path: Path) -> None:
 
 def test_the_cli_uses_this_writer(tmp_path, monkeypatch) -> None:
     """`genus config set` must not grow a second implementation. Asserted by
-    patching the writer and checking the command went through it."""
+    patching the writer and checking the command went through it.
+
+    Patched at ``robothor.settings.operator``, which is where the CLI's write
+    path now lives — the same module ``PATCH /api/settings`` calls, so this
+    also pins that neither surface can route around the shared writer.
+    """
     import argparse
 
     from robothor.cli import config_cmd
 
     calls: list[tuple] = []
     monkeypatch.setattr(
-        config_cmd,
-        "write_setting",
+        "robothor.settings.operator.write_settings",
         lambda *a, **k: (calls.append((a, k)), tmp_path / "config.yaml")[1],
     )
     monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
@@ -151,4 +156,236 @@ def test_the_cli_uses_this_writer(tmp_path, monkeypatch) -> None:
 
     assert rc == 0
     assert calls, "genus config set bypassed the shared settings writer"
-    assert calls[0][0][:2] == ("auth", "local_login")
+    # One change, spelled (group, field, value, other spellings).
+    assert calls[0][0][0] == [("auth", "local_login", True, ("GENUS_LOCAL_LOGIN",))]
+
+
+# ── C1: every scalar must round-trip through the file ────────────────────────
+
+#: Values an operator can type into the Config form. Each one is a string the
+#: field accepts, so ``validate()`` passes it through -- the corruption, if any,
+#: happens strictly inside the writer.
+#:
+#: ``- item`` is the one that actually broke: a YAML block-sequence indicator is
+#: ``-`` followed by a space, and the old hand-rolled quoting rule did not list
+#: ``-``. It wrote the value bare, the file stopped parsing, and the page an
+#: operator would use to undo it started returning 500.
+ROUND_TRIP_CASES = [
+    "- item",
+    "- ",
+    "? x",
+    ": x",
+    "yes",
+    "no",
+    "on",
+    "off",
+    "null",
+    "~",
+    "true",
+    "1e3",
+    "0644",
+    "3",
+    "3.5",
+    "#comment",
+    "@at",
+    "&anchor",
+    "*alias",
+    "!!python/object/apply:os.system",
+    "{a: 1}",
+    "[1, 2]",
+    "a: b",
+    "value\nmax_concurrent_agents: 999",
+    "  leading and trailing  ",
+    "",
+    "/var/log/robothor",
+    "plain",
+]
+
+
+@pytest.mark.parametrize("value", ROUND_TRIP_CASES)
+def test_every_scalar_round_trips_as_the_same_string(config_path: Path, value: str) -> None:
+    """What was written is what the instance reads back. No exceptions.
+
+    The rule cannot be a list of characters to quote -- that list was wrong
+    once and would be wrong again. The writer emits through the same YAML
+    dumper the platform loads with, so the two cannot disagree.
+    """
+    write_setting("paths", "log_dir", value, path=config_path)
+
+    text = config_path.read_text(encoding="utf-8")
+    assert yaml.safe_load(text)["settings"]["paths"]["log_dir"] == value, text
+
+
+def test_a_value_that_would_not_round_trip_is_refused_rather_than_written(
+    config_path: Path, monkeypatch
+) -> None:
+    """The guard is the round trip itself, not an enumeration of bad inputs.
+
+    If a future dumper change (or a value nobody imagined) produced a file that
+    reads back as something else, the operator gets an error and the file they
+    had -- never a 200 and an instance that will not start.
+    """
+    config_path.write_text("settings:\n  paths:\n    log_dir: /old\n", encoding="utf-8")
+    original = config_path.read_text(encoding="utf-8")
+
+    # A renderer that writes a block-sequence indicator bare: exactly the bug.
+    monkeypatch.setattr("robothor.settings.config_file._render", lambda _value: "- item")
+    with pytest.raises(OSError):
+        write_setting("paths", "log_dir", "- item", path=config_path)
+
+    assert config_path.read_text(encoding="utf-8") == original
+
+
+# ── C2: concurrent writers must not lose each other's changes ────────────────
+
+
+def test_two_concurrent_writers_both_land(config_path: Path) -> None:
+    """Read-splice-replace with no lock is a lost update that reports success.
+
+    The bridge's handlers are plain ``def``, so FastAPI runs them in its worker
+    threadpool -- genuinely parallel. The barrier below forces the interleaving
+    a threadpool produces on its own: both threads read the file before either
+    replaces it. Without a lock the second replace discards the first key and
+    both callers are told the change applied.
+    """
+    import threading
+
+    config_path.write_text("settings:\n", encoding="utf-8")
+    start = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def _write(group: str, field: str, value: object) -> None:
+        try:
+            start.wait(timeout=5)
+            write_setting(group, field, value, path=config_path)
+        except BaseException as exc:  # noqa: BLE001 - reported below
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=_write, args=("paths", "log_dir", "/var/log/race")),
+        threading.Thread(target=_write, args=("engine", "max_concurrent_agents", 8)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert not errors, errors
+    block = _block(config_path)
+    assert block["paths"]["log_dir"] == "/var/log/race"
+    assert block["engine"]["max_concurrent_agents"] == 8
+
+
+# ── I3: a batch is one splice and one replace ────────────────────────────────
+
+
+def test_a_batch_of_settings_is_written_in_one_replace(config_path: Path, monkeypatch) -> None:
+    """Per-field ``os.replace`` makes a batch atomic per FIELD, not per request:
+    a failure on the second field leaves the first one written."""
+    replaces: list[object] = []
+    real_replace = Path.replace
+
+    def _counting_replace(self, target):
+        replaces.append(target)
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", _counting_replace)
+    write_settings(
+        [
+            ("paths", "log_dir", "/var/log/batch", ()),
+            ("engine", "max_concurrent_agents", 8, ()),
+        ],
+        path=config_path,
+    )
+
+    assert len(replaces) == 1, "a batch must be one atomic replace, not one per field"
+    block = _block(config_path)
+    assert block["paths"]["log_dir"] == "/var/log/batch"
+    assert block["engine"]["max_concurrent_agents"] == 8
+
+
+def test_a_failed_batch_leaves_the_file_byte_identical(config_path: Path, monkeypatch) -> None:
+    config_path.write_text("settings:\n  paths:\n    log_dir: /old\n", encoding="utf-8")
+    original = config_path.read_bytes()
+
+    def _boom(self, target):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(Path, "replace", _boom)
+    with pytest.raises(OSError):
+        write_settings(
+            [
+                ("paths", "log_dir", "/var/log/one", ()),
+                ("engine", "max_concurrent_agents", 8, ()),
+            ],
+            path=config_path,
+        )
+
+    assert config_path.read_bytes() == original
+    assert sorted(p.name for p in config_path.parent.iterdir()) == ["config.yaml"]
+
+
+# ── N4: the top-level writer takes the same lock ─────────────────────────────
+
+
+def test_a_top_level_write_and_a_settings_write_do_not_lose_each_other(
+    config_path: Path,
+) -> None:
+    """``write_top_level`` is the first-run wizard's ``setup_completed_at``, and
+    it edits the same document as a settings write through its own
+    read-modify-write. Unlocked, the wizard finishing while an operator saves
+    the Config form drops one of the two -- and the lock that was added for
+    ``write_settings`` did not cover it.
+    """
+    import threading
+
+    config_path.write_text("settings:\n", encoding="utf-8")
+    start = threading.Barrier(2, timeout=5)
+    errors: list[BaseException] = []
+
+    def _run(fn) -> None:
+        try:
+            start.wait(timeout=5)
+            fn()
+        except threading.BrokenBarrierError:
+            fn()  # the lock won the race; the work still has to happen
+        except BaseException as exc:  # noqa: BLE001 - reported below
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(
+            target=_run,
+            args=(lambda: write_top_level("setup_completed_at", "2026-09-15", path=config_path),),
+        ),
+        threading.Thread(
+            target=_run,
+            args=(lambda: write_setting("paths", "log_dir", "/var/log/both", path=config_path),),
+        ),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert not errors, errors
+    loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert loaded["setup_completed_at"] == "2026-09-15"
+    assert loaded["settings"]["paths"]["log_dir"] == "/var/log/both"
+
+
+def test_the_top_level_writer_holds_the_settings_lock(config_path: Path, monkeypatch) -> None:
+    """Asserted at the seam as well as by outcome: a barrier test can pass by
+    luck on a fast machine, and this cannot."""
+    from robothor.settings import config_file
+
+    held: list[bool] = []
+    real = config_file._write_atomically
+
+    def _spy(path, text):
+        held.append(config_file._WRITE_LOCK.locked())
+        return real(path, text)
+
+    monkeypatch.setattr(config_file, "_write_atomically", _spy)
+    write_top_level("setup_completed_at", "2026-09-15", path=config_path)
+
+    assert held == [True], "write_top_level replaced the file without holding the write lock"

@@ -450,3 +450,89 @@ def _fresh_settings_cache():
     reset_settings()
     yield
     reset_settings()
+
+
+# ── the engine's own flag readers ────────────────────────────────────────────
+#
+# Lives here rather than in one test file because TWO suites now need it, and
+# they need it for the same reason: the only honest check of what a page shows
+# for a guardrail is what the ENGINE resolves for it. Two pages agreeing with
+# each other proved nothing -- ``normalise`` was wrong and both pages were
+# wrong together, which is precisely how the 2026-09-15 re-review found a
+# guardrail reported ``false`` while the engine ran it.
+#
+# Enumerated, not derived, so adding a governed flag stops HERE and is
+# considered rather than silently dropping out of the comparison; the guard
+# test in ``test_controls_unset_defaults.py`` fails when the table and
+# ``GOVERNED_FLAGS`` disagree.
+
+
+def engine_flag_readers() -> dict[str, tuple[object, str]]:
+    """flag -> (the engine accessor, the env var that gates it, or "").
+
+    The gate matters: a two-var ladder's accessor returns ``off`` while its
+    subsystem-enabled var is unset, which is a fact about that OTHER flag, not
+    about the value of the one a page is rendering. Setting the gate isolates
+    the question to "what does this flag itself resolve to".
+    """
+    from robothor.engine import feature_flags as ff
+
+    return {
+        "ROBOTHOR_ADMISSION_MODE": (ff.execution_mode_admission_mode, "ROBOTHOR_ADMISSION_ENABLED"),
+        "ROBOTHOR_APPROVAL_MODE": (ff.approval_mode, "ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED"),
+        "ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE": (
+            ff.benchmark_decontamination_mode,
+            "ROBOTHOR_BENCHMARK_DECONTAMINATION_ENABLED",
+        ),
+        "ROBOTHOR_BENCHMARK_SANDBOX_MODE": (
+            ff.benchmark_sandbox_mode,
+            "ROBOTHOR_BENCHMARK_SANDBOX_ENABLED",
+        ),
+        "ROBOTHOR_COMPLETION_CONTRACTS_MODE": (
+            ff.completion_contract_mode,
+            "ROBOTHOR_COMPLETION_CONTRACTS_ENABLED",
+        ),
+        "ROBOTHOR_DELIVERABLE_CONTRACT_MODE": (
+            ff.deliverable_contract_mode,
+            "ROBOTHOR_DELIVERABLE_CONTRACT_ENABLED",
+        ),
+        "ROBOTHOR_DNC_MODE": (ff.do_not_contact_mode, ""),
+        "ROBOTHOR_EXEC_ALLOWLIST_STRICT_MODE": (
+            ff.exec_allowlist_mode,
+            "ROBOTHOR_EXEC_ALLOWLIST_STRICT_ENABLED",
+        ),
+        "ROBOTHOR_HONESTY_SUITE_MODE": (ff.honesty_suite_mode, ""),
+        "ROBOTHOR_INJECTION_SCAN_MODE": (ff.injection_scan_mode, "ROBOTHOR_INJECTION_SCAN_ENABLED"),
+        "ROBOTHOR_JUDGE_ENABLED": (ff.goal_judge_enabled, ""),
+        "ROBOTHOR_PER_USER_SESSIONS": (ff.per_user_sessions_mode, ""),
+        "ROBOTHOR_RBAC_MODE": (ff.rbac_enforcement_mode, "ROBOTHOR_RBAC_ENABLED"),
+        "ROBOTHOR_RIP_13_MODE": (ff.symbolic_memory_mode, "ROBOTHOR_RIP_13_ENABLED"),
+        "ROBOTHOR_RIP_1_ENABLED": (lambda: ff.is_rip_enabled(1), ""),
+        "ROBOTHOR_RIP_4_ENABLED": (lambda: ff.is_rip_enabled(4), ""),
+        "ROBOTHOR_RIP_5_ENABLED": (ff.curator_enabled, ""),
+        "ROBOTHOR_RIP_7_MODE": (ff.rip_7_enforcement_mode, "ROBOTHOR_RIP_7_ENABLED"),
+        "ROBOTHOR_RUN_VERIFICATION_MODE": (
+            ff.run_verification_mode,
+            "ROBOTHOR_RUN_VERIFICATION_ENABLED",
+        ),
+        "ROBOTHOR_SANDBOX_DEFAULT_MODE": (
+            ff.sandbox_default_mode,
+            "ROBOTHOR_SANDBOX_DEFAULT_ENABLED",
+        ),
+        "ROBOTHOR_TOOL_VERIFY_MODE": (ff.tool_verify_mode, "ROBOTHOR_TOOL_VERIFY_ENABLED"),
+    }
+
+
+def engine_flag_value(value: object) -> str:
+    """An engine accessor's answer, spelled the way the store and the API spell it."""
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    return str(value)
+
+
+@pytest.fixture
+def engine_readers():
+    """:func:`engine_flag_readers`, for a test that wants it as a fixture."""
+    return engine_flag_readers()

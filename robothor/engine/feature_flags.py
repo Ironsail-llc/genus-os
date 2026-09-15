@@ -24,7 +24,14 @@ from typing import Literal
 
 logger = logging.getLogger(__name__)
 
-_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+#: Imported, not declared. This set used to exist here, in
+#: ``scripts/flag_audit.py`` and (implicitly) nowhere else — and when the
+#: Controls and Settings pages grew their own reading of the same variables
+#: they got it wrong, reporting a guardrail ``false`` while this module ran it.
+#: One set, so a page and the engine cannot disagree about what "on" is.
+#: The store imports nothing from the engine, so this direction is safe;
+#: ``_resolve_raw`` below already goes through the same module.
+from robothor.flags.store import TRUE_VALUES as _TRUE_VALUES  # noqa: E402
 
 Rip7Mode = Literal["off", "observe", "alert", "enforce"]
 _VALID_RIP_7_MODES = frozenset(("observe", "alert", "enforce"))

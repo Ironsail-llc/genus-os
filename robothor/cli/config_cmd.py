@@ -27,30 +27,40 @@ credential in a terminal, a screenshot or a scrollback buffer.
 from __future__ import annotations
 
 import argparse  # noqa: TC003
-import difflib
-import hashlib
 import json
 import sys
-from functools import lru_cache
-from typing import Any
 
-from robothor.settings import provenance
-from robothor.settings.config_file import write_setting
-from robothor.settings.provenance import (
+from robothor.settings import operator
+from robothor.settings.operator import (
+    DEFAULT_UNITS,  # noqa: F401 — re-exported; this module named it first
     SOURCE_DEFAULT,
     SOURCE_ENV,  # noqa: F401 — re-exported for callers reading provenance labels
     SOURCE_FILE,  # noqa: F401
-    SOURCE_RUNTIME,
+    SOURCE_RUNTIME,  # noqa: F401
 )
 
 __all__ = ["cmd_config"]
 
-#: What a setting whose declaration names no units falls back to. It should
-#: never be reached -- ``SettingsGroup`` stamps every field with its group's
-#: units and ``tests/test_settings_registry.py`` fails if one is missing -- but
-#: naming too FEW units is how a change reports applied and is not, so the
-#: fallback is the conservative pair rather than nothing.
-DEFAULT_UNITS: tuple[str, ...] = ("robothor-engine", "robothor-bridge")
+# ── the shared implementation ────────────────────────────────────────────────
+#
+# Every verb below routes by the same metadata, coerces with the same coercer
+# and writes through the same writer as ``PATCH /api/settings`` on the bridge:
+# they are the SAME function objects, bound here under the private names this
+# module and the doctor's checks already call them by.
+# ``crm/bridge/tests/test_settings_router.py::
+# test_the_router_and_the_cli_call_the_same_functions`` asserts that identity,
+# so a future edit cannot quietly fork one surface from the other.
+
+_record = operator.record
+_coerce = operator.coerce
+_resolve = operator.resolve
+_units_for = operator.units_for
+_agree = operator.agree
+_mask = operator.mask
+_digest = operator.digest
+_display = operator.display
+_db_rows = operator.db_rows
+_db_value = operator.db_value
 
 # ── shared helpers ───────────────────────────────────────────────────────────
 
@@ -75,92 +85,20 @@ def _operator_name() -> str:
         return "cli"
 
 
-def _record(name: str) -> dict[str, Any] | None:
-    from robothor.settings.registry import field_index
-
-    return field_index().get(name)
-
-
 def _unknown_name(name: str) -> int:
-    """Exit code 2 and the closest declared names.
+    """Exit code 2 and the closest declared names, on TWO stderr lines.
 
     A typo in a variable name is otherwise indistinguishable from a setting
     that does not exist yet, and both look like the command doing nothing.
-    """
-    from robothor.settings.registry import field_index
 
-    candidates = sorted({record["env"] for record in field_index().values()})
-    close = difflib.get_close_matches(name.upper(), candidates, n=3, cutoff=0.6)
-    _err(f"{name}: no such setting.")
-    if close:
-        _err("Did you mean: " + ", ".join(close) + "?")
-    else:
-        _err("`genus config list` shows every declared setting.")
+    Two lines, as this command has always printed: the failure on the first,
+    the fix on the second. The library returns them as a pair for exactly this
+    reason — the bridge joins them into one HTTP string, and a terminal is not
+    an HTTP body. ``robothor/cli/tests/test_config_cmd.py`` pins both lines.
+    """
+    for line in operator.unknown_name_lines(name):
+        _err(line)
     return 2
-
-
-def _digest(value: str) -> str:
-    """A short, stable fingerprint of a secret — never the secret."""
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:8]
-
-
-def _mask(value: Any) -> str:
-    text = "" if value is None else str(value)
-    return f"<set, sha256:{_digest(text)}>" if text else "<unset>"
-
-
-def _display(record: dict[str, Any], value: Any) -> str:
-    return _mask(value) if record["secret"] else str(value)
-
-
-@lru_cache(maxsize=1)
-def _db_rows() -> dict[str, str]:
-    """Operator-written ``feature_flags`` rows, read once.
-
-    One query rather than one per flag: ``genus config list`` walks every
-    declared setting, and twenty round trips (or twenty connection timeouts on
-    a box whose database is down) is the difference between a command that
-    answers and one an operator stops running.
-
-    A database that is down or absent is not an error here -- flags then
-    resolve from the environment, exactly as they do in the engine. Rows
-    stamped by the migration seed are "unset", the same rule
-    ``robothor.flags.store`` applies.
-    """
-    try:
-        from robothor.db.connection import get_connection
-        from robothor.flags.store import _SEED_ACTOR
-
-        with get_connection() as conn, conn.cursor() as cur:
-            cur.execute("SELECT name, value, updated_by FROM feature_flags")
-            rows = cur.fetchall()
-    except Exception:
-        return {}
-    return {name: value for name, value, updated_by in rows if updated_by != _SEED_ACTOR}
-
-
-def _db_value(record: dict[str, Any]) -> str | None:
-    """An operator-written ``feature_flags`` row for this field, or None."""
-    return _db_rows().get(record["env"]) if record["governed"] else None
-
-
-def _resolve(record: dict[str, Any]) -> tuple[Any, str, str]:
-    """``(value, source, detail)`` — what the platform reads, and why.
-
-    The DB layer is resolved here rather than in ``settings.provenance``: only
-    governed flags have one, and the settings package has no business opening a
-    database connection to answer what a variable is set to.
-    """
-    db = _db_value(record)
-    if db is not None:
-        return db, SOURCE_RUNTIME, f"feature_flags row for {record['env']}"
-    return provenance.resolve(record)
-
-
-def _units_for(record: dict[str, Any]) -> tuple[str, ...]:
-    """The units declared on the field itself (see ``declare()``)."""
-    declared = record["restart_units"]
-    return DEFAULT_UNITS if declared is None else tuple(declared)
 
 
 # ── get / explain / list ─────────────────────────────────────────────────────
@@ -296,24 +234,6 @@ def _cmd_list(args: argparse.Namespace) -> int:
 # ── set ──────────────────────────────────────────────────────────────────────
 
 
-def _coerce(record: dict[str, Any], raw: Any) -> Any:
-    """Validate ``raw`` against the field's own type, returning the value.
-
-    The model does the coercing, so ``genus config set`` cannot write a value
-    that would fail on the next start -- which is the failure this command
-    exists to prevent, not to relocate. ``validate`` uses it for a second
-    reason: a value from a YAML file is already typed and one from the
-    environment is always text, so the only honest comparison of the two is
-    the one made after both have been through the field.
-    """
-    from robothor.settings.model import GenusSettings
-
-    group, field = record["field"].split(".", 1)
-    model = GenusSettings.model_fields[group].annotation
-    instance = model(**{field: raw})  # type: ignore[misc]
-    return getattr(instance, field)
-
-
 def _set_result(applied: bool, pending: list[str], errors: list[str], as_json: bool) -> int:
     if as_json:
         print(
@@ -334,99 +254,42 @@ def _set_result(applied: bool, pending: list[str], errors: list[str], as_json: b
 
 
 def _cmd_set(args: argparse.Namespace) -> int:
+    """Route one change by the field's own metadata, and say what it cost.
+
+    The routing, the coercion, the refusals and the write all live in
+    ``robothor.settings.operator``, which the bridge's ``PATCH /api/settings``
+    calls too. What is left here is the CLI's half: an exit code and a line of
+    text. A governed flag comes back with no units -- it resolves from the DB
+    on the engine's next read (a five-second TTL), so it is live.
+    """
     as_json = getattr(args, "json", False)
     record = _record(args.name)
     if record is None:
         return _unknown_name(args.name)
 
-    if record["secret"]:
-        return _set_result(
-            False,
-            [],
-            [
-                f"{record['env']} holds a credential. `genus config set` never writes "
-                "secrets -- config.yaml is a plain file that gets copied into bug "
-                "reports. Store it with `genus vault set <key>` and give the service "
-                "the key; `genus vault list` shows the naming in use."
-            ],
-            as_json,
-        )
-
-    if record["governed"]:
-        from robothor.flags import store
-
-        allowed = store.valid_values_for(record["env"])
-        if args.value not in allowed:
-            return _set_result(
-                False,
-                [],
-                [
-                    f"{record['env']}: {args.value!r} is not one of {', '.join(allowed)}. "
-                    "The engine does not honour any other value, so storing it would "
-                    "show one thing and do another."
-                ],
-                as_json,
-            )
-        actor = f"operator:{_operator_name()}"
-        try:
-            store.set_flag(record["env"], args.value, actor, "genus config set")
-        except Exception as exc:  # a DB that is down must say so, not half-apply
-            return _set_result(False, [], [f"{record['env']}: {exc}"], as_json)
-        # Governed flags resolve from the DB on the engine's next read (a
-        # five-second TTL), so this is live -- no restart, no file to edit.
-        return _set_result(True, [], [], as_json)
-
     try:
-        value = _coerce(record, args.value)
-    except Exception as exc:
-        first = str(exc).splitlines()[0]
-        return _set_result(
-            False, [], [f"{record['env']}: {args.value!r} is not a valid value ({first})"], as_json
+        value = operator.validate(record, args.value)
+        pending = operator.apply_change(
+            record,
+            value,
+            actor=f"operator:{_operator_name()}",
+            reason="genus config set",
         )
+    except operator.SettingError as exc:
+        return _set_result(False, [], [exc.message], as_json)
 
-    from robothor.settings.sources import config_yaml_path
-
-    path = config_yaml_path()
-    if path is None:
-        return _set_result(
-            False, [], ["no workspace: set ROBOTHOR_WORKSPACE and try again"], as_json
-        )
-
-    group, field = record["field"].split(".", 1)
-    spellings = (record["env"], *record["aliases"])
-    try:
-        # One writer, shared with the first-run wizard's operator step: two
-        # implementations of "store a setting in config.yaml" would be two
-        # opinions about indentation, comments and deprecated spellings, and a
-        # surface that reports "applied" while the service reads something else.
-        write_setting(group, field, value, names=spellings, path=path)
-    except OSError as exc:
-        return _set_result(False, [], [f"{path}: {exc}"], as_json)
-
-    units = list(_units_for(record)) if record["restart_required"] else []
-    return _set_result(True, units, [], as_json)
+    return _set_result(True, list(pending), [], as_json)
 
 
 # ── validate (an alias for `genus doctor`) ───────────────────────────────────
 
-#: Helpers the doctor's own checks call. ``_agree`` and ``_units_for`` stay
-#: here because ``set`` and ``explain`` use them too; the checks that used to
+#: ``_agree`` and ``_units_for``, which the doctor's checks import from here,
+#: are now ``robothor.settings.operator`` functions bound at the top of this
+#: module — the checks keep the names they were written against while the
+#: implementation is the one the bridge also calls. The checks that used to
 #: live in this section moved to ``robothor/doctor/checks/`` whole, so that
 #: `genus doctor`, the bridge's ``/api/doctor`` and this command all ask the
 #: same questions rather than three similar ones.
-
-
-def _agree(record: dict[str, Any], file_value: Any, env_value: str) -> bool:
-    """Do a typed file value and a raw environment string mean the same thing?
-
-    Falls back to comparing the text when either side will not coerce: a value
-    the field cannot hold is a real disagreement worth reporting, and it is
-    reported by the same line as any other.
-    """
-    try:
-        return bool(_coerce(record, file_value) == _coerce(record, env_value))
-    except Exception:
-        return str(file_value) == env_value
 
 
 def _cmd_validate(args: argparse.Namespace) -> int:

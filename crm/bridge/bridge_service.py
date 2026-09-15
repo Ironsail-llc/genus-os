@@ -57,6 +57,7 @@ from routers.people import router as people_router
 from routers.providers import router as providers_router
 from routers.routines import router as routines_router
 from routers.runs import router as runs_router
+from routers.settings import router as settings_router
 from routers.setup import router as setup_router
 from routers.system_health import router as system_health_router
 from routers.tenants import router as tenants_router
@@ -173,6 +174,10 @@ app.include_router(installed_agents_router)
 app.include_router(agent_manifests_router)
 app.include_router(audit_router)
 app.include_router(controls_router)
+# Settings: the Config page. Beside Controls because a governed flag is a
+# setting whose store happens to be a table -- PATCH /api/settings routes one
+# through the same robothor.flags.store call this router's PATCH makes.
+app.include_router(settings_router)
 app.include_router(fleet_router)
 app.include_router(runs_router)
 app.include_router(system_health_router)
