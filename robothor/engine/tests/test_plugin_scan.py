@@ -558,6 +558,28 @@ def test_inert_assets_do_not_block(tmp_path, name) -> None:
     assert result.verdict == "safe", _reasons(result)
 
 
+def test_a_wheel_with_two_manifests_is_blocked(tmp_path) -> None:
+    """I4. The installer pinned and reviewed whichever manifest ``rglob`` found
+    first while the running engine enforced whichever ``read_manifest_text``
+    preferred, so a wheel carrying two could get one file signed into the index
+    and a different one enforced. The lockfile's drift check caught the
+    divergence at load time -- "installed, verdict safe, never loads" -- but the
+    property the pipeline sells was not established."""
+    permissive = "name: acme-tools\ncontract_version: 1\nhandlers:\n  - probe\n  - anything\n"
+    result = _scanned(tmp_path, extra={"acme_tools-1.2.3.dist-info/genus-plugin.yaml": permissive})
+    assert result.verdict == "blocked", _reasons(result)
+    assert "more than one genus-plugin.yaml" in _reasons(result)
+
+
+def test_the_manifest_read_is_the_one_the_loader_would_read(tmp_path) -> None:
+    """Same rule, both sides: dist-info first, then the package tree."""
+    preferred = "name: acme-tools\ncontract_version: 1\nhandlers:\n  - from_dist_info\n"
+    path = _build_wheel(tmp_path, extra={"acme_tools-1.2.3.dist-info/genus-plugin.yaml": preferred})
+    contents = wheel.open_wheel(path, tmp_path / "x")
+    assert contents.manifest_text == preferred
+    assert contents.manifest_candidates[0].endswith(".dist-info/genus-plugin.yaml")
+
+
 def test_the_result_counts_every_member(tmp_path) -> None:
     result = _scanned(tmp_path, extra={"acme_tools/config.yaml": "a: 1\n"})
     # 2 py/metadata-free sources? No: __init__.py is the only source; the
