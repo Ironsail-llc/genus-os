@@ -50,6 +50,7 @@ import logging
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -110,6 +111,16 @@ _SINCE = re.compile(rf"(?:{_RELATIVE_AGE}|{ISO_TIMESTAMP_PATTERN})")
 #: 4MB structured record does not ship all of it to a browser.
 _OUTPUT_FIELDS = "--output-fields=MESSAGE,PRIORITY,__REALTIME_TIMESTAMP"
 
+#: How long the derived unit set is trusted. Short enough that an operator who
+#: installs a unit and refreshes sees it; long enough that a page refresh is not
+#: thirty file opens.
+CATALOG_TTL_SECONDS = 30.0
+
+#: ``(computed_at, catalog)`` or ``None``. Module state, deliberately: the
+#: alternative is ``functools.lru_cache``, which never expires, and an operator
+#: who installs a unit should not have to restart the bridge to follow it.
+_catalog_cache: tuple[float, dict[str, str]] | None = None
+
 # Bound at module level so a test can stand in for the subprocess at the
 # router's own seam, rather than patching the `subprocess` module globally for
 # everything else running in the same process.
@@ -148,15 +159,56 @@ def unit_catalog() -> dict[str, str]:
     fallback so a dev checkout and a container still render a useful page. Both
     are the same glob ``scripts/install-units.sh`` uses, which is what keeps a
     newly added unit from needing an edit here.
+
+    Cached for :data:`CATALOG_TTL_SECONDS`. The uncached version did a directory
+    listing plus a file read per unit on every request — roughly thirty opens
+    for a page the operator refreshes — and the installed set changes when
+    somebody runs the installer, not between two clicks. A stale entry self-
+    heals within the TTL, and the worst case of two threads racing is that both
+    compute the same dict.
     """
-    return _catalog_from(INSTALLED_UNIT_DIR) or _catalog_from(TEMPLATE_UNIT_DIR)
+    global _catalog_cache
+    cached = _catalog_cache
+    now = time.monotonic()
+    if cached is not None and now - cached[0] < CATALOG_TTL_SECONDS:
+        return cached[1]
+    catalog = _catalog_from(INSTALLED_UNIT_DIR) or _catalog_from(TEMPLATE_UNIT_DIR)
+    _catalog_cache = (now, catalog)
+    return catalog
 
 
-def _journalctl() -> tuple[str | None, str | None]:
-    """``(path, None)`` when journald is usable here, else ``(None, reason)``."""
+def reset_unit_catalog_cache() -> None:
+    """Forget the cached unit set. For tests, and for an installer that wants
+    the next request to see what it just wrote."""
+    global _catalog_cache
+    _catalog_cache = None
+
+
+def _journalctl_path() -> tuple[str | None, str | None]:
+    """Where ``journalctl`` is, or why this deployment has none.
+
+    No probe. The READ path calls only this: a ``journalctl`` that cannot run
+    fails the real invocation too, and that failure is already reported as
+    ``available: false`` — so the ``--version`` spawn in front of every read was
+    a second process answering a question the first one answers.
+    """
     path = _which("journalctl")
     if path is None:
         return None, "journald is not available on this deployment (journalctl is not installed)"
+    return path, None
+
+
+def _journalctl() -> tuple[str | None, str | None]:
+    """``(path, None)`` when journald is usable here, else ``(None, reason)``.
+
+    This one DOES probe, because ``/api/logs/units`` has nothing else to go on:
+    its whole answer is "can this box serve logs at all", and a ``journalctl``
+    binary that exits non-zero on ``--version`` (no journal, no permission,
+    a stub in a container image) would otherwise be reported as available.
+    """
+    path, reason = _journalctl_path()
+    if path is None:
+        return None, reason
     try:
         probe = _run(
             [path, "--version"],
@@ -262,7 +314,7 @@ def read_logs(
             detail="since must be a relative age (30m, 1h, 7d) or an ISO-8601 timestamp",
         )
 
-    path, reason = _journalctl()
+    path, reason = _journalctl_path()
     if reason is not None or path is None:
         return _unavailable(unit, reason or "journald is not available on this deployment")
 

@@ -200,10 +200,41 @@ def test_until_is_applied(controls_client_as_operator, monkeypatch):
     assert [r[0] for r in rows[1:]] == ["1"]
 
 
-@pytest.mark.parametrize("limit", ["0", "5001", "abc"])
+@pytest.mark.parametrize("limit", ["0", "5001", "abc", "-1", "1_0", "+7", " 5 ", "007"])
 def test_limit_is_bounded_at_five_thousand(controls_client_as_operator, monkeypatch, limit):
     _events(monkeypatch, [])
-    assert controls_client_as_operator.get(f"{CSV}?limit={limit}").status_code == 422
+    resp = controls_client_as_operator.get(f"{CSV}?limit={limit}")
+    assert resp.status_code == 422
+    assert isinstance(resp.json()["detail"], str), (
+        "the Helm was promised one 422 body shape across all four routes; a "
+        "pydantic Field cap renders the nested one"
+    )
+
+
+@pytest.mark.parametrize("field", ["since", "until"])
+@pytest.mark.parametrize("value", ["notatimestamp", "yesterday", "2026-13", "'; --", "2026-09-01 "])
+def test_a_malformed_time_bound_is_a_422_not_a_500(
+    controls_client_as_operator, monkeypatch, field, value
+):
+    """A caller's typo is not an appliance fault.
+
+    Unvalidated, these reached psycopg2's timestamp comparison and came back as
+    ``500 {"error": "internal error"}`` — in a route whose whole argument for
+    returning a real 500 is that a 500 means "we broke".
+    """
+    _events(monkeypatch, [])
+    resp = controls_client_as_operator.get(f"{CSV}?{field}={value}")
+    assert resp.status_code == 422
+    assert isinstance(resp.json()["detail"], str)
+
+
+@pytest.mark.parametrize(
+    "value", ["2026-09-01", "2026-09-01T10:00", "2026-09-01T10:00:00", "2026-09-01T10:00:00Z"]
+)
+def test_a_real_timestamp_is_passed_through(controls_client_as_operator, monkeypatch, value):
+    captured = _events(monkeypatch, [])
+    assert controls_client_as_operator.get(f"{CSV}?since={value}").status_code == 200
+    assert captured["since"] == value
 
 
 # ── failure ──────────────────────────────────────────────────────────────────

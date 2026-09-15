@@ -42,6 +42,7 @@ from robothor.audit.logger import query_log
 from robothor.sanitize import sanitize_log
 from robothor.secrets.redaction import redact
 from routers._operator import require_audit_reader
+from routers._params import iso_timestamp, positive_int
 
 logger = logging.getLogger(__name__)
 
@@ -165,20 +166,43 @@ def export_audit_events_csv(
     event_type: str | None = Query(None, description="Filter by event_type"),
     actor: str | None = Query(None, description="Filter by actor (agent_id)"),
     user_id: str | None = Query(None, description="Filter by user_id"),
-    limit: int = Query(MAX_CSV_ROWS, ge=1, le=MAX_CSV_ROWS),
+    limit: str = Query(str(MAX_CSV_ROWS)),
 ) -> Response:
     """The same rows as ``/events``, as a downloadable spreadsheet.
 
     Operator or auditor: an export leaves the appliance, so an agent's service
     token is refused here even when it carries ``audit:read`` and the
     middleware has already let it past.
+
+    ``limit``, ``since`` and ``until`` are validated in the handler rather than
+    by a pydantic ``Field`` cap. FastAPI enforces those before the route runs
+    and renders them as ``{"detail": [ {...} ]}`` — a second 422 body for the
+    same class of error, on the one route out of four that would have had it.
+    Unvalidated ``since``/``until`` also reached psycopg2's timestamp
+    comparison and came back as a 500: a caller's typo rendered as an appliance
+    fault, in the route whose whole argument for a real 500 is that a 500 means
+    *we* broke.
+
+    **The export is appliance-wide, not caller-tenant-wide.** ``audit_log`` has
+    no ``tenant_id`` column (the tenant is a key inside ``details``, written by
+    ``routers/_audit.py``) and ``query_log`` applies no tenant predicate, so
+    this returns every tenant's rows — exactly as ``GET /api/audit/events``,
+    which already admits an auditor, has always done. The filename names the
+    CALLER's tenant, which is a fact about who exported it, not about what is
+    inside.
     """
     require_audit_reader(request)
     from deps import get_tenant_id
 
+    rows = positive_int(limit, field="limit", maximum=MAX_CSV_ROWS)
+    if since is not None:
+        since = iso_timestamp(since, field="since")
+    if until is not None:
+        until = iso_timestamp(until, field="until")
+
     try:
         events = query_log(
-            limit=limit,
+            limit=rows,
             event_type=event_type,
             actor=actor,
             since=since,

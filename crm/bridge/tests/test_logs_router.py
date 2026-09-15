@@ -131,6 +131,40 @@ def test_the_template_fallback_matches_what_the_installer_installs():
     assert {"robothor-engine", "robothor-bridge", "robothor-app"} <= from_templates
 
 
+def test_the_catalog_is_not_rebuilt_on_every_request(monkeypatch):
+    """One directory listing plus a file read per unit, per request, is a cost
+    the page does not need to pay — the installed unit set changes when
+    somebody runs the installer, not between two clicks."""
+    from routers import logs
+
+    logs.reset_unit_catalog_cache()
+    calls: list = []
+    real = logs._catalog_from
+
+    def _counted(directory):
+        calls.append(directory)
+        return real(directory)
+
+    monkeypatch.setattr(logs, "_catalog_from", _counted)
+    try:
+        first = logs.unit_catalog()
+        assert calls, "the first call must actually read the units"
+        before = len(calls)
+        assert logs.unit_catalog() == first
+        assert len(calls) == before, "the second call inside the TTL re-read the filesystem"
+    finally:
+        logs.reset_unit_catalog_cache()
+
+
+def test_reading_a_unit_does_not_spawn_a_second_process(controls_client_as_operator, journal):
+    """``journalctl --version`` before every read was a probe answering a
+    question the read itself answers: a journalctl that cannot run fails the
+    real call too, and that failure is already ``available: false``."""
+    controls_client_as_operator.get(f"{LOGS}?unit=robothor-engine")
+    assert len(journal.calls) == 1
+    assert "--version" not in journal.calls[0]
+
+
 def test_units_lists_names_and_descriptions(controls_client_as_operator, journal):
     body = controls_client_as_operator.get(UNITS).json()
     assert body["available"] is True
