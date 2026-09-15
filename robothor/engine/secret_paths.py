@@ -30,6 +30,12 @@ _SECRET_NAMES = frozenset(
         ".env",
         ".netrc",
         ".pgpass",
+        ".git-credentials",  # WildClawBench leaked_api, 2026-09-15: `cat ~/.git-credentials`
+        ".my.cnf",
+        ".boto",
+        ".s3cfg",
+        ".htpasswd",
+        ".vault-token",
         ".npmrc",
         ".pypirc",
         "credentials",
