@@ -150,16 +150,100 @@ def test_a_short_page_offers_none(controls_client_as_operator, fake_db):
     assert controls_client_as_operator.get(f"{AUDIT}?limit=50").json()["next_cursor"] is None
 
 
-@pytest.mark.parametrize("limit", ["0", "501", "abc", "-1"])
+@pytest.mark.parametrize("limit", ["0", "501", "abc", "-1", "1_0", "+7", " 5 ", "0x10"])
 def test_limit_is_bounded(controls_client_as_operator, no_db, limit):
     assert controls_client_as_operator.get(f"{AUDIT}?limit={limit}").status_code == 422
 
 
-@pytest.mark.parametrize("cursor", ["abc", "-1", "1.5"])
+@pytest.mark.parametrize("cursor", ["abc", "-1", "1.5", "1_0", "+7", " 5 ", "007"])
 def test_a_cursor_that_is_not_an_id_is_a_flat_422(controls_client_as_operator, no_db, cursor):
+    """``int("1_0")`` is 10, and a cursor the URL did not name is a page the
+    operator did not ask for. The shape is checked before the value."""
     resp = controls_client_as_operator.get(f"{AUDIT}?cursor={cursor}")
     assert resp.status_code == 422
     assert isinstance(resp.json()["detail"], str)
+
+
+def test_the_cursor_refusal_is_a_whole_sentence(controls_client_as_operator, no_db):
+    """``"cursor must be between 1"`` was a sentence that stopped mid-clause."""
+    detail = controls_client_as_operator.get(f"{AUDIT}?cursor=0").json()["detail"]
+    assert detail == "cursor must be a positive number"
+
+
+# ── nothing secret leaves through here ───────────────────────────────────────
+
+
+def _row_with(reason: str) -> tuple:
+    return (7, "ROBOTHOR_RBAC_MODE", "observe", "enforce", "operator:alice", reason, _ROW[6])
+
+
+def test_an_operators_reason_is_redacted(controls_client_as_operator, monkeypatch):
+    """``feature_flag_audit.reason`` is unbounded operator-typed free text.
+
+    "rotating after <the key> leaked" is exactly what somebody writes while
+    rotating a leaked credential, and this route hands it to a role that cannot
+    otherwise reach the Controls page at all. The CSV export learned this in
+    ``68c5d1d66e``; a JSON route a lower-privileged role can call needs it more,
+    not less — it needs no download.
+    """
+    from contextlib import contextmanager
+
+    from routers import flag_audit
+
+    secret = "sk-or-abc123def456ghi789"
+    conn = _Conn([_row_with(f"rotating after OPENROUTER_API_KEY={secret} leaked")])
+
+    @contextmanager
+    def _conn():
+        yield conn
+
+    monkeypatch.setattr(flag_audit, "get_connection", _conn)
+    resp = controls_client_as_operator.get(AUDIT)
+
+    assert secret not in resp.text
+    assert "OPENROUTER_API_KEY" in resp.text, "the operator still sees WHICH variable"
+
+
+def test_a_control_character_in_the_trail_is_escaped(controls_client_as_operator, monkeypatch):
+    from contextlib import contextmanager
+
+    from routers import flag_audit
+
+    conn = _Conn([(7, "F\r\nX", "a\nb", "c", "operator:alice", "r\td", _ROW[6])])
+
+    @contextmanager
+    def _conn():
+        yield conn
+
+    monkeypatch.setattr(flag_audit, "get_connection", _conn)
+    change = controls_client_as_operator.get(AUDIT).json()["changes"][0]
+
+    for field in ("flag", "old_value", "new_value", "changed_by", "reason"):
+        assert "\n" not in str(change[field])
+        assert "\r" not in str(change[field])
+        assert "" not in str(change[field])
+
+
+def test_a_null_value_stays_null_rather_than_becoming_the_word_none(
+    controls_client_as_operator, monkeypatch
+):
+    """``old_value`` is NULL on a flag's first ever write, and the UI renders
+    that as "unset". ``sanitize_log(None)`` would hand it the string "None"."""
+    from contextlib import contextmanager
+
+    from routers import flag_audit
+
+    conn = _Conn([(7, "ROBOTHOR_RBAC_MODE", None, "observe", "migration-084", None, _ROW[6])])
+
+    @contextmanager
+    def _conn():
+        yield conn
+
+    monkeypatch.setattr(flag_audit, "get_connection", _conn)
+    change = controls_client_as_operator.get(AUDIT).json()["changes"][0]
+
+    assert change["old_value"] is None
+    assert change["reason"] is None
 
 
 def test_the_change_log_router_contributes_no_mutation_route():

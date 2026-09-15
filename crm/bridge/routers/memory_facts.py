@@ -48,6 +48,7 @@ from robothor.db.connection import get_connection
 from robothor.sanitize import sanitize_log
 from routers._audit import audited
 from routers._operator import require_operator
+from routers._params import positive_int
 
 logger = logging.getLogger(__name__)
 
@@ -99,31 +100,19 @@ class ForgetRequest(BaseModel):
     reason: str | None = None
 
 
-def _fact_id(value: str) -> int:
+def _fact_id(value: str, *, field: str = "fact id") -> int:
     """A ``memory_facts.id`` in its canonical form, or 422.
 
-    ``memory_facts.id`` is ``SERIAL`` — a 32-bit signed integer — so the bound
-    is the column's, not a taste. Without this, ``WHERE id = %s`` on a caller's
-    typo is a psycopg2 ``DataError`` and the operator reads a 500, which is
-    indistinguishable from an appliance that has actually broken.
+    The SHAPE check is ``routers._params.positive_int`` and it comes first,
+    because ``int`` is not a shape check: ``int("1_0")`` is 10, so
+    ``POST /api/memory/facts/1_0/forget`` deactivated fact **ten** and wrote an
+    audit row whose ``fact_id`` and whose ``path`` named different facts.
+
+    The upper bound is then the column's: ``memory_facts.id`` is ``SERIAL``, a
+    32-bit signed integer, and a value above it is a psycopg2 ``DataError`` —
+    a 500, which reads to an operator as an appliance that has broken.
     """
-    try:
-        parsed = int(str(value))
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=422, detail="not a fact id") from None
-    if parsed < 1 or parsed > 2147483647:
-        raise HTTPException(status_code=422, detail="not a fact id")
-    return parsed
-
-
-def _limit(value: str) -> int:
-    try:
-        parsed = int(str(value))
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=422, detail="limit must be a number") from None
-    if not 1 <= parsed <= MAX_LIMIT:
-        raise HTTPException(status_code=422, detail=f"limit must be between 1 and {MAX_LIMIT}")
-    return parsed
+    return positive_int(value, field=field, maximum=2147483647)
 
 
 def _reason(body: ForgetRequest | None) -> str:
@@ -243,10 +232,10 @@ def list_facts(
     from deps import get_tenant_id
 
     tenant_id = get_tenant_id(request)
-    page = _limit(limit)
+    page = positive_int(limit, field="limit", maximum=MAX_LIMIT)
     if active not in ACTIVE_FILTERS:
         raise HTTPException(status_code=422, detail="active must be true, false or all")
-    after = _fact_id(cursor) if cursor is not None else None
+    after = _fact_id(cursor, field="cursor") if cursor is not None else None
 
     # BEFORE the connection below, deliberately: ``search_facts`` takes its own
     # connection out of the same pool (and an embedding call besides), so

@@ -58,6 +58,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from robothor.sanitize import sanitize_log
 from robothor.secrets.redaction import redact
 from routers._operator import require_operator
+from routers._params import ISO_TIMESTAMP_PATTERN, positive_int
 
 logger = logging.getLogger(__name__)
 
@@ -82,16 +83,28 @@ TEMPLATE_UNIT_DIR = Path(__file__).resolve().parents[3] / "infra" / "systemd"
 #: Only ever a robothor unit, and never a template (``robothor-alert@``): an
 #: instance-less template unit has no journal of its own, and the ``@`` would
 #: be the one character in a unit name that means something else.
-_UNIT_NAME = re.compile(r"^robothor-[a-z0-9][a-z0-9-]*$")
+#:
+#: Matched with ``fullmatch`` everywhere, never ``match``: ``$`` also matches
+#: immediately before a trailing newline, so an anchored ``^…$`` still admits
+#: ``"robothor-engine\n"``.
+_UNIT_NAME = re.compile(r"robothor-[a-z0-9][a-z0-9-]*")
 
-#: ``--since`` values this route will pass on. Either a relative age
-#: (``30m``, ``1h``, ``7d``) or an ISO-8601 date/time. Nothing else — not
-#: journald's own English ("yesterday", "2 hours ago"), which is a parser this
-#: route does not need to expose.
-_SINCE = re.compile(
-    r"^(?:\d{1,6}[smhd]"
-    r"|\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?(?:Z|[+-]\d{2}:?\d{2})?)$"
-)
+#: A relative age, in journald's units. This is the half of ``--since`` that
+#: ``routers._params.ISO_TIMESTAMP_PATTERN`` cannot carry — a timestamp column
+#: has no use for "1h" — and the only reason this route has a pattern of its
+#: own rather than calling ``iso_timestamp``.
+_RELATIVE_AGE = r"\d{1,6}[smhd]"
+
+#: ``--since`` values this route will pass on: a relative age or an ISO-8601
+#: date/time. Nothing else — not journald's own English ("yesterday", "2 hours
+#: ago"), which is a parser this route does not need to expose.
+#:
+#: The newline case is not hypothetical. With ``^…$`` and ``.match()``,
+#: ``since=1h\n`` passed validation, then failed the ``since[-1] in 'smhd'``
+#: test below, lost its leading ``-`` and reached journald as an ABSOLUTE
+#: timestamp — the request quietly answered a different question from the one
+#: the operator asked.
+_SINCE = re.compile(rf"(?:{_RELATIVE_AGE}|{ISO_TIMESTAMP_PATTERN})")
 
 #: The journal fields this route reads. Named explicitly so a unit that logs a
 #: 4MB structured record does not ship all of it to a browser.
@@ -113,7 +126,7 @@ def _catalog_from(directory: Path) -> dict[str, str]:
         return catalog
     for path in paths:
         name = path.stem
-        if not _UNIT_NAME.match(name):
+        if not _UNIT_NAME.fullmatch(name):
             continue
         description = ""
         try:
@@ -242,13 +255,8 @@ def read_logs(
             status_code=422,
             detail="unknown unit; allowed units are " + ", ".join(sorted(catalog)),
         )
-    try:
-        count = int(lines)
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=422, detail="lines must be a number") from None
-    if not 1 <= count <= MAX_LINES:
-        raise HTTPException(status_code=422, detail=f"lines must be between 1 and {MAX_LINES}")
-    if since is not None and not _SINCE.match(since):
+    count = positive_int(lines, field="lines", maximum=MAX_LINES)
+    if since is not None and not _SINCE.fullmatch(since):
         raise HTTPException(
             status_code=422,
             detail="since must be a relative age (30m, 1h, 7d) or an ISO-8601 timestamp",

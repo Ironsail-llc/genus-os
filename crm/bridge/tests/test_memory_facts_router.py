@@ -76,7 +76,7 @@ def test_an_auditor_may_not_touch_memory(controls_client_as_auditor, no_db):
 # ── validation, all of it before any query ───────────────────────────────────
 
 
-@pytest.mark.parametrize("limit", ["0", "201", "-1", "abc"])
+@pytest.mark.parametrize("limit", ["0", "201", "-1", "abc", "1_0", "+7", " 5 ", "0x10"])
 def test_limit_is_bounded(controls_client_as_operator, no_db, limit):
     assert controls_client_as_operator.get(f"{FACTS}?limit={limit}").status_code == 422
 
@@ -86,15 +86,23 @@ def test_active_takes_only_the_three_words(controls_client_as_operator, no_db, a
     assert controls_client_as_operator.get(f"{FACTS}?active={active}").status_code == 422
 
 
-@pytest.mark.parametrize("cursor", ["abc", "1.5", "-", "0"])
+@pytest.mark.parametrize("cursor", ["abc", "1.5", "-", "0", "1_0", "+7", " 5 ", "007"])
 def test_a_cursor_that_is_not_a_fact_id_is_422(controls_client_as_operator, no_db, cursor):
     assert controls_client_as_operator.get(f"{FACTS}?cursor={cursor}").status_code == 422
 
 
-@pytest.mark.parametrize("fact_id", ["abc", "1.5", "-3", "0", "1%20OR%201=1"])
+@pytest.mark.parametrize(
+    "fact_id", ["abc", "1.5", "-3", "0", "1%20OR%201=1", "1_0", "+7", "%205%20", "007"]
+)
 def test_a_fact_id_that_is_not_an_id_is_422(controls_client_as_operator, no_db, fact_id):
-    """Validated at the boundary: ``WHERE id = %s`` on an integer column turns
-    a typo into a 500, and a 500 is indistinguishable from a broken appliance."""
+    """Validated at the boundary, by SHAPE and not by ``int()``.
+
+    ``int("1_0")`` is 10, so ``POST /api/memory/facts/1_0/forget`` used to
+    deactivate fact **10** — and the audit row then carried ``fact_id: 10``
+    beside a ``path`` naming ``1_0``: two answers to "which fact did the
+    operator forget" inside one audit record. ``+7``, ``007`` and a padded
+    ``" 5 "`` went the same way.
+    """
     client = controls_client_as_operator
     assert client.post(f"/api/memory/facts/{fact_id}/forget/preview").status_code == 422
     assert (

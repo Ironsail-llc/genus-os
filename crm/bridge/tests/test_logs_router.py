@@ -207,12 +207,33 @@ def test_a_since_that_is_not_a_time_is_422(controls_client_as_operator, journal,
     assert journal.calls == []
 
 
-@pytest.mark.parametrize("lines", ["0", "1001", "-5", "abc"])
+@pytest.mark.parametrize("lines", ["0", "1001", "-5", "abc", "1_0", "%20%2B5%20", "007"])
 def test_lines_is_bounded(controls_client_as_operator, journal, lines):
-    assert (
-        controls_client_as_operator.get(f"{LOGS}?unit=robothor-engine&lines={lines}").status_code
-        == 422
-    )
+    """``int("1_0")`` is 10 — a window the caller did not ask for."""
+    resp = controls_client_as_operator.get(f"{LOGS}?unit=robothor-engine&lines={lines}")
+    assert resp.status_code == 422
+    assert isinstance(resp.json()["detail"], str)
+    assert journal.calls == []
+
+
+def test_a_trailing_newline_does_not_smuggle_a_since_past_validation(
+    controls_client_as_operator, journal
+):
+    """``$`` also matches before a trailing newline, so ``^…$`` with ``.match``
+    admitted ``"1h\\n"`` — which then failed the ``since[-1] in 'smhd'`` test,
+    lost its leading ``-``, and reached journald as an ABSOLUTE timestamp. The
+    request quietly answered a different question from the one asked."""
+    resp = controls_client_as_operator.get(f"{LOGS}?unit=robothor-engine&since=1h%0A")
+    assert resp.status_code == 422
+    assert journal.calls == []
+
+
+def test_a_trailing_newline_does_not_smuggle_a_unit_past_the_allowlist(
+    controls_client_as_operator, journal
+):
+    resp = controls_client_as_operator.get(f"{LOGS}?unit=robothor-engine%0A")
+    assert resp.status_code == 422
+    assert journal.calls == []
 
 
 def test_grep_is_never_passed_to_journalctl(controls_client_as_operator, journal):

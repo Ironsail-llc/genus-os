@@ -35,10 +35,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Query, Request
 
 from robothor.db.connection import get_connection
+from robothor.sanitize import sanitize_log
+from robothor.secrets.redaction import redact
 from routers._operator import require_audit_reader
+from routers._params import positive_int
 
 router = APIRouter(prefix="/api/controls", tags=["controls"])
 
@@ -48,15 +51,25 @@ MAX_LIMIT = 500
 DEFAULT_LIMIT = 50
 
 
-def _positive_int(value: str, *, field: str, maximum: int | None = None) -> int:
-    try:
-        parsed = int(str(value))
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=422, detail=f"{field} must be a number") from None
-    if parsed < 1 or (maximum is not None and parsed > maximum):
-        bound = f" and {maximum}" if maximum is not None else ""
-        raise HTTPException(status_code=422, detail=f"{field} must be between 1{bound}")
-    return parsed
+def _text(value: object) -> str | None:
+    """One trail field, safe to serve.
+
+    ``reason`` is unbounded free text an operator typed, written straight
+    through ``robothor/flags/store.py`` with nothing upstream constraining it —
+    and "rotating after OPENROUTER_API_KEY=… leaked" is exactly what somebody
+    writes while rotating a leaked credential. This route hands that to an
+    AUDITOR, a role that cannot otherwise reach the Controls page at all, over
+    JSON that needs no download. So the same redactor the CSV export runs
+    (commit 68c5d1d66e, for the same reason) runs here, then ``sanitize_log``
+    for the control characters.
+
+    ``None`` survives as ``None``: ``old_value`` is NULL on a flag's first ever
+    write and the page renders that as "unset", which the string ``"None"``
+    would quietly become.
+    """
+    if value is None:
+        return None
+    return sanitize_log(redact(str(value)))
 
 
 @router.get("/audit")
@@ -74,8 +87,8 @@ def list_flag_changes(
     row twice.
     """
     require_audit_reader(request)
-    page = _positive_int(limit, field="limit", maximum=MAX_LIMIT)
-    after = _positive_int(cursor, field="cursor") if cursor is not None else None
+    page = positive_int(limit, field="limit", maximum=MAX_LIMIT)
+    after = positive_int(cursor, field="cursor") if cursor is not None else None
 
     sql = (
         "SELECT id, name, from_value, to_value, actor, reason, at FROM feature_flag_audit WHERE 1=1"
@@ -98,11 +111,11 @@ def list_flag_changes(
     changes = [
         {
             "id": int(row[0]),
-            "flag": row[1],
-            "old_value": row[2],
-            "new_value": row[3],
-            "changed_by": row[4],
-            "reason": row[5],
+            "flag": _text(row[1]),
+            "old_value": _text(row[2]),
+            "new_value": _text(row[3]),
+            "changed_by": _text(row[4]),
+            "reason": _text(row[5]),
             "changed_at": row[6].isoformat() if hasattr(row[6], "isoformat") else row[6],
         }
         for row in rows
