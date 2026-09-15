@@ -493,6 +493,8 @@ def import_agent(
     output_dir: str | Path | None = None,
     repo_root: Path | None = None,
     defaults_path: str | Path | None = None,
+    *,
+    record: bool = True,
 ) -> dict[str, Any]:
     """Reverse-engineer an existing agent manifest into a template bundle.
 
@@ -707,19 +709,27 @@ department: {department}
     }
     output_file("programmatic.json").write_text(json.dumps(programmatic, indent=2) + "\n")
 
-    # Register in installed.yaml
-    instance = InstanceConfig.load()
-    instance.record_install(
-        agent_id=agent_id,
-        source="local",
-        source_path=str(out_path),
-        version=manifest.get("version", "0.0.0"),
-        variables={
-            k: v.get("default", "") if isinstance(v, dict) else v for k, v in variables.items()
-        },
-        manifest_path=manifest_path.relative_to(repo_root).as_posix(),
-        instruction_path=safe_relative_path(instr_file).as_posix() if instr_file else "",
-    )
+    # Register in installed.yaml.
+    #
+    # Skipped when ``record`` is False, which is what an EXPORT passes. An
+    # export reads an installed agent and writes a bundle somewhere else;
+    # recording it would rewrite the live install record's source_path to point
+    # at the temporary staging directory the export used, so the next
+    # ``genus agent update`` would look for its template in a directory that no
+    # longer exists.
+    if record:
+        instance = InstanceConfig.load()
+        instance.record_install(
+            agent_id=agent_id,
+            source="local",
+            source_path=str(out_path),
+            version=manifest.get("version", "0.0.0"),
+            variables={
+                k: v.get("default", "") if isinstance(v, dict) else v for k, v in variables.items()
+            },
+            manifest_path=manifest_path.relative_to(repo_root).as_posix(),
+            instruction_path=safe_relative_path(instr_file).as_posix() if instr_file else "",
+        )
 
     # Score hub readiness
     hub_readiness_score = 0
