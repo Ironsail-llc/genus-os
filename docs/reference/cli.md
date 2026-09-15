@@ -372,7 +372,7 @@ Usage: `genus channel verify <name> [--target TARGET] [--to TARGET] [--tenant TE
 
 Store a channel's credentials.
 
-Usage: `genus channel add <name> [--bot-token BOT_TOKEN] [--app-token APP_TOKEN] [--smtp-password SMTP_PASSWORD] [--verify-target VERIFY_TARGET] [--from-address FROM_ADDRESS] [--smtp-host SMTP_HOST] [--smtp-port SMTP_PORT] [--smtp-starttls SMTP_STARTTLS] [--smtp-user SMTP_USER] [--to TO]`
+Usage: `genus channel add <name> [--bot-token BOT_TOKEN] [--app-token APP_TOKEN] [--smtp-password SMTP_PASSWORD] [--app-password APP_PASSWORD] [--app-id APP_ID] [--tenant-id TENANT_ID] [--verify-target VERIFY_TARGET] [--from-address FROM_ADDRESS] [--smtp-host SMTP_HOST] [--smtp-port SMTP_PORT] [--smtp-starttls SMTP_STARTTLS] [--smtp-user SMTP_USER] [--to TO]`
 
 | Argument | Required | Description |
 | --- | --- | --- |
@@ -383,6 +383,9 @@ Usage: `genus channel add <name> [--bot-token BOT_TOKEN] [--app-token APP_TOKEN]
 | `--bot-token` | `BOT_TOKEN` | — | REFUSED: a token on a command line is world-readable. Use the prompt or export ROBOTHOR_SLACK_BOT_TOKEN |
 | `--app-token` | `APP_TOKEN` | — | REFUSED, as --bot-token. Export ROBOTHOR_SLACK_APP_TOKEN instead |
 | `--smtp-password` | `SMTP_PASSWORD` | — | REFUSED, as --bot-token. Export ROBOTHOR_EMAIL_SMTP_PASSWORD instead |
+| `--app-password` | `APP_PASSWORD` | — | REFUSED, as --bot-token. Export ROBOTHOR_TEAMS_APP_PASSWORD instead |
+| `--app-id` | `APP_ID` | — | Entra application (client) id of the Azure Bot backing the Teams channel. Not a secret: it is the audience every inbound activity is checked against |
+| `--tenant-id` | `TENANT_ID` | — | Directory (tenant) id a single-tenant Teams bot authenticates against. Not this instance's Genus tenant id |
 | `--verify-target` | `VERIFY_TARGET` | — | Conversation `genus channel verify` and the doctor post their test message to. Never a delivery fallback |
 | `--from-address` | `FROM_ADDRESS` | — | Address the email channel sends FROM over SMTP. Required for the SMTP transport; the gws transport sends as its own account |
 | `--smtp-host` | `SMTP_HOST` | — | SMTP server for the email channel's fallback transport |

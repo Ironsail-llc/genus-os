@@ -172,9 +172,7 @@ class TestAReceivingChannelIsHandedTheRuntime:
     config at mount time — the same handshake ``init_chat`` performs for the
     built-in chat router, through a slot rather than an import."""
 
-    def test_a_channel_that_declares_bind_runtime_is_given_the_runner(
-        self, install, monkeypatch
-    ):
+    def test_a_channel_that_declares_bind_runtime_is_given_the_runner(self, install, monkeypatch):
         bound: dict[str, Any] = {}
 
         class _Bindable(_PluginChannel):
