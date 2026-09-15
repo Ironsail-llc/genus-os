@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import argparse
 
-__all__ = ["cmd_plugin", "cmd_plugin_list"]
+__all__ = ["cmd_plugin", "cmd_plugin_install", "cmd_plugin_list", "cmd_plugin_remove"]
 
 #: Printed by every verb that writes the lockfile. The engine re-reads it on
 #: SIGHUP (``robothor/engine/daemon.py``) or on ``POST /api/plugins/reload``.
@@ -193,6 +193,19 @@ def cmd_plugin_info(name: str) -> int:
             f"  lock row      enabled={lock_row.enabled} verdict={lock_row.verdict} "
             f"recorded_at={lock_row.recorded_at or '-'}"
         )
+        if lock_row.source is None:
+            # Absence is information: `genus plugin remove` refuses a row with
+            # no source, so an operator wondering why needs to see it here.
+            print("  installed by  not this platform (no source recorded)")
+        else:
+            where = lock_row.source.index_url or lock_row.source.origin
+            print(f"  installed by  genus plugin install — {where}")
+            if lock_row.source.publisher_key_id:
+                print(f"      signed by {lock_row.source.publisher_key_id}")
+            if lock_row.source.installed_at:
+                print(f"      installed {lock_row.source.installed_at}")
+        if lock_row.dist_sha256:
+            print(f"  artifact      sha256 {lock_row.dist_sha256}")
         if row.drifted:
             print("  drift         the manifest has changed since it was recorded")
     return 0
@@ -286,6 +299,111 @@ def cmd_plugin_sync(force: bool = False) -> int:
     return 0
 
 
+def _print_plan(plan: Any, *, would: bool) -> None:
+    """One install plan, as the operator reads it.
+
+    The pip command is printed only at the CLI. It carries a temp directory and
+    the interpreter's path, which is why the admin route's copy of this object
+    leaves it out -- but an operator checking a ``--dry-run`` on their own box
+    needs to see the command that would run, and the path is theirs.
+    """
+    print(f"{plan.name} {plan.version}" + (f" — {plan.summary}" if plan.summary else ""))
+    print(f"  source       {plan.origin}" + (f" {plan.index_url}" if plan.index_url else ""))
+    if plan.publisher_key_id:
+        print(f"  signed by    {plan.publisher_key_id}")
+    print(f"  artifact     {plan.filename} ({plan.size} bytes)")
+    print(f"  sha256       {plan.sha256}")
+    if plan.groups:
+        print(f"  contributes  {', '.join(plan.groups)}")
+    print(f"  verdict      {plan.verdict} (prompt scan: {plan.prompt_scan})")
+    # The count an operator can compare against the wheel: it is what turns
+    # "every member is accounted for" from a claim into a check.
+    print(
+        f"  scanned      {plan.files_scanned} source file(s), "
+        f"{plan.members_accounted} member(s) accounted for"
+    )
+    for reason in plan.reasons:
+        print(f"      - {reason}")
+    if would:
+        print("\n  would run:")
+        print("    " + " ".join(plan.pip_command))
+
+
+def cmd_plugin_install(
+    spec: str,
+    *,
+    index: str | None = None,
+    sha256: str | None = None,
+    accept_review: bool = False,
+    scan_prompts: bool = False,
+    dry_run: bool = False,
+) -> int:
+    """Install one plugin, or refuse with the reason on stderr."""
+    from robothor.plugins.installer import InstallError, install
+    from robothor.plugins.registry import RegistryError
+
+    if not spec:
+        print("genus plugin install: name a plugin or a wheel.", file=sys.stderr)
+        return 2
+    try:
+        outcome = install(
+            spec,
+            index=index,
+            sha256=sha256,
+            accept_review=accept_review,
+            scan_prompts=scan_prompts,
+            dry_run=dry_run,
+        )
+    except (InstallError, RegistryError) as exc:
+        # A refusal is the product here. A traceback out of an install would
+        # tell the operator nothing they can act on.
+        print(f"genus plugin install: {exc}", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        print(
+            f"genus plugin install: could not write the lockfile "
+            f"({type(exc).__name__}: {exc.strerror or exc}).",
+            file=sys.stderr,
+        )
+        return 2
+
+    _print_plan(outcome.plan, would=outcome.dry_run)
+    if outcome.dry_run:
+        print("\nnothing was downloaded into place and nothing was recorded (--dry-run)")
+        return 0
+    if outcome.note:
+        print(f"\nnote: {outcome.note}")
+    print(f"\ninstalled {outcome.plan.name} {outcome.plan.version} — {_RELOAD_HINT}")
+    return 0
+
+
+def cmd_plugin_remove(name: str, *, force: bool = False) -> int:
+    """Uninstall one plugin this platform installed."""
+    from robothor.plugins.installer import InstallError, remove
+
+    if not name:
+        print("genus plugin remove: name a distribution.", file=sys.stderr)
+        return 2
+    try:
+        result = remove(name, force=force)
+    except InstallError as exc:
+        print(f"genus plugin remove: {exc}", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        print(
+            f"genus plugin remove: could not write the lockfile "
+            f"({type(exc).__name__}: {exc.strerror or exc}).",
+            file=sys.stderr,
+        )
+        return 2
+    if result.get("note"):
+        print(f"note: {result['note']}")
+    if not result.get("row_dropped"):
+        print(f"{name}: no lockfile row to drop")
+    print(f"removed {name} — {_RELOAD_HINT}")
+    return 0
+
+
 def cmd_plugin_doctor(as_json: bool = False) -> int:
     """The ``plugins`` category of ``genus doctor``, under its own verb."""
     from robothor.doctor.context import DoctorContext
@@ -309,6 +427,17 @@ def cmd_plugin(args: argparse.Namespace) -> int:
     if command == "doctor":
         return cmd_plugin_doctor(bool(getattr(args, "json", False)))
     name = str(getattr(args, "name", "") or "").strip()
+    if command == "install":
+        return cmd_plugin_install(
+            name,
+            index=getattr(args, "index", None),
+            sha256=getattr(args, "sha256", None),
+            accept_review=bool(getattr(args, "accept_review", False)),
+            scan_prompts=bool(getattr(args, "scan_prompts", False)),
+            dry_run=bool(getattr(args, "dry_run", False)),
+        )
+    if command == "remove":
+        return cmd_plugin_remove(name, force=bool(getattr(args, "force", False)))
     if command == "info":
         return cmd_plugin_info(name)
     if command in ("enable", "disable"):

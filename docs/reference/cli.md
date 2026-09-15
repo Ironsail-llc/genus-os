@@ -34,7 +34,7 @@ not here: a flag belongs to one command, a setting to the whole instance.
 
 List installed plugins, record them, and enable or disable one.
 
-Usage: `genus plugin {list,info,enable,disable,sync,doctor}`
+Usage: `genus plugin {list,info,enable,disable,sync,install,remove,doctor}`
 
 ### `genus plugin list`
 
@@ -81,6 +81,38 @@ Usage: `genus plugin sync [--force]`
 | Flag | Takes | Default | Description |
 | --- | --- | --- | --- |
 | `--force` | — | off | Rebuild even when the existing lockfile cannot be read, accepting the loss of every disable it recorded |
+
+### `genus plugin install`
+
+Install a plugin from a signed index, or an offline wheel.
+
+Usage: `genus plugin install <name> [--index INDEX] [--sha256 SHA256] [--accept-review] [--scan-prompts] [--dry-run]`
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `name` | yes | Distribution name (optionally name==version), or the path or https URL of a wheel — a wheel also needs --sha256 |
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--index` | `INDEX` | — | Read only this index URL, instead of the configured ones |
+| `--sha256` | `SHA256` | — | Required when installing a wheel directly: the wheel's SHA-256. There is no signed index vouching for a file you name yourself. |
+| `--accept-review` | — | off | Install a plugin the scan flagged for review, having read the reasons |
+| `--scan-prompts` | — | off | Also run the platform's injection screen over any prompt text the wheel ships (off by default; the static scan only notices the files) |
+| `--dry-run` | — | off | Print what would be downloaded, its hash, the verdict and the pip command, and write nothing |
+
+### `genus plugin remove`
+
+Uninstall a plugin this platform installed and drop its row.
+
+Usage: `genus plugin remove <name> [--force]`
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `name` | yes | Distribution name |
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--force` | — | off | Remove even when the lockfile has no record that this platform installed it |
 
 ### `genus plugin doctor`
 

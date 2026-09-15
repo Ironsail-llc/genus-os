@@ -66,6 +66,38 @@ ENGINE_SYNC = {
     "reloaded": False,
 }
 
+ENGINE_INSTALL = {
+    "plan": {
+        "name": "acme-tools",
+        "version": "1.2.3",
+        "origin": "registry",
+        "index_url": "https://example.invalid/index.json",
+        "publisher_key_id": "genus-2026",
+        "filename": "acme_tools-1.2.3-py3-none-any.whl",
+        "sha256": "0" * 64,
+        "size": 4096,
+        "summary": "A probe",
+        "verdict": "safe",
+        "reasons": [],
+        "prompt_scan": "static-only",
+        "groups": ["genus.tools"],
+        "accept_review": False,
+    },
+    "installed": True,
+    "dry_run": False,
+    "row": {"name": "acme-tools", "verdict": "safe"},
+    "reload_hint": "reload the engine (SIGHUP) or restart to apply",
+    "note": "",
+}
+
+ENGINE_REMOVE = {
+    "name": "acme-tools",
+    "removed": True,
+    "row_dropped": True,
+    "reload_hint": "reload the engine (SIGHUP) or restart to apply",
+    "note": "",
+}
+
 
 class FakeEngine:
     """Stands in for the engine's ``/api/admin/plugins`` surface."""
@@ -80,6 +112,10 @@ class FakeEngine:
             return self.status, ENGINE_RELOAD
         if path.endswith("/sync"):
             return self.status, ENGINE_SYNC
+        if path.endswith("/install"):
+            return self.status, ENGINE_INSTALL
+        if path.endswith("/remove"):
+            return self.status, ENGINE_REMOVE
         if path.endswith(("/enable", "/disable")):
             return self.status, ENGINE_ROW
         return self.status, ENGINE_LISTING
@@ -104,6 +140,8 @@ def fake_engine():
         ("post", "/api/plugins/acme-tools/enable"),
         ("post", "/api/plugins/reload"),
         ("post", "/api/plugins/sync"),
+        ("post", "/api/plugins/install"),
+        ("post", "/api/plugins/acme-tools/remove"),
     ],
 )
 def test_a_non_operator_is_refused_before_the_engine_is_called(
@@ -221,3 +259,103 @@ def test_the_read_writes_no_audit_event(controls_client_as_operator, fake_engine
     with patch("routers.plugins.audited") as audited:
         controls_client_as_operator.get("/api/plugins")
     assert audited.call_count == 0
+
+
+# ── Install and remove ──────────────────────────────────────────────────
+
+
+def test_install_proxies_the_body_the_engine_expects(controls_client_as_operator, fake_engine):
+    response = controls_client_as_operator.post(
+        "/api/plugins/install",
+        json={"name": "acme-tools", "version": "1.2.3", "accept_review": True},
+    )
+    assert response.status_code == 200
+    assert response.json() == ENGINE_INSTALL
+    method, path, body = fake_engine.calls[0]
+    assert (method, path) == ("POST", "/api/admin/plugins/install")
+    assert body == {
+        "name": "acme-tools",
+        "version": "1.2.3",
+        "index": None,
+        "accept_review": True,
+        "dry_run": False,
+    }
+
+
+def test_install_is_not_confused_with_a_plugin_named_install(
+    controls_client_as_operator, fake_engine
+):
+    """`/{name}/remove` must not swallow the literal path."""
+    controls_client_as_operator.post("/api/plugins/install", json={"name": "acme-tools"})
+    assert fake_engine.calls[0][1] == "/api/admin/plugins/install"
+
+
+def test_a_browser_cannot_name_a_wheel_path_or_url(controls_client_as_operator, fake_engine):
+    """Explicit wheel installs are CLI-only. A dashboard naming a filesystem
+    path would be a file read on the engine's box; one naming a URL would make
+    the engine fetch on a caller's say-so."""
+    for name in ("/srv/app/evil.whl", "https://evil.invalid/x.whl", "../../etc/passwd"):
+        response = controls_client_as_operator.post("/api/plugins/install", json={"name": name})
+        assert response.status_code == 422, name
+    assert not fake_engine.calls
+
+
+def test_install_refuses_an_index_that_is_not_https(controls_client_as_operator, fake_engine):
+    response = controls_client_as_operator.post(
+        "/api/plugins/install",
+        json={"name": "acme-tools", "index": "http://example.invalid/index.json"},
+    )
+    assert response.status_code == 422
+    assert not fake_engine.calls
+
+
+def test_a_blocked_install_keeps_the_engines_422(controls_client_as_operator, fake_engine):
+    fake_engine.status = 422
+    response = controls_client_as_operator.post("/api/plugins/install", json={"name": "acme-tools"})
+    assert response.status_code == 422
+
+
+def test_remove_proxies_and_carries_force(controls_client_as_operator, fake_engine):
+    response = controls_client_as_operator.post(
+        "/api/plugins/acme-tools/remove", json={"force": True}
+    )
+    assert response.status_code == 200
+    assert response.json() == ENGINE_REMOVE
+    method, path, body = fake_engine.calls[0]
+    assert (method, path) == ("POST", "/api/admin/plugins/acme-tools/remove")
+    assert body == {"force": True}
+
+
+def test_remove_rejects_a_name_that_is_not_a_distribution(controls_client_as_operator, fake_engine):
+    response = controls_client_as_operator.post("/api/plugins/..%2F..%2Fetc/remove")
+    assert response.status_code in (404, 422)
+    assert not fake_engine.calls
+
+
+def test_install_and_remove_audit_identifiers_only(controls_client_as_operator, fake_engine):
+    """The audit trail carries what happened, not the engine's whole answer. A
+    verdict and a version are identifiers of the decision; reasons, hashes and
+    filenames are not."""
+    with patch("routers.plugins.audited") as audited:
+        controls_client_as_operator.post("/api/plugins/install", json={"name": "acme-tools"})
+    assert audited.call_count == 1
+    args, kwargs = audited.call_args
+    assert args[1] == "plugin.install"
+    assert set(kwargs) <= {"action", "status", "plugin", "version", "verdict"}
+    assert kwargs["plugin"] == "acme-tools"
+    assert kwargs["verdict"] == "safe"
+    assert kwargs["version"] == "1.2.3"
+
+    with patch("routers.plugins.audited") as audited:
+        controls_client_as_operator.post("/api/plugins/acme-tools/remove")
+    assert audited.call_count == 1
+    args, kwargs = audited.call_args
+    assert args[1] == "plugin.remove"
+    assert set(kwargs) <= {"action", "status", "plugin"}
+
+
+def test_a_failed_install_is_audited_as_an_error(controls_client_as_operator, fake_engine):
+    fake_engine.status = 422
+    with patch("routers.plugins.audited") as audited:
+        controls_client_as_operator.post("/api/plugins/install", json={"name": "acme-tools"})
+    assert audited.call_args.kwargs["status"] == "error"

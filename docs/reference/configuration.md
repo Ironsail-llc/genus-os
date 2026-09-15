@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-372 settings in 13 groups.
+375 settings in 13 groups.
 
 ## paths
 
@@ -65,6 +65,9 @@ Where the instance keeps its files. Every path defaults under the workspace.
 | `ROBOTHOR_MEMORY_DIR` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | Directory holding memory artefacts (vision mode marker, projections, eval corpora). Empty means <workspace>/memory. |
 | `ROBOTHOR_MODEL_BREAKER_STATE` | str | `/run/robothor/model-breaker-alerts.json` | `robothor-engine`, `robothor-bridge` | no | legacy | File the model circuit breaker stores alert-dedup timestamps in. |
 | `ROBOTHOR_OWNER_CONFIG` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | Explicit override for the operator identity file robothor.owner_config.load_owner_config() reads when called with no explicit path. Empty means the hardcoded ~/.robothor/owner.yaml. Read directly in robothor/settings/sources.py (owner_config_override_path()), not through this model -- declared here only so the name is documented and the env-read-site ratchet sees it as accounted for. |
+| `ROBOTHOR_PLUGIN_DIR` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | unreleased | Directory `genus plugin install` installs into (pip --target), for images whose site-packages is read-only. Empty installs into the running interpreter's environment. The directory must also be on the engine's PYTHONPATH or nothing installed there is ever discovered. |
+| `ROBOTHOR_PLUGIN_INDEXES` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | unreleased | Comma-separated URLs of signed plugin index files (index.json), read in order — the first index publishing a name wins, so a company's own index listed first shadows the platform's. Empty means the platform index alone. Each index must be https and must be signed by a key pinned through ROBOTHOR_PLUGIN_INDEX_KEYS. |
+| `ROBOTHOR_PLUGIN_INDEX_KEYS` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | unreleased | Directory of PEM Ed25519 PUBLIC keys that may sign a plugin index. Each file's stem is the key_id it pins, so a company running an internal registry drops its key here rather than patching the platform. Empty means only the keys the platform ships. |
 | `ROBOTHOR_PLUGIN_LOCKFILE` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | unreleased | Absolute path of the plugin lockfile: which installed distributions the operator accepted, what their manifest looked like when they were recorded, and which are disabled. Empty means <workspace>/.robothor/plugins.lock. A relative value resolves against that same config directory, never the working directory — the engine and an operator's shell must read the same file. |
 | `ROBOTHOR_RLM_LOG_DIR` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | Directory the recursive language model tool writes per-call logs to. Empty means <workspace>/logs/rlm. |
 | `ROBOTHOR_SERVICES_MANIFEST` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | Explicit path to robothor-services.json, the service/port registry shared by the engine and the dashboard. |

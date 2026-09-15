@@ -208,6 +208,48 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Rebuild even when the existing lockfile cannot be read, accepting "
         "the loss of every disable it recorded",
     )
+    plugin_install = plugin_sub.add_parser(
+        "install", help="Install a plugin from a signed index, or an offline wheel"
+    )
+    plugin_install.add_argument(
+        "name",
+        help="Distribution name (optionally name==version), or the path or https "
+        "URL of a wheel — a wheel also needs --sha256",
+    )
+    plugin_install.add_argument(
+        "--index", help="Read only this index URL, instead of the configured ones"
+    )
+    plugin_install.add_argument(
+        "--sha256",
+        help="Required when installing a wheel directly: the wheel's SHA-256. "
+        "There is no signed index vouching for a file you name yourself.",
+    )
+    plugin_install.add_argument(
+        "--accept-review",
+        action="store_true",
+        help="Install a plugin the scan flagged for review, having read the reasons",
+    )
+    plugin_install.add_argument(
+        "--scan-prompts",
+        action="store_true",
+        help="Also run the platform's injection screen over any prompt text the "
+        "wheel ships (off by default; the static scan only notices the files)",
+    )
+    plugin_install.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print what would be downloaded, its hash, the verdict and the pip "
+        "command, and write nothing",
+    )
+    plugin_remove = plugin_sub.add_parser(
+        "remove", help="Uninstall a plugin this platform installed and drop its row"
+    )
+    plugin_remove.add_argument("name", help="Distribution name")
+    plugin_remove.add_argument(
+        "--force",
+        action="store_true",
+        help="Remove even when the lockfile has no record that this platform installed it",
+    )
     plugin_doctor = plugin_sub.add_parser("doctor", help="The plugins category of `genus doctor`")
     plugin_doctor.add_argument("--json", action="store_true", help="Machine-readable output")
     init_parser = subparsers.add_parser("init", help="Interactive setup wizard")
