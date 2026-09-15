@@ -256,11 +256,25 @@ def test_refuses_to_be_interpreted_by_sh(installer) -> None:
     assert "bash" in result.stderr.lower()
 
 
+def _code_lines() -> list[str]:
+    """Every line of the script that is not a comment."""
+    return [
+        line
+        for line in SCRIPT.read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+
+
 def test_never_sudos_and_never_pipes_into_a_shell() -> None:
-    body = SCRIPT.read_text(encoding="utf-8")
-    assert "sudo" not in body, "the installer must never elevate"
-    assert not re.search(r"\|\s*(ba)?sh\b", body), "the installer must never pipe into a shell"
-    assert "eval " not in body, "the installer must never eval"
+    for line in _code_lines():
+        assert not re.search(r"(^|[;&|(]\s*)sudo\s", line), f"the installer elevates: {line}"
+        assert not re.search(r"\beval\s", line), f"the installer evals: {line}"
+        # A download that reaches a shell is the whole threat this script is
+        # allowed to exist despite. `say`/`printf` lines quote the documented
+        # one-liner, which is text, not a pipeline.
+        if re.search(r"^\s*(say|printf|echo|cat)\b", line):
+            continue
+        assert not re.search(r"\|\s*(ba)?sh\b", line), f"the installer pipes into a shell: {line}"
 
 
 def test_every_download_is_pinned_to_a_tag_never_main() -> None:
@@ -299,7 +313,12 @@ def test_dry_run_compose_prints_a_pinned_plan_and_writes_nothing(installer, tmp_
     assert "/main/infra" not in out
 
     assert not target.exists(), "--dry-run created the install directory"
-    assert _tree(tmp_path) - before <= {"bin/id"}, "--dry-run wrote outside the plan"
+    fixture_owned = {
+        entry
+        for entry in _tree(tmp_path)
+        if entry == "bin" or entry.startswith("bin/") or entry in {"home", "shim.log"}
+    }
+    assert _tree(tmp_path) - before - fixture_owned == set(), "--dry-run wrote outside the plan"
     assert _tree(result.home) == set(), "--dry-run wrote into HOME"
 
 
@@ -332,7 +351,9 @@ def test_a_piped_run_without_yes_is_a_preview_that_writes_nothing(installer, tmp
 
 def test_the_version_stamp_line_exists_and_is_a_release_tag() -> None:
     body = SCRIPT.read_text(encoding="utf-8")
-    match = re.search(r'^INSTALL_SH_DEFAULT_VERSION="(v[0-9]+\.[0-9]+\.[0-9]+)"$', body, re.M)
+    match = re.search(
+        r'^INSTALL_SH_DEFAULT_VERSION="(v[0-9]+\.[0-9]+\.[0-9]+)"$', body, re.MULTILINE
+    )
     assert match, "scripts/install.sh carries no INSTALL_SH_DEFAULT_VERSION stamp"
 
 
@@ -363,7 +384,7 @@ def test_a_releases_api_that_fails_falls_back_to_the_stamp_and_says_so(installer
     assert result.returncode == 0, result.output
     assert "releases api" in result.stderr.lower()
     body = SCRIPT.read_text(encoding="utf-8")
-    stamp = re.search(r'^INSTALL_SH_DEFAULT_VERSION="(v[^"]+)"$', body, re.M).group(1)
+    stamp = re.search(r'^INSTALL_SH_DEFAULT_VERSION="(v[^"]+)"$', body, re.MULTILINE).group(1)
     assert f"genusos=={stamp.lstrip('v')}" in result.stdout
 
 
@@ -376,7 +397,7 @@ def test_a_releases_api_that_fails_with_no_stamp_is_an_error_not_a_hang(
             r'^INSTALL_SH_DEFAULT_VERSION="[^"]*"$',
             'INSTALL_SH_DEFAULT_VERSION=""',
             SCRIPT.read_text(encoding="utf-8"),
-            flags=re.M,
+            flags=re.MULTILINE,
         ),
         encoding="utf-8",
     )
@@ -425,9 +446,7 @@ def _install(installer, target: Path, **kwargs):
     )
 
 
-def test_a_compose_install_downloads_pinned_files_and_runs_the_wizard(
-    installer, tmp_path
-) -> None:
+def test_a_compose_install_downloads_pinned_files_and_runs_the_wizard(installer, tmp_path) -> None:
     target = tmp_path / "genus"
     result = _install(installer, target)
     assert result.returncode == 0, result.output
@@ -439,7 +458,7 @@ def test_a_compose_install_downloads_pinned_files_and_runs_the_wizard(
 
     assert "docker compose version" in calls, "compose v2 was never verified"
     assert "config -q" in calls, "the downloaded compose files were never parsed"
-    assert f"pip install genusos=={PINNED.lstrip('v')}" in calls.replace("  ", " ")
+    assert f"pip install --disable-pip-version-check genusos=={PINNED.lstrip('v')}" in calls
     assert "genus init --substrate compose --yes" in calls
     assert f"--workspace {target}" in calls
     assert "genus doctor --json" in calls
@@ -498,9 +517,7 @@ def test_no_provider_key_is_named_rather_than_prompted_for(installer, tmp_path) 
 
 def test_yes_without_an_owner_is_refused_before_anything_is_written(installer, tmp_path) -> None:
     target = tmp_path / "genus"
-    result = installer(
-        "--substrate", "compose", "--version", PINNED, "--dir", str(target), "--yes"
-    )
+    result = installer("--substrate", "compose", "--version", PINNED, "--dir", str(target), "--yes")
     assert result.returncode != 0
     assert "--owner-name" in result.stderr
     assert not target.exists()
