@@ -257,6 +257,19 @@ def _container_name(task: dict[str, Any]) -> str:
     return ("wcb-" + slug.strip("-"))[:60]
 
 
+#: What a task's grade() reads besides the key, with the benchmark's defaults.
+#: One table for both grader paths (in-container and ground-truth), so they
+#: cannot drift apart again.
+GRADER_ENV_DEFAULTS = {
+    "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
+    "JUDGE_MODEL": "openai/gpt-5.4",
+}
+
+
+def _grader_env() -> dict[str, str]:
+    return {name: os.environ.get(name, default) for name, default in GRADER_ENV_DEFAULTS.items()}
+
+
 def _container_command(
     task: dict[str, Any], workspace: Path, out_dir: Path, model: str | None
 ) -> tuple[list[str], Path]:
@@ -291,6 +304,10 @@ def _container_command(
         # next wedge carries its own post-mortem.
         "ROBOTHOR_WATCHDOG_TRACE_FILE": "/out/wd.log",
         "OPENROUTER_API_KEY": _api_key(),
+        # The task's own grade() runs in THIS container after the agent and
+        # reads these by name (2026-09-15: five of six Social tasks scored 0
+        # on a KeyError for the base URL — the agent had finished the work).
+        **_grader_env(),
     }
     if model:
         env["ROBOTHOR_BENCH_MODEL"] = model
@@ -502,10 +519,7 @@ def _grade_with_ground_truth(
     env_file.chmod(0o600)
     env_file.write_text(
         f"OPENROUTER_API_KEY={_api_key()}\n"
-        "OPENROUTER_BASE_URL="
-        + os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-        + "\n"
-        "JUDGE_MODEL=" + os.environ.get("JUDGE_MODEL", "openai/gpt-5.4") + "\n",
+        + "".join(f"{k}={v}\n" for k, v in _grader_env().items()),
         encoding="utf-8",
     )
 
