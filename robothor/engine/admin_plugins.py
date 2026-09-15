@@ -110,6 +110,13 @@ def plugin_listing() -> dict[str, Any]:
             "present": lock.present,
             "malformed": lock.malformed,
             "rows": len(lock.rows),
+            # WHICH damage, in the words the CLI and the doctor already print.
+            # `malformed` covers four different faults with four different
+            # remedies -- unreadable path, undecodable bytes, invalid JSON, no
+            # `plugins` list -- and a page holding only the boolean had to write
+            # a fifth sentence covering all of them at once. Never the path:
+            # `Lockfile.problem` is built from the error class, not the file.
+            "problem": lock.problem or None,
         },
         "plugins": [row.as_json() for row in inventory()],
     }
@@ -340,7 +347,18 @@ def reload_plugin_stack() -> dict[str, Any]:
         "generation": gen,
         "loaded": len(result.loaded),
         "failures": [
-            {"name": f.name, "group": f.group, "reason": f.reason} for f in result.failures
+            {
+                "name": f.name,
+                "group": f.group,
+                "reason": f.reason,
+                # `name` is the ENTRY POINT. One distribution appears here once
+                # per group it publishes into, and `genus-hostinfo` shows up as
+                # `hostinfo`, so without this there is no join key at all and
+                # every consumer has to invent one. None means the loader could
+                # not name the distribution, never that it did not look.
+                "distribution": f.distribution,
+            }
+            for f in result.failures
         ],
     }
 

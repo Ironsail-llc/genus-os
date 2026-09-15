@@ -117,6 +117,7 @@ class TestListing:
             "present": False,
             "malformed": False,
             "rows": 0,
+            "problem": None,
         }
         assert [p["name"] for p in body["plugins"]] == ["acme-tools"]
 
@@ -161,6 +162,52 @@ class TestListing:
         body = client.get("/api/admin/plugins").json()
         assert body["lockfile"]["malformed"] is True
         assert body["plugins"][0]["state"] == "loaded", "a corrupt file must not disable anything"
+
+    def test_the_lockfile_problem_is_the_sentence_the_cli_prints(
+        self, client, one_plugin, lock_path
+    ):
+        """``malformed`` says THAT it is damaged; ``problem`` says which damage.
+
+        The CLI and the doctor both print ``Lockfile.problem``. The Helm had one
+        sentence of its own covering all four cases at once — including the
+        unreadable PATH, whose remedy is a filesystem and not a rebuild. One
+        field, one wording, three surfaces.
+        """
+        lock_path.write_text("{{{", encoding="utf-8")
+        lock = client.get("/api/admin/plugins").json()["lockfile"]
+        assert lock["problem"] == lockfile.read_lockfile().problem
+        assert "is not valid JSON" in lock["problem"]
+
+    def test_a_lockfile_with_no_plugins_list_says_so(self, client, one_plugin, lock_path):
+        lock_path.write_text('{"version": 1}', encoding="utf-8")
+        assert (
+            client.get("/api/admin/plugins").json()["lockfile"]["problem"]
+            == "does not hold a 'plugins' list"
+        )
+
+    def test_a_healthy_lockfile_has_no_problem(self, client, one_plugin):
+        lockfile.sync()
+        body = client.get("/api/admin/plugins").json()
+        assert body["lockfile"]["malformed"] is False
+        assert body["lockfile"]["problem"] is None, "an empty string is not a problem"
+
+    def test_the_problem_never_names_the_path(self, client, one_plugin, lock_path):
+        lock_path.mkdir()
+        lock = client.get("/api/admin/plugins").json()["lockfile"]
+        assert lock["problem"], "a path that will not read is a problem"
+        assert "plugins.lock" not in lock["problem"]
+        assert "/" not in lock["problem"]
+
+    def test_a_row_says_whether_this_platform_installed_it(self, client, one_plugin):
+        """``source`` present is what lets the Helm offer Remove at all.
+
+        Its ABSENCE is the load-bearing half: ``genus plugin remove`` refuses a
+        row this platform did not put there, so a button that offered it anyway
+        would be promising an act the engine answers 422 to.
+        """
+        lockfile.sync()
+        row = client.get("/api/admin/plugins").json()["plugins"][0]
+        assert row["source"] is None, "sync() records what somebody else installed"
 
 
 class TestEnableDisable:
@@ -208,8 +255,27 @@ class TestReload:
         body = client.post("/api/admin/plugins/reload").json()
         assert body["loaded"] == 0
         assert body["failures"] == [
-            {"name": "probe", "group": "genus.tools", "reason": lockfile.DISABLED_REASON}
+            {
+                "name": "probe",
+                "group": "genus.tools",
+                "reason": lockfile.DISABLED_REASON,
+                "distribution": "acme-tools",
+            }
         ]
+
+    def test_a_failure_names_the_distribution_it_belongs_to(self, client, one_plugin):
+        """``name`` is the ENTRY POINT, not the distribution.
+
+        One distribution appears here once per group it publishes into, and
+        ``genus-hostinfo`` shows up as ``hostinfo``. Without this field the Helm
+        had to guess which card to file a refusal under, and a wrong guess
+        reports a plugin the operator did not disable as one they did.
+        """
+        broken = _EP(payload={"genus_contract_version": "0.1", "handlers": {"probe": 1}})
+        with patch.object(loader, "_discover", lambda: [broken]):
+            failure = client.post("/api/admin/plugins/reload").json()["failures"][0]
+        assert failure["name"] == "probe"
+        assert failure["distribution"] == "acme-tools"
 
     def test_a_reload_that_fails_is_reported_not_raised(self, client, one_plugin):
         from robothor.engine import daemon
