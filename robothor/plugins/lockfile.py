@@ -342,6 +342,25 @@ def _row_from_json(data: Any) -> LockRow | None:
     )
 
 
+def _read_text(path: Path) -> str:
+    """The file's bytes as text, never raising on the bytes themselves.
+
+    ``errors="replace"``, and that is the whole point. ``Path.read_text`` with
+    a strict codec raises ``UnicodeDecodeError`` — a ``ValueError``, so it slid
+    past every ``except OSError`` in this module — and one non-UTF-8 byte in
+    the lockfile therefore produced a traceback out of `genus plugin list`, a
+    doctor check that raised instead of failing, and bare 500s where the 409
+    and 503 had been carefully built. A file that is not text is a file whose
+    CONTENT is unreadable, which is a case this module already knows how to
+    report; it is not a new kind of catastrophe.
+
+    Replacing rather than refusing also keeps the ``--force`` salvage useful:
+    a file corrupted in one place still yields the names it is about to
+    discard, instead of nothing.
+    """
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
 def read_lockfile(path: Path | None = None) -> Lockfile:
     """Read the lockfile. Never raises, never blocks boot.
 
@@ -354,13 +373,17 @@ def read_lockfile(path: Path | None = None) -> Lockfile:
     if resolved is None:
         return Lockfile(path=None, present=False)
     try:
-        raw = resolved.read_text(encoding="utf-8")
+        raw = _read_text(resolved)
     except FileNotFoundError:
         return Lockfile(path=resolved, present=False)
     except OSError as exc:
         problem = f"cannot be read ({type(exc).__name__})"
         _warn_once(resolved, problem)
         return Lockfile(path=resolved, present=True, malformed=True, problem=problem, io_error=exc)
+    except ValueError as exc:  # noqa: BLE001 - a decode that errors="replace" could not absorb
+        problem = f"is not readable text ({type(exc).__name__})"
+        _warn_once(resolved, problem)
+        return Lockfile(path=resolved, present=True, malformed=True, problem=problem)
 
     try:
         data = json.loads(raw)
@@ -574,8 +597,11 @@ def sync(path: Path | None = None, *, force: bool = False) -> SyncResult:
     rejected_copy = ""
     if force and lock.present and not lock.trustworthy:
         try:
-            raw = resolved.read_text(encoding="utf-8")
-        except OSError:
+            raw = _read_text(resolved)
+        except (OSError, ValueError):
+            # Salvage is a courtesy. Failing to read the bytes here must not
+            # turn a forced rebuild into a traceback — the rejected copy below
+            # is what actually preserves them.
             raw = ""
         salvaged = _salvage(raw)
         discarded_rows = len(lock.bad_rows) or max(len(salvaged) - len(lock.rows), 0)

@@ -422,10 +422,10 @@ what it has been told about, so a fresh install behaves as it always has and
 
 Two different cases, and they are handled differently on purpose:
 
-* **The whole file** does not parse, or cannot be read at all. It is treated as
-  absent — logged once, reported by `plugins.lockfile`, and nothing is
-  refused. A governance file that could brick an engine would be deleted by the
-  first operator it bricked.
+* **The whole file** does not parse, is not even decodable text, or cannot be
+  read at all. It is treated as absent — logged once, reported by
+  `plugins.lockfile`, and nothing is refused. A governance file that could
+  brick an engine would be deleted by the first operator it bricked.
 * **One row** does not parse (not an object, or missing `name`). The rows that
   *do* parse still govern — discarding them would put every other disabled
   plugin straight back into service — and the unreadable ones are counted,

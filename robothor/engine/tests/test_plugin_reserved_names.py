@@ -213,20 +213,43 @@ class TestNoDrift:
             assert builtin_hook_names() == {"channel_bus.surface"}
             assert loader.builtin_names("genus.hooks") == {"channel_bus.surface"}
 
+
+def _groups_without_a_guard(source: str) -> list[str]:
+    """Table entries `source` never mentions — i.e. that nothing asserts."""
+    return sorted(group for group in loader._BUILTIN_SOURCES if f'"{group}"' not in source)
+
+
+class TestTheDriftGuardIsComplete:
+    """Every `_BUILTIN_SOURCES` entry must have an assertion in `TestNoDrift`.
+
+    Deliberately a SEPARATE class, so that its own group literals are not part
+    of the source being scanned — a meta-guard that satisfies itself is the
+    vacuous-control pattern this whole review keeps finding.
+    """
+
     def test_every_table_entry_has_a_drift_assertion(self):
-        """A table entry with no guard is the one that drifts. It was schemas."""
-        guarded = {
-            "genus.tools",
-            "genus.schemas",
-            "genus.guardrails",
-            "genus.models",
-            "genus.services",
-            "genus.channels",
-            "genus.commands",
-            "genus.doctor",
-            "genus.hooks",
-        }
-        assert set(loader._BUILTIN_SOURCES) == guarded
+        import inspect
+
+        ungoverned = _groups_without_a_guard(inspect.getsource(TestNoDrift))
+        assert not ungoverned, (
+            f"these groups are in _BUILTIN_SOURCES with no assertion in TestNoDrift: "
+            f"{ungoverned}. A derivation nothing compares to its caller is how the "
+            "53-name genus.schemas gap survived round 1."
+        )
+
+    def test_it_would_notice_a_deleted_assertion(self):
+        """Not just an added table entry.
+
+        A hardcoded expected set only catches the add direction; deleting a
+        guard during a refactor left it still matching. This proves the scan
+        fails when an assertion goes away.
+        """
+        import inspect
+
+        source = inspect.getsource(TestNoDrift)
+        for group in loader._BUILTIN_SOURCES:
+            gutted = source.replace(f'"{group}"', '"genus.deleted-assertion"')
+            assert _groups_without_a_guard(gutted) == [group], group
 
 
 class TestHooksAreNotCachedStale:

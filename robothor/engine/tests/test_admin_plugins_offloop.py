@@ -236,6 +236,33 @@ class TestSyncRoute:
         assert "IsADirectoryError" in response.text
         assert "--force" not in response.text, "force cannot fix a read-only path"
 
+    def test_undecodable_bytes_are_409_not_a_bare_500(self, client, one_plugin, plugin_lockfile):
+        """A third corruption shape, and the one both handlers missed.
+
+        ``Path.read_text`` raises ``UnicodeDecodeError`` — a ``ValueError``,
+        not an ``OSError`` — so a lockfile holding one non-UTF-8 byte fell past
+        both the 409 and the 503 arm and came back as a bare 500.
+        """
+        lockfile.sync()
+        plugin_lockfile.write_bytes(b'\xff\xfe{"lockfile_version": 1, "plugins": []}')
+
+        response = client.post("/api/admin/plugins/sync")
+        assert response.status_code == 409
+        assert "--force" in response.json()["detail"]
+
+    def test_undecodable_bytes_do_not_break_the_listing(self, client, one_plugin, plugin_lockfile):
+        lockfile.sync()
+        plugin_lockfile.write_bytes(b"\xff\xfe not text")
+        body = client.get("/api/admin/plugins").json()
+        assert body["lockfile"]["malformed"] is True
+        assert body["plugins"][0]["state"] == "loaded"
+
+    def test_undecodable_bytes_do_not_break_a_disable(self, client, one_plugin, plugin_lockfile):
+        lockfile.sync()
+        plugin_lockfile.write_bytes(b"\xff\xfe not text")
+        # No readable row, so 404 — the honest answer, and not a 500.
+        assert client.post("/api/admin/plugins/acme-tools/disable").status_code == 404
+
     def test_the_two_failures_have_different_statuses(
         self, client, one_plugin, plugin_lockfile, tmp_path, monkeypatch
     ):

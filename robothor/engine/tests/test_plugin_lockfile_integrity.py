@@ -320,6 +320,108 @@ class TestUnwritablePath:
         with patch.object(loader, "_discover", lambda: [_EP()]):
             assert "probe" in loader.load_plugins().tools
 
+
+# ── S1: bytes that are not text at all ─────────────────────────────────
+
+
+#: A lockfile written by a process that was not writing UTF-8 — a half-flushed
+#: page, a UTF-16 BOM, a disk that returned garbage. ``Path.read_text`` raises
+#: ``UnicodeDecodeError``, which is a ``ValueError`` and not an ``OSError``, so
+#: every caller that had carefully handled both "unreadable path" and
+#: "unparseable JSON" fell through to a traceback on this third shape.
+_NOT_UTF8 = b'\xff\xfe{"lockfile_version": 1, "plugins": []}'
+
+
+class TestBytesThatAreNotText:
+    def test_the_read_reports_malformed_rather_than_raising(self, plugin_lockfile):
+        plugin_lockfile.write_bytes(_NOT_UTF8)
+        lock = lockfile.read_lockfile()
+        assert lock.malformed is True
+        assert lock.present is True
+        assert lock.rows == {}
+        assert lock.problem, "the operator has to be told what is wrong"
+
+    def test_it_is_not_reported_as_an_io_fault(self, plugin_lockfile):
+        """``io_error`` means the PATH will not read, which drives a 503 and a
+        re-raise. Undecodable CONTENT is the 409/``--force`` shape."""
+        plugin_lockfile.write_bytes(_NOT_UTF8)
+        assert lockfile.read_lockfile().io_error is None
+
+    def test_a_load_is_unaffected(self, plugin_lockfile, one_plugin):
+        plugin_lockfile.write_bytes(_NOT_UTF8)
+        result = loader.load_plugins()
+        assert "probe" in result.tools
+        assert result.failures == []
+
+    def test_sync_refuses_rather_than_raising(self, plugin_lockfile, one_plugin):
+        plugin_lockfile.write_bytes(_NOT_UTF8)
+        result = lockfile.sync()
+        assert result.ok is False
+        assert "--force" in result.refused
+
+    def test_force_rebuilds_and_keeps_the_rejected_bytes(self, plugin_lockfile, one_plugin):
+        plugin_lockfile.write_bytes(_NOT_UTF8)
+        result = lockfile.sync(force=True)
+        assert result.ok is True
+        assert result.rejected_copy == "plugins.lock.rejected"
+        assert plugin_lockfile.with_name(result.rejected_copy).read_bytes() == _NOT_UTF8
+
+    def test_force_still_salvages_what_it_can(self, plugin_lockfile, one_plugin):
+        """One bad byte must not cost the operator the whole message.
+
+        ``errors="replace"`` means the undecodable bytes become U+FFFD and the
+        rest of the text is still scanned, so a file corrupted in one place
+        still names the disables it is about to discard.
+        """
+        lockfile.sync()
+        lockfile.set_enabled("acme-tools", False)
+        intact = plugin_lockfile.read_bytes()
+        plugin_lockfile.write_bytes(b"\xff\xfe" + intact[: intact.rindex(b"]")])
+
+        result = lockfile.sync(force=True)
+        assert result.discarded_disables == ("acme-tools",)
+
+    def test_the_doctor_fails_rather_than_raising(self, plugin_lockfile, one_plugin):
+        import asyncio
+
+        from robothor.doctor.checks import plugins as plugin_checks
+        from robothor.doctor.tests.conftest import make_ctx
+
+        plugin_lockfile.write_bytes(_NOT_UTF8)
+        check = next(c for c in plugin_checks.CHECKS if c.id == "plugins.lockfile")
+        result = asyncio.run(check.run(make_ctx()))
+
+        assert result.status == "fail"
+        assert "--force" in result.detail
+
+    def test_the_cli_exits_2_with_a_sentence(self, plugin_lockfile, one_plugin, capsys):
+        import argparse
+
+        from robothor.cli.plugins import cmd_plugin
+
+        plugin_lockfile.write_bytes(_NOT_UTF8)
+        assert cmd_plugin(argparse.Namespace(plugin_command="sync", force=False)) == 2
+        assert "--force" in capsys.readouterr().err
+
+    def test_list_and_info_do_not_traceback(self, plugin_lockfile, one_plugin, capsys):
+        import argparse
+
+        from robothor.cli.plugins import cmd_plugin
+
+        plugin_lockfile.write_bytes(_NOT_UTF8)
+        assert cmd_plugin(argparse.Namespace(plugin_command="list")) == 0
+        assert cmd_plugin(argparse.Namespace(plugin_command="info", name="acme-tools")) == 0
+        assert "unreadable" in capsys.readouterr().out
+
+    def test_disable_exits_2_rather_than_raising(self, plugin_lockfile, one_plugin, capsys):
+        import argparse
+
+        from robothor.cli.plugins import cmd_plugin
+
+        plugin_lockfile.write_bytes(_NOT_UTF8)
+        assert cmd_plugin(argparse.Namespace(plugin_command="disable", name="acme-tools")) == 2
+        assert "acme-tools" in capsys.readouterr().err
+
     def test_the_cli_exits_2_rather_than_printing_a_traceback(
         self, tmp_path, monkeypatch, one_plugin, capsys
     ):
