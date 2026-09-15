@@ -34,6 +34,13 @@ Four rules the routes enforce:
 Handlers are plain ``def`` (not ``async def``) on purpose: psycopg2 is
 synchronous, so FastAPI must run them in its worker threadpool rather than on
 the event loop (see ``crm/bridge/tests/test_route_concurrency.py``).
+
+**This disagrees with ``POST /api/memory/search`` and that is deliberate.**
+``routers/memory.py``'s search route is ``async def`` and awaits ``search_facts``
+ON the event loop, where its synchronous psycopg2 calls block every other
+request in the process. The route here does the same work in a worker thread.
+Do not "fix" this one to match the older one — the difference is the point, and
+the older one is the one that is wrong.
 """
 
 from __future__ import annotations
@@ -103,9 +110,15 @@ class ForgetRequest(BaseModel):
     ``Field`` cap is enforced by FastAPI before the route runs, and its
     rejection is ``{"detail": [ ... ]}`` — a second 422 body shape for a route
     whose contract says every refusal is a flat ``{"detail": "<sentence>"}``.
+
+    The TYPE is unconstrained for the same reason, and that is not pedantry:
+    ``reason: str | None`` made ``{"reason": 12345}`` a pydantic type error and
+    therefore the nested body, so the flat contract held for four spellings of
+    "no reason" and broke on the fifth. ``Any`` puts every one of them through
+    ``_reason``, which is where the sentence the operator reads is written.
     """
 
-    reason: str | None = None
+    reason: Any = None
 
 
 def _fact_id(value: str, *, field: str = "fact id") -> int:
@@ -124,7 +137,20 @@ def _fact_id(value: str, *, field: str = "fact id") -> int:
 
 
 def _reason(body: ForgetRequest | None) -> str:
-    text = ((body.reason if body else None) or "").strip()
+    """The operator's sentence, or a flat 422.
+
+    The type is checked HERE rather than by the annotation, because
+    ``ForgetRequest.reason`` is ``Any``: a ``str | None`` annotation made
+    ``{"reason": 12345}`` a pydantic error and therefore the nested
+    ``{"detail": [ ... ]}`` body, so the flat contract held for four spellings
+    of a bad reason and broke on the fifth. Rejected rather than coerced — a
+    reason is a sentence a person will read back, and ``str(["a", "b"])`` in
+    the audit trail is not one.
+    """
+    raw = body.reason if body is not None else None
+    if raw is not None and not isinstance(raw, str):
+        raise HTTPException(status_code=422, detail="a reason must be text")
+    text = (raw or "").strip()
     if len(text) < MIN_REASON:
         raise HTTPException(
             status_code=422,

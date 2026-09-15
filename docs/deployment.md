@@ -764,10 +764,16 @@ Three more operator surfaces on the bridge, behind the same operator gate as
 
 **Memory.** `GET /api/memory/facts` pages what this tenant believes, newest
 first, filtered by `q` (which goes through the same search path as
-`/api/memory/search`), `entity`, and `active=true|false|all`.
+`/api/memory/search`), `entity`, and `active=true|false|all`. The filters
+compose: `q` with `entity` still filters by entity. `cursor` is keyset
+pagination over the browse order only — combined with `q` it is a `422`, because
+a relevance ranking has no keyset.
 `POST /api/memory/facts/{id}/forget/preview` answers what a forget would do —
 which entities the fact is filed under, how many nightly episodes cite it, and
-which always-in-context memory blocks quote its text — and writes nothing.
+which always-in-context memory blocks quote its text — and writes nothing. For
+a fact under twelve characters the block scan is skipped and
+`references.blocks_scanned` is `false`: a substring that short matches
+everything, and a warning that cries wolf is the one that gets ignored.
 `POST /api/memory/facts/{id}/forget` takes a reason (3–500 characters) and
 **bounds** the fact: `is_active=false`, `valid_to=now()`. Nothing is deleted,
 and only the named row changes — supersession chains are not followed. A second
@@ -779,9 +785,14 @@ the fact id and the reason, never the text.
 `GET /api/audit/events.csv` exports the audit log itself — same filters as
 `/api/audit/events`, up to 5,000 rows, as a `text/csv` attachment. Both admit
 the `auditor` role as well as an operator; nothing else on `/api/controls`
-does. Cells are sanitised and anything a spreadsheet would evaluate is prefixed
-with an apostrophe, so an audit detail cannot become a formula. A failed export
-is a real `500` rather than an empty file.
+does. Cells are sanitised, run through the platform's secret redactor, and
+anything a spreadsheet would evaluate is prefixed with an apostrophe, so an
+audit detail cannot become a formula or carry a credential off the box. A
+failed export is a real `500` rather than an empty file.
+
+`audit_log` has no tenant column, so **the export is appliance-wide**, not
+caller-tenant-wide — the same rows `GET /api/audit/events` has always returned.
+The `<tenant>` in the filename names who exported it, not what is inside.
 
 **Logs.** `GET /api/logs/units` lists the units that may be followed — derived
 from the unit files `scripts/install-units.sh` installs, so a unit added to

@@ -124,7 +124,21 @@ def test_a_cursor_cannot_be_combined_with_a_query(controls_client_as_operator, n
     assert "q" in resp.json()["detail"]
 
 
-@pytest.mark.parametrize("body", [{}, {"reason": ""}, {"reason": "  "}, {"reason": "ab"}])
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"reason": ""},
+        {"reason": "  "},
+        {"reason": "ab"},
+        # A non-string reason is the same refusal, and must render the same
+        # way: a pydantic ``str`` annotation would reject these before the
+        # handler runs and answer with the nested ``{"detail": [ {...} ]}``.
+        {"reason": 12345},
+        {"reason": ["a", "b"]},
+        {"reason": None},
+    ],
+)
 def test_a_forget_without_a_real_reason_is_422(controls_client_as_operator, no_db, body):
     resp = controls_client_as_operator.post(FORGET, json=body)
     assert resp.status_code == 422
