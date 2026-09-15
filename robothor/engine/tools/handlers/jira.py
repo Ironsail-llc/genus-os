@@ -29,8 +29,13 @@ def _get_base_url() -> str:
 
 
 def _get_auth_header() -> str:
+    # The token goes through the accessor (vault first) so a rotation the
+    # assistant performs takes effect without a restart; the e-mail is an
+    # identifier, not a credential, and stays an ordinary setting read.
+    from robothor.secrets import get_secret
+
     email = os.environ.get("JIRA_USER_EMAIL", "")
-    token = os.environ.get("JIRA_API_TOKEN", "")
+    token = get_secret("JIRA_API_TOKEN") or ""
     if not email or not token:
         return ""
     return base64.b64encode(f"{email}:{token}".encode()).decode()

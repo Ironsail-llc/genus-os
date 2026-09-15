@@ -45,7 +45,11 @@ def cmd_codex(args: Namespace) -> int:
         try:
             asyncio.run(ensure_chatgpt_login())
             print("Codex subscription auth is available (ChatGPT login).")
-            if os.environ.get("OPENAI_API_KEY"):
+            # The accessor, so the warning is about the credential a codex
+            # subprocess would actually inherit -- vault rows included.
+            from robothor.secrets import get_secret
+
+            if get_secret("OPENAI_API_KEY"):
                 print(
                     "Warning: OPENAI_API_KEY is set in this shell. "
                     "Genus removes it for codex/* subprocess calls to avoid API billing."

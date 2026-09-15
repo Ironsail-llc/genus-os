@@ -355,6 +355,11 @@ _BENCHMARK_EXCLUDED_TOOLS: frozenset[str] = _BENCHMARK_WITHHELD_READS | frozense
         "tool_call",
         # Vault writes.
         "vault_set",
+        # Dials a real vendor endpoint with a real credential. Read-only as
+        # far as this instance is concerned, and still excluded: a benchmark
+        # run burning an operator's rate limit against their own account is a
+        # side effect on something the harness does not own.
+        "vault_test",
         # Wall-clock burn against a per-task cap.
         "wait_seconds",
     }

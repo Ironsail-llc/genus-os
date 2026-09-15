@@ -428,6 +428,28 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _tool_policy(manifest: dict[str, Any]) -> dict[str, Any]:
+    """The three manifest keys that say what an agent may reach.
+
+    One function because they are one decision -- which tools, which not, and
+    which credentials the tools' child processes may see -- and because
+    ``manifest_to_agent_config`` is on a size ratchet that (rightly) makes a
+    new field pay for itself by extraction rather than by raising the cap.
+
+    ``secrets`` is normalised here rather than trusted: a manifest is
+    hand-edited YAML, and a stray blank entry or a non-string would otherwise
+    reach :func:`robothor.engine.exec_env.build_exec_env` as a grant for the
+    empty name.
+    """
+    return {
+        "tools_allowed": manifest.get("tools_allowed", []),
+        "tools_denied": manifest.get("tools_denied", []),
+        "secret_grants": [
+            str(name).strip() for name in manifest.get("secrets", []) if str(name).strip()
+        ],
+    }
+
+
 def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
     """Convert a YAML manifest dict to an AgentConfig."""
     model = manifest.get("model", {})
@@ -581,11 +603,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         delivery_channel=delivery.get("channel", ""),
         delivery_to=delivery.get("to", "") or _default_chat_id(),
         surface_to_channel=bool(delivery.get("surface_to_channel", True)),
-        tools_allowed=manifest.get("tools_allowed", []),
-        tools_denied=manifest.get("tools_denied", []),
-        secret_grants=[
-            str(name).strip() for name in manifest.get("secrets", []) if str(name).strip()
-        ],
+        **_tool_policy(manifest),
         service_role=resolve_service_role(
             str(manifest.get("id", "")),
             manifest.get("role", manifest.get("service_role", "")),
