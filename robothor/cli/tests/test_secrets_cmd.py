@@ -169,3 +169,91 @@ def test_a_value_already_identical_in_the_vault_is_skipped(stores, monkeypatch, 
         capsys, secrets_command="migrate", from_env=True, dry_run=False, only=None, tenant=None
     )
     assert "already" in out.lower() or "unchanged" in out.lower()
+
+
+# ── R1: migrate must never revert a rotation ─────────────────────────────────
+
+
+def test_migrate_never_overwrites_a_differing_vault_row(stores, monkeypatch, capsys):
+    """Review R1, and it was the runbook's own step 3 doing it.
+
+    The vault holds what the assistant rotated to; the environment holds the
+    dead token the box booted with. `migrate` compared fingerprints, saw they
+    differed, and WROTE — reverting every rotation the assistant had ever
+    performed, and printing `stored` while it did.
+
+    The precedence rule is "a vault row that exists beats the environment". A
+    migration that inverts it is the incident, executed by the documented
+    remediation for the incident.
+    """
+    monkeypatch.setenv("GITHUB_TOKEN", FAKE_ENV_TOKEN)
+    stores["providers/github/api_key"] = FAKE_VAULT_TOKEN
+
+    code, out = _run(
+        capsys, secrets_command="migrate", from_env=True, dry_run=False, only=None, tenant=None
+    )
+
+    assert stores["providers/github/api_key"] == FAKE_VAULT_TOKEN, (
+        "the migration overwrote the vault's value with the stale environment copy"
+    )
+    assert code == 0
+    assert "GITHUB_TOKEN" in out
+    assert "conflict" in out.lower() or "shadow" in out.lower()
+
+
+def test_the_conflict_line_names_both_fingerprints_and_neither_value(stores, monkeypatch, capsys):
+    """An operator deciding which copy to keep needs to tell them apart."""
+    from robothor.secrets.fingerprint import fingerprint
+
+    monkeypatch.setenv("GITHUB_TOKEN", FAKE_ENV_TOKEN)
+    stores["providers/github/api_key"] = FAKE_VAULT_TOKEN
+    _, out = _run(
+        capsys, secrets_command="migrate", from_env=True, dry_run=False, only=None, tenant=None
+    )
+    assert fingerprint(FAKE_ENV_TOKEN) in out
+    assert fingerprint(FAKE_VAULT_TOKEN) in out
+    assert FAKE_ENV_TOKEN not in out
+    assert FAKE_VAULT_TOKEN not in out
+
+
+def test_the_dry_run_reports_the_conflict_too(stores, monkeypatch, capsys):
+    """A dry run that says `would store` and a real run that skips would send
+    an operator looking for a bug in the real run."""
+    monkeypatch.setenv("GITHUB_TOKEN", FAKE_ENV_TOKEN)
+    stores["providers/github/api_key"] = FAKE_VAULT_TOKEN
+    _, out = _run(
+        capsys, secrets_command="migrate", from_env=True, dry_run=True, only=None, tenant=None
+    )
+    assert "would store  GITHUB_TOKEN" not in out
+    assert "conflict" in out.lower() or "shadow" in out.lower()
+
+
+def test_overwrite_names_the_one_credential_it_may_replace(stores, monkeypatch, capsys):
+    """The escape hatch is per NAME, never a blanket flag: an operator who
+    means to revert one credential does not mean to revert all of them."""
+    monkeypatch.setenv("GITHUB_TOKEN", FAKE_ENV_TOKEN)
+    monkeypatch.setenv("BRAVE_API_KEY", "brave-FAKE-env-0000")
+    stores["providers/github/api_key"] = FAKE_VAULT_TOKEN
+    stores["providers/brave/api_key"] = "brave-FAKE-vault-1111"
+
+    _run(
+        capsys,
+        secrets_command="migrate",
+        from_env=True,
+        dry_run=False,
+        only=None,
+        tenant=None,
+        overwrite=["GITHUB_TOKEN"],
+    )
+    assert stores["providers/github/api_key"] == FAKE_ENV_TOKEN, "the named row was not replaced"
+    assert stores["providers/brave/api_key"] == "brave-FAKE-vault-1111", (
+        "--overwrite GITHUB_TOKEN replaced a credential it did not name"
+    )
+
+
+def test_an_absent_vault_row_is_still_migrated_normally(stores, monkeypatch, capsys):
+    """The conflict rule must not break the ordinary case, which is the whole
+    point of the command: a credential the vault does not hold yet."""
+    monkeypatch.setenv("GITHUB_TOKEN", FAKE_ENV_TOKEN)
+    _run(capsys, secrets_command="migrate", from_env=True, dry_run=False, only=None, tenant=None)
+    assert FAKE_ENV_TOKEN in stores.values()

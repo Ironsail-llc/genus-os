@@ -66,14 +66,24 @@ genus secrets migrate --from-env
 `migrate` refuses bootstrap names outright, so step 3 cannot move something the
 box needs in order to start.
 
+**It also never overwrites a vault row that differs.** If the assistant has
+already rotated a credential, the vault holds the new one and the environment
+holds the dead one the box booted with — so a migration that wrote would revert
+the rotation, which is the incident performed by its own remedy. Those names are
+reported as `CONFLICT` with a fingerprint per store and skipped. Check which copy
+is alive (`vault_test`) before doing anything; if the environment's really is the
+one you want, `--overwrite NAME` replaces that one row and no other.
+
 ### Then delete the migrated entries from the file
 
 ```bash
 sops /etc/robothor/secrets.enc.json
 ```
 
-Remove every name `migrate` reported as stored. Compare fingerprints first if
-you want to be certain the vault has the same value:
+Remove every name `migrate` reported as stored — and every name it reported as
+`CONFLICT`, once you have confirmed the vault's copy is the one you want, since
+those are exactly the environment entries that were shadowing a rotation.
+Compare fingerprints first if you want to be certain:
 
 ```bash
 genus secrets status | grep GITHUB_TOKEN

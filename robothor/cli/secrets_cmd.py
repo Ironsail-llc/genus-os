@@ -27,6 +27,7 @@ from, and it says so in its own name.
 from __future__ import annotations
 
 import argparse  # noqa: TC003
+from typing import Any
 
 from robothor.constants import DEFAULT_TENANT
 
@@ -151,9 +152,19 @@ def _migrate(args: argparse.Namespace) -> int:
     else:
         candidates = sorted(environment_credential_names())
 
+    overwrite = {n.strip() for n in (getattr(args, "overwrite", None) or []) if n.strip()}
+
     planned: list[tuple[str, str, str]] = []  # (name, vault key, fingerprint)
     refused: list[str] = []
     unchanged: list[str] = []
+    # The vault holds a DIFFERENT value for these, and it is KEPT. Overwriting
+    # inverted the platform's own precedence rule while printing "stored":
+    # once the assistant has rotated anything the vault holds the new
+    # credential and the environment holds the dead one the box booted with, so
+    # a migration that wrote would revert every rotation -- and the SOPS
+    # runbook tells the operator to run exactly this. The incident, executed by
+    # the remediation for the incident.
+    conflicts: list[tuple[str, Any]] = []
 
     for name in candidates:
         value = value_for(name)
@@ -168,6 +179,9 @@ def _migrate(args: argparse.Namespace) -> int:
         if status.in_vault and status.vault_fingerprint == fingerprint(value):
             unchanged.append(name)
             continue
+        if status.in_vault and name not in overwrite:
+            conflicts.append((name, status))
+            continue
         planned.append((name, _vault_key_for(name), fingerprint(value)))
 
     for name in refused:
@@ -178,6 +192,17 @@ def _migrate(args: argparse.Namespace) -> int:
         )
     for name in unchanged:
         print(f"already  {name}  — the vault holds the same value; nothing to do.")
+    for name, status in conflicts:
+        written = f", written {status.updated_at}" if status.updated_at else ""
+        print(
+            f"CONFLICT {name}  — the vault already holds a DIFFERENT value and it was "
+            f"kept. environment {status.env_fingerprint}, vault "
+            f"{status.vault_fingerprint} (at {status.vault_key}{written}). The vault "
+            "wins for application credentials, so readers are already served its copy; "
+            "`vault_test` says whether that copy is alive. Delete the environment copy "
+            f"from the secrets file, or pass `--overwrite {name}` to replace the vault "
+            "row with it."
+        )
 
     verb = "would store" if dry_run else "stored"
     for name, key, digest in planned:
@@ -190,7 +215,7 @@ def _migrate(args: argparse.Namespace) -> int:
         if name not in {row[0] for row in planned} and name not in refused + unchanged:
             print(f"skipped  {name}  — not set in this environment.")
 
-    if not planned and not refused and not unchanged:
+    if not planned and not refused and not unchanged and not conflicts:
         print("Nothing to migrate: no application credential is set in this environment.")
 
     if planned and not dry_run:
@@ -200,6 +225,12 @@ def _migrate(args: argparse.Namespace) -> int:
             "environment for application credentials. Remove them from the instance's "
             "secrets file when you are satisfied — `genus doctor` will report them as "
             "shadows until you do."
+        )
+    if conflicts:
+        print(
+            f"\n{len(conflicts)} credential(s) were NOT migrated: the vault already "
+            "holds a different value. That is the vault winning, which is the intended "
+            "behaviour — a migration must never revert a rotation."
         )
     return 1 if (refused and only) else 0
 
