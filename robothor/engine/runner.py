@@ -51,7 +51,7 @@ from robothor.engine.context_budget import keep_context_within_budget
 # Re-exported for existing importers. The `as` form is what marks a name as
 # deliberately re-exported; a plain import reads to mypy as a private detail,
 # which is the right default and the wrong one here.
-from robothor.engine.deliverables import deadline_note, task_text_from  # noqa: E402
+from robothor.engine.deliverables import task_text_from  # noqa: E402
 from robothor.engine.error_actions import apply_error_recovery
 from robothor.engine.finalization_budget import FinalizationBudget  # noqa: E402
 from robothor.engine.injection_screen import screen_run_prompt
@@ -79,6 +79,7 @@ from robothor.engine.post_execution import apply_post_execution_guardrails
 from robothor.engine.prompts import (
     EXECUTION_MODE_PREAMBLE,
 )
+from robothor.engine.repeat_guard import drain_repeat_notes  # noqa: E402
 from robothor.engine.run_budget import (  # noqa: E402
     DEADLINE_WARNING_FRACTION as DEADLINE_WARNING_FRACTION,
 )
@@ -94,6 +95,7 @@ from robothor.engine.run_finalizer import RunFinalizationMixin
 from robothor.engine.run_identity import resolve_run_identity
 from robothor.engine.run_lifecycle import RunLifecycleMixin, spawn_post_stall_autodream
 from robothor.engine.run_llm_calls import LLMCallMixin  # noqa: E402
+from robothor.engine.run_pacing import DeadlinePacer, checkin_note, mode_for_run  # noqa: E402
 from robothor.engine.sandbox_policy import agent_holds_exec, resolve_sandbox_decision
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.session import ENGINE_CONTEXT_ROLE, AgentSession
@@ -1857,7 +1859,7 @@ class AgentRunner(
         _pre_iteration_msg_idx = len(session.messages)
         _tool_failures: dict[str, int] = {}  # per-tool failure count for circuit breaker
         _guard_state = GuardState()  # carries the 500K alert's one-shot latch
-        _deadline_warned = False  # one-shot latch for the wrap-up note
+        _pacer = DeadlinePacer(mode=mode_for_run(session.run_id))  # reads once, seeds the cache
         # ── [WALLCLOCK] the loop's own deadline — computed once, checked
         # every iteration. See the self-check below for why this exists.
         _wallclock_ceiling = effective_wallclock_ceiling(
@@ -1890,20 +1892,17 @@ class AgentRunner(
             # this for heartbeat + worker per operator directive 2026-04-20). The
             # check only fires when the cap is positive.
             # ── [DEADLINE] Tell the agent while it can still act ──
-            # A run killed at its ceiling loses whatever it had not yet
-            # written. Warning once at 80% lets it flush partial results —
-            # which is the difference between partial credit and none.
-            if not _deadline_warned and self._active_watchdog is not None:
-                _dl_note = deadline_note(
-                    self._active_watchdog.elapsed_seconds,
-                    float(getattr(self._active_watchdog, "_hard_timeout", 0) or 0),
-                    task_text_from(session.messages),
-                    getattr(agent_config, "workspace", "") or self.config.workspace,
-                )
-                if _dl_note:
-                    _deadline_warned = True
-                    logger.info("Deadline warning issued at iteration %d", _iteration)
-                    session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": _dl_note})
+            # Rungs, wording and ladder: robothor/engine/run_pacing.py. Here is
+            # the only place with the live watchdog, task text and workspace.
+            _dl_note = _pacer.note_for(
+                self._active_watchdog,
+                iteration=_iteration,
+                task_text=task_text_from(session.messages),
+                workspace=getattr(agent_config, "workspace", "") or self.config.workspace,
+                run_id=session.run.id,
+            )
+            if _dl_note:
+                session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": _dl_note})
 
             if _safety_cap > 0 and _iteration >= _safety_cap:
                 await self._force_wrapup(
@@ -1919,18 +1918,12 @@ class AgentRunner(
                 return
 
             # ── [SOFT CHECK-IN] Nudge LLM to self-assess progress ──
-            if _iteration > 0 and _checkin_interval > 0 and _iteration % _checkin_interval == 0:
-                session.messages.append(
-                    {
-                        "role": ENGINE_CONTEXT_ROLE,
-                        "content": (
-                            f"[SYSTEM] Progress check-in (iteration {_iteration}): "
-                            "Are you making progress toward the goal? If you are stuck "
-                            "in a loop or have completed the task, provide your final "
-                            "answer and stop calling tools. If making progress, continue."
-                        ),
-                    }
-                )
+            # Cadence and wording in robothor/engine/run_pacing.py.
+            _ci_note = checkin_note(
+                _iteration, _checkin_interval, _pacer.mode, run_id=session.run.id
+            )
+            if _ci_note:
+                session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": _ci_note})
 
             # ── [STATUS] Emit iteration_start lifecycle event ──
             if on_status:
@@ -2304,6 +2297,8 @@ class AgentRunner(
                         )
 
                 # ── [ESCALATION] Record error/success ──
+                # A refusal is neither: the tool never ran (see repeat_guard).
+                _refused = isinstance(result, dict) and bool(result.get("repeat_guard"))
                 if escalation:
                     if error_msg:
                         from robothor.engine.models import ErrorType
@@ -2311,16 +2306,20 @@ class AgentRunner(
                         escalation.record_error(error_type or ErrorType.UNKNOWN)
                         # Track per-kind (tool_name + error_msg_prefix) for STOP RETRYING hints
                         escalation.record_error_kind(tool_name, error_msg)
-                    else:
+                    elif not _refused:
                         escalation.record_success()
 
                 # ── [CHECKPOINT] Record success ──
-                if checkpoint and not error_msg:
+                if checkpoint and not error_msg and not _refused:
                     checkpoint.record_success()
 
                 # Track errors for this iteration
                 if error_msg:
                     iteration_errors.append((tool_name, error_msg, error_type))
+
+            # ── [REPEAT GUARD] After every tool result, never between them ──
+            for _rg_note in drain_repeat_notes(session):
+                session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": _rg_note})
 
             # ── [STATUS] Emit tools_done lifecycle event ──
             if on_status:

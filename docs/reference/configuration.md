@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-378 settings in 13 groups.
+379 settings in 13 groups.
 
 ## paths
 
@@ -319,6 +319,7 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 | `ROBOTHOR_RUN_VERIFICATION_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Switch for verifying a finished run's claims against its tool trace. |
 | `ROBOTHOR_RUN_VERIFICATION_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Run-verification ladder position: observe records the verdict, enforce marks the run failed when its claims are unsupported. |
 | `ROBOTHOR_SANDBOX_ENFORCE_OVERRIDES_MANIFEST` | bool | `false` | `robothor-engine` | no | legacy | Make sandbox 'enforce' outrank a manifest's per-agent opt-out. Without it an agent can decline the sandbox it is enforced under. |
+| `ROBOTHOR_STEP_EFFICIENCY_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Step-efficiency ladder position: 'off' keeps the single 80% deadline note, 'observe' (default) keeps it and logs what enforce would do at WARNING, 'enforce' adds pace notes at 50/80/95%, the repeat-call guard, tool timeouts bounded by the run's remaining budget, and a progress check-in every 25 iterations. |
 | `ROBOTHOR_TODO_ESCALATE_ENABLED` | bool | `true` | `robothor-engine` | no | legacy | Escalate a run's unfinished todos into CRM tasks when it ends, so leftovers are tracked rather than lost with the transcript. |
 | `ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Promote a todo's subtasks into their own CRM tasks. |
 | `ROBOTHOR_TOOL_VERIFY_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Switch for tool-level post-condition checks -- did the write the tool reported actually land? |

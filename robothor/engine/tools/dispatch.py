@@ -474,6 +474,35 @@ async def _execute_tool(
     if handler is None:
         return {"error": f"Unknown tool: {name}"}
 
+    # ── Repeat-call guard ──
+    # The one place every tool call passes through BEFORE the handler runs, so
+    # a call the run has already made and already been answered the same way
+    # can be answered from what it has. Read-only allow-list, never skips a
+    # write, and below `enforce` it decides nothing and only logs. Per-run
+    # state lives on the run's session (robothor/engine/repeat_guard.py); a
+    # call from outside a live run, or a run at `off`, finds no guard at all
+    # and pays nothing.
+    #
+    # Deliberately ABOVE the benchmark-sandbox token: its reset lives in the
+    # `finally` of the handler's try, and an early return from here used to
+    # jump straight over it, leaving the DAL's ContextVar True for the rest of
+    # the task — "CRM writes silently sandboxed" being the failure mode.
+    from robothor.engine.repeat_guard import guard_for_run
+
+    guard = guard_for_run(run_id)
+    if guard is not None:
+        decision = await asyncio.to_thread(guard.before, name, args, workspace=workspace)
+        if decision is not None and decision.result is not None:
+            _audit_tool_call(
+                name,
+                agent_id,
+                tenant_id,
+                user_id=user_id,
+                status="ok" if decision.action == "answered" else "denied",
+                error=decision.note if decision.action == "refused" else None,
+            )
+            return decision.result
+
     # Benchmark sandbox: mirror ctx.is_benchmark into the CRM DAL's
     # ContextVar for the duration of the handler call. DAL paths that
     # create operator-facing state (dal.create_session_goal) cannot see
@@ -524,6 +553,12 @@ async def _execute_tool(
             from robothor.crm.dal import reset_benchmark_sandbox
 
             reset_benchmark_sandbox(sandbox_token)
+    # ── Repeat-call guard: remember what this call returned ──
+    # Deliberately BEFORE verification, so what the guard digests is the
+    # handler's own output and not something a later control annotated onto it.
+    if guard is not None:
+        await asyncio.to_thread(guard.after, name, args, result, workspace=workspace)
+
     # ── Post-condition verification (grade the environment, not the transcript) ──
     # The single choke point every tool call passes through, AFTER the handler
     # has returned successfully. Bookkeeping only: verify_tool_result never

@@ -290,7 +290,14 @@ class Sandbox:
                 timeout=timeout,
             )
         except subprocess.TimeoutExpired:
-            return {"error": f"Command timed out ({timeout}s limit)", "exit_code": 124}
+            # Same shape as the host branch in tools/handlers/filesystem.py, and
+            # for the same reason: the limit goes in its own field so a clamped
+            # per-call number never lands in text the repeat guard digests.
+            return {
+                "error": "Command timed out",
+                "timeout_seconds": timeout,
+                "exit_code": 124,
+            }
 
         return {
             "stdout": proc.stdout[:4000],
@@ -416,7 +423,8 @@ class Sandbox:
                     return {"error": proc.stderr.strip(), "exit_code": proc.returncode}
                 return {"stdout": proc.stdout.strip(), "exit_code": 0}
             except subprocess.TimeoutExpired:
-                return {"error": f"Command timed out ({timeout}s)"}
+                # Same shape as exec_shell above: no per-call number in the text.
+                return {"error": "Command timed out", "timeout_seconds": timeout}
 
         if not self.container_id:
             return {"error": "Sandbox not started"}
@@ -430,7 +438,7 @@ class Sandbox:
                 return {"error": proc.stderr.strip(), "exit_code": proc.returncode}
             return {"stdout": proc.stdout.strip(), "exit_code": 0}
         except subprocess.TimeoutExpired:
-            return {"error": f"Docker exec timed out ({timeout}s)"}
+            return {"error": "Docker exec timed out", "timeout_seconds": timeout}
 
     async def copy_from(self, container_path: str, local_path: str) -> bool:
         """Copy a file from the sandbox to the host. No-op for local mode."""

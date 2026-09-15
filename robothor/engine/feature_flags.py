@@ -59,6 +59,14 @@ _VALID_ENFORCEMENT_MODES = frozenset(("observe", "alert", "enforce"))
 HonestySuiteMode = Literal["off", "observe", "enforce"]
 _VALID_HONESTY_SUITE_MODES = frozenset(("off", "observe", "enforce"))
 
+# Step efficiency is a PACING aid, not a guardrail: it blocks no action an
+# operator cares about, so it has no "alert" rung and nothing to page on. Its
+# default is `observe` rather than `off` for the honesty-suite reason — a
+# control nobody runs measures nothing, and observe only logs what enforce
+# would have done. See step_efficiency_mode().
+StepEfficiencyMode = Literal["off", "observe", "enforce"]
+_VALID_STEP_EFFICIENCY_MODES = frozenset(("off", "observe", "enforce"))
+
 # The do-not-contact opt-out has TWO rungs, not four. There is no "off": a
 # legal opt-out that can be switched off entirely is not a control. There is no
 # "alert" either — "observe" already notifies through the guardrail-event row
@@ -567,6 +575,45 @@ def honesty_suite_mode() -> HonestySuiteMode:
         return "off"
     raw = _resolve_raw("ROBOTHOR_HONESTY_SUITE_MODE", "observe").strip().lower()
     if raw in _VALID_HONESTY_SUITE_MODES:
+        return raw  # type: ignore[return-value]
+    return "observe"
+
+
+def step_efficiency_mode() -> StepEfficiencyMode:
+    """Rollout mode for the run's step-efficiency controls.
+
+    One flag for four controls that all answer the same question — this run has
+    a fixed wall-clock budget, so is it spending steps on anything — because an
+    operator promoting half of them would get a run that is warned about its
+    pace and then repeats the same read anyway.
+
+    The measurement: on the 2026-09-15 WildClawBench sweep five of twelve Code
+    tasks and one Productivity task spent their entire budget and scored ZERO,
+    while every Code task that finished scored 0.9-1.0. Two profiled runs show
+    where it went — one ran the same `exec` nine times and re-read one file six
+    times; the other was provider-throughput bound with no exact repeats. So the
+    controls are: pace-aware deadline notes, a repeat-call guard, tool timeouts
+    bounded by what the run has left, and a check-in that actually fires.
+
+    - ``off``: exactly the pre-existing behaviour — one deadline note at 80% of
+      the ceiling, no repeat guard, no clamp, check-in only at max_iterations.
+    - ``observe`` (default): the pre-existing behaviour still happens, and every
+      control additionally logs what ``enforce`` would have done, with the run
+      id, at WARNING. WARNING is deliberate and load-bearing: the benchmark
+      container installs no logging configuration at all, so Python's
+      ``lastResort`` handler drops everything below WARNING and an observe rung
+      logged at INFO would be invisible in exactly the place it is read.
+    - ``enforce``: the controls act — three pace notes instead of one, repeated
+      reads answered from the previous result, a fifth identical `exec` refused,
+      timeouts clamped to the remaining budget, check-ins every 25 iterations.
+
+    ``alert`` is deliberately absent: nothing here blocks an operator-visible
+    action, so there is no "would have blocked" event worth paging on.
+    """
+    if _disabled_all():
+        return "off"
+    raw = _resolve_raw("ROBOTHOR_STEP_EFFICIENCY_MODE", "observe").strip().lower()
+    if raw in _VALID_STEP_EFFICIENCY_MODES:
         return raw  # type: ignore[return-value]
     return "observe"
 

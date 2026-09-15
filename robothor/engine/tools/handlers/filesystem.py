@@ -64,7 +64,25 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if refused:
         return {"error": refused}
 
-    timeout = resolve_exec_timeout(args)
+    # The tool's own ceiling, then the RUN's: a command may not outlive the run
+    # that owns it, and it must leave time for the write the run is graded on.
+    # Every exec in the profiled 1200s failure asked for 900s.
+    # The run id makes the observe-rung line attributable — evidence that cannot
+    # be tied to a run is not evidence — and the mode comes from the run's
+    # cached rung rather than a DB-backed flag read per `exec`, which the
+    # profiled run made 41 times.
+    from robothor.engine.run_pacing import clamp_tool_timeout, mode_for_run
+
+    run_id = getattr(ctx, "run_id", "") or ""
+    timeout, clamp_note = clamp_tool_timeout(
+        resolve_exec_timeout(args), mode=mode_for_run(run_id), run_id=run_id
+    )
+
+    def _with_note(result: dict[str, Any]) -> dict[str, Any]:
+        """Say when the timeout the agent asked for is not the one it got."""
+        if clamp_note and isinstance(result, dict):
+            result["timeout_note"] = clamp_note
+        return result
 
     # An agent configured `sandbox: docker` must actually have its shell
     # commands run in the container. This used to go straight to subprocess.run
@@ -78,7 +96,7 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     sandbox = get_current_sandbox()
     if sandbox is not None and sandbox.mode != SandboxMode.LOCAL:
         try:
-            return await sandbox.exec_shell(command, timeout=timeout)
+            return _with_note(await sandbox.exec_shell(command, timeout=timeout))
         except Exception as e:
             return {"error": f"Sandboxed exec failed: {e}"}
 
@@ -98,18 +116,25 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "exit_code": proc.returncode,
             }
         except subprocess.TimeoutExpired:
+            # The limit rides in its OWN field, never inside the message. When
+            # the run's remaining budget is clamping this call, that number
+            # changes every call — and the repeat guard digests `error`, so a
+            # limit baked into the text put the wall clock back inside the
+            # digest and made six identical timeouts look like six different
+            # results. The agent still reads the number: it is in the result.
             return {
                 "error": (
-                    f"Command timed out ({timeout}s limit). Ask for more time with "
-                    f"the `timeout` parameter (up to {MAX_EXEC_TIMEOUT}s) rather "
-                    "than backgrounding the command — a backgrounded child is "
+                    "Command timed out. Ask for more time with the `timeout` "
+                    f"parameter (up to {MAX_EXEC_TIMEOUT}s) rather than "
+                    "backgrounding the command — a backgrounded child is "
                     "killed when exec returns."
-                )
+                ),
+                "timeout_seconds": timeout,
             }
         except Exception as e:
             return {"error": f"Command failed: {e}"}
 
-    return await asyncio.to_thread(_run)
+    return _with_note(await asyncio.to_thread(_run))
 
 
 _SEARCH_SKIP_DIRS = frozenset(

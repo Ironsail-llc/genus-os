@@ -59,7 +59,12 @@ KNOWN_LARGE: dict[str, int] = {
     # that module's own contract), which is what paid for classifying a
     # workflow-budget kill and letting it propagate.
     "runner.py::execute": 989,  # +7: task_id propagated onto the run at INSERT time
-    "runner.py::_run_loop": 775,
+    # 775 -> 773 with the step-efficiency work: the guard's note drain, the
+    # pace-note call site and the refusal branch cost less than the inlined
+    # deadline and check-in blocks returned when they left for run_pacing.py.
+    # The cap follows the function down; leaving it at 775 would bank two lines
+    # this method did not earn.
+    "runner.py::_run_loop": 773,
     # +12: run/tenant threaded onto the signature, and the do-not-contact
     # refusal at the head of both outbound-mail branches. The check itself
     # lives in _dnc_refusal; only the two call sites are in here.

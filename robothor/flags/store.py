@@ -73,8 +73,14 @@ _BOOL_VALUES: tuple[str, ...] = ("true", "false")
 #: caller lands on) and ``feature_flags.per_user_sessions_mode`` maps every
 #: unrecognised value onto ``enforce``, so offering ``alert`` would let an
 #: operator set a rung, see it stored, and get a different one.
+#: ``ROBOTHOR_STEP_EFFICIENCY_MODE`` joins them as a pacing aid: it blocks no
+#: operator-visible action, so an "alert" rung would page on nothing.
 _THREE_RUNG_MODE_FLAGS: frozenset[str] = frozenset(
-    {"ROBOTHOR_HONESTY_SUITE_MODE", "ROBOTHOR_PER_USER_SESSIONS"}
+    {
+        "ROBOTHOR_HONESTY_SUITE_MODE",
+        "ROBOTHOR_PER_USER_SESSIONS",
+        "ROBOTHOR_STEP_EFFICIENCY_MODE",
+    }
 )
 
 

@@ -295,6 +295,14 @@ def _container_command(
         # withholding the task's skills.
         "ROBOTHOR_COMPLETION_CONTRACTS_ENABLED": "1",
         "ROBOTHOR_COMPLETION_CONTRACTS_MODE": "enforce",
+        # Same reasoning, and the same trap avoided: the container's env is
+        # built from this dict and forwards a host ROBOTHOR_* only when a task
+        # names it, so an operator exporting this rung and re-running the sweep
+        # would have measured the in-container default and read a flat result
+        # as "the controls do nothing". `enforce` is the default here because
+        # measuring `enforce` is what the harness is for; the host value wins
+        # when there is one, so an off-vs-enforce differential still works.
+        "ROBOTHOR_STEP_EFFICIENCY_MODE": os.environ.get("ROBOTHOR_STEP_EFFICIENCY_MODE", "enforce"),
         # Genus resolves its skills directory from this, so the task's skills
         # land somewhere the loader actually reads.
         "ROBOTHOR_WORKSPACE": CONTAINER_WORKSPACE,
