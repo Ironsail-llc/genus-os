@@ -76,6 +76,24 @@ something the model can no longer see is worse than the repeat it prevented.
 Results over 200k characters are not tracked at all, so they can never be
 withheld.
 
+**A resend is itself a read, and the guard records what it put back.** It did
+not, and that is what run `8cd032aa` measured: 23 read decisions in one
+`enforce` run and every one of them carried the whole file, `sam3_image.py`
+(37 KB) five times. `after` never runs for a call the guard answered — dispatch
+returns the decision and the handler is skipped — so `_still_in_context` went on
+looking for the payload stored at the original read, a string that no message
+holds once the resent dict (three extra keys) has replaced it. The first resend
+after a compaction is the design; every later one was a repeat answered with the
+bytes the tool would have returned, which costs exactly what the repeat would
+have and reads from outside as a control that never fired. The in-context check
+still runs on every decision, so this bookkeeping cannot cause a pointer at
+content that is gone.
+
+Because of that, **a `warned` row is not by itself a saving**. The row's
+`reason` now says which branch it took: a reason ending *"and is repeated here
+because it is no longer in your context"* is a resend that cost a full copy of
+the file; one that does not is a short answer that cost ~160 characters.
+
 `list_directory` is **not** short-circuited, and the reason is worth stating: the
 handler reports every entry's `size` (and with `recursive: true` the whole
 subtree) while a fingerprint can only stat the directory — whose mtime does not
@@ -184,6 +202,42 @@ GROUP BY 1, 2;
 read, `blocked` a refusal. This is the flag's evidence source, so
 `genus flags` / the Controls page read the same rows.
 
+A count of `warned` rows does **not** say the guard saved anything — that is
+exactly how 23 full-file resends read as 23 answers. Split them:
+
+```sql
+SELECT tool_name,
+       count(*) FILTER (WHERE reason LIKE '%no longer in your context') AS resent,
+       count(*) FILTER (WHERE reason NOT LIKE '%no longer in your context') AS short
+FROM agent_guardrail_events
+WHERE guardrail_name = 'repeat_guard' AND action = 'warned' AND tool_name = 'read_file'
+GROUP BY 1;
+```
+
+`resent` counting everything is the defect above; a healthy long run shows one
+resend per file per compaction and short answers after it.
+
+**Observe understates this particular split.** Under `observe` the tool runs
+anyway, so its result is back in `session.messages` on every call and the shadow
+decision is always the short one — the rung never shows the resend branch that
+`enforce` takes. Check the branch on an `enforce` run, or with the doctor probe
+below.
+
+## The positive control
+
+```
+genus doctor --only step_efficiency.guard
+```
+
+Three identical reads of a file in a temp directory, through the real
+`dispatch._execute_tool` with a registered session, the conversation compacted
+between the first and the second. It passes only when the last repeat comes back
+without content: a guard that decides nothing, resends every time, or points at
+content that is gone each fail with a different line. Nothing it does reaches
+the instance, and it writes no `agent_guardrail_events` rows.
+
+Run it before reading a zero in the table as "the workload has no repeats".
+
 ## Where it lives
 
 | Piece | File |
@@ -191,6 +245,7 @@ read, `blocked` a refusal. This is the flag's evidence source, so
 | Pace notes, check-in cadence, timeout clamp | `robothor/engine/run_pacing.py` |
 | Repeat-call guard | `robothor/engine/repeat_guard.py` |
 | Guard decision point | `robothor/engine/tools/dispatch.py` (`_execute_tool`) |
+| Positive control | `robothor/doctor/checks/step_efficiency.py` |
 | Note text for the 80% rung | `robothor/engine/deliverables.py`, `robothor/engine/run_budget.py` |
 | Call sites | `robothor/engine/runner.py` (`_run_loop`), `robothor/engine/tools/handlers/filesystem.py` (`_exec`) |
 | Flag reader | `robothor/engine/feature_flags.py: step_efficiency_mode` |
