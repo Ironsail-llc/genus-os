@@ -80,6 +80,14 @@ REAP_GRACE_SECONDS = 300
 #: this only keeps the query from returning every young row.
 REAP_MIN_SCAN_SECONDS = 300
 
+#: A live `running` row that has recorded NO step by this age is reaped
+#: regardless of its agent's ceiling. The first step lands within seconds of
+#: a start when the runner is alive; a row with none after fifteen minutes is
+#: a runner that died in setup. Live, 2026-09-14: one such row sat 104
+#: minutes under main's two-hour ceiling, outlived a deploy's drain, and the
+#: deploy restarted nothing after the app bundle had already been rebuilt.
+NO_STEP_REAP_SECONDS = 15 * 60
+
 
 def _is_orphan(started_at: Any, daemon_start_ts: str | None) -> bool:
     """Did this run start before the current daemon booted?
@@ -435,6 +443,18 @@ def _cleanup_stale_workflow_runs() -> int:
         return 0
 
 
+def _has_any_step(run_id: str) -> bool:
+    """Whether the run has recorded a single step. Unknown (a failed read)
+    counts as True: the reaper must never kill on a question it could not ask."""
+    try:
+        from robothor.engine.tracking import list_steps
+
+        return bool(list_steps(run_id))
+    except Exception as e:  # noqa: BLE001 - a read failure is not evidence of death
+        logger.debug("_has_any_step: list_steps failed for %s: %s", run_id, e)
+        return True
+
+
 def _cleanup_stale_runs() -> int:
     """Mark stale 'running' agent_runs as 'timeout' with per-run classification.
 
@@ -487,7 +507,9 @@ def _cleanup_stale_runs() -> int:
                 # watchdog and call healthy work a crash.
                 if not _is_orphan(started_at, daemon_start_ts):
                     age = (datetime.now(UTC) - started_at).total_seconds() if started_at else 0.0
-                    if age < stale_run_cutoff_seconds(str(agent_id or "")):
+                    if age < stale_run_cutoff_seconds(str(agent_id or "")) and not (
+                        age >= NO_STEP_REAP_SECONDS and not _has_any_step(str(run_id))
+                    ):
                         continue
                 started_iso = started_at.isoformat() if started_at is not None else ""
                 category, message = classify_reap_reason(str(run_id), started_iso, daemon_start_ts)
