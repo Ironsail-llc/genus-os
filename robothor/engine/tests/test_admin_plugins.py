@@ -117,6 +117,7 @@ class TestListing:
             "present": False,
             "malformed": False,
             "rows": 0,
+            "problem": None,
         }
         assert [p["name"] for p in body["plugins"]] == ["acme-tools"]
 
@@ -161,6 +162,138 @@ class TestListing:
         body = client.get("/api/admin/plugins").json()
         assert body["lockfile"]["malformed"] is True
         assert body["plugins"][0]["state"] == "loaded", "a corrupt file must not disable anything"
+
+    def test_the_lockfile_problem_is_the_sentence_the_cli_prints(
+        self, client, one_plugin, lock_path
+    ):
+        """``malformed`` says THAT it is damaged; ``problem`` says which damage.
+
+        The CLI and the doctor both print ``Lockfile.problem``. The Helm had one
+        sentence of its own covering all four cases at once — including the
+        unreadable PATH, whose remedy is a filesystem and not a rebuild. One
+        field, one wording, three surfaces.
+        """
+        lock_path.write_text("{{{", encoding="utf-8")
+        lock = client.get("/api/admin/plugins").json()["lockfile"]
+        assert lock["problem"] == lockfile.read_lockfile().problem
+        assert "is not valid JSON" in lock["problem"]
+
+    def test_a_lockfile_with_no_plugins_list_says_so(self, client, one_plugin, lock_path):
+        lock_path.write_text('{"version": 1}', encoding="utf-8")
+        assert (
+            client.get("/api/admin/plugins").json()["lockfile"]["problem"]
+            == "does not hold a 'plugins' list"
+        )
+
+    def test_unreadable_rows_are_a_problem_without_being_malformed(
+        self, client, one_plugin, lock_path
+    ):
+        """The PARTIAL fault, which `malformed` deliberately does not cover.
+
+        A file that parses but holds rows that do not keeps every row it could
+        read — discarding them would put every other disabled plugin back into
+        service — so `malformed` stays false and `rows` counts only the
+        readable ones. The rows it could not read are operator decisions that
+        cannot be honoured, and `problem` is the only place the payload says so:
+        a consumer reading `problem` only under `malformed` reports a healthy
+        file with a row count while some plugins the operator turned off are
+        loading.
+        """
+        lock_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "plugins": [
+                        {"name": "acme-tools", "enabled": False},
+                        {"no": "name"},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        lock = client.get("/api/admin/plugins").json()["lockfile"]
+        assert lock["malformed"] is False
+        assert lock["rows"] == 1
+        assert lock["problem"] == lockfile.read_lockfile().problem
+        assert "cannot be read" in lock["problem"]
+
+    def test_a_healthy_lockfile_has_no_problem(self, client, one_plugin):
+        lockfile.sync()
+        body = client.get("/api/admin/plugins").json()
+        assert body["lockfile"]["malformed"] is False
+        assert body["lockfile"]["problem"] is None, "an empty string is not a problem"
+
+    def test_the_problem_never_names_the_path(self, client, one_plugin, lock_path):
+        lock_path.mkdir()
+        lock = client.get("/api/admin/plugins").json()["lockfile"]
+        assert lock["problem"], "a path that will not read is a problem"
+        assert "plugins.lock" not in lock["problem"]
+        assert "/" not in lock["problem"]
+
+    def test_a_row_says_whether_this_platform_installed_it(self, client, one_plugin):
+        """``source`` present is what lets the Helm offer Remove at all.
+
+        Its ABSENCE is the load-bearing half: ``genus plugin remove`` refuses a
+        row this platform did not put there, so a button that offered it anyway
+        would be promising an act the engine answers 422 to.
+        """
+        lockfile.sync()
+        row = client.get("/api/admin/plugins").json()["plugins"][0]
+        assert row["source"] is None, "sync() records what somebody else installed"
+
+    def test_the_listing_names_the_indexes_this_instance_reads(self, client, one_plugin):
+        """The install form offers a CHOICE between configured indexes, never a
+        free-text URL box: a browser naming a URL is the engine fetching on a
+        caller's say-so, and the operator configured these out of band."""
+        from robothor.plugins import registry
+
+        body = client.get("/api/admin/plugins").json()
+        assert body["indexes"] == list(registry.configured_indexes())
+
+    def test_the_configured_indexes_are_carried_in_order(self, client, one_plugin, monkeypatch):
+        """First publishing a name wins, so the order is part of the answer."""
+        self._configure(
+            monkeypatch,
+            "https://example.invalid/first.json,https://example.invalid/second.json",
+        )
+        assert client.get("/api/admin/plugins").json()["indexes"] == [
+            "https://example.invalid/first.json",
+            "https://example.invalid/second.json",
+        ]
+
+    def test_an_index_the_install_route_would_refuse_is_still_reported(
+        self, client, one_plugin, monkeypatch
+    ):
+        """What is CONFIGURED, verbatim — including what cannot be used.
+
+        ``install`` refuses a non-https ``index`` with a 422, so a listing that
+        silently dropped one would leave an operator with a setting that has no
+        effect and no explanation: the picker would simply be missing an entry.
+        This route answers the configuration; filtering what can be OFFERED is
+        the consumer's job, and the Helm names what it left out.
+        """
+        self._configure(
+            monkeypatch,
+            "https://example.invalid/first.json,http://internal.invalid/index.json",
+        )
+        assert client.get("/api/admin/plugins").json()["indexes"] == [
+            "https://example.invalid/first.json",
+            "http://internal.invalid/index.json",
+        ]
+
+    @staticmethod
+    def _configure(monkeypatch, value: str) -> None:
+        """Set the index list and clear the settings cache.
+
+        ``get_settings()`` is ``lru_cache``d for the process, so a bare
+        ``setenv`` is served whatever an earlier resolution in the same test
+        already read. The suite's autouse fixture resets between tests, not
+        within one.
+        """
+        from robothor.settings import reset_settings
+
+        monkeypatch.setenv("ROBOTHOR_PLUGIN_INDEXES", value)
+        reset_settings()
 
 
 class TestEnableDisable:
@@ -208,8 +341,27 @@ class TestReload:
         body = client.post("/api/admin/plugins/reload").json()
         assert body["loaded"] == 0
         assert body["failures"] == [
-            {"name": "probe", "group": "genus.tools", "reason": lockfile.DISABLED_REASON}
+            {
+                "name": "probe",
+                "group": "genus.tools",
+                "reason": lockfile.DISABLED_REASON,
+                "distribution": "acme-tools",
+            }
         ]
+
+    def test_a_failure_names_the_distribution_it_belongs_to(self, client, one_plugin):
+        """``name`` is the ENTRY POINT, not the distribution.
+
+        One distribution appears here once per group it publishes into, and
+        ``genus-hostinfo`` shows up as ``hostinfo``. Without this field the Helm
+        had to guess which card to file a refusal under, and a wrong guess
+        reports a plugin the operator did not disable as one they did.
+        """
+        broken = _EP(payload={"genus_contract_version": "0.1", "handlers": {"probe": 1}})
+        with patch.object(loader, "_discover", lambda: [broken]):
+            failure = client.post("/api/admin/plugins/reload").json()["failures"][0]
+        assert failure["name"] == "probe"
+        assert failure["distribution"] == "acme-tools"
 
     def test_a_reload_that_fails_is_reported_not_raised(self, client, one_plugin):
         from robothor.engine import daemon

@@ -98,10 +98,18 @@ def plugin_listing() -> dict[str, Any]:
     from robothor.plugins.inventory import inventory
     from robothor.plugins.loader import generation
     from robothor.plugins.lockfile import lockfile_path, read_lockfile
+    from robothor.plugins.registry import configured_indexes
 
     lock = read_lockfile()
     return {
         "generation": generation(),
+        # The indexes this instance reads, in order, so an install form can
+        # offer a CHOICE between them rather than a free-text URL box. The
+        # route accepts an `index` and only an https one, but a browser that
+        # can type any URL is a browser that can make the engine fetch on a
+        # caller's say-so; these were configured out of band by the operator.
+        # URLs, never paths -- the same rule the rest of this response follows.
+        "indexes": list(configured_indexes()),
         "lockfile": {
             # Whether a path resolves at all, never which one. An instance with
             # no workspace has nowhere to put the file, and that is the only
@@ -110,6 +118,13 @@ def plugin_listing() -> dict[str, Any]:
             "present": lock.present,
             "malformed": lock.malformed,
             "rows": len(lock.rows),
+            # WHICH damage, in the words the CLI and the doctor already print.
+            # `malformed` covers four different faults with four different
+            # remedies -- unreadable path, undecodable bytes, invalid JSON, no
+            # `plugins` list -- and a page holding only the boolean had to write
+            # a fifth sentence covering all of them at once. Never the path:
+            # `Lockfile.problem` is built from the error class, not the file.
+            "problem": lock.problem or None,
         },
         "plugins": [row.as_json() for row in inventory()],
     }
@@ -340,7 +355,18 @@ def reload_plugin_stack() -> dict[str, Any]:
         "generation": gen,
         "loaded": len(result.loaded),
         "failures": [
-            {"name": f.name, "group": f.group, "reason": f.reason} for f in result.failures
+            {
+                "name": f.name,
+                "group": f.group,
+                "reason": f.reason,
+                # `name` is the ENTRY POINT. One distribution appears here once
+                # per group it publishes into, and `genus-hostinfo` shows up as
+                # `hostinfo`, so without this there is no join key at all and
+                # every consumer has to invent one. None means the loader could
+                # not name the distribution, never that it did not look.
+                "distribution": f.distribution,
+            }
+            for f in result.failures
         ],
     }
 

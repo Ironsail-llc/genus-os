@@ -73,6 +73,14 @@ class PluginStatus:
     #: ``{"contract_version": int|None, "declared": {kind: [names]}}``, or None
     #: when the distribution ships no manifest.
     manifest: dict[str, Any] | None = None
+    #: The lock row's ``source`` -- where this platform got the distribution --
+    #: or None for anything it did not install. The ABSENCE is what matters:
+    #: ``genus plugin remove`` refuses a row with no source, because
+    #: uninstalling a package somebody else put on the box, on the grounds that
+    #: it appears in this platform's lockfile, is reaching outside what the
+    #: platform owns. An operator surface that could not tell the two apart
+    #: would offer a button whose only outcome is a 422.
+    source: dict[str, Any] | None = None
 
     def as_json(self) -> dict[str, Any]:
         """The wire shape the admin API and the Helm read.
@@ -92,6 +100,7 @@ class PluginStatus:
             "contributions": dict(self.contributions),
             "failure_reason": self.failure_reason or None,
             "manifest": self.manifest,
+            "source": self.source,
         }
 
 
@@ -143,6 +152,7 @@ def status_for(name: str, dist: Any, eps: list[Any]) -> PluginStatus:
         failure_reason=reason,
         contributions=contributions,
         manifest=_manifest_json(dist),
+        source=row.source.as_json() if row is not None and row.source is not None else None,
     )
 
 

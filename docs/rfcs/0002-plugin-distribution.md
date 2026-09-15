@@ -260,7 +260,13 @@ here.
 
 - Create the `genus-plugins` repository, mint the production Ed25519 key, add
   its public half to `registry_keys.py`. **Operator.**
-- The Helm's install UI reads the plan and verdict shapes above. **C6b.**
+- ~~The Helm's install UI reads the plan and verdict shapes above.~~
+  **Shipped.** Settings › Plugins installs from the registry (preview →
+  findings → explicit acceptance → install) and removes a distribution this
+  platform put there; see "From the Helm" in
+  [`docs/PLUGINS.md`](../PLUGINS.md). The listing gained `lockfile.problem`,
+  `plugins[].source`, `indexes` and `failures[].distribution` to make it
+  possible without the page guessing.
 - MCP tool plugins, `SKILL.md` skill plugins and the sandbox tiers, if they are
   still wanted. **Separate work, from #267.**
 - A prompt screen tuned for documentation rather than for an assembled agent

@@ -6,13 +6,14 @@ import { Loader2, Puzzle, RefreshCw } from "lucide-react";
 import { PageHeader } from "@/components/business/page-header";
 import { EmptyState } from "@/components/business/empty-state";
 import { Button } from "@/components/ui/button";
+import { PluginInstallCard } from "@/components/views/settings/plugins-install";
 import { readBridgeReply } from "@/lib/bridge/read-reply";
 import { useRowActions } from "@/lib/bridge/row-actions";
 import { BRIDGE_UNREACHABLE, useBridgePoll } from "@/lib/bridge/use-bridge-poll";
 
 /**
- * Settings › Plugins — the third-party code this instance runs, and the three
- * acts an operator has over it: record, toggle, reload.
+ * Settings › Plugins — the third-party code this instance runs, and the acts an
+ * operator has over it: install, record, toggle, remove, reload.
  *
  * `pip install` used to be the whole of plugin governance: a distribution that
  * published a `genus.*` entry point became part of the engine, and the only way
@@ -20,13 +21,29 @@ import { BRIDGE_UNREACHABLE, useBridgePoll } from "@/lib/bridge/use-bridge-poll"
  * was missing, and this page is the only place an operator can write it without
  * a shell on the box.
  *
- * Four rules, each of which the bridge's shape makes it easy to get wrong:
+ * Six rules, each of which the bridge's shape makes it easy to get wrong:
  *
- * **The verdict is not rendered.** Every recorded row carries
- * `verdict: "unscanned"` and nothing scans a plugin yet (that is C6). A pill
- * reading "unscanned" on the screen where third-party code is turned on invites
- * the reading "scanned, and fine" the moment a scanner does exist and the word
- * changes; a field that has never carried a judgement is not a judgement.
+ * **The listing's verdict is not rendered.** A row recorded by `sync` carries
+ * `verdict: "unscanned"` — nothing looked at it. A pill reading "unscanned" on
+ * the screen where third-party code is turned on invites the reading "scanned,
+ * and fine" the moment the word changes, and a field that has never carried a
+ * judgement is not a judgement. The INSTALL card is the opposite case and shows
+ * its verdict in full: that one is a measurement of the exact bytes about to be
+ * installed, taken before anything is.
+ *
+ * **A refusal is filed by `failures[].distribution`.** `failures[].name` is the
+ * ENTRY-POINT name — `genus-hostinfo` publishes `hostinfo` and contributes
+ * `host_state`, three namespaces — so there was no join key at all, and this
+ * page inferred one from the group, `enabled`, a squashed prefix match on the
+ * distribution's own name, and `manifest.declared` (which holds contribution
+ * names and therefore answers a different question). Every input to that guess
+ * was a fact the loader already had. It answers now; `null` means unattributed
+ * and nothing may fill it in.
+ *
+ * **Remove exists only where `source` does.** A lock row with no `source` is
+ * one `genus plugin sync` recorded over a package somebody installed by hand,
+ * and `remove` refuses those without `--force`. A button on such a row would
+ * promise an act whose only outcome is a 422.
  *
  * **Recording is the fresh install's primary act.** Until `genus plugin sync`
  * has run, `lockfile.present` is `false`, every `recorded` is `false`, and
@@ -60,6 +77,24 @@ export interface Lockfile {
   present: boolean;
   malformed: boolean;
   rows: number;
+  /**
+   * WHICH damage, in the engine's own words, or null when the file is fine.
+   *
+   * `malformed` is one flag over four faults with four different remedies, so
+   * the single sentence this page used to print was one remedy short for each
+   * of them — it sent an operator whose lockfile PATH is a directory off to
+   * repair the file's contents. `Lockfile.problem` is what the CLI and the
+   * doctor already print, and it never names the path.
+   */
+  problem: string | null;
+}
+
+/** Where `genus plugin install` got a distribution. Absent for everything else. */
+export interface PluginSource {
+  origin: string;
+  installedAt: string;
+  indexUrl: string;
+  publisherKeyId: string;
 }
 
 export interface PluginManifest {
@@ -78,10 +113,14 @@ export interface Plugin {
   contributions: Array<{ kind: string; count: number }>;
   failureReason: string | null;
   manifest: PluginManifest | null;
+  /** Null for anything this platform did not install. Gates Remove. */
+  source: PluginSource | null;
 }
 
 export interface Listing {
   generation: number | null;
+  /** Index URLs this instance reads, in order. The install form's choices. */
+  indexes: string[];
   lockfile: Lockfile;
   plugins: Plugin[];
 }
@@ -94,9 +133,12 @@ interface SyncReport {
 }
 
 interface ReloadFailure {
+  /** The ENTRY-POINT name. Not a distribution, not a contribution. */
   name: string;
   group: string;
   reason: string;
+  /** The distribution it belongs to, or null when the engine could not name it. */
+  distribution: string | null;
 }
 
 interface ReloadReport {
@@ -107,7 +149,8 @@ interface ReloadReport {
 
 const EMPTY_LISTING: Listing = {
   generation: null,
-  lockfile: { pathConfigured: true, present: false, malformed: false, rows: 0 },
+  indexes: [],
+  lockfile: { pathConfigured: true, present: false, malformed: false, rows: 0, problem: null },
   plugins: [],
 };
 
@@ -154,6 +197,28 @@ export function normalizePlugin(value: unknown): Plugin | null {
         : [],
     failureReason: typeof row.failure_reason === "string" ? row.failure_reason : null,
     manifest: normalizeManifest(row.manifest),
+    source: normalizeSource(row.source),
+  };
+}
+
+/**
+ * The lock row's `source`, or null.
+ *
+ * Its ABSENCE is what this reads for: an older bridge sends no field at all,
+ * and a row `sync` recorded over a hand-installed package sends `null`. Both
+ * mean "do not offer Remove", which is the safe answer in either case —
+ * inventing a source would put a button on a row the engine refuses.
+ */
+function normalizeSource(value: unknown): PluginSource | null {
+  if (!value || typeof value !== "object") return null;
+  const row = value as Record<string, unknown>;
+  const origin = typeof row.origin === "string" ? row.origin : "";
+  if (!origin) return null;
+  return {
+    origin,
+    installedAt: typeof row.installed_at === "string" ? row.installed_at : "",
+    indexUrl: typeof row.index_url === "string" ? row.index_url : "",
+    publisherKeyId: typeof row.publisher_key_id === "string" ? row.publisher_key_id : "",
   };
 }
 
@@ -162,6 +227,7 @@ export function normalizeListing(body: unknown): Listing {
   const lock = (root.lockfile ?? {}) as Record<string, unknown>;
   return {
     generation: typeof root.generation === "number" ? root.generation : null,
+    indexes: strings(root.indexes),
     lockfile: {
       // Absent means "the bridge did not say"; only an explicit `false` is a
       // claim that no path resolves, and only that may raise the alarm below.
@@ -169,6 +235,10 @@ export function normalizeListing(body: unknown): Listing {
       present: lock.present === true,
       malformed: lock.malformed === true,
       rows: typeof lock.rows === "number" ? lock.rows : 0,
+      // Absent or empty is "the bridge did not say which damage", and the page
+      // falls back to its own sentence rather than printing nothing.
+      problem:
+        typeof lock.problem === "string" && lock.problem.trim() ? lock.problem.trim() : null,
     },
     plugins: Array.isArray(root.plugins)
       ? root.plugins.map(normalizePlugin).filter((p): p is Plugin => p !== null)
@@ -200,100 +270,16 @@ function normalizeReload(body: unknown): ReloadReport {
               name: typeof row.name === "string" ? row.name : "",
               group: typeof row.group === "string" ? row.group : "",
               reason: typeof row.reason === "string" ? row.reason : "",
+              // Absent (an older bridge) reads exactly like null: unattributed.
+              // The alternative is a page that starts guessing again the moment
+              // it meets a payload one field short.
+              distribution:
+                typeof row.distribution === "string" && row.distribution ? row.distribution : null,
             };
           })
           .filter((f): f is ReloadFailure => f !== null)
       : [],
   };
-}
-
-/** `-` and `_` are the same character in a distribution name; case is not either. */
-function squash(name: string): string {
-  return name.toLowerCase().replace(/[-_.]/g, "");
-}
-
-/**
- * Every name this distribution's manifest declares, squashed for comparison.
- *
- * These are CONTRIBUTION names, not entry-point names — two different
- * namespaces. `plugins/genus-hostinfo` publishes the entry point `hostinfo`
- * and declares the handler `host_state`, and `loader.py` compares `declared`
- * against the keys of the imported payload, never against the entry point. So
- * a manifest that does not name the failing entry point says nothing at all
- * about whether this distribution owns it, and must never be read as a denial.
- */
-function declaredNames(plugin: Plugin): string[] {
-  return (plugin.manifest?.declared ?? []).flatMap((entry) => entry.names.map(squash));
-}
-
-/**
- * Whether a distribution's own name could carry this entry point.
- *
- * `genus-hostinfo` publishes `hostinfo`; a distribution and its entry points
- * are named by the same hand, so this is the strongest signal the payload
- * actually offers for a refusal that is not `disabled by operator`.
- */
-function nameCouldOwn(plugin: Plugin, wanted: string): boolean {
-  const own = squash(plugin.name);
-  return own === wanted || own.endsWith(wanted) || wanted.endsWith(own);
-}
-
-/**
- * Which distribution a reload failure belongs to, or `null` for "cannot tell".
- *
- * `failures[].name` is the ENTRY-POINT name, not the distribution's — one
- * distribution appears here once per group it publishes into, and
- * `genus-hostinfo` shows up as `hostinfo`. There is no join key in the payload,
- * so this weighs the evidence that IS there, strongest first, and returns
- * nothing rather than a guess. A wrong answer here is not a cosmetic slip: it
- * reports a plugin the operator did not disable as one they did, beside a card
- * drawing that same plugin as loaded.
- *
- * The order, and why each step outranks the next:
- *
- * 1. **The group.** An entry point that failed in `genus.jobs` belongs to a
- *    distribution that publishes into `genus.jobs`. Nothing else is a candidate.
- * 2. **`enabled`, for `disabled by operator` only.** That reason is produced by
- *    exactly one thing — a lock row that is off — so a distribution the listing
- *    draws as enabled cannot be its owner, whatever it is called. If precisely
- *    one candidate is off, that is the owner; if none is, the page says nothing
- *    rather than accusing a running plugin.
- * 3. **The distribution's own name.** `genus-hostinfo` publishes `hostinfo`:
- *    the same hand names both, so a squashed prefix/suffix relation is real
- *    evidence. Applied to EVERY candidate. An earlier round restricted this
- *    step to candidates whose manifest declared nothing, on the belief that a
- *    manifest names entry points — it does not (see `declaredNames`), so that
- *    rule disqualified every manifest-bearing plugin from the only step that
- *    can match it, and a genuine ImportError on the one plugin installed
- *    rendered as "could not be tied to an installed distribution".
- * 4. **`manifest.declared`**, as a tiebreaker when the name step is silent or
- *    ambiguous. It matches only when a contribution happens to share its entry
- *    point's name, which does happen and is worth using — but it is a
- *    coincidence, so it never outranks the name.
- *
- * Being alone in the group is still not a verdict: with no name relation and no
- * declared match, the failure goes to the unattributed bucket with its group
- * and entry-point name, for the operator to place.
- */
-export function attributeFailure(failure: ReloadFailure, plugins: Plugin[]): string | null {
-  let candidates = plugins.filter((p) => p.groups.includes(failure.group));
-
-  if (failure.reason === BY_OPERATOR) {
-    const off = candidates.filter((p) => !p.enabled || p.state === "disabled");
-    if (off.length === 1) return off[0].name;
-    if (off.length === 0) return null;
-    candidates = off;
-  }
-
-  const wanted = squash(failure.name);
-  const byName = candidates.filter((p) => nameCouldOwn(p, wanted));
-  if (byName.length === 1) return byName[0].name;
-
-  // Ambiguous by name: let the manifest break the tie between those. Silent by
-  // name: let it speak for the whole field. Either way it only ever narrows.
-  const pool = byName.length > 1 ? byName : candidates;
-  const byDeclared = pool.filter((p) => declaredNames(p).includes(wanted));
-  return byDeclared.length === 1 ? byDeclared[0].name : null;
 }
 
 function statePill(state: string): { label: string; className: string } {
@@ -333,6 +319,29 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
   const [reloadError, setReloadError] = useState<string | null>(null);
   /** A lock row was written and the engine has not been asked to act on it yet. */
   const [pending, setPending] = useState(false);
+  /**
+   * The one card whose Remove is awaiting a yes, or null.
+   *
+   * Inline rather than a modal, and single rather than a set: uninstalling is
+   * the only act here that cannot be undone from this page, and a confirmation
+   * that appears beside the card being removed names it by being next to it.
+   */
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+  /**
+   * What the last removal answered.
+   *
+   * Page-level rather than a row note, because a successful removal takes the
+   * card away with the next listing read — a note keyed on that distribution
+   * would be written and then become invisible, which is how "pip reported the
+   * distribution was not installed; the row was dropped anyway" turned into a
+   * clean-looking removal.
+   */
+  const [removeReport, setRemoveReport] = useState<{
+    name: string;
+    removed: boolean;
+    rowDropped: boolean;
+    note: string;
+  } | null>(null);
 
   const { busyRow, rowErrors, rowNotes, act, setRowNote, setRowError } = useRowActions();
 
@@ -383,6 +392,11 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
     setSyncForcible(false);
     setReloadReport(null);
     setReloadError(null);
+    setRemoveReport(null);
+    // An open destructive confirmation is part of "the last act", and leaving
+    // one sitting under a fresh install plan is one mis-click from an act the
+    // operator has already moved on from.
+    setConfirmRemove(null);
   }, []);
 
   const record = useCallback(async () => {
@@ -446,6 +460,50 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
     }
   }, [poll, clearNotes, retireReports]);
 
+  /**
+   * Uninstall a distribution this platform installed, and drop its lock row.
+   *
+   * Only reachable on a row carrying `source`; `remove` refuses the rest
+   * without `--force`, which stays on the CLI for the reason `sync --force`
+   * does — an act that reaches outside what the platform put on the box should
+   * be typed by somebody standing at it.
+   *
+   * Like every other act here it does NOT reload: pip has removed the files and
+   * the running engine is still holding the imported modules, so the bar comes
+   * up saying exactly that.
+   */
+  const remove = useCallback(
+    (plugin: Plugin) => {
+      setConfirmRemove(null);
+      retireReports();
+      void act(
+        plugin.name,
+        `${BRIDGE}/api/plugins/${encodeURIComponent(plugin.name)}/remove`,
+        { method: "POST", body: JSON.stringify({}) },
+        (body) => {
+          const answer = (body ?? {}) as Record<string, unknown>;
+          setRemoveReport({
+            name: plugin.name,
+            // Both default to the optimistic reading ONLY because the route
+            // always sends them; an absent field is not evidence of success,
+            // and `note` is what the route uses to say the outcome was mixed.
+            removed: answer.removed !== false,
+            rowDropped: answer.row_dropped !== false,
+            note: typeof answer.note === "string" ? answer.note : "",
+          });
+          // The listing is the truth about what is installed, and this changed
+          // it: re-read rather than editing a row out of the local copy.
+          setPending(true);
+          poll.reload();
+        },
+        (res) => {
+          if (res.status === 502) setRowError(plugin.name, ENGINE_UNREACHABLE);
+        }
+      );
+    },
+    [act, poll, retireReports, setRowError]
+  );
+
   const toggle = useCallback(
     (plugin: Plugin) => {
       const verb = plugin.enabled ? "disable" : "enable";
@@ -507,13 +565,21 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
     [act, setRowNote, setRowError, retireReports]
   );
 
-  /** The reload report's failures, filed under the distribution each belongs to. */
+  /**
+   * The reload report's failures, filed under the distribution each belongs to.
+   *
+   * By `failures[].distribution` and nothing else. The engine has `ep.dist` in
+   * hand when it records a refusal, so this is an answer rather than the
+   * weighted guess that used to live here — and `null` stays unattributed,
+   * because the one thing worse than "I cannot place this" is placing it on a
+   * plugin that is running fine.
+   */
   const attributed = useMemo(() => {
     if (!reloadReport) return { byPlugin: [], unmatched: [] as ReloadFailure[] };
     const byPlugin = new Map<string, ReloadFailure[]>();
     const unmatched: ReloadFailure[] = [];
     for (const failure of reloadReport.failures) {
-      const name = attributeFailure(failure, data.plugins);
+      const name = failure.distribution;
       if (name === null) unmatched.push(failure);
       else byPlugin.set(name, [...(byPlugin.get(name) ?? []), failure]);
     }
@@ -521,7 +587,7 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
       byPlugin: [...byPlugin.entries()].map(([name, failures]) => ({ name, failures })),
       unmatched,
     };
-  }, [reloadReport, data.plugins]);
+  }, [reloadReport]);
 
   if (!visible) return null;
 
@@ -558,6 +624,19 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
         turned off; turning one off writes that record, and the engine keeps running the set it
         discovered until it is reloaded.
       </p>
+
+      {listing !== null && !poll.forbidden ? (
+        <PluginInstallCard
+          indexes={data.indexes}
+          onAct={retireReports}
+          onInstalled={() => {
+            // A distribution appeared: the listing is the truth about what is
+            // installed, and the engine has not been told about it yet.
+            setPending(true);
+            poll.reload();
+          }}
+        />
+      ) : null}
 
       {poll.forbidden ? (
         <p className="text-xs text-muted-foreground" data-testid="plugins-forbidden">
@@ -602,9 +681,11 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
               {data.lockfile.malformed
                 ? "lockfile: unreadable"
                 : data.lockfile.present
-                  ? `lockfile: ${data.lockfile.rows} recorded ${
+                  ? // A row count alone over a `problem` is the chip reporting a
+                    // healthy file while some of its rows govern nothing.
+                    `lockfile: ${data.lockfile.rows} recorded ${
                       data.lockfile.rows === 1 ? "row" : "rows"
-                    }`
+                    }${data.lockfile.problem ? ", and rows that could not be read" : ""}`
                   : "lockfile: not written yet"}
             </span>
           </div>
@@ -655,7 +736,9 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
             will not read, the bytes are not decodable text, the JSON does not
             parse, or there is no `plugins` list
             (`robothor/plugins/lockfile.py::read_lockfile`). Unreadable ROWS
-            leave the flag false and are not visible in this payload at all.
+            leave the flag FALSE and are reported through `problem` instead —
+            they get their own card below, because their consequence is the
+            partial one and this one's is total.
 
             So the consequence is the opposite of a partial one.
             `Lockfile.usable = present and not malformed`, and the loader opens
@@ -677,12 +760,46 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
               data-testid="plugins-lockfile-malformed"
               className="max-w-3xl break-words rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
             >
-              The lockfile could not be read at all, so the engine is ignoring it: nothing is being
-              refused, and <strong>every installed plugin is loading, including any you turned
+              {data.lockfile.problem
+                ? `The lockfile ${data.lockfile.problem}, so the engine is ignoring it: `
+                : "The lockfile could not be read at all, so the engine is ignoring it: "}
+              nothing is being refused, and{" "}
+              <strong>every installed plugin is loading, including any you turned
               off</strong> and any whose manifest has drifted. Until it is repaired this screen can
-              show you what is installed but cannot govern it. Record installed plugins to find out
-              which fault it is — the refusal says whether the file&apos;s contents are damaged or
-              its path cannot be written, and those have different remedies.
+              show you what is installed but cannot govern it.{" "}
+              {data.lockfile.problem
+                ? "Recording is what tells you whether the write can succeed once it is repaired."
+                : "Record installed plugins to find out which fault it is — the refusal says whether the file's contents are damaged or its path cannot be written, and those have different remedies."}
+            </p>
+          ) : null}
+
+          {/*
+            The PARTIAL damage, which is a different fault with a different
+            consequence and was invisible here until the engine started
+            answering `problem`.
+
+            `read_lockfile` keeps every row it could parse and counts the ones
+            it could not; `malformed` stays false and `rows` reports only the
+            readable ones. So the rows that DID parse still govern — which is
+            deliberate, since discarding them would put every other disabled
+            plugin back into service — and the ones that did not are operator
+            decisions that cannot be honoured, with nothing on screen to say so.
+            The page showed "lockfile: 1 recorded row" and a clean bill.
+
+            Warning, not destructive: the file is doing most of its job. And no
+            `--force` here either, for the reason the card above gives — the
+            server's own refusal is what names it, and only when it applies.
+          */}
+          {!data.lockfile.malformed && data.lockfile.problem ? (
+            <p
+              data-testid="plugins-lockfile-rows-damaged"
+              className="max-w-3xl break-words rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning"
+            >
+              The lockfile {data.lockfile.problem}. Every row it <em>could</em> read still governs,
+              so most of what you turned off is still off — but{" "}
+              <strong>whatever the unreadable rows turned off is loading right now</strong>, and
+              this screen cannot show you which plugins those were. Repairing the file by hand
+              keeps those decisions; recording over it cannot, and will refuse for that reason.
             </p>
           ) : null}
 
@@ -757,7 +874,7 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
               testId="plugins-empty"
               icon={Puzzle}
               title="No plugins are installed"
-              description="Nothing on this box publishes a genus.* entry point. Install one with pip and it appears here — there is no registry to enrol in and no package format to learn."
+              description="Nothing on this box publishes a genus.* entry point. Install one from the registry above, or with pip, and it appears here. To install a wheel you have on disk, use `genus plugin install ./x.whl --sha256 …` on the box — a dashboard that could name a path would be reading files on the engine's machine."
             />
           ) : null}
 
@@ -824,6 +941,32 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
                         .map((entry) => `${entry.kind} × ${entry.count}`)
                         .join(" · ")}
                 </p>
+
+                {/*
+                  Where it came from, for the rows this platform put here. A
+                  row with no `source` says nothing rather than "installed by
+                  hand": `sync` records whatever is on the box, and asserting
+                  how a package arrived from the absence of a field would be
+                  inventing provenance.
+                */}
+                {plugin.source ? (
+                  <p
+                    data-testid={`plugin-source-${plugin.name}`}
+                    className="break-words text-[11px] text-muted-foreground"
+                  >
+                    Installed by this platform from the{" "}
+                    {plugin.source.origin === "registry" ? "registry" : "a wheel"}
+                    {plugin.source.publisherKeyId
+                      ? `, signed by ${plugin.source.publisherKeyId}`
+                      : ""}
+                    {plugin.source.indexUrl ? (
+                      <>
+                        {" · "}
+                        <span className="break-all font-mono">{plugin.source.indexUrl}</span>
+                      </>
+                    ) : null}
+                  </p>
+                ) : null}
 
                 {plugin.failureReason ? (
                   <p
@@ -903,7 +1046,55 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
                       and the engine answers a toggle on one with a 404.
                     </span>
                   ) : null}
+                  {/*
+                    Remove only where `source` is. The engine refuses a row it
+                    did not install without `--force`, so a button on every card
+                    would be one that answers 422 on most of them — and the
+                    escape stays on the CLI, because uninstalling a package
+                    somebody else put on the box is not a thing to do from a
+                    browser by accident.
+                  */}
+                  {plugin.source ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      data-testid={`plugin-remove-${plugin.name}`}
+                      disabled={busy}
+                      onClick={() => setConfirmRemove(plugin.name)}
+                      className="ml-auto"
+                    >
+                      Remove
+                    </Button>
+                  ) : null}
                 </div>
+
+                {confirmRemove === plugin.name ? (
+                  <div
+                    data-testid={`plugin-remove-confirm-${plugin.name}`}
+                    className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-2"
+                  >
+                    <p className="min-w-0 flex-1 basis-48 break-words text-[11px] text-destructive">
+                      Uninstall {plugin.name} and drop its lockfile row? The files go now; the
+                      engine keeps the modules it already imported until it is reloaded.
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      data-testid={`plugin-remove-no-${plugin.name}`}
+                      onClick={() => setConfirmRemove(null)}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      size="sm"
+                      data-testid={`plugin-remove-yes-${plugin.name}`}
+                      disabled={busy}
+                      onClick={() => remove(plugin)}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                ) : null}
 
                 {rowNotes[plugin.name] ? (
                   <p
@@ -925,6 +1116,31 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
               </div>
             );
           })}
+
+          {removeReport ? (
+            <p
+              data-testid="plugins-remove-result"
+              className="max-w-3xl break-words rounded-lg border border-border bg-card p-3 text-xs text-muted-foreground"
+            >
+              {removeReport.removed
+                ? `Uninstalled ${removeReport.name}`
+                : `${removeReport.name} was not uninstalled`}
+              {removeReport.rowDropped
+                ? " and dropped its lockfile row."
+                : " and its lockfile row is still there."}{" "}
+              Removing is not unloading — the engine keeps the modules it has already imported
+              until it is reloaded.
+              {/*
+                The route's `note`, which it uses for exactly the mixed outcome:
+                "pip reported the distribution was not installed; the lockfile
+                row was dropped anyway". Without it a partial removal reads as a
+                clean one, and the card it described has already left the screen.
+              */}
+              {removeReport.note ? (
+                <span className="block pt-1 text-warning">{removeReport.note}</span>
+              ) : null}
+            </p>
+          ) : null}
 
           {reloadError ? (
             <p
@@ -961,10 +1177,12 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
                 problem — which is the operator's own decision printed back at
                 them as something to fix.
 
-                Every line carries `group/entry-point` beside the reason, so the
-                attribution below can be checked rather than believed: that is
-                the only evidence the payload gives for the match, and the match
-                is a judgement this page made, not one the engine sent.
+                Every line still carries `group/entry-point` beside the reason,
+                although the match is now the engine's answer rather than this
+                page's guess. It is kept because the entry point is the thing an
+                operator greps for in a traceback or a journal, and because one
+                distribution appears here once per group it publishes into — a
+                line without it would read as the same refusal reported twice.
               */}
               {attributed.byPlugin.map(({ name, failures }) => {
                 const intended = failures.filter((f) => f.reason === BY_OPERATOR);

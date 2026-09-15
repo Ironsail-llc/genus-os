@@ -83,9 +83,21 @@ _GROUPS = {
 class PluginFailure:
     """One plugin that did not load, and why. Never raised — reported."""
 
+    #: The ENTRY-POINT name. ``genus-hostinfo`` publishes ``hostinfo``, which is
+    #: neither its distribution name nor the ``host_state`` handler it
+    #: contributes: three namespaces, none of them interchangeable.
     name: str
     group: str
     reason: str
+    #: Which DISTRIBUTION this entry point belongs to, or None when the metadata
+    #: layer cannot name it. Optional and last so every three-argument
+    #: construction still works, but the loader has ``ep.dist`` in hand at every
+    #: one of them, so None here means "genuinely unnameable" and never "not
+    #: bothered". Without it the Helm had to infer the owner from the group, the
+    #: ``enabled`` flag and a prefix match on the distribution's own name, and a
+    #: wrong inference reports a plugin the operator did not disable as one they
+    #: did, beside a card drawing that same plugin as loaded.
+    distribution: str | None = None
 
 
 @dataclass
@@ -262,6 +274,22 @@ def builtin_names(group: str) -> set[str]:
     return set(names)
 
 
+def _dist_name(dist: Any) -> str | None:
+    """The distribution behind an entry point, or None when nothing can name it.
+
+    None is reserved for the honest case — unreadable or absent metadata — so
+    that a consumer reading None knows it is the loader's answer and not the
+    loader's silence. Never raises: a distribution whose metadata is broken is
+    one this cannot name, not a reason discovery stops.
+    """
+    try:
+        from robothor.plugins.lockfile import dist_name
+
+        return dist_name(dist) or None
+    except Exception:  # noqa: BLE001 - governance must never block boot
+        return None
+
+
 def _platform_installed(dist: Any, lock: Any) -> bool:
     """Whether ``genus plugin install`` put this distribution here.
 
@@ -344,6 +372,14 @@ def load_plugins(
         if group not in _GROUPS:
             continue
 
+        # Which DISTRIBUTION this entry point belongs to, resolved ONCE and
+        # carried on every refusal below. The loader has always had this in
+        # hand -- `getattr(ep, "dist", None)` is three lines down -- and not
+        # reporting it is what pushed the inference onto the Helm, which has
+        # only the listing to infer from. Empty becomes None: an unnameable
+        # distribution is a fact, an empty string is a string.
+        distribution = _dist_name(getattr(ep, "dist", None))
+
         # THE LOCKFILE IS CONSULTED BEFORE `ep.load()`, for the reason the
         # manifest gate below gives: after the import, "refused" means the code
         # has already run. A distribution with no row is unconstrained -- the
@@ -351,7 +387,7 @@ def load_plugins(
         # is what tells it.
         refusal = _lockfile.refusal_for(getattr(ep, "dist", None), lock, digests=digests)
         if refusal is not None:
-            result.failures.append(PluginFailure(name, group, refusal))
+            result.failures.append(PluginFailure(name, group, refusal, distribution))
             logger.info("Plugin %r not loaded: %s", name, refusal)
             continue
 
@@ -371,6 +407,7 @@ def load_plugins(
                         name,
                         group,
                         f"no {MANIFEST_NAME} in the distribution — refused before import",
+                        distribution,
                     )
                 )
                 logger.warning("Plugin %r ships no %s; refusing before import", name, MANIFEST_NAME)
@@ -387,14 +424,21 @@ def load_plugins(
             payload = ep.load()
         except Exception as e:
             result.failures.append(
-                PluginFailure(name, group, f"failed to import: {type(e).__name__}: {e}")
+                PluginFailure(
+                    name, group, f"failed to import: {type(e).__name__}: {e}", distribution
+                )
             )
             logger.warning("Plugin %r failed to import: %s", name, e)
             continue
 
         if not isinstance(payload, dict):
             result.failures.append(
-                PluginFailure(name, group, f"payload is {type(payload).__name__}, expected a dict")
+                PluginFailure(
+                    name,
+                    group,
+                    f"payload is {type(payload).__name__}, expected a dict",
+                    distribution,
+                )
             )
             continue
 
@@ -405,6 +449,7 @@ def load_plugins(
                     name,
                     group,
                     f"contract version {declared!r} != {CONTRACT_VERSION!r} — refused",
+                    distribution,
                 )
             )
             logger.warning(
@@ -417,7 +462,9 @@ def load_plugins(
 
         contributions = payload.get(_GROUPS[group])
         if not isinstance(contributions, dict) or not contributions:
-            result.failures.append(PluginFailure(name, group, f"no {_GROUPS[group]!r} in payload"))
+            result.failures.append(
+                PluginFailure(name, group, f"no {_GROUPS[group]!r} in payload", distribution)
+            )
             continue
 
         # Hold the payload to what the distribution declared. This half is
@@ -441,7 +488,12 @@ def load_plugins(
         )
         if undeclared:
             result.failures.append(
-                PluginFailure(name, group, f"undeclared in {MANIFEST_NAME}: {undeclared} — refused")
+                PluginFailure(
+                    name,
+                    group,
+                    f"undeclared in {MANIFEST_NAME}: {undeclared} — refused",
+                    distribution,
+                )
             )
             logger.warning("Plugin %r offered undeclared %s %s", name, group, undeclared)
             continue
@@ -454,14 +506,18 @@ def load_plugins(
         clash = [k for k in contributions if k in group_reserved]
         if clash:
             result.failures.append(
-                PluginFailure(name, group, f"reserved name(s) {sorted(clash)} — refused")
+                PluginFailure(
+                    name, group, f"reserved name(s) {sorted(clash)} — refused", distribution
+                )
             )
             logger.warning("Plugin %r tried to shadow built-in(s) %s", name, sorted(clash))
             continue
         taken = [k for k in contributions if k in target]
         if taken:
             result.failures.append(
-                PluginFailure(name, group, f"name(s) {sorted(taken)} already claimed — refused")
+                PluginFailure(
+                    name, group, f"name(s) {sorted(taken)} already claimed — refused", distribution
+                )
             )
             continue
 
@@ -474,7 +530,12 @@ def load_plugins(
             raw = payload.get("read_only")
             if not isinstance(raw, list | tuple | set) or not all(isinstance(x, str) for x in raw):
                 result.failures.append(
-                    PluginFailure(name, group, "read_only must be a list of tool names — refused")
+                    PluginFailure(
+                        name,
+                        group,
+                        "read_only must be a list of tool names — refused",
+                        distribution,
+                    )
                 )
                 continue
             foreign = sorted(set(raw) - set(contributions))
@@ -486,6 +547,7 @@ def load_plugins(
                         name,
                         group,
                         f"read_only names {foreign} are not provided by this plugin — refused",
+                        distribution,
                     )
                 )
                 logger.warning(

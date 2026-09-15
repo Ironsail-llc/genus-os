@@ -27,7 +27,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 ENGINE_LISTING = {
     "generation": 3,
-    "lockfile": {"path_configured": True, "present": True, "malformed": False, "rows": 1},
+    "indexes": ["https://example.invalid/index.json"],
+    "lockfile": {
+        "path_configured": True,
+        "present": True,
+        "malformed": False,
+        "rows": 1,
+        "problem": None,
+    },
     "plugins": [
         {
             "name": "acme-tools",
@@ -41,8 +48,29 @@ ENGINE_LISTING = {
             "contributions": {"tools": 2},
             "failure_reason": None,
             "manifest": {"contract_version": 1, "declared": {"handlers": ["probe"]}},
+            "source": {
+                "origin": "registry",
+                "installed_at": "2026-09-15T00:00:00+00:00",
+                "index_url": "https://example.invalid/index.json",
+                "publisher_key_id": "genus-2026",
+            },
         }
     ],
+}
+
+#: A listing whose lockfile is damaged and whose plugin nothing installed — the
+#: two shapes the Helm renders differently, and the two this proxy must not
+#: flatten.
+ENGINE_LISTING_DAMAGED = {
+    "generation": 3,
+    "lockfile": {
+        "path_configured": True,
+        "present": True,
+        "malformed": True,
+        "rows": 0,
+        "problem": "is not valid JSON (JSONDecodeError)",
+    },
+    "plugins": [{**ENGINE_LISTING["plugins"][0], "source": None}],
 }
 
 ENGINE_ROW = {
@@ -57,6 +85,22 @@ ENGINE_ROW = {
 }
 
 ENGINE_RELOAD = {"generation": 4, "loaded": 1, "failures": []}
+
+#: A reload that refused one entry point. ``name`` is the ENTRY POINT and
+#: ``distribution`` is the package it came from: two namespaces, and the page
+#: files the refusal under the second.
+ENGINE_RELOAD_WITH_FAILURE = {
+    "generation": 4,
+    "loaded": 0,
+    "failures": [
+        {
+            "name": "probe",
+            "group": "genus.tools",
+            "reason": "disabled by operator",
+            "distribution": "acme-tools",
+        }
+    ],
+}
 
 ENGINE_SYNC = {
     "recorded": ["acme-tools"],
@@ -105,11 +149,15 @@ class FakeEngine:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, dict | None]] = []
         self.status = 200
+        #: Overridable so a test can hand the proxy a different engine answer
+        #: without patching a second time.
+        self.listing: dict = ENGINE_LISTING
+        self.reload: dict = ENGINE_RELOAD
 
     async def __call__(self, method, path, *, json=None, timeout=30):
         self.calls.append((method, path, json))
         if path.endswith("/reload"):
-            return self.status, ENGINE_RELOAD
+            return self.status, self.reload
         if path.endswith("/sync"):
             return self.status, ENGINE_SYNC
         if path.endswith("/install"):
@@ -118,7 +166,7 @@ class FakeEngine:
             return self.status, ENGINE_REMOVE
         if path.endswith(("/enable", "/disable")):
             return self.status, ENGINE_ROW
-        return self.status, ENGINE_LISTING
+        return self.status, self.listing
 
 
 @pytest.fixture
@@ -171,6 +219,47 @@ def test_it_proxies_the_engine_listing_verbatim(controls_client_as_operator, fak
 def test_an_unreachable_engine_is_a_502(controls_client_as_operator, fake_engine):
     fake_engine.status = 502
     assert controls_client_as_operator.get("/api/plugins").status_code == 502
+
+
+def test_the_lockfile_problem_survives_the_proxy(controls_client_as_operator, fake_engine):
+    """Additive engine fields must arrive whole, not filtered to a known list.
+
+    ``lockfile.problem`` is WHICH damage, in the engine's own words, and the
+    page renders it verbatim. A proxy that rebuilt the object from the four
+    fields it knew about would drop it silently and the page would fall back to
+    its generic sentence — correct-looking, and one remedy short.
+    """
+    fake_engine.listing = ENGINE_LISTING_DAMAGED
+    lock = controls_client_as_operator.get("/api/plugins").json()["lockfile"]
+    assert lock["problem"] == "is not valid JSON (JSONDecodeError)"
+
+
+def test_a_rows_source_survives_the_proxy(controls_client_as_operator, fake_engine):
+    """``source`` present is what lets the page offer Remove; absent is what
+    stops it offering an act the engine would answer 422 to."""
+    installed = controls_client_as_operator.get("/api/plugins").json()["plugins"][0]
+    assert installed["source"]["origin"] == "registry"
+    assert installed["source"]["publisher_key_id"] == "genus-2026"
+
+    fake_engine.listing = ENGINE_LISTING_DAMAGED
+    hand_installed = controls_client_as_operator.get("/api/plugins").json()["plugins"][0]
+    assert hand_installed["source"] is None
+
+
+def test_the_configured_indexes_survive_the_proxy(controls_client_as_operator, fake_engine):
+    """The install form offers a choice between these; a proxy that dropped them
+    would leave it with a free-text URL box or no index control at all."""
+    body = controls_client_as_operator.get("/api/plugins").json()
+    assert body["indexes"] == ["https://example.invalid/index.json"]
+
+
+def test_a_reload_failure_keeps_its_distribution(controls_client_as_operator, fake_engine):
+    """``name`` is the entry point, ``distribution`` the package. The page files
+    the refusal under the second, and there is no other join key."""
+    fake_engine.reload = ENGINE_RELOAD_WITH_FAILURE
+    failure = controls_client_as_operator.post("/api/plugins/reload").json()["failures"][0]
+    assert failure["name"] == "probe"
+    assert failure["distribution"] == "acme-tools"
 
 
 # ── The acts ────────────────────────────────────────────────────────────
