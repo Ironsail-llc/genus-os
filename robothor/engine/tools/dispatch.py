@@ -485,6 +485,29 @@ async def _execute_tool(
 
         sandbox_token = set_benchmark_sandbox(True)
 
+    # ── Repeat-call guard ──
+    # The one place every tool call passes through BEFORE the handler runs, so
+    # a call the run has already made and already been answered the same way
+    # can be answered from what it has. Read-only allow-list, never skips a
+    # write, and below `enforce` it decides nothing and only logs. Per-run
+    # state lives on the run's session (robothor/engine/repeat_guard.py); a
+    # call from outside a live run finds no guard and is unaffected.
+    from robothor.engine.repeat_guard import guard_for_run
+
+    guard = guard_for_run(run_id)
+    if guard is not None:
+        decision = await asyncio.to_thread(guard.before, name, args, workspace=workspace)
+        if decision is not None and decision.result is not None:
+            _audit_tool_call(
+                name,
+                agent_id,
+                tenant_id,
+                user_id=user_id,
+                status="ok" if decision.action == "answered" else "denied",
+                error=decision.note if decision.action == "refused" else None,
+            )
+            return decision.result
+
     # Wrap handler invocation: an unhandled exception here used to propagate
     # out of the runner, leaving agent_runs rows in 'running' state until the
     # 30-min reaper fired. Returning a structured error lets the LLM decide
@@ -530,6 +553,9 @@ async def _execute_tool(
     # raises and, below the enforce rung, returns the result untouched. The
     # try/except guards the import itself, so even a broken verification module
     # cannot fail an agent's real work.
+    if guard is not None:
+        await asyncio.to_thread(guard.after, name, args, result, workspace=workspace)
+
     try:
         from robothor.engine.tools import verification
 

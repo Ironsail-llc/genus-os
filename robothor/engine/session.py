@@ -206,6 +206,11 @@ class AgentSession:
         self._offloaded_paths: set[str] = set()
         self._step_costs: list[float] = []
         self.todo_list: TodoList | None = None
+        # Per-run repeat-call state (robothor/engine/repeat_guard.py), created
+        # on the first guarded tool call. It lives on the session because it is
+        # scoped to exactly one run and because deciding whether an earlier
+        # result is still visible to the model means reading `messages`.
+        self.repeat_guard: Any = None
         # ── Upgrade-plan session state (Phase 0 foundation) ────────────
         # Counters and slots that Rip 1 (background-review fork),
         # Rip 9 (interrupt/steer), and Rip 10 (trajectory capture)

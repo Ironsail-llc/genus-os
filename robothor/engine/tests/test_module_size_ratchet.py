@@ -48,6 +48,10 @@ CAPS = {
     # independently, so the ratchet takes the merged actual rather than either
     # branch's number -- a cap carried over from one side would bank the other
     # side's savings as headroom.
+    # Held at 2514 through the step-efficiency work: the repeat guard's drain
+    # and the pace-note call site were paid for by the check-in block and the
+    # deadline block leaving for run_pacing.py. A ratchet only ever goes down,
+    # so a wash stays where it was rather than banking headroom.
     "robothor/engine/runner.py": 2514,
     # 2545: a concurrent session ratcheted this to 2539 by lifting injection
     # screening and journal resume out of execute(); the deliverable guard's call

@@ -243,3 +243,110 @@ class DeadlinePacer:
             note.replace("\n", " ")[:300],
         )
         return None
+
+
+def clamp_tool_timeout(
+    requested: int,
+    *,
+    watchdog: Any = None,
+    mode: str | None = None,
+    run_id: str = "",
+) -> tuple[int, str]:
+    """``(effective_timeout, note)`` for one tool call, note empty if unchanged.
+
+    ``min(requested, remaining - reserve)``, floored, so a single call cannot
+    consume the whole run. Every one of the 41 ``exec`` calls in the profiled
+    run asked for 900s against a 1200s budget; the only ceiling the engine had
+    was the tool's own constant, which knows nothing about the run asking.
+
+    The reserve is what the run needs AFTER the call returns — writing the
+    deliverable is the whole point of noticing the deadline at all — and the
+    floor is what stops a nearly-expired run from turning every command into a
+    guaranteed timeout.
+
+    ``watchdog`` defaults to the live one; no watchdog, or a run with no
+    ceiling, means nothing to clamp to and the request stands.
+    """
+    if mode is None:
+        from robothor.engine.feature_flags import step_efficiency_mode
+
+        mode = step_efficiency_mode()
+    if mode == "off" or requested <= 0:
+        return requested, ""
+    if watchdog is None:
+        from robothor.engine.stall_watchdog import _active_watchdog_var
+
+        watchdog = _active_watchdog_var.get()
+    if watchdog is None:
+        return requested, ""
+    hard_timeout = float(getattr(watchdog, "_hard_timeout", 0) or 0)
+    if hard_timeout <= 0:
+        return requested, ""
+
+    remaining = int(hard_timeout - float(getattr(watchdog, "elapsed_seconds", 0) or 0))
+    allowed = max(MIN_TOOL_TIMEOUT_SECONDS, remaining - TIMEOUT_RESERVE_SECONDS)
+    if allowed >= requested:
+        return requested, ""
+
+    note = f"timeout clamped to {allowed}s: the run has {max(0, remaining)}s left"
+    if mode != "enforce":
+        logger.warning(
+            "step-efficiency observe: run %s would have %s (requested %ds)",
+            run_id or "?",
+            note,
+            requested,
+        )
+        return requested, ""
+    logger.warning("Tool timeout clamped to %ds on run %s", allowed, run_id or "?")
+    return allowed, note
+
+
+#: The check-in that already shipped, fired at ``max_iterations``.
+_SHIPPED_CHECKIN = (
+    "[SYSTEM] Progress check-in (iteration {iteration}): Are you making progress "
+    "toward the goal? If you are stuck in a loop or have completed the task, "
+    "provide your final answer and stop calling tools. If making progress, continue."
+)
+
+#: The added one. "Are you making progress" is a question an agent answers yes
+#: to; what is on disk, and where, is checkable — and it is what the graders
+#: and the operator actually read.
+_DELIVERABLE_CHECKIN = (
+    "[SYSTEM] Progress check-in (iteration {iteration}): what have you WRITTEN to "
+    "the deliverable path so far? Name the path and say what is in it. If nothing "
+    "is written yet, write your current partial answer there NOW before continuing "
+    "— an incomplete file at the requested path is worth more than a perfect "
+    "answer that was never saved. If the task is done, give your final answer and "
+    "stop calling tools."
+)
+
+
+def checkin_note(
+    iteration: int,
+    checkin_interval: int,
+    mode: str,
+    *,
+    run_id: str = "",
+) -> str | None:
+    """The progress check-in for this iteration, or None.
+
+    The shipped cadence fires at ``max_iterations`` on every rung of the ladder,
+    unchanged. ``enforce`` adds one every ``CHECKIN_EVERY`` iterations, because
+    the bench agent's ``max_iterations`` is 80 and the run this exists for took
+    79 — the shipped check-in never fired once on the run that needed it.
+    """
+    if iteration < 1:
+        return None
+    if checkin_interval > 0 and iteration % checkin_interval == 0:
+        return _SHIPPED_CHECKIN.format(iteration=iteration)
+    if mode == "off" or iteration % CHECKIN_EVERY != 0:
+        return None
+    if mode != "enforce":
+        logger.warning(
+            "step-efficiency observe: run %s would inject a deliverable check-in at iteration %d",
+            run_id or "?",
+            iteration,
+        )
+        return None
+    logger.warning("Deliverable check-in issued at iteration %d, run %s", iteration, run_id or "?")
+    return _DELIVERABLE_CHECKIN.format(iteration=iteration)

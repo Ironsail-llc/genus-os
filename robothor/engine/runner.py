@@ -80,6 +80,7 @@ from robothor.engine.post_execution import apply_post_execution_guardrails
 from robothor.engine.prompts import (
     EXECUTION_MODE_PREAMBLE,
 )
+from robothor.engine.repeat_guard import drain_repeat_notes  # noqa: E402
 from robothor.engine.run_budget import (  # noqa: E402
     DEADLINE_WARNING_FRACTION as DEADLINE_WARNING_FRACTION,
 )
@@ -95,7 +96,7 @@ from robothor.engine.run_finalizer import RunFinalizationMixin
 from robothor.engine.run_identity import resolve_run_identity
 from robothor.engine.run_lifecycle import RunLifecycleMixin, spawn_post_stall_autodream
 from robothor.engine.run_llm_calls import LLMCallMixin  # noqa: E402
-from robothor.engine.run_pacing import DeadlinePacer  # noqa: E402
+from robothor.engine.run_pacing import DeadlinePacer, checkin_note  # noqa: E402
 from robothor.engine.sandbox_policy import agent_holds_exec, resolve_sandbox_decision
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.session import ENGINE_CONTEXT_ROLE, AgentSession
@@ -1920,18 +1921,12 @@ class AgentRunner(
                 return
 
             # ── [SOFT CHECK-IN] Nudge LLM to self-assess progress ──
-            if _iteration > 0 and _checkin_interval > 0 and _iteration % _checkin_interval == 0:
-                session.messages.append(
-                    {
-                        "role": ENGINE_CONTEXT_ROLE,
-                        "content": (
-                            f"[SYSTEM] Progress check-in (iteration {_iteration}): "
-                            "Are you making progress toward the goal? If you are stuck "
-                            "in a loop or have completed the task, provide your final "
-                            "answer and stop calling tools. If making progress, continue."
-                        ),
-                    }
-                )
+            # Cadence and wording in robothor/engine/run_pacing.py.
+            _ci_note = checkin_note(
+                _iteration, _checkin_interval, _pacer.mode, run_id=session.run.id
+            )
+            if _ci_note:
+                session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": _ci_note})
 
             # ── [STATUS] Emit iteration_start lifecycle event ──
             if on_status:
@@ -2322,6 +2317,11 @@ class AgentRunner(
                 # Track errors for this iteration
                 if error_msg:
                     iteration_errors.append((tool_name, error_msg, error_type))
+
+            # ── [REPEAT GUARD] Notes raised while the tools ran ──
+            # After every tool result, never between them: see drain_repeat_notes.
+            for _rg_note in drain_repeat_notes(session):
+                session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": _rg_note})
 
             # ── [STATUS] Emit tools_done lifecycle event ──
             if on_status:
