@@ -187,6 +187,14 @@ def _env_name_for(adapter: str, key: str) -> str:
     return slug.upper()
 
 
+#: A URL with no userinfo. An endpoint is the one thing an adapter must state
+#: in the clear, and versioned paths (``/v1/_mcp``) are the norm — so "has a
+#: digit" made every ordinary MCP endpoint a secret the receiver had to
+#: hand-supply. A URL that DOES carry userinfo is caught by the credential
+#: shapes long before this, so exempting the rest costs nothing.
+_PLAIN_URL = re.compile(r"(?i)^[a-z][a-z0-9+.-]*://(?![^/\s:@]{1,256}:[^/\s@]{1,256}@)\S*$")
+
+
 def _is_opaque(value: str) -> bool:
     """Whether *value* reads as an issued identifier rather than as a setting.
 
@@ -199,6 +207,8 @@ def _is_opaque(value: str) -> bool:
     fill in. Guessing at entropy anywhere the cost is an unreadable error is
     what :mod:`robothor.secrets.redaction` refuses to do, and rightly.
     """
+    if _PLAIN_URL.match(value):
+        return False
     return (
         len(value) >= 16
         and not any(character.isspace() for character in value)

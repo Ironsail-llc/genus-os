@@ -134,7 +134,12 @@ _VALUE_SHAPES: tuple[tuple[str, str], ...] = (
     (r"\bgithub_pat_[A-Za-z0-9_]{20,}", "a GitHub fine-grained token"),
     (r"\bglpat-[A-Za-z0-9_-]{16,}", "a GitLab token"),
     (r"\b(?:AKIA|ASIA)[0-9A-Z]{15,16}\b", "an AWS access key id"),
-    (r"\bAIza[0-9A-Za-z_-]{35}\b", "a Google API key"),
+    # No trailing ``\b``: a Google key is base64url and may end in ``-``, after
+    # which a word boundary does not fire — so the anchored form silently
+    # dropped a whole class of real keys. ``{35,}`` is greedy and takes the
+    # whole run, which is the same thing a lookahead would buy with less to
+    # read.
+    (r"\bAIza[0-9A-Za-z_-]{35,}", "a Google API key"),
     (r"-----BEGIN [A-Z ]{0,32}PRIVATE KEY-----", "a PEM private key"),
     (r"\bnpm_[A-Za-z0-9]{36}\b", "an npm token"),
     (r"\bshp(?:at|ca|pa|ss)_[a-fA-F0-9]{32}\b", "a Shopify token"),
@@ -197,15 +202,37 @@ _MAPPING_CREDENTIAL = re.compile(
 )
 
 #: A credential stated in prose: ``the billing password is hunter2hunter2``.
-#: The value must look like a VALUE rather than like the next English word — it
-#: carries a digit and a letter, or is long and non-alphabetic. Without that
-#: test "the token is described below" is a credential and an operator cannot
-#: write a sentence about authentication in an instruction file.
+#:
+#: Three narrowings, and each one is a false positive this rule produced:
+#:
+#: 1. **The noun must be SINGULAR and DETERMINED** — "the password is",
+#:    "my api key is". "Passwords are argon2id, minimum 12 characters", copied
+#:    verbatim from this repo's own ``docs/configuration.md``, made an agent
+#:    unexportable. A statement about credentials in general is a policy; a
+#:    statement about *the* credential is a leak.
+#: 2. **The value must not be a known algorithm or format name.** ``argon2id``,
+#:    ``sha256`` and ``ed25519`` all satisfy "letters and digits", and all three
+#:    are the answer to "what is the password *hashed with*".
+#: 3. **The value must be long enough to be one.** Twelve characters, not eight:
+#:    at eight, ordinary technical prose keeps landing on it.
+#:
+#: Instruction files are prose, and prose about authentication is what operators
+#: write most, so this rule is the one most likely to be met in practice. It
+#: earns a refusal only when the sentence is carrying the value itself.
+_ALGORITHM_NAMES = (
+    r"(?:argon2[a-z]*|bcrypt|scrypt|pbkdf2[a-z0-9]*|sha\d+[a-z-]*|md5|hmac[a-z0-9-]*"
+    r"|ed25519[a-z-]*|rsa\d*|ecdsa[a-z0-9-]*|aes\d*[a-z-]*|base64|utf-?8|oauth\d?|jwt"
+    r"|tls\d*[a-z.]*|ssl\d*)"
+)
+
 _PROSE_CREDENTIAL = re.compile(
-    r"(?i)\b(?:password|passphrase|passwd|secret|api[ _-]?key|access[ _-]?key|token"
-    r"|credential)s?\s+(?:is|was|are|were|=|:)\s+[\"']?"
-    r"(?=[A-Za-z0-9+/=_.-]{8,})(?=[A-Za-z0-9+/=_.-]*\d)(?=[A-Za-z0-9+/=_.-]*[A-Za-z])"
-    r"[A-Za-z0-9+/=_.-]{8,}"
+    r"(?i)\b(?:the|this|that|our|my|its|his|her|their|a|an)\s+"
+    r"(?:[a-z0-9_-]{1,20}\s+){0,3}"
+    r"(?:password|passphrase|passwd|secret|api[ _-]?key|access[ _-]?key|token|credential)"
+    r"\s+(?:is|was)\s+[\"']?"
+    rf"(?!{_ALGORITHM_NAMES}\b)"
+    r"(?=[A-Za-z0-9+/=_.-]{12,})(?=[A-Za-z0-9+/=_.-]*\d)(?=[A-Za-z0-9+/=_.-]*[A-Za-z])"
+    r"[A-Za-z0-9+/=_.-]{12,}"
 )
 
 #: The leak gate's own patterns (``scripts/check_instance_leak.py``), applied at

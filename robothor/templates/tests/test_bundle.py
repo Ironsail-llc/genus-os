@@ -180,6 +180,21 @@ class TestCredentialShapes:
         assert hits, f"{label} exported cleanly"
         assert all(part not in hits[0].describe() for part in (_GH, _AWS, _GOOGLE, _GITLAB))
 
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "AIza" + "E" * 35,
+            # R4: a base64url key may end in ``-`` or ``_``. ``\b`` does not
+            # fire after a hyphen, so the trailing word boundary silently
+            # dropped a whole class of real keys.
+            "AIza" + "E" * 34 + "-",
+            "AIza" + "E" * 34 + "_",
+            "AIza" + "E" * 36,
+        ],
+    )
+    def test_a_google_key_is_caught_whatever_it_ends_with(self, key):
+        assert scan_secret_literals(f"key: {key}\n", "adapters/maps.yaml")
+
     def test_a_credential_word_inside_a_longer_key_still_counts(self):
         """``access_key_id:`` missed: the word had to TERMINATE the key name."""
         assert scan_secret_literals("access_key_id: AKIAsomethingelse\n", "adapters/b.yaml")
@@ -187,6 +202,24 @@ class TestCredentialShapes:
     def test_a_password_stated_in_prose_is_refused(self):
         hits = scan_secret_literals("# the billing password is hunter2hunter2\n", "setup.yaml")
         assert [h.line for h in hits] == [1]
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            # The one the re-review found — copied verbatim from
+            # docs/configuration.md. An instruction file is prose, and prose
+            # about authentication is the thing operators write most.
+            "Passwords are argon2id, minimum 12 characters.",
+            "Passwords are bcrypt with a cost factor of 12.",
+            "Tokens are ed25519-signed and expire after 3600 seconds.",
+            "The secret is stored in the vault, never in this file.",
+            "Our api key rotation is quarterly; see runbook 7.",
+            "The password policy is documented in section 4.",
+            "Credentials are sha256-hashed before they reach the log.",
+        ],
+    )
+    def test_prose_about_credentials_is_not_a_credential(self, line):
+        assert scan_secret_literals(line + "\n", "instructions.template.md") == []
 
     @pytest.mark.parametrize(
         "line",

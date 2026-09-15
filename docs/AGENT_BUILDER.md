@@ -812,7 +812,10 @@ as text and checked for:
 - a **credential word anywhere in a key name** (`api_key`, `access_key_id`,
   `client_secret`, `github_pat`) with a literal scalar value
 - a credential **stated in prose** — "the billing password is hunter2hunter2" —
-  where the value looks like a value rather than like the next English word
+  where the noun is singular and determined ("*the* password is", not
+  "Passwords are"), the value is twelve characters of letters and digits, and it
+  is not the name of an algorithm. Prose about authentication is what operators
+  write most, so this rule refuses only when the sentence carries the value.
 
 `${NAME}` references are substituted out first, so an adapter that authenticates
 correctly exports cleanly.
@@ -820,11 +823,13 @@ correctly exports cleanly.
 With `--include-adapters`: every value under `headers:` is replaced by a
 `${NAME}` reference, and a value under `env:` or a top-level string is replaced
 when its key names a credential, its value carries one of the shapes above, or
-it reads as an issued identifier (long, unbroken, letters and digits). Every
-name introduced this way is added to `requires.secrets`, so the far side
-supplies its own. `command:` is **never** rewritten — an argv element cannot be
-parameterised without breaking the command — so a credential there refuses the
-export instead.
+it reads as an issued identifier (long, unbroken, letters and digits). A plain
+URL with no userinfo is never treated as one — an endpoint is the thing an
+adapter must state in the clear, and versioned paths like `/v1/_mcp` would
+otherwise become a secret the receiver has to invent. Every name introduced this
+way is added to `requires.secrets`, so the far side supplies its own.
+`command:` is **never** rewritten — an argv element cannot be parameterised
+without breaking the command — so a credential there refuses the export instead.
 
 **Reproducible.** The same agent exports to the same bytes: members are written
 in sorted order with fixed mode, ownership and mtime, and the gzip header's
@@ -887,9 +892,27 @@ Requirements:
 ```
 
 The capability block is the point of the preview. A bundle is a prompt plus a
-tool grant plus a schedule, and `(!)` marks a tool that can execute, write, send
-or reach the network. An **absent or empty `tools_allowed`** reads as *every
-tool this fleet has* — which is what the engine does with it — never as "none".
+tool grant plus a schedule. Every tool is listed; `(!)` marks the ones that
+raise the scan verdict. The values shown are the ones that will be **written** —
+`--set` overrides are applied before the plan is rendered. An **absent or empty
+`tools_allowed`** reads as *every tool this fleet has* — which is what the engine
+does with it — never as "none".
+
+A tool is flagged when it can do something the receiving instance cannot take
+back:
+
+| Flagged | Not flagged on its own |
+|---------|------------------------|
+| execution — `exec`, `shell`, `bash`, `run_command` | workspace writes — `write_file`, `edit_file`, `append_file`, `create_file` |
+| starting another agent — `spawn_agent`, `dispatch_agent` | reads — `read_file`, `search_files`, `list_directory`, `search_memory`, `get_*`, `list_*` |
+| the network — `web_fetch`, `http_request`, `browser` | mailbox and calendar reads — `gws_gmail_get`, `gws_gmail_search`, `gws_calendar_list` |
+| sending outside — `gws_gmail_send`, `telegram_send`, `slack_post_message`, `make_call` | `web_search` — a query returns results, it does not choose a destination |
+| mutating a record — `create_person`, `update_task`, `resolve_task`, `gws_calendar_create` | instance-local memory — `store_memory`, `append_to_block` |
+| destroying workspace state — `delete_file` | |
+
+There is no per-agent host allowlist yet, so **every** `web_fetch` counts: a GET
+whose URL carries the data is exfiltration with no write tool involved. When an
+allowlist exists, this is where it plugs in.
 
 | Flag | Effect |
 |------|--------|

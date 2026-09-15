@@ -96,39 +96,89 @@ class BundleNotPublishedError(BundleInstallError):
     """
 
 
-#: Tools whose presence changes what a stranger's agent can do TO an instance
-#: rather than merely on it: run a command, reach the network, write a file,
-#: send something to a person. Named individually rather than inferred, because
-#: a plan that guessed would be a plan an operator learns to skim.
-HIGH_RISK_TOOLS = frozenset(
-    {
-        "exec",
-        "shell",
-        "bash",
-        "run_command",
-        "write_file",
-        "edit_file",
-        "delete_file",
-        "web_fetch",
-        "browser",
-        "http_request",
-        "send_message",
-        "create_message",
-        "make_call",
-        "send_notification",
-        "invoke_skill",
-        "spawn_agent",
-    }
+# ---------------------------------------------------------------------------
+# what raises the verdict
+# ---------------------------------------------------------------------------
+#
+# The first cut of this was a name list plus a blanket ``gws_`` prefix, and a
+# re-review measured the result: all 16 shipped agent templates scanned
+# ``review``, 12 of them because they grant ``write_file`` or read a mailbox
+# with ``gws_gmail_get``. A verdict that fires on every one of the platform's
+# own agents is a verdict operators learn to type past, which costs more than it
+# buys — ``enforce_verdict``'s own docstring makes the same argument from the
+# other end.
+#
+# So the line is now what a tool can do that the RECEIVING instance cannot take
+# back: execute code, start another agent, reach the network, send something to
+# somebody, or mutate a record it keeps on their behalf. Reading a mailbox and
+# writing a file in the agent's own workspace are neither.
+#
+# The plan is unaffected: it lists EVERY tool and marks the flagged ones, so
+# narrowing the verdict narrows nothing an operator is shown.
+
+#: Runs code on the appliance.
+_EXECUTION_TOOLS = frozenset(
+    {"exec", "shell", "bash", "sh", "run_command", "run_shell", "execute", "sandbox_exec"}
 )
 
-#: Prefixes that mean the same thing for a tool this platform has not met —
-#: a plugin or adapter tool the flagging table cannot know about by name.
-HIGH_RISK_PREFIXES = ("exec", "send_", "write_", "delete_", "post_", "gws_", "push_")
+#: Starts another agent, which is a capability grant this scan cannot see into.
+_SPAWN_TOOLS = frozenset({"spawn_agent", "spawn_subagent", "dispatch_agent", "run_agent"})
+
+#: Reaches a host of the tool's choosing. There is no per-agent host allowlist
+#: on this platform yet, so "web_fetch to a non-allowlisted host" is every
+#: web_fetch — a GET whose URL carries the data is exfiltration with no write
+#: tool involved. ``web_search`` is deliberately absent: a query to a search
+#: engine returns results, it does not choose a destination.
+_NETWORK_TOOLS = frozenset({"web_fetch", "fetch_url", "http_request", "browser", "browse"})
+
+#: Verbs that mean "act on something outside this instance", wherever they sit
+#: in a tool name: ``gws_gmail_send``, ``telegram_send``, ``slack_post_message``.
+_OUTBOUND_VERBS = frozenset(
+    {"send", "post", "publish", "transmit", "dispatch", "forward", "call", "sms", "email", "page"}
+)
+
+#: Verbs that mutate a record this instance keeps for somebody — the CRM,
+#: a calendar, a schedule. Same vocabulary as
+#: ``robothor.engine.run_verification``'s write-tool families, kept here rather
+#: than imported so a scan of a bundle does not drag in the verification engine.
+_RECORD_VERBS = frozenset(
+    {"create", "update", "delete", "merge", "resolve", "approve", "reject", "archive", "revoke"}
+)
+
+#: Nouns that make a record verb workspace-local instead. ``create_file`` and
+#: ``edit_file`` write inside the agent's own workspace; ``create_person``
+#: writes into the operator's CRM.
+_WORKSPACE_NOUNS = frozenset({"file", "files", "dir", "directory", "folder", "path", "draft"})
+
+#: ...except this one. A workspace noun excuses WRITING, not DESTROYING: an
+#: agent that can delete the operator's files is a capability grant worth a
+#: human look even though the blast radius stops at the workspace.
+_NEVER_EXCUSED_VERBS = frozenset({"delete", "revoke"})
+
+#: Names that do not decompose into verb-and-noun but mean the same thing.
+HIGH_RISK_TOOLS = _EXECUTION_TOOLS | _SPAWN_TOOLS | _NETWORK_TOOLS | frozenset({"make_call"})
 
 
 def is_high_risk(tool: str) -> bool:
+    """Whether granting *tool* is a decision a human should make deliberately.
+
+    Not "whether the tool is dangerous" — every tool is, in the wrong prompt.
+    This answers the narrower question the install verdict can act on: can this
+    tool do something on the receiving instance that the receiving operator
+    cannot undo or did not ask for?
+    """
     name = tool.strip().lower()
-    return name in HIGH_RISK_TOOLS or name.startswith(HIGH_RISK_PREFIXES)
+    if name in HIGH_RISK_TOOLS:
+        return True
+    tokens = set(re.split(r"[^a-z0-9]+", name)) - {""}
+    if any(token.startswith("spawn") for token in tokens):
+        return True
+    if tokens & _OUTBOUND_VERBS:
+        return True
+    acting = tokens & _RECORD_VERBS
+    if acting:
+        return bool(acting & _NEVER_EXCUSED_VERBS) or not (tokens & _WORKSPACE_NOUNS)
+    return False
 
 
 @dataclass(frozen=True)
@@ -766,17 +816,24 @@ def _setup_defaults(staging: Path) -> dict[str, Any]:
     return defaults
 
 
-def _read_capability(staging: Path, instruction: str) -> Capability:
+def _read_capability(
+    staging: Path, instruction: str, overrides: Mapping[str, Any] | None = None
+) -> Capability:
     """What the staged bundle's manifest grants, for the preview.
 
     Never raises: a plan that could not be shown because a manifest was odd is
     a plan the operator does not get, and "could not be read" is itself a fact
     worth putting in front of them before they say yes.
     """
+    # The operator's ``--set`` values win over the bundle's defaults, because
+    # they win over them at install time too. A preview that showed the
+    # bundle's cron and installed the operator's is worse than showing
+    # nothing: it is a plan that disagrees with the write it previews.
+    variables = {**_setup_defaults(staging), **(overrides or {})}
     try:
         declared = read_manifest_template(
             (staging / "manifest.template.yaml").read_text(encoding="utf-8"),
-            _setup_defaults(staging),
+            variables,
         )
     except (OSError, BundleInstallError) as exc:
         return Capability(unreadable=type(exc).__name__)
@@ -1042,7 +1099,7 @@ def install_bundle(
                 secret_lookup=secret_lookup,
             ),
             collisions=collisions,
-            capability=_read_capability(staging, instruction),
+            capability=_read_capability(staging, instruction, overrides),
             # Scanned on the STAGED copy — the bytes that would actually be
             # installed, after the id rewrite — rather than on whatever a
             # publisher's index claimed. The publisher's own verdict is

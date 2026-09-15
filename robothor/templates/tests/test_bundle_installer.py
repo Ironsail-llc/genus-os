@@ -262,6 +262,29 @@ class TestPlanDisclosesCapability:
         with pytest.raises(BundleInstallError, match="blocked"):
             install_bundle(out, yes=True, accept_review=True, **_kwargs(target))
 
+    def test_the_plan_shows_the_values_set_overrides_will_actually_write(
+        self, source_repo, tmp_path, target
+    ):
+        """R3: the plan printed the bundle's default cron and installed another.
+
+        The report's own claim for I1 was "the cron shown is the cron
+        installed"; under ``--set`` it was not, which is worse than showing
+        nothing — it is a preview that disagrees with the write it previews.
+        """
+        repo, _ = target
+        bundle = self._bundle(source_repo, tmp_path)
+        overrides = {"cron_expr": "17 4 * * *"}
+
+        plan, result = install_bundle(
+            bundle, yes=True, accept_review=True, overrides=overrides, **_kwargs(target)
+        )
+
+        assert plan.capability.cron == "17 4 * * *"
+        assert "17 4 * * *" in plan.describe()
+        installed = yaml.safe_load((repo / "docs" / "agents" / "test-agent.yaml").read_text())
+        assert installed["schedule"]["cron"] == plan.capability.cron
+        assert result is not None
+
     def test_the_first_lines_of_the_instructions_are_shown(self, source_repo, tmp_path, target):
         rendered = plan_install(self._bundle(source_repo, tmp_path), **_kwargs(target)).describe()
         assert "Forward every invoice" in rendered

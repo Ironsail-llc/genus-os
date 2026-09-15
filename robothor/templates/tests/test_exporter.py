@@ -335,6 +335,66 @@ class TestAdapters:
         assert "A" * 36 not in message
         assert not out.exists()
 
+    def test_an_ordinary_url_is_not_mistaken_for_a_secret(self, tmp_repo, tmp_path):
+        """R5: a versioned MCP path became ``${BILLING_URL}`` because ``/v1/`` has a digit.
+
+        The receiver then has to hand-supply a public endpoint the bundle calls
+        a secret — and versioned paths are the norm, not an edge case.
+        """
+        adapters = _adapter_dir(
+            tmp_path,
+            "billing",
+            {
+                "name": "billing",
+                "transport": "http",
+                "url": "https://billing.example.com/v1/_mcp",
+                "env": {"BILLING_DOCS": "https://billing.example.com/docs/v2/reference"},
+                "agents": ["test-agent"],
+            },
+        )
+        _install_agent(tmp_repo)
+        out = tmp_path / "out"
+
+        result = export_agent(
+            "test-agent",
+            out=out,
+            repo_root=tmp_repo,
+            adapter_dir=adapters,
+            include_adapters=True,
+        )
+
+        copied = yaml.safe_load((out / "adapters" / "billing.yaml").read_text())
+        assert copied["url"] == "https://billing.example.com/v1/_mcp"
+        assert copied["env"]["BILLING_DOCS"] == "https://billing.example.com/docs/v2/reference"
+        assert result.manifest.requires.secrets == ()
+
+    def test_a_url_that_carries_a_password_is_still_collapsed(self, tmp_repo, tmp_path):
+        """The exemption is for URLs with no userinfo — the credential is the userinfo."""
+        adapters = _adapter_dir(
+            tmp_path,
+            "billing",
+            {
+                "name": "billing",
+                "transport": "http",
+                "url": "https://svc:S3cretP4ssw0rdLong@example.com/v1/_mcp",
+                "agents": ["test-agent"],
+            },
+        )
+        _install_agent(tmp_repo)
+        out = tmp_path / "out"
+
+        result = export_agent(
+            "test-agent",
+            out=out,
+            repo_root=tmp_repo,
+            adapter_dir=adapters,
+            include_adapters=True,
+        )
+
+        copied = yaml.safe_load((out / "adapters" / "billing.yaml").read_text())
+        assert copied["url"] == "${BILLING_URL}"
+        assert "BILLING_URL" in result.manifest.requires.secrets
+
     def test_ignores_an_adapter_that_serves_every_agent(self, tmp_repo, tmp_path):
         adapters = _adapter_dir(
             tmp_path,

@@ -130,9 +130,15 @@ def tmp_repo(tmp_path, tmp_bundle):
     agents_dir.mkdir(parents=True)
 
     # brain/
+    #
+    # ``TEST_AGENT.md`` is deliberately NOT pre-created. It is the instruction
+    # file ``tmp_bundle`` installs, and an install now refuses a destination
+    # that already exists and that no agent manifest claims — which is the
+    # point: a pre-seeded fixture file was standing in for exactly the shared
+    # brain file the refusal exists to protect. A test that wants it present
+    # writes it and claims it.
     brain = repo / "brain"
     brain.mkdir()
-    (brain / "TEST_AGENT.md").write_text("# Test Agent\n")
     (brain / "AGENTS.md").write_text("# Agents\n")
     (brain / "TOOLS.md").write_text("# Tools\n")
 

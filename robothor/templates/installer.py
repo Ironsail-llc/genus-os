@@ -127,8 +127,8 @@ def _owned_agent_files(repo_root: Path, agent_id: str) -> dict[str, Path]:
     return files
 
 
-def _instruction_claimant(repo_root: Path, destination: Path, agent_id: str) -> str | None:
-    """The OTHER agent whose manifest claims *destination*, or None.
+def _instruction_owner(repo_root: Path, destination: Path) -> str | None:
+    """The agent whose installed manifest declares *destination*, or None.
 
     Reads the canonical manifest directory rather than ``installed.yaml``:
     install records are mutable state, and "whose file is this?" has to be
@@ -146,9 +146,6 @@ def _instruction_claimant(repo_root: Path, destination: Path, agent_id: str) -> 
             continue
         if not isinstance(data, dict):
             continue
-        other = str(data.get("id") or path.stem)
-        if other == agent_id:
-            continue
         declared = data.get("instruction_file")
         if not isinstance(declared, str) or not declared:
             continue
@@ -157,8 +154,38 @@ def _instruction_claimant(repo_root: Path, destination: Path, agent_id: str) -> 
         except TemplateSecurityError:
             continue
         if claimed == destination:
-            return other
+            return str(data.get("id") or path.stem)
     return None
+
+
+def _instruction_refusal(repo_root: Path, destination: Path, agent_id: str) -> str | None:
+    """Why *agent_id* may not write *destination*, or None if it may.
+
+    The first cut asked "does another AGENT claim this path", which answered
+    "no" for the platform's shared brain files — ``brain/TOOLS.md``,
+    ``brain/AGENTS.md`` — because no manifest claims them. A hub or preset
+    template declaring one of those replaced it silently. The question is not
+    whose the file is; it is whether it is MINE.
+
+    So: a destination that does not exist is free, a destination this agent's own
+    installed manifest already declares is an update, and everything else is
+    refused with the reason.
+    """
+    if not destination.exists():
+        return None
+    owner = _instruction_owner(repo_root, destination)
+    if owner == agent_id:
+        return None
+    if owner:
+        return (
+            f"it is the instruction file agent {owner!r} declares. An agent only ever "
+            "writes its own files."
+        )
+    return (
+        "it already exists and no agent manifest claims it, so it is not this "
+        "agent's to replace. Point instruction_file at a path of this agent's own, "
+        "or move the existing file out of the way."
+    )
 
 
 def install(
@@ -325,13 +352,10 @@ def install(
     # somebody else's prompt. The caller's own collision check is the first
     # line; this is the one that holds for every caller.
     if "instruction" in output_files:
-        claimant = _instruction_claimant(repo_root, output_files["instruction"][0], agent_id)
-        if claimant is not None:
-            raise TemplateSecurityError(
-                f"Refusing to write {output_files['instruction'][0].name}: it is the "
-                f"instruction file agent {claimant!r} declares. An agent only ever "
-                "writes its own files."
-            )
+        destination = output_files["instruction"][0]
+        refusal = _instruction_refusal(repo_root, destination, agent_id)
+        if refusal is not None:
+            raise TemplateSecurityError(f"Refusing to write {destination.name}: {refusal}")
 
     # Write files atomically — temp files first, then validate, then move
     temp_files: dict[str, tuple[Path, Path]] = {}  # key -> (temp_path, final_path)

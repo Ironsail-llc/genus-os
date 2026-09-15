@@ -184,7 +184,6 @@ class TestInstall:
         victim = tmp_path / "victim.md"
         victim.write_text("do not overwrite")
         instruction = tmp_repo / "brain" / "TEST_AGENT.md"
-        instruction.unlink()
         instruction.symlink_to(victim)
 
         with pytest.raises(TemplateSecurityError, match="symlinks"):
@@ -466,7 +465,7 @@ class TestInstructionOwnership:
     def test_reinstalling_over_your_own_instruction_file_is_still_allowed(
         self, tmp_bundle, tmp_repo, tmp_instance_dir
     ):
-        """An update is the installer's job; only a STRANGER's file is off limits."""
+        """An update is the installer's job; only somebody ELSE's file is off limits."""
         self._claim(tmp_repo, "test-agent", "brain/TEST_AGENT.md")
 
         result = install(
@@ -479,3 +478,47 @@ class TestInstructionOwnership:
 
         assert result["agent_id"] == "test-agent"
         assert "Test Agent" in (tmp_repo / "brain" / "TEST_AGENT.md").read_text()
+
+    def test_an_unclaimed_brain_file_is_not_overwritten_either(
+        self, tmp_bundle, tmp_repo, tmp_instance_dir
+    ):
+        """R1: ``brain/TOOLS.md`` belongs to no agent, and was being replaced.
+
+        ``_instruction_claimant`` answered "which OTHER AGENT declares this
+        path", so the platform's shared brain files — which no manifest claims —
+        came back unowned and were overwritten by a hub or preset install. The
+        question is not "who owns it" but "is it mine".
+        """
+        shared = tmp_repo / "brain" / "TEST_AGENT.md"
+        shared.parent.mkdir(parents=True, exist_ok=True)
+        shared.write_text("# the platform's shared notes\n")
+
+        with pytest.raises(TemplateSecurityError, match="TEST_AGENT.md"):
+            install(
+                str(tmp_bundle),
+                overrides={"version": "1.0.0"},
+                auto_yes=True,
+                instance_dir=tmp_instance_dir,
+                repo_root=tmp_repo,
+            )
+
+        assert shared.read_text() == "# the platform's shared notes\n"
+        assert not (tmp_repo / "docs" / "agents" / "test-agent.yaml").exists()
+
+    def test_a_fresh_install_writes_its_instruction_file(
+        self, tmp_bundle, tmp_repo, tmp_instance_dir
+    ):
+        """The other half: a destination nobody has written is written."""
+        target = tmp_repo / "brain" / "TEST_AGENT.md"
+        if target.exists():
+            target.unlink()
+
+        install(
+            str(tmp_bundle),
+            overrides={"version": "1.0.0"},
+            auto_yes=True,
+            instance_dir=tmp_instance_dir,
+            repo_root=tmp_repo,
+        )
+
+        assert "Test Agent" in target.read_text()
