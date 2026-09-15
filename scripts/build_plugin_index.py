@@ -56,6 +56,63 @@ def _fail(message: str) -> int:
     return 2
 
 
+def _bundle_entry(path: Path, *, base_url: str, yanked: dict[str, str]) -> dict[str, Any]:
+    """One agent-bundle entry, read entirely out of the tarball.
+
+    Same rule as a wheel: the name, the version and the requirement list come
+    out of the artifact's own ``bundle.yaml``, never off the command line. A
+    publisher who could type ``requires`` by hand would be signing a promise the
+    bundle does not keep, and the installer's plan — the thing an operator
+    actually reads before saying yes — would be the lie.
+    """
+    from robothor.templates import bundle as bundle_envelope
+
+    data = path.read_bytes()
+    with tempfile.TemporaryDirectory(prefix="genus-index-bundle-") as unpacked:
+        destination = Path(unpacked)
+        try:
+            from robothor.templates.hub_client import HubClient
+
+            HubClient._extract_archive(data, destination)  # noqa: SLF001 - one extractor, shared
+        except Exception as exc:  # noqa: BLE001 - the message is the product
+            raise bundle_envelope.BundleError(f"{path.name}: {exc}") from exc
+
+        roots = [destination, *(c for c in sorted(destination.iterdir()) if c.is_dir())]
+        root = next(
+            (r for r in roots if (r / bundle_envelope.BUNDLE_FILENAME).is_file()),
+            None,
+        )
+        if root is None:
+            raise bundle_envelope.BundleError(
+                f"{path.name} carries no {bundle_envelope.BUNDLE_FILENAME}, so nothing "
+                "says what it is. Export it with 'genus agent export'."
+            )
+        manifest = bundle_envelope.read_bundle(root)
+        bundle_envelope.verify_bundle_files(root, manifest)
+
+    entry: dict[str, Any] = {
+        "kind": "agent-bundle",
+        "name": manifest.id,
+        "version": manifest.version,
+        "summary": manifest.name,
+        "requires": manifest.requires.as_document(),
+        "artifacts": [
+            {
+                "kind": "bundle",
+                "filename": path.name,
+                "url": base_url + path.name,
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "size": len(data),
+            }
+        ],
+    }
+    key = f"{manifest.id}=={manifest.version}"
+    if key in yanked:
+        entry["yanked"] = True
+        entry["yank_reason"] = yanked[key]
+    return entry
+
+
 def _entry(path: Path, *, base_url: str, yanked: dict[str, str]) -> tuple[dict[str, Any], str]:
     """One index entry, read entirely out of the wheel. Returns (entry, verdict)."""
     data = path.read_bytes()
@@ -148,10 +205,14 @@ def main(argv: list[str] | None = None) -> int:
     if not directory.is_dir():
         return _fail(f"{args.directory!r} is not a directory.")
     wheels = sorted(directory.glob("*.whl"))
-    if not wheels:
-        # An index with no plugins is a valid signed document that silently
-        # removes every plugin the previous one published.
-        return _fail(f"there are no wheels in {args.directory!r}; refusing to sign an empty index.")
+    bundles = sorted(p for p in directory.iterdir() if p.name.endswith((".tar.gz", ".tgz")))
+    if not wheels and not bundles:
+        # An index with no entries is a valid signed document that silently
+        # removes everything the previous one published.
+        return _fail(
+            f"there are no wheels or agent bundles in {args.directory!r}; refusing to "
+            "sign an empty index."
+        )
 
     yanked: dict[str, str] = {}
     if args.yanked:
@@ -183,10 +244,22 @@ def main(argv: list[str] | None = None) -> int:
             )
         entries.append(entry)
 
+    from robothor.templates.bundle import BundleError
+
+    for path in bundles:
+        try:
+            entries.append(_bundle_entry(path, base_url=base_url, yanked=yanked))
+        except BundleError as exc:
+            return _fail(str(exc))
+
     seen: set[str] = set()
     for entry in entries:
         key = f"{entry['name']}=={entry['version']}"
         if key in seen:
+            # Across BOTH kinds. A wheel and an agent bundle publishing the same
+            # name is not a clash an installer can resolve for the operator --
+            # each verb would find "its" entry and neither would say the other
+            # exists.
             return _fail(f"{key} appears twice in {args.directory!r}.")
         seen.add(key)
 
@@ -232,9 +305,12 @@ def main(argv: list[str] | None = None) -> int:
     except registry.RegistryError as exc:
         return _fail(f"the index this build produced does not verify: {exc}")
 
-    print(f"wrote {out} ({len(entries)} plugin(s)) and {out.name}.sig signed by {args.key_id}")
+    print(f"wrote {out} ({len(entries)} entr(ies)) and {out.name}.sig signed by {args.key_id}")
     for entry in payload["plugins"]:
-        marks = [entry["scan"]["verdict"]]
+        marks = [entry.get("kind", "plugin")]
+        scan_record = entry.get("scan")
+        if isinstance(scan_record, dict):
+            marks.append(str(scan_record.get("verdict", "unscanned")))
         if entry.get("yanked"):
             marks.append("yanked")
         print(f"  {entry['name']} {entry['version']}  {' '.join(marks)}")

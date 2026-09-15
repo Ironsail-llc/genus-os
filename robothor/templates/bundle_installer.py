@@ -55,7 +55,7 @@ from robothor.templates.safety import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Mapping, Sequence
 
     import httpx
 
@@ -214,6 +214,55 @@ def _extract(content: bytes, into: Path) -> Path:
             "with 'genus plugin install'."
         )
     return candidates[0]
+
+
+def _from_index(
+    slug: str,
+    *,
+    version: str | None,
+    index: str | None,
+    indexes: Sequence[str] | None,
+    keys: dict[str, str] | None,
+    client: httpx.Client | None,
+    scratch: Path,
+) -> tuple[Path, str, str]:
+    """Resolve a slug through the SIGNED index and fetch what it pins.
+
+    The same verification the plugin installer gets, because it is the same
+    function: signature over canonical bytes, a pinned key id, a freshness
+    window, one publisher per name. What is different is only the ``kind`` —
+    and asking for the wrong one is refused with the verb that takes it, not
+    with "not found".
+    """
+    from robothor.plugins import registry
+    from robothor.templates.hub_client import MAX_DOWNLOAD_BYTES
+
+    urls: Sequence[str]
+    if index:
+        urls = (index,)
+    elif indexes is not None:
+        urls = tuple(indexes)
+    else:
+        urls = registry.configured_indexes()
+
+    try:
+        loaded = registry.load_indexes(urls, keys=keys, client=client)
+        entry, _source = registry.select(slug, version, indexes=loaded, kind=registry.BUNDLE_KIND)
+    except registry.RegistryError as exc:
+        raise BundleInstallError(str(exc)) from exc
+
+    artifact = entry.bundle()
+    assert artifact is not None  # select() refuses an entry with no bundle artifact
+    if artifact.size > MAX_DOWNLOAD_BYTES:
+        # Refused from the SIGNED size, before a byte is fetched — the only
+        # place an oversized artifact costs nothing.
+        raise BundleInstallError(
+            f"{entry.name} {entry.version} is too large: the index declares "
+            f"{artifact.size} bytes, over the {MAX_DOWNLOAD_BYTES}-byte limit."
+        )
+    content = _fetch(artifact.url, client=client)
+    digest = _verify_digest(content, artifact.sha256)
+    return _extract(content, scratch), digest, entry.name
 
 
 def _materialize(
@@ -484,6 +533,11 @@ def install_bundle(
     new_id: str | None = None,
     yes: bool = False,
     strict: bool = False,
+    from_index: bool = False,
+    version: str | None = None,
+    index: str | None = None,
+    indexes: Sequence[str] | None = None,
+    keys: dict[str, str] | None = None,
     repo_root: Path | None = None,
     instance_dir: Path | None = None,
     adapter_dir: str | Path | None = None,
@@ -492,7 +546,10 @@ def install_bundle(
     client: httpx.Client | None = None,
     overrides: dict[str, Any] | None = None,
 ) -> tuple[InstallPlan, dict[str, Any] | None]:
-    """Plan, and (with ``yes``) perform, an install from a path, directory or URL.
+    """Plan, and (with ``yes``) perform, an install.
+
+    *source* is a path, a directory, an ``https`` URL, or — with
+    ``from_index`` — a slug published in a signed index.
 
     Returns ``(plan, result)``; ``result`` is ``None`` whenever nothing was
     written, which is every call without ``yes`` and every refusal.
@@ -510,13 +567,36 @@ def install_bundle(
     try:
         download_root = scratch / "download"
         download_root.mkdir()
-        verified, digest = _materialize(source, sha256=sha256, client=client, scratch=download_root)
+        published_as = ""
+        if from_index:
+            verified, digest, published_as = _from_index(
+                str(source),
+                version=version,
+                index=index,
+                indexes=indexes,
+                keys=keys,
+                client=client,
+                scratch=download_root,
+            )
+        else:
+            verified, digest = _materialize(
+                source, sha256=sha256, client=client, scratch=download_root
+            )
 
         try:
             manifest = read_bundle(verified)
             verify_bundle_files(verified, manifest)
         except BundleError as exc:
             raise BundleInstallError(str(exc)) from exc
+
+        if published_as and manifest.id != published_as:
+            # The SIGNED name is the authority. A tarball whose bundle.yaml
+            # calls itself something else is the publisher's signature
+            # vouching for one agent and the archive delivering another.
+            raise BundleInstallError(
+                f"The index publishes this as {published_as!r}, but the bundle inside "
+                f"calls itself {manifest.id!r}. Refusing rather than picking one."
+            )
 
         try:
             target_id = validate_identifier(new_id, label="--id") if new_id else manifest.id

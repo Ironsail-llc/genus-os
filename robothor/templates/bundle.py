@@ -60,6 +60,7 @@ __all__ = [
     "bundle_document",
     "file_digest",
     "parse_bundle",
+    "parse_requires",
     "read_bundle",
     "scan_instance_leaks",
     "scan_secret_literals",
@@ -293,7 +294,7 @@ def _require_list(value: Any, kind: str) -> tuple[str, ...]:
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 
 
-def _parse_requires(value: Any) -> Requires:
+def parse_requires(value: Any) -> Requires:
     if value is None:
         return Requires()
     if not isinstance(value, dict):
@@ -384,7 +385,7 @@ def parse_bundle(data: Any) -> BundleManifest:
         version=version,
         exported_at=_text(data.get("exported_at"), "exported_at"),
         platform_version=_text(data.get("platform_version"), "platform_version"),
-        requires=_parse_requires(data.get("requires")),
+        requires=parse_requires(data.get("requires")),
         files=_parse_files(data.get("files")),
     )
 

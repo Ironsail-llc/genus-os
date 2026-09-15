@@ -49,6 +49,12 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
+# The bundle envelope's own requirement record, reused rather than re-declared.
+# A signed index that described an agent's requirements in its own vocabulary
+# would give the platform two spellings of the same list, and the one an
+# operator read in the plan would be the one nobody verified.
+from robothor.templates.bundle import Requires as BundleRequires
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Sequence
 
@@ -107,6 +113,23 @@ DEFAULT_INDEX_URL = "https://ironsail-llc.github.io/genus-plugins/index.json"
 #: Verdicts a scan record may carry. Anything else is refused at parse time
 #: rather than compared against later and silently treated as "not blocked".
 VERDICTS = ("safe", "review", "blocked")
+
+#: What an index entry can publish. One signed document, one signature, one set
+#: of pinned keys -- and two kinds of thing in it, because an operator who
+#: trusts a publisher's wheels has already made the decision that matters about
+#: their agents, and asking them to pin a second key for the same publisher
+#: would be ceremony rather than security.
+PLUGIN_KIND = "plugin"
+BUNDLE_KIND = "agent-bundle"
+ENTRY_KINDS = (PLUGIN_KIND, BUNDLE_KIND)
+
+#: The one artifact kind each entry kind may carry, and the verb that installs
+#: it. A plugin entry holding a bundle (or the reverse) is refused at PARSE
+#: time: by the time an installer is looking at it, the only honest thing left
+#: to say is "this signed document is internally inconsistent", and saying it
+#: earlier costs nothing.
+ARTIFACT_FOR_KIND = {PLUGIN_KIND: "wheel", BUNDLE_KIND: "bundle"}
+VERB_FOR_KIND = {PLUGIN_KIND: "genus plugin install", BUNDLE_KIND: "genus agent install"}
 
 
 class RegistryError(Exception):
@@ -215,7 +238,7 @@ class ScanRecord:
 
 @dataclass(frozen=True)
 class IndexEntry:
-    """One published plugin version."""
+    """One published plugin version, or one published agent bundle."""
 
     name: str
     version: str
@@ -230,10 +253,23 @@ class IndexEntry:
     scan: ScanRecord = field(default_factory=ScanRecord)
     yanked: bool = False
     yank_reason: str = ""
+    #: ``plugin`` (the default, and what every entry published before this
+    #: existed is) or ``agent-bundle``.
+    kind: str = PLUGIN_KIND
+    #: What an agent bundle needs on the far side, carried INSIDE the signature
+    #: so an operator can read the requirement list before downloading a byte.
+    #: Always empty for a plugin entry.
+    requires: BundleRequires = field(default_factory=BundleRequires)
 
     def wheel(self) -> Artifact | None:
+        return self.artifact("wheel")
+
+    def bundle(self) -> Artifact | None:
+        return self.artifact("bundle")
+
+    def artifact(self, kind: str) -> Artifact | None:
         for artifact in self.artifacts:
-            if artifact.kind == "wheel":
+            if artifact.kind == kind:
                 return artifact
         return None
 
@@ -249,19 +285,27 @@ class Index:
     key_id: str = ""
     entries: tuple[IndexEntry, ...] = ()
 
-    def entry(self, name: str, version: str | None = None) -> IndexEntry | None:
+    def entry(
+        self, name: str, version: str | None = None, *, kind: str | None = None
+    ) -> IndexEntry | None:
         """The newest matching entry, or None.
 
         "Newest" is the LAST matching entry in publication order rather than a
         version comparison: this module does not own a version scheme, and a
         hand-rolled comparator that gets ``1.10`` versus ``1.9`` wrong would
         install the older one while reporting the newer.
+
+        ``kind`` of None matches ANY kind, which is what :func:`select` needs to
+        tell "nobody publishes this" apart from "somebody publishes it, but as
+        the other kind of thing".
         """
         found = None
         for entry in self.entries:
             if entry.name != name:
                 continue
             if version is not None and entry.version != version:
+                continue
+            if kind is not None and entry.kind != kind:
                 continue
             found = entry
         return found
@@ -289,14 +333,15 @@ def _sha256(value: Any, label: str) -> str:
         raise RegistryError(str(exc)) from exc
 
 
-def _artifact(data: Any, plugin: str) -> Artifact:
+def _artifact(data: Any, plugin: str, *, expected: str) -> Artifact:
     if not isinstance(data, dict):
         raise RegistryError(f"{plugin}: an artifact entry is not an object.")
     kind = _text(data.get("kind"), "artifact kind")
-    if kind != "wheel":
+    if kind != expected:
         raise RegistryError(
-            f"{plugin}: artifact kind {kind or '(missing)'!r} is not supported; "
-            "this platform installs wheels only."
+            f"{plugin}: artifact kind {kind or '(missing)'!r} does not match the entry, "
+            f"which must carry a {expected!r} artifact. A signed document that "
+            "contradicts itself is not resolved in the operator's favour."
         )
     filename = _text(data.get("filename"), "artifact filename")
     # The filename becomes a file on disk in the installer. Refusing a
@@ -339,9 +384,25 @@ def _scan_record(data: Any, plugin: str) -> ScanRecord:
     )
 
 
+def _requires(data: Any, name: str) -> BundleRequires:
+    """An agent bundle's requirement list, parsed by the bundle envelope's own rules."""
+    from robothor.templates.bundle import BundleError, parse_requires
+
+    try:
+        return parse_requires(data)
+    except BundleError as exc:
+        raise RegistryError(f"{name}: {exc}") from exc
+
+
 def _entry(data: Any) -> IndexEntry:
     if not isinstance(data, dict):
         raise RegistryError("The index holds a plugin entry that is not an object.")
+    kind = _text(data.get("kind"), "kind").strip() or PLUGIN_KIND
+    if kind not in ENTRY_KINDS:
+        raise RegistryError(
+            f"The index holds an entry of kind {kind!r}; this platform publishes "
+            f"{' and '.join(ENTRY_KINDS)}."
+        )
     name = _text(data.get("name"), "name").strip()
     if not name:
         raise RegistryError("The index holds a plugin entry with no name.")
@@ -363,11 +424,22 @@ def _entry(data: Any) -> IndexEntry:
         contract_version=str(data.get("contract_version") or ""),
         groups=tuple(groups),
         python=_text(data.get("python"), "python"),
-        artifacts=tuple(_artifact(a, name) for a in artifacts),
-        manifest_sha256=_sha256(data.get("manifest_sha256"), label=f"{name} manifest SHA-256"),
+        artifacts=tuple(_artifact(a, name, expected=ARTIFACT_FOR_KIND[kind]) for a in artifacts),
+        # A plugin's manifest digest pins the ``genus-plugin.yaml`` inside the
+        # wheel, which is the thing the loader later reads. An agent bundle has
+        # no such second file: its ``bundle.yaml`` pins every member, and the
+        # artifact's own SHA-256 pins ``bundle.yaml``. Demanding one anyway
+        # would be a field with nothing behind it.
+        manifest_sha256=(
+            _sha256(data.get("manifest_sha256"), label=f"{name} manifest SHA-256")
+            if kind == PLUGIN_KIND
+            else ""
+        ),
         scan=_scan_record(data.get("scan"), name),
         yanked=bool(data.get("yanked")),
         yank_reason=_text(data.get("yank_reason"), "yank_reason"),
+        kind=kind,
+        requires=_requires(data.get("requires"), name) if kind == BUNDLE_KIND else BundleRequires(),
     )
 
 
@@ -719,6 +791,7 @@ def select(
     version: str | None = None,
     *,
     indexes: Sequence[Index],
+    kind: str = PLUGIN_KIND,
 ) -> tuple[IndexEntry, Index]:
     """Pick one published entry across every index, or refuse and say why.
 
@@ -729,13 +802,31 @@ def select(
     platform's help, and the operator is the only one who can say which of the
     two they meant.
     """
-    matches = [(index, index.entry(name, version)) for index in indexes]
-    found = [(index, entry) for index, entry in matches if entry is not None]
+    if kind not in ENTRY_KINDS:
+        raise RegistryError(f"Unknown index entry kind {kind!r}.")
+
+    any_kind = [
+        (index, entry)
+        for index in indexes
+        for entry in (index.entry(name, version),)
+        if entry is not None
+    ]
+    found = [(index, entry) for index, entry in any_kind if entry.kind == kind]
     if not found:
         where = ", ".join(index.url or "(local)" for index in indexes) or "(no index configured)"
+        if any_kind:
+            # The name IS published — as the other kind of thing. Saying "not
+            # found" here sends an operator hunting for a publishing mistake
+            # that does not exist; naming the verb that installs it is one line
+            # and ends the search.
+            other = any_kind[-1][1].kind
+            raise RegistryError(
+                f"{name} is published as an {other}, not as a {kind}. Install it with "
+                f"'{VERB_FOR_KIND[other]} {name}'."
+            )
         if version is not None:
             raise RegistryError(f"No index publishes {name} {version}. Indexes read: {where}.")
-        raise RegistryError(f"No index publishes a plugin named {name!r}. Indexes read: {where}.")
+        raise RegistryError(f"No index publishes a {kind} named {name!r}. Indexes read: {where}.")
 
     # The SIGNING KEY is the identity, not the display string beside it.
     # Comparing only ``publisher_id`` meant a second pinned publisher could
@@ -760,6 +851,8 @@ def select(
             f"{name} {entry.version} has been yanked by its publisher"
             + (f": {entry.yank_reason}" if entry.yank_reason else ".")
         )
-    if entry.wheel() is None:
-        raise RegistryError(f"{name} {entry.version} publishes no wheel artifact.")
+    if entry.artifact(ARTIFACT_FOR_KIND[kind]) is None:
+        raise RegistryError(
+            f"{name} {entry.version} publishes no {ARTIFACT_FOR_KIND[kind]} artifact."
+        )
     return entry, index
