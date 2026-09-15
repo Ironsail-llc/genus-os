@@ -230,6 +230,15 @@ class TestSyncRoute:
         occupied = tmp_path / "occupied.lock"
         occupied.mkdir()
         monkeypatch.setenv("ROBOTHOR_PLUGIN_LOCKFILE", str(occupied))
+        # reset_settings() because ROBOTHOR_PLUGIN_LOCKFILE resolves through the
+        # settings SINGLETON, and building the app now reads settings (it asks
+        # which plugin channels are armed, to mount their routers). Before that
+        # this monkeypatch happened to land before anything had resolved
+        # settings at all; relying on that was a latent dependency on nothing
+        # else reading configuration first.
+        from robothor.settings import reset_settings
+
+        reset_settings()
         with patch.object(loader, "_discover", lambda: [_EP()]):
             response = client.post("/api/admin/plugins/sync")
         assert response.status_code == 503
@@ -290,6 +299,15 @@ class TestSyncRoute:
         target.mkdir()
         (target / "plugins.lock").mkdir()
         monkeypatch.setenv("ROBOTHOR_PLUGIN_LOCKFILE", str(target / "plugins.lock"))
+        # reset_settings() because ROBOTHOR_PLUGIN_LOCKFILE resolves through the
+        # settings SINGLETON, and building the app now reads settings (it asks
+        # which plugin channels are armed, to mount their routers). Before that
+        # this monkeypatch happened to land before anything had resolved
+        # settings at all; relying on that was a latent dependency on nothing
+        # else reading configuration first.
+        from robothor.settings import reset_settings
+
+        reset_settings()
         response = client.post("/api/admin/plugins/acme-tools/disable")
         assert response.status_code == 503
         assert "IsADirectoryError" in response.text

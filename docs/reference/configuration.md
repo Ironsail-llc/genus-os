@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-379 settings in 13 groups.
+384 settings in 13 groups.
 
 ## paths
 
@@ -239,6 +239,11 @@ How the instance reaches people, and who it says it is.
 | `ROBOTHOR_SLACK_APP_TOKEN` | str | _(unset)_ | `robothor-engine` | yes | legacy | Slack app-level token for socket mode. |
 | `ROBOTHOR_SLACK_BOT_TOKEN` | str | _(unset)_ | `robothor-engine` | yes | legacy | Slack bot token. The Slack channel starts only when it and the app token are both set. |
 | `ROBOTHOR_SLACK_VERIFY_TARGET` | str | _(empty)_ | `robothor-engine` | no | 1.70.0 | Conversation `genus channel verify slack` and the doctor's Slack check post their test message to -- a channel id (C.../G.../D...) or a user id (U.../W...), never a #name. Used by verify and the doctor only: delivery never falls back to it, so an agent whose manifest names no target fails loudly instead of posting somewhere nobody chose. |
+| `ROBOTHOR_TEAMS_ACCESS` | str | `pairing` | `robothor-engine` | no | 1.90.0 | Inbound access policy for Teams. Defaults to `pairing`: an unknown sender in a 1:1 chat is answered with a one-shot code and reaches nothing until an operator approves it. A field of its own rather than `channel_access_default` so that configuring one surface does not silently change the posture of another. |
+| `ROBOTHOR_TEAMS_APP_ID` | str | _(empty)_ | `robothor-engine` | no | 1.90.0 | Entra application (client) id of the Azure Bot backing the `teams` channel, which ships as the `genus-teams` plugin. Not a secret -- it is the `aud` every inbound activity's token is checked against, and it is printed in the portal -- so it lives here rather than in the vault, where the doctor could not read it on an instance with no master key. |
+| `ROBOTHOR_TEAMS_APP_PASSWORD` | str | _(unset)_ | `robothor-engine` | yes | 1.90.0 | Client secret for the Teams bot's Entra application. Read through the secrets accessor, so `genus channel add teams` may put it in this instance's vault instead of the environment. |
+| `ROBOTHOR_TEAMS_TENANT_ID` | str | _(empty)_ | `robothor-engine` | no | 1.90.0 | Directory (tenant) id the Teams bot authenticates against when it fetches a Bot Framework token. A single-tenant bot must set it; a multi-tenant one leaves it empty and uses the botframework.com tenant. Not this instance's Genus tenant id. |
+| `ROBOTHOR_TEAMS_VERIFY_TARGET` | str | _(empty)_ | `robothor-engine` | no | 1.90.0 | Conversation `genus channel verify teams` sends its proof-of-life activity to -- a recorded conversation id, or the directory object id of somebody who has messaged the bot. Used by verify and the doctor only: delivery never falls back to it, so an agent whose manifest names no target fails loudly instead of posting somewhere nobody chose. |
 | `ROBOTHOR_TELEGRAM_ACCESS` | str | `open` | `robothor-engine` | no | 1.73.0 | Inbound access policy for Telegram. Defaults to `open` for COMPATIBILITY, not because it is the recommended setting: Telegram's own `_resolve_user` ladder and closed-onboarding refusal already decide who may run an agent, and changing that as a side effect of shipping the shared gate would be a silent behaviour change on the one surface every instance already uses. Set it to `pairing` to have an unknown private-chat sender answered with a one-shot code instead. |
 | `ROBOTHOR_TELEGRAM_BOT_NAME` | str | _(empty)_ | `robothor-engine` | no | legacy | @name of the Telegram bot, shown on the dashboard so an operator can find the right conversation. |
 | `ROBOTHOR_TELEGRAM_BOT_TOKEN` | str | _(unset)_ | `robothor-engine` | yes | legacy | Bot token for the Telegram channel. Empty disables Telegram. Also read from `TELEGRAM_BOT_TOKEN`. |

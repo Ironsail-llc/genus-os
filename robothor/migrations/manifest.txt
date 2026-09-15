@@ -123,3 +123,5 @@ crm/117_agent_questions.sql
 crm/118_user_channel_identities.sql
 crm/119_workflow_step_timeout.sql
 crm/120_tenant_rls_cover_new_tables.sql
+crm/121_channel_conversation_refs.sql
+crm/122_trigger_type_channel.sql

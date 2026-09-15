@@ -1,0 +1,36 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.16",
+  "version": "1.0.0",
+  "id": "REPLACE-WITH-YOUR-AZURE-BOT-APP-ID",
+  "packageName": "ai.genus.teams",
+  "developer": {
+    "name": "REPLACE-WITH-YOUR-ORGANISATION",
+    "websiteUrl": "https://example.com",
+    "privacyUrl": "https://example.com/privacy",
+    "termsOfUseUrl": "https://example.com/terms"
+  },
+  "name": {
+    "short": "Genus OS",
+    "full": "Genus OS assistant"
+  },
+  "description": {
+    "short": "Delivers agent output and answers questions from Teams.",
+    "full": "Genus OS posts agent output into Teams and lets the people you have paired talk to your instance's main agent. Access is decided by your instance, not by Teams membership: an unknown sender in a 1:1 chat is answered with a one-shot pairing code and reaches nothing until you approve it."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#1F2933",
+  "bots": [
+    {
+      "botId": "REPLACE-WITH-YOUR-AZURE-BOT-APP-ID",
+      "scopes": ["personal", "team", "groupChat"],
+      "supportsFiles": false,
+      "isNotificationOnly": false
+    }
+  ],
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": []
+}

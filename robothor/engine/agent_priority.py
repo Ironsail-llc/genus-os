@@ -30,6 +30,11 @@ _INTERACTIVE_TRIGGERS = frozenset(
         TriggerType.TELEGRAM,
         TriggerType.WEBCHAT,
         TriggerType.SLACK,
+        # Every plugin channel that receives, as one member. A Teams message is
+        # a person waiting exactly as a Slack message is, and without this a
+        # channel-triggered run fell through to the manifest ladder and queued
+        # behind a nightly sweep.
+        TriggerType.CHANNEL,
         TriggerType.IDE,
         TriggerType.MANUAL,
         TriggerType.CHANNEL_EVENT,

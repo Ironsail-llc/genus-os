@@ -215,8 +215,11 @@ class TestAddWritesTheCredentialSomewhereDeliberate:
         assert "slack_verify_target" not in "".join(vault.written)
 
     def test_an_unknown_channel_cannot_be_added(self, capsys):
-        assert cmd_channel(_add_args(name="teams")) == 2
-        assert "teams" in capsys.readouterr().err
+        # Was `teams`, which the table now knows: a plugin channel is
+        # configured through the same rows as a built-in. `matrix` is a
+        # channel nothing here has ever heard of, which is the point.
+        assert cmd_channel(_add_args(name="matrix")) == 2
+        assert "matrix" in capsys.readouterr().err
 
 
 class TestVerifyExitCodes:

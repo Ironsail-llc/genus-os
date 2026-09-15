@@ -201,6 +201,16 @@ def _mount_subsystem_routers(
 
     register_admin_approvals(app)
 
+    # The receiving half of an armed plugin channel. `Channel.inbound_router`
+    # has been a declared-and-empty slot since the channel protocol landed, and
+    # a channel that receives over HTTP cannot mount itself. Only channels the
+    # operator named in ROBOTHOR_CHANNELS are mounted, and only under
+    # /api/channels/<name> -- see channels/routers.py for why the second half
+    # of that sentence is a security property and not tidiness.
+    from robothor.engine.channels.routers import mount_plugin_channel_routers
+
+    mount_plugin_channel_routers(app, runner=runner, tenant_id=config.tenant_id)
+
 
 async def _fleet_readiness(config: EngineConfig, details: dict[str, Any]) -> str:
     """Readiness for the agent fleet. Broken and absent are different answers.

@@ -548,6 +548,24 @@ def _build_parser() -> argparse.ArgumentParser:
         help="REFUSED, as --bot-token. Export ROBOTHOR_EMAIL_SMTP_PASSWORD instead",
     )
     channel_add.add_argument(
+        "--app-password",
+        default=None,
+        help="REFUSED, as --bot-token. Export ROBOTHOR_TEAMS_APP_PASSWORD instead",
+    )
+    channel_add.add_argument(
+        "--app-id",
+        default=None,
+        help="Entra application (client) id of the Azure Bot backing the Teams "
+        "channel. Not a secret: it is the audience every inbound activity is "
+        "checked against",
+    )
+    channel_add.add_argument(
+        "--tenant-id",
+        default=None,
+        help="Directory (tenant) id a single-tenant Teams bot authenticates "
+        "against. Not this instance's Genus tenant id",
+    )
+    channel_add.add_argument(
         "--verify-target",
         default=None,
         help="Conversation `genus channel verify` and the doctor post their test "

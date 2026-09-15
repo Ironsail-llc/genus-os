@@ -77,6 +77,8 @@ exclude_docs: |
   !/PLUGINS.md
   !/channels/slack.md
   !/channels/slack-app-manifest.json
+  !/channels/teams.md
+  !/channels/teams-app-manifest.json
   !/channels/email.md
   !/channels/access.md
   !/channels/webchat.md
@@ -109,6 +111,7 @@ nav:
       - Plugins: PLUGINS.md
       - Slack channel: channels/slack.md
       - Email channel: channels/email.md
+      - Teams channel: channels/teams.md
       - Channel access: channels/access.md
       - Web chat channel: channels/webchat.md
       - Benchmark sandbox: runbooks/BENCHMARK_SANDBOX.md
