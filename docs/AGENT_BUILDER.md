@@ -749,6 +749,144 @@ still required by the parser and is ignored when `--preset` is given.
 
 ---
 
+## 8a. Sharing an Agent
+
+A template bundle is what the hub publishes. An **agent bundle** is what you
+hand to a person: the same files plus `bundle.yaml`, which pins every member by
+SHA-256 and states what the agent needs on the far side.
+
+### Export
+
+```bash
+genus agent export email-classifier                        # ./agent-email-classifier-<version>.tar.gz
+genus agent export email-classifier --out ./shared/        # a directory instead
+genus agent export email-classifier --include-adapters     # carry MCP adapter definitions too
+```
+
+`bundle.yaml`:
+
+```yaml
+kind: agent-bundle
+schema: 1
+id: email-classifier
+name: Email Classifier
+version: "2026-03-04"
+exported_at: "2026-09-15T12:00:00+00:00"
+platform_version: 1.89.0
+requires:
+  plugins: [genus-billing]        # from the manifest's requires: block
+  adapters: [billing]             # adapters whose agents: list names this agent
+  secrets: [BILLING_API_KEY]      # every ${NAME} the bundle references
+  skills: [triage]                # from the manifest's requires: block
+files:
+  - path: setup.yaml
+    sha256: 5f2b…
+  - path: manifest.template.yaml
+    sha256: a91c…
+```
+
+**What is included:** the manifest template, the instruction file, `setup.yaml`,
+`SKILL.md`, `programmatic.json`, and every skill named in the manifest's
+optional `requires.skills` (copied from `agents/skills/<name>/`).
+
+**What is not:** memory, CRM rows, your instance config, your `.env`, and —
+unless you pass `--include-adapters` — adapter definitions. An adapter names a
+command the engine will run; carrying one is a decision worth typing.
+
+**Two refusals, and they are hard failures — nothing is written:**
+
+| Refused | Why |
+|---------|-----|
+| a credential **value** anywhere in the bundle | exit 2, naming `file:line`; the value itself is never printed. Replace it with `${NAME}` and list the name under `requires.secrets`. |
+| `/home/<someone>/…`, `/Users/<someone>/…`, or this instance's workspace path | the same rule `scripts/check_instance_leak.py` enforces on a commit, applied where the file leaves. Use workspace-relative paths. |
+
+With `--include-adapters`, credential-shaped adapter values are collapsed to
+`${NAME}` references and the names are added to `requires.secrets` — so the far
+side supplies its own, and yours never travels.
+
+**Reproducible.** The same agent exports to the same bytes: members are written
+in sorted order with fixed mode, ownership and mtime, and the gzip header's
+timestamp is zeroed. The only field that changes between two exports of an
+unchanged agent is `exported_at`; set `SOURCE_DATE_EPOCH` to pin it.
+
+### Declaring requirements
+
+Skills are a workspace-wide library and plugins are a process-wide seam, so
+neither can be derived from the agent alone. Say so in the manifest:
+
+```yaml
+requires:
+  plugins: [genus-billing]
+  skills: [triage]
+```
+
+Adapters and `${NAME}` references are derived automatically and merged with
+anything you declare.
+
+### Install
+
+```bash
+genus agent install ./agent-email-classifier-2026-03-04.tar.gz          # print the plan
+genus agent install ./agent-email-classifier-2026-03-04.tar.gz --yes    # install it
+genus agent install ./shared/email-classifier --yes                     # a bundle directory
+genus agent install https://example.org/agent.tar.gz --sha256 <hex> --yes
+```
+
+Without `--yes` nothing is written — you get a plan:
+
+```
+Agent:    Email Classifier (email-classifier) v2026-03-04
+Source:   ./agent-email-classifier-2026-03-04.tar.gz
+SHA-256:  9c1f…
+
+Files this would write:
+  docs/agents/email-classifier.yaml
+  brain/agents/email-classifier.md
+  agents/skills/triage/
+
+Requirements:
+        ok  secret BILLING_API_KEY
+   MISSING  plugin genus-billing — not installed; 'genus plugin install genus-billing'
+```
+
+| Flag | Effect |
+|------|--------|
+| `--yes` | actually write. Without it, plan only. |
+| `--sha256 HEX` | pin the archive's bytes. **Required** for a URL — no signed index vouches for a file you name yourself. |
+| `--id NEW_ID` | install under a different id. Renames the manifest id, `instruction_file` and the brain file together. |
+| `--strict` | refuse unless every requirement is already satisfied. Without it, a missing one is listed and the install proceeds. |
+| `--index URL` | resolve the name through that signed index instead of the hub. |
+
+**Never overwrites.** An id that is already installed is refused; `--id` installs
+alongside. A skill the bundle carries that you already have is **kept**, not
+replaced — your `triage` may be three months of tuning.
+
+**Verified before anything is read.** `files[]` hashes must match *and* the
+bundle must carry nothing `files[]` does not list; the archive is extracted by
+the same bounded extractor the hub client uses (no traversal, no symlinks,
+bounded members and size).
+
+### From a signed catalogue
+
+A signed plugin index (`docs/PLUGINS.md`) can publish agent bundles too — an
+entry with `kind: agent-bundle` and a `bundle` artifact. Resolution for a bare
+name is: local catalog, then a signed index **if you have configured one**, then
+the hub. Only "no index publishes that name" falls through; a signature failure
+stops there rather than quietly fetching an unsigned copy from the hub.
+
+`genus plugin install` refuses an agent bundle and `genus agent install` refuses
+a plugin wheel — each naming the verb that takes it.
+
+### From the Helm
+
+`POST /api/installed-agents/{id}/export` downloads the same bundle (operator
+only, audited with the id alone; a credential literal is a 409 naming the file).
+`GET /api/installed-agents/{id}/export/plan` returns what *would* be exported,
+so a Share dialog can show it first. Adapters are never carried over HTTP, and
+install-from-a-path or a URL is CLI-only.
+
+---
+
 ## 9. Complete Example: Email Pipeline
 
 A 3-unit pipeline: **classifier** → **analyst** → **responder**, connected via CRM tasks and event hooks.

@@ -28,7 +28,6 @@ supply for itself.
 from __future__ import annotations
 
 import gzip
-import os
 import re
 import shutil
 import tarfile
@@ -357,19 +356,14 @@ def _write_archive(staging: Path, out: Path, root_name: str) -> None:
 def _resolved_exported_at(exported_at: str | None) -> str:
     """When the export happened, pinnable for a reproducible build.
 
-    ``SOURCE_DATE_EPOCH`` is the reproducible-builds convention and is honoured
-    here for the same reason it exists elsewhere: the ONLY field in a bundle
-    that changes between two exports of an unchanged agent is this one, so a
-    build that wants byte-identical output has to be able to pin it.
+    A PARAMETER rather than an environment convention. ``exported_at`` is the
+    only field in a bundle that changes between two exports of an unchanged
+    agent, so a publisher who wants byte-identical output has to be able to pin
+    it — and the CLI exposes it as ``--exported-at`` rather than as an
+    undeclared variable the settings model does not know about.
     """
     if exported_at:
         return exported_at
-    epoch = os.environ.get("SOURCE_DATE_EPOCH", "").strip()
-    if epoch:
-        try:
-            return datetime.fromtimestamp(int(epoch), UTC).isoformat(timespec="seconds")
-        except (ValueError, OSError, OverflowError):
-            pass
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 

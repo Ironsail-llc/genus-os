@@ -878,6 +878,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Carry this agent's adapter definitions, with credentials collapsed to ${NAME}",
     )
+    export_parser.add_argument(
+        "--exported-at",
+        default=None,
+        help="Pin the bundle's exported_at timestamp (ISO-8601) for a reproducible build",
+    )
 
     remove_parser = agent_sub.add_parser("remove", help="Remove an installed agent")
     remove_parser.add_argument("agent_id", help="Agent ID to remove")

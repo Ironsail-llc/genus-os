@@ -116,7 +116,7 @@ def _kwargs(target, **extra):
     base = {
         "repo_root": repo,
         "instance_dir": instance_dir,
-        "environ": {},
+        "environment": {},
         "secret_lookup": _no_secrets,
         "adapter_dir": None,
     }
@@ -156,7 +156,7 @@ class TestPlan:
         out = tmp_path / "with-secret"
         export_agent("test-agent", out=out, repo_root=source_repo)
 
-        plan = plan_install(out, **_kwargs(target, environ={"BILLING_API_KEY": "x"}))
+        plan = plan_install(out, **_kwargs(target, environment={"BILLING_API_KEY": "x"}))
 
         assert all(s.satisfied for s in plan.requires if s.kind == "secrets")
 

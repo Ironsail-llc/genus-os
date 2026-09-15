@@ -378,13 +378,32 @@ def _default_secret_lookup(name: str) -> str:
         return "unavailable"
 
 
+def _env_is_set(name: str, environment: Mapping[str, str] | None) -> bool:
+    """Whether the variable *name* is set, without reading its value.
+
+    Through :mod:`robothor.settings.env` rather than ``os.environ`` directly.
+    A bundle's ``requires.secrets`` names arrive at runtime from a document
+    somebody else wrote, so they are exactly the dynamically-named case that
+    module exists for — there is no settings field to declare for a variable
+    this instance learns about when the tarball is opened.
+
+    *environment* overrides it outright, which is how a test states the environment
+    it is describing instead of describing the machine it happens to run on.
+    """
+    if environment is not None:
+        return name in environment
+    from robothor.settings.env import process_env_get
+
+    return process_env_get(name, None) is not None
+
+
 def _requirement_statuses(
     manifest: BundleManifest,
     *,
     repo_root: Path,
     instance_dir: Path | None,
     adapter_dir: Path | None,
-    environ: Mapping[str, str],
+    environment: Mapping[str, str] | None,
     secret_lookup: Callable[[str], str],
 ) -> tuple[RequireStatus, ...]:
     """ "Present or not" for every requirement. Nothing here installs anything."""
@@ -416,7 +435,7 @@ def _requirement_statuses(
         statuses.append(RequireStatus("adapters", name, in_bundle or on_disk, detail))
 
     for name in manifest.requires.secrets:
-        if name in environ:
+        if _env_is_set(name, environment):
             statuses.append(RequireStatus("secrets", name, True))
             continue
         source = secret_lookup(name)
@@ -554,7 +573,7 @@ def install_bundle(
     repo_root: Path | None = None,
     instance_dir: Path | None = None,
     adapter_dir: str | Path | None = None,
-    environ: Mapping[str, str] | None = None,
+    environment: Mapping[str, str] | None = None,
     secret_lookup: Callable[[str], str] | None = None,
     client: httpx.Client | None = None,
     overrides: dict[str, Any] | None = None,
@@ -567,12 +586,9 @@ def install_bundle(
     Returns ``(plan, result)``; ``result`` is ``None`` whenever nothing was
     written, which is every call without ``yes`` and every refusal.
     """
-    import os
-
     if repo_root is None:
         repo_root = default_workspace_root()
     repo_root = Path(repo_root).resolve(strict=True)
-    environ = os.environ if environ is None else environ
     secret_lookup = secret_lookup or _default_secret_lookup
     adapter_path = Path(adapter_dir) if adapter_dir is not None else None
 
@@ -649,7 +665,7 @@ def install_bundle(
                 repo_root=repo_root,
                 instance_dir=instance_dir,
                 adapter_dir=adapter_path,
-                environ=environ,
+                environment=environment,
                 secret_lookup=secret_lookup,
             ),
             collision=collision,

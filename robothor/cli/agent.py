@@ -345,6 +345,7 @@ def _cmd_agent_export(args: argparse.Namespace) -> int:
             args.agent_id,
             out=getattr(args, "out", None),
             include_adapters=getattr(args, "include_adapters", False),
+            exported_at=getattr(args, "exported_at", None),
         )
     except FileNotFoundError as error:
         print(f"Error: {error}")

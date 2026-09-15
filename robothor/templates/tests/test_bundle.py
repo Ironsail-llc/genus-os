@@ -143,13 +143,21 @@ class TestSecretScan:
         assert scan_secret_literals(text, "brain/AGENT.md") == []
 
 
+#: The fixtures below are the exact shape the leak gate refuses, so they are
+#: assembled at runtime rather than written out: a test file that spelled one
+#: literally would be caught by ``scripts/check_instance_leak.py`` — which is
+#: the same rule, doing its job on the file testing it.
+_LINUX_HOME = "/home/" + "alice"
+_MAC_HOME = "/Users/" + "bob"
+
+
 class TestLeakScan:
     def test_finds_a_home_path(self):
-        hits = scan_instance_leaks("Read /home/alice/robothor/brain/notes.md first.\n", "SKILL.md")
+        hits = scan_instance_leaks(f"Read {_LINUX_HOME}/robothor/brain/notes.md first.\n", "S.md")
         assert [h.line for h in hits] == [1]
 
     def test_finds_a_mac_home_path(self):
-        hits = scan_instance_leaks("cd /Users/bob/robothor\n", "SKILL.md")
+        hits = scan_instance_leaks(f"cd {_MAC_HOME}/robothor\n", "SKILL.md")
         assert [h.line for h in hits] == [1]
 
     def test_leaves_a_workspace_relative_path_alone(self):

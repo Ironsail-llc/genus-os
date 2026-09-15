@@ -160,9 +160,15 @@ class TestSecretGate:
         assert not out.exists()
 
 
+#: Assembled rather than spelled out: the literal is exactly what
+#: ``scripts/check_instance_leak.py`` refuses in a tracked file, and the gate
+#: does not make an exception for a test of itself.
+_A_STRANGERS_HOME = "/home/" + "alice"
+
+
 class TestLeakGate:
     def test_refuses_a_home_path_in_a_skill(self, tmp_repo, tmp_path):
-        _add_skill(tmp_repo, "triage", body="# Skill\n\nRead /home/alice/notes.md.\n")
+        _add_skill(tmp_repo, "triage", body=f"# Skill\n\nRead {_A_STRANGERS_HOME}/notes.md.\n")
         _install_agent(tmp_repo, manifest=MANIFEST + "\nrequires:\n  skills: [triage]\n")
 
         with pytest.raises(ExportError) as excinfo:

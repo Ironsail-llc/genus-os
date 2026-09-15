@@ -139,6 +139,13 @@ def test_only_genuinely_async_routes_run_on_the_event_loop():
         ("POST", "/api/installed-agents/install"),
         ("POST", "/api/installed-agents/{agent_id}/update"),
         ("DELETE", "/api/installed-agents/{agent_id}"),
+        # The two export routes await nothing, and are still `async def`: both
+        # hand ALL of their work — a template render, a tarball, a full-text
+        # scan of every file — to asyncio.to_thread, so the thin coroutine that
+        # remains is the right shape. Written `def` they would occupy a worker
+        # thread for the whole export instead of releasing it.
+        ("POST", "/api/installed-agents/{agent_id}/export"),
+        ("GET", "/api/installed-agents/{agent_id}/export/plan"),
         # Answering a waiting question. One of its three kinds — a permission
         # escalation — is an asyncio.Event inside the ENGINE process, so the
         # route awaits engine_request and a `def` handler could not settle it at

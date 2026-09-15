@@ -271,11 +271,18 @@ def test_credential_and_install_routes_are_never_allowlisted() -> None:
 
 
 def test_install_state_mutations_are_gated_in_the_handler() -> None:
-    """The specific regression this guard was written for."""
+    """The specific regression this guard was written for.
+
+    Four now, not three: ``POST {id}/export`` joined them. It is a mutation
+    route by shape rather than by effect — it writes nothing — but it carries
+    the agent's instructions off the appliance, which is a bigger blast radius
+    than the delete beside it, so it is held to the same gate rather than
+    exempted for not being a write.
+    """
     install_routes = [
         route for route in _mutation_routes() if route.path.startswith("/api/installed-agents")
     ]
-    assert len(install_routes) == 3, f"expected install/update/remove, got {install_routes}"
+    assert len(install_routes) == 4, f"expected install/update/remove/export, got {install_routes}"
     for route in install_routes:
         assert "require_operator(" in inspect.getsource(route.endpoint), _describe(route)
 

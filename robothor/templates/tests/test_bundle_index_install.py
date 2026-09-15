@@ -94,7 +94,7 @@ def _kwargs(target, **extra):
     base = {
         "repo_root": repo,
         "instance_dir": instance_dir,
-        "environ": {},
+        "environment": {},
         "secret_lookup": _no_secrets,
         "adapter_dir": None,
         "index": INDEX_URL,
