@@ -248,14 +248,25 @@ def value_for(name: str) -> str:
 
 
 def _reload_cached_readers() -> None:
-    """Best effort: let a running engine in this process see the new rows."""
-    try:
+    """Make the write visible: in this process, and in the running engine.
+
+    Two halves, because the CLI is a DIFFERENT PROCESS from the engine. The
+    local reset covers an invocation that shares the interpreter; the POST
+    covers the ordinary case, where an operator runs ``genus`` in a terminal
+    while the engine is up and would otherwise wait out the cache TTL wondering
+    whether the command worked.
+    """
+    import contextlib
+
+    # A CLI invocation normally has no engine to refresh in-process, and the
+    # rows are written either way — so this half is allowed to find nothing.
+    with contextlib.suppress(Exception):
         from robothor.engine import key_pool
         from robothor.secrets import reset_vault_availability
 
         reset_vault_availability()
         key_pool.reload_provider_keys()
-    except Exception:  # noqa: BLE001 - the CLI usually runs outside the engine
-        # Nothing to warn about: a CLI invocation normally has no engine to
-        # refresh, and the rows are written either way.
-        return
+
+    from robothor.secrets.reload import notify_engine
+
+    notify_engine()
