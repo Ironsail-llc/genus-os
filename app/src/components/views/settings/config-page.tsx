@@ -85,20 +85,35 @@ function unitList(units: string[]): string {
 }
 
 /**
- * Why a field is read-only, in the bridge's own terms.
+ * The types this build knows how to put a control behind.
  *
- * The GET does not carry a sentence — only `editable: false` — so this
- * reproduces the refusal `PATCH /api/settings` would answer with, rather than
- * inventing a different explanation for the same fact. If they ever disagree,
- * the operator reads the PATCH's, which is the one that is true.
+ * The settings model declares only these four today. A field arriving as
+ * something else (a `list`, when one is added) is rendered read-only and says
+ * so: a text box that posts `"a,b"` as a string is an editable control whose
+ * save is a guaranteed 422, which is worse than an honest refusal.
  */
-function envOverrideSentence(field: SettingField): string {
+const EDITABLE_TYPES = new Set(["str", "int", "float", "bool"]);
+
+/**
+ * What to say when the route marked a field not editable and told us nothing
+ * else — an older bridge, predating `values[].reason`.
+ *
+ * It deliberately names NO variable. The route resolves the variable actually
+ * in use across the field's deprecated aliases, so on a mid-migration box the
+ * canonical name is not the one that is set; a guess here would send the
+ * operator to clear something that does not exist, and leave the field
+ * overridden after the restart they did for it.
+ */
+function unexplainedRefusal(field: SettingField): string {
   return (
-    `${field.env} is set in this instance's environment, which wins over config.yaml — a change ` +
-    `saved here would apply to nothing. Clear the variable on the box and restart ` +
-    `${unitList(field.restartUnits)}, then it can be managed from this page.`
+    `This instance will not let ${field.env} be changed from here, and did not say why. ` +
+    `Run \`genus config explain ${field.env}\` on the box — it names the layer supplying the ` +
+    `value and the variable in use.`
   );
 }
+
+/** A fingerprint is `sha256:` + eight characters. Anything longer is the bridge being wrong. */
+const FINGERPRINT_MAX = 24;
 
 interface FieldState {
   field: SettingField;
@@ -192,14 +207,35 @@ export function ConfigPage({ visible = true, onOpenFlags }: ConfigPageProps) {
     });
   };
 
+  /**
+   * The sections on screen, and how many of each one's unsaved changes the
+   * filter is hiding.
+   *
+   * A group holding a dirty field is never filtered away. A draft that
+   * disappears is worse than one that is refused: it survives in state, there
+   * is no Save and no discard while it is hidden, and it is silently included
+   * in the next save of that group once the filter is cleared.
+   */
   const visibleGroups = useMemo(() => {
     if (!groups) return [];
     const needle = query.trim();
-    if (!needle) return groups;
-    return groups
-      .map((group) => ({ ...group, fields: group.fields.filter((f) => matchesQuery(f, needle)) }))
-      .filter((group) => group.fields.length > 0);
-  }, [groups, query]);
+    // `group` is always the WHOLE group: a save posts a section's dirty fields,
+    // and a save computed from the filtered list would quietly drop the ones
+    // the filter is hiding. `shown` is what is drawn.
+    if (!needle) return groups.map((group) => ({ group, shown: group.fields, hidden: 0 }));
+    const out: Array<{ group: SettingGroup; shown: SettingField[]; hidden: number }> = [];
+    for (const group of groups) {
+      const shown: SettingField[] = [];
+      let hidden = 0;
+      for (const field of group.fields) {
+        if (matchesQuery(field, needle)) shown.push(field);
+        else if (stateFor(field).dirty) hidden += 1;
+      }
+      if (shown.length === 0 && hidden === 0) continue;
+      out.push({ group, shown, hidden });
+    }
+    return out;
+  }, [groups, query, stateFor]);
 
   const searching = query.trim().length > 0;
 
@@ -224,12 +260,60 @@ export function ConfigPage({ visible = true, onOpenFlags }: ConfigPageProps) {
         errors?: Array<{ name?: string; message?: string }>;
       } | null;
 
+      // `applied` FIRST, always, and whatever the status code says.
+      //
+      // The route documents a PARTIAL write: a failure during application
+      // cannot be rolled back across a file and a table, so it answers 500
+      // with `applied` naming exactly what landed. Reading `errors` first and
+      // returning — which this did — reported such a save as a total failure:
+      // the field that WAS written to config.yaml kept showing its old value,
+      // and the units it needs never reached the restart banner. An operator
+      // reads "the save failed", walks away, and never restarts a service a
+      // change already in the file is waiting on.
+      const applied = new Set(Array.isArray(body?.applied) ? body.applied : []);
+      const landedStates = dirty.filter((s) => applied.has(s.field.name));
+
+      if (landedStates.length > 0) {
+        // The new values are taken from what was SENT rather than re-read: a
+        // re-read would also replace every other section's unsaved edits,
+        // which is a worse surprise than a source pill that is one layer stale
+        // until Refresh. The route writes a governed flag to the flag store
+        // and everything else to config.yaml, so the layer is knowable.
+        setValues((prev) => {
+          const next = { ...prev };
+          for (const state of landedStates) {
+            next[state.field.name] = {
+              value: fromDraft(state.field, state.draft),
+              source: state.field.governed ? "db" : "config",
+              editable: true,
+              reason: null,
+            };
+          }
+          return next;
+        });
+        setDrafts((prev) => {
+          const next = { ...prev };
+          for (const state of landedStates) delete next[state.field.name];
+          return next;
+        });
+        setSaved((prev) => {
+          const next = { ...prev };
+          for (const state of landedStates) next[state.field.name] = true;
+          return next;
+        });
+
+        noteRestartNeeded(
+          Array.isArray(body?.pending_restart) ? body.pending_restart : [],
+          landedStates.map((s) => s.field.name)
+        );
+      }
+
       const errors = Array.isArray(body?.errors) ? body.errors : [];
       if (errors.length > 0) {
         // Every error lands on its own field. One that names something this
         // section is not rendering (an unknown name, a field filtered out of
-        // view) still has to be readable, or the save looks like it did
-        // nothing at all.
+        // view, or the request-level keys `changes`/`note`) still has to be
+        // readable, or the save looks like it did nothing at all.
         const landed: Record<string, string> = {};
         const orphans: string[] = [];
         const rendered = new Set(group.fields.map((f) => f.name));
@@ -240,51 +324,24 @@ export function ConfigPage({ visible = true, onOpenFlags }: ConfigPageProps) {
           else orphans.push(message || `${name || "a setting"} was refused.`);
         }
         setFieldErrors((prev) => ({ ...prev, ...landed }));
-        if (orphans.length) {
-          setSectionErrors((prev) => ({ ...prev, [group.id]: orphans.join(" ") }));
+
+        const partial = landedStates.length
+          ? `Part of this section was written before the instance failed: ${landedStates
+              .map((s) => s.field.name)
+              .join(", ")} landed and the rest did not. `
+          : "";
+        if (partial || orphans.length) {
+          setSectionErrors((prev) => ({ ...prev, [group.id]: `${partial}${orphans.join(" ")}`.trim() }));
         }
         return;
       }
 
       if (!res.ok) {
-        setSectionErrors((prev) => ({ ...prev, [group.id]: `The bridge refused the save (HTTP ${res.status}).` }));
-        return;
+        setSectionErrors((prev) => ({
+          ...prev,
+          [group.id]: `The bridge refused the save (HTTP ${res.status}).`,
+        }));
       }
-
-      const applied = new Set(Array.isArray(body?.applied) ? body.applied : []);
-      const landedStates = dirty.filter((s) => applied.has(s.field.name));
-
-      // The new values are taken from what was SENT rather than re-read: a
-      // re-read would also replace every other section's unsaved edits, which
-      // is a worse surprise than a source pill that is one layer stale until
-      // Refresh. The route writes a governed flag to the flag store and
-      // everything else to config.yaml, so the layer is knowable without one.
-      setValues((prev) => {
-        const next = { ...prev };
-        for (const state of landedStates) {
-          next[state.field.name] = {
-            value: fromDraft(state.field, state.draft),
-            source: state.field.governed ? "db" : "config",
-            editable: true,
-          };
-        }
-        return next;
-      });
-      setDrafts((prev) => {
-        const next = { ...prev };
-        for (const state of landedStates) delete next[state.field.name];
-        return next;
-      });
-      setSaved((prev) => {
-        const next = { ...prev };
-        for (const state of landedStates) next[state.field.name] = true;
-        return next;
-      });
-
-      noteRestartNeeded(
-        Array.isArray(body?.pending_restart) ? body.pending_restart : [],
-        landedStates.map((s) => s.field.name)
-      );
     } catch {
       setSectionErrors((prev) => ({ ...prev, [group.id]: BRIDGE_UNREACHABLE }));
     } finally {
@@ -390,10 +447,12 @@ export function ConfigPage({ visible = true, onOpenFlags }: ConfigPageProps) {
       ) : null}
 
       <div className="flex min-w-0 flex-col gap-2">
-        {visibleGroups.map((group) => {
+        {visibleGroups.map(({ group, shown, hidden }) => {
           const expanded = searching || open[group.id] === true;
-          const states = group.fields.map(stateFor);
-          const dirty = states.filter((s) => s.dirty && writable(s));
+          const states = shown.map(stateFor);
+          // Counted over the WHOLE group, so the count and the save agree even
+          // when the filter is hiding some of what will be posted.
+          const dirty = group.fields.map(stateFor).filter((s) => s.dirty && writable(s));
           const sectionError = sectionErrors[group.id];
           return (
             <section
@@ -415,13 +474,25 @@ export function ConfigPage({ visible = true, onOpenFlags }: ConfigPageProps) {
                 )}
                 <span className="truncate text-sm font-medium text-foreground">{group.label}</span>
                 <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
-                  {group.fields.length} {group.fields.length === 1 ? "setting" : "settings"}
+                  {searching ? `${shown.length} of ${group.fields.length}` : group.fields.length}{" "}
+                  {group.fields.length === 1 ? "setting" : "settings"}
                   {dirty.length ? ` · ${dirty.length} changed` : ""}
                 </span>
               </button>
 
               {expanded ? (
                 <div className="flex min-w-0 flex-col gap-2 border-t border-border p-3">
+                  {hidden > 0 ? (
+                    <p
+                      data-testid={`config-hidden-changes-${group.id}`}
+                      className="text-[11px] text-warning"
+                    >
+                      {hidden} unsaved {hidden === 1 ? "change is" : "changes are"} hidden by the
+                      filter. Saving this section posts {hidden === 1 ? "it" : "them"} too — clear
+                      the filter to see {hidden === 1 ? "it" : "them"}.
+                    </p>
+                  ) : null}
+
                   {states.map((state) => (
                     <FieldRow
                       key={state.field.name}
@@ -494,7 +565,32 @@ function FieldRow({
   const { field, current, draft } = state;
   const source = current?.source ?? "unknown";
   const secret = field.secret ? asSecretStatus(current?.value) : null;
-  const envLocked = !field.secret && current?.editable === false;
+  const known = EDITABLE_TYPES.has(field.type) || (field.choices?.length ?? 0) > 0;
+
+  /**
+   * Why this row has no control, or `null` when it has one.
+   *
+   * Every branch here ends in a SENTENCE, because a row with no input and no
+   * explanation is the thing an operator files a bug about. Three of them, in
+   * the order they have to be tested:
+   *
+   * 1. no entry in the values map at all — `editable` is `undefined`, which is
+   *    not `false`, so testing `editable === false` first drew a live-looking
+   *    input whose Save silently discarded what was typed (`writable()`
+   *    requires `editable ?? false`);
+   * 2. the route refused it — its own sentence, verbatim (see `SettingValue.reason`);
+   * 3. a type this build has no control for.
+   */
+  const locked: string | null = !current
+    ? `${field.env} is declared by this instance but was not reported by the server, so there is ` +
+      `no value to change here. Refresh; if it stays missing, the bridge and the engine are not ` +
+      `the same build.`
+    : !current.editable
+      ? (current.reason ?? unexplainedRefusal(field))
+      : !known
+        ? `This build does not know how to edit a ${field.type}. Set it with ` +
+          `\`genus config set ${field.env}\` on the box; the value above is what is running.`
+        : null;
 
   return (
     <div
@@ -528,50 +624,68 @@ function FieldRow({
         <p className="text-[11px] text-muted-foreground">{field.description}</p>
       ) : null}
 
-      {field.secret ? (
-        <div className="flex min-w-0 flex-col gap-1">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        {field.secret ? (
           <span
             data-testid={`config-secret-${field.name}`}
             className="flex w-fit items-center gap-1.5 rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] text-muted-foreground"
           >
             <KeyRound aria-hidden className="size-3" />
-            {secret?.configured ? `configured · ${secret.fingerprint ?? "no fingerprint"}` : "not set here"}
+            {secret?.configured
+              ? // Capped. The route's fingerprint is `sha256:` + eight
+                // characters; a longer one means the bridge is wrong, and the
+                // secret path exists for exactly that case.
+                `configured · ${(secret.fingerprint ?? "no fingerprint").slice(0, FINGERPRINT_MAX)}`
+              : "not set here"}
           </span>
-          <p className="text-[11px] text-muted-foreground">
-            Credentials are managed on the Secrets page, or with{" "}
-            <span className="font-mono">genus vault set</span> on the box — never in config.yaml,
-            which gets copied into bug reports. This line reads the environment and config.yaml
-            only, so a credential that lives in the vault shows as not set here.
-          </p>
-        </div>
-      ) : envLocked ? (
-        <div className="flex min-w-0 flex-col gap-1">
+        ) : locked ? (
           <span className="min-w-0 break-all font-mono text-[12px] text-foreground">
             {draft || "(empty)"}
           </span>
-          <p
-            data-testid={`config-readonly-${field.name}`}
-            className="text-[11px] text-warning"
-          >
-            {envOverrideSentence(field)}
-          </p>
-        </div>
-      ) : (
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
+        ) : (
           <FieldControl field={field} draft={draft} onDraft={onDraft} />
-          {field.governed ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              data-testid={`config-flags-link-${field.name}`}
-              onClick={() => onOpenFlags?.()}
-            >
-              <Flag aria-hidden />
-              Verdict on Flags
-            </Button>
-          ) : null}
-        </div>
-      )}
+        )}
+
+        {/*
+          Outside the editable branch on purpose: a governed field is always
+          editable under the current contract, and the day that stops being
+          true the verdict is the FIRST thing its row should still offer.
+        */}
+        {field.governed ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            data-testid={`config-flags-link-${field.name}`}
+            onClick={() => onOpenFlags?.()}
+          >
+            <Flag aria-hidden />
+            Verdict on Flags
+          </Button>
+        ) : null}
+
+        {!field.secret && field.default !== null && field.default !== "" ? (
+          <span
+            data-testid={`config-default-${field.name}`}
+            className="shrink-0 text-[10px] text-muted-foreground/80"
+          >
+            default {String(field.default)}
+          </span>
+        ) : null}
+      </div>
+
+      {locked ? (
+        <p data-testid={`config-readonly-${field.name}`} className="text-[11px] text-warning">
+          {locked}
+        </p>
+      ) : null}
+
+      {field.secret ? (
+        <p className="text-[11px] text-muted-foreground">
+          That status reads the environment and config.yaml only — the vault is not consulted — so
+          a credential stored with <span className="font-mono">genus vault set</span> shows here as
+          not set. It is not a report that anything is missing.
+        </p>
+      ) : null}
 
       {error ? (
         <p data-testid={`config-error-${field.name}`} className="text-[11px] text-destructive">

@@ -22,7 +22,6 @@ function flag(name: string, choices: string[] | null, governed = true): SettingF
   return {
     name,
     env: name,
-    group: "flags",
     type: choices?.includes("true") ? "bool" : "str",
     description: `what ${name} does`,
     default: null,
@@ -30,7 +29,6 @@ function flag(name: string, choices: string[] | null, governed = true): SettingF
     governed,
     restartRequired: false,
     restartUnits: ["robothor-engine"],
-    since: "legacy",
     hot: true,
     choices,
   };
@@ -44,6 +42,21 @@ describe("flagSections", () => {
     const sections = flagSections([flag("ROBOTHOR_RBAC_MODE", LADDER)]);
     expect(sections.map((s) => s.id)).toEqual(["guardrails"]);
     expect(sections[0].fields.map((f) => f.name)).toEqual(["ROBOTHOR_RBAC_MODE"]);
+  });
+
+  it("warns about promotion under every heading that can hold an enforce rung", () => {
+    // ROBOTHOR_RIP_7_MODE and ROBOTHOR_RIP_13_MODE have an enforce rung and
+    // sit under Engine ladders, because the family is matched first. A warning
+    // that lived only in the Guardrails blurb would therefore be missing from
+    // the heading holding two flags that block work when promoted.
+    const sections = flagSections([
+      flag("ROBOTHOR_RBAC_MODE", LADDER),
+      flag("ROBOTHOR_RIP_13_MODE", ["observe", "enforce"]),
+    ]);
+    for (const section of sections) {
+      const holdsEnforce = section.fields.some((f) => f.choices?.includes("enforce"));
+      if (holdsEnforce) expect(section.blurb).toMatch(/never fired/i);
+    }
   });
 
   it("puts the RIP family under Engine ladders, whatever shape their values take", () => {

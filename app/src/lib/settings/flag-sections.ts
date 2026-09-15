@@ -44,8 +44,14 @@ const ORDER: Array<{ id: FlagSectionId; label: string; blurb: string }> = [
   {
     id: "ladders",
     label: "Engine ladders",
+    // The RIP family is matched by name, BEFORE the enforce rung, so a RIP
+    // flag that has an enforce rung (ROBOTHOR_RIP_7_MODE,
+    // ROBOTHOR_RIP_13_MODE) lands here rather than under Guardrails — keeping
+    // the family in one place, which is how the inventory and the runbooks
+    // talk about them. The promotion warning therefore has to be said here
+    // too, or half the guardrails on this page would be missing it.
     blurb:
-      "The numbered engine upgrades. Each one is inventoried with an owner and a promotion date in infra/flags.yaml.",
+      "The numbered engine upgrades, each inventoried with an owner and a promotion date in infra/flags.yaml. The ones with an enforce rung block work when promoted: read the verdict first, because a control that has never fired is not evidence that promoting it is safe.",
   },
   {
     id: "tuning",

@@ -89,16 +89,50 @@ const SCHEMA = {
   ],
 };
 
+/**
+ * The route's own refusal for ROBOTHOR_ENGINE_HOST, verbatim.
+ *
+ * It names a DEPRECATED ALIAS on purpose: `provenance.env_name_in_use` walks
+ * `(env, *aliases)`, so on a mid-migration box the variable actually supplying
+ * a field is not the canonical name — and a page that composed this sentence
+ * itself would send the operator to clear one that is not set.
+ */
+const ENV_REFUSAL =
+  "ROBOTHOR_ENGINE_HOST is set in this instance's environment (ROBOTHOR_OLD_ENGINE_HOST), " +
+  "which wins over config.yaml — a change saved here would apply to nothing. Clear the " +
+  "variable on the box and restart robothor-engine, then it can be managed from this page.";
+
+const SECRET_REFUSAL =
+  "ROBOTHOR_TELEGRAM_BOT_TOKEN holds a credential. `genus config set` never writes secrets -- " +
+  "config.yaml is a plain file that gets copied into bug reports. Store it with " +
+  "`genus vault set <key>` and give the service the key.";
+
 function values() {
   return {
     values: {
-      ROBOTHOR_MAX_CONCURRENT_AGENTS: { value: 3, source: "default", editable: true },
-      ROBOTHOR_LOG_DIR: { value: "/var/log/robothor", source: "config", editable: true },
-      ROBOTHOR_ENGINE_HOST: { value: "0.0.0.0", source: "env", editable: false },
+      ROBOTHOR_MAX_CONCURRENT_AGENTS: {
+        value: 3,
+        source: "default",
+        editable: true,
+        reason: null,
+      },
+      ROBOTHOR_LOG_DIR: {
+        value: "/var/log/robothor",
+        source: "config",
+        editable: true,
+        reason: null,
+      },
+      ROBOTHOR_ENGINE_HOST: {
+        value: "0.0.0.0",
+        source: "env",
+        editable: false,
+        reason: ENV_REFUSAL,
+      },
       ROBOTHOR_TELEGRAM_BOT_TOKEN: {
         value: { configured: true, fingerprint: "sha256:ab12cd34" },
         source: "env",
         editable: false,
+        reason: SECRET_REFUSAL,
       },
     },
     pending_restart: [],
@@ -167,9 +201,11 @@ async function setupMocks(page: Page): Promise<Recorded> {
     recorded.patches.push(body);
     const changes = (body.changes ?? {}) as Record<string, unknown>;
 
-    // The bridge validates the WHOLE batch first and writes nothing if any of
-    // it fails, so a bad concurrency value refuses the log directory with it.
-    if (changes.ROBOTHOR_MAX_CONCURRENT_AGENTS === "nine") {
+    // An empty log directory is a refusal an operator can actually PRODUCE
+    // through this form — they clear the box and press Save. (Feeding "nine"
+    // to the int field would need the spec to retype the input as text, which
+    // tests a path the product cannot reach.)
+    if (changes.ROBOTHOR_LOG_DIR === "") {
       return json(
         route,
         {
@@ -177,9 +213,9 @@ async function setupMocks(page: Page): Promise<Recorded> {
           pending_restart: [],
           errors: [
             {
-              name: "ROBOTHOR_MAX_CONCURRENT_AGENTS",
+              name: "ROBOTHOR_LOG_DIR",
               message:
-                "ROBOTHOR_MAX_CONCURRENT_AGENTS: 'nine' is not a valid value (Input should be a valid integer)",
+                "ROBOTHOR_LOG_DIR: '' is not a valid value (String should have at least 1 character)",
             },
           ],
         },
@@ -215,9 +251,13 @@ test.describe("Settings › Config", () => {
 
     await page.locator('[data-testid="config-group-toggle-engine"]').click();
 
-    // A field the environment supplies is read-only, and says why.
+    // A field the environment supplies is read-only, in the SERVER's words —
+    // including the variable it resolved, which this page cannot compute.
+    await expect(page.locator('[data-testid="config-readonly-ROBOTHOR_ENGINE_HOST"]')).toHaveText(
+      ENV_REFUSAL
+    );
     await expect(page.locator('[data-testid="config-readonly-ROBOTHOR_ENGINE_HOST"]')).toContainText(
-      "wins over config.yaml"
+      "ROBOTHOR_OLD_ENGINE_HOST"
     );
     await expect(
       page.locator('[data-testid="config-field-ROBOTHOR_ENGINE_HOST"] input')
@@ -248,26 +288,16 @@ test.describe("Settings › Config", () => {
     await page.locator('[data-testid="config-restart-dismiss"]').click();
     await expect(page.locator('[data-testid="config-restart-banner"]')).toHaveCount(0);
 
-    // Now the refusal. Nothing is written, and the sentence is the server's.
+    // Now the refusal — produced the way an operator would produce it, by
+    // clearing the box. Nothing is written, and the sentence is the server's.
     await page.locator('[data-testid="config-group-toggle-engine"]').click();
-    await page
-      .locator('[data-testid="config-input-ROBOTHOR_MAX_CONCURRENT_AGENTS"]')
-      .evaluate((el) => {
-        // A number input will not hold "nine" through fill(); the bridge's own
-        // refusal is what this asserts, so the value is set the way a paste
-        // into a text field would arrive.
-        const input = el as HTMLInputElement;
-        input.type = "text";
-      });
-    await page.locator('[data-testid="config-input-ROBOTHOR_MAX_CONCURRENT_AGENTS"]').fill("nine");
+    await page.locator('[data-testid="config-input-ROBOTHOR_LOG_DIR"]').fill("");
     await page.locator('[data-testid="config-save-engine"]').click();
 
-    await expect(
-      page.locator('[data-testid="config-error-ROBOTHOR_MAX_CONCURRENT_AGENTS"]')
-    ).toContainText("is not a valid value");
-    await expect(
-      page.locator('[data-testid="config-saved-ROBOTHOR_MAX_CONCURRENT_AGENTS"]')
-    ).toHaveCount(0);
+    await expect(page.locator('[data-testid="config-error-ROBOTHOR_LOG_DIR"]')).toContainText(
+      "String should have at least 1 character"
+    );
+    await expect(page.locator('[data-testid="config-saved-ROBOTHOR_LOG_DIR"]')).toHaveCount(0);
   });
 
   test("filters to one setting, and fits a 390 px screen", async ({ page }) => {

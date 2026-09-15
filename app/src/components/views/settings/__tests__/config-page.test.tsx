@@ -146,18 +146,57 @@ const SCHEMA = {
   ],
 };
 
+/**
+ * The refusal the route itself would answer a PATCH of ROBOTHOR_ENGINE_HOST
+ * with, verbatim.
+ *
+ * It names `ROBOTHOR_OLD_ENGINE_HOST` — a DEPRECATED ALIAS — on purpose.
+ * `provenance.env_name_in_use` walks `(env, *aliases)`, so on a mid-migration
+ * box the variable actually supplying a field is not the canonical name. A
+ * page that composed this sentence itself would tell the operator to clear a
+ * variable that is not set, and the field would still be overridden after the
+ * restart.
+ */
+const ENV_REFUSAL =
+  "ROBOTHOR_ENGINE_HOST is set in this instance's environment (ROBOTHOR_OLD_ENGINE_HOST), " +
+  "which wins over config.yaml — a change saved here would apply to nothing. Clear the " +
+  "variable on the box and restart robothor-engine, then it can be managed from this page.";
+
+const SECRET_REFUSAL =
+  "ROBOTHOR_TELEGRAM_BOT_TOKEN holds a credential. `genus config set` never writes secrets -- " +
+  "config.yaml is a plain file that gets copied into bug reports. Store it with " +
+  "`genus vault set <key>` and give the service the key; `genus vault list` shows the naming in use.";
+
 const VALUES = {
   values: {
-    ROBOTHOR_MAX_CONCURRENT_AGENTS: { value: 3, source: "default", editable: true },
-    ROBOTHOR_LOG_DIR: { value: "/var/log/robothor", source: "config", editable: true },
-    ROBOTHOR_DETECTORS_ENABLED: { value: true, source: "default", editable: true },
-    ROBOTHOR_ENGINE_HOST: { value: "0.0.0.0", source: "env", editable: false },
+    ROBOTHOR_MAX_CONCURRENT_AGENTS: {
+      value: 3,
+      source: "default",
+      editable: true,
+      reason: null,
+    },
+    ROBOTHOR_LOG_DIR: {
+      value: "/var/log/robothor",
+      source: "config",
+      editable: true,
+      reason: null,
+    },
+    ROBOTHOR_DETECTORS_ENABLED: { value: true, source: "default", editable: true, reason: null },
+    ROBOTHOR_ENGINE_HOST: {
+      value: "0.0.0.0",
+      source: "env",
+      editable: false,
+      reason: ENV_REFUSAL,
+    },
     ROBOTHOR_TELEGRAM_BOT_TOKEN: {
       value: { configured: true, fingerprint: "sha256:ab12cd34" },
       source: "env",
       editable: false,
+      reason: SECRET_REFUSAL,
     },
-    ROBOTHOR_RBAC_MODE: { value: "enforce", source: "db", editable: true },
+    // Governed, and editable WHATEVER supplied it: the flag store reads its
+    // operator row before the environment, so the write is never invisible.
+    ROBOTHOR_RBAC_MODE: { value: "enforce", source: "db", editable: true, reason: null },
   },
   pending_restart: [],
 };
@@ -293,21 +332,109 @@ describe("Settings › Config", () => {
     const status = screen.getByTestId("config-secret-ROBOTHOR_TELEGRAM_BOT_TOKEN");
     expect(status).toHaveTextContent(/configured/i);
     expect(status).toHaveTextContent("sha256:ab12cd34");
-    expect(row).toHaveTextContent(/Secrets page/i);
   });
 
-  it("makes a field the environment supplies read-only, and says why", async () => {
+  it("gives a secret the SERVER's refusal, not a local paraphrase of it", async () => {
+    mockBridge();
+    render(<ConfigPage visible />);
+    fireEvent.click(await screen.findByTestId("config-group-toggle-channels"));
+    const badge = await screen.findByTestId("config-readonly-ROBOTHOR_TELEGRAM_BOT_TOKEN");
+    expect(badge).toHaveTextContent(SECRET_REFUSAL);
+    // Our own line, which is NOT a restatement of the API: `configured` reads
+    // the environment and config.yaml only, so a vaulted credential is not
+    // "missing".
+    expect(screen.getByTestId("config-field-ROBOTHOR_TELEGRAM_BOT_TOKEN")).toHaveTextContent(
+      /vault/i
+    );
+  });
+
+  it("caps an over-long fingerprint rather than rendering whatever came back", async () => {
+    const long = `sha256:${"a".repeat(80)}`;
+    vi.spyOn(global, "fetch").mockImplementation((async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/schema")) return { ok: true, status: 200, json: async () => SCHEMA } as Response;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ...VALUES,
+          values: {
+            ...VALUES.values,
+            ROBOTHOR_TELEGRAM_BOT_TOKEN: {
+              ...VALUES.values.ROBOTHOR_TELEGRAM_BOT_TOKEN,
+              value: { configured: true, fingerprint: long },
+            },
+          },
+        }),
+      } as Response;
+    }) as typeof fetch);
+    render(<ConfigPage visible />);
+    fireEvent.click(await screen.findByTestId("config-group-toggle-channels"));
+    const status = await screen.findByTestId("config-secret-ROBOTHOR_TELEGRAM_BOT_TOKEN");
+    expect(status.textContent ?? "").not.toContain(long);
+    expect(status).toHaveTextContent("sha256:");
+  });
+
+  it("makes a field the environment supplies read-only, in the SERVER's words", async () => {
     mockBridge();
     render(<ConfigPage visible />);
     await openEngine();
     const row = screen.getByTestId("config-field-ROBOTHOR_ENGINE_HOST");
     expect(within(row).queryByRole("textbox")).not.toBeInTheDocument();
     const badge = screen.getByTestId("config-readonly-ROBOTHOR_ENGINE_HOST");
-    expect(badge).toHaveTextContent(/environment/i);
-    expect(badge).toHaveTextContent(/wins/i);
-    expect(badge).toHaveTextContent("robothor-engine");
+    // Verbatim, including the variable the route resolved — which on a
+    // mid-migration box is a deprecated alias this page cannot compute.
+    expect(badge).toHaveTextContent(ENV_REFUSAL);
+    expect(badge).toHaveTextContent("ROBOTHOR_OLD_ENGINE_HOST");
     // The current value is still worth reading — it is what the engine runs.
     expect(row).toHaveTextContent("0.0.0.0");
+  });
+
+  it("names no variable of its own when an older bridge sends no reason", async () => {
+    vi.spyOn(global, "fetch").mockImplementation((async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/schema")) return { ok: true, status: 200, json: async () => SCHEMA } as Response;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ...VALUES,
+          values: {
+            ...VALUES.values,
+            ROBOTHOR_ENGINE_HOST: { value: "0.0.0.0", source: "env", editable: false },
+          },
+        }),
+      } as Response;
+    }) as typeof fetch);
+    render(<ConfigPage visible />);
+    await openEngine();
+    const badge = await screen.findByTestId("config-readonly-ROBOTHOR_ENGINE_HOST");
+    expect(badge).toHaveTextContent(/did not say why/i);
+    expect(badge).toHaveTextContent("genus config explain");
+    // Guessing a variable name is the whole defect: a wrong one sends the
+    // operator to clear something that is not set.
+    expect(badge).not.toHaveTextContent("Clear the variable");
+    expect(within(screen.getByTestId("config-field-ROBOTHOR_ENGINE_HOST")).queryByRole("textbox"))
+      .not.toBeInTheDocument();
+  });
+
+  it("renders a field the values map omits as read-only, never as a live box", async () => {
+    // The contract says GET returns all 371, so this is defensive — but the
+    // defence must not be an input whose Save silently discards what was typed.
+    vi.spyOn(global, "fetch").mockImplementation((async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/schema")) return { ok: true, status: 200, json: async () => SCHEMA } as Response;
+      const values = { ...VALUES.values } as Record<string, unknown>;
+      delete values.ROBOTHOR_LOG_DIR;
+      return { ok: true, status: 200, json: async () => ({ ...VALUES, values }) } as Response;
+    }) as typeof fetch);
+    render(<ConfigPage visible />);
+    fireEvent.click(await screen.findByTestId("config-group-toggle-engine"));
+    const row = await screen.findByTestId("config-field-ROBOTHOR_LOG_DIR");
+    expect(within(row).queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.getByTestId("config-readonly-ROBOTHOR_LOG_DIR")).toHaveTextContent(
+      /not reported by the server/i
+    );
   });
 
   it("sends a governed field to the Flags page rather than editing it here", async () => {
@@ -317,6 +444,89 @@ describe("Settings › Config", () => {
     fireEvent.click(await screen.findByTestId("config-group-toggle-flags"));
     fireEvent.click(await screen.findByTestId("config-flags-link-ROBOTHOR_RBAC_MODE"));
     expect(onOpenFlags).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the link to the verdict on a governed field that is not editable", async () => {
+    // Governed is always editable under the current contract, so this is a
+    // latent case — but the verdict link living inside the editable branch is
+    // how it would stop being latent without anybody noticing.
+    vi.spyOn(global, "fetch").mockImplementation((async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/schema")) return { ok: true, status: 200, json: async () => SCHEMA } as Response;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ...VALUES,
+          values: {
+            ...VALUES.values,
+            ROBOTHOR_RBAC_MODE: {
+              value: "enforce",
+              source: "env",
+              editable: false,
+              reason: "a future contract refused this",
+            },
+          },
+        }),
+      } as Response;
+    }) as typeof fetch);
+    const onOpenFlags = vi.fn();
+    render(<ConfigPage visible onOpenFlags={onOpenFlags} />);
+    fireEvent.click(await screen.findByTestId("config-group-toggle-flags"));
+    fireEvent.click(await screen.findByTestId("config-flags-link-ROBOTHOR_RBAC_MODE"));
+    expect(onOpenFlags).toHaveBeenCalledOnce();
+  });
+
+  it("shows what each field's declared default is", async () => {
+    mockBridge();
+    render(<ConfigPage visible />);
+    await openEngine();
+    expect(screen.getByTestId("config-default-ROBOTHOR_MAX_CONCURRENT_AGENTS")).toHaveTextContent(
+      "3"
+    );
+  });
+
+  it("refuses to edit a type this build does not know, rather than posting a string", async () => {
+    // The settings model declares only str/int/float/bool today. A list field
+    // added later would reach a text box whose save is a guaranteed 422; a
+    // read-only row saying so is the honest rendering of "not supported yet".
+    const listSchema = {
+      groups: [
+        {
+          id: "engine",
+          label: "Engine",
+          fields: [
+            {
+              ...SCHEMA.groups[0].fields[1],
+              name: "ROBOTHOR_FUTURE_LIST",
+              env: "ROBOTHOR_FUTURE_LIST",
+              type: "list",
+            },
+          ],
+        },
+      ],
+    };
+    vi.spyOn(global, "fetch").mockImplementation((async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/schema")) return { ok: true, status: 200, json: async () => listSchema } as Response;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          values: {
+            ROBOTHOR_FUTURE_LIST: { value: "a,b", source: "config", editable: true, reason: null },
+          },
+          pending_restart: [],
+        }),
+      } as Response;
+    }) as typeof fetch);
+    render(<ConfigPage visible />);
+    fireEvent.click(await screen.findByTestId("config-group-toggle-engine"));
+    const row = await screen.findByTestId("config-field-ROBOTHOR_FUTURE_LIST");
+    expect(within(row).queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.getByTestId("config-readonly-ROBOTHOR_FUTURE_LIST")).toHaveTextContent(
+      /does not know how to edit/i
+    );
   });
 
   it("posts ONLY the fields that changed", async () => {
@@ -380,6 +590,60 @@ describe("Settings › Config", () => {
     expect(screen.queryByTestId("config-restart-banner")).not.toBeInTheDocument();
     // And the edit is still in the box, to be corrected rather than retyped.
     expect(screen.getByTestId("config-input-ROBOTHOR_MAX_CONCURRENT_AGENTS")).toHaveValue(null);
+  });
+
+  it("marks what a partial 500 DID write, banners it, and lands the rest", async () => {
+    // The contract: a failure DURING application cannot be rolled back across a
+    // file and a table, so it is 500 with `applied` naming exactly what landed.
+    // Reporting that as a total failure is how an operator walks away without
+    // restarting a unit a change that DID land needs.
+    mockBridge(() => ({
+      status: 500,
+      body: {
+        applied: ["ROBOTHOR_LOG_DIR"],
+        pending_restart: ["robothor-engine"],
+        errors: [
+          {
+            name: "ROBOTHOR_MAX_CONCURRENT_AGENTS",
+            message: "ROBOTHOR_MAX_CONCURRENT_AGENTS: the database went away",
+          },
+        ],
+      },
+    }));
+    render(<ConfigPage visible />);
+    await openEngine();
+    fireEvent.change(screen.getByTestId("config-input-ROBOTHOR_LOG_DIR"), {
+      target: { value: "/var/log/genus" },
+    });
+    fireEvent.change(screen.getByTestId("config-input-ROBOTHOR_MAX_CONCURRENT_AGENTS"), {
+      target: { value: "7" },
+    });
+    fireEvent.click(screen.getByTestId("config-save-engine"));
+
+    expect(await screen.findByTestId("config-saved-ROBOTHOR_LOG_DIR")).toBeInTheDocument();
+    expect(await screen.findByTestId("config-restart-banner")).toHaveTextContent("robothor-engine");
+    expect(
+      await screen.findByTestId("config-error-ROBOTHOR_MAX_CONCURRENT_AGENTS")
+    ).toHaveTextContent("the database went away");
+    expect(screen.getByTestId("config-save-error-engine")).toHaveTextContent(/part of this section/i);
+    // And the row that landed now reads what was written.
+    expect(screen.getByTestId("config-input-ROBOTHOR_LOG_DIR")).toHaveValue("/var/log/genus");
+  });
+
+  it("keeps a section with an unsaved edit visible through a filter that excludes it", async () => {
+    // A dirty edit that vanishes is worse than one that is refused: the draft
+    // survives, and is silently re-included in the next save of that group.
+    mockBridge();
+    render(<ConfigPage visible />);
+    await openEngine();
+    fireEvent.change(screen.getByTestId("config-input-ROBOTHOR_LOG_DIR"), {
+      target: { value: "/var/log/genus" },
+    });
+    fireEvent.change(screen.getByTestId("config-search"), { target: { value: "telegram" } });
+
+    expect(await screen.findByTestId("config-group-engine")).toBeInTheDocument();
+    expect(screen.getByTestId("config-hidden-changes-engine")).toHaveTextContent(/filter/i);
+    expect(screen.getByTestId("config-save-engine")).toBeEnabled();
   });
 
   it("shows a 422 error that belongs to no rendered field rather than swallowing it", async () => {

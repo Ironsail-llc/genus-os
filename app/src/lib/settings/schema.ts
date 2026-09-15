@@ -38,17 +38,16 @@ export interface SettingField {
   name: string;
   /** The same string today; kept separate because `name` is the key, `env` is the label. */
   env: string;
-  group: string;
-  /** `"str" | "int" | "float" | "bool"` today — anything else renders as text. */
+  /** `"str" | "int" | "float" | "bool"` today; a type this build does not know is not editable. */
   type: string;
   description: string;
+  /** What the platform runs when nothing sets it — "what am I changing this from". */
   default: unknown;
   secret: boolean;
   governed: boolean;
   restartRequired: boolean;
   /** Units a change waits on. Always present on the wire; may be empty. */
   restartUnits: string[];
-  since: string;
   /** No restart needed — a governed flag, or a field declared `restart_required: false`. */
   hot: boolean;
   /** The values the write path accepts, or `null` where the platform bounds nothing. */
@@ -72,8 +71,27 @@ export interface SettingValue {
   /** A `SecretStatus` for a secret; the effective value otherwise. */
   value: unknown;
   source: SettingSource;
-  /** False for a secret, and for a field an environment variable supplies. */
+  /**
+   * Exactly "would a PATCH of this field be accepted". A secret is never
+   * editable; a governed flag always is, whatever `source` says, because the
+   * flag store reads its operator row before the environment.
+   */
   editable: boolean;
+  /**
+   * The route's OWN refusal sentence — byte for byte what `PATCH
+   * /api/settings` would put in `errors[0].message` — or `null` when editable.
+   *
+   * It is rendered verbatim and never paraphrased. The env sentence names the
+   * variable `provenance.env_name_in_use` resolved, which walks the field's
+   * deprecated aliases: on a mid-migration box that is NOT the canonical name,
+   * so a page composing the sentence itself would send the operator to clear a
+   * variable that is not set, and the field would still be overridden after
+   * the restart.
+   *
+   * `null` also covers a bridge that predates the key. The page then says it
+   * was not told, rather than inventing the sentence that is missing.
+   */
+  reason: string | null;
 }
 
 export interface SettingsValues {
@@ -113,7 +131,6 @@ function toField(raw: unknown): SettingField | null {
   return {
     name,
     env: text(row.env) || name,
-    group: text(row.group),
     type: text(row.type) || "str",
     description: text(row.description),
     default: row.default ?? null,
@@ -121,7 +138,6 @@ function toField(raw: unknown): SettingField | null {
     governed: row.governed === true,
     restartRequired: row.restart_required === true,
     restartUnits: strings(row.restart_units),
-    since: text(row.since) || "legacy",
     hot: row.hot === true,
     choices: Array.isArray(row.enum) ? strings(row.enum) : null,
   };
@@ -156,12 +172,16 @@ export function normalizeValues(body: unknown): SettingsValues {
       const cell = record(entry);
       if (!cell) continue;
       const source = text(cell.source) as SettingSource;
+      const reason = text(cell.reason).trim();
       values[name] = {
         value: cell.value ?? null,
         source: SOURCES.has(source) ? source : "unknown",
         // Absent is not editable: a page that guessed "yes" would offer a box
         // whose save the bridge refuses.
         editable: cell.editable === true,
+        // Whitespace is not a sentence. An empty `reason` has to read as "the
+        // server did not say", not as a badge with nothing in it.
+        reason: reason || null,
       };
     }
   }

@@ -166,38 +166,55 @@ export function FlagsPage({ visible = true, role }: FlagsPageProps) {
     try {
       const res = await fetch(`${BRIDGE}/api/controls`);
       if (!res.ok) {
-        setVerdictError(await readBridgeReply(res));
+        const refusal = await readBridgeReply(res);
+        // Dropped, not kept. A banner reading "no flag below can be shown as
+        // doing anything" above a row still badged ENFORCING is two
+        // contradictory claims at once, and the green one is the one people
+        // believe. Every row falls back to UNKNOWN, which is a warning.
+        setControls({});
+        setVerdictError(refusal);
         return;
       }
       setControls(normalizeControls(await res.json()));
       setVerdictError(null);
     } catch {
+      setControls({});
       setVerdictError(BRIDGE_UNREACHABLE);
     }
+  }, []);
+
+  /**
+   * The layer each flag's value came from.
+   *
+   * Its own loader, separate from the schema, because this is what a write
+   * changes: a flag that was `env` before the write is `db` after it, and the
+   * schema — 164 KB, derived from a registry that cannot change without a
+   * restart — is not worth re-fetching to learn that.
+   */
+  const loadValues = useCallback(async (): Promise<string | null> => {
+    const res = await fetch(`${BRIDGE}/api/settings`);
+    if (!res.ok) return readBridgeReply(res);
+    setValues(normalizeValues(await res.json()).values);
+    return null;
   }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [schemaRes, valuesRes] = await Promise.all([
-        fetch(`${BRIDGE}/api/settings/schema`),
-        fetch(`${BRIDGE}/api/settings`),
-      ]);
-      const bad = !schemaRes.ok ? schemaRes : !valuesRes.ok ? valuesRes : null;
-      if (bad) {
-        setError(await readBridgeReply(bad));
+      const schemaRes = await fetch(`${BRIDGE}/api/settings/schema`);
+      if (!schemaRes.ok) {
+        setError(await readBridgeReply(schemaRes));
         return;
       }
       const groups = normalizeSchema(await schemaRes.json());
       setFields(groups.flatMap((group) => group.fields).filter((field) => field.governed));
-      setValues(normalizeValues(await valuesRes.json()).values);
-      setError(null);
+      setError(await loadValues());
     } catch {
       setError(BRIDGE_UNREACHABLE);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [loadValues]);
 
   useEffect(() => {
     if (!visible) return;
@@ -255,10 +272,21 @@ export function FlagsPage({ visible = true, role }: FlagsPageProps) {
         return next;
       });
       setReasons((prev) => ({ ...prev, [field.name]: "" }));
-      // The verdict is what the control is DOING, and that changed the moment
-      // the row was written. Assuming it would be a lie of exactly the kind
-      // this page exists to stop.
-      await loadControls();
+      // BOTH, because one row shows facts from both routes. The verdict is
+      // what the control is DOING and it changed the moment the row was
+      // written; the source pill and the env note come from /api/settings and
+      // changed at the same instant, since the write is what put the operator
+      // row there. Refreshing only the first leaves a row asserting a fresh
+      // value beside a stale layer — on the screen whose purpose is saying
+      // what is actually true.
+      await Promise.all([
+        loadControls(),
+        loadValues().catch(() => {
+          // The write landed and the verdict is being re-read; a values read
+          // that failed on top of that is not worth taking the page down for.
+          // The pill stays as it was until the next Refresh.
+        }),
+      ]);
     } catch {
       setRowErrors((prev) => ({ ...prev, [field.name]: BRIDGE_UNREACHABLE }));
     } finally {

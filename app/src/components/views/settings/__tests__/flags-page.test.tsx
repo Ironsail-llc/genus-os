@@ -83,16 +83,42 @@ const SCHEMA = {
   ],
 };
 
+/**
+ * Four keys per entry, as `GET /api/settings` has answered since fix round 3.
+ *
+ * `ROBOTHOR_JUDGE_ENABLED` is governed AND supplied by the environment, and it
+ * is `editable: true` with `reason: null`. That is not a quirk of this
+ * fixture, it is the contract: `_refusal()` exempts every governed field,
+ * because `robothor.flags.store.resolve` reads the operator's DB row before
+ * `os.environ` and the write is therefore never invisible. The env NOTE on the
+ * row still earns its place — "your change outranks the variable, and keeps
+ * outranking it until somebody removes the row" is what the operator needs to
+ * know before making it.
+ */
 const VALUES = {
   values: {
-    ROBOTHOR_LOG_DIR: { value: "/var/log/robothor", source: "config", editable: true },
-    ROBOTHOR_RBAC_MODE: { value: "enforce", source: "db", editable: true },
-    ROBOTHOR_APPROVAL_MODE: { value: "observe", source: "default", editable: true },
-    ROBOTHOR_RIP_1_ENABLED: { value: "false", source: "default", editable: true },
-    ROBOTHOR_JUDGE_ENABLED: { value: "true", source: "env", editable: false },
-    ROBOTHOR_DNC_MODE: { value: "enforce", source: "db", editable: true },
+    ROBOTHOR_LOG_DIR: {
+      value: "/var/log/robothor",
+      source: "config",
+      editable: true,
+      reason: null,
+    },
+    ROBOTHOR_RBAC_MODE: { value: "enforce", source: "db", editable: true, reason: null },
+    ROBOTHOR_APPROVAL_MODE: { value: "observe", source: "default", editable: true, reason: null },
+    ROBOTHOR_RIP_1_ENABLED: { value: "false", source: "default", editable: true, reason: null },
+    ROBOTHOR_JUDGE_ENABLED: { value: "true", source: "env", editable: true, reason: null },
+    ROBOTHOR_DNC_MODE: { value: "enforce", source: "db", editable: true, reason: null },
   },
   pending_restart: [],
+};
+
+/** What the same route answers once a write has put an operator row behind a flag. */
+const VALUES_AFTER_WRITE = {
+  ...VALUES,
+  values: {
+    ...VALUES.values,
+    ROBOTHOR_JUDGE_ENABLED: { value: "false", source: "db", editable: true, reason: null },
+  },
 };
 
 function control(name: string, value: string, valid: string[], status: string, message: string) {
@@ -127,6 +153,8 @@ const CONTROLS = [
 interface Recorded {
   patches: Array<{ url: string; body: Record<string, unknown> }>;
   controlReads: number;
+  valueReads: number;
+  schemaReads: number;
 }
 
 function mockBridge(
@@ -136,7 +164,7 @@ function mockBridge(
   }),
   controlsAfterPatch: unknown[] = CONTROLS
 ): Recorded {
-  const recorded: Recorded = { patches: [], controlReads: 0 };
+  const recorded: Recorded = { patches: [], controlReads: 0, valueReads: 0, schemaReads: 0 };
   vi.spyOn(global, "fetch").mockImplementation((async (
     input: RequestInfo | URL,
     init?: RequestInit
@@ -155,7 +183,12 @@ function mockBridge(
       recorded.controlReads += 1;
       return { ok: true, status: 200, json: async () => body } as Response;
     }
-    const body = url.includes("/schema") ? SCHEMA : VALUES;
+    if (url.includes("/schema")) {
+      recorded.schemaReads += 1;
+      return { ok: true, status: 200, json: async () => SCHEMA } as Response;
+    }
+    recorded.valueReads += 1;
+    const body = recorded.patches.length ? VALUES_AFTER_WRITE : VALUES;
     return { ok: true, status: 200, json: async () => body } as Response;
   }) as typeof fetch);
   return recorded;
@@ -338,11 +371,11 @@ describe("Settings › Flags", () => {
   });
 
   it("keeps a flag the environment supplies writable, and says what a write would do", async () => {
-    // `robothor.flags.store.resolve` is DB row -> environment -> default, so an
-    // operator row here OUTRANKS the variable and the write is not futile. The
-    // settings API reports `editable: false` for it anyway (it applies the
-    // non-governed env rule), and following that would disable a control that
-    // works — the inverse of an inert control, and just as dishonest.
+    // The route now agrees: `_refusal()` exempts governed fields, so this
+    // arrives `editable: true` with no reason. The note is not a workaround
+    // for that — it is the fact an operator needs before they write, namely
+    // that `robothor.flags.store.resolve` reads the DB row BEFORE os.environ,
+    // so the change applies and keeps applying.
     mockBridge();
     render(<FlagsPage visible role="owner" />);
     await screen.findByTestId("flag-ROBOTHOR_JUDGE_ENABLED");
@@ -350,6 +383,93 @@ describe("Settings › Flags", () => {
     const note = screen.getByTestId("flag-env-note-ROBOTHOR_JUDGE_ENABLED");
     expect(note).toHaveTextContent(/environment/i);
     expect(note).toHaveTextContent(/outrank/i);
+  });
+
+  it("re-reads the layer as well as the verdict, so the row cannot contradict itself", async () => {
+    // The verdict comes from /api/controls and the source pill from
+    // /api/settings. Refreshing only the first leaves "now: false" (fresh)
+    // beside "environment" (stale) in one row, on the screen whose whole
+    // purpose is saying what is actually true.
+    const after = [
+      ...CONTROLS.slice(0, 3),
+      control("ROBOTHOR_JUDGE_ENABLED", "false", BOOL, "UNPROVEN", "disabled by an operator row"),
+    ];
+    const recorded = mockBridge(() => ({ status: 200, body: { name: "x", value: "y" } }), after);
+    render(<FlagsPage visible role="owner" />);
+    await screen.findByTestId("flag-ROBOTHOR_JUDGE_ENABLED");
+    expect(screen.getByTestId("flag-source-ROBOTHOR_JUDGE_ENABLED")).toHaveTextContent(
+      "environment"
+    );
+    const schemaReadsBefore = recorded.schemaReads;
+
+    fireEvent.click(screen.getByTestId("flag-value-ROBOTHOR_JUDGE_ENABLED-false"));
+    fireEvent.change(screen.getByTestId("flag-reason-ROBOTHOR_JUDGE_ENABLED"), {
+      target: { value: "off while the grader is rebuilt" },
+    });
+    fireEvent.click(screen.getByTestId("flag-apply-ROBOTHOR_JUDGE_ENABLED"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("flag-source-ROBOTHOR_JUDGE_ENABLED")).toHaveTextContent(
+        "flag store"
+      )
+    );
+    expect(screen.queryByTestId("flag-env-note-ROBOTHOR_JUDGE_ENABLED")).not.toBeInTheDocument();
+    // Values only: the 164 KB schema cannot change without a restart, so
+    // re-fetching it after every flag write would be pure waste.
+    expect(recorded.schemaReads).toBe(schemaReadsBefore);
+  });
+
+  it("drops stale verdicts when they cannot be re-read, rather than leaving them on screen", async () => {
+    // A banner saying "no flag below can be shown as doing anything" above a
+    // row still badged ENFORCING is two contradictory claims at once, and the
+    // green one is the one people believe.
+    let failNext = false;
+    vi.spyOn(global, "fetch").mockImplementation((async (
+      input: RequestInfo | URL,
+      init?: RequestInit
+    ) => {
+      const url = String(input);
+      if (init?.method === "PATCH") {
+        failNext = true;
+        return { ok: true, status: 200, json: async () => ({ name: "x", value: "y" }) } as Response;
+      }
+      if (url.includes("/api/controls")) {
+        if (failNext) {
+          return {
+            ok: false,
+            status: 500,
+            json: async () => ({ detail: "evidence table gone" }),
+          } as Response;
+        }
+        return { ok: true, status: 200, json: async () => CONTROLS } as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => (url.includes("/schema") ? SCHEMA : VALUES),
+      } as Response;
+    }) as typeof fetch);
+
+    render(<FlagsPage visible role="owner" />);
+    await screen.findByTestId("flag-ROBOTHOR_RBAC_MODE");
+    expect(screen.getByTestId("flag-verdict-ROBOTHOR_RBAC_MODE")).toHaveAttribute(
+      "data-status",
+      "ENFORCING"
+    );
+
+    fireEvent.click(screen.getByTestId("flag-value-ROBOTHOR_RBAC_MODE-observe"));
+    fireEvent.change(screen.getByTestId("flag-reason-ROBOTHOR_RBAC_MODE"), {
+      target: { value: "stepping back" },
+    });
+    fireEvent.click(screen.getByTestId("flag-apply-ROBOTHOR_RBAC_MODE"));
+
+    expect(await screen.findByTestId("flags-verdict-error")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByTestId("flag-verdict-ROBOTHOR_RBAC_MODE")).toHaveAttribute(
+        "data-status",
+        "UNKNOWN"
+      )
+    );
   });
 
   it("shows a non-operator the verdicts and no way to write", async () => {

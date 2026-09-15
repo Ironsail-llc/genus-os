@@ -55,13 +55,29 @@ const SCHEMA = {
   ],
 };
 
+/**
+ * Four keys per entry, as the route has answered since fix round 3 — and
+ * `ROBOTHOR_JUDGE_ENABLED` is governed AND env-supplied AND `editable: true`,
+ * because the flag store reads its operator row before `os.environ`.
+ */
 const VALUES = {
   values: {
-    ROBOTHOR_RBAC_MODE: { value: "enforce", source: "db", editable: true },
-    ROBOTHOR_RIP_1_ENABLED: { value: "false", source: "default", editable: true },
-    ROBOTHOR_JUDGE_ENABLED: { value: "false", source: "default", editable: true },
+    // Supplied by a variable on the box, and editable anyway — which is the
+    // point of fix round 3. After the write it is `db`, and the row must say
+    // so rather than keeping the layer the write superseded.
+    ROBOTHOR_RBAC_MODE: { value: "enforce", source: "env", editable: true, reason: null },
+    ROBOTHOR_RIP_1_ENABLED: { value: "false", source: "default", editable: true, reason: null },
+    ROBOTHOR_JUDGE_ENABLED: { value: "false", source: "default", editable: true, reason: null },
   },
   pending_restart: [],
+};
+
+const VALUES_AFTER_WRITE = {
+  ...VALUES,
+  values: {
+    ...VALUES.values,
+    ROBOTHOR_RBAC_MODE: { value: "observe", source: "db", editable: true, reason: null },
+  },
 };
 
 function control(name: string, value: string, valid: string[], status: string, message: string) {
@@ -113,7 +129,9 @@ async function setupMocks(page: Page): Promise<Recorded> {
   );
 
   await page.route("**/api/bridge/api/settings/schema", (route) => json(route, SCHEMA));
-  await page.route("**/api/bridge/api/settings", (route) => json(route, VALUES));
+  await page.route("**/api/bridge/api/settings", (route) =>
+    json(route, recorded.patches.length ? VALUES_AFTER_WRITE : VALUES)
+  );
 
   // Registered before `/api/controls` so it is matched first: that path does
   // not glob across a `/`, and without this the write would fall through to
@@ -196,6 +214,14 @@ test.describe("Settings › Flags", () => {
     await expect(page.locator('[data-testid="flag-ROBOTHOR_RBAC_MODE"]')).toContainText(
       "nothing has been blocked since the change"
     );
+
+    // The layer is re-read with the verdict. A row asserting a fresh value
+    // beside the layer that value superseded is two contradictory facts on the
+    // screen whose purpose is saying what is true.
+    await expect(page.locator('[data-testid="flag-source-ROBOTHOR_RBAC_MODE"]')).toHaveText(
+      "flag store"
+    );
+    await expect(page.locator('[data-testid="flag-env-note-ROBOTHOR_RBAC_MODE"]')).toHaveCount(0);
 
     expect(recorded.patches).toHaveLength(1);
     expect(recorded.patches[0].url).toContain("/api/controls/ROBOTHOR_RBAC_MODE");

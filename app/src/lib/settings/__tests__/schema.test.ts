@@ -81,7 +81,6 @@ function field(overrides: Partial<SettingField> = {}): SettingField {
   return {
     name: "ROBOTHOR_X",
     env: "ROBOTHOR_X",
-    group: "engine",
     type: "str",
     description: "",
     default: null,
@@ -89,7 +88,6 @@ function field(overrides: Partial<SettingField> = {}): SettingField {
     governed: false,
     restartRequired: true,
     restartUnits: [],
-    since: "legacy",
     hot: false,
     choices: null,
     ...overrides,
@@ -102,6 +100,9 @@ describe("normalizeSchema", () => {
     expect(groups.map((g) => g.id)).toEqual(["engine", "flags"]);
     expect(groups[0].fields[0].name).toBe("ROBOTHOR_MAX_CONCURRENT_AGENTS");
     expect(groups[0].fields[0].restartUnits).toEqual(["robothor-engine"]);
+    // The declared default: "what am I changing this from" is the question a
+    // row without it cannot answer.
+    expect(groups[0].fields[0].default).toBe(3);
   });
 
   it("carries the enum only where the route bounds the field", () => {
@@ -126,11 +127,21 @@ describe("normalizeSchema", () => {
 });
 
 describe("normalizeValues", () => {
-  it("reads the value, the source and the editable flag", () => {
+  it("reads all four keys the route answers with", () => {
     const { values, pendingRestart } = normalizeValues({
       values: {
-        ROBOTHOR_MAX_CONCURRENT_AGENTS: { value: 7, source: "config", editable: true },
-        ROBOTHOR_ENGINE_HOST: { value: "0.0.0.0", source: "env", editable: false },
+        ROBOTHOR_MAX_CONCURRENT_AGENTS: {
+          value: 7,
+          source: "config",
+          editable: true,
+          reason: null,
+        },
+        ROBOTHOR_ENGINE_HOST: {
+          value: "0.0.0.0",
+          source: "env",
+          editable: false,
+          reason: "ROBOTHOR_ENGINE_HOST is set in this instance's environment (ROBOTHOR_OLD_HOST) …",
+        },
       },
       pending_restart: ["robothor-bridge", "robothor-engine"],
     });
@@ -138,9 +149,26 @@ describe("normalizeValues", () => {
       value: 7,
       source: "config",
       editable: true,
+      reason: null,
     });
     expect(values.ROBOTHOR_ENGINE_HOST.editable).toBe(false);
+    // The server's own sentence, kept whole. It names the variable ACTUALLY in
+    // use, which `provenance.env_name_in_use` resolves across the field's
+    // deprecated aliases — a fact this module could not compute and must not
+    // paraphrase.
+    expect(values.ROBOTHOR_ENGINE_HOST.reason).toContain("ROBOTHOR_OLD_HOST");
     expect(pendingRestart).toEqual(["robothor-bridge", "robothor-engine"]);
+  });
+
+  it("treats a missing reason as absent rather than as an empty sentence", () => {
+    const { values } = normalizeValues({
+      values: {
+        ROBOTHOR_X: { value: "a", source: "env", editable: false },
+        ROBOTHOR_Y: { value: "a", source: "env", editable: false, reason: "   " },
+      },
+    });
+    expect(values.ROBOTHOR_X.reason).toBeNull();
+    expect(values.ROBOTHOR_Y.reason).toBeNull();
   });
 
   it("treats a source it does not know as unknown rather than as a default", () => {
