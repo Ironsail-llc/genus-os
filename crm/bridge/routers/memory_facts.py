@@ -248,13 +248,19 @@ def list_facts(
         raise HTTPException(status_code=422, detail="active must be true, false or all")
     after = _fact_id(cursor) if cursor is not None else None
 
+    # BEFORE the connection below, deliberately: ``search_facts`` takes its own
+    # connection out of the same pool (and an embedding call besides), so
+    # ranking inside a held one would be two pool slots per request and a
+    # deadlock the moment the pool is the narrower of the two.
+    ranked = _ranked_by_search(q, tenant_id, active, page) if q else None
+
     with get_connection() as conn:
         cur = conn.cursor()
-        if q:
-            facts = _facts_by_id(
-                cur, _ranked_by_search(q, tenant_id, active, page), tenant_id, active
-            )
-            return {"facts": facts, "next_cursor": None}
+        if ranked is not None:
+            return {
+                "facts": _facts_by_id(cur, ranked, tenant_id, active),
+                "next_cursor": None,
+            }
 
         clause, params = _active_predicate(active)
         sql = f"SELECT {_SELECT} FROM memory_facts WHERE tenant_id = %s{clause}"  # noqa: S608 -- _SELECT is a module constant
