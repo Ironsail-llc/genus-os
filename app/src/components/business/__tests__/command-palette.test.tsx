@@ -42,14 +42,22 @@ describe("CommandPalette", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onNavigate).toHaveBeenCalledWith("health", undefined);
   });
-  it("derives its entries from the nav config — no not-yet-built views", () => {
-    render(<CommandPalette onNavigate={vi.fn()} role="owner" />);
+  it("derives its entries from the nav config, gate included", () => {
+    const { unmount } = render(<CommandPalette onNavigate={vi.fn()} role="owner" />);
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    // Memory, Audit and Inbox WERE absent here; all three are built screens now.
+    expect(screen.getByTestId("command-item-memory")).toBeTruthy();
+    expect(screen.getByTestId("command-item-audit")).toBeTruthy();
+    expect(screen.getByTestId("command-item-inbox")).toBeTruthy();
+    expect(screen.getByTestId("command-item-workflows").textContent).toContain("Automations");
+    unmount();
+
+    // ⌘K is a nav surface like any other, so it obeys the same per-item gate.
+    render(<CommandPalette onNavigate={vi.fn()} role="member" />);
     fireEvent.keyDown(window, { key: "k", metaKey: true });
     expect(screen.queryByTestId("command-item-memory")).toBeNull();
     expect(screen.queryByTestId("command-item-audit")).toBeNull();
-    // Inbox WAS in this list; it is a built screen now, so the palette reaches it.
-    expect(screen.getByTestId("command-item-inbox")).toBeTruthy();
-    expect(screen.getByTestId("command-item-workflows").textContent).toContain("Automations");
+    expect(screen.queryByTestId("command-item-logs")).toBeNull();
   });
 
   it("offers settings pages to an operator only", () => {

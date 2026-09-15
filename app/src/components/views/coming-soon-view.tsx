@@ -4,12 +4,15 @@ import { Construction } from "lucide-react";
 import { PageHeader } from "@/components/business/page-header";
 import { viewTitles, type ViewId } from "@/components/layout/nav-config";
 
-/** What each not-yet-built view will hold, so the placeholder says something. */
-const PROMISES: Partial<Record<ViewId, string>> = {
-  memory: "What the fleet remembers — facts, blocks and entities — with the provenance of every row.",
-  audit: "The append-only record of who did what, from which channel, and what the platform decided.",
-  logs: "Live engine and service logs, filtered by agent, run and severity.",
-};
+/**
+ * What each not-yet-built view will hold, so the placeholder says something.
+ *
+ * Empty: Memory, Audit and Logs were the last three entries and all three are
+ * built. The component stays for the next view the nav names before it exists —
+ * a disabled item with a pill beats a dead link, and that is what `soon` in
+ * `nav-config.ts` is for.
+ */
+const PROMISES: Partial<Record<ViewId, string>> = {};
 
 interface ComingSoonViewProps {
   view: ViewId;

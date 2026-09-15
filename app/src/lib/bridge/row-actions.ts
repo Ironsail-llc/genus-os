@@ -33,12 +33,20 @@ export interface RowActions {
   /**
    * Perform one action against `url`. `onOk` receives the parsed body; a
    * refusal lands in `rowErrors[id]` in the bridge's own words.
+   *
+   * `onFail` is for the callers where the STATUS carries meaning beyond "it
+   * did not work". `POST /api/memory/facts/{id}/forget` answers 409 with "that
+   * fact is already inactive" — which is the server telling the page its row
+   * is stale, not merely refusing — and 422 belongs beside the field that
+   * caused it. The sentence is already in `rowErrors[id]` when it runs; this
+   * is only how a caller learns which kind of refusal it was.
    */
   act: (
     id: string,
     url: string,
     init: RequestInit,
-    onOk: (body: unknown) => void
+    onOk: (body: unknown) => void,
+    onFail?: (res: Response, message: string) => void
   ) => Promise<void>;
 }
 
@@ -75,7 +83,13 @@ export function useRowActions(): RowActions {
   );
 
   const act = useCallback(
-    async (id: string, url: string, init: RequestInit, onOk: (body: unknown) => void) => {
+    async (
+      id: string,
+      url: string,
+      init: RequestInit,
+      onOk: (body: unknown) => void,
+      onFail?: (res: Response, message: string) => void
+    ) => {
       setBusyRow(id);
       clearRow(id);
       try {
@@ -84,7 +98,9 @@ export function useRowActions(): RowActions {
           ...init,
         });
         if (!res.ok) {
-          setRowError(id, await readBridgeReply(res));
+          const message = await readBridgeReply(res);
+          setRowError(id, message);
+          onFail?.(res, message);
           return;
         }
         onOk(await res.json());

@@ -59,17 +59,37 @@ describe("Sidebar", () => {
     expect(onNavigate).toHaveBeenCalledWith("settings", "flags");
   });
 
-  it("renders views that do not exist yet as disabled items with a soon pill", () => {
+  it("reaches Memory, Audit and Logs — built screens, no soon pill", () => {
     const onNavigate = vi.fn();
     renderSidebar({ onNavigate });
     for (const id of ["memory", "audit", "logs"]) {
       const item = screen.getByTestId(`nav-${id}`);
-      expect(item).toBeDisabled();
-      expect(item).toHaveAttribute("aria-disabled", "true");
-      expect(screen.getByTestId(`soon-${id}`).textContent?.toLowerCase()).toBe("soon");
+      expect(item).not.toBeDisabled();
+      expect(screen.queryByTestId(`soon-${id}`)).toBeNull();
     }
     fireEvent.click(screen.getByTestId("nav-memory"));
-    expect(onNavigate).not.toHaveBeenCalled();
+    expect(onNavigate).toHaveBeenCalledWith("memory", undefined);
+  });
+
+  /**
+   * The gate is per item, not per group: taking Observe away from a member to
+   * protect Memory would take Runs, Fleet and Health away with it.
+   */
+  it("shows an auditor Audit and hides Memory and Logs", () => {
+    renderSidebar({ role: "auditor" });
+    expect(screen.getByTestId("nav-audit")).toBeTruthy();
+    expect(screen.queryByTestId("nav-memory")).toBeNull();
+    expect(screen.queryByTestId("nav-logs")).toBeNull();
+    expect(screen.getByTestId("nav-runs")).toBeTruthy();
+  });
+
+  it("shows a member none of the three, and the rest of Observe anyway", () => {
+    renderSidebar({ role: "member" });
+    for (const id of ["memory", "audit", "logs"]) {
+      expect(screen.queryByTestId(`nav-${id}`)).toBeNull();
+    }
+    expect(screen.getByTestId("nav-group-observe")).toBeTruthy();
+    expect(screen.getByTestId("nav-health")).toBeTruthy();
   });
 
   it("reaches the Inbox, which is built and no longer wears a soon pill", () => {

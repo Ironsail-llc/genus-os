@@ -64,6 +64,19 @@ export interface NavItem {
   icon: LucideIcon;
   /** The view behind this item does not exist yet: render disabled, never a dead link. */
   soon?: boolean;
+  /**
+   * UX gate for ONE item, for the groups that are not gated wholesale.
+   *
+   * Observe is a mixed group: Runs, Fleet and Health are everybody's, Memory
+   * and Logs are the operator's, and Audit is the operator's plus the
+   * read-only `auditor`. Hiding the whole group to protect three of its items
+   * would take the other three away from everyone, so the gate is per item.
+   *
+   * Like `NavGroup.requiresOperator`, this authorizes NOTHING — the bridge
+   * checks the caller's role on every one of these routes, and a member who
+   * types `?v=memory` gets a refusal from the server, not from this file.
+   */
+  requires?: "operator" | "audit";
 }
 
 export interface NavGroup {
@@ -83,6 +96,29 @@ const OPERATOR_ROLES = new Set(["owner", "admin"]);
 
 export function isOperatorRole(role: string | null | undefined): boolean {
   return OPERATOR_ROLES.has(role ?? "");
+}
+
+/**
+ * Mirrors `crm/bridge/routers/_operator.py::AUDIT_ROLES` — the operator roles
+ * plus `auditor`.
+ *
+ * `auditor` reads the record of what was done and who widened which guardrail
+ * (`GET /api/audit/*`, `GET /api/controls/audit`) and nothing else. It is
+ * deliberately NOT an operator: Memory and Logs stay shut to it, because the
+ * journal carries every value every process printed — a far wider surface than
+ * a record of decisions — and a memory forget is a write.
+ */
+const AUDIT_ROLES = new Set([...OPERATOR_ROLES, "auditor"]);
+
+export function isAuditReaderRole(role: string | null | undefined): boolean {
+  return AUDIT_ROLES.has(role ?? "");
+}
+
+/** Whether `role` may see one nav item. UX only — see `NavItem.requires`. */
+export function isNavItemVisible(item: NavItem, role: string | null | undefined): boolean {
+  if (item.requires === "operator") return isOperatorRole(role);
+  if (item.requires === "audit") return isAuditReaderRole(role);
+  return true;
 }
 
 export interface SettingsPage {
@@ -191,9 +227,9 @@ export const navGroups: NavGroup[] = [
     items: [
       { id: "runs", label: "Runs", view: "runs", icon: Activity },
       { id: "fleet", label: "Fleet", view: "fleet", icon: Users },
-      { id: "memory", label: "Memory", view: "memory", icon: Brain, soon: true },
-      { id: "audit", label: "Audit", view: "audit", icon: ScrollText, soon: true },
-      { id: "logs", label: "Logs", view: "logs", icon: FileText, soon: true },
+      { id: "memory", label: "Memory", view: "memory", icon: Brain, requires: "operator" },
+      { id: "audit", label: "Audit", view: "audit", icon: ScrollText, requires: "audit" },
+      { id: "logs", label: "Logs", view: "logs", icon: FileText, requires: "operator" },
       { id: "health", label: "Health", view: "health", icon: HeartPulse },
     ],
   },
@@ -211,10 +247,20 @@ export const navGroups: NavGroup[] = [
   },
 ];
 
-/** Nav groups a holder of `role` may see. UX only — see NavGroup.requiresOperator. */
+/**
+ * Nav groups a holder of `role` may see, with the items they may see inside
+ * them. UX only — see `NavGroup.requiresOperator` and `NavItem.requires`.
+ *
+ * A group left with no items is dropped rather than rendered as a heading over
+ * nothing. The sidebar, the mobile More sheet and the ⌘K palette all read this
+ * one function, so none of them can disagree about who sees what.
+ */
 export function visibleNavGroups(role: string | null | undefined): NavGroup[] {
   const operator = isOperatorRole(role);
-  return navGroups.filter((group) => !group.requiresOperator || operator);
+  return navGroups
+    .filter((group) => !group.requiresOperator || operator)
+    .map((group) => ({ ...group, items: group.items.filter((item) => isNavItemVisible(item, role)) }))
+    .filter((group) => group.items.length > 0);
 }
 
 export const viewTitles: Record<ViewId, string> = {
@@ -234,8 +280,15 @@ export const viewTitles: Record<ViewId, string> = {
   settings: "Settings",
 };
 
-/** Views that have no screen behind them yet. */
-const COMING_SOON_VIEWS = new Set<ViewId>(["memory", "audit", "logs"]);
+/**
+ * Views that have no screen behind them yet.
+ *
+ * Empty as of the Observe pages — Memory, Audit and Logs are built. The set
+ * and the `soon` machinery around it stay: the next view to be named in the
+ * nav before it exists gets a disabled item with a pill rather than a dead
+ * link, which is the whole reason this exists.
+ */
+const COMING_SOON_VIEWS = new Set<ViewId>();
 
 export function isComingSoonView(view: ViewId): boolean {
   return COMING_SOON_VIEWS.has(view);

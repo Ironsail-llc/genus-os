@@ -187,6 +187,32 @@ describe("AppShell — URL-synced views", () => {
     expect(screen.queryByTestId("coming-soon-inbox")).toBeNull();
   });
 
+  /**
+   * The three Observe screens were SOON placeholders until B14b. The shell has
+   * to mount the real views, and — because it mounts every view at once and
+   * hides the inactive ones with `display: none` — it has to hand each of them
+   * the role, so the two that are operator-only do not put an operator-gated
+   * read on the bridge for a member who never navigated there.
+   */
+  it.each([
+    ["memory", "Memory"],
+    ["audit", "Audit"],
+    ["logs", "Logs"],
+  ])("shows the real %s view at ?v=%s", async (view, title) => {
+    window.history.replaceState(null, "", `/?v=${view}`);
+    await renderShell();
+    expect(screen.getByTestId("header-title").textContent).toBe(title);
+    expect(screen.getByTestId(`${view}-view`)).toBeInTheDocument();
+    expect(screen.queryByTestId(`coming-soon-${view}`)).toBeNull();
+  });
+
+  it("tells a member the Observe screens are not theirs, rather than asking the bridge", async () => {
+    mockSession.role = "member";
+    window.history.replaceState(null, "", "/?v=audit");
+    await renderShell();
+    expect(screen.getByTestId("audit-not-yours")).toBeInTheDocument();
+  });
+
   it("badges the sidebar Inbox from the same poll the view reads", async () => {
     // One hook in the shell feeds both, so a single GET has to serve them.
     const pending = {
