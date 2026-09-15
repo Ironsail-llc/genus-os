@@ -660,6 +660,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         difficulty_class=v2.get("difficulty_class", ""),
         lifecycle_hooks=v2.get("lifecycle_hooks", []),
         sandbox=v2.get("sandbox", "local"),
+        credential_tier=str(v2.get("credentials", "") or "").strip().lower(),
         # Fleet default via env (ROBOTHOR_EAGER_TOOL_COMPRESSION); an explicit
         # manifest value — including False as opt-out — always wins. Pairs
         # with tool_offload_threshold: with offloading configured, thinning
