@@ -203,23 +203,39 @@ docker_major() {
   printf '%s' "$raw" | sed -n 's/[^0-9]*\([0-9][0-9]*\).*/\1/p' | head -n1
 }
 
-# The latest release tag, or a non-zero exit. Never hangs: --max-time bounds it.
+# The latest release tag, or a non-zero exit.
+#
+# Bounded TWICE on purpose. `--max-time` asks curl to stop; `timeout` makes the
+# bound hold whatever is on PATH under the name `curl`, because a metadata
+# refresh that can block is the reason an install hangs. `timeout` is coreutils
+# and is not on every macOS, so its absence falls back to the flag alone.
 latest_release_tag() {
   local body tag
-  body="$(curl -fsSL --max-time "$API_TIMEOUT_S" \
-    -H 'accept: application/vnd.github+json' "$RELEASES_API" 2>/dev/null)" || return 1
+  if command -v timeout >/dev/null 2>&1; then
+    body="$(timeout "$API_TIMEOUT_S" curl -fsSL --max-time "$API_TIMEOUT_S" \
+      -H 'accept: application/vnd.github+json' "$RELEASES_API" 2>/dev/null)" || return 1
+  else
+    body="$(curl -fsSL --max-time "$API_TIMEOUT_S" \
+      -H 'accept: application/vnd.github+json' "$RELEASES_API" 2>/dev/null)" || return 1
+  fi
   tag="$(printf '%s' "$body" | tr ',' '\n' \
     | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
   [ -n "$tag" ] || return 1
   printf '%s' "$tag"
 }
 
-# A value a POSIX shell sourcing the file reproduces byte for byte, and runs
-# nothing: inside double quotes only \ " $ and ` are special.
+# A value quoted so compose's dotenv parser and a POSIX shell both read it
+# back unchanged, and neither runs anything: inside double quotes only \ " $
+# and ` are special.
+#
+# It RETURNS 1 rather than calling `die`, because every call site is a command
+# substitution and `die` there exits only the subshell — its status discarded,
+# `set -e` none the wiser, and the value written as empty while the install
+# reports success. That is exactly what this used to do.
 env_quote() {
   local value="$1"
   case "$value" in
-    *$'\n'*) die "a credential containing a newline cannot be written to an env file" ;;
+    *$'\n'*) return 1 ;;
   esac
   value="${value//\\/\\\\}"
   value="${value//\"/\\\"}"
@@ -288,6 +304,18 @@ for name in "${PROVIDER_VARS[@]}"; do
   fi
 done
 
+# A newline in a credential is a paste that picked up a line break, and no env
+# file can carry one. Refused HERE, at the top level, before a directory
+# exists: the wizard would otherwise be handed a key that cannot work, and the
+# failure would surface as a provider error three minutes later.
+for name in ${FOUND_PROVIDER_VARS[@]+"${FOUND_PROVIDER_VARS[@]}"}; do
+  case "${!name}" in
+    *$'\n'*)
+      die "${name} contains a newline — it was probably pasted with a line break. Fix the variable and run again."
+      ;;
+  esac
+done
+
 # --------------------------------------------------------------------------
 # the plan — printed before anything happens, every time
 # --------------------------------------------------------------------------
@@ -300,7 +328,7 @@ if [ "$SUBSTRATE" = "compose" ]; then
   say "  directory   ${DIR}"
 fi
 if [ "${#FOUND_PROVIDER_VARS[@]}" -gt 0 ]; then
-  say "  provider    ${FOUND_PROVIDER_VARS[*]} (from the environment)"
+  say "  provider    ${FOUND_PROVIDER_VARS[*]+${FOUND_PROVIDER_VARS[*]}} (from the environment)"
 else
   say "  provider    none in the environment — the wizard expects one of:"
   say "              ${PROVIDER_VARS[*]}"
@@ -312,8 +340,8 @@ if [ "$SUBSTRATE" = "compose" ]; then
   say "  1. check Docker ${MINIMUM_DOCKER_MAJOR}+ and the Compose v2 plugin"
   say "  2. create ${DIR}"
   say "  3. download ${BASE_FILE} and ${APPS_FILE}, pinned to ${VERSION}"
-  say "  4. write ${DIR}/.env (mode 0600) with GENUS_IMAGE_TAG and any provider key above"
-  say "  5. parse both compose files before anything starts"
+  say "  4. parse both compose files before anything is created"
+  say "  5. write ${DIR}/.env — the image tag, and deliberately no credential"
   say "  6. install the CLI into ${DIR}/.venv"
   say "  7. genus init --substrate compose --yes --workspace ${DIR}"
   say "  8. genus doctor --json, then print the first-run URL"
@@ -325,10 +353,6 @@ else
   say "  4. genus doctor --json, then print the first-run URL"
 fi
 say ""
-
-if [ "$PREVIEW" -eq 1 ] && [ "${DRY_RUN_EXPLICIT:-0}" = "0" ]; then
-  : # the notice is printed after the commands, where it is still on screen
-fi
 
 # An interactive run that was not given --yes asks once, here, with the plan
 # still on screen. A piped run never reaches this: it is a preview.
@@ -366,45 +390,70 @@ install_compose() {
     die "Docker ${major} is older than the ${MINIMUM_DOCKER_MAJOR}+ the stack needs"
   fi
 
-  say "→ creating ${DIR}"
-  run mkdir -p "$DIR"
+  # Everything is fetched and proved in a staging directory first, so a tag
+  # that does not exist, or a compose file this Docker cannot read, leaves no
+  # half-made install directory behind for the next run to resume into.
+  local staging
+  if [ "$DRY_RUN" -eq 0 ]; then
+    staging="$(mktemp -d "${TMPDIR:-/tmp}/genus-install.XXXXXX")"
+    # shellcheck disable=SC2064  # expand $staging now: that is the point
+    trap "rm -rf -- '$staging'" EXIT
+  else
+    staging="<a temporary directory>"
+  fi
 
   local name
   for name in "$BASE_FILE" "$APPS_FILE"; do
     say "→ downloading ${name} pinned to ${VERSION}"
     if ! run curl -fsSL --max-time "$DOWNLOAD_TIMEOUT_S" \
-      -o "${DIR}/${name}" "${RAW_BASE}/${VERSION}/infra/${name}"; then
-      die "could not download ${name} for ${VERSION} — does that release exist?"
+      -o "${staging}/${name}" "${RAW_BASE}/${VERSION}/infra/${name}"; then
+      die "could not download ${name} for ${VERSION} — does that release exist? Nothing was created."
     fi
   done
 
-  say "→ writing ${DIR}/.env (0600)"
-  if [ "$DRY_RUN" -eq 0 ]; then
-    local previous_umask
-    previous_umask="$(umask)"
-    umask 077
-    {
-      printf '# Written by the Genus OS installer. Mode 0600: it can hold a provider key.\n'
-      printf 'GENUS_IMAGE_TAG=%s\n' "$(env_quote "$VERSION")"
-      for name in "${FOUND_PROVIDER_VARS[@]}"; do
-        printf '%s=%s\n' "$name" "$(env_quote "${!name}")"
-      done
-    } > "${DIR}/.env"
-    umask "$previous_umask"
-    chmod 600 "${DIR}/.env"
-  else
-    say "     GENUS_IMAGE_TAG=\"${VERSION}\"${FOUND_PROVIDER_VARS[*]:+, ${FOUND_PROVIDER_VARS[*]}}"
-  fi
-
   # The tag pins the content, so there is nothing to checksum against; what is
   # worth proving is that what arrived is a compose file this Docker can read,
-  # before a single container is created. ROBOTHOR_DB_PASSWORD is required by
-  # the base file and is minted by the wizard, so the parse check supplies a
-  # throwaway of its own rather than inventing a credential on disk.
+  # before a single directory or container exists. The variables the files
+  # require are supplied on the command line rather than through --env-file, so
+  # no parser but this script's own is in the path. ROBOTHOR_DB_PASSWORD is
+  # minted by the wizard, so the check supplies a throwaway of its own.
   say "→ checking both compose files parse"
-  run env "ROBOTHOR_DB_PASSWORD=${ROBOTHOR_DB_PASSWORD:-install-sh-parse-check}" \
-    docker compose --env-file "${DIR}/.env" \
-    -f "${DIR}/${BASE_FILE}" -f "${DIR}/${APPS_FILE}" config -q
+  if ! run env "GENUS_IMAGE_TAG=${VERSION}" \
+    "ROBOTHOR_DB_PASSWORD=${ROBOTHOR_DB_PASSWORD:-install-sh-parse-check}" \
+    docker compose -f "${staging}/${BASE_FILE}" -f "${staging}/${APPS_FILE}" config -q; then
+    die "the compose files for ${VERSION} did not parse with this Docker (see the error above). Nothing was created."
+  fi
+
+  say "→ creating ${DIR}"
+  run mkdir -p "$DIR"
+  for name in "$BASE_FILE" "$APPS_FILE"; do
+    run mv "${staging}/${name}" "${DIR}/${name}"
+  done
+
+  # The image tag, and NOTHING else. `genus.env`, which the wizard writes next,
+  # is the instance's only copy of a credential on disk and says so in its own
+  # header; a second copy here would make that false and would be read by
+  # nothing — compose runs with `--env-file genus.env`. This file exists so a
+  # bare `docker compose ps` in the directory can still resolve the tag.
+  say "→ writing ${DIR}/.env (the image tag; no credential)"
+  local quoted_tag
+  if ! quoted_tag="$(env_quote "$VERSION")"; then
+    die "the release tag ${VERSION} cannot be written to an env file"
+  fi
+  if [ "$DRY_RUN" -eq 0 ]; then
+    {
+      printf '# Written by the Genus OS installer, for docker compose run by hand in\n'
+      printf '# this directory. Credentials live in genus.env, which the wizard writes\n'
+      printf '# 0600 and which every container reads through env_file.\n'
+      printf 'GENUS_IMAGE_TAG=%s\n' "$quoted_tag"
+    } > "${DIR}/.env"
+  else
+    say "     GENUS_IMAGE_TAG=${quoted_tag}"
+  fi
+
+  if [ "${#FOUND_PROVIDER_VARS[@]}" -gt 0 ]; then
+    say "→ the wizard will take the provider key from ${FOUND_PROVIDER_VARS[*]+${FOUND_PROVIDER_VARS[*]}} in this environment"
+  fi
 
   say "→ installing the CLI into ${DIR}/.venv"
   run python3 -m venv "${DIR}/.venv"
@@ -417,11 +466,16 @@ install_compose() {
 
   say "→ genus init --substrate compose"
   local init_json url
-  show "$genus" init --substrate compose --yes --json \
-    --workspace "$DIR" --owner-name "$OWNER_NAME" --owner-email "$OWNER_EMAIL"
+  local -a init_args
+  init_args=(init --substrate compose --yes --json --workspace "$DIR")
+  # `if`, not `A && B`: an AND-list whose left side fails is the one shape
+  # `set -e` is documented to ignore, and relying on that for control flow is
+  # how a guard stops guarding.
+  if [ -n "$OWNER_NAME" ]; then init_args+=(--owner-name "$OWNER_NAME"); fi
+  if [ -n "$OWNER_EMAIL" ]; then init_args+=(--owner-email "$OWNER_EMAIL"); fi
+  show "$genus" "${init_args[@]}"
   if [ "$DRY_RUN" -eq 0 ]; then
-    init_json="$("$genus" init --substrate compose --yes --json \
-      --workspace "$DIR" --owner-name "$OWNER_NAME" --owner-email "$OWNER_EMAIL")"
+    init_json="$("$genus" "${init_args[@]}")"
   else
     init_json=""
   fi
@@ -457,11 +511,16 @@ install_pipx() {
 
   say "→ genus init --substrate local"
   local init_json url
-  show genus init --substrate local --yes --json \
-    --owner-name "$OWNER_NAME" --owner-email "$OWNER_EMAIL"
+  local -a init_args
+  init_args=(init --substrate local --yes --json)
+  # `if`, not `A && B`: an AND-list whose left side fails is the one shape
+  # `set -e` is documented to ignore, and relying on that for control flow is
+  # how a guard stops guarding.
+  if [ -n "$OWNER_NAME" ]; then init_args+=(--owner-name "$OWNER_NAME"); fi
+  if [ -n "$OWNER_EMAIL" ]; then init_args+=(--owner-email "$OWNER_EMAIL"); fi
+  show genus "${init_args[@]}"
   if [ "$DRY_RUN" -eq 0 ]; then
-    init_json="$(genus init --substrate local --yes --json \
-      --owner-name "$OWNER_NAME" --owner-email "$OWNER_EMAIL")"
+    init_json="$(genus "${init_args[@]}")"
   else
     init_json=""
   fi
@@ -486,11 +545,7 @@ epilogue() {
   if [ "$PREVIEW" -eq 1 ]; then
     say "Nothing was written: this was a preview."
     say "Run it for real by adding --yes and an operator identity:"
-    if [ "$SUBSTRATE" = "compose" ]; then
-      say "  … | bash -s -- --substrate compose --yes \\"
-    else
-      say "  … | bash -s -- --substrate pipx --yes \\"
-    fi
+    say "  … | bash -s -- --substrate ${SUBSTRATE} --yes \\"
     say "        --owner-name \"Ada Lovelace\" --owner-email ada@example.com"
     return 0
   fi
@@ -502,6 +557,24 @@ epilogue() {
   else
     say "  The wizard printed no first-run URL; run \`genus auth setup-link\` to mint one."
   fi
+
+  if [ "$SUBSTRATE" != "compose" ]; then
+    return 0
+  fi
+
+  # Neither of these is guessable, and both are needed by the next command an
+  # operator types. The CLI is in a private virtualenv that is not on PATH, and
+  # the workspace is not the platform's default (~/robothor) — a `genus doctor`
+  # without both answers about a different, empty instance.
+  say ""
+  say "  This install's CLI, and the workspace it serves:"
+  say "    ${DIR}/.venv/bin/genus"
+  say "    export ROBOTHOR_WORKSPACE=${DIR}"
+  say "    export PATH=\"${DIR}/.venv/bin:\$PATH\""
+  say ""
+  say "  The stack, for logs, ps and restarts:"
+  say "    docker compose --env-file ${DIR}/genus.env \\"
+  say "      -f ${DIR}/${BASE_FILE} -f ${DIR}/${APPS_FILE} ps"
 }
 
 case "$SUBSTRATE" in

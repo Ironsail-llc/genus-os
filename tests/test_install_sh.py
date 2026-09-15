@@ -65,6 +65,12 @@ case "$url" in
     if [ "$mode" = "api-fails" ]; then
       exit 28
     fi
+    if [ "$mode" = "api-hangs" ]; then
+      # Deliberately ignores --max-time: only an outer bound can save a run
+      # from a curl that does not honour its own flag.
+      sleep "${SHIM_HANG_SECONDS:-45}"
+      exit 0
+    fi
     printf '{"tag_name": "%s", "name": "release"}\n' "$SHIM_API_TAG"
     exit 0
     ;;
@@ -88,6 +94,14 @@ if [ "${1:-}" = "compose" ] && [ "${2:-}" = "version" ]; then
   echo "Docker Compose version v2.29.7"
   exit 0
 fi
+case "$*" in
+  # What compose would interpolate from, recorded from the environment the
+  # installer handed it rather than from argv.
+  *config*)
+    printf 'config-env GENUS_IMAGE_TAG=%s ROBOTHOR_DB_PASSWORD=%s\n' \
+      "${GENUS_IMAGE_TAG:-unset}" "${ROBOTHOR_DB_PASSWORD:-unset}" >> "$SHIM_LOG"
+    ;;
+esac
 exit 0
 """
 
@@ -342,6 +356,29 @@ def test_a_piped_run_without_yes_is_a_preview_that_writes_nothing(installer, tmp
     assert "--yes" in result.output
     assert not target.exists()
     assert "genus init" not in result.calls
+    # A preview whose printed command could not be retyped is a preview of
+    # nothing: no empty owner flags.
+    assert "--owner-name ''" not in result.output
+    assert '--owner-name ""' not in result.output
+    assert "--owner-email ''" not in result.output
+
+
+def test_the_epilogue_says_where_the_cli_is_and_which_workspace_it_serves(
+    installer, tmp_path
+) -> None:
+    """`~/genus` is not the platform's default workspace, and `.venv/bin` is
+    not on PATH — an operator who types `genus doctor` next gets either
+    "command not found" or a doctor pointed at an empty ~/robothor."""
+    target = tmp_path / "genus"
+    result = _install(installer, target)
+    assert result.returncode == 0, result.output
+
+    out = result.stdout
+    assert f"{target}/.venv/bin/genus" in out, "the epilogue never names the CLI it installed"
+    assert f"export ROBOTHOR_WORKSPACE={target}" in out or (
+        f'ROBOTHOR_WORKSPACE="{target}"' in out
+    ), "the epilogue never points the shell at this workspace"
+    assert "genus.env" in out, "the epilogue never names the file the stack runs with"
 
 
 # --------------------------------------------------------------------------
@@ -419,6 +456,24 @@ def test_a_releases_api_that_fails_with_no_stamp_is_an_error_not_a_hang(
     assert "--version" in result.stderr
 
 
+def test_a_releases_api_that_hangs_is_bounded_by_the_script_not_by_curl(
+    installer, tmp_path
+) -> None:
+    """A curl that ignores --max-time must not be able to wedge an install."""
+    result = installer(
+        "--substrate",
+        "pipx",
+        "--dry-run",
+        env={"SHIM_CURL_MODE": "api-hangs", "SHIM_HANG_SECONDS": "45"},
+        timeout=40,
+    )
+    assert result.returncode == 0, result.output
+    stamp = re.search(
+        r'^INSTALL_SH_DEFAULT_VERSION="(v[^"]+)"$', SCRIPT.read_text(encoding="utf-8"), re.MULTILINE
+    ).group(1)
+    assert f"genusos=={stamp.lstrip('v')}" in result.stdout
+
+
 @pytest.mark.parametrize(
     "bad",
     ["v1.2.3; touch pwned", "$(touch pwned)", "main", "latest", "1.2.3"],
@@ -464,6 +519,13 @@ def test_a_compose_install_downloads_pinned_files_and_runs_the_wizard(installer,
 
     assert "docker compose version" in calls, "compose v2 was never verified"
     assert "config -q" in calls, "the downloaded compose files were never parsed"
+    # The parse check supplies its own environment rather than pointing compose
+    # at a dotenv file, so no unescaping rule but this script's own is in play.
+    parse = next(line for line in calls.splitlines() if "config -q" in line)
+    assert "--env-file" not in parse, "the parse check trusts compose's dotenv parser"
+    env_line = next(line for line in calls.splitlines() if line.startswith("config-env "))
+    assert f"GENUS_IMAGE_TAG={PINNED}" in env_line, "compose was not told which tag to resolve"
+    assert "ROBOTHOR_DB_PASSWORD=unset" not in env_line
     assert f"pip install --disable-pip-version-check genusos=={PINNED.lstrip('v')}" in calls
     assert "genus init --substrate compose --yes" in calls
     assert f"--workspace {target}" in calls
@@ -479,19 +541,22 @@ def test_the_install_directory_may_contain_spaces(installer, tmp_path) -> None:
     assert f"--workspace {target}" in result.calls
 
 
-def test_the_env_file_is_private_and_carries_the_pinned_tag(installer, tmp_path) -> None:
+def test_the_env_file_carries_the_pinned_tag_and_no_credential(installer, tmp_path) -> None:
+    """`genus.env` is the only copy of a credential on disk — the wizard says so."""
     target = tmp_path / "genus"
-    result = _install(installer, target)
+    result = _install(installer, target, env={"OPENROUTER_API_KEY": "sk-not-a-real-key"})
     assert result.returncode == 0, result.output
 
     env_file = target / ".env"
     assert env_file.is_file()
-    mode = stat.S_IMODE(env_file.stat().st_mode)
-    assert mode == 0o600, f".env is mode {mode:o}, not 600"
-    assert f'GENUS_IMAGE_TAG="{PINNED}"' in env_file.read_text(encoding="utf-8")
+    body = env_file.read_text(encoding="utf-8")
+    assert f'GENUS_IMAGE_TAG="{PINNED}"' in body
+    assert "sk-not-a-real-key" not in body, "the installer wrote a second copy of the key"
+    for name in ("API_KEY", "PASSWORD", "SECRET", "TOKEN"):
+        assert name not in body, f".env carries a {name} line"
 
 
-def test_a_provider_key_with_shell_metacharacters_is_written_inert(installer, tmp_path) -> None:
+def test_a_provider_key_with_shell_metacharacters_never_executes(installer, tmp_path) -> None:
     target = tmp_path / "genus"
     hostile = 'sk-a"b$(touch pwned)`touch pwned2`'
     result = _install(installer, target, env={"OPENROUTER_API_KEY": hostile})
@@ -499,19 +564,46 @@ def test_a_provider_key_with_shell_metacharacters_is_written_inert(installer, tm
 
     assert not (tmp_path / "pwned").exists()
     assert not (tmp_path / "pwned2").exists()
-    body = (target / ".env").read_text(encoding="utf-8")
-    assert "OPENROUTER_API_KEY=" in body
-    # Round-tripping the file through a shell must reproduce the value exactly
-    # and run nothing.
-    probe = subprocess.run(  # noqa: S603
-        ["bash", "-c", f'set -a; . "{target / ".env"}"; set +a; printf %s "$OPENROUTER_API_KEY"'],
-        capture_output=True,
-        text=True,
-        cwd=str(tmp_path),
-        check=True,
+    assert hostile not in (target / ".env").read_text(encoding="utf-8")
+    # It reached the wizard, which is the only thing that should store it, and
+    # it reached it as one argument rather than as shell.
+    assert "genus init" in result.calls
+
+
+def test_a_credential_carrying_a_newline_aborts_before_anything_is_written(
+    installer, tmp_path
+) -> None:
+    """A newline in a key is a mis-paste, and an env file cannot carry one.
+
+    The refusal used to live inside a command substitution, where `die` exited
+    only the subshell: the install ran to completion and reported success with
+    the key silently dropped.
+    """
+    target = tmp_path / "genus"
+    result = _install(
+        installer,
+        target,
+        env={"OPENAI_API_KEY": "sk-line1\nGENUS_IMAGE_TAG=evil"},
     )
-    assert probe.stdout == hostile
-    assert not (tmp_path / "pwned").exists()
+    assert result.returncode != 0, "a newline-bearing credential was accepted"
+    assert "OPENAI_API_KEY" in result.stderr
+    assert "newline" in result.stderr.lower()
+    assert not target.exists(), "the install directory was created anyway"
+    assert "genus init" not in result.calls
+
+
+def test_the_env_file_is_written_without_a_quoting_round_trip(installer, tmp_path) -> None:
+    """The one value in `.env` is a tag this script validated, so the file has
+    no reason to need a parser more forgiving than compose's own."""
+    target = tmp_path / "genus"
+    result = _install(installer, target)
+    assert result.returncode == 0, result.output
+    lines = [
+        line
+        for line in (target / ".env").read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#")
+    ]
+    assert lines == [f'GENUS_IMAGE_TAG="{PINNED}"']
 
 
 def test_no_provider_key_is_named_rather_than_prompted_for(installer, tmp_path) -> None:
@@ -529,12 +621,37 @@ def test_yes_without_an_owner_is_refused_before_anything_is_written(installer, t
     assert not target.exists()
 
 
-def test_a_tag_that_does_not_exist_fails_on_the_download(installer, tmp_path) -> None:
+def test_a_tag_that_does_not_exist_fails_and_leaves_no_directory(installer, tmp_path) -> None:
     target = tmp_path / "genus"
     result = _install(installer, target, env={"SHIM_CURL_MODE": "download-fails"})
     assert result.returncode != 0
     assert "docker-compose.yml" in result.stderr
     assert "genus init" not in result.calls, "the wizard ran on a failed download"
+    assert not target.exists(), "a failed download left an empty install directory behind"
+
+
+def test_compose_files_that_do_not_parse_are_named(installer, tmp_path) -> None:
+    """Docker's own stderr plus exit 15 names the file and not the decision."""
+    target = tmp_path / "genus"
+    result = _install(
+        installer,
+        target,
+        shims={
+            "docker": (
+                "#!/usr/bin/env bash\n"
+                'printf \'docker %s\\n\' "$*" >> "$SHIM_LOG"\n'
+                'if [ "${1:-}" = "compose" ] && [ "${2:-}" = "version" ]; then\n'
+                '  echo "Docker Compose version v2.29.7"; exit 0\n'
+                "fi\n"
+                'case "$*" in *config*) echo "yaml: line 3: mapping values" >&2; exit 15 ;; esac\n'
+                "exit 0\n"
+            )
+        },
+    )
+    assert result.returncode != 0
+    assert "parse" in result.stderr.lower() or "compose" in result.stderr.lower()
+    assert "genus init" not in result.calls
+    assert not target.exists(), "an unparseable download left an install directory behind"
 
 
 def test_pypi_without_the_release_falls_back_to_the_git_tag(installer, tmp_path) -> None:

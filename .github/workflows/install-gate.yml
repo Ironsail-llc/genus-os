@@ -625,12 +625,18 @@ jobs:
             "$RUNNER_TEMP/install-sh-block.out"
           echo "assertion OK: the compose files were fetched pinned to the release tag"
 
-      - name: Assert the .env the installer wrote is private
+      # genus.env is the instance's only copy of a credential on disk and says
+      # so in its own header. The installer's .env carries the image tag so a
+      # bare `docker compose` in the directory resolves, and nothing else.
+      - name: Assert the installer's .env pins the tag and carries no credential
         run: |
-          MODE="$(stat -c '%a' ~/genus/.env)"
-          test "$MODE" = "600"
+          cat ~/genus/.env
           grep -q "GENUS_IMAGE_TAG=\"${{ steps.version.outputs.tag }}\"" ~/genus/.env
-          echo "assertion OK: the installer's .env is 0600 and pins the tag"
+          if grep -qE '(API_KEY|PASSWORD|SECRET|TOKEN)=' ~/genus/.env; then
+            echo "the installer wrote a credential into .env"; exit 1
+          fi
+          test "$(stat -c '%a' ~/genus/genus.env)" = "600"
+          echo "assertion OK: .env pins the tag and holds no credential; genus.env is 0600"
 
       # The containers reach the mock at their own network's gateway, and only
       # genus.env can tell them: compose's `environment:` beats `env_file:`.
