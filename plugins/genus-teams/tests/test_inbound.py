@@ -507,3 +507,52 @@ class TestTheKeysAreCachedButNotForever:
         clock["now"] += jwt_validation.KEY_CACHE_SECONDS + 1
         await jwt_validation.signing_key(KID)
         assert _served_keys["keys"] == 2
+
+
+class TestTheRealDeferralPath:
+    """Every test above replaces ``spawn`` so it can see what was deferred —
+    which means none of them exercises the line that actually defers.
+
+    That is the shape of this platform's most-repeated defect: a control
+    verified only through the seam standing in for it. So this one runs the
+    endpoint over a real ASGI transport, with the real ``asyncio.create_task``,
+    and waits for the answer to come out the other side.
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_activity_is_answered_by_the_real_background_task(
+        self, monkeypatch, recorded, sent
+    ):
+        import asyncio
+
+        from robothor.engine.channels import access
+
+        async def _evaluate(*_a: Any, **_kw: Any) -> access.AccessDecision:
+            return access.AccessDecision(allowed=True)
+
+        monkeypatch.setattr(access, "evaluate", _evaluate)
+
+        channel = TeamsChannel()
+        runner = _Runner()
+        channel.bind_runtime(runner=runner, config=None)
+        router_module.reset_rate_limit()
+
+        app = FastAPI()
+        app.include_router(channel.inbound_router)
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="https://engine.test") as client:
+            response = await client.post(
+                PATH, json=_activity(), headers={"Authorization": f"Bearer {_token()}"}
+            )
+        assert response.status_code == 200
+
+        # The endpoint acknowledged BEFORE running anything, so the task is
+        # still in flight here. Wait for it the way the event loop would.
+        for _ in range(200):
+            if runner.calls:
+                break
+            await asyncio.sleep(0.01)
+
+        assert runner.calls, "the deferred run never happened — spawn() is inert"
+        assert sent == [(ALICE_AAD, "the answer")]
