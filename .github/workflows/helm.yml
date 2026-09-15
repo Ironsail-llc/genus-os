@@ -3,9 +3,12 @@ name: Helm
 on:
   push:
     branches: [main]
-    paths:
-      - 'helm/**'
-      - '.github/workflows/helm.yml'
+    # Every release tag, and deliberately WITHOUT a paths filter: GitHub ANDs
+    # branch/tag filters with path filters, so a release whose commit happened
+    # not to touch helm/ would publish no chart and say nothing. Linting main
+    # a few extra times a day is the cheaper failure.
+    tags:
+      - 'v*'
   pull_request:
     paths:
       - 'helm/**'
@@ -151,3 +154,88 @@ jobs:
           name: rendered-manifests
           path: _rendered/
           retention-days: 14
+
+  publish:
+    name: Publish the chart to ghcr.io/ironsail-llc/charts
+    # Release tags only. A chart published from a branch would give the
+    # registry a version that no git tag, changelog entry or image exists for.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.16.3
+
+      # semantic-release bumps Chart.yaml in the same commit the tag points at,
+      # so these agree unless something raced. Publishing anyway would put a
+      # version in the registry that no release describes.
+      - name: Assert the chart version is the tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          CHART="$(helm show chart helm/genus-os | awk '/^version:/ {print $2}' | tr -d '"')"
+          echo "tag=${TAG}  Chart.yaml=${CHART}"
+          if [ "$TAG" != "$CHART" ]; then
+            echo "chart version ${CHART} is not the release tag ${TAG}"
+            exit 1
+          fi
+          echo "version=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: helm dependency build
+        run: |
+          helm repo add groundhog2k https://groundhog2k.github.io/helm-charts/
+          helm dependency build helm/genus-os
+
+      - name: Log in to GHCR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GITHUB_TOKEN" \
+            | helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin
+
+      - name: helm package and push
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          helm package helm/genus-os --destination "$RUNNER_TEMP"
+          helm push "$RUNNER_TEMP/genus-os-${VERSION}.tgz" oci://ghcr.io/ironsail-llc/charts
+
+      # A push nobody pulls back is a push that can be broken for a whole
+      # release cycle. Pull the published artifact -- not the working tree --
+      # and render it with the values production actually uses.
+      - name: Pull the published chart back and render it
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/verify"
+          helm pull oci://ghcr.io/ironsail-llc/charts/genus-os \
+            --version "$VERSION" --destination "$RUNNER_TEMP/verify"
+          test -f "$RUNNER_TEMP/verify/genus-os-${VERSION}.tgz"
+          helm template gos "$RUNNER_TEMP/verify/genus-os-${VERSION}.tgz" \
+            --namespace genus \
+            --values helm/genus-os/values.yaml \
+            --values helm/genus-os/values-production.yaml \
+            --set dashboard.ingress.host=genus-os.internal.ironsail.ai \
+            > "$RUNNER_TEMP/verify/production.yaml"
+          test -s "$RUNNER_TEMP/verify/production.yaml"
+          echo "assertion OK: oci://ghcr.io/ironsail-llc/charts/genus-os ${VERSION} renders"
+
+      - name: Summarise
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          {
+            echo "### Chart published"
+            echo
+            echo '```bash'
+            echo "helm install genus oci://ghcr.io/ironsail-llc/charts/genus-os \\"
+            echo "  --version ${VERSION} --namespace genus --create-namespace -f values.yaml"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

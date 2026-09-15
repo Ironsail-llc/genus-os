@@ -569,6 +569,28 @@ database, cache, signing, SSO/OIDC, dashboard, provider — with per-component
 references enforced. The dashboard and the migration job cannot request the
 privileged or provider classes.
 
+Every release publishes the packaged chart to GHCR, so an install needs no
+clone:
+
+```bash
+helm install genus oci://ghcr.io/ironsail-llc/charts/genus-os \
+  --version X.Y.Z \
+  --namespace genus --create-namespace \
+  --values values.yaml
+
+helm test genus --namespace genus
+```
+
+The chart version is the release tag with the leading `v` removed — the same
+`vX.Y.Z` the images carry, because semantic-release bumps `Chart.yaml` in the
+commit the tag points at and the publish job refuses to push when the two
+disagree. `helm show values oci://ghcr.io/ironsail-llc/charts/genus-os
+--version X.Y.Z` prints the defaults to start your own `values.yaml` from, and
+an upgrade is the same line with `helm upgrade`.
+
+**From a checkout**, for chart development and for a change you have not
+released yet:
+
 ```bash
 helm repo add groundhog2k https://groundhog2k.github.io/helm-charts/
 helm dependency update helm/genus-os
