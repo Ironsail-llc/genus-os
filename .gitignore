@@ -259,3 +259,7 @@ helm/*/charts/*.tgz
 
 # MkDocs build output (docs site)
 /site/
+
+# Build artifact: the docs workflow copies scripts/install.sh here so the
+# site serves it at /install.sh. Never commit the copy.
+docs/install.sh

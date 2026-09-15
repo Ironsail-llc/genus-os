@@ -98,6 +98,25 @@ jobs:
       # the package.
       - run: ruff check robothor/ bench/ scripts/
       - run: ruff format --check robothor/ bench/ scripts/
+      # The shell in scripts/ is release and backup machinery, and the
+      # installer in particular is piped straight into bash from a URL. It was
+      # outside every gate: ruff cannot read shell, and nothing else looked.
+      # Pinned and checksummed, like every other tool this repository's gates
+      # download. An unpinned `apt-get install` in a lint gate is a rule set
+      # nobody pinned: the findings change under you with the runner image.
+      - name: Install shellcheck
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          archive="$RUNNER_TEMP/shellcheck.tar.xz"
+          curl --fail --show-error --location --output "$archive" \
+            https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.linux.x86_64.tar.xz
+          echo "6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87  $archive" \
+            | sha256sum --check --strict
+          tar --extract --xz --file "$archive" --directory "$RUNNER_TEMP/bin" \
+            --strip-components=1 shellcheck-v0.10.0/shellcheck
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/shellcheck" --version
+      - run: shellcheck --severity=warning scripts/*.sh
 
   typecheck:
     runs-on: ubuntu-latest

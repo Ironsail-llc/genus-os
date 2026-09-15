@@ -16,6 +16,32 @@ the trusted database CA, and declare the exact endpoint CIDRs/ports in the
 environment values. Plain chart values are not the credential source in this
 mode.
 
+## Install
+
+The chart is published to GHCR on every release, so nothing needs a clone:
+
+```bash
+helm install genus oci://ghcr.io/ironsail-llc/charts/genus-os \
+  --version X.Y.Z \
+  --namespace genus --create-namespace \
+  --values values.yaml
+```
+
+The chart version is the release tag without its leading `v`; the publish job
+refuses to push a chart whose version is not the tag, and pulls the pushed
+artifact back and templates it with `values-production.yaml` before the job
+goes green. `helm show values oci://ghcr.io/ironsail-llc/charts/genus-os
+--version X.Y.Z` prints the defaults.
+
+Installing from this directory (`helm install gos helm/genus-os …`) is the
+developer path: it is what CI lints, and what to use for a change that has not
+been released yet.
+
+**Not in the chart yet:** plugins. `genus plugin sync` has no init container
+here, so a cluster install activates plugins through the admin API rather than
+through a values list. That belongs with the plugin installer, not with this
+chart.
+
 ## Files
 
 | File | Purpose |

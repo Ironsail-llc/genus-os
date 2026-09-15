@@ -167,6 +167,9 @@ fi
 
 # ── PostgreSQL dumps (30-day retention) ─────────────────────────
 
+# One database today, a list tomorrow: the loop is the shape the extra
+# database will be added to, not a quoting mistake.
+# shellcheck disable=SC2043
 for db in robothor_memory; do
     DUMP_FILE="$BACKUP_ROOT/db/${db}-${DATE}.sql.gz"
     if [ ! -f "$DUMP_FILE" ]; then
@@ -259,6 +262,8 @@ backup_docker_volumes || log "WARNING: docker volume backup incomplete"
     du -sh "$BACKUP_ROOT/latest"/* "$BACKUP_ROOT/db" "$BACKUP_ROOT/docker-volumes" "$BACKUP_ROOT/ollama" "$BACKUP_ROOT/docker-images" 2>/dev/null | sort -rh
     echo ""
     echo "## Database Dumps (today)"
+    # One database today, a list tomorrow — see above.
+    # shellcheck disable=SC2043
     for db in robothor_memory; do
         DUMP_FILE="$BACKUP_ROOT/db/${db}-${DATE}.sql.gz"
         if [ -f "$DUMP_FILE" ]; then

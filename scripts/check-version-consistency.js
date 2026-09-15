@@ -58,6 +58,14 @@ const versions = new Map([
     'Helm appVersion',
     capture('helm/genus-os/Chart.yaml', /^appVersion:\s*"?([^"\s]+)"?\s*$/m, 'appVersion'),
   ],
+  [
+    'install.sh default version',
+    capture(
+      'scripts/install.sh',
+      /^INSTALL_SH_DEFAULT_VERSION="v([^"]+)"$/m,
+      'INSTALL_SH_DEFAULT_VERSION',
+    ),
+  ],
   ['dashboard package', appPackage.version],
   ['release package', rootPackage.version],
   ['release package lock', rootLock.version],

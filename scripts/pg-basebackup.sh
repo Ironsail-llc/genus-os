@@ -139,6 +139,9 @@ log "base backup complete: $SIZE"
 
 # Keep the last N. Deleting a base backup strands the WAL that replays onto it,
 # so wal-offsite.sh prunes WAL only below the NEWEST base — always in that order.
+# Newest-first by MTIME, which a glob cannot order; the names are this
+# script's own `base-<timestamp>` and carry no whitespace.
+# shellcheck disable=SC2010
 mapfile -t OLD < <(ls -1dt "$DEST"/base-* 2>/dev/null | grep -v '\.backup_label$' | tail -n +$((KEEP + 1)))
 for d in "${OLD[@]:-}"; do
     [[ -n "$d" ]] || continue

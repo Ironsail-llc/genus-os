@@ -78,6 +78,15 @@ replaceOnce(
   `$1${version}$2`,
   'runtime version',
 );
+// The published one-liner defaults to the release it shipped with, so the
+// GitHub releases API is a refresh and never a dependency. scripts/install.sh
+// is in the release commit's assets for this reason.
+replaceOnce(
+  'scripts/install.sh',
+  /^INSTALL_SH_DEFAULT_VERSION="[^"]*"$/m,
+  `INSTALL_SH_DEFAULT_VERSION="v${version}"`,
+  'installer version stamp',
+);
 replaceOnce('helm/genus-os/Chart.yaml', /^version:\s*[^\n]+$/m, `version: ${version}`, 'chart version');
 replaceOnce(
   'helm/genus-os/Chart.yaml',

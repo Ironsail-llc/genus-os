@@ -355,7 +355,9 @@ def test_the_claim_token_guard_exits(workflow: dict[str, Any]) -> None:
         (label, script) for label, script in _run_blocks(workflow) if "/api/setup/claim" in script
     ]
 
-    assert len(claiming) == 2, "both substrates must claim the wizard"
+    # Both substrates, plus the one-line installer, whose whole last act is to
+    # print a link that has to work.
+    assert len(claiming) == 3, "every job that installs must claim the wizard"
     for label, script in claiming:
         assert 'test -n "$CLAIM" &&' not in script, (
             f"{label}: a failing `&&` list does not exit under `set -e`"
