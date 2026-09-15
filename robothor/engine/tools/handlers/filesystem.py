@@ -6,6 +6,8 @@ import asyncio
 import subprocess
 from typing import TYPE_CHECKING, Any
 
+from robothor.constants import DEFAULT_TENANT
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -95,10 +97,67 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     sandbox = get_current_sandbox()
     if sandbox is not None and sandbox.mode != SandboxMode.LOCAL:
+        # A container never inherits the engine's environment in the first
+        # place — a stricter isolation than the host scrub below, and the
+        # reason this branch needs none. It also means a `secrets:` grant does
+        # not reach the container, so say so rather than letting the agent
+        # discover it as an unexplained failure.
+        from robothor.engine.exec_env import grants_for_agent as _grants
+
         try:
-            return _with_note(await sandbox.exec_shell(command, timeout=timeout))
+            result = await sandbox.exec_shell(command, timeout=timeout)
         except Exception as e:
             return {"error": f"Sandboxed exec failed: {e}"}
+        sandboxed_grants = _grants(
+            getattr(ctx, "agent_id", "") or "", getattr(ctx, "workspace", "") or ""
+        )
+        if sandboxed_grants and isinstance(result, dict):
+            result["secret_grant_note"] = (
+                "Secret grants — this agent runs sandboxed, and a container "
+                "receives none of the host's environment, so "
+                f"{', '.join(sandboxed_grants)} were not available to the "
+                "command."
+            )
+        return _with_note(result)
+
+    # The child's environment is built from an allowlist rather than inherited.
+    # Without this, `subprocess.run` with no `env=` handed every shell command
+    # an agent asked for the engine's whole process environment — the ~50
+    # credentials decrypted out of a root-owned SOPS file at boot — to any
+    # exec-capable agent, sub-agents included. `secret_paths` refuses the
+    # commands that PRINT a secrets file; it cannot help with a command that
+    # simply USES $GITHUB_TOKEN, so the fix is that the token is not there.
+    #
+    # The grant is looked up by THIS context's agent id, which for a spawned
+    # sub-agent is the child's — so a sub-agent reads its own manifest and
+    # inherits nothing.
+    from robothor.engine.exec_env import build_exec_env, grants_for_agent
+
+    # `getattr` rather than attribute access: this runs on EVERY exec, and a
+    # caller passing a narrower context than the full ToolContext must lose a
+    # grant lookup, never the scrub. Losing the scrub is a credential leak;
+    # losing the lookup is a missing grant, which is noted.
+    exec_agent_id = getattr(ctx, "agent_id", "") or ""
+    exec_workspace = getattr(ctx, "workspace", "") or ""
+    child_env = await asyncio.to_thread(
+        lambda: build_exec_env(
+            agent_id=exec_agent_id,
+            base=None,
+            grants=grants_for_agent(exec_agent_id, exec_workspace),
+            tenant_id=getattr(ctx, "tenant_id", "") or DEFAULT_TENANT,
+        )
+    )
+
+    def _with_grant_note(result: dict[str, Any]) -> dict[str, Any]:
+        """Say when a granted credential was refused or was simply not there.
+
+        A silent absence is the failure shape this codebase keeps re-learning:
+        the command fails for an unrelated-looking reason and nothing anywhere
+        says the credential was never present.
+        """
+        if child_env.note and isinstance(result, dict):
+            result["secret_grant_note"] = child_env.note
+        return result
 
     def _run() -> dict[str, Any]:
         try:
@@ -109,6 +168,7 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 text=True,
                 timeout=timeout,
                 cwd=ctx.workspace or None,
+                env=child_env.env,
             )
             return {
                 "stdout": proc.stdout[:4000],
@@ -134,7 +194,7 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         except Exception as e:
             return {"error": f"Command failed: {e}"}
 
-    return _with_note(await asyncio.to_thread(_run))
+    return _with_grant_note(_with_note(await asyncio.to_thread(_run)))
 
 
 _SEARCH_SKIP_DIRS = frozenset(

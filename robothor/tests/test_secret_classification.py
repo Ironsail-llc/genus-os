@@ -133,6 +133,8 @@ def test_non_secret_names_exclude_every_declared_secret():
     safe = non_secret_env_names()
     for record in field_index().values():
         if record["secret"]:
-            assert record["env"] not in safe, f"{record['env']} is a secret and reached the allowlist"
+            assert record["env"] not in safe, (
+                f"{record['env']} is a secret and reached the allowlist"
+            )
     assert "ROBOTHOR_DB_HOST" in safe
     assert "ROBOTHOR_WORKSPACE" in safe

@@ -583,6 +583,9 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         surface_to_channel=bool(delivery.get("surface_to_channel", True)),
         tools_allowed=manifest.get("tools_allowed", []),
         tools_denied=manifest.get("tools_denied", []),
+        secret_grants=[
+            str(name).strip() for name in manifest.get("secrets", []) if str(name).strip()
+        ],
         service_role=resolve_service_role(
             str(manifest.get("id", "")),
             manifest.get("role", manifest.get("service_role", "")),

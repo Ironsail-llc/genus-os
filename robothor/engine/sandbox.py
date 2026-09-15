@@ -408,7 +408,15 @@ class Sandbox:
         For DOCKER mode, runs via docker exec.
         """
         if self.mode == SandboxMode.LOCAL:
-            env = os.environ.copy()
+            # Was `os.environ.copy()`, which handed a browser or desktop
+            # helper the engine's whole credential set. The allowlist is the
+            # same one the `exec` tool builds; no grants are passed, because
+            # nothing on this path is a command an agent composed — it is the
+            # platform driving Xvfb, a browser or a screenshot tool, and none
+            # of those has any business holding a token.
+            from robothor.engine.exec_env import build_exec_env
+
+            env = build_exec_env(agent_id=self.container_name or "", mode=None).env
             env["DISPLAY"] = self.display
             try:
                 proc = await asyncio.to_thread(
