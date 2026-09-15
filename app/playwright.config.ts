@@ -21,6 +21,22 @@ export default defineConfig({
       AUTH_OIDC_CLIENT_ID: "playwright-client",
       AUTH_OIDC_CLIENT_SECRET: "playwright-client-secret",
       GENUS_BRIDGE_SSO_SECRET: "playwright-bridge-sso-secret",
+      /*
+        A dead port on purpose.
+
+        Every e2e spec intercepts the bridge in the browser, but interception
+        is not total — a download started by `<a download>` is not routed by
+        Playwright at all, and the request goes to this Next server, which
+        resolves the bridge through `lib/services/registry.ts` and falls back
+        to `http://localhost:9100` when no service manifest is found. That is
+        the LIVE bridge on a developer box, and an e2e run was putting a real
+        request on it with the Helm's own dev credentials attached.
+
+        Pinning `BRIDGE_URL` here means the worst an unintercepted request can
+        do is fail to connect. Nothing in the suite may depend on a reply from
+        it; if a spec needs bridge data, it mocks it.
+      */
+      BRIDGE_URL: "http://127.0.0.1:59999",
       GENUS_ENVIRONMENT: "test",
       GENUS_INSECURE_DEV_MODE: "true",
       PORT: port,

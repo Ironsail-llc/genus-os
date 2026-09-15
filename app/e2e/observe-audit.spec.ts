@@ -33,10 +33,11 @@ const EVENT = {
 interface Recorded {
   events: string[];
   changes: string[];
+  exports: string[];
 }
 
 async function setupMocks(page: Page): Promise<Recorded> {
-  const recorded: Recorded = { events: [], changes: [] };
+  const recorded: Recorded = { events: [], changes: [], exports: [] };
 
   await page.route("**/api/auth/session", (route) =>
     json(route, {
@@ -71,16 +72,16 @@ async function setupMocks(page: Page): Promise<Recorded> {
     `events.json`. The three paths here differ only in punctuation, which is
     exactly the case a glob cannot be trusted with.
   */
-  // The CSV route is served the way the bridge serves it — an attachment — so
-  // this spec proves the whole path, the app's proxy headers included.
-  await page.route(/\/api\/bridge\/api\/audit\/events\.csv/, (route) =>
-    route.fulfill({
+  // The CSV route, served the way the bridge serves it — an attachment.
+  await page.route(/\/api\/bridge\/api\/audit\/events\.csv/, (route) => {
+    recorded.exports.push(route.request().url());
+    return route.fulfill({
       status: 200,
       contentType: "text/csv; charset=utf-8",
       headers: { "content-disposition": 'attachment; filename="audit-acme-2099-01-01.csv"' },
       body: "id,timestamp,event_type\r\n91,2099-01-01T09:00:00+00:00,memory.forget\r\n",
-    })
-  );
+    });
+  });
 
   await page.route(/\/api\/bridge\/api\/audit\/events\?/, (route) => {
     recorded.events.push(route.request().url());
@@ -131,22 +132,43 @@ test.describe("Observe › Audit", () => {
     await expect(link).toHaveAttribute("href", /event_type=memory.forget/);
     await expect(link).toHaveAttribute("href", /since=2099-01-01/);
 
-    /*
-      A download, not a navigation — and the URL the browser downloads from is
-      the one carrying the filters.
+    await expect(link).toHaveAttribute("download", "");
 
-      The FILENAME is not asserted here, deliberately: Playwright's route
-      interception does not apply to a download request (a `page.route` handler
-      is never called for one — checked, not assumed), so a filename read here
-      would come from whatever the real server answered rather than from the
-      fixture. That the proxy carries the bridge's `Content-Disposition` and
-      `Content-Type` across — which is what decides the name — is pinned in
-      `__tests__/api/bridge-proxy.test.ts`, where the reply can actually be
+    /*
+      The link is FETCHED, not clicked.
+
+      Playwright's route interception does not apply to a download request — a
+      `page.route` handler is never called for one, checked and not assumed —
+      so clicking this anchor sends a request that leaves the fixture entirely.
+      It used to reach `localhost:9100`, the live bridge on a developer box,
+      with the Helm's own dev credentials attached; `BRIDGE_URL` is now pinned
+      to a dead port in `playwright.config.ts` so that can no longer happen,
+      and the click is gone as well.
+
+      Fetching the anchor's own `href` proves what the click would have proved
+      and can actually be observed: that the href is a live, correctly
+      addressed URL carrying the operator's filters, and that what comes back
+      down it is a CSV attachment. That the app's proxy carries the bridge's
+      `Content-Disposition` and `Content-Type` across — the part this
+      browser-level interception steps in front of — is pinned in
+      `__tests__/api/bridge-proxy.test.ts`, where the upstream reply can be
       controlled.
     */
-    const [download] = await Promise.all([page.waitForEvent("download"), link.click()]);
-    expect(download.url()).toContain("/api/bridge/api/audit/events.csv");
-    expect(download.url()).toContain("event_type=memory.forget");
+    const reply = await page.evaluate(async () => {
+      const href = document.querySelector<HTMLAnchorElement>('[data-testid="audit-export"]')!.href;
+      const res = await fetch(href);
+      return {
+        type: res.headers.get("content-type"),
+        disposition: res.headers.get("content-disposition"),
+        body: await res.text(),
+      };
+    });
+    expect(reply.type).toContain("text/csv");
+    expect(reply.disposition).toContain("audit-acme-2099-01-01.csv");
+    expect(reply.body).toContain("memory.forget");
+    expect(recorded.exports).toHaveLength(1);
+    expect(recorded.exports[0]).toContain("event_type=memory.forget");
+    expect(recorded.exports[0]).toContain("since=2099-01-01");
 
     await page.locator('[data-testid="audit-tab-flags"]').click();
     await expect(page.locator('[data-testid="audit-old-7"]')).toHaveText("observe");
