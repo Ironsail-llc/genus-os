@@ -432,7 +432,7 @@ def test_forgetting_a_fact_that_does_not_exist_is_404(controls_client_as_operato
 
 
 def test_the_forget_is_committed_and_visible_to_another_connection(
-    controls_client_as_operator, make_fact, tenants, db_conn
+    controls_client_as_operator, make_fact, tenants
 ):
     """The one test in this file that does NOT bind ``live_db``.
 
@@ -446,8 +446,19 @@ def test_the_forget_is_committed_and_visible_to_another_connection(
 
     ``make_fact`` deletes the row by id afterwards, so the committed write is
     cleaned up rather than left in the test database.
+
+    The second connection is built from ``get_config().db.dict`` — the SAME
+    kwargs ``robothor.db.connection.get_pool`` passes to psycopg2 — and not
+    from ``psycopg2.connect(dbname=…)``. Naming only the database left every
+    other parameter to libpq's defaults, which on a developer's box means the
+    Unix socket and in CI means a socket that is not there at all
+    (``connection to server on socket "/var/run/postgresql/.s.PGSQL.5432"``,
+    while CI's Postgres listens on TCP). A test that reaches the database a
+    different way than the code does is a test about this machine.
     """
     import psycopg2
+
+    from robothor.config import get_config
 
     platform, _ = tenants
     fact_id = make_fact("Alice prefers tea, and the write must survive", tenant=platform)
@@ -459,7 +470,7 @@ def test_the_forget_is_committed_and_visible_to_another_connection(
         == 200
     )
 
-    elsewhere = psycopg2.connect(dbname=db_conn.get_dsn_parameters()["dbname"])
+    elsewhere = psycopg2.connect(**get_config().db.dict)
     try:
         with elsewhere.cursor() as cur:
             cur.execute("SELECT is_active, valid_to FROM memory_facts WHERE id = %s", (fact_id,))

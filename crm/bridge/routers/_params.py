@@ -26,6 +26,7 @@ as ``{"detail": [ {...} ]}``, a second body shape for the same class of error.
 from __future__ import annotations
 
 import re
+from datetime import datetime
 
 from fastapi import HTTPException
 
@@ -68,9 +69,35 @@ def positive_int(value: str, *, field: str, maximum: int | None = None) -> int:
 
 
 def iso_timestamp(value: str, *, field: str) -> str:
-    """``value`` unchanged if it is a timestamp, else a flat 422."""
-    if not ISO_TIMESTAMP.fullmatch(str(value)):
+    """``value`` as a CANONICAL timestamp string, or a flat 422.
+
+    Parsed and re-emitted, not waved through. Two reasons, and the second is
+    why this returns a different string than it was given:
+
+    1. the pattern is a shape, not a calendar. ``2026-13-01`` is four-two-two
+       digits and is not a month; ``2026-02-30`` is not a day. Both matched,
+       reached PostgreSQL's timestamp comparison, and came back as a 500 — a
+       caller's error rendered as an appliance fault, which is exactly what
+       validating this was supposed to stop;
+    2. what leaves this function is then built by ``datetime.isoformat`` rather
+       than by the caller. That matters most for
+       ``routers/logs.py``, where the value goes on a COMMAND LINE: a token
+       assembled from a parsed ``datetime`` carries nothing of the request
+       string, which is a structural guarantee rather than an argument about
+       how good the pattern is.
+
+    The pattern still runs first: it is cheap, it bounds what the parser is
+    asked to read, and it refuses the spellings ``fromisoformat`` accepts that
+    this appliance has no use for.
+    """
+    text = str(value)
+    if not ISO_TIMESTAMP.fullmatch(text):
         raise HTTPException(
             status_code=422, detail=f"{field} must be an ISO-8601 date or timestamp"
         )
-    return str(value)
+    try:
+        return datetime.fromisoformat(text).isoformat()
+    except ValueError:
+        raise HTTPException(
+            status_code=422, detail=f"{field} must be an ISO-8601 date or timestamp"
+        ) from None

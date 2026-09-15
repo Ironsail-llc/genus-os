@@ -234,7 +234,101 @@ def test_a_valid_since_is_passed_as_one_token(controls_client_as_operator, journ
     passed = [a for a in argv if a.startswith("--since")]
     assert len(passed) == 1
     assert passed[0].startswith("--since=")
-    assert " " not in passed[0].split("=", 1)[1] or since.startswith("2026")
+
+
+# ── nothing from the request reaches argv ────────────────────────────────────
+#
+# Validation says a value is acceptable; it does not stop the ACCEPTED STRING
+# from being the one that is executed. These pin the stronger property: every
+# argv token is built from this module's own constants, the catalog's own
+# strings, or an int — so there is no request-supplied object in the command
+# line at all, whatever a future edit does to the patterns.
+
+
+@pytest.mark.parametrize(
+    ("since", "expected"),
+    [
+        ("1h", "--since=-1h"),
+        ("30m", "--since=-30m"),
+        ("7d", "--since=-7d"),
+        ("45s", "--since=-45s"),
+        # Re-emitted canonically. A value that parses but spells itself
+        # differently afterwards is fine — that IS the severing.
+        ("007h", "--since=-7h"),
+        ("2026-09-01", "--since=2026-09-01T00:00:00"),
+        ("2026-09-01T10:00", "--since=2026-09-01T10:00:00"),
+        ("2026-09-01T10:00:00Z", "--since=2026-09-01T10:00:00+00:00"),
+        ("2026-09-01 10:00:00", "--since=2026-09-01T10:00:00"),
+        # %2B, not a bare "+": in a query string that decodes to a space.
+        ("2026-09-01T10:00:00%2B0200", "--since=2026-09-01T10:00:00+02:00"),
+    ],
+)
+def test_since_is_re_emitted_rather_than_forwarded(
+    controls_client_as_operator, journal, since, expected
+):
+    """The argv token is CONSTRUCTED, never the caller's string.
+
+    Relative ages are rebuilt from an int and a letter looked up in this
+    module's own table; timestamps go through ``datetime.fromisoformat`` and
+    come back out of ``.isoformat()``. Both cases also accept spellings the old
+    pass-through could not have normalised.
+    """
+    controls_client_as_operator.get(f"{LOGS}?unit=robothor-engine&since={since}")
+    argv = journal.calls[-1]
+    assert [a for a in argv if a.startswith("--since")] == [expected]
+
+
+def test_a_date_that_matches_the_pattern_but_is_not_a_date_is_422(
+    controls_client_as_operator, journal
+):
+    """``2026-13-01`` is four-two-two digits and not a month. The pattern let it
+    through and journald answered ``available: false`` for a request the
+    operator believed was valid; parsing refuses it properly."""
+    resp = controls_client_as_operator.get(f"{LOGS}?unit=robothor-engine&since=2026-13-01")
+    assert resp.status_code == 422
+    assert journal.calls == []
+
+
+def test_the_unit_in_argv_is_the_catalogs_string_not_the_requests(
+    controls_client_as_operator, journal
+):
+    """Identity, not equality.
+
+    The allowlist check proves the request names a known unit; it does not stop
+    the REQUEST'S string object from being the one handed to the subprocess.
+    Taking the catalog's own key means no object the caller created is in the
+    command line, which is what makes this structurally safe rather than safe
+    by argument.
+    """
+    from routers import logs
+
+    catalog = {"robothor-engine": "Genus OS Agent Engine"}
+    stored = next(iter(catalog))
+    logs_unit = logs._allowlisted_unit("robothor-engine", catalog)
+
+    assert logs_unit == "robothor-engine"
+    assert logs_unit is stored, "argv must carry the catalog's object, not the request's"
+
+
+def test_every_argv_token_is_a_string_this_module_owns(controls_client_as_operator, journal):
+    """A whole-argv assertion, so a token added later is covered for free."""
+    from routers import logs
+
+    controls_client_as_operator.get(f"{LOGS}?unit=robothor-engine&lines=25&since=1h&grep=anything")
+    argv = journal.calls[-1]
+    owned = {
+        "/usr/bin/journalctl",
+        "-u",
+        "-n",
+        "-o",
+        "json",
+        "--no-pager",
+        logs._OUTPUT_FIELDS,
+        "robothor-engine",  # the catalog's key, not the query string
+        "25",  # str(int)
+        "--since=-1h",  # rebuilt from an int and a table lookup
+    }
+    assert set(argv) <= owned, set(argv) - owned
 
 
 @pytest.mark.parametrize(

@@ -51,6 +51,7 @@ import re
 import shutil
 import subprocess
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -96,6 +97,10 @@ _UNIT_NAME = re.compile(r"robothor-[a-z0-9][a-z0-9-]*")
 #: own rather than calling ``iso_timestamp``.
 _RELATIVE_AGE = r"\d{1,6}[smhd]"
 
+#: The same shape with its parts named, so :func:`_since_argument` can rebuild
+#: the argument from them rather than forwarding what was typed.
+_RELATIVE_AGE_RE = re.compile(r"(?P<count>\d{1,6})(?P<unit>[smhd])")
+
 #: ``--since`` values this route will pass on: a relative age or an ISO-8601
 #: date/time. Nothing else — not journald's own English ("yesterday", "2 hours
 #: ago"), which is a parser this route does not need to expose.
@@ -110,6 +115,12 @@ _SINCE = re.compile(rf"(?:{_RELATIVE_AGE}|{ISO_TIMESTAMP_PATTERN})")
 #: The journal fields this route reads. Named explicitly so a unit that logs a
 #: 4MB structured record does not ship all of it to a browser.
 _OUTPUT_FIELDS = "--output-fields=MESSAGE,PRIORITY,__REALTIME_TIMESTAMP"
+
+#: journald's relative-age units, keyed by the letter a caller may type. A
+#: TABLE rather than a passthrough, because the letter that reaches argv is
+#: then this module's own string and not the request's — see
+#: :func:`_since_argument`.
+_AGE_UNITS = {"s": "s", "m": "m", "h": "h", "d": "d"}
 
 #: How long the derived unit set is trusted. Short enough that an operator who
 #: installs a unit and refreshes sees it; long enough that a page refresh is not
@@ -182,6 +193,51 @@ def reset_unit_catalog_cache() -> None:
     the next request to see what it just wrote."""
     global _catalog_cache
     _catalog_cache = None
+
+
+def _allowlisted_unit(unit: str, catalog: dict[str, str]) -> str | None:
+    """The CATALOG's own string for ``unit``, or ``None``.
+
+    Identity, not equality, and that is the whole point. ``unit in catalog``
+    proves the request names a known unit; it does not stop the REQUEST'S
+    string object from being the one handed to ``subprocess``. Returning the
+    stored key means the command line is assembled entirely from strings this
+    process derived from the filesystem — there is no caller-supplied object in
+    argv to reason about, which is a stronger claim than "we checked it" and
+    the one a taint analyser can see.
+    """
+    for name in catalog:
+        if name == unit:
+            return name
+    return None
+
+
+def _since_argument(since: str) -> str | None:
+    """``--since=<canonical>``, built from scratch, or ``None`` if unparseable.
+
+    Nothing of the caller's string survives into the result:
+
+    * a relative age becomes ``f"-{int(digits)}{_AGE_UNITS[letter]}"`` — an int
+      and a value out of this module's own table. journald's spelling for "an
+      hour ago" carries the leading ``-``;
+    * a timestamp goes through ``datetime.fromisoformat`` and comes back out of
+      ``.isoformat()``, so what reaches argv is Python's canonical spelling of
+      the moment, not the caller's.
+
+    A value that parses and then re-emits differently (``…T10:00:00Z`` becoming
+    ``…T10:00:00+00:00``) is the mechanism working, not a bug. Parsing also
+    catches what the pattern cannot: ``2026-13-01`` is four-two-two digits and
+    is not a month, and used to reach journald and come back as
+    ``available: false`` for a request the operator believed was valid.
+    """
+    relative = _RELATIVE_AGE_RE.fullmatch(since)
+    if relative is not None:
+        return f"--since=-{int(relative.group('count'))}{_AGE_UNITS[relative.group('unit')]}"
+    try:
+        moment = datetime.fromisoformat(since)
+    except ValueError:
+        return None
+    return f"--since={moment.isoformat()}"
 
 
 def _journalctl_path() -> tuple[str | None, str | None]:
@@ -300,7 +356,9 @@ def read_logs(
     """The last N lines of one unit's journal."""
     require_operator(request)
     catalog = unit_catalog()
-    if unit not in catalog:
+    # The catalog's OWN string from here on — see _allowlisted_unit.
+    known_unit = _allowlisted_unit(unit, catalog)
+    if known_unit is None:
         # Naming the set is the whole value of the refusal: the alternative is
         # an operator guessing unit names against a 422 that will not say.
         raise HTTPException(
@@ -308,22 +366,29 @@ def read_logs(
             detail="unknown unit; allowed units are " + ", ".join(sorted(catalog)),
         )
     count = positive_int(lines, field="lines", maximum=MAX_LINES)
-    if since is not None and not _SINCE.fullmatch(since):
-        raise HTTPException(
-            status_code=422,
-            detail="since must be a relative age (30m, 1h, 7d) or an ISO-8601 timestamp",
-        )
+    since_argument: str | None = None
+    if since is not None:
+        # The pattern first (cheap, and it bounds what the parser is asked to
+        # read), then the rebuild. Either refusing is the same 422.
+        since_argument = _since_argument(since) if _SINCE.fullmatch(since) else None
+        if since_argument is None:
+            raise HTTPException(
+                status_code=422,
+                detail="since must be a relative age (30m, 1h, 7d) or an ISO-8601 timestamp",
+            )
 
     path, reason = _journalctl_path()
     if reason is not None or path is None:
-        return _unavailable(unit, reason or "journald is not available on this deployment")
+        return _unavailable(known_unit, reason or "journald is not available on this deployment")
 
-    argv = [path, "-u", unit, "-n", str(count), "-o", "json", "--no-pager", _OUTPUT_FIELDS]
-    if since is not None:
-        # ONE token, and journald's own spelling for a relative age is a
-        # leading '-'. `--since=-1h` cannot be mistaken for a separate
-        # argument the way `--since -1h` could.
-        argv.append(f"--since={'-' + since if since[-1] in 'smhd' else since}")
+    # Every token below is this module's own constant, the catalog's own string,
+    # `str` of an int, or a value _since_argument constructed. Nothing the
+    # caller sent is in this list.
+    argv = [path, "-u", known_unit, "-n", str(count), "-o", "json", "--no-pager", _OUTPUT_FIELDS]
+    if since_argument is not None:
+        # ONE token: `--since=-1h` cannot be mistaken for a separate argument
+        # the way `--since -1h` could.
+        argv.append(since_argument)
 
     try:
         completed = _run(
@@ -335,16 +400,18 @@ def read_logs(
             shell=False,
         )
     except subprocess.TimeoutExpired:
-        return _unavailable(unit, "timed out")
+        return _unavailable(known_unit, "timed out")
     except OSError as exc:
         logger.warning("journalctl read failed: %s", sanitize_log(exc))
-        return _unavailable(unit, "journalctl could not be run")
+        return _unavailable(known_unit, "journalctl could not be run")
     if completed.returncode != 0:
         # stderr is deliberately not returned: it is journald's, not ours, and
         # an operator reading someone else's error text is how a path or a
         # value that was never meant to be served gets served.
-        logger.warning("journalctl exited %s for %s", completed.returncode, sanitize_log(unit))
-        return _unavailable(unit, "journalctl could not read that unit's journal")
+        logger.warning(
+            "journalctl exited %s for %s", completed.returncode, sanitize_log(known_unit)
+        )
+        return _unavailable(known_unit, "journalctl could not read that unit's journal")
 
     entries: list[dict[str, Any]] = []
     for raw_line in (completed.stdout or "").splitlines():
@@ -365,7 +432,7 @@ def read_logs(
         )
 
     return {
-        "unit": unit,
+        "unit": known_unit,
         "available": True,
         "lines": entries,
         # Measured against what journald RETURNED, not what survived ``grep``:

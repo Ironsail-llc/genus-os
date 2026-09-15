@@ -181,7 +181,7 @@ def test_it_takes_the_same_filters_as_the_json_route(controls_client_as_operator
     controls_client_as_operator.get(
         f"{CSV}?since=2026-09-01&event_type=user.invite&actor=operator:alice&user_id=u1&limit=4000"
     )
-    assert captured["since"] == "2026-09-01"
+    assert captured["since"] == "2026-09-01T00:00:00", "parsed and re-emitted, not forwarded"
     assert captured["event_type"] == "user.invite"
     assert captured["actor"] == "operator:alice"
     assert captured["user_id"] == "u1"
@@ -212,7 +212,21 @@ def test_limit_is_bounded_at_five_thousand(controls_client_as_operator, monkeypa
 
 
 @pytest.mark.parametrize("field", ["since", "until"])
-@pytest.mark.parametrize("value", ["notatimestamp", "yesterday", "2026-13", "'; --", "2026-09-01 "])
+@pytest.mark.parametrize(
+    "value",
+    [
+        "notatimestamp",
+        "yesterday",
+        "2026-13",
+        "'; --",
+        "2026-09-01 ",
+        # Four-two-two digits, and not a month. The PATTERN admits it; only
+        # parsing knows it is not a date, and unparsed it reached psycopg2.
+        "2026-13-01",
+        "2026-02-30",
+        "2026-09-01T25:00:00",
+    ],
+)
 def test_a_malformed_time_bound_is_a_422_not_a_500(
     controls_client_as_operator, monkeypatch, field, value
 ):
@@ -229,12 +243,25 @@ def test_a_malformed_time_bound_is_a_422_not_a_500(
 
 
 @pytest.mark.parametrize(
-    "value", ["2026-09-01", "2026-09-01T10:00", "2026-09-01T10:00:00", "2026-09-01T10:00:00Z"]
+    ("value", "canonical"),
+    [
+        ("2026-09-01", "2026-09-01T00:00:00"),
+        ("2026-09-01T10:00", "2026-09-01T10:00:00"),
+        ("2026-09-01T10:00:00", "2026-09-01T10:00:00"),
+        ("2026-09-01T10:00:00Z", "2026-09-01T10:00:00+00:00"),
+    ],
 )
-def test_a_real_timestamp_is_passed_through(controls_client_as_operator, monkeypatch, value):
+def test_a_real_timestamp_is_parsed_and_re_emitted(
+    controls_client_as_operator, monkeypatch, value, canonical
+):
+    """Accepted, and normalised on the way through.
+
+    The same parse that turns ``2026-13-01`` into a 422 spells the survivors
+    Python's way. The audit store gets one shape whatever the caller typed.
+    """
     captured = _events(monkeypatch, [])
     assert controls_client_as_operator.get(f"{CSV}?since={value}").status_code == 200
-    assert captured["since"] == value
+    assert captured["since"] == canonical
 
 
 # ── failure ──────────────────────────────────────────────────────────────────
