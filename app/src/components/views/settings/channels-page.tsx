@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { ChevronDown, ChevronRight, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
 
 import { PageHeader } from "@/components/business/page-header";
@@ -8,7 +8,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ChannelAccess } from "@/components/views/settings/channel-access";
-import { readBridgeReply } from "@/lib/bridge/read-reply";
+import { useRowActions } from "@/lib/bridge/row-actions";
+import { useBridgePoll } from "@/lib/bridge/use-bridge-poll";
 
 /**
  * Channels: what can deliver, whether it is set up, and who may use it.
@@ -42,7 +43,6 @@ import { readBridgeReply } from "@/lib/bridge/read-reply";
  */
 
 const BRIDGE = "/api/bridge";
-const POLL_MS = 60_000;
 
 export interface ChannelHealth {
   [key: string]: unknown;
@@ -185,77 +185,44 @@ export interface ChannelsPageProps {
 
 export function ChannelsPage({ visible = true }: ChannelsPageProps) {
   const [channels, setChannels] = useState<Channel[] | null>(null);
-  const [listError, setListError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  const [verifying, setVerifying] = useState<string | null>(null);
   const [results, setResults] = useState<Record<string, VerifyResult>>({});
-  const [verifyErrors, setVerifyErrors] = useState<Record<string, string>>({});
   const [targets, setTargets] = useState<Record<string, string>>({});
   const [open, setOpen] = useState<Record<string, boolean>>({});
 
-  // Re-created on every render-relevant change; the poll must not be, or the
-  // interval would be torn down and rebuilt on each tick.
-  const loadRef = useRef<() => Promise<void>>(async () => {});
-
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch(`${BRIDGE}/api/channels`);
-      if (!res.ok) {
-        setListError(await readBridgeReply(res));
-        return;
-      }
-      const body = (await res.json()) as { channels?: Channel[] };
-      setChannels(Array.isArray(body.channels) ? body.channels : []);
-      setListError(null);
-    } catch {
-      setListError("The dashboard could not reach the bridge. Check that the service is running.");
-    } finally {
-      setLoading(false);
-    }
+  const absorb = useCallback((body: unknown) => {
+    const list = (body as { channels?: unknown })?.channels;
+    setChannels(Array.isArray(list) ? (list as Channel[]) : []);
   }, []);
 
-  loadRef.current = load;
+  const {
+    loading,
+    error: listError,
+    reload,
+  } = useBridgePoll({ visible, url: `${BRIDGE}/api/channels`, onData: absorb });
 
-  useEffect(() => {
-    if (!visible) return;
-    void loadRef.current();
-    const timer = setInterval(() => void loadRef.current(), POLL_MS);
-    return () => clearInterval(timer);
-  }, [visible]);
-
-  const setVerifyError = (name: string, message: string | null) =>
-    setVerifyErrors((prev) => {
-      const next = { ...prev };
-      if (message) next[name] = message;
-      else delete next[name];
-      return next;
-    });
+  // The busy row, the per-row refusal and the one reader of it, shared with
+  // every other Helm list rather than hand-rolled here. Verify used to have its
+  // own copy of this cycle, and the copy is what let a stale verdict survive a
+  // failed re-verify.
+  const { busyRow: verifying, rowErrors: verifyErrors, act } = useRowActions();
 
   async function runVerify(channel: Channel) {
-    setVerifying(channel.name);
-    setVerifyError(channel.name, null);
+    // BEFORE the request, not after the answer. A verdict on screen must
+    // describe the attempt now in flight or no attempt at all: a refused
+    // re-verify that left "all checks passed" beside a fresh error is exactly
+    // the tick over an outage `readVerify` exists to refuse, one layer up.
+    setResults((prev) => {
+      const next = { ...prev };
+      delete next[channel.name];
+      return next;
+    });
     const target = (targets[channel.name] ?? "").trim();
-    try {
-      const res = await fetch(`${BRIDGE}/api/channels/${channel.name}/verify`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(target ? { target } : {}),
-      });
-      if (!res.ok) {
-        setVerifyError(channel.name, await readBridgeReply(res));
-        return;
-      }
-      const result = (await res.json()) as VerifyResult;
-      setResults((prev) => ({ ...prev, [channel.name]: result }));
-    } catch {
-      setVerifyError(
-        channel.name,
-        "The dashboard could not reach the bridge to verify that channel."
-      );
-    } finally {
-      setVerifying(null);
-    }
+    await act(
+      channel.name,
+      `${BRIDGE}/api/channels/${encodeURIComponent(channel.name)}/verify`,
+      { method: "POST", body: JSON.stringify(target ? { target } : {}) },
+      (body) => setResults((prev) => ({ ...prev, [channel.name]: body as VerifyResult }))
+    );
   }
 
   const rows = channels ?? [];
@@ -266,7 +233,7 @@ export function ChannelsPage({ visible = true }: ChannelsPageProps) {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => void loadRef.current()}
+          onClick={reload}
           data-testid="channels-refresh"
         >
           <RefreshCw aria-hidden />
@@ -308,7 +275,7 @@ export function ChannelsPage({ visible = true }: ChannelsPageProps) {
               </p>
             ) : null}
             <div>
-              <Button variant="outline" size="sm" onClick={() => void loadRef.current()}>
+              <Button variant="outline" size="sm" onClick={reload}>
                 Try again
               </Button>
             </div>
@@ -343,7 +310,9 @@ export function ChannelsPage({ visible = true }: ChannelsPageProps) {
               className="flex flex-col gap-3 rounded-lg border border-border bg-card p-3.5"
             >
               <div className="flex flex-wrap items-center gap-2">
-                <h3 className="text-sm font-medium text-foreground">{channel.name}</h3>
+                <h3 className="min-w-0 break-words text-sm font-medium text-foreground">
+                  {channel.name}
+                </h3>
                 <Badge
                   variant="outline"
                   className="text-muted-foreground"
@@ -363,7 +332,10 @@ export function ChannelsPage({ visible = true }: ChannelsPageProps) {
               <dl className="grid grid-cols-1 gap-x-6 gap-y-1.5 text-xs sm:grid-cols-2">
                 <div className="flex flex-wrap items-baseline gap-1.5">
                   <dt className="text-muted-foreground">Access mode</dt>
-                  <dd className="text-foreground" data-testid={`channel-access-mode-${channel.name}`}>
+                  <dd
+                    className="min-w-0 break-words text-foreground"
+                    data-testid={`channel-access-mode-${channel.name}`}
+                  >
                     {channel.access_mode ?? "unknown — the setting could not be resolved"}
                   </dd>
                 </div>
@@ -511,7 +483,7 @@ export function ChannelsPage({ visible = true }: ChannelsPageProps) {
                   </Button>
                 </div>
                 {isOpen ? (
-                  <ChannelAccess channel={channel.name} onSettled={() => void loadRef.current()} />
+                  <ChannelAccess channel={channel.name} onSettled={reload} />
                 ) : null}
               </div>
             </section>

@@ -37,19 +37,27 @@ const CHANNELS = {
   ],
 };
 
-const PENDING = {
-  channel: "telegram",
-  pending: [
-    {
-      id: PENDING_ID,
-      channel: "telegram",
-      expires_at: "2099-01-01T00:30:00+00:00",
-      created_at: "2099-01-01T00:00:00+00:00",
-      display_name_present: true,
-    },
-  ],
-  count: 1,
-};
+/**
+ * Built fresh per `setupMocks`, never shared at module scope: the approve
+ * handler settles the code by emptying this list, and a fixture two tests in
+ * one worker both mutate makes the second test measure a page the first one
+ * changed.
+ */
+function freshPending() {
+  return {
+    channel: "telegram",
+    pending: [
+      {
+        id: PENDING_ID,
+        channel: "telegram",
+        expires_at: "2099-01-01T00:30:00+00:00",
+        created_at: "2099-01-01T00:00:00+00:00",
+        display_name_present: true,
+      },
+    ],
+    count: 1,
+  };
+}
 
 const IDENTITIES = {
   channel: "telegram",
@@ -76,8 +84,67 @@ interface Recorded {
   approve: Array<{ url: string; body: Record<string, unknown> }>;
 }
 
-async function setupMocks(page: Page): Promise<Recorded> {
+/**
+ * The widest values a real instance can hand this page: a 120-character
+ * display name, a 60-character access mode and a long channel name. The 390 px
+ * test is only worth anything against strings like these — short fixtures pass
+ * a responsive assertion no matter how the page is built.
+ */
+function hostileChannels() {
+  return {
+    channels: [
+      {
+        ...CHANNELS.channels[0],
+        access_mode: `pairing-${"x".repeat(52)}`,
+        health: {
+          channel: "telegram",
+          configured: true,
+          bot_token: `sha256:${"a".repeat(64)}`,
+        },
+      },
+      CHANNELS.channels[1],
+    ],
+  };
+}
+
+function hostileIdentities() {
+  return {
+    channel: "telegram",
+    identities: [
+      {
+        ...IDENTITIES.identities[0],
+        display_name: "N".repeat(120),
+        user_id: "u".repeat(64),
+        native_id_fingerprint: `sha256:${"b".repeat(64)}`,
+      },
+    ],
+    count: 1,
+  };
+}
+
+/**
+ * How far the widest ancestor of `testid` overflows its own box.
+ *
+ * NOT `document.documentElement`: the settings body is an `overflow-y-auto`
+ * container, which makes its `overflow-x` compute to `auto` — so it absorbs
+ * everything its children overflow by and the document never widens. An
+ * assertion on the document therefore cannot fail, whatever the page does.
+ */
+async function worstOverflow(page: Page, testid: string): Promise<number> {
+  return page.evaluate((id) => {
+    let worst = 0;
+    let el: Element | null = document.querySelector(`[data-testid="${id}"]`);
+    while (el) {
+      worst = Math.max(worst, el.scrollWidth - el.clientWidth);
+      el = el.parentElement;
+    }
+    return worst;
+  }, testid);
+}
+
+async function setupMocks(page: Page, hostile = false): Promise<Recorded> {
   const recorded: Recorded = { verify: [], approve: [] };
+  const pending = freshPending();
 
   // An owner session: Settings is operator-gated in the shell.
   await page.route("**/api/auth/session", (route) =>
@@ -134,31 +201,23 @@ async function setupMocks(page: Page): Promise<Recorded> {
       body: (route.request().postDataJSON() ?? {}) as Record<string, unknown>,
     });
     // Settled: the next read of `pending` answers with nobody waiting.
-    PENDING.pending.length = 0;
-    PENDING.count = 0;
+    pending.pending.length = 0;
+    pending.count = 0;
     return json(route, { id: IDENTITY_ID, channel: "telegram", role: "member" });
   });
-  await page.route("**/api/bridge/api/channels/*/pending", (route) => json(route, PENDING));
-  await page.route("**/api/bridge/api/channels/*/identities", (route) => json(route, IDENTITIES));
-  await page.route("**/api/bridge/api/channels", (route) => json(route, CHANNELS));
+  await page.route("**/api/bridge/api/channels/*/pending", (route) => json(route, pending));
+  await page.route("**/api/bridge/api/channels/*/identities", (route) =>
+    json(route, hostile ? hostileIdentities() : IDENTITIES)
+  );
+  await page.route("**/api/bridge/api/channels", (route) =>
+    json(route, hostile ? hostileChannels() : CHANNELS)
+  );
 
   return recorded;
 }
 
 test.describe("Settings › Channels", () => {
   test("lists channels, verifies one, and approves a pairing", async ({ page }) => {
-    // Restored per test: the approve mock empties it on the way through.
-    PENDING.pending = [
-      {
-        id: PENDING_ID,
-        channel: "telegram",
-        expires_at: "2099-01-01T00:30:00+00:00",
-        created_at: "2099-01-01T00:00:00+00:00",
-        display_name_present: true,
-      },
-    ];
-    PENDING.count = 1;
-
     const recorded = await setupMocks(page);
     await page.goto(SETTINGS_URL, { waitUntil: "networkidle" });
 
@@ -215,20 +274,26 @@ test.describe("Settings › Channels", () => {
     await expect(page.locator(`[data-testid="channel-pending-empty-telegram"]`)).toBeVisible();
   });
 
-  test("stays usable at phone width", async ({ page }) => {
-    await setupMocks(page);
+  test("stays usable at phone width, with the widest strings the API can send", async ({
+    page,
+  }) => {
+    await setupMocks(page, true);
     await page.setViewportSize({ width: 390, height: 780 });
     await page.goto(SETTINGS_URL, { waitUntil: "networkidle" });
 
     await expect(page.locator('[data-testid="channel-card-telegram"]')).toBeVisible({
       timeout: 15000,
     });
+    expect(await worstOverflow(page, "settings-page-channels")).toBeLessThanOrEqual(1);
+
+    // The access panel and the pairing form are the widest surfaces here, and
+    // neither is on screen until the operator opens them.
     await page.locator('[data-testid="channel-access-toggle-telegram"]').click();
     await expect(page.locator('[data-testid="channel-access-telegram"]')).toBeVisible();
+    expect(await worstOverflow(page, "settings-page-channels")).toBeLessThanOrEqual(1);
 
-    const overflow = await page.evaluate(
-      () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-    );
-    expect(overflow).toBeLessThanOrEqual(1);
+    await page.locator(`[data-testid="pairing-settle-${PENDING_ID}"]`).click();
+    await expect(page.locator(`[data-testid="pairing-form-${PENDING_ID}"]`)).toBeVisible();
+    expect(await worstOverflow(page, "settings-page-channels")).toBeLessThanOrEqual(1);
   });
 });

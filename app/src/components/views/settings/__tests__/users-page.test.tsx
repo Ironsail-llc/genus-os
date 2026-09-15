@@ -389,6 +389,46 @@ describe("UsersPage", () => {
     expect(screen.getByTestId(`user-row-${MEMBER.id}`)).toBeTruthy();
   });
 
+  it("will not create an account with a role the operator was never shown", async () => {
+    const bridge = mockBridge();
+    bridge.reply("/api/auth/roles", 503, { detail: "the account store is unavailable" });
+    await renderPage();
+
+    fireEvent.click(screen.getByTestId("users-invite-open"));
+    fireEvent.change(screen.getByTestId("invite-email"), {
+      target: { value: "carol@example.com" },
+    });
+    expect((screen.getByTestId("invite-submit") as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(screen.getByTestId("invite-submit"));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(callsTo(bridge.calls, "/api/users")).toHaveLength(0);
+  });
+
+  it("says so rather than quietly listing fewer accounts than the bridge counted", async () => {
+    mockBridge({ users: [MEMBER, { ...OWNER, id: "" }], count: 2 });
+    await renderPage();
+    expect(screen.getByTestId("users-count-mismatch").textContent).toMatch(/2/);
+    expect(screen.getByTestId("users-count-mismatch").textContent).toMatch(
+      /could not be read|not shown/i
+    );
+  });
+
+  it("offers a disabled account a way back", async () => {
+    const bridge = mockBridge({ users: [{ ...MEMBER, status: "disabled" }], count: 1 });
+    await renderPage();
+
+    expect(screen.queryByTestId(`user-deactivate-${MEMBER.id}`)).toBeNull();
+    fireEvent.click(screen.getByTestId(`user-reactivate-${MEMBER.id}`));
+
+    await waitFor(() =>
+      expect(callsTo(bridge.calls, `/api/users/${MEMBER.id}`, "PATCH")).toHaveLength(1)
+    );
+    expect(callsTo(bridge.calls, `/api/users/${MEMBER.id}`, "PATCH")[0].body).toEqual({
+      status: "active",
+    });
+  });
+
   it("renders the bridge's own words when the listing fails", async () => {
     const bridge = mockBridge();
     bridge.reply("/api/users", 503, { detail: "the account store is unavailable" }, "GET");

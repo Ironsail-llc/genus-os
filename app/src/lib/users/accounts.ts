@@ -64,6 +64,19 @@ export function normalizeAccounts(body: unknown): Account[] {
     .filter((account): account is Account => account !== null);
 }
 
+/**
+ * How many accounts `GET /api/users` said it was returning, or `null`.
+ *
+ * The route answers `count` beside `users`, and the page compares the two: a
+ * row `normalizeAccount` had to drop is a row no action on the screen could
+ * have reached, and a listing that is quietly short is the same class of claim
+ * as a pending count rendered as `0` because the database was down.
+ */
+export function accountCount(body: unknown): number | null {
+  const count = (body as { count?: unknown })?.count;
+  return typeof count === "number" && Number.isFinite(count) ? count : null;
+}
+
 /** A grant as the invite and binding-grant routes answer with it. */
 export interface BindingGrant {
   id: string;

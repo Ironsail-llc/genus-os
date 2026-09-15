@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Copy, KeyRound, Loader2, RefreshCw, UserPlus } from "lucide-react";
 
 import { PageHeader } from "@/components/business/page-header";
@@ -10,7 +10,9 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { readBridgeReply } from "@/lib/bridge/read-reply";
 import { useRowActions } from "@/lib/bridge/row-actions";
+import { useBridgePoll } from "@/lib/bridge/use-bridge-poll";
 import {
+  accountCount,
   normalizeAccounts,
   normalizeGrant,
   type Account,
@@ -50,7 +52,6 @@ import {
  */
 
 const BRIDGE = "/api/bridge";
-const POLL_MS = 60_000;
 
 const OWNER_ROLE = "owner";
 
@@ -127,8 +128,8 @@ export interface UsersPageProps {
 
 export function UsersPage({ visible = true, role }: UsersPageProps) {
   const [users, setUsers] = useState<Account[] | null>(null);
-  const [listError, setListError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  /** What `GET /api/users` said it was returning, when it said. */
+  const [unreadable, setUnreadable] = useState(0);
 
   const [roles, setRoles] = useState<RoleEntry[]>([]);
   const [rolesError, setRolesError] = useState<string | null>(null);
@@ -148,23 +149,27 @@ export function UsersPage({ visible = true, role }: UsersPageProps) {
 
   const callerIsOwner = role === OWNER_ROLE;
 
-  const loadRef = useRef<() => Promise<void>>(async () => {});
-
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch(`${BRIDGE}/api/users`);
-      if (!res.ok) {
-        setListError(await readBridgeReply(res));
-        return;
-      }
-      setUsers(normalizeAccounts(await res.json()));
-      setListError(null);
-    } catch {
-      setListError("The dashboard could not reach the bridge. Check that the service is running.");
-    } finally {
-      setLoading(false);
-    }
+  /**
+   * The listing, and how much of it this page could not read.
+   *
+   * `normalizeAccount` drops a row with no id — it is not addressable, so no
+   * action on this page could reach it — and dropping rows in silence is the
+   * same claim the sibling page refuses to make when it will not render an
+   * unreadable pending count as `0`. The route answers `count`, so the
+   * difference is knowable and is said out loud.
+   */
+  const absorbListing = useCallback((body: unknown) => {
+    const listed = normalizeAccounts(body);
+    const claimed = accountCount(body);
+    setUsers(listed);
+    setUnreadable(claimed === null ? 0 : Math.max(0, claimed - listed.length));
   }, []);
+
+  const {
+    loading,
+    error: listError,
+    reload,
+  } = useBridgePoll({ visible, url: `${BRIDGE}/api/users`, onData: absorbListing });
 
   const loadRoles = useCallback(async () => {
     try {
@@ -181,16 +186,12 @@ export function UsersPage({ visible = true, role }: UsersPageProps) {
     }
   }, []);
 
-  loadRef.current = async () => {
-    await load();
-  };
-
+  // The roles catalog is read once per mount, not polled: it is a constant of
+  // the build, and its failure is reported separately so a dead catalog does
+  // not hide the accounts.
   useEffect(() => {
     if (!visible) return;
     void loadRoles();
-    void loadRef.current();
-    const timer = setInterval(() => void loadRef.current(), POLL_MS);
-    return () => clearInterval(timer);
   }, [visible, loadRoles]);
 
   /**
@@ -246,7 +247,10 @@ export function UsersPage({ visible = true, role }: UsersPageProps) {
 
   async function submitInvite() {
     const email = invite.email.trim();
-    if (!email) return;
+    // The role gate is repeated here rather than left to the disabled button:
+    // a form submits on Enter, and `disabled` on the submit control is a hint
+    // to the pointer, not a rule about what this function may send.
+    if (!email || assignableRoles.length === 0) return;
     setInviting(true);
     setInviteError(null);
     try {
@@ -273,7 +277,7 @@ export function UsersPage({ visible = true, role }: UsersPageProps) {
       setCopied(false);
       setInvite(EMPTY_INVITE);
       setInviteOpen(false);
-      await load();
+      reload();
     } catch {
       setInviteError("The dashboard could not reach the bridge to create that account.");
     } finally {
@@ -303,7 +307,7 @@ export function UsersPage({ visible = true, role }: UsersPageProps) {
           size="sm"
           onClick={() => {
             void loadRoles();
-            void loadRef.current();
+            reload();
           }}
           data-testid="users-refresh"
         >
@@ -331,9 +335,11 @@ export function UsersPage({ visible = true, role }: UsersPageProps) {
           <UserPlus aria-hidden />
           Invite somebody
         </Button>
-        {rolesError ? (
-          <span className="text-xs text-warning" data-testid="users-roles-error">
-            The role catalog could not be read ({rolesError}), so the role menus below are empty.
+        {assignableRoles.length === 0 ? (
+          <span id="users-roles-error" className="text-xs text-warning" data-testid="users-roles-error">
+            {rolesError
+              ? `The role catalog could not be read (${rolesError}), so no account can be created or have its role changed from here until it is back.`
+              : "The bridge listed no roles this session may assign, so no account can be created or have its role changed from here."}
           </span>
         ) : null}
       </div>
@@ -407,10 +413,18 @@ export function UsersPage({ visible = true, role }: UsersPageProps) {
           </p>
 
           <div className="flex flex-wrap items-center gap-1.5">
+            {/*
+              No catalog, no invite. With `/api/auth/roles` down the select is
+              empty and `invite.role` still holds this form's initial value, so
+              submitting would create an account at a role the operator was
+              shown an empty box for. On an access-control screen that is the
+              wrong direction to fail in; the warning above says why.
+            */}
             <Button
               type="submit"
               size="xs"
-              disabled={inviting || !invite.email.trim()}
+              disabled={inviting || !invite.email.trim() || assignableRoles.length === 0}
+              aria-describedby={assignableRoles.length === 0 ? "users-roles-error" : undefined}
               data-testid="invite-submit"
             >
               {inviting ? <Loader2 aria-hidden className="animate-spin" /> : null}
@@ -523,11 +537,24 @@ export function UsersPage({ visible = true, role }: UsersPageProps) {
             <p className="text-sm font-medium text-destructive">The account listing failed</p>
             <p className="text-xs text-muted-foreground">{listError}</p>
             <div>
-              <Button variant="outline" size="sm" onClick={() => void loadRef.current()}>
+              <Button variant="outline" size="sm" onClick={reload}>
                 Try again
               </Button>
             </div>
           </div>
+        ) : null}
+
+        {unreadable > 0 ? (
+          <p
+            className="rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs text-warning"
+            data-testid="users-count-mismatch"
+          >
+            {`The bridge counted ${unreadable + rows.length} accounts and ${
+              unreadable === 1 ? "one of them" : `${unreadable} of them`
+            } could not be read by this version of the dashboard, so ${
+              unreadable === 1 ? "it is" : "they are"
+            } not shown below. Use \`genus user list\` on the box to see the whole set.`}
+          </p>
         ) : null}
 
         {!listError && !loading && rows.length === 0 ? (
@@ -554,10 +581,20 @@ export function UsersPage({ visible = true, role }: UsersPageProps) {
               className="flex flex-col gap-2 rounded-lg border border-border bg-card p-3"
             >
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-medium text-foreground">
+                {/*
+                  `min-w-0 break-words` on every span carrying a value the
+                  SERVER chose: a flex item's default `min-width: auto` refuses
+                  to shrink below its longest word, so a 120-character display
+                  name or a 64-character address pushes the settings pane
+                  sideways at 390 px instead of wrapping. `break-all` on the
+                  address, which is one unbreakable token.
+                */}
+                <span className="min-w-0 break-words text-sm font-medium text-foreground">
                   {user.display_name || user.email}
                 </span>
-                <span className="font-mono text-xs text-muted-foreground">{user.email}</span>
+                <span className="min-w-0 break-all font-mono text-xs text-muted-foreground">
+                  {user.email}
+                </span>
                 <Badge
                   variant="outline"
                   className={statusClass(user.status)}
@@ -628,7 +665,28 @@ export function UsersPage({ visible = true, role }: UsersPageProps) {
                   Arm an SSO grant
                 </Button>
 
-                {user.status === "disabled" ? null : (
+                {user.status === "disabled" ? (
+                  // The way back. `AccountPatch` takes `status: active`, and a
+                  // screen that can only ever disable an account leaves the
+                  // operator on the box for the other half of the same switch.
+                  // No confirmation: restoring access is the reversible
+                  // direction, and the destructive one already has it.
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    disabled={busy}
+                    data-testid={`user-reactivate-${user.id}`}
+                    onClick={() =>
+                      void patchUser(
+                        user,
+                        { status: "active" },
+                        "Reactivated. They can sign in again."
+                      )
+                    }
+                  >
+                    Reactivate
+                  </Button>
+                ) : (
                   <Button
                     variant="outline"
                     size="xs"

@@ -98,7 +98,7 @@ export function ChannelAccess({
 
   const loadPending = useCallback(async () => {
     try {
-      const res = await fetch(`${BRIDGE}/api/channels/${channel}/pending`);
+      const res = await fetch(`${BRIDGE}/api/channels/${encodeURIComponent(channel)}/pending`);
       if (!res.ok) {
         setPendingError(await readBridgeReply(res));
         return;
@@ -113,7 +113,7 @@ export function ChannelAccess({
 
   const loadIdentities = useCallback(async () => {
     try {
-      const res = await fetch(`${BRIDGE}/api/channels/${channel}/identities`);
+      const res = await fetch(`${BRIDGE}/api/channels/${encodeURIComponent(channel)}/identities`);
       if (!res.ok) {
         setIdentitiesError(await readBridgeReply(res));
         return;
@@ -137,17 +137,25 @@ export function ChannelAccess({
     };
   }, [loadPending, loadIdentities]);
 
-  const formFor = (id: string): SettleForm =>
-    forms[id] ?? { code: "", email: "", role: DEFAULT_PAIRED_ROLE };
+  const BLANK_FORM: SettleForm = { code: "", email: "", role: DEFAULT_PAIRED_ROLE };
 
+  const formFor = (id: string): SettleForm => forms[id] ?? BLANK_FORM;
+
+  /**
+   * Edits the form from the updater's own `prev`, never from the render-scope
+   * `forms`. Reading the closure would lose the first of two updates batched
+   * into one render — not reachable through the fields below today, and exactly
+   * the shape that becomes a bug the day somebody adds a paste handler that
+   * fills the code and the address together.
+   */
   const editForm = (id: string, patch: Partial<SettleForm>) =>
-    setForms((prev) => ({ ...prev, [id]: { ...formFor(id), ...patch } }));
+    setForms((prev) => ({ ...prev, [id]: { ...(prev[id] ?? BLANK_FORM), ...patch } }));
 
   const openForm = (id: string) => {
     setConfirming(null);
     setRowError(id, null);
     setRowNote(id, null);
-    setForms((prev) => ({ ...prev, [id]: formFor(id) }));
+    setForms((prev) => ({ ...prev, [id]: prev[id] ?? BLANK_FORM }));
   };
 
   const closeForm = (id: string) =>
@@ -166,7 +174,7 @@ export function ChannelAccess({
     if (code.length !== CODE_LENGTH || !form.email.trim()) return;
     await act(
       row.id,
-      `${BRIDGE}/api/channels/${channel}/pairings/${encodeURIComponent(code)}/approve`,
+      `${BRIDGE}/api/channels/${encodeURIComponent(channel)}/pairings/${encodeURIComponent(code)}/approve`,
       { method: "POST", body: JSON.stringify({ email: form.email.trim(), role: form.role }) },
       () => {
         closeForm(row.id);
@@ -183,7 +191,7 @@ export function ChannelAccess({
     if (code.length !== CODE_LENGTH) return;
     await act(
       row.id,
-      `${BRIDGE}/api/channels/${channel}/pairings/${encodeURIComponent(code)}/deny`,
+      `${BRIDGE}/api/channels/${encodeURIComponent(channel)}/pairings/${encodeURIComponent(code)}/deny`,
       { method: "POST" },
       () => {
         closeForm(row.id);
@@ -197,7 +205,7 @@ export function ChannelAccess({
   async function revoke(identity: ChannelIdentity) {
     await act(
       identity.id,
-      `${BRIDGE}/api/channels/${channel}/identities/${encodeURIComponent(identity.id)}`,
+      `${BRIDGE}/api/channels/${encodeURIComponent(channel)}/identities/${encodeURIComponent(identity.id)}`,
       { method: "DELETE" },
       () => {
         setConfirming(null);
@@ -410,13 +418,20 @@ export function ChannelAccess({
             className="flex flex-col gap-2 rounded-md border border-border bg-card p-2.5"
           >
             <div className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="font-medium text-foreground">
+              {/*
+                `min-w-0 break-words` on every span that carries a value the
+                SERVER chose: a flex item's default `min-width: auto` refuses to
+                shrink below its longest word, so a display name a workspace
+                admin set to 120 characters pushes the settings pane sideways at
+                390 px instead of wrapping.
+              */}
+              <span className="min-w-0 break-words font-medium text-foreground">
                 {identity.display_name || identity.user_id || "an unnamed binding"}
               </span>
               <Badge variant="outline" className="text-muted-foreground">
                 {identity.role || "role unknown"}
               </Badge>
-              <span className="font-mono text-[11px] text-muted-foreground">
+              <span className="min-w-0 break-all font-mono text-[11px] text-muted-foreground">
                 {identity.native_id_fingerprint || "no fingerprint reported"}
               </span>
               <span className="text-muted-foreground">paired {when(identity.paired_at)}</span>

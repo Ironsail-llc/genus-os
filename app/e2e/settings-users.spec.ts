@@ -61,13 +61,49 @@ function json(route: Route, body: unknown, status = 200) {
   return route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 }
 
+/**
+ * The widest values a real instance can hand this page: a display name a
+ * workspace admin set to 120 characters and a 64-character address local part.
+ * The 390 px test is only worth anything against strings like these.
+ */
+function hostileUsers() {
+  return {
+    users: [
+      USERS.users[0],
+      { ...USERS.users[1], display_name: "N".repeat(120), email: `${"a".repeat(64)}@example.com` },
+    ],
+    count: 2,
+  };
+}
+
+/**
+ * How far the widest ancestor of `testid` overflows its own box.
+ *
+ * NOT `document.documentElement`: the settings body is an `overflow-y-auto`
+ * container, which makes its `overflow-x` compute to `auto` — so it absorbs
+ * everything its children overflow by and the document never widens. An
+ * assertion on the document therefore cannot fail, whatever the page does.
+ */
+async function worstOverflow(page: Page, testid: string): Promise<number> {
+  return page.evaluate((id) => {
+    let worst = 0;
+    let el: Element | null = document.querySelector(`[data-testid="${id}"]`);
+    while (el) {
+      worst = Math.max(worst, el.scrollWidth - el.clientWidth);
+      el = el.parentElement;
+    }
+    return worst;
+  }, testid);
+}
+
 interface Recorded {
   invites: Array<Record<string, unknown>>;
   patches: Array<{ url: string; body: Record<string, unknown> }>;
+  grants: string[];
 }
 
-async function setupMocks(page: Page): Promise<Recorded> {
-  const recorded: Recorded = { invites: [], patches: [] };
+async function setupMocks(page: Page, hostile = false): Promise<Recorded> {
+  const recorded: Recorded = { invites: [], patches: [], grants: [] };
 
   await page.route("**/api/auth/session", (route) =>
     json(route, {
@@ -99,6 +135,23 @@ async function setupMocks(page: Page): Promise<Recorded> {
   );
 
   await page.route("**/api/bridge/api/auth/roles", (route) => json(route, ROLES));
+  // Registered before `…/users/*` so it is matched first: that glob does not
+  // cross a `/`, so without this route the arm-grant call fell through to the
+  // 503 catch-all and the affordance was never exercised end to end.
+  await page.route("**/api/bridge/api/users/*/binding-grant", (route) => {
+    recorded.grants.push(route.request().url());
+    return json(
+      route,
+      {
+        grant: {
+          id: "66666666-6666-4666-8666-666666666666",
+          expires_at: "2099-01-01T01:00:00+00:00",
+          issuer: "https://idp.example.com",
+        },
+      },
+      201
+    );
+  });
   await page.route("**/api/bridge/api/users/*", (route) => {
     const url = route.request().url();
     const body = (route.request().postDataJSON() ?? {}) as Record<string, unknown>;
@@ -111,7 +164,7 @@ async function setupMocks(page: Page): Promise<Recorded> {
     return json(route, { user: { ...USERS.users[1], ...body } });
   });
   await page.route("**/api/bridge/api/users", (route) => {
-    if (route.request().method() !== "POST") return json(route, USERS);
+    if (route.request().method() !== "POST") return json(route, hostile ? hostileUsers() : USERS);
     const body = (route.request().postDataJSON() ?? {}) as Record<string, unknown>;
     recorded.invites.push(body);
     return json(
@@ -190,22 +243,32 @@ test.describe("Settings › Users & roles", () => {
     // A change the appliance allows lands, and says what it did.
     await page.locator(`[data-testid="user-role-${MEMBER_ID}"]`).selectOption("viewer");
     await expect(page.locator(`[data-testid="user-note-${MEMBER_ID}"]`)).toContainText("viewer");
+
+    // Arm a fresh grant on an existing account — the other half of the SSO
+    // story, and the one the glob on `…/users/*` used to swallow.
+    await page.locator(`[data-testid="user-grant-arm-${MEMBER_ID}"]`).click();
+    const rowGrant = page.locator(`[data-testid="user-grant-${MEMBER_ID}"]`);
+    await expect(rowGrant).toBeVisible();
+    await expect(rowGrant).toContainText("https://idp.example.com");
+    await expect(rowGrant).toContainText("bob@example.com");
+    expect(recorded.grants).toHaveLength(1);
+    expect(recorded.grants[0]).toContain(`/api/users/${MEMBER_ID}/binding-grant`);
   });
 
-  test("stays usable at phone width", async ({ page }) => {
-    await setupMocks(page);
+  test("stays usable at phone width, with the widest strings the API can send", async ({
+    page,
+  }) => {
+    await setupMocks(page, true);
     await page.setViewportSize({ width: 390, height: 780 });
     await page.goto(SETTINGS_URL, { waitUntil: "networkidle" });
 
     await expect(page.locator(`[data-testid="user-row-${MEMBER_ID}"]`)).toBeVisible({
       timeout: 15000,
     });
+    expect(await worstOverflow(page, "settings-page-users")).toBeLessThanOrEqual(1);
+
     await page.locator('[data-testid="users-invite-open"]').click();
     await expect(page.locator('[data-testid="users-invite-form"]')).toBeVisible();
-
-    const overflow = await page.evaluate(
-      () => document.documentElement.scrollWidth - document.documentElement.clientWidth
-    );
-    expect(overflow).toBeLessThanOrEqual(1);
+    expect(await worstOverflow(page, "settings-page-users")).toBeLessThanOrEqual(1);
   });
 });

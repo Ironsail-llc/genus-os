@@ -352,6 +352,47 @@ describe("ChannelsPage", () => {
     expect(result.textContent).toMatch(/cannot prove|no verification/i);
   });
 
+  it("drops the previous verdict before a re-verify, so a refusal never sits beside a pass", async () => {
+    const bridge = mockBridge();
+    bridge.reply("/verify", 200, {
+      channel: "telegram",
+      configured: true,
+      verify_available: true,
+      error_class: null,
+      steps: [{ step: "auth", ok: true, detail: "bot reachable" }],
+    });
+    await renderPage();
+
+    fireEvent.click(screen.getByTestId("channel-verify-telegram"));
+    const first = await screen.findByTestId("channel-verify-result-telegram");
+    expect(first.getAttribute("data-verdict")).toBe("passed");
+
+    // The engine goes away. `502 could not read the channel state` is the
+    // bridge's own answer, and the verdict above must not survive it — a green
+    // tick beside a fresh error is the pass this page exists not to paint.
+    bridge.reply("/verify", 502, { detail: "could not read the channel state" });
+    fireEvent.click(screen.getByTestId("channel-verify-telegram"));
+
+    await screen.findByTestId("channel-verify-error-telegram");
+    expect(screen.queryByTestId("channel-verify-result-telegram")).toBeNull();
+    expect(screen.queryByTestId("channel-verify-steps-telegram")).toBeNull();
+  });
+
+  it("encodes the channel name it puts in a URL", async () => {
+    const bridge = mockBridge({
+      channels: [
+        { ...CHANNELS.channels[0], name: "a/b", pending_pairings: 0 },
+      ],
+    });
+    render(<ChannelsPage visible />);
+    await screen.findByTestId("channel-card-a/b");
+
+    fireEvent.click(screen.getByTestId("channel-verify-a/b"));
+    await waitFor(() => expect(callsTo(bridge.calls, "/verify")).toHaveLength(1));
+    // Not `/api/channels/a/b/verify`, which addresses a different route.
+    expect(callsTo(bridge.calls, "/verify")[0].url).toContain("/api/channels/a%2Fb/verify");
+  });
+
   it("renders the bridge's own sentence when verify is refused", async () => {
     const bridge = mockBridge();
     bridge.reply("/verify", 422, { detail: "that is not a delivery target" });
