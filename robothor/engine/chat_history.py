@@ -26,7 +26,7 @@ an assistant that cannot read a token cannot store one.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, SupportsIndex
 
 __all__ = ["ChatHistory", "as_history"]
 
@@ -54,13 +54,25 @@ class ChatHistory(list):  # type: ignore[type-arg]
     def append(self, entry: Any) -> None:
         super().append(_clean(entry))
 
-    def insert(self, index: int, entry: Any) -> None:
+    def insert(self, index: SupportsIndex, entry: Any) -> None:
         super().insert(index, _clean(entry))
 
     def extend(self, rows: Any) -> None:
         super().extend(_clean(row) for row in rows)
 
-    def __iadd__(self, rows: Any) -> ChatHistory:
+    def __iadd__(self, rows: Any) -> ChatHistory:  # type: ignore[misc]
+        """``history += rows``.
+
+        Needed, and the test is what proved it: ``list.__iadd__`` is implemented
+        in C and concatenates directly, so it does NOT go through the
+        ``extend`` above. A comment claiming otherwise was written here and the
+        parametrised "every way in" case failed on it immediately.
+
+        The ``type: ignore`` is for mypy's ``__iadd__``/``__add__`` variance
+        rule. Narrowing the return type to ``ChatHistory`` is the whole point:
+        an in-place add must not quietly produce a plain list and lose the
+        property.
+        """
         self.extend(rows)
         return self
 

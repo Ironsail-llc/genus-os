@@ -51,13 +51,47 @@ def ctx(monkeypatch):
 
 
 def _stores(monkeypatch, env: dict[str, str], vault_rows: dict[str, str]) -> None:
+    """Stand both stores up. ``vault_rows`` is keyed by ENVIRONMENT name.
+
+    Translated through ``vault_keys_for_env_name``, which is what the accessor
+    and the status module both search with. The double used to be keyed by
+    environment name directly and answer through ``export_env`` — a faithful
+    model of an implementation that decrypted every row in the instance to
+    answer about one, and which R9 removed.
+    """
     from robothor import vault
+    from robothor.vault.naming import vault_keys_for_env_name
 
     for name, value in env.items():
         monkeypatch.setenv(name, value)
-    monkeypatch.setattr(vault, "export_env", lambda **kw: dict(vault_rows))
-    monkeypatch.setattr(vault, "get", lambda key, **kw: vault_rows.get(key))
-    monkeypatch.setattr(vault, "list", lambda **kw: sorted(vault_rows))
+    rows = {vault_keys_for_env_name(name)[0]: value for name, value in vault_rows.items()}
+
+    # The table is scoped to the names this test set, not to the environment of
+    # whoever runs the suite. Without this the runner's own credentials join the
+    # table — and an ALIAS of one of them (this machine has GH_TOKEN, which
+    # resolves to the same vault row as GITHUB_TOKEN) reports a perfectly real
+    # shadow that has nothing to do with the assertion. It also keeps the
+    # runner's environment out of any failure output, which is the rule this
+    # whole task is about.
+    from robothor.secrets import status as status_module
+    from robothor.vault.naming import env_names_for_vault_key
+
+    monkeypatch.setattr(status_module, "environment_credential_names", lambda: set(env))
+
+    # An ALIAS of a name under test must not be answered by the runner's own
+    # environment. This machine has GH_TOKEN set, which resolves to the same
+    # vault row as GITHUB_TOKEN, so the table reported a perfectly real shadow
+    # between the runner's token and the fixture's — a true statement about
+    # nothing the test is asserting.
+    for key in rows:
+        for alias in env_names_for_vault_key(key):
+            if alias not in env:
+                monkeypatch.delenv(alias, raising=False)
+    monkeypatch.setattr(
+        vault, "export_env", lambda **kw: {k.upper().replace("/", "_"): v for k, v in rows.items()}
+    )
+    monkeypatch.setattr(vault, "get", lambda key, **kw: rows.get(key))
+    monkeypatch.setattr(vault, "list", lambda **kw: sorted(rows))
 
 
 @pytest.mark.asyncio
