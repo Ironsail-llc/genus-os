@@ -21,8 +21,11 @@ Two rules, both narrow, and the narrowness is the design:
   answered SHORT only while the earlier result is still in the conversation; if
   compaction or thinning removed it, the full content comes back. A guard that
   leaves the model unable to see a file it is holding a pointer to is worse than
-  the repeat it prevented. ``search_files`` has no single target to stat, so it
-  is counted by its output like ``exec`` and only ever noted.
+  the repeat it prevented. A resend is itself a read, so the guard records what
+  it put back — without that the next repeat looked for a payload no message
+  held any more, resent the file again, and went on doing so for the rest of the
+  run. ``search_files`` has no single target to stat, so it is counted by its
+  output like ``exec`` and only ever noted.
 
 * **exec.** A command may have side effects the engine cannot see, so the third
   identical-output occurrence gets a note and STILL RUNS. Only after four
@@ -299,6 +302,8 @@ class RepeatGuard:
         )
         if decision.result is None:
             self.pending_notes.append(decision.note)
+        else:
+            self._remember_answer(tool_name, args or {}, decision.result)
         return decision
 
     def _decide(self, tool_name: str, args: dict[str, Any], workspace: Any) -> GuardDecision | None:
@@ -330,12 +335,17 @@ class RepeatGuard:
         if not self._still_in_context(previous.payload):
             # Compaction took the earlier result out of the conversation, so a
             # pointer to it would point at nothing. Send the content again.
+            note = f"{note}, and is repeated here because it is no longer in your context"
             result = {
                 **previous.result,
                 "unchanged_since_step": previous.step,
-                "note": f"{note}, and is repeated here because it is no longer in your context",
+                "note": note,
                 "repeat_guard": "answered",
             }
+        # The decision's note is what `_record_event` writes, so it has to be
+        # the note the agent actually got. It was the SHORT text either way,
+        # which made a resend and a real saving the same `warned` row — and a
+        # sweep counting those rows read 23 full-file resends as 23 answers.
         return GuardDecision("answered", tool_name, note, result)
 
     def _decide_counted(self, tool_name: str, args: dict[str, Any]) -> GuardDecision | None:
@@ -386,12 +396,50 @@ class RepeatGuard:
     def _still_in_context(self, payload: str) -> bool:
         """Is the earlier tool result still somewhere the model can read it?"""
         for message in getattr(self.session, "messages", None) or []:
-            if message.get("role") != "tool":
+            if not isinstance(message, dict) or message.get("role") != "tool":
                 continue
             content = message.get("content")
             if isinstance(content, str) and payload in content:
                 return True
         return False
+
+    def _remember_answer(
+        self, tool_name: str, args: dict[str, Any], result: dict[str, Any]
+    ) -> None:
+        """A resend is a read. Write down what the guard put in the conversation.
+
+        `after` never runs for a call the guard answered — dispatch returns the
+        decision and the handler is skipped — so whatever `_remember` last
+        stored is what `_still_in_context` keeps comparing against. When the
+        answer was a RESEND, that stored payload is a string no message holds
+        any more: the conversation now carries the resent dict, which has three
+        extra keys and therefore is not a superstring of it. The check was
+        false forever after, and the guard resent the same file on every
+        subsequent repeat. Measured: `sam3_image.py`, 37 KB, five times in one
+        run; 14 of that run's 23 read decisions were this.
+
+        Only the resend needs recording. A short answer added nothing to the
+        conversation, so the payload it pointed at is still the right one to
+        look for.
+        """
+        if tool_name not in SHORT_CIRCUIT_TOOLS or "content" not in result:
+            return
+        previous = self.reads.get(canonical_key(tool_name, args))
+        if previous is None:
+            return
+        try:
+            payload = json.dumps(result, default=str)
+        except (TypeError, ValueError):  # pragma: no cover - default=str covers these
+            return
+        if len(payload) > MAX_TRACKED_CHARS:  # pragma: no cover - `after` capped it already
+            return
+        # Only the payload. `result` stays the handler's own dict, so a resend
+        # after a LATER compaction rebuilds byte-identically and this payload
+        # goes on being the right string to look for. And the step stays the
+        # step the file was actually READ at: the note says "identical to your
+        # read at step N", and pointing that at a step where nothing was read
+        # would be a lie the model cannot check.
+        previous.payload = payload
 
     # ── remember ────────────────────────────────────────────────────────
 
