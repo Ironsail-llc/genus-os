@@ -15,6 +15,9 @@ import { FleetView } from "@/components/views/fleet-view";
 import { RunsView } from "@/components/views/runs-view";
 import { AutomationsView } from "@/components/views/automations-view";
 import { HealthView } from "@/components/views/health-view";
+import { MemoryView } from "@/components/views/memory-view";
+import { AuditView } from "@/components/views/audit-view";
+import { LogsView } from "@/components/views/logs-view";
 import { CanvasView } from "@/components/views/canvas-view";
 import { ComingSoonView } from "@/components/views/coming-soon-view";
 import { SettingsView } from "@/components/views/settings-view";
@@ -230,6 +233,15 @@ export function AppShell() {
                 role={role}
                 roleLoading={roleLoading}
               />
+              {/*
+                The three Observe screens. Each is handed the role because
+                every view here stays mounted: without it a member's Helm would
+                put an operator-gated read on the bridge on every page load,
+                for a screen they never opened and may not see.
+              */}
+              <MemoryView visible={view === "memory"} role={role} roleLoading={roleLoading} />
+              <AuditView visible={view === "audit"} role={role} roleLoading={roleLoading} />
+              <LogsView visible={view === "logs"} role={role} roleLoading={roleLoading} />
               <HealthView visible={view === "health"} />
               <SettingsView
                 visible={view === "settings"}
