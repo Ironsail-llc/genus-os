@@ -204,6 +204,15 @@ workflow steps and `ask_user` questions in one list — and
 `POST /api/approvals/{kind}/{id}` answers one. Both are operator-scoped and
 audited.
 
+A **tool-permission escalation** is the third kind and is deliberately not in
+that list: it lives in the engine's memory with a coroutine blocked on it, so a
+listing would be stale the moment it rendered. It is announced over the run's
+own SSE stream as `approval_required` with `kind: "escalation"`, and the Helm's
+chat answers it in place — Allow once, Allow for this session, or Deny — at
+`POST /api/approvals/escalation/{id}`, which the bridge proxies to the engine
+process holding the request. The card counts down `timeout_seconds`; past that
+the engine has already denied the tool for itself.
+
 #### Asking mid-run: the `ask_user` tool
 
 A workflow approval is a gate the *author* declared. `ask_user` is a question

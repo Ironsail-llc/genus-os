@@ -218,3 +218,101 @@ describe("ChatPanel — an agent's question, on every stream", () => {
     expect(screen.queryByTestId("ask-card")).toBeNull();
   });
 });
+
+
+/**
+ * The escalation half of the same event.
+ *
+ * `permission_escalation._announce` emits `approval_required` with
+ * `kind: "escalation"` and a `tool`, and the coroutine that is waiting lives in
+ * the ENGINE with a hard timeout. The panel has to carry `kind`, `tool` and
+ * `timeout_seconds` through to the card, because the card is what decides which
+ * route the answer goes to — and an escalation sent to the question route is an
+ * answer that reaches nobody while the agent waits out its whole budget.
+ */
+const ESCALATION_EVENT = {
+  event: "approval_required",
+  data: {
+    kind: "escalation",
+    id: "esc-9",
+    run_id: "run-1",
+    agent_id: "scheduler",
+    tool: "exec",
+    question: "Agent scheduler is requesting approval.\nTool: exec",
+    options: ["Approve", "Approve All", "Deny"],
+    timeout_seconds: 90,
+  },
+};
+
+describe("ChatPanel — a tool-permission escalation on the stream", () => {
+  beforeEach(() => {
+    setupFetchMock({
+      send: () =>
+        sse([ESCALATION_EVENT, { event: "done", data: { text: "Waiting on you." } }]),
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders the escalation card, with its tool and its countdown", async () => {
+    render(<ChatPanel />);
+    await typeAndSend("tidy the logs");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("escalation-card")).toBeTruthy();
+    });
+    expect(screen.getByTestId("escalation-tool").textContent).toContain("exec");
+    expect(screen.getByTestId("escalation-countdown").textContent).toContain("90s");
+  });
+
+  it("answers it at the escalation route, not the question route", async () => {
+    render(<ChatPanel />);
+    await typeAndSend("tidy the logs");
+    await waitFor(() => {
+      expect(screen.getByTestId("escalation-allow-once")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByTestId("escalation-allow-once"));
+
+    await waitFor(() => {
+      const posted = (global.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.map(
+        (call) => String(call[0]),
+      );
+      expect(posted).toContain("/api/bridge/api/approvals/escalation/esc-9");
+    });
+  });
+
+  it("shows one card per id, however many times the event arrives", async () => {
+    setupFetchMock({
+      send: () =>
+        sse([
+          ESCALATION_EVENT,
+          ESCALATION_EVENT,
+          { event: "done", data: { text: "Waiting on you." } },
+        ]),
+    });
+    render(<ChatPanel />);
+    await typeAndSend("tidy the logs");
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("escalation-card")).toHaveLength(1);
+    });
+  });
+
+  it("dismisses a settled card when the person sends the next message", async () => {
+    render(<ChatPanel />);
+    await typeAndSend("tidy the logs");
+    await waitFor(() => {
+      expect(screen.getByTestId("escalation-card")).toBeTruthy();
+    });
+
+    setupFetchMock({ send: () => sse([{ event: "done", data: { text: "Done." } }]) });
+    await typeAndSend("never mind");
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("escalation-card")).toBeNull();
+    });
+  });
+});

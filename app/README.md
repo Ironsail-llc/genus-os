@@ -30,6 +30,32 @@ card. Server-side data fetches for the generation prompt
 caller's bridge bearer token via `lib/bridge-auth.ts`; their TTL cache is
 partitioned per caller so one operator's rows never reach another's dashboard.
 
+### Talking to another agent, and answering escalations in place
+
+The chat header carries an agent switcher when the appliance has more than one
+**chattable** agent — `GET /api/agent-manifests` marks an agent chattable when
+it holds its session between runs (`schedule.session_target: persistent`) or
+when it is the configured default, because an `isolated` worker would answer
+from a session it forgets the moment the run ends. Picking somebody else
+reloads that agent's history and adds `agent: "<id>"` to every chat request,
+which the BFF turns into `session_key: "agent:<id>:primary"`; the engine's
+`_effective_session_key` does the rest for each role. The **default agent sends
+no key at all** — that omission is what keeps the operator's shared main
+session (webchat and Telegram, on purpose) exactly as it was, and the canvas
+prompt injection stays main-only for the same reason. The choice is remembered
+per browser in `localStorage`, never in the URL.
+
+The same chat answers the two things an agent can block on. An `ask_user`
+question is a durable row settled at `POST /api/approvals/question/{id}`; a
+**tool-permission escalation** is an in-RAM request the engine is waiting on,
+settled at `POST /api/approvals/escalation/{id}` with **Allow once**
+(`{approved: true}`), **Allow for this session**
+(`{approved: true, remember_session: true}`) or **Deny** (`{approved: false}`).
+Both arrive as the same `approval_required` SSE event and the card branches on
+its `kind`. An escalation shows the tool and a live countdown from
+`timeout_seconds`: when it runs out the engine has denied the tool itself, and
+the card says so rather than collecting a decision nobody is waiting for.
+
 ## Navigation
 
 The Helm is a single client shell: every view is mounted in

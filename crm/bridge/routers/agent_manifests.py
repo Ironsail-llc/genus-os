@@ -61,6 +61,7 @@ from robothor.templates.safety import (
 from routers import _manifest_validation as validation
 from routers._audit import audited
 from routers._engine_client import engine_request
+from routers._manifest_rows import _block, _broken, _summary
 from routers._operator import require_operator
 
 logger = logging.getLogger(__name__)
@@ -155,6 +156,24 @@ def _manifest_dir() -> Path:
     from robothor.engine.config import EngineConfig
 
     return EngineConfig.from_env().manifest_dir
+
+
+def _default_chat_agent() -> str:
+    """The agent id interactive chat lands on when nobody names one.
+
+    Same authority as every other engine-derived value here, and for the same
+    reason ``_workspace`` gives: ``chat.py`` resolves an empty ``session_key``
+    to ``EngineConfig.main_session_key``, whose agent segment is this id. An
+    instance that set ``ROBOTHOR_DEFAULT_CHAT_AGENT`` and a bridge that spelled
+    it "main" would disagree about which agent the operator has been talking to
+    for the whole life of the appliance.
+
+    Resolved ONCE per listing by the caller: this builder reads the environment
+    and touches the filesystem, and a fleet of twenty is twenty of those.
+    """
+    from robothor.engine.config import EngineConfig
+
+    return EngineConfig.from_env().default_chat_agent
 
 
 def _refused(error: TemplateSecurityError) -> HTTPException:
@@ -312,64 +331,18 @@ def _snapshot(agent_id: str) -> None:
 
 
 # ─── Reading ─────────────────────────────────────────────────────────
-
-
-def _block(document: dict[str, Any], key: str) -> dict[str, Any]:
-    """One nested block of a manifest, or ``{}`` if it is not a mapping.
-
-    ``document.get(key) or {}`` is the version that looks right and is not: a
-    FALSY non-mapping (``[]``, ``""``) is caught by the ``or`` and a truthy one
-    (``"0 9 * * *"``, ``[announce]``) sails straight into ``.get()``. That is an
-    `AttributeError` out of a route, and a manifest whose `model:` is a bare
-    string is exactly the kind a human hand-edited and needs the editor for.
-    """
-    value = document.get(key)
-    return value if isinstance(value, dict) else {}
-
-
-def _summary(document: dict[str, Any]) -> dict[str, Any]:
-    """The fields one fleet-list row shows.
-
-    A whole manifest per row would put every agent's tool list, warmup files
-    and delivery target into a single response the list view never reads.
-    """
-    schedule = _block(document, "schedule")
-    delivery = _block(document, "delivery")
-    model = _block(document, "model")
-    return {
-        "id": str(document.get("id") or ""),
-        "name": document.get("name") or "",
-        "description": document.get("description") or "",
-        "version": str(document.get("version") or ""),
-        "department": document.get("department") or "",
-        "cron": schedule.get("cron") or "",
-        "timezone": schedule.get("timezone") or "",
-        "enabled": bool(schedule.get("enabled", True)),
-        "delivery": delivery.get("mode") or "none",
-        "model": model.get("primary") or "",
-    }
+#
+# `_block`, `_summary` and `_broken` live in `_manifest_rows` and are
+# re-exported here: `automations.py` reads them off this module by name so
+# that the cron it shows is the one the fleet list shows, and moving them
+# was a decomposition, not a change of seam.
+__all__ = ["_block", "_broken", "_summary", "router"]
 
 
 def _scan() -> Any:
     from robothor.engine.config import load_manifest_dir
 
     return load_manifest_dir(_manifest_dir())
-
-
-def _broken(scan: Any) -> list[dict[str, str]]:
-    """The failure bucket, as ids and error TYPES.
-
-    ``ManifestFailure.detail`` is a parser message and routinely carries the
-    absolute path of the file; it does not come out here.
-    """
-    return [
-        {
-            "id": failure.agent_id or Path(failure.filename).stem,
-            "filename": failure.filename,
-            "error_type": failure.error_type,
-        }
-        for failure in scan.failures
-    ]
 
 
 def _parse(text: str) -> dict[str, Any]:
@@ -748,12 +721,13 @@ async def list_manifests(request: Request) -> dict[str, Any]:
     """
     require_operator(request)
     scan = await asyncio.to_thread(_scan)
+    default_agent = _default_chat_agent()
     agents: list[dict[str, Any]] = []
     undescribable: list[dict[str, str]] = []
     for manifest in scan.manifests:
         agent_id = str(manifest.get("id") or "")
         try:
-            agents.append(_summary(manifest))
+            agents.append(_summary(manifest, default_agent))
         except Exception as error:  # noqa: BLE001 — one manifest, not the page
             logger.warning(
                 "Could not summarise %s: %s", sanitize_log(agent_id), type(error).__name__
@@ -763,7 +737,16 @@ async def list_manifests(request: Request) -> dict[str, Any]:
             )
     agents.sort(key=lambda row: row["id"])
     broken = [*_broken(scan), *undescribable]
-    return {"agents": agents, "broken": broken, "count": len(agents)}
+    return {
+        "agents": agents,
+        "broken": broken,
+        "count": len(agents),
+        # Named rather than inferred. The chat sends NO session_key for this
+        # agent — that omission is what keeps the operator's shared main
+        # session (webchat and Telegram, on purpose) exactly as it was — and a
+        # browser that had to guess which id that is would guess "main".
+        "default_agent": default_agent,
+    }
 
 
 @router.get("/api/agent-manifests/{agent_id}")

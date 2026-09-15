@@ -1,9 +1,11 @@
 import { getEngineClient } from "@/lib/engine/server-client";
+import { sessionKeyForAgent } from "@/lib/chat/agent-session";
 
 export async function POST(req: Request) {
   const body = await req.json();
   const planId = body.plan_id;
   const feedback = body.feedback;
+  const sessionKey = sessionKeyForAgent(body.agent);
 
   if (!planId || typeof planId !== "string") {
     return new Response(JSON.stringify({ error: "plan_id required" }), {
@@ -15,7 +17,7 @@ export async function POST(req: Request) {
   const client = getEngineClient();
 
   try {
-    const result = await client.planReject(planId, feedback);
+    const result = await client.planReject(planId, feedback, sessionKey);
     return new Response(JSON.stringify(result), {
       headers: { "Content-Type": "application/json" },
     });

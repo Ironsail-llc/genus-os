@@ -7,6 +7,30 @@ import { bridgeAuthHeaders } from "@/lib/bridge-auth";
 
 const ENGINE_URL = process.env.ROBOTHOR_ENGINE_URL || "http://127.0.0.1:18800";
 
+/**
+ * A `session_key` field, or no field at all.
+ *
+ * The distinction is the whole feature. `chat.py::_effective_session_key`
+ * resolves an absent OR empty key to `EngineConfig.main_session_key` — the
+ * session the operator's webchat and Telegram share on purpose — but a
+ * present, non-empty one is the caller naming a conversation. Spreading this
+ * helper keeps "no agent chosen" byte-identical to every request the Helm has
+ * sent since B1, instead of quietly adding `session_key: ""` to all of them.
+ */
+function keyed(sessionKey: string): { session_key?: string } {
+  return sessionKey ? { session_key: sessionKey } : {};
+}
+
+/** The same choice, appended to a query string that already has a parameter. */
+function keyedQuery(sessionKey: string): string {
+  return sessionKey ? `&session_key=${encodeURIComponent(sessionKey)}` : "";
+}
+
+/** The same choice, as a whole query string. */
+function keyedOnlyQuery(sessionKey: string): string {
+  return sessionKey ? `?session_key=${encodeURIComponent(sessionKey)}` : "";
+}
+
 async function engineHeaders(json = false): Promise<Record<string, string>> {
   return {
     ...(await bridgeAuthHeaders()),
@@ -63,11 +87,11 @@ class EngineClient {
    * Send a chat message. Returns the raw Response with SSE body.
    * Caller is responsible for reading the SSE stream.
    */
-  async chatSend(message: string): Promise<Response> {
+  async chatSend(message: string, sessionKey = ""): Promise<Response> {
     const res = await fetch(`${ENGINE_URL}/chat/send`, {
       method: "POST",
       headers: await engineHeaders(true),
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message, ...keyed(sessionKey) }),
       signal: AbortSignal.timeout(120_000),
     });
     if (!res.ok) {
@@ -78,10 +102,11 @@ class EngineClient {
 
   /** Get conversation history for a session. */
   async chatHistory(
-    limit = 50
+    limit = 50,
+    sessionKey = ""
   ): Promise<{ sessionKey: string; messages: ChatMessage[] }> {
     const res = await fetch(
-      `${ENGINE_URL}/chat/history?limit=${limit}`,
+      `${ENGINE_URL}/chat/history?limit=${limit}${keyedQuery(sessionKey)}`,
       { headers: await engineHeaders(), signal: AbortSignal.timeout(30_000) },
     );
     if (!res.ok) {
@@ -105,11 +130,11 @@ class EngineClient {
   }
 
   /** Cancel the running response for a session. */
-  async chatAbort(): Promise<{ ok: boolean; aborted: boolean }> {
+  async chatAbort(sessionKey = ""): Promise<{ ok: boolean; aborted: boolean }> {
     const res = await fetch(`${ENGINE_URL}/chat/abort`, {
       method: "POST",
       headers: await engineHeaders(true),
-      body: JSON.stringify({}),
+      body: JSON.stringify(keyed(sessionKey)),
       signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) {
@@ -119,11 +144,11 @@ class EngineClient {
   }
 
   /** Clear session history. */
-  async chatClear(): Promise<{ ok: boolean }> {
+  async chatClear(sessionKey = ""): Promise<{ ok: boolean }> {
     const res = await fetch(`${ENGINE_URL}/chat/clear`, {
       method: "POST",
       headers: await engineHeaders(true),
-      body: JSON.stringify({}),
+      body: JSON.stringify(keyed(sessionKey)),
       signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) {
@@ -135,11 +160,11 @@ class EngineClient {
   // ── Plan Mode ──
 
   /** Start plan mode: explore with read-only tools. Returns SSE stream. */
-  async planStart(message: string, deepPlan = false): Promise<Response> {
+  async planStart(message: string, deepPlan = false, sessionKey = ""): Promise<Response> {
     const res = await fetch(`${ENGINE_URL}/chat/plan/start`, {
       method: "POST",
       headers: await engineHeaders(true),
-      body: JSON.stringify({ message, deep_plan: deepPlan }),
+      body: JSON.stringify({ message, deep_plan: deepPlan, ...keyed(sessionKey) }),
       signal: AbortSignal.timeout(120_000),
     });
     if (!res.ok) {
@@ -149,11 +174,11 @@ class EngineClient {
   }
 
   /** Approve a pending plan. Returns SSE stream of execution. */
-  async planApprove(planId: string): Promise<Response> {
+  async planApprove(planId: string, sessionKey = ""): Promise<Response> {
     const res = await fetch(`${ENGINE_URL}/chat/plan/approve`, {
       method: "POST",
       headers: await engineHeaders(true),
-      body: JSON.stringify({ plan_id: planId }),
+      body: JSON.stringify({ plan_id: planId, ...keyed(sessionKey) }),
       signal: AbortSignal.timeout(120_000),
     });
     if (!res.ok) {
@@ -163,11 +188,15 @@ class EngineClient {
   }
 
   /** Reject a pending plan with optional feedback. */
-  async planReject(planId: string, feedback?: string): Promise<{ ok: boolean }> {
+  async planReject(
+    planId: string,
+    feedback?: string,
+    sessionKey = ""
+  ): Promise<{ ok: boolean }> {
     const res = await fetch(`${ENGINE_URL}/chat/plan/reject`, {
       method: "POST",
       headers: await engineHeaders(true),
-      body: JSON.stringify({ plan_id: planId, feedback }),
+      body: JSON.stringify({ plan_id: planId, feedback, ...keyed(sessionKey) }),
       signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) {
@@ -177,9 +206,9 @@ class EngineClient {
   }
 
   /** Check plan state for a session. */
-  async planStatus(): Promise<{ active: boolean; plan?: PlanState }> {
+  async planStatus(sessionKey = ""): Promise<{ active: boolean; plan?: PlanState }> {
     const res = await fetch(
-      `${ENGINE_URL}/chat/plan/status`,
+      `${ENGINE_URL}/chat/plan/status${keyedOnlyQuery(sessionKey)}`,
       { headers: await engineHeaders(), signal: AbortSignal.timeout(30_000) },
     );
     if (!res.ok) {
@@ -191,11 +220,11 @@ class EngineClient {
   // ── Deep Mode ──
 
   /** Start deep reasoning. Returns SSE stream. */
-  async deepStart(query: string): Promise<Response> {
+  async deepStart(query: string, sessionKey = ""): Promise<Response> {
     const res = await fetch(`${ENGINE_URL}/chat/deep/start`, {
       method: "POST",
       headers: await engineHeaders(true),
-      body: JSON.stringify({ query }),
+      body: JSON.stringify({ query, ...keyed(sessionKey) }),
       signal: AbortSignal.timeout(120_000),
     });
     if (!res.ok) {
@@ -205,9 +234,9 @@ class EngineClient {
   }
 
   /** Check deep reasoning state for a session. */
-  async deepStatus(): Promise<{ active: boolean; deep?: DeepState }> {
+  async deepStatus(sessionKey = ""): Promise<{ active: boolean; deep?: DeepState }> {
     const res = await fetch(
-      `${ENGINE_URL}/chat/deep/status`,
+      `${ENGINE_URL}/chat/deep/status${keyedOnlyQuery(sessionKey)}`,
       { headers: await engineHeaders(), signal: AbortSignal.timeout(30_000) },
     );
     if (!res.ok) {

@@ -1,8 +1,10 @@
 import { getEngineClient } from "@/lib/engine/server-client";
+import { sessionKeyForAgent } from "@/lib/chat/agent-session";
 
 export async function POST(req: Request) {
   const body = await req.json();
   const query = body.query || body.message;
+  const sessionKey = sessionKeyForAgent(body.agent);
 
   if (!query || typeof query !== "string") {
     return new Response(JSON.stringify({ error: "query required" }), {
@@ -14,7 +16,7 @@ export async function POST(req: Request) {
   const client = getEngineClient();
 
   try {
-    const engineRes = await client.deepStart(query);
+    const engineRes = await client.deepStart(query, sessionKey);
 
     if (!engineRes.body) {
       return new Response(
