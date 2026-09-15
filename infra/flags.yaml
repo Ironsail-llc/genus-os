@@ -702,7 +702,7 @@ flags:
       pre-existing deadline note's `logger.info` line was unreadable in
       `agent.log` for exactly that reason.
 
-      BLOCKER for enforce on the fleet: a re-measured WildClawBench 02_Code and
+      BLOCKER: a re-measured WildClawBench 02_Code and
       01_Productivity sweep in the sandbox showing timed-out tasks falling,
       plus `agent_guardrail_events` rows with guardrail_name = 'repeat_guard'
       proving the guard fired on a real repeat rather than on nothing. Enforce
