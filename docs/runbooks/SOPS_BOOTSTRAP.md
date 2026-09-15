@@ -52,16 +52,32 @@ vault.
 
 ## The move
 
+**The order matters, and it is: migrate → verify → shrink.** Shrinking the SOPS
+file before verifying is what turns a mis-filed credential into an outage, and
+there is no step here that can be usefully done out of order.
+
 ```bash
 # 1. See what is where.
 genus secrets status
 
-# 2. Rehearse.
+# 2. Rehearse. Prints exactly what step 3 will print, including conflicts.
 genus secrets migrate --from-env --dry-run
 
-# 3. Do it. Prints names and fingerprints; never a value.
+# 3. Migrate. Names and fingerprints only; never a value.
 genus secrets migrate --from-env
+
+# 4. VERIFY before touching the SOPS file. Every credential you migrated should
+#    read `vault` under SERVED. Anything that does not is a credential the
+#    readers cannot see, and deleting its environment copy would take it away.
+genus secrets status
+genus doctor --only secrets.shadowed
+
+# 5. Only now, shrink the file (below).
 ```
+
+`migrate` opens by telling you how many existing vault rows it will **not**
+touch, before any per-name line — because on a box whose assistant has been
+rotating credentials, that number is the one that matters.
 
 `migrate` refuses bootstrap names outright, so step 3 cannot move something the
 box needs in order to start.
