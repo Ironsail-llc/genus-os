@@ -46,11 +46,14 @@ from routers.automations import router as automations_router
 from routers.channel_access import router as channel_access_router
 from routers.controls import router as controls_router
 from routers.conversations import router as conversations_router
+from routers.flag_audit import router as flag_audit_router
 from routers.fleet import router as fleet_router
 from routers.health import router as health_router
 from routers.installed_agents import router as installed_agents_router
 from routers.integration import router as integration_router
+from routers.logs import router as logs_router
 from routers.memory import router as memory_router
+from routers.memory_facts import router as memory_facts_router
 from routers.notes_tasks import router as notes_tasks_router
 from routers.notifications import router as notifications_router
 from routers.people import router as people_router
@@ -163,6 +166,11 @@ app.include_router(providers_router)
 app.include_router(conversations_router)
 app.include_router(notes_tasks_router)
 app.include_router(memory_router)
+# The operator's view of the memory_facts TABLE (list / forget preview /
+# forget). Its own router because its gate is not memory_router's: every route
+# is operator-only, where the subsystem proxy above is agent-reachable under
+# ``_memory_admin_scope``.
+app.include_router(memory_facts_router)
 app.include_router(routines_router)
 app.include_router(notifications_router)
 app.include_router(tenants_router)
@@ -174,6 +182,11 @@ app.include_router(installed_agents_router)
 app.include_router(agent_manifests_router)
 app.include_router(audit_router)
 app.include_router(controls_router)
+# The guardrail CHANGE LOG, on the same prefix as Controls but with its own
+# gate: an auditor may read who flipped what and why, and may reach nothing
+# else in controls_router. Separate module so that router's operator-only
+# docstring stays true of every route in it.
+app.include_router(flag_audit_router)
 # Settings: the Config page. Beside Controls because a governed flag is a
 # setting whose store happens to be a table -- PATCH /api/settings routes one
 # through the same robothor.flags.store call this router's PATCH makes.
@@ -181,6 +194,10 @@ app.include_router(settings_router)
 app.include_router(fleet_router)
 app.include_router(runs_router)
 app.include_router(system_health_router)
+# journald, for an operator who is not on the box. Beside system_health because
+# both answer "what is this appliance doing right now" — one as numbers, one as
+# the lines the processes actually printed.
+app.include_router(logs_router)
 app.include_router(workflows_router)
 # Automations: the scheduled half of the fleet, joined to what its last run
 # actually did. Beside workflows because the Helm shows them on one screen --

@@ -326,6 +326,19 @@ def controls_client_as_admin(_controls_auth_key):
 
 
 @pytest.fixture
+def controls_client_as_auditor(_controls_auth_key):
+    """A verified human session with role="auditor" — the one non-operator
+    human role the audit READ surfaces admit.
+
+    ``robothor.auth.tokens`` grants it ``audit:read`` and nothing else that
+    writes, and ``ROLE_DESCRIPTIONS`` calls it "Read-only, plus the audit log.
+    For review, not operation." Every route that CHANGES something must still
+    403 it, which is what the memory/logs suites assert with this fixture.
+    """
+    return _make_controls_client_as_role("auditor")
+
+
+@pytest.fixture
 def controls_client_as_other_tenant_owner(_controls_auth_key):
     """A verified human session with role="owner" — the operator role — but
     in a DIFFERENT tenant ("acme-corp") than the platform tenant.

@@ -304,6 +304,19 @@ also have a home of their own, named in the row:
 | `ROBOTHOR_DECLARED_TOOL_OUTAGES` | `tool:reason,tool:reason` — outages the operator has already decided about, so the tool-outage detector stops alerting on them |
 | `GENUS_WORKSPACE`, `GENUS_ENV_FILE`, `GENUS_UID`, `GENUS_GID` | These configure the **compose file**, not the platform, so `genus config` does not know them. (`GENUS_IMAGE_TAG` looks like one of them but *is* declared, in the `substrate` group.) See [Deployment](deployment.md#docker-compose) |
 
+### The log-unit allowlist has no variable
+
+`GET /api/logs` will follow one unit per `robothor-*.service` file that
+`scripts/install-units.sh` installs into `/etc/systemd/system` — falling back
+to the `infra/systemd/` templates when none are installed (a checkout, or a
+container). Nothing else: not `sshd`, not a template unit like
+`robothor-alert@`, and not a name the caller invents. There is deliberately no
+setting for it, because a configurable allowlist is one an operator can widen
+to "everything" from a page that is meant to be read-only — add the unit to
+`infra/systemd/` and install it, and the route follows it. `GET /api/logs/units`
+is the live answer for any given box. See
+[Deployment](deployment.md#the-helms-observe-pages).
+
 ## Channels
 
 Which channels exist, and whether each one is actually set up, is visible over
