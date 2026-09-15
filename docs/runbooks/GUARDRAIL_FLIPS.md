@@ -210,6 +210,7 @@ fails if one is re-dated without a reason.
 | `ROBOTHOR_RIP_13_MODE` | observe (2026-09-20) | BLOCKER: 0 evidence rows ever; nothing writes `rip_13_symbolic_memory`. Wire evidence or set it off with a reason |
 | `ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE` | observe (2026-09-20) | BLOCKER: the observe reporter has produced 0 rows; probe one before flipping (analytics-only) |
 | `ROBOTHOR_RUN_VERIFICATION_MODE` | observe (2026-09-05) | soak the `unverified_claims` rate before alert |
+| `ROBOTHOR_STEP_EFFICIENCY_MODE` | observe (2026-10-01) | new entry 2026-09-15. Ships at observe, not off — the honesty-suite shape. BLOCKER: `repeat_guard` rows in `agent_guardrail_events` proving the guard fires on a real repeat, plus a re-measured WildClawBench 02_Code / 01_Productivity sweep in the sandbox. `docs/runbooks/STEP_EFFICIENCY.md` |
 | `ROBOTHOR_PLUGIN_MANIFEST_MODE` | observe, permanent | `promotion: n/a-on-this-instance` — zero plugins installed, so enforce is a no-op here |
 | `ROBOTHOR_DNC_MODE` | enforce | shipped enforcing — **no ladder**, see below |
 

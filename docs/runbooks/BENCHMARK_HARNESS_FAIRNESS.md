@@ -117,6 +117,32 @@ gone.
 `task_timeout_seconds` — do not optimise the agent. If `judge_errors` is
 climbing, the grader is broken, not the agent.
 
+## 4. A budget the agent cannot see is a budget it spends
+
+The rule above — a timeout is an outcome, never a grade — is about the HARNESS
+being fair. WildClawBench inverts the problem: its budgets are the ones every
+competing harness is killed at, so they are already fair, and a run that spends
+one is a statement about the agent.
+
+The 2026-09-15 sweep says the statement is not "it could not do the task". Five
+of twelve Code tasks and one Productivity task hit their budget and scored zero;
+every Code task that *finished* scored 0.9–1.0. Profiling the two timed-out runs
+from the bench pod's `agent_run_steps` found the same `exec`
+(`python3 test_sam3.py`, requested `timeout: 900` against a 1200s budget) run
+**nine** times, one file re-read six times and four more 2–4 times each, 86 tool
+calls consuming 435s, and the run killed mid-`read_file` with nothing written.
+Context was never the constraint (p50 41k tokens — compaction works), and the
+engine's entire time-awareness was one note at 80% of the ceiling, logged at
+INFO in a container whose root logger has no handlers, so nobody could see it
+fire. The second run had no exact repeats at all and was provider-throughput
+bound (675 output tokens/call at 25–85 tok/s), which is the model, not the
+harness.
+
+`ROBOTHOR_STEP_EFFICIENCY_MODE` is the answer to the first run and deliberately
+not to the second: see [step efficiency](STEP_EFFICIENCY.md) for the controls,
+the log lines to grep, and what has to be true before it is promoted past
+`observe`.
+
 ## Suite YAML keys added
 
 ```yaml
