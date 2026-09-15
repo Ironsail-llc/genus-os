@@ -128,8 +128,34 @@ without arriving behind a green badge:
 `GET /api/automations` composes each card from three sources: the manifest (what
 the automation is), `agent_schedules` (what the scheduler currently holds —
 `next_run_at`, `consecutive_errors`) and the newest `agent_runs` row (what
-happened). The same four run columns now come back from `GET /api/runs` and
-`GET /api/runs/{id}`, so the Runs view shows them too.
+happened). Both queries are scoped to the platform tenant *in the statement*,
+not only by RLS. The same four run columns now come back from `GET /api/runs`
+and `GET /api/runs/{id}`, so the Runs view shows them too.
+
+**One card per job, not per agent.** The scheduler derives up to three jobs from
+one manifest and keys `agent_schedules` — and the circuit breaker — by the job
+id it built: `<agent>` from `schedule.cron`, `<agent>:heartbeat` from
+`heartbeat.cron`, `<agent>:worker` from `worker.cron`
+(`robothor/engine/schedule_reconcile.py`). Automations uses the same ids, so an
+agent scheduled only by a heartbeat and a worker — the shape of the primary
+agent on a typical instance — gets a card per job rather than none at all. The
+card's **Enabled** toggle and **Run now** address the *manifest* (one
+`schedule.enabled` covers all three jobs); **Reset breaker** addresses the *job*,
+because that is what trips. **Edit schedule** appears only on an `agent` job:
+the manifest PATCH owns `schedule.cron` and `schedule.timezone` and nothing
+else, so heartbeat and worker crons are edited in the YAML.
+
+Where the manifest and the schedule row disagree, the manifest wins for
+anything the operator can change (cron, timezone, enabled) — it is what the
+engine re-derives from on its next reconcile. Two honesty rules follow from
+that: a card whose manifest will not parse is still rendered, from the schedule
+row alone and marked as such (the engine keeps firing a job it already holds, so
+a YAML typo must not make a running automation disappear); and a disabled or
+breaker-tripped card prints "not scheduled — disabled" / "held — reset the
+breaker to resume" rather than a cron-arithmetic instant it will not fire on.
+Likewise, a write is reported as reconciled only when the response's
+`reconcile.applied` says so — an engine that is down answers 200 and changes
+nothing.
 
 **The circuit breaker.** The scheduler stops running an agent after
 `CIRCUIT_BREAKER_THRESHOLD` consecutive failures (`robothor/engine/scheduler.py`

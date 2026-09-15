@@ -36,9 +36,21 @@ export interface AutomationRun {
 
 /** One row of `GET /api/automations` — see `_compose`. */
 export interface Automation {
+  /**
+   * The JOB id, which is what `agent_schedules` is keyed by and what the
+   * breaker trips on: `main`, `main:heartbeat`, `main:worker`. One manifest can
+   * be several of these.
+   */
   id: string;
-  name: string;
+  /** The MANIFEST id — what the agent-manifest routes are keyed by. */
+  agent_id: string;
+  /** `agent` | `heartbeat` | `worker`, from `schedule_reconcile`'s own kinds. */
   kind: string;
+  /** Whether a manifest PATCH can change THIS job's schedule (only `agent` can). */
+  editable: boolean;
+  /** The loader could not parse the manifest; this card is the schedule row alone. */
+  manifest_unreadable: boolean;
+  name: string;
   description: string;
   cron: string;
   timezone: string;
@@ -71,7 +83,17 @@ const GOOD_RUN = new Set(["completed"]);
 const BAD_RUN = new Set(["failed", "timeout", "cancelled"]);
 
 /** `delivery_status` values the delivery layer writes on success. */
-const DELIVERED = new Set(["delivered", "sent", "ok", "success"]);
+export const DELIVERED = new Set(["delivered", "sent", "ok", "success"]);
+
+/**
+ * Run statuses that have not finished yet.
+ *
+ * A run still going has no delivery status because it has not got there, which
+ * is not the same as a finished run that failed to send. Reading the first as
+ * "not delivered" in warn colour put a red cell on every automation the
+ * operator happened to be watching mid-fire.
+ */
+const IN_FLIGHT = new Set(["pending", "running"]);
 
 /** `verified_status` values from `robothor/engine/run_verification.py`. */
 const GOOD_VERDICT = new Set(["verified", "no_claims"]);
@@ -120,7 +142,11 @@ export function deliveredReading(
   if (!run) return { text: "nothing delivered yet", tone: "unknown" };
 
   const status = (run.delivery_status ?? "").trim();
-  if (!status) return { text: "not delivered", tone: "warn" };
+  if (!status) {
+    return IN_FLIGHT.has((run.status ?? "").trim())
+      ? { text: "delivery pending", tone: "unknown" }
+      : { text: "not delivered", tone: "warn" };
+  }
 
   const channel = (run.delivery_channel ?? "").trim() || (automation.delivery.channel ?? "").trim();
   const when = relativeTime(run.delivered_at, now);
@@ -178,6 +204,26 @@ export function durationText(ms: number | null | undefined): string | null {
   const minutes = seconds / 60;
   if (minutes < 90) return `${Math.round(minutes)} min`;
   return `${(minutes / 60).toFixed(1)} h`;
+}
+
+/**
+ * What the "next run" line may honestly claim.
+ *
+ * `nextRunText` is pure cron arithmetic and knows nothing about whether the
+ * engine will act on it. It will not: `scheduler.py` filters `spec.enabled`
+ * when registering jobs and skips a tripped agent before it fires. Printing a
+ * confident instant for either — down to the minute and the zone — is the
+ * failure this whole view was built to remove, wearing the view's own clothes.
+ */
+export function nextRunClaim(
+  automation: Pick<Automation, "enabled" | "breaker_tripped">,
+  computed: string | null,
+  heldRelative: string
+): string {
+  if (!automation.enabled) return "not scheduled — disabled";
+  if (automation.breaker_tripped) return "held — reset the breaker to resume";
+  if (computed) return computed;
+  return heldRelative ? `${heldRelative} (per the scheduler)` : "not scheduled";
 }
 
 /** `GET /api/automations`, defensively: a malformed body renders as empty. */

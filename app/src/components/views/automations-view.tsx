@@ -10,8 +10,10 @@ import { isOperatorRole } from "@/components/layout/nav-config";
 import { AutomationCard } from "@/components/views/automations/automation-card";
 import { WorkflowsSection } from "@/components/views/automations/workflows-section";
 import { describeTrigger } from "@/components/views/agents/agent-manifests";
+import { reconcileNote, warningLine, warningsOf } from "@/lib/agents/reconcile";
 import { normalizeAutomations, type Automation } from "@/lib/automations/run-truth";
 import { readBridgeReply } from "@/lib/bridge/read-reply";
+import { useRowActions } from "@/lib/bridge/row-actions";
 
 /**
  * Automations — every scheduled agent, and what its last run actually did.
@@ -57,9 +59,12 @@ export function AutomationsView({
   // appliance saying it is broken. Told apart so a member is not shown red.
   const [forbidden, setForbidden] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [busyRow, setBusyRow] = useState<string | null>(null);
-  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
-  const [rowNotes, setRowNotes] = useState<Record<string, string>>({});
+  // The busy row, the per-row error and the per-row note, shared with the
+  // Agents view's manifest list rather than forked from it.
+  const { busyRow, rowErrors, rowNotes, setRowNote, act } = useRowActions();
+  // The engine's half of a manifest write, kept per row beside the note.
+  const [rowReconcile, setRowReconcile] = useState<Record<string, string>>({});
+  const [rowWarnings, setRowWarnings] = useState<Record<string, string>>({});
 
   const canWrite = isOperatorRole(role);
   const readOnly = !roleLoading && !canWrite;
@@ -99,95 +104,78 @@ export function AutomationsView({
     return () => clearInterval(timer);
   }, [visible]);
 
-  function setRow(
-    setter: React.Dispatch<React.SetStateAction<Record<string, string>>>,
-    id: string,
-    message: string | null
-  ) {
-    setter((prev) => {
-      const next = { ...prev };
-      if (message) next[id] = message;
-      else delete next[id];
-      return next;
-    });
-  }
-
-  const act = useCallback(
-    async (id: string, url: string, init: RequestInit, onOk: (body: unknown) => void) => {
-      setBusyRow(id);
-      setRow(setRowErrors, id, null);
-      setRow(setRowNotes, id, null);
-      try {
-        const res = await fetch(url, {
-          headers: { "Content-Type": "application/json" },
-          ...init,
-        });
-        if (!res.ok) {
-          setRow(setRowErrors, id, await readBridgeReply(res));
-          return;
-        }
-        onOk(await res.json());
-      } catch {
-        setRow(setRowErrors, id, "The dashboard could not reach the bridge to do that.");
-      } finally {
-        setBusyRow(null);
-      }
+  /**
+   * Read the engine's half of a write and say only what it supports.
+   *
+   * The routes behind these buttons answer `{"reconcile": {"applied": false,
+   * "error": …}}` with a 200 when the engine is unreachable, and
+   * `agent_manifests`'s own docstring names the failure: the operator must not
+   * be told the agent is live when it is not. Same reader as B8's panel.
+   */
+  const absorb = useCallback(
+    (id: string, body: unknown) => {
+      setRowReconcile((prev) => ({ ...prev, [id]: reconcileNote(body) ?? "" }));
+      setRowWarnings((prev) => ({ ...prev, [id]: warningLine(warningsOf(body)) ?? "" }));
     },
     []
   );
 
-  const manifestUrl = (id: string, suffix = "") =>
-    `${BRIDGE}/api/agent-manifests/${encodeURIComponent(id)}${suffix}`;
+  // The card is keyed by JOB id (`main:heartbeat`); the manifest routes are
+  // keyed by the AGENT id. Conflating the two is what made the reset address a
+  // row that does not exist.
+  const manifestUrl = (automation: Automation, suffix = "") =>
+    `${BRIDGE}/api/agent-manifests/${encodeURIComponent(automation.agent_id)}${suffix}`;
 
   const onToggle = useCallback(
     async (automation: Automation) => {
+      // `schedule.enabled` rides every job spec the manifest derives, so one
+      // disable stops the agent, its heartbeat and its worker together.
       const suffix = automation.enabled ? "/disable" : "/enable";
-      await act(automation.id, manifestUrl(automation.id, suffix), { method: "POST" }, () => {
-        setRow(
-          setRowNotes,
+      await act(automation.id, manifestUrl(automation, suffix), { method: "POST" }, (body) => {
+        setRowNote(
           automation.id,
           automation.enabled ? "Taken off its schedule." : "Back on its schedule."
         );
+        absorb(automation.id, body);
         void loadRef.current();
       });
     },
-    [act]
+    [act, absorb, setRowNote]
   );
 
   const onRunNow = useCallback(
     async (automation: Automation) => {
-      await act(automation.id, manifestUrl(automation.id, "/run"), { method: "POST" }, (body) => {
-        setRow(
-          setRowNotes,
-          automation.id,
-          describeTrigger((body as { triggered?: unknown })?.triggered)
-        );
+      await act(automation.id, manifestUrl(automation, "/run"), { method: "POST" }, (body) => {
+        setRowNote(automation.id, describeTrigger((body as { triggered?: unknown })?.triggered));
+        absorb(automation.id, body);
         void loadRef.current();
       });
     },
-    [act]
+    [act, absorb, setRowNote]
   );
 
   const onResetBreaker = useCallback(
     async (automation: Automation) => {
+      // By JOB id: the scheduler trips its breaker per job, so resetting the
+      // bare agent id would leave the stopped heartbeat stopped.
       const url = `${BRIDGE}/api/automations/${encodeURIComponent(automation.id)}/reset-breaker`;
-      await act(automation.id, url, { method: "POST" }, () => {
-        setRow(
-          setRowNotes,
+      await act(automation.id, url, { method: "POST" }, (body) => {
+        setRowNote(
           automation.id,
           "The error count is back to zero — it runs again on its next scheduled fire."
         );
+        absorb(automation.id, body);
         void loadRef.current();
       });
     },
-    [act]
+    [act, absorb, setRowNote]
   );
 
   const onSaveSchedule = useCallback(
     async (automation: Automation, edit: { cron: string; timezone: string; change: string }) => {
       await act(
         automation.id,
-        manifestUrl(automation.id),
+        manifestUrl(automation),
         {
           method: "PATCH",
           body: JSON.stringify({
@@ -198,13 +186,21 @@ export function AutomationsView({
             change: edit.change || "Schedule changed from the Helm.",
           }),
         },
-        () => {
-          setRow(setRowNotes, automation.id, "Schedule saved. The engine re-derived its jobs.");
+        (body) => {
+          // "Saved" is what the file did. Whether the engine re-derived its
+          // jobs is a separate claim the body has to support.
+          setRowNote(
+            automation.id,
+            reconcileNote(body)
+              ? "Schedule saved to the manifest."
+              : "Schedule saved. The engine re-derived its jobs."
+          );
+          absorb(automation.id, body);
           void loadRef.current();
         }
       );
     },
-    [act]
+    [act, absorb, setRowNote]
   );
 
   const rows = automations ?? [];
@@ -292,6 +288,8 @@ export function AutomationsView({
             busy={busyRow === automation.id}
             error={rowErrors[automation.id]}
             note={rowNotes[automation.id]}
+            reconcile={rowReconcile[automation.id] || null}
+            warnings={rowWarnings[automation.id] || null}
             onToggle={onToggle}
             onRunNow={onRunNow}
             onResetBreaker={onResetBreaker}

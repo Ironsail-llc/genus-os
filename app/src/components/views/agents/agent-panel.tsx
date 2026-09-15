@@ -20,6 +20,9 @@ import {
   type ValidationIssue,
   type ValidationVerdict,
 } from "@/lib/agents/manifests";
+// Aliased: this component already holds the rendered note in state under that
+// name, and shadowing the reader with its own output is how it stops being one.
+import { reconcileNote as readReconcile, warningsOf } from "@/lib/agents/reconcile";
 import { readBridgeReply } from "@/lib/bridge/read-reply";
 
 /**
@@ -353,17 +356,11 @@ export function AgentPanel({ agentId, models, onClose, onSaved }: AgentPanelProp
 
   function absorb(body: Record<string, unknown>, sentence: string) {
     setResult(sentence);
-    const answered = Array.isArray(body.warnings) ? (body.warnings as ValidationIssue[]) : [];
-    const pre = Array.isArray(body.pre_existing) ? (body.pre_existing as ValidationIssue[]) : [];
-    setWarnings([...answered, ...pre]);
-    const reconcile = body.reconcile as { applied?: boolean; error?: string } | undefined;
-    setReconcileNote(
-      reconcile && reconcile.applied === false
-        ? `The manifest was written, but the engine did not pick up the schedule change (${
-            reconcile.error ?? "the engine did not reconcile"
-          }). It will be reconciled on the next watchdog pass.`
-        : null
-    );
+    // Both readings live in `lib/agents/reconcile.ts`, because the Automations
+    // list makes the same two claims about the same response and the sentence
+    // has to stay identical in both places.
+    setWarnings(warningsOf(body));
+    setReconcileNote(readReconcile(body));
   }
 
   /** POST the create, and hand back the id the SERVER chose. */

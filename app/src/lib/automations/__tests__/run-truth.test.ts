@@ -4,6 +4,7 @@ import {
   completedReading,
   deliveredReading,
   durationText,
+  nextRunClaim,
   normalizeAutomations,
   ranReading,
   type Automation,
@@ -31,8 +32,11 @@ function run(overrides: Partial<AutomationRun> = {}): AutomationRun {
 function automation(overrides: Partial<Automation> = {}): Automation {
   return {
     id: "invoice-chaser",
-    name: "Invoice Chaser",
+    agent_id: "invoice-chaser",
     kind: "agent",
+    editable: true,
+    manifest_unreadable: false,
+    name: "Invoice Chaser",
     description: "",
     cron: "0 9 * * *",
     timezone: "UTC",
@@ -99,6 +103,54 @@ describe("delivered", () => {
 
   it("says nothing has been delivered yet when the automation has never run", () => {
     expect(deliveredReading(automation({ last_run: null }), NOW).tone).toBe("unknown");
+  });
+
+  it("a run still in flight is delivery PENDING, not a delivery failure", () => {
+    // It has not got there yet. Reading that as "not delivered" in warn colour
+    // put a red cell on every automation the operator watched mid-fire.
+    for (const status of ["running", "pending"]) {
+      const inFlight = automation({
+        last_run: run({ status, delivery_status: null, delivered_at: null }),
+      });
+      expect(deliveredReading(inFlight, NOW)).toEqual({
+        text: "delivery pending",
+        tone: "unknown",
+      });
+    }
+  });
+
+  it("a FINISHED run with no delivery is still not delivered", () => {
+    const done = automation({
+      last_run: run({ status: "completed", delivery_status: null, delivered_at: null }),
+    });
+    expect(deliveredReading(done, NOW).tone).toBe("warn");
+  });
+});
+
+describe("nextRunClaim", () => {
+  it("a disabled automation is not scheduled, whatever its cron says", () => {
+    expect(nextRunClaim({ enabled: false, breaker_tripped: false }, "Tue 09:00", "")).toMatch(
+      /disabled/
+    );
+  });
+
+  it("a tripped automation is held, not due", () => {
+    expect(nextRunClaim({ enabled: true, breaker_tripped: true }, "Tue 09:00", "")).toMatch(
+      /breaker/
+    );
+  });
+
+  it("a live automation keeps the computed instant", () => {
+    expect(nextRunClaim({ enabled: true, breaker_tripped: false }, "Tue 09:00", "in 2 hours")).toBe(
+      "Tue 09:00"
+    );
+  });
+
+  it("falls back to what the scheduler holds, then to nothing at all", () => {
+    expect(nextRunClaim({ enabled: true, breaker_tripped: false }, null, "in 2 hours")).toBe(
+      "in 2 hours (per the scheduler)"
+    );
+    expect(nextRunClaim({ enabled: true, breaker_tripped: false }, null, "")).toBe("not scheduled");
   });
 });
 

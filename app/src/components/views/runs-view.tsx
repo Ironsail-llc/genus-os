@@ -6,13 +6,24 @@ import { PageHeader } from "@/components/business/page-header";
 import { EmptyState } from "@/components/business/empty-state";
 import { StatusBadge, fromEngineStatus } from "@/components/business/status-badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { DELIVERED } from "@/lib/automations/run-truth";
+import { relativeTime } from "@/lib/inbox/pending";
 
 const BRIDGE_URL = "/api/bridge";
 
-/** `delivery_status` values the delivery layer writes on success. */
-const DELIVERED = new Set(["delivered", "sent", "ok", "success"]);
 /** `verified_status` values that are not a finding — see run_verification.py. */
 const GOOD_VERDICT = new Set(["verified", "no_claims"]);
+
+/**
+ * Whether a `delivery_status` means the answer got there.
+ *
+ * `DELIVERED` is imported rather than re-listed, and the comparison lowercases
+ * for the same reason `run-truth.ts` does — two readers of one column that
+ * disagree on case are two different answers about the same run.
+ */
+function wasDelivered(status: string): boolean {
+  return DELIVERED.has(status.trim().toLowerCase());
+}
 
 /** A status token as a person reads it: `unverified_claims` → `unverified claims`. */
 function humanize(status: string): string {
@@ -126,9 +137,12 @@ export function RunsView({ visible = true }: { visible?: boolean }) {
                 )}
                 {r.delivery_status && (
                   <div data-testid={`run-delivered-${r.id}`}
-                    className={`text-xs ${DELIVERED.has(r.delivery_status) ? "text-muted-foreground" : "text-destructive"}`}>
+                    className={`text-xs ${wasDelivered(r.delivery_status) ? "text-muted-foreground" : "text-destructive"}`}>
                     delivery {humanize(r.delivery_status)}
                     {r.delivery_channel ? ` via ${r.delivery_channel}` : ""}
+                    {/* WHEN it landed, not only that it did: a delivery an hour
+                        after the run is a queue, not a success. */}
+                    {relativeTime(r.delivered_at) ? ` ${relativeTime(r.delivered_at)}` : ""}
                   </div>
                 )}
               </button>
@@ -146,9 +160,10 @@ export function RunsView({ visible = true }: { visible?: boolean }) {
             <div className="mt-2 flex flex-wrap gap-3 text-xs">
               {detail.run.delivery_status && (
                 <span data-testid={`run-delivered-detail-${detail.run.id}`}
-                  className={DELIVERED.has(detail.run.delivery_status) ? "text-muted-foreground" : "text-destructive"}>
+                  className={wasDelivered(detail.run.delivery_status) ? "text-muted-foreground" : "text-destructive"}>
                   delivery {humanize(detail.run.delivery_status)}
                   {detail.run.delivery_channel ? ` via ${detail.run.delivery_channel}` : ""}
+                  {relativeTime(detail.run.delivered_at) ? ` ${relativeTime(detail.run.delivered_at)}` : ""}
                 </span>
               )}
               {detail.run.verified_status && (

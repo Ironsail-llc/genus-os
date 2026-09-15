@@ -16,10 +16,15 @@ const AUTOMATIONS_URL = "/?v=workflows";
 const TRIPPED_ID = "ledger-sweeper";
 const HEALTHY_ID = "invoice-chaser";
 
+const HEARTBEAT_ID = "orchestrator:heartbeat";
+
 interface Automation {
   id: string;
-  name: string;
+  agent_id: string;
   kind: string;
+  editable: boolean;
+  manifest_unreadable: boolean;
+  name: string;
   description: string;
   cron: string;
   timezone: string;
@@ -36,8 +41,11 @@ function seed(): Automation[] {
   return [
     {
       id: HEALTHY_ID,
-      name: "Invoice Chaser",
+      agent_id: HEALTHY_ID,
       kind: "agent",
+      editable: true,
+      manifest_unreadable: false,
+      name: "Invoice Chaser",
       description: "Chases unpaid invoices.",
       cron: "0 9 * * *",
       timezone: "UTC",
@@ -62,8 +70,11 @@ function seed(): Automation[] {
     },
     {
       id: TRIPPED_ID,
-      name: "Ledger Sweeper",
+      agent_id: TRIPPED_ID,
       kind: "agent",
+      editable: true,
+      manifest_unreadable: false,
+      name: "Ledger Sweeper",
       description: "",
       cron: "*/15 * * * *",
       timezone: "UTC",
@@ -85,6 +96,26 @@ function seed(): Automation[] {
       breaker_tripped: true,
       breaker_threshold: 5,
       delivery: { mode: "none", channel: "", to: "" },
+    },
+    // A job the engine keys as `<agent>:heartbeat` — the shape that had no card
+    // at all before the C1 fix, and the shape the primary agent actually has.
+    {
+      id: HEARTBEAT_ID,
+      agent_id: "orchestrator",
+      kind: "heartbeat",
+      editable: false,
+      manifest_unreadable: false,
+      name: "Orchestrator · heartbeat",
+      description: "",
+      cron: "0 12,16 * * *",
+      timezone: "UTC",
+      enabled: true,
+      next_run_at: "2099-01-01T12:00:00Z",
+      last_run: null,
+      consecutive_errors: 0,
+      breaker_tripped: false,
+      breaker_threshold: 5,
+      delivery: { mode: "announce", channel: "telegram", to: "agent@example.com" },
     },
   ];
 }
@@ -137,7 +168,9 @@ async function setupMocks(page: Page): Promise<Recorded> {
   });
 
   await page.route("**/api/bridge/api/automations/*/reset-breaker", (route) => {
-    const id = new URL(route.request().url()).pathname.split("/").slice(-2)[0];
+    const id = decodeURIComponent(
+      new URL(route.request().url()).pathname.split("/").slice(-2)[0]
+    );
     recorded.resets.push(id);
     const row = store.get(id);
     if (!row) return json(route, { detail: "no schedule for that automation" }, 404);
@@ -189,7 +222,22 @@ test.describe("Automations › run truth and the breaker", () => {
       "none expected"
     );
 
-    // The tripped one, and only the tripped one, carries the chip.
+    // A heartbeat job has a card of its own, labelled, with no schedule form:
+    // the manifest PATCH owns schedule.* only.
+    await expect(page.locator(`[data-testid="automation-card-${HEARTBEAT_ID}"]`)).toBeVisible();
+    await expect(page.locator(`[data-testid="automation-kind-${HEARTBEAT_ID}"]`)).toHaveText(
+      "heartbeat"
+    );
+    await expect(page.locator(`[data-testid="automation-edit-${HEARTBEAT_ID}"]`)).toHaveCount(0);
+    await expect(page.locator(`[data-testid="automation-uneditable-${HEARTBEAT_ID}"]`)).toContainText(
+      "heartbeat"
+    );
+
+    // The tripped one, and only the tripped one, carries the chip. And while it
+    // is tripped it must not advertise a next fire it will not have.
+    await expect(page.locator(`[data-testid="automation-next-${TRIPPED_ID}"]`)).toContainText(
+      "breaker"
+    );
     await expect(page.locator(`[data-testid="automation-breaker-${TRIPPED_ID}"]`)).toContainText(
       "5"
     );
@@ -237,6 +285,33 @@ test.describe("Automations › run truth and the breaker", () => {
         },
       },
     ]);
+  });
+
+  test("a save the engine did not reconcile does not claim it did", async ({ page }) => {
+    await setupMocks(page);
+    // Exactly what the bridge answers with the engine unreachable: a 200 that
+    // says the file was written and the schedule was NOT picked up.
+    await page.route("**/api/bridge/api/agent-manifests/*", (route) =>
+      route.request().method() === "PATCH"
+        ? json(route, { saved: true, reconcile: { applied: false, error: "engine unreachable" } })
+        : json(route, { ok: true })
+    );
+    await page.goto(AUTOMATIONS_URL, { waitUntil: "networkidle" });
+
+    await expect(page.locator(`[data-testid="automation-card-${HEALTHY_ID}"]`)).toBeVisible({
+      timeout: 15000,
+    });
+    await page.locator(`[data-testid="automation-edit-${HEALTHY_ID}"]`).click();
+    await page.locator(`[data-testid="automation-cron-input-${HEALTHY_ID}"]`).fill("0 6 * * *");
+    await page.locator(`[data-testid="automation-save-${HEALTHY_ID}"]`).click();
+
+    await expect(page.locator(`[data-testid="automation-reconcile-${HEALTHY_ID}"]`)).toContainText(
+      "engine unreachable",
+      { timeout: 15000 }
+    );
+    await expect(page.locator(`[data-testid="automation-note-${HEALTHY_ID}"]`)).not.toContainText(
+      "re-derived"
+    );
   });
 
   test("stays usable at phone width", async ({ page }) => {

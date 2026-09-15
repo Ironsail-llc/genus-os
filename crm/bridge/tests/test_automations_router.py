@@ -12,9 +12,13 @@ question.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from typing import TYPE_CHECKING
 
 import pytest
 from routers import automations
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class _Cursor:
@@ -52,8 +56,62 @@ def _bind_connection(monkeypatch, recorder: dict, rowcount: int = 1):
     monkeypatch.setattr(automations, "get_connection", _fake)
 
 
+#: A manifest shaped like the primary agent on a real instance: NO
+#: ``schedule.cron``, and its two real schedules in the ``heartbeat`` and
+#: ``worker`` blocks. Written from the shape of ``docs/agents/main.yaml``, never
+#: its content — the crons, names and delivery targets here are invented.
+#:
+#: This shape is the whole of C1: the engine keys ``agent_schedules`` by JOB id
+#: (``<agent>:heartbeat``), so an agent scheduled this way matched neither "has
+#: a cron" nor "has a schedule row" and had no card at all.
+MAIN_SHAPED_YAML = """
+id: orchestrator
+name: Orchestrator
+description: Runs the instance.
+version: 1.0.0
+department: core
+model:
+  primary: test-model
+schedule:
+  timezone: UTC
+  timeout_seconds: 600
+delivery:
+  mode: announce
+  channel: telegram
+  to: agent@example.com
+heartbeat:
+  cron: "0 12,16 * * *"
+  timezone: UTC
+worker:
+  cron: "0 7-22/2 * * *"
+  timezone: UTC
+"""
+
+#: An ordinary cron'd agent, for the same directory.
+PLAIN_YAML = """
+id: nightly-report
+name: Nightly Report
+version: 1.0.0
+department: operations
+schedule:
+  cron: "0 9 * * *"
+  timezone: UTC
+delivery:
+  mode: none
+"""
+
+
+def _manifest_dir(workspace: Path) -> Path:
+    directory = workspace / "docs" / "agents"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
 MANIFEST = {
     "id": "invoice-chaser",
+    "agent_id": "invoice-chaser",
+    "kind": "agent",
+    "editable": True,
     "name": "Invoice Chaser",
     "description": "Chases unpaid invoices.",
     "version": "1.0.0",
@@ -104,7 +162,7 @@ def fake_sources(monkeypatch):
     }
     monkeypatch.setattr(automations, "_manifests", lambda: state["manifests"])
     monkeypatch.setattr(automations, "_schedule_rows", lambda tenant_id: state["schedules"])
-    monkeypatch.setattr(automations, "_latest_runs", lambda ids: state["runs"])
+    monkeypatch.setattr(automations, "_latest_runs", lambda ids, tenant_id: state["runs"])
     return state
 
 
@@ -112,6 +170,61 @@ def _rows(client):
     response = client.get("/api/automations")
     assert response.status_code == 200
     return response.json()["automations"]
+
+
+# ─── The manifest half, unstubbed ────────────────────────────────────
+#
+# Every composition test below stubs ``_manifests``. That stub is what hid the
+# defect these three exercise: the real reader was looking for a field the
+# primary agent on a real instance does not have.
+
+
+def test_a_manifest_scheduled_only_by_heartbeat_and_worker_still_has_cards(env_workspace):
+    """One job, one card — because ``agent_schedules`` is keyed by JOB id.
+
+    ``robothor/engine/schedule_reconcile.py`` derives ``<id>``, ``<id>:heartbeat``
+    and ``<id>:worker`` from one manifest and the scheduler writes THOSE as
+    ``agent_schedules.agent_id``. An agent whose only schedules are a heartbeat
+    and a worker has no ``schedule.cron`` at all, so keying cards by the
+    manifest id dropped it entirely — on a real instance that is the primary
+    agent, the two rows that fire most often and the two breakers most likely
+    to trip.
+    """
+    (_manifest_dir(env_workspace) / "orchestrator.yaml").write_text(
+        MAIN_SHAPED_YAML, encoding="utf-8"
+    )
+    rows = {row["id"]: row for row in automations._manifests()}
+
+    assert "orchestrator:heartbeat" in rows
+    assert "orchestrator:worker" in rows
+    # No schedule.cron, so no bare-agent job — exactly what the engine derives.
+    assert "orchestrator" not in rows
+
+    heartbeat = rows["orchestrator:heartbeat"]
+    assert heartbeat["kind"] == "heartbeat"
+    assert heartbeat["agent_id"] == "orchestrator"
+    assert heartbeat["cron"] == "0 12,16 * * *"
+    assert heartbeat["timezone"] == "UTC"
+    # The heartbeat and worker crons are not editable through the manifest
+    # form, whose FORM_OWNED_PATHS covers schedule.* only. Saying so beats a
+    # form that posts and changes nothing.
+    assert heartbeat["editable"] is False
+
+
+def test_an_ordinary_cron_agent_is_one_card_of_kind_agent(env_workspace):
+    (_manifest_dir(env_workspace) / "nightly-report.yaml").write_text(PLAIN_YAML, encoding="utf-8")
+    rows = {row["id"]: row for row in automations._manifests()}
+
+    assert rows["nightly-report"]["kind"] == "agent"
+    assert rows["nightly-report"]["agent_id"] == "nightly-report"
+    assert rows["nightly-report"]["editable"] is True
+
+
+def test_a_manifest_with_no_schedule_of_any_kind_yields_no_job(env_workspace):
+    (_manifest_dir(env_workspace) / "on-demand.yaml").write_text(
+        "id: on-demand\nname: On Demand\nversion: 1.0.0\n", encoding="utf-8"
+    )
+    assert [row["id"] for row in automations._manifests() if row["agent_id"] == "on-demand"] == []
 
 
 # ─── The gate ────────────────────────────────────────────────────────
@@ -193,10 +306,49 @@ def test_a_cronless_manifest_the_scheduler_still_holds_is_listed(
     assert rows[0]["timezone"] == "UTC"
 
 
-def test_a_schedule_row_with_no_manifest_is_dropped(controls_client_as_operator, fake_sources):
-    fake_sources["schedules"] = [{**SCHEDULE, "agent_id": "retired-agent"}]
+def test_a_schedule_row_whose_manifest_will_not_parse_still_gets_a_card(
+    controls_client_as_operator, fake_sources
+):
+    """A YAML typo must never vanish a firing automation.
+
+    ``load_manifest_dir`` puts an unparseable manifest in ``failures``, so it is
+    not in ``scan.manifests`` at all — but a blocked reconcile prunes nothing,
+    so the engine keeps firing the job it already holds. Dropping the row as
+    "no manifest" hid a still-running, still-failing agent, which is the
+    2026-08-24 manifest outage in miniature.
+    """
+    fake_sources["schedules"] = [
+        {**SCHEDULE, "agent_id": "ledger-sweeper", "consecutive_errors": 6}
+    ]
     fake_sources["manifests"] = []
-    assert _rows(controls_client_as_operator) == []
+    fake_sources["runs"] = {}
+
+    row = _rows(controls_client_as_operator)[0]
+    assert row["id"] == "ledger-sweeper"
+    assert row["manifest_unreadable"] is True
+    assert row["cron"] == "0 9 * * *"
+    assert row["consecutive_errors"] == 6
+    assert row["breaker_tripped"] is True
+    # Nothing on the card may invite an edit of a file that will not parse.
+    assert row["editable"] is False
+
+
+def test_a_degraded_card_takes_its_job_kind_from_the_row_id(
+    controls_client_as_operator, fake_sources
+):
+    fake_sources["schedules"] = [{**SCHEDULE, "agent_id": "orchestrator:heartbeat"}]
+    fake_sources["manifests"] = []
+    fake_sources["runs"] = {}
+
+    row = _rows(controls_client_as_operator)[0]
+    assert row["kind"] == "heartbeat"
+    assert row["agent_id"] == "orchestrator"
+
+
+def test_a_manifest_that_parses_is_never_marked_unreadable(
+    controls_client_as_operator, fake_sources
+):
+    assert _rows(controls_client_as_operator)[0]["manifest_unreadable"] is False
 
 
 def test_one_agents_run_never_lands_on_another_agents_card(
@@ -208,9 +360,10 @@ def test_one_agents_run_never_lands_on_another_agents_card(
 
 def test_rows_are_sorted_by_id(controls_client_as_operator, fake_sources):
     fake_sources["manifests"] = [
-        {**MANIFEST, "id": "zulu", "name": "Zulu"},
-        {**MANIFEST, "id": "alpha", "name": "Alpha"},
+        {**MANIFEST, "id": "zulu", "agent_id": "zulu", "name": "Zulu"},
+        {**MANIFEST, "id": "alpha", "agent_id": "alpha", "name": "Alpha"},
     ]
+    fake_sources["schedules"] = []
     assert [row["id"] for row in _rows(controls_client_as_operator)] == ["alpha", "zulu"]
 
 
@@ -231,10 +384,10 @@ def test_latest_run_selection_is_newest_per_agent(monkeypatch):
         return [dict(RUN)]
 
     monkeypatch.setattr(automations, "_query", _capture)
-    latest = automations._latest_runs(["invoice-chaser"])
+    latest = automations._latest_runs(["invoice-chaser"], "default")
     assert "DISTINCT ON (agent_id)" in seen["sql"]
     assert "started_at DESC" in seen["sql"]
-    assert seen["params"] == (["invoice-chaser"],)
+    assert seen["params"] == (["invoice-chaser"], "default")
     assert latest["invoice-chaser"]["status"] == "completed"
 
 
@@ -242,7 +395,51 @@ def test_latest_runs_asks_nothing_when_there_are_no_agents(monkeypatch):
     monkeypatch.setattr(
         automations, "_query", lambda sql, params: pytest.fail("queried with no agents")
     )
-    assert automations._latest_runs([]) == {}
+    assert automations._latest_runs([], "default") == {}
+
+
+def test_latest_run_is_scoped_to_the_tenant_in_the_statement(monkeypatch):
+    """A foreign tenant's newer run must never be rendered as this card's.
+
+    ``agent_runs`` is not tenant-scoped by RLS unless the connection carries a
+    scope, and the bridge sets none. The schedule query beside this one is
+    scoped in the statement for exactly that reason; this one has to be too, or
+    another tenant's delivery status and verification verdict end up on the
+    card.
+    """
+    seen: dict = {}
+
+    def _capture(sql, params):
+        seen["sql"] = sql
+        seen["params"] = params
+        return []
+
+    monkeypatch.setattr(automations, "_query", _capture)
+    automations._latest_runs(["invoice-chaser"], "probe-tenant")
+    assert "tenant_id = %s" in seen["sql"]
+    assert seen["params"] == (["invoice-chaser"], "probe-tenant")
+
+
+def test_the_listing_asks_both_queries_for_the_platform_tenant(
+    controls_client_as_operator, monkeypatch
+):
+    asked: dict = {}
+
+    def _schedules(tenant_id):
+        asked["schedules"] = tenant_id
+        return []
+
+    def _runs(ids, tenant_id):
+        asked["runs"] = tenant_id
+        return {}
+
+    monkeypatch.setattr(automations, "_manifests", lambda: [])
+    monkeypatch.setattr(automations, "_schedule_rows", _schedules)
+    monkeypatch.setattr(automations, "_latest_runs", _runs)
+
+    controls_client_as_operator.get("/api/automations")
+    assert asked["schedules"] == automations.PLATFORM_TENANT
+    assert asked["runs"] == automations.PLATFORM_TENANT
 
 
 # ─── The breaker ─────────────────────────────────────────────────────
@@ -284,6 +481,51 @@ def test_reset_breaker_zeroes_the_row_for_this_tenant(controls_client_as_operato
     assert "tenant_id = %s" in recorder["sql"]
     assert recorder["params"][0] == "invoice-chaser"
     assert recorder["params"][1] == automations.PLATFORM_TENANT
+
+
+def test_reset_breaker_addresses_the_job_id_the_engine_wrote(
+    controls_client_as_operator, monkeypatch
+):
+    """``main:heartbeat`` is a row id, not a path.
+
+    The scheduler trips its breaker per JOB, so resetting the bare agent id
+    would not clear the heartbeat that is actually stopped — and
+    ``_safe_id``'s kebab rule refused the colon outright, making the one
+    breaker an operator most needs to reset unreachable through this route.
+    """
+    recorder: dict = {}
+    _bind_connection(monkeypatch, recorder, rowcount=1)
+
+    response = controls_client_as_operator.post(
+        "/api/automations/orchestrator:heartbeat/reset-breaker"
+    )
+    assert response.status_code == 200
+    assert response.json()["id"] == "orchestrator:heartbeat"
+    assert recorder["params"][0] == "orchestrator:heartbeat"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "orchestrator:nightly",  # not a kind the engine derives
+        "orchestrator:heartbeat:worker",
+        "../../etc/passwd",
+        "orchestrator:../worker",
+        "Orchestrator",
+    ],
+)
+def test_reset_breaker_still_refuses_anything_that_is_not_a_job_id(
+    controls_client_as_operator, monkeypatch, bad
+):
+    monkeypatch.setattr(
+        automations,
+        "_reset_breaker",
+        lambda agent_id, tenant_id: pytest.fail(f"reached the database with {agent_id!r}"),
+    )
+    response = controls_client_as_operator.post(
+        f"/api/automations/{bad}/reset-breaker", follow_redirects=False
+    )
+    assert response.status_code in {404, 422}
 
 
 def test_reset_breaker_404s_when_the_row_belongs_to_another_tenant(

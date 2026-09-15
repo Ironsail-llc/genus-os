@@ -11,6 +11,7 @@ import {
   completedReading,
   deliveredReading,
   durationText,
+  nextRunClaim,
   ranReading,
   toneClass,
   type Automation,
@@ -55,6 +56,10 @@ export interface AutomationCardProps extends AutomationActions {
   busy: boolean;
   error?: string | null;
   note?: string | null;
+  /** The caveat when the engine did not pick a write up — `reconcileNote`. */
+  reconcile?: string | null;
+  /** Manifest findings a write answered with, as one line — `warningLine`. */
+  warnings?: string | null;
 }
 
 function Cell({
@@ -82,6 +87,8 @@ export function AutomationCard({
   busy,
   error,
   note,
+  reconcile,
+  warnings,
   onToggle,
   onRunNow,
   onResetBreaker,
@@ -93,9 +100,13 @@ export function AutomationCard({
   // The manifest's cron, phrased by B8's describer, because that is what the
   // Edit form below writes and what the engine will hold after its next
   // reconcile. `next_run_at` is what it holds NOW, and it is the hover title.
+  //
+  // `nextRunClaim` is what stops the arithmetic being printed as a promise: a
+  // disabled or breaker-tripped job has a perfectly valid cron and will not
+  // fire on it.
   const computedNext = nextRunText(automation.cron, automation.timezone);
   const heldNext = relativeTime(automation.next_run_at);
-  const nextText = computedNext ?? (heldNext ? `${heldNext} (per the scheduler)` : "not scheduled");
+  const nextText = nextRunClaim(automation, computedNext, heldNext);
 
   const ran = ranReading(automation.last_run);
   const delivered = deliveredReading(automation);
@@ -141,11 +152,32 @@ export function AutomationCard({
           >
             {automation.enabled ? "Enabled" : "Disabled"}
           </Badge>
+          {automation.kind && automation.kind !== "agent" ? (
+            <Badge
+              variant="outline"
+              data-testid={`automation-kind-${automation.id}`}
+              className="border-ring/30 bg-muted text-muted-foreground"
+            >
+              {automation.kind}
+            </Badge>
+          ) : null}
           <Badge variant="outline" className="text-muted-foreground">
             {automation.delivery.mode || "none"}
+            {automation.delivery.to ? ` → ${automation.delivery.to}` : ""}
           </Badge>
         </div>
       </div>
+
+      {automation.manifest_unreadable ? (
+        <p
+          data-testid={`automation-broken-${automation.id}`}
+          className="rounded-md border border-warning/30 bg-warning/5 p-2 text-xs text-warning"
+        >
+          This automation&apos;s manifest will not load, so everything above comes from the
+          scheduler&apos;s own row. The engine keeps firing the job it already holds — fix the YAML
+          and the card fills in on the next scan.
+        </p>
+      ) : null}
 
       <div className="flex flex-col gap-0.5">
         <span
@@ -223,20 +255,37 @@ export function AutomationCard({
             <Rocket aria-hidden />
             Run now
           </Button>
-          <Button
-            variant="ghost"
-            size="xs"
-            data-testid={`automation-edit-${automation.id}`}
-            onClick={() =>
-              setEdit(
-                edit
-                  ? null
-                  : { cron: automation.cron, timezone: automation.timezone, change: "" }
-              )
-            }
-          >
-            Edit schedule
-          </Button>
+          {automation.editable ? (
+            <Button
+              variant="ghost"
+              size="xs"
+              data-testid={`automation-edit-${automation.id}`}
+              onClick={() =>
+                setEdit(
+                  edit
+                    ? null
+                    : { cron: automation.cron, timezone: automation.timezone, change: "" }
+                )
+              }
+            >
+              Edit schedule
+            </Button>
+          ) : (
+            /*
+              FORM_OWNED_PATHS covers schedule.cron and schedule.timezone and
+              nothing else, so a PATCH cannot move a heartbeat or worker cron —
+              and a manifest that will not parse has nothing to edit at all. A
+              form that posts and changes nothing is worse than no form.
+            */
+            <span
+              data-testid={`automation-uneditable-${automation.id}`}
+              className="text-[11px] text-muted-foreground"
+            >
+              {automation.manifest_unreadable
+                ? "Fix the manifest before editing this schedule."
+                : `This cron lives in the manifest's ${automation.kind} block — edit it there.`}
+            </span>
+          )}
         </div>
       ) : null}
 
@@ -321,6 +370,29 @@ export function AutomationCard({
           data-testid={`automation-note-${automation.id}`}
         >
           {note}
+        </span>
+      ) : null}
+      {/*
+        The engine's half of a manifest write, kept apart from the note above
+        and in warning colour. A save that reports success over an engine that
+        did not reconcile is the exact failure `agent_manifests` says must not
+        happen; B8's panel and this card now read the same field through
+        `lib/agents/reconcile.ts`.
+      */}
+      {reconcile ? (
+        <span
+          className="text-xs text-warning"
+          data-testid={`automation-reconcile-${automation.id}`}
+        >
+          {reconcile}
+        </span>
+      ) : null}
+      {warnings ? (
+        <span
+          className="text-xs text-warning"
+          data-testid={`automation-warnings-${automation.id}`}
+        >
+          {warnings}
         </span>
       ) : null}
       {error ? (

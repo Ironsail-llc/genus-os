@@ -15,8 +15,11 @@ import type { Automation } from "@/lib/automations/run-truth";
 
 const NIGHTLY: Automation = {
   id: "invoice-chaser",
-  name: "Invoice Chaser",
+  agent_id: "invoice-chaser",
   kind: "agent",
+  editable: true,
+  manifest_unreadable: false,
+  name: "Invoice Chaser",
   description: "Chases unpaid invoices.",
   cron: "0 9 * * *",
   timezone: "UTC",
@@ -43,6 +46,7 @@ const NIGHTLY: Automation = {
 const TRIPPED: Automation = {
   ...NIGHTLY,
   id: "ledger-sweeper",
+  agent_id: "ledger-sweeper",
   name: "Ledger Sweeper",
   description: "",
   last_run: {
@@ -318,6 +322,172 @@ describe("AutomationsView", () => {
     mockBridge();
     await renderView();
     expect(screen.getByTestId("workflows-section")).toBeTruthy();
+  });
+});
+
+describe("AutomationsView › a next run it will not have", () => {
+  it("a disabled automation does not advertise a confident next fire", async () => {
+    mockBridge([{ ...NIGHTLY, enabled: false }]);
+    await renderView();
+    const next = screen.getByTestId(`automation-next-${NIGHTLY.id}`).textContent ?? "";
+    // The cron is real; the fire is not. scheduler.py filters spec.enabled.
+    expect(next).not.toMatch(/Jun 16/);
+    expect(next).toMatch(/disabled/i);
+  });
+
+  it("a tripped automation says it is held, not when it fires next", async () => {
+    mockBridge();
+    await renderView();
+    const next = screen.getByTestId(`automation-next-${TRIPPED.id}`).textContent ?? "";
+    expect(next).not.toMatch(/\d{4}/);
+    expect(next).toMatch(/breaker/i);
+  });
+
+  it("an enabled, untripped automation still shows the instant", async () => {
+    mockBridge([NIGHTLY]);
+    await renderView();
+    expect(screen.getByTestId(`automation-next-${NIGHTLY.id}`).textContent).toMatch(/Jun 16/);
+  });
+});
+
+describe("AutomationsView › the engine's half of a write", () => {
+  function mockWithPatchReply(reply: unknown) {
+    const calls: Call[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = (init?.method ?? "GET").toUpperCase();
+        calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : null });
+        if (url.includes("/api/workflows")) {
+          return { ok: true, status: 200, json: async () => [] } as Response;
+        }
+        if (url.includes("/api/automations") && method === "GET") {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ automations: [NIGHTLY], count: 1 }),
+          } as Response;
+        }
+        return { ok: true, status: 200, json: async () => reply } as Response;
+      })
+    );
+    return calls;
+  }
+
+  it("does not claim the engine re-derived anything when it did not", async () => {
+    // Exactly what the bridge answers with the engine unreachable.
+    mockWithPatchReply({
+      saved: true,
+      reconcile: { applied: false, error: "engine unreachable" },
+    });
+    await renderView();
+
+    fireEvent.click(screen.getByTestId(`automation-edit-${NIGHTLY.id}`));
+    fireEvent.click(screen.getByTestId(`automation-save-${NIGHTLY.id}`));
+
+    const note = await screen.findByTestId(`automation-reconcile-${NIGHTLY.id}`);
+    expect(note.textContent).toMatch(/did not pick up/i);
+    expect(note.textContent).toMatch(/engine unreachable/);
+  });
+
+  it("an unreconciled disable says so too", async () => {
+    mockWithPatchReply({ reconcile: { applied: false, error: "engine unreachable" } });
+    await renderView();
+    fireEvent.click(screen.getByTestId(`automation-toggle-${NIGHTLY.id}`));
+    expect((await screen.findByTestId(`automation-reconcile-${NIGHTLY.id}`)).textContent).toMatch(
+      /watchdog/i
+    );
+  });
+
+  it("surfaces the manifest warnings a save answered with", async () => {
+    mockWithPatchReply({
+      saved: true,
+      reconcile: { applied: true },
+      warnings: [{ path: "schedule.cron", code: "check.F", message: "fires every minute" }],
+    });
+    await renderView();
+    fireEvent.click(screen.getByTestId(`automation-edit-${NIGHTLY.id}`));
+    fireEvent.click(screen.getByTestId(`automation-save-${NIGHTLY.id}`));
+    expect((await screen.findByTestId(`automation-warnings-${NIGHTLY.id}`)).textContent).toMatch(
+      /fires every minute/
+    );
+  });
+
+  it("a reconciled save says so plainly and carries no caveat", async () => {
+    mockWithPatchReply({ saved: true, reconcile: { applied: true } });
+    await renderView();
+    fireEvent.click(screen.getByTestId(`automation-edit-${NIGHTLY.id}`));
+    fireEvent.click(screen.getByTestId(`automation-save-${NIGHTLY.id}`));
+    await screen.findByTestId(`automation-note-${NIGHTLY.id}`);
+    expect(screen.queryByTestId(`automation-reconcile-${NIGHTLY.id}`)).toBeNull();
+  });
+});
+
+describe("AutomationsView › jobs, not agents", () => {
+  const HEARTBEAT: Automation = {
+    ...NIGHTLY,
+    id: "orchestrator:heartbeat",
+    agent_id: "orchestrator",
+    kind: "heartbeat",
+    editable: false,
+    name: "Orchestrator · heartbeat",
+  };
+
+  it("labels a heartbeat job and offers no schedule form for it", async () => {
+    mockBridge([HEARTBEAT]);
+    render(<AutomationsView visible role="owner" roleLoading={false} />);
+    await screen.findByTestId(`automation-card-${HEARTBEAT.id}`);
+
+    expect(screen.getByTestId(`automation-kind-${HEARTBEAT.id}`).textContent).toMatch(/heartbeat/i);
+    // FORM_OWNED_PATHS covers schedule.* only; a form that posts and changes
+    // nothing is worse than no form.
+    expect(screen.queryByTestId(`automation-edit-${HEARTBEAT.id}`)).toBeNull();
+    expect(screen.getByTestId(`automation-uneditable-${HEARTBEAT.id}`).textContent).toMatch(
+      /heartbeat/i
+    );
+  });
+
+  it("resets the breaker by JOB id and toggles by AGENT id", async () => {
+    const { calls } = mockBridge([{ ...HEARTBEAT, breaker_tripped: true, consecutive_errors: 5 }]);
+    render(<AutomationsView visible role="owner" roleLoading={false} />);
+    await screen.findByTestId(`automation-card-${HEARTBEAT.id}`);
+
+    fireEvent.click(screen.getByTestId(`automation-reset-${HEARTBEAT.id}`));
+    await waitFor(() =>
+      expect(
+        callsTo(calls, `/api/automations/${encodeURIComponent(HEARTBEAT.id)}/reset-breaker`)
+      ).toHaveLength(1)
+    );
+
+    fireEvent.click(screen.getByTestId(`automation-toggle-${HEARTBEAT.id}`));
+    await waitFor(() =>
+      // schedule.enabled rides every spec, so disabling the agent stops the
+      // heartbeat too — but the route is keyed by the manifest, not the job.
+      expect(callsTo(calls, "/api/agent-manifests/orchestrator/disable")).toHaveLength(1)
+    );
+  });
+
+  it("a card whose manifest will not parse says so and offers no edit", async () => {
+    const BROKEN: Automation = {
+      ...NIGHTLY,
+      id: "ledger-sweeper",
+      agent_id: "ledger-sweeper",
+      name: "ledger-sweeper",
+      editable: false,
+      manifest_unreadable: true,
+      cron: "*/15 * * * *",
+    };
+    mockBridge([BROKEN]);
+    render(<AutomationsView visible role="owner" roleLoading={false} />);
+    await screen.findByTestId(`automation-card-${BROKEN.id}`);
+
+    expect(screen.getByTestId(`automation-broken-${BROKEN.id}`).textContent).toMatch(
+      /will not load/i
+    );
+    expect(screen.queryByTestId(`automation-edit-${BROKEN.id}`)).toBeNull();
+    // Still firing, so the reset must still be reachable.
+    expect(screen.getByTestId(`automation-toggle-${BROKEN.id}`)).toBeTruthy();
   });
 });
 

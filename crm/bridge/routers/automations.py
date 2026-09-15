@@ -49,6 +49,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from robothor.db.connection import get_connection
 from robothor.engine.sanitize import sanitize_log
+from robothor.engine.schedule_reconcile import KIND_AGENT, KIND_HEARTBEAT, KIND_WORKER
 from routers import agent_manifests
 from routers._audit import audited
 from routers._operator import PLATFORM_TENANT, require_operator
@@ -69,6 +70,12 @@ _RUN_COLUMNS = (
     "agent_id, id, started_at, status, duration_ms, delivery_status, delivered_at, "
     "delivery_channel, delivery_mode, verified_status, outcome_assessment"
 )
+
+#: The engine's three job kinds, imported so the two sides cannot drift.
+#: ``schedule_reconcile`` composes ``<id>``, ``<id>:heartbeat`` and
+#: ``<id>:worker``; everything here that parses or builds one of those ids goes
+#: through :func:`_split_job_id` or :func:`_jobs_of`.
+_JOB_SUFFIXES = frozenset({KIND_HEARTBEAT, KIND_WORKER})
 
 
 def _threshold() -> int:
@@ -101,31 +108,99 @@ def _isoformat(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _manifests() -> list[dict[str, Any]]:
-    """The manifest half of every row.
+def _split_job_id(job_id: str) -> tuple[str, str]:
+    """``("main:heartbeat")`` → ``("main", "heartbeat")``; a bare id → kind ``agent``.
 
-    ``_summary`` is the fleet-list shape and carries the delivery MODE only;
-    the channel and the address live on the document, and the card names them
-    because "delivered" with no channel is not an answer. One unreadable
-    manifest is skipped rather than 500ing the page, the same bargain
-    ``list_manifests`` already makes.
+    The inverse of what ``schedule_reconcile`` composes. Kept as one function so
+    the two directions cannot drift: everything that reads an
+    ``agent_schedules`` row and everything that writes a route parameter comes
+    through here.
+    """
+    agent_id, _, suffix = job_id.partition(":")
+    kind = suffix if suffix in _JOB_SUFFIXES else KIND_AGENT
+    return agent_id, kind
+
+
+def _jobs_of(document: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every job one manifest declares, in the engine's own ids.
+
+    This is the whole of the "which automations exist" question, and getting it
+    wrong is what made the primary agent invisible. ``schedule_reconcile``
+    derives up to THREE jobs from one manifest — ``<id>`` from ``schedule.cron``,
+    ``<id>:heartbeat`` from ``heartbeat.cron``, ``<id>:worker`` from
+    ``worker.cron`` — and the scheduler writes each of those as an
+    ``agent_schedules.agent_id``. ``_summary`` reads ``schedule.cron`` only, so
+    an agent scheduled purely by heartbeat and worker (the shape of the primary
+    agent on a real instance) had neither a "cron" nor a matching schedule row
+    and was dropped from both arms of the listing.
+
+    One card per JOB rather than one per manifest, because the job is the unit
+    everything else here is keyed by: the schedule row, the circuit breaker
+    (``scheduler.py`` trips per dedup key) and therefore the reset.
+    """
+    summary = agent_manifests._summary(document)
+    agent_id = summary["id"]
+    if not agent_id:
+        return []
+
+    delivery = agent_manifests._block(document, "delivery")
+    base = {
+        **summary,
+        "agent_id": agent_id,
+        "delivery_channel": delivery.get("channel") or "",
+        "delivery_to": delivery.get("to") or "",
+    }
+
+    jobs: list[dict[str, Any]] = []
+    if summary["cron"]:
+        # The form's FORM_OWNED_PATHS covers schedule.cron/schedule.timezone and
+        # nothing else, so this is the only kind whose schedule a PATCH can
+        # actually change. The others say so rather than offering a form that
+        # posts and alters nothing.
+        jobs.append({**base, "id": agent_id, "kind": KIND_AGENT, "editable": True})
+
+    for kind in (KIND_HEARTBEAT, KIND_WORKER):
+        block = agent_manifests._block(document, kind)
+        cron = block.get("cron")
+        if not cron:
+            continue
+        sub_delivery = agent_manifests._block(block, "delivery")
+        jobs.append(
+            {
+                **base,
+                "id": f"{agent_id}:{kind}",
+                "kind": kind,
+                "editable": False,
+                "name": f"{base['name'] or agent_id} · {kind}",
+                "cron": str(cron),
+                "timezone": block.get("timezone") or summary["timezone"],
+                "delivery": sub_delivery.get("mode") or base["delivery"],
+                "delivery_channel": sub_delivery.get("channel") or base["delivery_channel"],
+                "delivery_to": sub_delivery.get("to") or base["delivery_to"],
+            }
+        )
+    return jobs
+
+
+def _manifests() -> list[dict[str, Any]]:
+    """Every job every readable manifest declares.
+
+    One unreadable manifest is skipped rather than 500ing the page, the same
+    bargain ``list_manifests`` already makes — and a manifest the loader could
+    not parse at all still reaches the operator, as a degraded card built from
+    its schedule row (see ``_automations``).
     """
     scan = agent_manifests._scan()
     rows: list[dict[str, Any]] = []
     for document in scan.manifests:
         try:
-            summary = agent_manifests._summary(document)
+            rows.extend(_jobs_of(document))
         except Exception as error:  # noqa: BLE001 — one manifest, not the page
             logger.warning(
                 "Could not summarise %s for automations: %s",
                 sanitize_log(str(document.get("id") or "")),
                 type(error).__name__,
             )
-            continue
-        delivery = agent_manifests._block(document, "delivery")
-        summary["delivery_channel"] = delivery.get("channel") or ""
-        summary["delivery_to"] = delivery.get("to") or ""
-        rows.append(summary)
     return rows
 
 
@@ -146,20 +221,27 @@ def _schedule_rows(tenant_id: str) -> list[dict[str, Any]]:
     return [_isoformat(row) for row in rows]
 
 
-def _latest_runs(agent_ids: list[str]) -> dict[str, dict[str, Any]]:
-    """The newest run of each of these agents, keyed by agent.
+def _latest_runs(agent_ids: list[str], tenant_id: str) -> dict[str, dict[str, Any]]:
+    """The newest run of each of these agents, for this tenant, keyed by agent.
 
     ``DISTINCT ON`` rather than a per-agent ``LIMIT 1``: one statement for the
     whole page instead of one per card, and the alternative — fetching every
     run and keeping the first — reads the entire table to answer a question
     about twenty rows.
+
+    Scoped in the statement for the same reason the schedule query is, and it
+    is not decoration: RLS on ``agent_runs`` engages only when the connection
+    carries a scope, and the bridge sets none — so without this predicate a
+    foreign tenant's NEWER run wins the ``DISTINCT ON`` and its delivery status
+    and verification verdict are rendered as this automation's.
     """
     if not agent_ids:
         return {}
     rows = _query(
         f"SELECT DISTINCT ON (agent_id) {_RUN_COLUMNS} FROM agent_runs "
-        "WHERE agent_id = ANY(%s) ORDER BY agent_id, started_at DESC NULLS LAST",
-        (list(agent_ids),),
+        "WHERE agent_id = ANY(%s) AND tenant_id = %s "
+        "ORDER BY agent_id, started_at DESC NULLS LAST",
+        (list(agent_ids), tenant_id),
     )
     return {str(row["agent_id"]): _isoformat(row) for row in rows}
 
@@ -204,8 +286,11 @@ def _compose(
     errors = int(schedule.get("consecutive_errors") or 0)
     return {
         "id": manifest["id"],
+        "agent_id": manifest["agent_id"],
+        "kind": manifest["kind"],
+        "editable": bool(manifest.get("editable")),
+        "manifest_unreadable": bool(manifest.get("manifest_unreadable")),
         "name": manifest.get("name") or manifest["id"],
-        "kind": "agent",
         "description": manifest.get("description") or "",
         "cron": manifest.get("cron") or schedule.get("cron_expr") or "",
         "timezone": manifest.get("timezone") or schedule.get("timezone") or "",
@@ -223,25 +308,88 @@ def _compose(
     }
 
 
-def _automations(tenant_id: str) -> list[dict[str, Any]]:
-    manifests = _manifests()
-    schedules = {str(row.get("agent_id") or ""): row for row in _schedule_rows(tenant_id)}
+def _degraded(job_id: str) -> dict[str, Any]:
+    """A card for a job whose manifest the loader could not read.
 
-    # A manifest with neither a cron nor a schedule row is not an automation:
-    # it is an agent that only runs when something triggers it, and it has its
-    # own screen. A schedule row with no manifest is dropped the other way —
-    # there is no name, no delivery target and nothing an operator could edit.
+    The engine keeps firing a job it already holds — a blocked reconcile prunes
+    nothing — so dropping the row as "no manifest" makes a still-running,
+    still-failing automation disappear from the one screen built to notice
+    that. This is the 2026-08-24 manifest outage in miniature: the file broke,
+    the agent kept going, and every surface went quiet.
+
+    Everything on it comes from the schedule row. ``editable`` is false: there
+    is nothing to offer an operator a form for until the YAML parses again.
+    """
+    agent_id, kind = _split_job_id(job_id)
+    return {
+        "id": job_id,
+        "agent_id": agent_id,
+        "kind": kind,
+        "name": job_id,
+        "description": "",
+        "cron": "",
+        "timezone": "",
+        "enabled": True,
+        "delivery": "",
+        "delivery_channel": "",
+        "delivery_to": "",
+        "editable": False,
+        "manifest_unreadable": True,
+    }
+
+
+def _automations(tenant_id: str) -> list[dict[str, Any]]:
+    """Every job that has a declared cron or a row the engine is holding.
+
+    Both directions matter. A manifest job with no row yet is an automation the
+    scheduler has not reconciled — it belongs on screen, saying so. A row with
+    no manifest job is an automation still firing from a file that will not
+    parse — it belongs on screen even more.
+    """
+    schedules = {str(row.get("agent_id") or ""): row for row in _schedule_rows(tenant_id)}
+    manifests = _manifests()
+
+    # A manifest job with neither a cron nor a schedule row is not an
+    # automation: it is an agent that only runs when something triggers it, and
+    # it has its own screen.
     listed = [
         manifest for manifest in manifests if manifest.get("cron") or manifest["id"] in schedules
     ]
+    known = {manifest["id"] for manifest in listed}
+    listed.extend(_degraded(job_id) for job_id in schedules if job_id and job_id not in known)
+
     threshold = _threshold()
-    latest = _latest_runs([manifest["id"] for manifest in listed])
+    latest = _latest_runs([manifest["id"] for manifest in listed], tenant_id)
     rows = [
         _compose(manifest, schedules.get(manifest["id"], {}), latest.get(manifest["id"]), threshold)
         for manifest in listed
     ]
     rows.sort(key=lambda row: row["id"])
     return rows
+
+
+def _safe_job_id(job_id: object) -> str:
+    """A job id the engine could have written, or a 422 naming the rule it broke.
+
+    ``agent_manifests._safe_id`` is the kebab rule for a MANIFEST id and refuses
+    the colon outright, which made ``main:heartbeat`` — the row an operator most
+    often needs to reset — unreachable through this route. So: the agent half
+    still goes through that same validator (which is what refuses ``..``, a
+    slash, an uppercase letter or anything path-shaped), and the suffix is
+    checked against the engine's own two kinds rather than a pattern. A third
+    colon, or a suffix the engine never derives, is not a job id.
+    """
+    raw = str(job_id)
+    agent_part, separator, suffix = raw.partition(":")
+    validated = agent_manifests._safe_id(agent_part)
+    if not separator:
+        return validated
+    if suffix not in _JOB_SUFFIXES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"expected an agent id, or one ending :{' or :'.join(sorted(_JOB_SUFFIXES))}",
+        )
+    return f"{validated}:{suffix}"
 
 
 def _reset_breaker(agent_id: str, tenant_id: str) -> bool:
@@ -280,7 +428,7 @@ def reset_breaker(agent_id: str, request: Request) -> dict[str, Any]:
     and the trail has to name who decided that.
     """
     require_operator(request)
-    agent_id = agent_manifests._safe_id(agent_id)
+    agent_id = _safe_job_id(agent_id)
     if not _reset_breaker(agent_id, PLATFORM_TENANT):
         audited(
             request,
