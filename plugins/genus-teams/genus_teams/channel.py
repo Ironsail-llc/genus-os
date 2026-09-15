@@ -39,7 +39,12 @@ import logging
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
-from genus_teams.credentials import APP_ID_ENV, APP_PASSWORD_ENV, teams_credentials
+from genus_teams.credentials import (
+    APP_ID_ENV,
+    APP_PASSWORD_ENV,
+    missing_credential_names,
+    teams_credentials,
+)
 from genus_teams.tokens import TokenError, TokenSource, build_client
 from robothor.constants import DEFAULT_TENANT
 from robothor.engine.channels import conversations
@@ -230,12 +235,16 @@ class TeamsChannel:
 
         credentials = teams_credentials(tenant_id=self.tenant_id)
         if not credentials.can_send:
+            # The NAMES of what is missing, resolved by the credentials module,
+            # and nothing else from the credentials object. Not a masked value
+            # and not a length: a log line is the wrong place for a secret in
+            # every form, and the safe way to guarantee that is for the value
+            # never to be an argument to a log call.
             logger.warning(
-                "Agent %s announces on Teams but %s / %s are set neither in the "
+                "Agent %s announces on Teams but %s is set neither in the "
                 "environment nor in the vault",
                 getattr(config, "id", "?"),
-                APP_ID_ENV,
-                APP_PASSWORD_ENV,
+                ", ".join(missing_credential_names(credentials)),
             )
             return SendReceipt(
                 acknowledged=0, expected=1, status="failed:teams_not_configured", target=clean
@@ -378,14 +387,7 @@ class TeamsChannel:
             ]
 
         steps: list[tuple[str, bool, str]] = []
-        missing = [
-            env
-            for env, present in (
-                (APP_ID_ENV, bool(credentials.app_id)),
-                (APP_PASSWORD_ENV, bool(credentials.app_password)),
-            )
-            if not present
-        ]
+        missing = missing_credential_names(credentials)
         if missing:
             steps.append(("credentials", False, f"{', '.join(missing)} is not set anywhere"))
             return steps
@@ -566,7 +568,14 @@ class TeamsChannel:
 
 
 def _describe(exc: Exception) -> str:
-    """An exception in words safe to print. Never the raw object."""
+    """An exception in words safe to print. Never the raw object.
+
+    Two passes, because an exception message is two kinds of untrusted at once:
+    ``redact`` for a credential shape that may have been interpolated into it,
+    and ``sanitize_log`` for the control characters that would otherwise let a
+    remote server's error message write its own line in this instance's journal.
+    """
+    from robothor.sanitize import sanitize_log
     from robothor.secrets.redaction import redact
 
-    return redact(f"{type(exc).__name__}: {exc}")
+    return sanitize_log(redact(f"{type(exc).__name__}: {exc}"))

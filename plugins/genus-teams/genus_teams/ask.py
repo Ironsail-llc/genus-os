@@ -22,6 +22,12 @@ input and one submit.
 ``None`` is the only non-answer: a timeout, a card that never went out, or an
 ask discarded. It is never one of the options, because an option returned
 because the clock ran out is an approval nobody gave.
+
+Every value out of a card payload that reaches a log line goes through
+``sanitize_log`` first. The payload is composed by whoever pressed the button,
+and an ask id carrying a newline writes a second log line of the sender's
+choosing — which is how the timeline of an incident ends up part-written by the
+person being investigated.
 """
 
 from __future__ import annotations
@@ -34,6 +40,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from robothor.identity.scope import PRIVILEGED_ROLES
+from robothor.sanitize import sanitize_log
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Sequence
@@ -254,7 +261,12 @@ def settle_from_activity(
 
     pending = _pending.get(ask_id)
     if pending is None or pending.future.done():
-        # An ordinary race: a button pressed after the tool gave up, or twice.
+        # Usually an ordinary race — a button pressed after the tool gave up, or
+        # twice — and sometimes somebody trying ids. Recorded at debug either
+        # way, because "the card did nothing" is otherwise unexplainable.
+        logger.debug(
+            "Teams: a card answer arrived for ask %s, which is not open", sanitize_log(ask_id)
+        )
         return True
 
     if pending.conversation_id != conversation_id or not _may_settle(pending, native_id, identity):
@@ -262,7 +274,8 @@ def settle_from_activity(
         # a card in a Teams channel is visible to everyone in it, so this is an
         # expected event and not necessarily an attack.
         logger.warning(
-            "Teams: refused an answer to ask %s from somebody it was not asked of", ask_id
+            "Teams: refused an answer to ask %s from somebody it was not asked of",
+            sanitize_log(ask_id),
         )
         return True
 

@@ -20,7 +20,8 @@ The invariants under test are the platform's, not Teams':
 from __future__ import annotations
 
 import time
-from urllib.parse import quote
+from typing import Any
+from urllib.parse import quote, urlsplit
 
 import httpx
 import pytest
@@ -88,9 +89,27 @@ class _Recorder:
         return [str(r.url) for r in self.requests]
 
 
+#: Where Entra's token endpoint lives. Compared as a parsed HOST, never as a
+#: substring of the URL. Two shapes contain that string and are not that host: a
+#: sub-domain suffix (`login.microsoftonline.com.example.test`) and a query
+#: parameter carrying it. A fixture that routes on a substring is a fixture that
+#: keeps passing after the code under test starts calling the wrong host, which
+#: is the opposite of what a fixture is for.
+TOKEN_HOST = "login.microsoftonline.com"
+
+
+def _host(url: Any) -> str:
+    """The hostname of a request URL, lower-cased. Empty when there is none."""
+    return (urlsplit(str(url)).hostname or "").lower()
+
+
+def _is_token_request(request: httpx.Request) -> bool:
+    return _host(request.url) == TOKEN_HOST
+
+
 def _ok_handler(activity_id: str = "1700000000001"):
     def _handle(request: httpx.Request) -> httpx.Response:
-        if "login.microsoftonline.com" in str(request.url):
+        if _is_token_request(request):
             return httpx.Response(200, json=TOKEN_RESPONSE)
         return httpx.Response(200, json={"id": activity_id})
 
@@ -140,7 +159,7 @@ class TestTheToken:
         assert await source.token() == TOKEN_RESPONSE["access_token"]
 
         request = recorder.requests[0]
-        assert "login.microsoftonline.com" in str(request.url)
+        assert _host(request.url) == TOKEN_HOST
         body = request.content.decode()
         assert "grant_type=client_credentials" in body
         assert "https%3A%2F%2Fapi.botframework.com%2F.default" in body
@@ -296,7 +315,9 @@ class TestSend:
         body = "x" * (channel_module.MAX_TEAMS_LENGTH * 2 + 10)
         receipt = await TeamsChannel().send(ALICE, body)
 
-        activities = [r for r in recorder.requests if "activities" in str(r.url)]
+        activities = [
+            r for r in recorder.requests if urlsplit(str(r.url)).path.endswith("/activities")
+        ]
         assert len(activities) == receipt.expected >= 3
         assert receipt.acknowledged == receipt.expected
 
@@ -309,7 +330,7 @@ class TestSend:
         state = {"n": 0}
 
         def _second_fails(request: httpx.Request) -> httpx.Response:
-            if "login.microsoftonline.com" in str(request.url):
+            if _is_token_request(request):
                 return httpx.Response(200, json=TOKEN_RESPONSE)
             state["n"] += 1
             if state["n"] == 2:

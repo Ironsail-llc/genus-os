@@ -45,6 +45,7 @@ __all__ = [
     "TENANT_ID_ENV",
     "TENANT_ID_VAULT_KEY",
     "TeamsCredentials",
+    "missing_credential_names",
     "teams_credentials",
 ]
 
@@ -108,6 +109,29 @@ class TeamsCredentials:
         creates unless the operator chose otherwise.
         """
         return (self.directory_tenant_id or "").strip() or BOTFRAMEWORK_TENANT
+
+
+def missing_credential_names(credentials: TeamsCredentials) -> list[str]:
+    """The environment names of the credentials this instance does NOT hold.
+
+    Names, never values, and the reason it lives here rather than at the call
+    site is the reason ``slack_credentials`` exists at all: one module spells
+    the credential names, and the surfaces that report on them take a list of
+    strings. A caller that assembled its own list would have the credential
+    object in the same expression as the message it is building — one edit from
+    a log line carrying the secret, which is the finding that put this function
+    here.
+
+    Empty when the instance can send.
+    """
+    return [
+        env
+        for env, present in (
+            (APP_ID_ENV, bool(credentials.app_id)),
+            (APP_PASSWORD_ENV, bool(credentials.app_password)),
+        )
+        if not present
+    ]
 
 
 def _setting(field: str) -> str:
