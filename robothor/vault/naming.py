@@ -17,6 +17,7 @@ Two rules, and they are the whole vocabulary:
 
 from __future__ import annotations
 
+import contextlib
 import re
 
 #: A component may not be empty, carry whitespace, or contain the ``/`` the
@@ -84,6 +85,48 @@ def env_name(vault_key: str) -> str:
     return vault_key.upper().replace("/", "_")
 
 
+#: ``<PROVIDER>_API_KEY`` and its numbered spares, which is the one environment
+#: name shape that already has a richer vault spelling: ``providers/<id>/api_key``
+#: is what the first-run wizard, the Helm provider page and ``key_pool`` all
+#: write and read. Matched mechanically rather than against a list of provider
+#: ids, so a provider nobody has heard of gets the same treatment.
+_PROVIDER_ENV = re.compile(
+    r"^(?P<provider>[A-Z0-9][A-Z0-9_]*?)_API_KEY(?:_(?P<slot>[2-9]|1[0-6]))?$"
+)
+
+
+def vault_keys_for_env_name(name: str) -> tuple[str, ...]:
+    """Every vault key that may hold the value of environment variable ``name``.
+
+    Canonical first. This is the INVERSE of :func:`env_name`, and it has to be a
+    tuple because that transform is not injective and because one shape already
+    has two spellings in the wild: ``OPENROUTER_API_KEY`` is written as
+    ``providers/openrouter/api_key`` by the wizard, the Helm provider page and
+    ``key_pool``, and would be written as ``openrouter_api_key`` by anything
+    that only knew how to invert ``env_name``.
+
+    That mismatch is not hypothetical: before this function,
+    ``resolve_secret("OPENROUTER_API_KEY")`` looked the name up in
+    ``export_env()`` and therefore could not see the row the wizard had
+    written, so a vault-only instance read as having no key at all. One
+    function, used by the accessor to search and by ``genus secrets migrate``
+    to choose where to write, is what keeps the two directions from drifting --
+    which is the whole argument of this module.
+    """
+    candidates: list[str] = []
+    match = _PROVIDER_ENV.match(name.strip().upper())
+    if match:
+        # A provider component the key path cannot carry is not an error here:
+        # the literal spelling below still works, so the caller still gets a
+        # usable candidate.
+        with contextlib.suppress(ValueError):
+            candidates.append(provider_key(match.group("provider"), int(match.group("slot") or 1)))
+    literal = name.strip().lower().replace("__", "_")
+    if literal and literal not in candidates:
+        candidates.append(literal)
+    return tuple(candidates)
+
+
 __all__ = [
     "API_KEY_FIELD",
     "CHANNEL_PREFIX",
@@ -92,4 +135,5 @@ __all__ = [
     "env_name",
     "provider_key",
     "validate_component",
+    "vault_keys_for_env_name",
 ]

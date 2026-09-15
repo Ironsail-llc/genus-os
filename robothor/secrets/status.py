@@ -16,6 +16,7 @@ with a credential it never returns; it is named to be conspicuous.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 
 from robothor.constants import DEFAULT_TENANT
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "SecretStatus",
+    "environment_credential_names",
     "resolve_for_key",
     "status_for_key",
     "status_for_name",
@@ -166,6 +168,27 @@ def resolve_for_key(key: str, *, tenant_id: str = DEFAULT_TENANT) -> str | None:
     return resolve_secret(env_name(key), vault_key=key, tenant_id=tenant_id).value
 
 
+def environment_credential_names() -> set[str]:
+    """Every name in THIS process's environment that holds a credential.
+
+    Two sources, unioned, because neither alone is the answer. The settings
+    model knows which DECLARED names are credentials. The redactor knows what a
+    credential NAME looks like, which is what catches ``GITHUB_TOKEN``,
+    ``AWS_SECRET_ACCESS_KEY`` and every other third-party token the platform
+    never declared -- and those are precisely the credentials an assistant is
+    handed, so a status table that could not see them would be blind to the
+    ones this change is about.
+
+    A third, hand-written list would be the drift defect. There isn't one.
+    """
+    from robothor.engine.exec_env import looks_like_a_credential_name
+    from robothor.secrets.classification import declared_secret_names
+    from robothor.settings.env import process_env_get  # noqa: F401 - import for symmetry
+
+    declared = declared_secret_names()
+    return {name for name in os.environ if name in declared or looks_like_a_credential_name(name)}
+
+
 def status_table(*, tenant_id: str = DEFAULT_TENANT) -> list[SecretStatus]:
     """Every credential this instance declares or holds, in one list.
 
@@ -185,6 +208,10 @@ def status_table(*, tenant_id: str = DEFAULT_TENANT) -> list[SecretStatus]:
     names: set[str] = {
         name for name in declared_secret_names() if index.get(name, {}).get("env") == name
     }
+    # ...and whatever the environment is actually carrying, declared or not. A
+    # token the operator handed the assistant for a vendor nobody declared is
+    # the case this table exists for.
+    names |= environment_credential_names()
 
     # Whatever the vault holds, whether or not anybody declared it.
     vault_keys: dict[str, str] = {}
