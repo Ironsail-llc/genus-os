@@ -71,9 +71,15 @@ _VAULT_SCHEMAS: dict[str, dict[str, Any]] = {
                 "Store a credential in the vault, encrypted. This is what you do "
                 "when the operator hands you a token: store it here, then prove it "
                 "with vault_test and answer with the fingerprint and the test "
-                "result. The vault beats the value the box booted with, and the "
-                "write takes effect immediately -- no restart. Never echo the value "
-                "back, and never write it to a memory block, a note or a file."
+                "result. KEY CONVENTION: providers/<vendor>/api_key for a provider "
+                "key or an API token (GITHUB_TOKEN included), "
+                "channels/<channel>/<field> for a channel setting, the lower-cased "
+                "variable name otherwise. The reply carries `readable_as` -- the "
+                "variables whose readers will find this row; if it is EMPTY the "
+                "credential is stored where nothing looks, so store it again under a "
+                "key that list names. The vault beats the value the box booted with, "
+                "and the write takes effect immediately -- no restart. Never echo the "
+                "value back, and never write it to a memory block, a note or a file."
             ),
             "parameters": {
                 "type": "object",

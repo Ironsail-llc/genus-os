@@ -16,7 +16,7 @@ with a credential it never returns; it is named to be conspicuous.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.secrets import ResolvedSecret, SecretSource, resolve_secret
@@ -62,6 +62,14 @@ class SecretStatus:
     shadowed_by: str | None = None
     env_fingerprint: str | None = None
     vault_fingerprint: str | None = None
+    #: The key the value was actually found under, when it was found. Not the
+    #: key that was asked for: a reader searches several candidates, and an
+    #: operator deleting a stale copy needs the one that exists.
+    vault_key: str | None = None
+    #: False when the vault could not be read at all. Distinct from
+    #: ``in_vault=False``, which means it WAS read and holds no row — a caller
+    #: that conflates the two reports green while nobody knows.
+    vault_readable: bool = True
 
 
 def _env_value(name: str) -> str | None:
@@ -74,26 +82,48 @@ def _env_value(name: str) -> str | None:
     return stripped or None
 
 
-def _vault_value(name: str, tenant_id: str, vault_key: str | None) -> str | None:
-    """The vault's own answer, read WITHOUT the precedence chain.
+def _vault_value(name: str, tenant_id: str, vault_key: str | None) -> tuple[str | None, str | None]:
+    """``(value, the key it came from)``, read WITHOUT the precedence chain.
 
     :func:`resolve_secret` answers "what would a reader get"; this answers
     "what does the vault hold", and the shadow check needs both or it cannot
     tell a shadow from an agreement.
-    """
-    try:
-        from robothor import vault
 
-        if vault_key is not None:
-            found = vault.get(vault_key, tenant_id=tenant_id)
-        else:
-            found = vault.export_env(tenant_id=tenant_id).get(name)
-    except Exception:  # noqa: BLE001 - an unreadable vault is not an exception here
-        return None
-    if found is None:
-        return None
-    stripped = found.strip()
-    return stripped or None
+    Searches the SAME candidates the accessor searches
+    (:func:`vault_keys_for_env_name`). It used to read only ``export_env()``,
+    which meant the most common class of credential — a provider slot, stored
+    at ``providers/<id>/api_key`` by the wizard and the Helm page — was
+    invisible here, so the required-severity shadow check passed on exactly the
+    shape the incident took. A check that cannot see the incident is the
+    inert-control defect.
+
+    Raises :class:`_VaultUnavailableError` rather than returning None when the vault
+    could not be read at all: "no row" and "nobody knows" produce the same
+    verdict from a check that conflates them, and the check would report green
+    while a dead environment value was being served.
+    """
+    from robothor import vault
+    from robothor.vault.naming import vault_keys_for_env_name
+
+    candidates = [vault_key] if vault_key is not None else list(vault_keys_for_env_name(name))
+    try:
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            found = vault.get(candidate, tenant_id=tenant_id)
+            if found is not None and found.strip():
+                return found.strip(), candidate
+        if vault_key is None:
+            exported = vault.export_env(tenant_id=tenant_id).get(name)
+            if exported is not None and exported.strip():
+                return exported.strip(), name.lower()
+    except Exception as exc:  # noqa: BLE001 - reported, never guessed at
+        raise _VaultUnavailableError(type(exc).__name__) from exc
+    return None, None
+
+
+class _VaultUnavailableError(RuntimeError):
+    """The vault could not be read. Distinct from "the vault holds no row"."""
 
 
 def _updated_at(vault_key: str | None, tenant_id: str) -> str | None:
@@ -118,7 +148,13 @@ def status_for_name(
     """The status of the credential an ENVIRONMENT name refers to."""
     tenant = tenant_id or DEFAULT_TENANT
     from_env = _env_value(name)
-    from_vault = _vault_value(name, tenant, vault_key)
+    try:
+        from_vault, found_at = _vault_value(name, tenant, vault_key)
+        vault_readable = True
+    except _VaultUnavailableError:
+        # "Nobody knows" is not "no row". A caller that conflates them reports
+        # green while a dead environment value is being served.
+        from_vault, found_at, vault_readable = None, None, False
     resolved: ResolvedSecret = resolve_secret(name, vault_key=vault_key, tenant_id=tenant)
 
     shadowed = bool(from_env and from_vault and from_env != from_vault)
@@ -130,7 +166,7 @@ def status_for_name(
         in_env=from_env is not None,
         in_vault=from_vault is not None,
         bootstrap=is_bootstrap(name),
-        updated_at=_updated_at(vault_key, tenant),
+        updated_at=_updated_at(found_at or vault_key, tenant),
         shadowed=shadowed,
         shadowed_by=(
             None
@@ -139,6 +175,8 @@ def status_for_name(
         ),
         env_fingerprint=fingerprint(from_env) if from_env else None,
         vault_fingerprint=fingerprint(from_vault) if from_vault else None,
+        vault_key=found_at,
+        vault_readable=vault_readable,
     )
 
 
@@ -205,7 +243,7 @@ def status_table(*, tenant_id: str = DEFAULT_TENANT) -> list[SecretStatus]:
     """
     from robothor.secrets.classification import declared_secret_names
     from robothor.settings.registry import field_index
-    from robothor.vault.naming import env_name
+    from robothor.vault.naming import env_name, env_names_for_vault_key
 
     index = field_index()
     names: set[str] = {
@@ -216,21 +254,44 @@ def status_table(*, tenant_id: str = DEFAULT_TENANT) -> list[SecretStatus]:
     # the case this table exists for.
     names |= environment_credential_names()
 
-    # Whatever the vault holds, whether or not anybody declared it.
-    vault_keys: dict[str, str] = {}
+    # Whatever the vault holds, whether or not anybody declared it — MERGED
+    # into the variable that reads it, not listed beside it.
+    #
+    # Listing it beside was I1: a provider key showed as
+    # `OPENROUTER_API_KEY env=yes vault=no` next to
+    # `PROVIDERS_OPENROUTER_API_KEY env=no vault=yes`, two rows describing one
+    # credential, neither of which could be a shadow of the other. The check
+    # that exists to report the incident could not see the incident's most
+    # common shape.
+    #
+    # `env_names_for_vault_key` is the same mapping the accessor searches with,
+    # in the other direction, so a row is filed under the name whose reader
+    # will actually serve it. A row nothing reads keeps its own line under its
+    # exported name — it is real, and an operator should see it.
+    unreadable_vault = False
+    orphan_keys: dict[str, str] = {}
     try:
         from robothor import vault
 
         for key in vault.list(tenant_id=tenant_id):
-            exported = env_name(key)
-            vault_keys[exported] = key
-            names.add(exported)
+            readers = env_names_for_vault_key(key)
+            if readers:
+                names.update(readers)
+            else:
+                exported = env_name(key)
+                orphan_keys[exported] = key
+                names.add(exported)
     except Exception:  # noqa: BLE001 - an unreadable vault narrows the table, not fails it
-        # The declared names still make a usable table, and every row's `source`
-        # will say `unavailable`, which is the honest answer.
+        # The declared names still make a usable table, and every row will say
+        # `vault_readable=False`, which is what stops the doctor calling it a
+        # pass.
+        unreadable_vault = True
         logger.debug("secrets: the vault could not be listed for the status table")
 
-    return [
-        status_for_name(name, tenant_id=tenant_id, vault_key=vault_keys.get(name))
+    rows = [
+        status_for_name(name, tenant_id=tenant_id, vault_key=orphan_keys.get(name))
         for name in sorted(names)
     ]
+    if unreadable_vault:
+        rows = [replace(row, vault_readable=False) for row in rows]
+    return rows

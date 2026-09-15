@@ -71,18 +71,32 @@ _KINDS: dict[str, str] = {
 }
 
 
+#: Vendor spellings that mean the same vendor. ``gh_token`` is what an earlier
+#: ``genus secrets migrate`` wrote for ``GH_TOKEN``, and ``kind_for_key`` did
+#: not recognise it — so the migrated GitHub token was the one credential that
+#: could not be ``vault_test``ed.
+_KIND_ALIASES: dict[str, str] = {"gh": "github"}
+
+
 def kind_for_key(vault_key: str) -> str | None:
     """Which probe, if any, knows how to test the row at ``vault_key``.
+
+    Matched on whole ``/``- and ``_``-separated WORDS, not on substrings. The
+    substring form claimed ``my_github_and_slack`` for GitHub, and would claim
+    any key with a vendor's name buried in it — a probe aimed at the wrong
+    vendor is a confident wrong answer, which is worse than ``unknown_kind``.
 
     ``None`` is a first-class answer: most credentials have no cheap identity
     endpoint, and claiming to have tested one that was never dialled is worse
     than saying so.
     """
-    parts = [part for part in str(vault_key).strip().lower().split("/") if part]
-    for part in parts:
-        for token, kind in _KINDS.items():
-            if token in part:
-                return kind
+    import re as _re
+
+    words = [w for w in _re.split(r"[/_.-]+", str(vault_key).strip().lower()) if w]
+    for word in words:
+        resolved = _KIND_ALIASES.get(word, word)
+        if resolved in _KINDS:
+            return _KINDS[resolved]
     return None
 
 
