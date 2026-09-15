@@ -28,7 +28,7 @@ Where to start, rather than reading this top to bottom:
 Settings are documented in the [configuration reference](configuration.md),
 not here: a flag belongs to one command, a setting to the whole instance.
 
-34 verbs.
+35 verbs.
 
 ## `genus plugin`
 
@@ -718,6 +718,35 @@ Usage: `genus vault export-env`
 Audit secret usage across the codebase.
 
 Usage: `genus vault audit`
+
+## `genus secrets`
+
+Where this instance keeps its credentials.
+
+Usage: `genus secrets {status,migrate}`
+
+### `genus secrets status`
+
+Every credential: which store has it, which store wins, fingerprints.
+
+Usage: `genus secrets status [--tenant TENANT]`
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--tenant` | `TENANT` | — | Tenant id (default: this one) |
+
+### `genus secrets migrate`
+
+Move application credentials out of the environment and into the vault.
+
+Usage: `genus secrets migrate [--from-env] [--dry-run] [--only NAME] [--tenant TENANT]`
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--from-env` | — | off | Read candidates from this process's environment (required) |
+| `--dry-run` | — | off | List what would be stored; write nothing |
+| `--only` | `NAME` | — | Migrate only these names |
+| `--tenant` | `TENANT` | — | Tenant id (default: this one) |
 
 ## `genus skills`
 

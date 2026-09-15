@@ -1,0 +1,115 @@
+# Shrinking the SOPS file to bootstrap
+
+**Who this is for:** an operator whose `secrets.enc.json` has grown to hold
+every credential the instance has ever used, and who wants the assistant to be
+able to rotate most of them.
+
+## Why
+
+On 2026-09-15 the operator handed the assistant a GitHub token over Telegram and
+expected it to be kept, used and rotated by the assistant. It could not be. The
+assistant can write the vault, but the secrets accessor read the process
+environment first — and that environment is a snapshot of this SOPS file,
+decrypted at boot into `/run/robothor/secrets.env` by a root-owned
+`ExecStartPre`. So the expired `GH_TOKEN` in the file shadowed the fresh vault
+row, and clearing it needed root to edit the file and restart the unit. The
+assistant can do neither, and must never need to.
+
+Application credentials now resolve **vault-first**, so the shadow no longer
+breaks anything. But a stale copy in this file is still a credential somebody
+will eventually read and a rotation somebody will think they performed — which
+is why `genus doctor` reports it. The fix is to stop keeping it here.
+
+## What belongs in the file
+
+Only **bootstrap** credentials: the ones that bring the instance up, which by
+definition cannot come from a store the instance needs to be up to read.
+
+| Name | Why it must be here |
+|------|---------------------|
+| `ROBOTHOR_DB_PASSWORD` | The vault's rows live in this database. A vault-first lookup for it asks the vault for the key to the vault. |
+| `ROBOTHOR_REDIS_PASSWORD` | Read before the engine has a database connection. |
+| `GENUS_AUTH_SIGNING_KEY` | Rotating it signs every session out and makes every stored MFA secret undecryptable. |
+| `AUTH_SECRET` | The dashboard's own session key, read by the Next.js app. |
+| `GENUS_BRIDGE_SSO_SECRET` | The bridge refuses every sign-in without it; see the 2026-09-03 eight-day outage. |
+| `ROBOTHOR_INTENT_HMAC_SECRET` | Changing it under running verifiers invalidates in-flight intents. |
+| `ROBOTHOR_NATS_URL`, `ROBOTHOR_NATS_PASSWORD` | Substrate transport, dialled before subsystems start. |
+| `ROBOTHOR_TEST_DB_DSN`, `ROBOTHOR_TEST_ADMIN_DSN` | Same argument as the database password. |
+
+`SOPS_AGE_KEY_FILE` and `ROBOTHOR_VAULT_*` are bootstrap by construction — they
+are how the file and the vault are opened — and are not stored *in* the file.
+
+The authoritative list is not this table. It is the `bootstrap=True` marker on
+the settings declaration, readable as:
+
+```bash
+genus secrets status          # the `bootstrap` note on each row
+```
+
+Everything else — provider keys, `GITHUB_TOKEN`, channel tokens, SMTP
+passwords, webhook URLs — is an **application** credential and belongs in the
+vault.
+
+## The move
+
+```bash
+# 1. See what is where.
+genus secrets status
+
+# 2. Rehearse.
+genus secrets migrate --from-env --dry-run
+
+# 3. Do it. Prints names and fingerprints; never a value.
+genus secrets migrate --from-env
+```
+
+`migrate` refuses bootstrap names outright, so step 3 cannot move something the
+box needs in order to start.
+
+### Then delete the migrated entries from the file
+
+```bash
+sops /etc/robothor/secrets.enc.json
+```
+
+Remove every name `migrate` reported as stored. Compare fingerprints first if
+you want to be certain the vault has the same value:
+
+```bash
+genus secrets status | grep GITHUB_TOKEN
+```
+
+A row with `yes` under both ENV and VAULT and a `SHADOW` note means the two hold
+**different** values — decide which one you meant before deleting either.
+
+### Verify
+
+```bash
+genus doctor --only secrets.shadowed
+sudo systemctl restart robothor-engine    # only to prove the box still starts
+genus secrets status
+```
+
+`secrets.shadowed` should pass, and every migrated credential should read
+`vault` under SERVED with nothing under ENV.
+
+## Rolling back
+
+Nothing is destroyed by the migration: it copies. If a credential turns out to
+be needed at boot, put it back in the SOPS file — bootstrap precedence means
+the environment will win for it again as soon as you also mark it bootstrap in
+the settings model, and until then the vault row keeps working.
+
+## What did not change
+
+SOPS stays. It is still the backend `scripts/load-secrets.sh` dispatches to, it
+still decrypts to tmpfs at boot, and `genus init --secrets-backend sops` still
+sets it up. The only change is what it is asked to hold.
+
+One related adjustment: `REQUIRED_KEYS` in `scripts/decrypt-secrets.sh` is now
+empty. It listed `OPENROUTER_API_KEY`, which would have refused the boot of an
+instance whose provider key lives in the vault — and since that script is the
+`ExecStartPre` of a unit ordering four services, a refusal there is the whole
+instance in `dependency failed`. The key is still *warned* about by name, with a
+pointer to `genus secrets status`, which is the command that can see both
+stores.
