@@ -522,6 +522,11 @@ job: `install` refuses a non-`https` `index` with a 422, and a listing that
 dropped one silently would leave an operator with a setting that has no effect
 and no explanation. (The Helm filters, and names what it left out.)
 
+Note that **omitting `index` is not the same as naming the first one**:
+`load_indexes` reads every configured URL and is all-or-nothing, so a single
+unusable entry refuses the whole set. A caller that has filtered the list should
+name the index it chose rather than leave the field out.
+
 The listing's `lockfile` block answers `path_configured`, `present`, `malformed`,
 `rows` and **`problem`** — the sentence the CLI and the doctor print, or `null`
 when the file is fine. `malformed` says *that* the whole file is unusable;

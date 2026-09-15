@@ -236,13 +236,31 @@ export function PluginInstallCard({ indexes, onAct, onInstalled }: PluginInstall
           body: JSON.stringify({
             name: name.trim(),
             version: version.trim() || undefined,
-            // The index the PICKER is showing, whenever there is a choice to
-            // show. Omitting it is not equivalent: the installer searches the
-            // named index alone, and every configured index in order when none
-            // is named — so a select displaying one while the engine resolved
-            // the wheel from another would be a provenance claim that is not
-            // true.
-            index: usable.length > 1 ? index || usable[0] : undefined,
+            /*
+              Which index to name, and when.
+
+              Omitting `index` is the ALL-indexes path: the engine reads every
+              configured URL in order. Naming one searches that one alone. Two
+              situations make the difference matter:
+
+              * **A choice exists.** A select displaying one index while the
+                engine resolved the wheel from another is a provenance claim
+                that is not true.
+              * **A configured index is REFUSED.** `load_indexes` is
+                all-or-nothing, so one `http://` entry refuses the whole set —
+                and with a single usable index there is no picker to reveal
+                that, so every Preview failed with an index error while the card
+                said only that the entry was not offered as a choice. Naming the
+                usable one keeps the refused one out of the search.
+
+              Otherwise the field stays off the request: with one configured
+              index the two paths resolve to the same place, and an `index` the
+              operator never chose is a claim the page has no business making.
+            */
+            index:
+              usable.length && (usable.length > 1 || refused.length)
+                ? index || usable[0]
+                : undefined,
             /*
               Only on a real install, and only for THIS plan.
 
@@ -288,7 +306,7 @@ export function PluginInstallCard({ indexes, onAct, onInstalled }: PluginInstall
         setBusy(null);
       }
     },
-    [name, version, index, usable, plan, acceptedSha, onAct, onInstalled]
+    [name, version, index, usable, refused, plan, acceptedSha, onAct, onInstalled]
   );
 
   async function copySha(value: string) {
@@ -400,11 +418,14 @@ export function PluginInstallCard({ indexes, onAct, onInstalled }: PluginInstall
           data-testid="plugins-install-unusable-index"
           className="break-words text-[11px] text-warning"
         >
-          Not offered as a choice, because the engine refuses a plugin index that is not{" "}
-          <code className="font-mono">https</code> — its signature is the only thing standing
+          {usable.length ? "Skipped" : "Unusable"}, because the engine refuses a plugin index that
+          is not <code className="font-mono">https</code> — its signature is the only thing standing
           between this box and whatever a mirror serves:{" "}
-          <span className="break-all font-mono">{refused.join(", ")}</span>. Fix{" "}
-          <code className="font-mono">ROBOTHOR_PLUGIN_INDEXES</code> on the box.
+          <span className="break-all font-mono">{refused.join(", ")}</span>.{" "}
+          {usable.length
+            ? "Installs here name a usable index explicitly, so this one is not searched — but nothing published only there can be found."
+            : "Nothing here can install until this is fixed: every configured index is refused."}{" "}
+          Fix <code className="font-mono">ROBOTHOR_PLUGIN_INDEXES</code> on the box.
         </p>
       ) : null}
 

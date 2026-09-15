@@ -1506,6 +1506,44 @@ describe("Settings › Plugins — installing from the registry", () => {
     expect(card.textContent).toMatch(/https/i);
   });
 
+  /**
+   * Hiding a refused index from the picker is not enough to keep it out of the
+   * request.
+   *
+   * With one usable index and one refused one there is no picker — nothing to
+   * choose between — so the body omitted `index` entirely, and an omitted
+   * `index` is the ALL-indexes path: `load_indexes` reads every configured URL
+   * and refuses the whole set on the `http://` one. So every Preview failed
+   * with an index error while the card said only that the entry was "not
+   * offered as a choice". Naming the usable index is what keeps the refused one
+   * out of the engine's search.
+   */
+  it("names the usable index when a refused one would poison the search", async () => {
+    const HTTP = "http://internal.invalid/index.json";
+    const recorded = mockBridge({
+      listings: [{ ...LISTING, indexes: [INDEX, HTTP] }, LISTING],
+      install: [{ status: 200, body: REVIEW_PLAN }],
+    });
+    render(<PluginsPage visible />);
+
+    await screen.findByTestId("plugins-install-card");
+    fireEvent.change(screen.getByTestId("plugins-install-name"), {
+      target: { value: "genus-weather" },
+    });
+    fireEvent.click(screen.getByTestId("plugins-install-preview"));
+
+    await screen.findByTestId("plugins-install-plan");
+    expect(recorded.posts[0].body).toMatchObject({ index: INDEX });
+  });
+
+  it("still names no index when every configured one is usable and there is only one", async () => {
+    const recorded = await preview();
+    // Nothing to disambiguate: one configured index and the engine's own order
+    // resolve to the same place, and an `index` the operator never chose is a
+    // claim the page has no business making.
+    expect(recorded.posts[0].body).not.toHaveProperty("index");
+  });
+
   it("does not claim a hash is copied once a different one is on screen", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
