@@ -251,6 +251,14 @@ same write-only shape the Helm Secrets page uses.
 
 The write takes effect immediately. No restart, and nothing for you to do.
 
+**Writes from elsewhere.** A running process caches what the vault answered, per
+key, for ten seconds (three for a "not configured" answer, because a feature
+that stays dead reads as broken rather than slow). So a credential you store
+with `genus vault set`, `genus secrets migrate` or the setup wizard lands within
+that window on every running process — and immediately, because those commands
+also POST `/api/admin/secrets/reload` to a local engine when one answers. If
+none does, they say so and tell you how long the wait is.
+
 The vault tools are **operator-tier**. An operator grants the tier explicitly:
 
 ```yaml

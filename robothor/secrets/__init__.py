@@ -78,6 +78,8 @@ from robothor.settings.env import process_env_get
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "SECRET_CACHE_MISS_TTL_SECONDS",
+    "SECRET_CACHE_TTL_SECONDS",
     "VAULT_RETRY_SECONDS",
     "ResolvedSecret",
     "SecretSource",
@@ -129,11 +131,27 @@ class ResolvedSecret(NamedTuple):
 #: make a test that sets a variable not take effect — a debugging afternoon for
 #: whoever hits it, bought for nothing.
 #:
-#: Invalidated by :func:`reset_secret_cache`, which ``vault_set`` reaches
-#: through ``_reload_cached_readers``. A cache that outlived a rotation would be
-#: the 2026-09-15 incident again with a shorter fuse: a correct write that
-#: readers cannot see.
-_vault_cache: dict[tuple[str, str], tuple[str | None, bool]] = {}
+#: Two ways out, and both are needed. :func:`reset_secret_cache` is the explicit
+#: one, which ``vault_set`` and the bridge's ``POST /api/admin/secrets/reload``
+#: both reach through ``key_pool.reload_provider_keys`` — for writers that can
+#: reach this process. And a short TTL, for the writers that cannot: the CLI and
+#: the setup wizard are separate processes, and a cache with no TTL made every
+#: one of their writes invisible to a running engine until a restart.
+_vault_cache: dict[tuple[str, str], tuple[str | None, bool, float]] = {}
+
+#: How long a cached HIT is served. Short, because this process is not the only
+#: writer: ``genus vault set``, ``genus secrets migrate``, ``genus channel add``
+#: and the setup wizard are all separate processes, and on ``main`` a CLI write
+#: took effect on the engine's next read. A performance fix that costs that is
+#: a regression. Ten seconds is long enough to collapse a burst of grants on one
+#: ``exec`` and short enough that nobody debugs it.
+SECRET_CACHE_TTL_SECONDS = 10.0
+
+#: How long a cached MISS is served — shorter, deliberately. A stale hit is a
+#: correct answer briefly out of date; a stale miss is a FEATURE THAT STAYS
+#: DEAD. The operator adds ``BRAVE_API_KEY`` from the CLI, web search keeps
+#: failing, and "slow" is indistinguishable from "broken".
+SECRET_CACHE_MISS_TTL_SECONDS = 3.0
 
 
 def reset_secret_cache() -> None:
@@ -179,7 +197,11 @@ def _vault_read(
     if not live:
         cached = _vault_cache.get(cache_key)
         if cached is not None:
-            return cached
+            value, available, stored_at = cached
+            ttl = SECRET_CACHE_TTL_SECONDS if value is not None else SECRET_CACHE_MISS_TTL_SECONDS
+            if _clock() - stored_at < ttl:
+                return value, available
+            del _vault_cache[cache_key]
 
     try:
         # Lazy: importing the vault pulls in the crypto and DAL layers, and a
@@ -227,7 +249,7 @@ def _vault_read(
 
     _vault_retry_after = None
     answer = (_clean(found), True)
-    _vault_cache[cache_key] = answer
+    _vault_cache[cache_key] = (*answer, _clock())
     return answer
 
 

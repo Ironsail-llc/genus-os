@@ -501,7 +501,15 @@ def reload_provider_keys() -> ReloadResult:
     Never raises: an unusable vault reloads nothing and leaves the environment
     exactly as it was.
     """
+    from robothor.secrets import reset_secret_cache
     from robothor.vault.naming import env_name, provider_key
+
+    # The accessor's per-key cache goes too. This function is what the bridge's
+    # `POST /api/admin/secrets/reload` and the agent's `vault_set` both reach,
+    # so it is the one explicit invalidation path every in-process writer
+    # already uses — and a reload that refreshed the pool while the accessor
+    # kept serving a cached value would be a reload in name only.
+    reset_secret_cache()
 
     exported = refresh_vault_snapshot()
 

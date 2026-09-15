@@ -46,6 +46,13 @@ def cmd_vault(args: argparse.Namespace) -> int:
             value = getpass.getpass(f"Value for {args.key}: ")
         vault_set(args.key, value, category=args.category)
         print(f"Stored: {args.key} [{args.category}]")
+        # A running engine caches what the vault answered, per key, for a few
+        # seconds. Without this the operator stores a credential here and
+        # watches the thing they just configured keep failing, with no way to
+        # tell a cache from a bug.
+        from robothor.secrets.reload import notify_engine
+
+        notify_engine()
         return 0
 
     if sub == "get":
@@ -87,6 +94,10 @@ def cmd_vault(args: argparse.Namespace) -> int:
 
         deleted = vault_delete(args.key)
         print(f"{'Deleted' if deleted else 'Not found'}: {args.key}")
+        if deleted:
+            from robothor.secrets.reload import notify_engine
+
+            notify_engine()
         return 0 if deleted else 1
 
     if sub == "import-env":
@@ -116,6 +127,10 @@ def cmd_vault(args: argparse.Namespace) -> int:
                 vault_set(key, value, category="credential")
                 count += 1
         print(f"Imported {count} secret(s)")
+        if count:
+            from robothor.secrets.reload import notify_engine
+
+            notify_engine()
         return 0
 
     if sub == "export-env":
