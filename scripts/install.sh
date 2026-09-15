@@ -41,7 +41,7 @@ set -euo pipefail
 # Rewritten by scripts/update-helm-values.sh on every release, so the published
 # script defaults to the release it shipped with and the API call below is only
 # a refresh. Keep the exact shape: the updater and its test both match it.
-INSTALL_SH_DEFAULT_VERSION="v1.87.0"
+INSTALL_SH_DEFAULT_VERSION="v1.88.0"
 
 REPO_SLUG="Ironsail-llc/genus-os"
 RAW_BASE="https://raw.githubusercontent.com/${REPO_SLUG}"
@@ -270,7 +270,7 @@ else
 fi
 
 if ! [[ "$VERSION" =~ $VERSION_RE ]]; then
-  die "not a release version: ${VERSION} — expected a tag such as v1.87.0"
+  die "not a release version: ${VERSION} — expected a release tag of the form vMAJOR.MINOR.PATCH"
 fi
 PEP440_VERSION="${VERSION#v}"
 
