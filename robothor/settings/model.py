@@ -1073,6 +1073,55 @@ class ChannelSettings(SettingsGroup):
         secret=True,
         since="1.74.0",
     )
+    teams_app_id: str = declare(
+        "",
+        "ROBOTHOR_TEAMS_APP_ID",
+        "Entra application (client) id of the Azure Bot backing the `teams` "
+        "channel, which ships as the `genus-teams` plugin. Not a secret -- it "
+        "is the `aud` every inbound activity's token is checked against, and it "
+        "is printed in the portal -- so it lives here rather than in the vault, "
+        "where the doctor could not read it on an instance with no master key.",
+        since="1.90.0",
+    )
+    teams_app_password: str = declare(
+        "",
+        "ROBOTHOR_TEAMS_APP_PASSWORD",
+        "Client secret for the Teams bot's Entra application. Read through the "
+        "secrets accessor, so `genus channel add teams` may put it in this "
+        "instance's vault instead of the environment.",
+        secret=True,
+        since="1.90.0",
+    )
+    teams_tenant_id: str = declare(
+        "",
+        "ROBOTHOR_TEAMS_TENANT_ID",
+        "Directory (tenant) id the Teams bot authenticates against when it "
+        "fetches a Bot Framework token. A single-tenant bot must set it; a "
+        "multi-tenant one leaves it empty and uses the botframework.com "
+        "tenant. Not this instance's Genus tenant id.",
+        since="1.90.0",
+    )
+    teams_access: str = declare(
+        "pairing",
+        "ROBOTHOR_TEAMS_ACCESS",
+        "Inbound access policy for Teams. Defaults to `pairing`: an unknown "
+        "sender in a 1:1 chat is answered with a one-shot code and reaches "
+        "nothing until an operator approves it. A field of its own rather than "
+        "`channel_access_default` so that configuring one surface does not "
+        "silently change the posture of another.",
+        since="1.90.0",
+    )
+    teams_verify_target: str = declare(
+        "",
+        "ROBOTHOR_TEAMS_VERIFY_TARGET",
+        "Conversation `genus channel verify teams` sends its proof-of-life "
+        "activity to -- a recorded conversation id, or the directory object id "
+        "of somebody who has messaged the bot. Used by verify and the doctor "
+        "only: delivery never falls back to it, so an agent whose manifest "
+        "names no target fails loudly instead of posting somewhere nobody "
+        "chose.",
+        since="1.90.0",
+    )
     channel_access_default: str = declare(
         "pairing",
         "ROBOTHOR_CHANNEL_ACCESS_DEFAULT",

@@ -57,6 +57,12 @@ _ADDABLE: dict[str, tuple[tuple[str, str, str], ...]] = {
     # behind a master key would make them unreadable by the doctor on an
     # instance that has no vault.
     "email": (("smtp_password", "smtp_password", "ROBOTHOR_EMAIL_SMTP_PASSWORD"),),
+    # A plugin channel (`genus-teams`), configured through the same table as a
+    # built-in. If a channel that ships as a package needed its own branch
+    # here, the first one would also be the first whose credentials an operator
+    # had to export by hand. ONE credential: the application id and the
+    # directory tenant id are not secrets and are settings below.
+    "teams": (("app_password", "app_password", "ROBOTHOR_TEAMS_APP_PASSWORD"),),
 }
 
 #: Per-channel non-secret settings ``add`` can write. ``(flag attribute, group,
@@ -72,6 +78,11 @@ _ADDABLE_SETTINGS: dict[str, tuple[tuple[str, str, str, str], ...]] = {
         ("smtp_starttls", "channels", "email_smtp_starttls", "ROBOTHOR_EMAIL_SMTP_STARTTLS"),
         ("smtp_user", "channels", "email_smtp_user", "ROBOTHOR_EMAIL_SMTP_USER"),
     ),
+    "teams": (
+        ("app_id", "channels", "teams_app_id", "ROBOTHOR_TEAMS_APP_ID"),
+        ("tenant_id", "channels", "teams_tenant_id", "ROBOTHOR_TEAMS_TENANT_ID"),
+        ("verify_target", "channels", "teams_verify_target", "ROBOTHOR_TEAMS_VERIFY_TARGET"),
+    ),
 }
 
 #: The flags that exist only to be REFUSED, per channel. A map rather than the
@@ -83,6 +94,7 @@ _ADDABLE_SETTINGS: dict[str, tuple[tuple[str, str, str, str], ...]] = {
 _REFUSED_FLAGS: dict[str, tuple[tuple[str, str], ...]] = {
     "slack": (("--bot-token", "bot_token"), ("--app-token", "app_token")),
     "email": (("--smtp-password", "smtp_password"),),
+    "teams": (("--app-password", "app_password"),),
 }
 
 
