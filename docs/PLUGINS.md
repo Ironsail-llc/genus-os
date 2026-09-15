@@ -800,33 +800,71 @@ The full design and what was deliberately left out is
 
 ### From the Helm
 
-**Settings › Plugins** drives those five routes, and it is what makes the
-lockfile reachable on a box nobody has a shell on. It opens with **Record
-installed plugins** when no file exists yet — the switches are dead until then,
-because a toggle with no row to flip is a 404 — and afterwards shows one card
-per distribution: its state (`loaded` as a fact, `disabled` as a decision,
-`failed` as a fault), a drift badge carrying the engine's own sentence, the
-entry-point groups, what it contributes as `kind × n`, and its manifest. A
-reload's failures name ENTRY POINTS, not distributions, so the page ties them
-back through the listing — the group, then `enabled` for a `disabled by
-operator` refusal, then the distribution's own name, with `declared` only as a
-tiebreaker (it holds contribution names, which are a different namespace) — and
-prints `group/entry-point` beside every line so the match can be checked. What
-it cannot place, it says it cannot place.
+**Settings › Plugins** drives every route above, and it is what makes the
+lockfile reachable on a box nobody has a shell on.
+
+**Install from the registry** sits at the top. Type a distribution name (and
+optionally a version; the index is a picker when more than one is configured)
+and press **Preview**, which posts `dry_run: true` and renders the plan: the
+artifact, the first twelve characters of its sha256 with the whole hash on the
+clipboard, the publisher key id that signed the index, the groups it
+contributes to, how much was scanned, and every reason sentence in full. The
+verdict is a **word** — `safe`, `review` or `blocked` — and never a checkmark,
+because what the scanner offers is a narrow claim about source it did not
+execute and a tick beside a package name reads as a clearance.
+
+`review` is the ordinary outcome, not an error: anything importing `os`, or
+whose manifest omits `entry_points:`, lands there. So **Install** is dead until
+the operator ticks *I accept the review findings*, which is what becomes
+`accept_review: true`. A `safe` plan needs no tick. A `blocked` plan gets **no
+Install button at all** — not a disabled one, which is a control that looks
+like it might work if you tried harder — and says so in as many words. Every
+refusal from the route is printed as the server's own sentence; a **504** in
+particular says the operation may still be running, which is not the same thing
+as failed.
+
+The form takes a name and never a path or a URL. To install a wheel you have on
+disk, use `genus plugin install ./x.whl --sha256 …` on the box; the card says
+so rather than leaving you to discover it.
+
+Below that, **Record installed plugins** when no lockfile exists yet — the
+switches are dead until then, because a toggle with no row to flip is a 404 —
+and one card per distribution: its state (`loaded` as a fact, `disabled` as a
+decision, `failed` as a fault), a drift badge carrying the engine's own
+sentence, the entry-point groups, what it contributes as `kind × n`, its
+manifest, and — for a distribution this platform installed — where it came
+from and a **Remove** button. Remove confirms inline beside the card, and it
+appears **only** where the lock row carries `source`: `remove` refuses a row
+somebody pip-installed by hand, so a button on every card would answer 422 on
+most of them, and `--force` stays on the CLI.
+
+A reload's failures name ENTRY POINTS, not distributions, and the page files
+each under `failures[].distribution` — printing `group/entry-point` beside the
+line so the match can be checked. What the engine could not name, the page does
+not name either: it goes to the unattributed list with its group and entry
+point, for the operator to place.
 Turning one off writes the row and nothing else, exactly as `genus plugin
 disable` does, so the card says the engine is still running it and a bar offers
 **one** reload after however many toggles; `disabled by operator` comes back in
 that reload's failure list and is rendered as the operator's own decision, not
-as something to fix. Two things it deliberately does not do: it never renders
-`verdict`, because nothing scans a plugin yet and a placeholder printed on the
-screen where third-party code is turned on reads as a clearance; and it offers
-no `--force`, pointing at `genus plugin sync --force` on the box instead — and
-only when the engine's own refusal names it, since a 409 also answers "no
-lockfile path resolves", where there is nothing to force. A file the engine
-found **unreadable** is reported as governing nothing at all, because that is
-what `usable` means: the page says every plugin that was turned off is loading
-again, and sends the operator to Record, whose refusal distinguishes damaged
-contents (409) from an unwritable path (503).
+as something to fix. Removing does not unload either: the files go now, the
+modules the engine already imported stay until the same bar's reload.
+
+Two things it deliberately does not do. It never renders a **lock row's**
+`verdict`: a row recorded by `sync` says `unscanned` — nothing looked at it —
+and a word on the screen where third-party code is turned on reads as a
+judgement. (The install card is the opposite case and shows its verdict in
+full: that one is a measurement of the exact bytes about to be installed.) And
+it offers no `--force`, pointing at `genus plugin sync --force` on the box
+instead — and only when the engine's own refusal names it, since a 409 also
+answers "no lockfile path resolves", where there is nothing to force.
+
+A file the engine found **unreadable** is reported as governing nothing at all,
+because that is what `usable` means: the page says every plugin that was turned
+off is loading again, leads with `lockfile.problem` — the same sentence the CLI
+and the doctor print, so the operator is told *which* of the four faults it is
+— and sends them to Record, whose refusal distinguishes damaged contents (409)
+from an unwritable path (503).
 
 ## A worked example
 
