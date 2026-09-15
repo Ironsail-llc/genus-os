@@ -376,21 +376,39 @@ install, what gets recorded, and what `enable`/`disable` act on:
       "verdict": "unscanned",
       "enabled": true,
       "kinds": ["genus.schemas", "genus.services", "genus.tools"],
-      "recorded_at": "2026-09-15T00:00:00+00:00"
+      "recorded_at": "2026-09-15T00:00:00+00:00",
+      "dist_sha256": "…",
+      "source": {
+        "origin": "registry",
+        "index_url": "https://ironsail-llc.github.io/genus-plugins/index.json",
+        "publisher_key_id": "genus-2026",
+        "installed_at": "2026-09-15T00:00:00+00:00"
+      }
     }
   ]
 }
 ```
 
-`verdict` is always `unscanned` today. Nothing scans a plugin yet, and a field
-reading `safe` because no scanner ran would be worse than no field at all.
+`verdict` is `unscanned` for anything `genus plugin sync` merely *found*
+installed — nothing scans a distribution that is already a directory tree, and
+a field reading `safe` because no scanner ran would be worse than no field at
+all. A plugin that arrived through `genus plugin install` carries the verdict
+its wheel actually got.
+
+`dist_sha256` and `source` appear only for plugins this platform installed.
+Their **absence** is information: a row without a `source` is one an operator
+pip-installed by hand, and `genus plugin remove` refuses those without
+`--force`. Both fields are additive — a lockfile written before they existed
+parses unchanged.
 
 ### The verbs
 
 | command | what it does |
 |---|---|
 | `genus plugin list` | what is installed, what it contributes, what is disabled, what was refused |
-| `genus plugin info <name>` | one distribution: manifest, groups, contributions, lock row, load state |
+| `genus plugin info <name>` | one distribution: manifest, groups, contributions, lock row, where it came from |
+| `genus plugin install <name\|wheel>` | install from a signed index, or from a wheel you hashed yourself |
+| `genus plugin remove <name>` | uninstall a plugin this platform installed and drop its row |
 | `genus plugin sync [--force]` | upsert a row per installed distribution; drop rows for ones that are gone |
 | `genus plugin enable <name>` | let a recorded plugin load again |
 | `genus plugin disable <name>` | stop it being imported at all |
@@ -471,10 +489,172 @@ acts with identifiers only.
 | `POST /api/plugins/{name}/enable` | `POST /api/admin/plugins/{name}/enable` | flip the row; 404 if unrecorded; does **not** reload |
 | `POST /api/plugins/{name}/disable` | `POST /api/admin/plugins/{name}/disable` | as above |
 | `POST /api/plugins/reload` | `POST /api/admin/plugins/reload` | runs the SIGHUP body; returns `{generation, loaded, failures}` |
+| `POST /api/plugins/install` | `POST /api/admin/plugins/install` | `{name, version?, index?, accept_review?, dry_run?}` → the install plan and its verdict; **422** for a blocked or unreviewed wheel, an unverifiable index, or a `name` that is not a distribution name |
+| `POST /api/plugins/{name}/remove` | `POST /api/admin/plugins/{name}/remove` | `{force?}` → `{name, removed, row_dropped, reload_hint, note}` |
 
 No response carries a filesystem path. Which distributions are installed is a
 platform fact; where an instance keeps its files is not, so the listing answers
-`path_configured` and `present` and never *where*.
+`path_configured` and `present` and never *where* — and the install response
+omits the pip command, which holds a temp directory and the interpreter's
+location. The CLI prints it; HTTP does not.
+
+`install` takes a distribution **name** and nothing that could become a path or
+a URL. A dashboard naming a filesystem path would be a file read on the
+engine's box; one naming a URL would make the engine fetch on a caller's
+say-so. Installing a wheel from disk is a CLI-only act, where the operator is
+standing at the machine.
+
+## Installing from the registry
+
+The registry is not a server. It is a signed static file — `index.json` plus a
+detached `index.json.sig` — that anything can host: GitHub Pages, an S3 bucket,
+a company's own nginx, or a directory copied onto a box with no network.
+Trust comes from the Ed25519 signature and the public key you pinned, never
+from the host, so every mirror is exactly as trustworthy as the original.
+
+```bash
+# the newest published version
+genus plugin install genus-hostinfo
+# an exact version
+genus plugin install genus-hostinfo==0.1.0
+# the plan, and write nothing
+genus plugin install genus-hostinfo --dry-run
+```
+
+What happens, in order, each step a refusal:
+
+1. **Resolve** the name in every index `ROBOTHOR_PLUGIN_INDEXES` lists, in
+   order. First index publishing the name wins — so a company index listed
+   first shadows the platform's, on purpose. A name published by **two
+   different publishers** is refused until you name one with `--index <url>`.
+2. **Verify** the index's signature against a key you pinned. An index is
+   also refused when its `key_id` is unknown, its `schema` is not 1, it is
+   dated in the future, it is more than 90 days old (a mirror serving a
+   pre-yank index would undo the yank silently), it redirects off its origin,
+   it exceeds 1 MB, or its bytes are not the canonical form that was signed.
+3. **Download** the wheel to a temp directory and check its sha256 against
+   what the index signed. Size-capped at 50 MB.
+4. **Open** it under bounded zip rules: no symlink member, no absolute or
+   traversing path, no duplicate names, member and uncompressed-size caps —
+   all checked against the headers before a byte is written.
+5. **Compare** the wheel's `genus-plugin.yaml` to the `manifest_sha256` the
+   index signed. A declaration widened after publication is refused here,
+   rather than caught by the lockfile's drift check one import too late.
+6. **Scan** it (below). `blocked` refuses; `review` refuses unless you pass
+   `--accept-review`; `safe` proceeds.
+7. **Install** with pip — and pip is allowed to do nothing at all:
+   `--no-deps --no-index --find-links <the temp directory>`. It resolves
+   nothing, reaches nowhere, and installs exactly the one file that survived
+   the steps above. It never sees a URL, an `--index-url` or `--pre`.
+8. **Record** the row: verdict, wheel hash, and where it came from.
+
+Nothing signals the engine. The running daemon keeps serving the plugin set it
+discovered until you reload it (SIGHUP, or `POST /api/plugins/reload`).
+
+### `--no-deps` is permanent, and it constrains you
+
+A plugin's dependencies are **not** installed. An installer that resolved them
+would let a plugin's own metadata name the next download, which is the supply
+chain this design exists to close.
+
+So a plugin that needs a library the platform does not already ship must either
+vendor it, or ask for it to be added to the platform's extras. That is a real
+constraint on plugin authors and it is deliberate.
+
+### Pinning a publisher's key
+
+`robothor/plugins/registry_keys.py` ships **empty**. The production key for the
+Genus registry is minted by whoever runs that registry; a placeholder committed
+before it exists is a placeholder nobody replaces.
+
+To trust a publisher — your own company's internal registry, say — drop their
+PEM **public** key into a directory and point `ROBOTHOR_PLUGIN_INDEX_KEYS` at
+it. The file's stem is the `key_id` the index must name:
+
+```bash
+mkdir -p /srv/app/plugin-keys
+cp acme-2026.pem /srv/app/plugin-keys/       # key_id "acme-2026"
+genus config set ROBOTHOR_PLUGIN_INDEX_KEYS /srv/app/plugin-keys
+genus config set ROBOTHOR_PLUGIN_INDEXES \
+  "https://plugins.acme.example/index.json,https://ironsail-llc.github.io/genus-plugins/index.json"
+```
+
+Publishing to your own registry is `scripts/build_plugin_index.py`: it reads a
+directory of wheels, takes every field out of the wheel itself, runs the same
+scanner, signs the canonical bytes, and verifies its own output with the
+shipped parser before it reports success.
+
+```bash
+python scripts/build_plugin_index.py dist/ \
+  --out index.json --key ~/.keys/acme.pem --key-id acme-2026 \
+  --publisher acme --base-url https://plugins.acme.example/wheels/
+```
+
+## Installing a wheel offline
+
+No index, no network — a wheel on disk and a hash you obtained some other way:
+
+```bash
+genus plugin install ./genus_hostinfo-0.1.0-py3-none-any.whl \
+  --sha256 3b1f…c0de
+```
+
+`--sha256` is **required**. There is no signed index vouching for a file you
+name yourself, so the hash is the only thing that says it is the file you
+meant. Everything from step 4 onward is identical, and the lock row records
+`"origin": "wheel"` with no index or key.
+
+This is CLI-only. The HTTP route takes a distribution name and nothing that
+could become a path.
+
+## What the scanner refuses, and why
+
+The scan runs on the bytes actually downloaded, before pip is allowed near
+them. It is offline, deterministic, and an **AST walk, never a grep**: a
+docstring reading "never call `eval()`" must not block an install, and
+`getattr(builtins, "ex" + "ec")` must. A text scan gets both backwards, and a
+scanner that cries wolf is one whose verdict gets waved through every time.
+
+**`blocked` — the install cannot proceed at all:**
+
+| finding | why |
+|---|---|
+| a `genus.*` group the manifest declares nothing for | undeclared surface: the loader would import it before anything could compare the two |
+| a manifest claiming a built-in name | shadowing `exec` or `web_fetch` is a takeover, not an extension |
+| a `contract_version` this engine does not speak | third-party code expecting a different tool-calling contract |
+| `os.system(...)`, `shell=True`, `os.popen` | a string handed to a shell |
+| `eval` / `exec` / `compile` on non-literal input | what runs cannot be read |
+| a decoder (`b64decode`, `unhexlify`, …) feeding `exec` | code hidden from review inside encoded data |
+| `getattr(builtins, …)` | how `exec` is reached without naming it |
+| `import ctypes` / `cffi` | native code outside every guardrail the engine applies to Python |
+| a raw socket | egress the engine's rules never see |
+| a write under `/etc`, an SSH directory, or a credentials path | persistence and credential theft |
+
+**`review` — refused unless you pass `--accept-review`:**
+
+- it contributes to `genus.hooks`, `genus.guardrails`, `genus.sandboxes`,
+  `genus.channels`, `genus.memory` or `genus.jobs` — these run with no tool
+  call, on a schedule or on every turn, so installing one changes what the
+  engine does by itself
+- it imports `requests` / `httpx` / `urllib` — it reaches off the box
+- it reads `os.environ` directly rather than through the settings accessor
+- it ships prompt text (`*.md`, `SKILL.md`, `instructions*`) — text a model
+  reads is an instruction channel
+- **anything the scan could not read**: a file that would not parse, one over
+  the size cap, or a wheel with more files than the scan bound. "We did not
+  look" is never reported as "safe".
+
+Every reason names a `file:line` inside the wheel. Prompt text is reported as
+`static-only` — the bytes were noticed, not read. `--scan-prompts` additionally
+runs the platform's injection screen over them; a screen that cannot run says
+`static-only` with a sentence rather than reporting clean.
+
+**The scan is not a sandbox and does not claim to be.** A plugin that passes
+still runs with the daemon's privileges once it is imported. What the scan buys
+is that hiding something costs effort, and that what it finds gets named.
+
+The full design and what was deliberately left out is
+[`docs/rfcs/0002-plugin-distribution.md`](rfcs/0002-plugin-distribution.md).
 
 ### From the Helm
 
