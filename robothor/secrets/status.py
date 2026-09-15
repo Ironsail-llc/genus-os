@@ -113,10 +113,12 @@ def _vault_value(name: str, tenant_id: str, vault_key: str | None) -> tuple[str 
             found = vault.get(candidate, tenant_id=tenant_id)
             if found is not None and found.strip():
                 return found.strip(), candidate
-        if vault_key is None:
-            exported = vault.export_env(tenant_id=tenant_id).get(name)
-            if exported is not None and exported.strip():
-                return exported.strip(), name.lower()
+        # No ``export_env()`` fallback. It decrypted every row the instance owns
+        # for each name with no match, so ``status_table`` — which walks every
+        # declared secret — decrypted the whole vault once per unconfigured one.
+        # The candidates already end with the literal lower-cased name, which is
+        # exactly what the export would have matched, so the fallback found
+        # nothing the search did not. Review R9.
     except Exception as exc:  # noqa: BLE001 - reported, never guessed at
         raise _VaultUnavailableError(type(exc).__name__) from exc
     return None, None

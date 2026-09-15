@@ -102,7 +102,22 @@ _ENV_PRINTING_BUILTINS = frozenset({"set", "declare", "typeset"})
 #: it does not close the hole. What closes it is ``PR_SET_DUMPABLE`` in
 #: :mod:`robothor.engine.process_hardening`; what removes it is the SOPS shrink,
 #: after which the engine's environment holds only bootstrap credentials.
-_PROCFS_ENVIRON = re.compile(r"/proc/[^/\s]+/(environ|cmdline)\b")
+#: Matched against a NORMALISED command, never the raw one. The literal form
+#: missed ``/proc/<pid>//environ`` — the kernel resolves both to the same file,
+#: and a path denylist that matches the string rather than the path means
+#: nothing. ``task/<tid>/`` is the per-thread view of the same environment.
+_PROCFS_ENVIRON = re.compile(r"/proc/[^/\s]+/(?:task/[^/\s]+/)?(environ|cmdline)\b")
+
+#: Repeated separators and no-op ``.`` components, collapsed before matching.
+#: Deliberately NOT ``..``: resolving that needs to know the working directory,
+#: and a denylist that guesses at one would refuse paths that do not exist while
+#: still missing the ones that do. The value here is closing the cheap spellings.
+_REDUNDANT_PATH = re.compile(r"/(?:\./)*(?:/+(?:\./)*)*")
+
+
+def _normalise_paths(command: str) -> str:
+    """Collapse ``//`` and ``/./`` so one path has one spelling to match."""
+    return _REDUNDANT_PATH.sub("/", command)
 
 
 def is_secret_path(path: str | os.PathLike[str]) -> bool:
@@ -271,7 +286,7 @@ def exec_reads_secret(command: str) -> str | None:
     # ``grep -a x /proc/$PPID/environ`` hides the path in an argument, and a
     # Python one-liner names no printer at all. Matched on the whole command for
     # that reason — see _PROCFS_ENVIRON for what this is and is not worth.
-    if _PROCFS_ENVIRON.search(command):
+    if _PROCFS_ENVIRON.search(_normalise_paths(command)):
         return (
             "refused: reading /proc/<pid>/environ or /proc/<pid>/cmdline prints another "
             "process's environment, which holds this instance's credentials. A "

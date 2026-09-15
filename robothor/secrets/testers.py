@@ -93,11 +93,18 @@ def kind_for_key(vault_key: str) -> str | None:
     import re as _re
 
     words = [w for w in _re.split(r"[/_.-]+", str(vault_key).strip().lower()) if w]
-    for word in words:
-        resolved = _KIND_ALIASES.get(word, word)
-        if resolved in _KINDS:
-            return _KINDS[resolved]
-    return None
+    matched = {
+        _KINDS[_KIND_ALIASES.get(word, word)]
+        for word in words
+        if _KIND_ALIASES.get(word, word) in _KINDS
+    }
+    # Exactly one vendor, or none. ``my_github_and_slack`` names two, and a
+    # probe that took whichever came first would dial one vendor with a
+    # credential meant for the other and report a confident wrong answer —
+    # worse than ``unknown_kind``, which at least says nothing was tested.
+    if len(matched) != 1:
+        return None
+    return matched.pop()
 
 
 def _classify(status: int) -> str:

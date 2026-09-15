@@ -276,6 +276,15 @@ it to a value no `role_permissions` row seeds (`main`, `operator`) denies that
 agent *every* tool under `ROBOTHOR_RBAC_MODE=enforce`. Two postures, two
 fields; `ROBOTHOR_DEFAULT_SERVICE_ROLE` cannot grant the credential tier either.
 
+**Spawning is not a way around it, but it is a way to reach it.** The tier is
+read from the manifest of whichever agent is running, so a spawned sub-agent is
+refused — that is the point. But an agent that holds `spawn` can spawn *an agent
+that has the tier*, which then acts with it. That is the design: `spawn` is
+delegation, and delegating to your operator agent is a normal thing to do. If it
+is not what you want, take `spawn` out of that agent's `tools_allowed`, or
+`tools_denied: [spawn]`. Grant the tier to as few agents as possible for the
+same reason you would limit any other privileged role.
+
 ### What a sub-agent sees
 
 Nothing *inherited*, unless its own manifest says so. An agent's `exec` commands used to

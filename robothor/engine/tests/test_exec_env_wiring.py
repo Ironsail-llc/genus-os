@@ -47,6 +47,17 @@ def _no_grants(request, monkeypatch):
     monkeypatch.setattr(exec_env, "grants_for_agent", lambda agent_id, workspace="": ())
 
 
+def _leaked(output: object, value: str) -> bool:
+    """Whether *value* survived — as a BOOLEAN bound by the caller to a local.
+
+    pytest's assertion rewriting prints every intermediate value in a failing
+    expression, so `assert VALUE not in result["stdout"]` puts the child's
+    entire environment — the real one, on whoever ran the suite — into the test
+    report. Review R6; the same mistake the process note describes.
+    """
+    return value in str(output)
+
+
 async def _run(command: str, *, agent_id: str = "researcher", workspace: str = "") -> dict:
     return await HANDLERS["exec"](
         {"command": command, "timeout": 30},
@@ -59,20 +70,22 @@ async def test_under_enforce_the_child_sees_no_credential(monkeypatch):
     monkeypatch.setenv("ROBOTHOR_EXEC_ENV_MODE", "enforce")
     result = await _run(DUMP)
     assert result.get("exit_code") == 0, result
-    dump = result["stdout"]
     for value in (FAKE_GITHUB, FAKE_SLACK, "fake-vendor-0000"):
-        assert value not in dump, "a credential reached the child of an agent's exec"
+        leaked = _leaked(result["stdout"], value)
+        assert not leaked, "a credential reached the child of an agent's exec"
     for name in ("GITHUB_TOKEN=", "GH_TOKEN=", "ROBOTHOR_SLACK_BOT_TOKEN="):
-        assert name not in dump
+        present = _leaked(result["stdout"], name)
+        assert not present
 
 
 @pytest.mark.asyncio
 async def test_under_enforce_the_child_still_has_a_working_environment(monkeypatch):
     monkeypatch.setenv("ROBOTHOR_EXEC_ENV_MODE", "enforce")
     result = await _run(DUMP)
-    dump = result["stdout"]
-    assert "PATH=" in dump, "a child with no PATH cannot run anything"
-    assert "HOME=" in dump
+    has_path = _leaked(result["stdout"], "PATH=")
+    has_home = _leaked(result["stdout"], "HOME=")
+    assert has_path, "a child with no PATH cannot run anything"
+    assert has_home
 
 
 @pytest.mark.asyncio
@@ -81,7 +94,8 @@ async def test_under_off_nothing_changes(monkeypatch):
     until its operator has read the observe report and chosen."""
     monkeypatch.setenv("ROBOTHOR_EXEC_ENV_MODE", "off")
     result = await _run(DUMP)
-    assert FAKE_GITHUB in result["stdout"]
+    present = _leaked(result["stdout"], FAKE_GITHUB)
+    assert present
 
 
 @pytest.mark.asyncio
@@ -104,11 +118,14 @@ async def test_a_granted_agent_gets_exactly_its_grant(monkeypatch):
     )
 
     granted = await _run(DUMP, agent_id="devops")
-    assert f"GITHUB_TOKEN={FAKE_GITHUB}" in granted["stdout"]
-    assert FAKE_SLACK not in granted["stdout"], "a grant is one name, not an amnesty"
+    injected = _leaked(granted["stdout"], f"GITHUB_TOKEN={FAKE_GITHUB}")
+    slack_leaked = _leaked(granted["stdout"], FAKE_SLACK)
+    assert injected
+    assert not slack_leaked, "a grant is one name, not an amnesty"
 
     ungranted = await _run(DUMP, agent_id="researcher")
-    assert FAKE_GITHUB not in ungranted["stdout"]
+    inherited = _leaked(ungranted["stdout"], FAKE_GITHUB)
+    assert not inherited
 
 
 @pytest.mark.asyncio
@@ -132,8 +149,10 @@ async def test_a_sub_agent_does_not_inherit_its_parents_grant(monkeypatch):
     )
 
     child = await _run(DUMP, agent_id="worker")
-    assert FAKE_GITHUB not in child["stdout"]
-    assert "GITHUB_TOKEN=" not in child["stdout"]
+    value_leaked = _leaked(child["stdout"], FAKE_GITHUB)
+    name_leaked = _leaked(child["stdout"], "GITHUB_TOKEN=")
+    assert not value_leaked
+    assert not name_leaked
 
 
 @pytest.mark.asyncio

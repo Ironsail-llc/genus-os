@@ -325,3 +325,27 @@ async def test_an_ordinary_hint_survives(stored, monkeypatch):
     monkeypatch.setattr(testers, "probe", fake_probe)
     result = await HANDLERS["vault_test"]({"key": "providers/github/api_key"}, _ctx())
     assert result["identity_hint"] == "octocat"
+
+
+# ── R8: one vendor, or none ──────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("key", "expected"),
+    [
+        ("providers/github/api_key", "github"),
+        ("gh_token", "github"),
+        ("channels/slack/bot_token", "slack"),
+        ("my_github_and_slack", None),
+        ("github_slack_bridge_token", None),
+        ("providers/nothing/api_key", None),
+        ("scratch/notes", None),
+    ],
+)
+def test_kind_for_key_names_one_vendor_or_none(key, expected):
+    """A key naming two vendors used to resolve to whichever came first, so the
+    probe would dial one vendor with a credential meant for the other and
+    report a confident wrong answer — worse than saying nothing was tested."""
+    from robothor.secrets.testers import kind_for_key
+
+    assert kind_for_key(key) == expected
