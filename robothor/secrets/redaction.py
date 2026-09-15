@@ -375,7 +375,10 @@ def redact_assistant_turn(message: Any) -> Any:
     changed = False
     for call in calls:
         function = call.get("function") if isinstance(call, dict) else None
-        raw = function.get("arguments") if isinstance(function, dict) else None
+        if not isinstance(function, dict):
+            cleaned_calls.append(call)
+            continue
+        raw = function.get("arguments")
         if not isinstance(raw, str) or not raw:
             cleaned_calls.append(call)
             continue
@@ -394,9 +397,7 @@ def redact_assistant_turn(message: Any) -> Any:
             cleaned_calls.append(call)
             continue
         changed = True
-        cleaned_calls.append(
-            {**call, "function": {**function, "arguments": scrubbed}}  # type: ignore[dict-item]
-        )
+        cleaned_calls.append({**call, "function": {**function, "arguments": scrubbed}})
 
     if not changed:
         return message

@@ -53,13 +53,16 @@ stale verdict passes ``live=True`` to skip the cooldown and probe the vault now.
 not, and neither is the text of an exception that may carry a connection
 string. A journal outlives the tmpfs file the credential came from.
 
-There is deliberately no cache of the vault's contents. ``vault.export_env()``
-returns EVERY secret the instance owns, so keeping it would hold every channel
-token and SMTP password in memory for the sake of one lookup —
-``engine/key_pool.py`` filters its snapshot down to provider slots for exactly
-that reason, and a general accessor has no such filter to apply. Callers that
-resolve a credential on a hot path cache the resolved value themselves
-(``tokens.signing_key()`` does).
+**What is cached, and what is not.** Rows the vault answered for, by key,
+invalidated on every write — see :data:`_vault_cache`. Nothing calls
+``export_env()`` here: it returns EVERY secret the instance owns, so using it to
+answer a question about one is a full decrypt per lookup and holds every channel
+token and SMTP password in memory for the sake of it. That matters because the
+callers are hot — ``github_api._get_token`` per request, ``build_exec_env`` once
+per grant per ``exec`` — and because before the vault went first, the
+environment short-circuited and none of this ran at all. The environment half is
+NOT cached: it is a dict lookup, and caching it would make a test that sets a
+variable not take effect.
 """
 
 from __future__ import annotations
@@ -80,6 +83,7 @@ __all__ = [
     "SecretSource",
     "get_secret",
     "is_bootstrap",
+    "reset_secret_cache",
     "reset_vault_availability",
     "resolve_secret",
     "secret_source",
@@ -113,10 +117,35 @@ class ResolvedSecret(NamedTuple):
     source: SecretSource
 
 
+#: What the vault answered for a key, so a hot caller does not ask twice.
+#:
+#: Keyed by ``(tenant, vault_key or name)`` and holding ``(value, available)``
+#: — the MISS is cached too, because ``build_exec_env`` resolves an unset grant
+#: on every ``exec`` and ``_remote_enabled`` asks about a provider that may not
+#: be configured, so remembering only hits would leave the common case paying
+#: full price.
+#:
+#: Only the vault half. The environment is a dict lookup and caching it would
+#: make a test that sets a variable not take effect — a debugging afternoon for
+#: whoever hits it, bought for nothing.
+#:
+#: Invalidated by :func:`reset_secret_cache`, which ``vault_set`` reaches
+#: through ``_reload_cached_readers``. A cache that outlived a rotation would be
+#: the 2026-09-15 incident again with a shorter fuse: a correct write that
+#: readers cannot see.
+_vault_cache: dict[tuple[str, str], tuple[str | None, bool]] = {}
+
+
+def reset_secret_cache() -> None:
+    """Forget what the vault said. Called on every write, and by the suite."""
+    _vault_cache.clear()
+
+
 def reset_vault_availability() -> None:
     """Re-arm the vault probe. For tests, and after a deliberate reload."""
     global _vault_retry_after  # noqa: PLW0603
     _vault_retry_after = None
+    reset_secret_cache()
 
 
 def _clean(value: str | None) -> str | None:
@@ -146,6 +175,12 @@ def _vault_read(
     if not live and _vault_retry_after is not None and _clock() < _vault_retry_after:
         return None, False
 
+    cache_key = (tenant_id, vault_key or name)
+    if not live:
+        cached = _vault_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
     try:
         # Lazy: importing the vault pulls in the crypto and DAL layers, and a
         # process whose credentials all come from the environment must not pay
@@ -155,31 +190,28 @@ def _vault_read(
         if vault_key is not None:
             found = vault.get(vault_key, tenant_id=tenant_id)
         else:
-            # Two ways in, and both are needed.
+            # One ROW at a time, by key. Never ``export_env()``.
             #
-            # ``export_env()`` applies ``naming.env_name`` to every row, so a
-            # row stored under the literal lower-cased name is found without
-            # this code re-deriving that transform (and drifting from it) —
-            # what ``key_pool._vault_lookup`` does.
+            # ``export_env`` decrypts every secret the instance owns, and this
+            # is a question about one. The callers are hot —
+            # ``github_api._get_token`` per request, ``build_exec_env`` once per
+            # grant per ``exec`` — so an export here is a psycopg2 connection
+            # and a full decrypt on each, and a much larger window in which
+            # every credential is in memory at once. Before the vault went
+            # first, the environment short-circuited and none of this ran.
             #
-            # But ``env_name`` has no inverse, and one shape already has a
-            # richer vault spelling: ``OPENROUTER_API_KEY`` is written as
-            # ``providers/openrouter/api_key`` by the wizard, the Helm provider
-            # page and ``key_pool``, and exports as ``PROVIDERS_OPENROUTER_
-            # API_KEY``. Looking only in the export therefore could not see the
-            # row the wizard itself had written, and a vault-only instance read
-            # as having no key at all. ``vault_keys_for_env_name`` is the one
-            # place that inverse is spelled; the accessor searches with it and
-            # ``genus secrets migrate`` writes with it.
+            # ``vault_keys_for_env_name`` is the one place the env-name→key
+            # mapping is spelled, and it ends with the literal lower-cased name
+            # — which is exactly what ``export_env`` would have matched — so
+            # searching the candidates covers everything the export did without
+            # decrypting the rest.
             from robothor.vault.naming import vault_keys_for_env_name
 
-            exported = vault.export_env(tenant_id=tenant_id)
-            found = exported.get(name)
-            if found is None:
-                for candidate in vault_keys_for_env_name(name):
-                    found = vault.get(candidate, tenant_id=tenant_id)
-                    if found is not None:
-                        break
+            found = None
+            for candidate in vault_keys_for_env_name(name):
+                found = vault.get(candidate, tenant_id=tenant_id)
+                if found is not None:
+                    break
     except Exception as exc:  # noqa: BLE001 - the vault is optional, by design
         _vault_retry_after = _clock() + VAULT_RETRY_SECONDS
         # The exception TYPE, never its text: a psycopg2 error carries the
@@ -194,7 +226,9 @@ def _vault_read(
         return None, False
 
     _vault_retry_after = None
-    return _clean(found), True
+    answer = (_clean(found), True)
+    _vault_cache[cache_key] = answer
+    return answer
 
 
 def _absent_or(name: str, from_vault: str | None, available: bool) -> ResolvedSecret:

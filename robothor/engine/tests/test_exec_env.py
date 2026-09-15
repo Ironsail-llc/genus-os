@@ -226,9 +226,14 @@ def granted_vault(monkeypatch):
     from robothor import secrets as secrets_module
     from robothor import vault
 
-    rows = {"GITHUB_TOKEN": "ghp_FAKE2222_from_the_vault"}
+    # Keyed the way the accessor asks — by VAULT key, through the one mapping.
+    # Keying by environment name modelled an accessor that decrypts every row
+    # to answer about one, which is the implementation this no longer has.
+    rows = {"providers/github/api_key": "ghp_FAKE2222_from_the_vault"}
     monkeypatch.setattr(vault, "get", lambda key, **kw: rows.get(key))
-    monkeypatch.setattr(vault, "export_env", lambda **kw: dict(rows))
+    monkeypatch.setattr(
+        vault, "export_env", lambda **kw: {k.upper().replace("/", "_"): v for k, v in rows.items()}
+    )
     secrets_module.reset_vault_availability()
     yield rows
     secrets_module.reset_vault_availability()

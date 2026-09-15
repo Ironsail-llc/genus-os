@@ -244,7 +244,7 @@ async def test_a_reader_inside_the_vault_failure_cooldown_still_sees_the_write(s
     from robothor import secrets as secrets_module
     from robothor import vault
 
-    monkeypatch.setenv("PROVIDERS_GITHUB_API_KEY", "ghp_FAKE0000_stale_environment")
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_FAKE0000_stale_environment")
 
     # Put the accessor into its failure cooldown, the way a database blip would.
     def boom(*args, **kwargs):
@@ -252,7 +252,7 @@ async def test_a_reader_inside_the_vault_failure_cooldown_still_sees_the_write(s
 
     monkeypatch.setattr(vault, "export_env", boom)
     monkeypatch.setattr(vault, "get", boom)
-    assert secrets_module.resolve_secret("PROVIDERS_GITHUB_API_KEY").source == "env"
+    assert secrets_module.resolve_secret("GITHUB_TOKEN").source == "env"
 
     # The vault comes back, and the assistant writes the replacement.
     rows = {"providers/github/api_key": "ghp_FAKE4444_the_replacement"}
@@ -268,7 +268,7 @@ async def test_a_reader_inside_the_vault_failure_cooldown_still_sees_the_write(s
         {"key": "providers/github/api_key", "value": "ghp_FAKE4444_the_replacement"}, _ctx()
     )
 
-    assert secrets_module.resolve_secret("PROVIDERS_GITHUB_API_KEY") == (
+    assert secrets_module.resolve_secret("GITHUB_TOKEN") == (
         "ghp_FAKE4444_the_replacement",
         "vault",
     ), "a reader inside the vault failure cooldown was still served the stale environment value"

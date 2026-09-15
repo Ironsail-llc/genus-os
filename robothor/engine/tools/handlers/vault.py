@@ -418,6 +418,8 @@ async def _reload_cached_readers() -> None:
         from robothor.engine import key_pool
         from robothor.secrets import reset_vault_availability
 
+        # Also clears the per-key vault cache: a reader holding a cached value
+        # after a rotation is the incident again with a shorter fuse.
         await asyncio.to_thread(reset_vault_availability)
         await asyncio.to_thread(key_pool.reload_provider_keys)
     except Exception as exc:  # noqa: BLE001 - the write succeeded; this is best effort
