@@ -100,6 +100,24 @@ def _fake_sops(tmp_path: Path, payload: str) -> str:
     return str(bin_dir)
 
 
+def _broken_sops(tmp_path: Path) -> str:
+    """A stub ``sops`` that FAILS, the way a wrong or missing age key does.
+
+    The refusal these tests need used to come from ``REQUIRED_KEYS``: a store
+    with no ``OPENROUTER_API_KEY`` was rejected. That check is gone (2026-09-15
+    — a provider key may now live in the vault, which this script cannot read
+    at ``ExecStartPre``), so the atomic-replace property is exercised against
+    the failure that is actually left. It is the more faithful trigger anyway:
+    "a failed decrypt" is what this test is named for.
+    """
+    bin_dir = tmp_path / "broken-bin"
+    bin_dir.mkdir(exist_ok=True)
+    sops = bin_dir / "sops"
+    sops.write_text("#!/bin/bash\necho 'failed to decrypt: no matching key' >&2\nexit 1\n")
+    sops.chmod(0o755)
+    return str(bin_dir)
+
+
 def _sops_instance(tmp_path: Path, root: Path, payload: str) -> dict[str, str]:
     """A root that looks like a SOPS box, plus the env that makes it decryptable."""
     (root / "etc" / "robothor" / "secrets.enc.json").write_text("{}")
@@ -471,9 +489,10 @@ def test_no_temp_file_is_left_behind(tmp_path: Path):
 def test_a_failed_decrypt_leaves_no_temp_file(tmp_path: Path):
     """One 0600 temp file per retry on tmpfs is still a leak."""
     root = _root(tmp_path)
-    env = _sops_instance(tmp_path, root, '{"OPENROUTER_API_KEY_2": "spare-only"}')
-    result = _run(root, **env)
-    assert result.returncode != 0, "a store without the provider credential must be refused"
+    (root / "etc" / "robothor" / "secrets.enc.json").write_text("{}")
+    (root / "etc" / "robothor" / "age.key").write_text("AGE-SECRET-KEY-STUB")
+    result = _run(root, ROBOTHOR_EXTRA_PATH=_broken_sops(tmp_path))
+    assert result.returncode != 0, "a decrypt that failed must not be treated as a boot"
     leftovers = sorted(p.name for p in (root / "run" / "robothor").iterdir())
     assert leftovers == [], leftovers
 
@@ -484,7 +503,8 @@ def test_a_refused_store_preserves_the_previous_boot(tmp_path: Path):
     out = _output(root)
     out.parent.mkdir(parents=True)
     out.write_text('OPENROUTER_API_KEY="from-last-boot"\n')
-    env = _sops_instance(tmp_path, root, '{"OPENROUTER_API_KEY_2": "spare-only"}')
-    result = _run(root, **env)
+    (root / "etc" / "robothor" / "secrets.enc.json").write_text("{}")
+    (root / "etc" / "robothor" / "age.key").write_text("AGE-SECRET-KEY-STUB")
+    result = _run(root, ROBOTHOR_EXTRA_PATH=_broken_sops(tmp_path))
     assert result.returncode != 0
     assert out.read_text() == 'OPENROUTER_API_KEY="from-last-boot"\n'

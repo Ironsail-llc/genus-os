@@ -198,27 +198,138 @@ handful of files, each with one job:
 
 ## Secrets
 
-Three rules, and the platform enforces all three rather than documenting them:
+### The rule: a value you hand the assistant wins over what the box booted with
+
+The vault is the store you and the assistant manage. The environment — which on
+a systemd instance is `/run/robothor/secrets.env`, decrypted at boot from a
+root-owned SOPS file — is **bootstrap only**.
+
+**Why.** On 2026-09-15 the operator handed the assistant a GitHub token over
+Telegram and expected it to be kept, used and rotated by the assistant. It
+could not be. The assistant could write the vault, but the accessor read the
+environment first, so the expired `GH_TOKEN` the box had booted with shadowed
+the fresh vault row — and clearing it needed root to edit the SOPS file and
+restart the unit, which the assistant cannot do and must never need to. A dead
+environment value must never silently shadow a live vault row.
+
+So precedence depends on **what the credential is**:
+
+| Class | Which store wins | What is in it |
+|-------|------------------|---------------|
+| **Application** | **vault**, then environment | Every third-party token: provider keys, `GITHUB_TOKEN`, channel tokens, SMTP passwords, webhook URLs. The credentials an assistant is handed, uses, proves and rotates. |
+| **Bootstrap** | **environment**, then vault | `ROBOTHOR_DB_PASSWORD` (the vault's own rows live in that database), the test DSNs, `ROBOTHOR_REDIS_PASSWORD`, `GENUS_AUTH_SIGNING_KEY`, `AUTH_SECRET`, `GENUS_BRIDGE_SSO_SECRET`, `ROBOTHOR_INTENT_HMAC_SECRET`, the NATS transport, and `ROBOTHOR_VAULT_*` / `SOPS_*`. |
+
+A name nobody declared is an **application** credential — the safe default,
+because the tokens this rule exists for are exactly the ones the platform has
+never heard of.
+
+The set is a marker on the settings declaration itself (`declare(...,
+secret=True, bootstrap=True)`), never a list maintained beside it. `genus
+secrets status` prints the whole table, and `robothor.secrets.classification`
+is where the rule lives.
+
+**An unreadable vault still falls through to the environment.** Failing closed
+would take every channel, provider and integration down with a vault outage,
+for credentials a root-owned file is still holding good copies of.
+
+### Handing the assistant a credential
+
+Paste the token to your main agent. It will:
+
+1. `vault_set` the credential — encrypted, and redacted out of the stored step
+   and the transcript, so it does not survive in `agent_run_steps.tool_input`.
+2. `vault_test` it — which dials the vendor's identity endpoint and answers
+   `{ok, identity_hint, error_class}`. The identity hint is the vendor's own
+   name for the account (a GitHub login, a Slack team), which is what catches a
+   token that works but belongs to the wrong account.
+3. Answer you with the fingerprint and the test result.
+
+It will not echo the value back, and it will not write it to a memory block, a
+note or a file. It also **cannot read it**: `vault_get` returns
+`{key, configured, fingerprint, source, updated_at}` and never a value — the
+same write-only shape the Helm Secrets page uses.
+
+The write takes effect immediately. No restart, and nothing for you to do.
+
+The three vault tools are **operator-tier**: granted to agents whose manifest
+declares `role: main` (or `owner`/`operator`/`admin`) and refused for everything
+else, including any sub-agent one of them spawns. A spawned child runs under its
+own agent id, so its own manifest is what is checked.
+
+### What a sub-agent sees
+
+Nothing, unless its own manifest says so. An agent's `exec` commands used to
+inherit the engine's whole process environment — all ~50 credentials. The child
+environment is now built from an allowlist: the process essentials (`PATH`,
+`HOME`, `LANG`, `LC_*`, `TERM`, `TZ`, `TMPDIR`, `ROBOTHOR_WORKSPACE`,
+`ROBOTHOR_AGENT_ID`) plus the `ROBOTHOR_*`/`GENUS_*` settings the model marks
+non-secret.
+
+An agent that genuinely needs a credential names it in its own manifest:
+
+```yaml
+id: devops
+secrets:
+  - GITHUB_TOKEN
+```
+
+Those names, and only those, are resolved through the accessor (vault first) and
+injected into that agent's children. **Grants are never inherited** — a
+sub-agent gets what its own manifest names, which is usually nothing. Bootstrap
+names are refused however a manifest spells them, and a grant that resolves from
+neither store becomes a note in the tool result rather than a silent absence.
+
+**`gh` in particular.** With neither `GH_TOKEN` nor `GITHUB_TOKEN` in the child
+environment, `gh` falls back to its own login file — so the agent acts as
+whoever ran `gh auth login`, not as the instance. Grant `GITHUB_TOKEN` if you
+want the instance's identity instead.
+
+`ROBOTHOR_EXEC_ENV_MODE` is the ladder: `off` disables the scrub, `observe` (the
+default for an existing install) changes nothing and logs per agent exactly what
+`enforce` would withhold, `enforce` applies it. Read the observe lines, grant
+what your agents actually need, then promote. New installs start at `enforce`.
+Grants apply on every rung, so promoting is never what first gives an agent a
+credential.
+
+### Moving out of the environment
+
+```bash
+genus secrets status                      # what is where, and which store wins
+genus secrets migrate --from-env --dry-run
+genus secrets migrate --from-env
+```
+
+`migrate` copies every application credential the process environment holds into
+the vault, refuses bootstrap names, and prints names and fingerprints only.
+Afterwards, delete the migrated entries from the secrets file: until you do,
+`genus doctor`'s `secrets.shadowed` check reports them, because a stale copy in
+either store is a credential somebody will eventually read and a rotation
+somebody will think they performed.
+
+SOPS stays — as the bootstrap layer. See
+[the SOPS runbook](runbooks/SOPS_BOOTSTRAP.md) for shrinking the file to just
+that.
+
+### The rules the platform enforces
 
 1. **A credential never goes in `config.yaml`.** `genus config set` refuses a
    setting declared secret and names `genus vault set` instead.
 2. **Read one through the accessor, not `os.environ`.**
 
     ```python
-    from robothor.secrets import get_secret, secret_source
+    from robothor.secrets import get_secret, resolve_secret
 
-    get_secret("OPENROUTER_API_KEY")      # value, or None
-    secret_source("OPENROUTER_API_KEY")   # "env" | "vault" | "missing" | "unavailable"
+    get_secret("OPENROUTER_API_KEY")       # value, or None
+    resolve_secret("OPENROUTER_API_KEY")   # (value, "env"|"vault"|"missing"|"unavailable")
     ```
 
-    It walks the process environment (whatever the backend put there) and then
-    the encrypted vault, and treats an unreadable vault as "not configured"
-    rather than raising. An instance whose vault has no master key resolves from
-    the environment only and says so once at INFO — an engine that could not
-    make an LLM call because its credential store is empty would be worse than
-    no vault at all.
-3. **Nothing prints a key.** Logs, alerts and `repr()` use a one-way
-   fingerprint (`key-1a2b3c4d`) rather than the last-four convention, which
+    The accessor applies the precedence above, and treats an unreadable vault as
+    "not configured" rather than raising — an engine that could not make an LLM
+    call because its credential store is momentarily unreachable would be worse
+    than no vault at all.
+3. **Nothing prints a key.** Logs, alerts, tool results, the status table and
+   `repr()` use a one-way fingerprint (`sha256:1a2b3c4d`, from
+   `robothor.secrets.fingerprint`) rather than the last-four convention, which
    prints real key material.
 
 ### Where the values come from
@@ -234,7 +345,16 @@ are in [Deployment § Secrets backends](deployment.md#secrets-backends).
 Five providers can hold credentials: `openrouter`, `anthropic`, `openai`,
 `gemini`, `deepseek`. Each resolves **vault-first, then environment**, slot by
 slot — a key written from the Settings page or the setup wizard wins the slot
-it was written to, while a spare left in the shell keeps working.
+it was written to, while a spare left in the shell keeps working. (Provider
+slots have always worked this way; since 2026-09-15 every other application
+credential does too.)
+
+`vault.naming.vault_keys_for_env_name` is the one place the environment name
+and the vault key are related in that direction: `OPENROUTER_API_KEY` finds
+`providers/openrouter/api_key`, and a name with no richer spelling finds its own
+lower-cased form. Both the accessor's search and `genus secrets migrate`'s
+choice of where to write go through it, so a row the migration writes is a row
+a reader finds.
 
 | Slot | Vault key | Environment variable |
 |------|-----------|----------------------|
