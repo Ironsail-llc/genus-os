@@ -118,9 +118,15 @@ class TestTheNote:
 class TestTheRunnerChecksThem:
     @staticmethod
     def _source() -> str:
+        """The deadline path's source.
+
+        It moved out of ``runner.py`` into ``run_pacing.py`` when the single
+        80% note became three; the invariant this pins did not move, so the
+        anchor follows the code rather than being deleted with it.
+        """
         from pathlib import Path
 
-        import robothor.engine.runner as m
+        import robothor.engine.run_pacing as m
 
         return Path(m.__file__).read_text(encoding="utf-8")
 
@@ -129,6 +135,24 @@ class TestTheRunnerChecksThem:
         assert "deadline_note(" in body, (
             "the deadline warning still cannot say WHICH file is missing"
         )
+
+    def test_every_late_rung_can_name_the_missing_file(self):
+        """Not just the 80% one: the 95% note is the last chance to write."""
+        body = self._source()
+        assert "missing_deliverables_note(" in body
+
+    def test_the_runner_hands_the_pacer_a_workspace(self):
+        """Without one, `missing_deliverables_note` returns None for every
+        path — the confinement check has nothing to confine to, so the note
+        silently stops naming files."""
+        from pathlib import Path
+
+        import robothor.engine.runner as m
+
+        body = Path(m.__file__).read_text(encoding="utf-8")
+        start = body.index("_pacer.note_for(")
+        block = body[start : body.index(")", body.index("run_id=", start))]
+        assert "workspace=" in block
 
 
 class TestTheComposedNote:
@@ -303,7 +327,7 @@ class TestItReadsTheTaskNotTheSystemPrompt:
         import robothor.engine.runner as m
 
         body = Path(m.__file__).read_text(encoding="utf-8")
-        start = body.index("_deadline_warned and self._active_watchdog")
+        start = body.index("_pacer.note_for(")
         block = body[start : body.index("if _safety_cap > 0", start)]
         assert "task_text_from(session.messages)" in block
         # Scoped to this block: elsewhere `messages[0]` is a legitimate,

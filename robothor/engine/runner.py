@@ -51,8 +51,9 @@ from robothor.engine.context_budget import keep_context_within_budget
 # Re-exported for existing importers. The `as` form is what marks a name as
 # deliberately re-exported; a plain import reads to mypy as a private detail,
 # which is the right default and the wrong one here.
-from robothor.engine.deliverables import deadline_note, task_text_from  # noqa: E402
+from robothor.engine.deliverables import task_text_from  # noqa: E402
 from robothor.engine.error_actions import apply_error_recovery
+from robothor.engine.feature_flags import step_efficiency_mode  # noqa: E402
 from robothor.engine.finalization_budget import FinalizationBudget  # noqa: E402
 from robothor.engine.injection_screen import screen_run_prompt
 from robothor.engine.journal_resume import maybe_prepend_journal_resume
@@ -94,6 +95,7 @@ from robothor.engine.run_finalizer import RunFinalizationMixin
 from robothor.engine.run_identity import resolve_run_identity
 from robothor.engine.run_lifecycle import RunLifecycleMixin, spawn_post_stall_autodream
 from robothor.engine.run_llm_calls import LLMCallMixin  # noqa: E402
+from robothor.engine.run_pacing import DeadlinePacer  # noqa: E402
 from robothor.engine.sandbox_policy import agent_holds_exec, resolve_sandbox_decision
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.session import ENGINE_CONTEXT_ROLE, AgentSession
@@ -1857,7 +1859,7 @@ class AgentRunner(
         _pre_iteration_msg_idx = len(session.messages)
         _tool_failures: dict[str, int] = {}  # per-tool failure count for circuit breaker
         _guard_state = GuardState()  # carries the 500K alert's one-shot latch
-        _deadline_warned = False  # one-shot latch for the wrap-up note
+        _pacer = DeadlinePacer(mode=step_efficiency_mode())  # pace notes, one rung each
         # ── [WALLCLOCK] the loop's own deadline — computed once, checked
         # every iteration. See the self-check below for why this exists.
         _wallclock_ceiling = effective_wallclock_ceiling(
@@ -1891,19 +1893,18 @@ class AgentRunner(
             # check only fires when the cap is positive.
             # ── [DEADLINE] Tell the agent while it can still act ──
             # A run killed at its ceiling loses whatever it had not yet
-            # written. Warning once at 80% lets it flush partial results —
-            # which is the difference between partial credit and none.
-            if not _deadline_warned and self._active_watchdog is not None:
-                _dl_note = deadline_note(
-                    self._active_watchdog.elapsed_seconds,
-                    float(getattr(self._active_watchdog, "_hard_timeout", 0) or 0),
-                    task_text_from(session.messages),
-                    getattr(agent_config, "workspace", "") or self.config.workspace,
-                )
-                if _dl_note:
-                    _deadline_warned = True
-                    logger.info("Deadline warning issued at iteration %d", _iteration)
-                    session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": _dl_note})
+            # written. Rungs, their wording and the ladder live in
+            # robothor/engine/run_pacing.py — this is the one place that knows
+            # the live watchdog, the task text and the workspace.
+            _dl_note = _pacer.note_for(
+                self._active_watchdog,
+                iteration=_iteration,
+                task_text=task_text_from(session.messages),
+                workspace=getattr(agent_config, "workspace", "") or self.config.workspace,
+                run_id=session.run.id,
+            )
+            if _dl_note:
+                session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": _dl_note})
 
             if _safety_cap > 0 and _iteration >= _safety_cap:
                 await self._force_wrapup(

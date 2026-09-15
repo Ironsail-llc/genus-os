@@ -105,18 +105,34 @@ class TestItReachesTheAgent:
         # fixed window breaks the moment anything is added to the block,
         # which is a test failing for the wrong reason.
         src = (Path(__file__).resolve().parents[1] / "runner.py").read_text(encoding="utf-8")
-        start = src.index("_deadline_warned and self._active_watchdog")
+        start = src.index("_pacer.note_for(")
         window = src[start : src.index("if _safety_cap > 0", start)]
         assert "session.messages.append" in window
         assert "ENGINE_CONTEXT_ROLE" in window
 
     def test_it_is_latched_so_it_does_not_repeat_every_iteration(self):
-        """Repeating it each turn would crowd out the work it is asking for."""
-        from pathlib import Path
+        """Repeating it each turn would crowd out the work it is asking for.
 
-        src = (Path(__file__).resolve().parents[1] / "runner.py").read_text(encoding="utf-8")
-        assert "_deadline_warned = False" in src
-        assert "_deadline_warned = True" in src
+        The one-shot boolean became a set of spent rungs when the single 80%
+        note became three (robothor/engine/run_pacing.py). Behaviour, not
+        spelling: drive a pacer across a whole budget and count the notes.
+        """
+        from robothor.engine.run_pacing import PACE_FRACTIONS, DeadlinePacer
+
+        class _Wd:
+            def __init__(self) -> None:
+                self.elapsed_seconds = 0.0
+                self._hard_timeout = 1200.0
+
+        wd = _Wd()
+        pacer = DeadlinePacer(mode="enforce")
+        notes = []
+        for i in range(1, 1201):
+            wd.elapsed_seconds = float(i)
+            note = pacer.note_for(wd, iteration=i, task_text="", workspace=None)
+            if note:
+                notes.append(note)
+        assert len(notes) == len(PACE_FRACTIONS)
 
 
 class TestCheckpointThenContinue:
