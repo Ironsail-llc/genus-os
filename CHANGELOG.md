@@ -1,3 +1,10 @@
+## [1.87.0](https://github.com/Ironsail-llc/genus-os/compare/v1.86.0...v1.87.0) (2026-09-15)
+
+### Features
+
+* **helm:** memory browser with forget, audit views, and logs ([#567](https://github.com/Ironsail-llc/genus-os/issues/567)) ([a5ad124](https://github.com/Ironsail-llc/genus-os/commit/a5ad124d90047d0d531a739f6e8d4568a448a09c)), closes [#565](https://github.com/Ironsail-llc/genus-os/issues/565)
+* **plugins:** lockfile with enable/disable, doctor checks, admin API ([#566](https://github.com/Ironsail-llc/genus-os/issues/566)) ([4a306c5](https://github.com/Ironsail-llc/genus-os/commit/4a306c5b9b5ad7b9582896b35c3903781a0040f0))
+
 ## [1.86.0](https://github.com/Ironsail-llc/genus-os/compare/v1.85.0...v1.86.0) (2026-09-15)
 
 ### Features
