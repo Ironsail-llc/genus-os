@@ -27,3 +27,30 @@ def process_env_set(name: str, value: str) -> None:
 def process_env_unset(name: str) -> None:
     """Remove a dynamically named variable; absent is not an error."""
     os.environ.pop(name, None)
+
+
+def process_env_names() -> frozenset[str]:
+    """Every variable name this process currently carries.
+
+    For the callers that must ENUMERATE rather than look up: ``genus secrets
+    status`` and ``genus secrets migrate`` ask "which of the names present here
+    hold credentials?", a question no declared setting can answer because most
+    of those names are third-party tokens the platform never declared.
+
+    Names only. A caller that needs a value asks :func:`process_env_get` for it
+    by name, which keeps "what is set?" and "what is it?" separate calls and
+    means a listing can never accidentally carry a credential.
+    """
+    return frozenset(os.environ)
+
+
+def process_env_snapshot() -> dict[str, str]:
+    """A detached copy of the whole process environment.
+
+    One caller, and it is the reason this function is not a smell:
+    :func:`robothor.engine.exec_env.build_exec_env` builds a child environment
+    by REJECTING from the parent's, so it has to see all of it. A copy rather
+    than ``os.environ`` itself, because the result is handed to a subprocess
+    and mutated on the way.
+    """
+    return dict(os.environ)

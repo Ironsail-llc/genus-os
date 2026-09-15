@@ -51,7 +51,6 @@ first gives an agent a credential.
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass, field
 from functools import lru_cache
 
@@ -262,9 +261,10 @@ def build_exec_env(
     """
     from robothor.secrets import resolve_secret
     from robothor.secrets.classification import is_bootstrap, non_secret_env_names
+    from robothor.settings.env import process_env_snapshot
 
     rung = mode if mode in _MODES else exec_env_mode()
-    source = dict(os.environ if base is None else base)
+    source = process_env_snapshot() if base is None else dict(base)
     allowed_settings = non_secret_env_names()
 
     # ``off`` reports nothing as well as doing nothing: a `withheld` list on a
