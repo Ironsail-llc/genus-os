@@ -107,11 +107,20 @@ class InstanceConfig:
     ) -> None:
         """Record an agent installation."""
         agent_id = validate_identifier(agent_id, label="agent ID")
-        if source not in {"local", "hub"}:
+        if source not in {"local", "hub", "bundle"}:
             raise ValueError(f"Unsupported agent source: {source}")
         if source == "hub":
             validate_identifier(source_path, label="hub bundle slug")
             source_sha256 = validate_sha256(source_sha256, label="hub bundle SHA-256")
+        if source == "bundle":
+            # An agent bundle an operator installed from a path, a directory or
+            # a URL. ``source_path`` is the agent ID rather than a filesystem
+            # path — the file it came from is usually gone by now — and the
+            # digest is optional, because a bundle handed over as a directory
+            # has no archive bytes to pin.
+            validate_identifier(source_path, label="agent bundle ID")
+            if source_sha256 is not None:
+                source_sha256 = validate_sha256(source_sha256, label="agent bundle SHA-256")
 
         agents = self.installed_agents
         agents[agent_id] = {

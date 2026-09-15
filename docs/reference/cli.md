@@ -732,7 +732,7 @@ Usage: `genus skills migrate-state`
 
 Agent management.
 
-Usage: `genus agent {scaffold,list,catalog,install,remove,update,resolve,import,setup,search,publish,bind,unbind}`
+Usage: `genus agent {scaffold,list,catalog,install,export,remove,update,resolve,import,setup,search,publish,bind,unbind}`
 
 ### `genus agent scaffold`
 
@@ -766,19 +766,40 @@ Usage: `genus agent catalog [--department DEPARTMENT]`
 
 ### `genus agent install`
 
-Install agent from template.
+Install agent from template or bundle.
 
-Usage: `genus agent install [source] [--preset PRESET] [--yes] [--set SET]`
+Usage: `genus agent install [source] [--preset PRESET] [--yes] [--set SET] [--sha256 SHA256] [--id NEW_ID] [--strict] [--index INDEX] [--accept-review]`
 
 | Argument | Required | Description |
 | --- | --- | --- |
-| `source` | no | Template path or agent ID (omit with --preset) |
+| `source` | no | Agent ID, template path, bundle directory, bundle .tar.gz, or https URL |
 
 | Flag | Takes | Default | Description |
 | --- | --- | --- | --- |
 | `--preset` | `PRESET` | — | Install a preset group |
 | `--yes`, `-y` | — | off | Non-interactive |
 | `--set` | `SET` | `[]` | Override variables (key=value) |
+| `--sha256` | `SHA256` | — | Expected SHA-256 of the bundle archive (required for a URL) |
+| `--id` | `NEW_ID` | — | Install under a different agent ID |
+| `--strict` | — | off | Refuse the install unless every requirement is already satisfied |
+| `--index` | `INDEX` | — | Install from this signed index URL instead of the hub |
+| `--accept-review` | — | off | Install a bundle the scan marked 'review' (never one it blocked) |
+
+### `genus agent export`
+
+Export an installed agent as a portable bundle.
+
+Usage: `genus agent export <agent_id> [--out OUT] [--include-adapters] [--exported-at EXPORTED_AT]`
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `agent_id` | yes | Agent ID to export |
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--out`, `-o` | `OUT` | — | Output directory, or a .tar.gz path (default: ./agent-<id>-<version>.tar.gz) |
+| `--include-adapters` | — | off | Carry this agent's adapter definitions, with credentials collapsed to ${NAME} |
+| `--exported-at` | `EXPORTED_AT` | — | Pin the bundle's exported_at timestamp (ISO-8601) for a reproducible build |
 
 ### `genus agent remove`
 

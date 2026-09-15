@@ -127,6 +127,67 @@ def _owned_agent_files(repo_root: Path, agent_id: str) -> dict[str, Path]:
     return files
 
 
+def _instruction_owner(repo_root: Path, destination: Path) -> str | None:
+    """The agent whose installed manifest declares *destination*, or None.
+
+    Reads the canonical manifest directory rather than ``installed.yaml``:
+    install records are mutable state, and "whose file is this?" has to be
+    answered by the files the engine actually reads.
+    """
+    agents_dir = repo_root / "docs" / "agents"
+    if not agents_dir.is_dir():
+        return None
+    for path in sorted(agents_dir.glob("*.yaml")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            data = yaml.safe_load(path.read_text()) or {}
+        except (OSError, yaml.YAMLError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        declared = data.get("instruction_file")
+        if not isinstance(declared, str) or not declared:
+            continue
+        try:
+            claimed = _instruction_path(repo_root, declared)
+        except TemplateSecurityError:
+            continue
+        if claimed == destination:
+            return str(data.get("id") or path.stem)
+    return None
+
+
+def _instruction_refusal(repo_root: Path, destination: Path, agent_id: str) -> str | None:
+    """Why *agent_id* may not write *destination*, or None if it may.
+
+    The first cut asked "does another AGENT claim this path", which answered
+    "no" for the platform's shared brain files — ``brain/TOOLS.md``,
+    ``brain/AGENTS.md`` — because no manifest claims them. A hub or preset
+    template declaring one of those replaced it silently. The question is not
+    whose the file is; it is whether it is MINE.
+
+    So: a destination that does not exist is free, a destination this agent's own
+    installed manifest already declares is an update, and everything else is
+    refused with the reason.
+    """
+    if not destination.exists():
+        return None
+    owner = _instruction_owner(repo_root, destination)
+    if owner == agent_id:
+        return None
+    if owner:
+        return (
+            f"it is the instruction file agent {owner!r} declares. An agent only ever "
+            "writes its own files."
+        )
+    return (
+        "it already exists and no agent manifest claims it, so it is not this "
+        "agent's to replace. Point instruction_file at a path of this agent's own, "
+        "or move the existing file out of the way."
+    )
+
+
 def install(
     template_path: str | Path,
     overrides: dict[str, Any] | None = None,
@@ -154,11 +215,21 @@ def install(
         repo_root = _find_repo_root()
     repo_root = repo_root.resolve(strict=True)
 
-    if source not in {"local", "hub"}:
+    if source not in {"local", "hub", "bundle"}:
         raise TemplateSecurityError(f"Unsupported agent install source: {source}")
     if source == "hub":
         source_ref = validate_identifier(source_ref, label="hub bundle slug")
         source_sha256 = validate_sha256(source_sha256, label="hub bundle SHA-256")
+    if source == "bundle":
+        # An agent bundle an operator named themselves. The ID is still strict
+        # — it becomes a filename under ``docs/agents/`` — but the digest is
+        # OPTIONAL rather than mandatory, because a bundle handed over as a
+        # directory has no archive bytes to hash. When there IS an archive the
+        # caller has already verified it against the hash the operator pinned;
+        # what is recorded here is provenance, not the check.
+        source_ref = validate_identifier(source_ref, label="agent bundle ID")
+        if source_sha256 is not None:
+            source_sha256 = validate_sha256(source_sha256, label="agent bundle SHA-256")
 
     try:
         bundle = trusted_directory(template_path, label="template bundle")
@@ -269,6 +340,23 @@ def install(
             instr_dest = _instruction_path(repo_root, instr_path)
             output_files["instruction"] = (instr_dest, instructions_content)
 
+    # An instruction file another agent's manifest claims is never written,
+    # whatever ``auto_yes`` says.
+    #
+    # ``auto_yes`` means "do not prompt", and it was being read as "overwrite
+    # anything". ``instruction_file`` is only constrained to live under
+    # ``brain/``, so a bundle (or a hub template) declaring
+    # ``brain/agents/main.md`` replaced the main agent's instructions while its
+    # own manifest stayed untouched — nothing in ``genus agent list`` looked
+    # wrong, and the most privileged agent on the appliance was running
+    # somebody else's prompt. The caller's own collision check is the first
+    # line; this is the one that holds for every caller.
+    if "instruction" in output_files:
+        destination = output_files["instruction"][0]
+        refusal = _instruction_refusal(repo_root, destination, agent_id)
+        if refusal is not None:
+            raise TemplateSecurityError(f"Refusing to write {destination.name}: {refusal}")
+
     # Write files atomically — temp files first, then validate, then move
     temp_files: dict[str, tuple[Path, Path]] = {}  # key -> (temp_path, final_path)
     validation_messages = []
@@ -313,7 +401,10 @@ def install(
 
     # Record installation
     recorded_source = str(bundle)
-    if source == "hub":
+    if source in {"hub", "bundle"}:
+        # Never the on-disk path. For a hub install that path is a temporary
+        # download; for a bundle install it is the staging copy the caller is
+        # about to delete. The strict ID is the only durable thing either has.
         assert source_ref is not None  # validated before any bundle files were read
         recorded_source = source_ref
     instance.record_install(
@@ -493,6 +584,8 @@ def import_agent(
     output_dir: str | Path | None = None,
     repo_root: Path | None = None,
     defaults_path: str | Path | None = None,
+    *,
+    record: bool = True,
 ) -> dict[str, Any]:
     """Reverse-engineer an existing agent manifest into a template bundle.
 
@@ -707,19 +800,27 @@ department: {department}
     }
     output_file("programmatic.json").write_text(json.dumps(programmatic, indent=2) + "\n")
 
-    # Register in installed.yaml
-    instance = InstanceConfig.load()
-    instance.record_install(
-        agent_id=agent_id,
-        source="local",
-        source_path=str(out_path),
-        version=manifest.get("version", "0.0.0"),
-        variables={
-            k: v.get("default", "") if isinstance(v, dict) else v for k, v in variables.items()
-        },
-        manifest_path=manifest_path.relative_to(repo_root).as_posix(),
-        instruction_path=safe_relative_path(instr_file).as_posix() if instr_file else "",
-    )
+    # Register in installed.yaml.
+    #
+    # Skipped when ``record`` is False, which is what an EXPORT passes. An
+    # export reads an installed agent and writes a bundle somewhere else;
+    # recording it would rewrite the live install record's source_path to point
+    # at the temporary staging directory the export used, so the next
+    # ``genus agent update`` would look for its template in a directory that no
+    # longer exists.
+    if record:
+        instance = InstanceConfig.load()
+        instance.record_install(
+            agent_id=agent_id,
+            source="local",
+            source_path=str(out_path),
+            version=manifest.get("version", "0.0.0"),
+            variables={
+                k: v.get("default", "") if isinstance(v, dict) else v for k, v in variables.items()
+            },
+            manifest_path=manifest_path.relative_to(repo_root).as_posix(),
+            instruction_path=safe_relative_path(instr_file).as_posix() if instr_file else "",
+        )
 
     # Score hub readiness
     hub_readiness_score = 0

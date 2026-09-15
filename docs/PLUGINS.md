@@ -665,6 +665,55 @@ python scripts/build_plugin_index.py dist/ \
   --publisher acme --base-url https://plugins.acme.example/wheels/
 ```
 
+### The index also publishes agent bundles
+
+An entry declares a `kind`: `plugin` (the default, and what every entry written
+before this existed is) or `agent-bundle`. One signed document, one signature,
+one set of pinned keys — an operator who already trusts a publisher's wheels
+should not have to pin a second key for their agents.
+
+```json
+{
+  "kind": "agent-bundle",
+  "name": "triage-bot",
+  "version": "1.2.0",
+  "requires": {"plugins": ["genus-billing"], "adapters": [],
+               "secrets": ["BILLING_API_KEY"], "skills": ["triage"]},
+  "artifacts": [{"kind": "bundle", "filename": "agent-triage-bot-1.2.0.tar.gz",
+                 "url": "https://plugins.acme.example/agents/agent-triage-bot-1.2.0.tar.gz",
+                 "sha256": "…", "size": 4096}]
+}
+```
+
+A plugin entry must carry a `wheel` artifact and a bundle entry a `bundle`
+artifact; an entry that contradicts itself is refused at parse time. `requires`
+and `scan` are read out of the bundle's own contents by the builder — the same
+rule that keeps a publisher from typing a plugin's groups by hand — so the plan
+an operator reads before installing is the one the signature covers.
+
+**Bundles are scanned like wheels.** `build_plugin_index.py` records a
+`{verdict, reasons, scanned_at}` for every bundle and refuses to sign a
+`blocked` one without `--allow-blocked`, exactly as it does for a wheel the
+static scanner blocked. The installer re-runs the scan on what it actually
+downloaded — the publisher's verdict is advisory for a bundle for the same
+reason it is advisory for a wheel. `blocked` (a credential literal, a foreign
+home path) always refuses; `review` (a tool that acts on the world, an absent
+`tools_allowed`, `can_spawn_agents`) needs `--accept-review`. Details in
+`docs/AGENT_BUILDER.md` §8a.
+
+The delivered body is also checked against the `size` the index signed, not only
+against the 50 MB cap: a size a signed document declares and nobody verifies is
+a field that means nothing.
+
+`build_plugin_index.py` picks up `*.tar.gz` alongside `*.whl` and detects the
+kind from `bundle.yaml`. Drop both in one directory and sign them together.
+
+**The two verbs do not take each other's entries.** `genus plugin install` on an
+agent bundle, or `genus agent install` on a plugin, is refused with the verb
+that *does* take it — not with "not found", which would send you hunting for a
+publishing mistake that is not there. See `docs/AGENT_BUILDER.md` §8a for the
+agent side.
+
 ## Installing a wheel offline
 
 No index, no network — a wheel on disk and a hash you obtained some other way:

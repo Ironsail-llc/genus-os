@@ -836,14 +836,57 @@ def _build_parser() -> argparse.ArgumentParser:
     catalog_parser = agent_sub.add_parser("catalog", help="Browse available templates")
     catalog_parser.add_argument("--department", "-d", default=None, help="Filter by department")
 
-    install_parser = agent_sub.add_parser("install", help="Install agent from template")
+    install_parser = agent_sub.add_parser("install", help="Install agent from template or bundle")
     install_parser.add_argument(
-        "source", nargs="?", default=None, help="Template path or agent ID (omit with --preset)"
+        "source",
+        nargs="?",
+        default=None,
+        help="Agent ID, template path, bundle directory, bundle .tar.gz, or https URL",
     )
     install_parser.add_argument("--preset", default=None, help="Install a preset group")
     install_parser.add_argument("--yes", "-y", action="store_true", help="Non-interactive")
     install_parser.add_argument(
         "--set", nargs="*", default=[], help="Override variables (key=value)"
+    )
+    install_parser.add_argument(
+        "--sha256", default=None, help="Expected SHA-256 of the bundle archive (required for a URL)"
+    )
+    install_parser.add_argument(
+        "--id", dest="new_id", default=None, help="Install under a different agent ID"
+    )
+    install_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Refuse the install unless every requirement is already satisfied",
+    )
+    install_parser.add_argument(
+        "--index", default=None, help="Install from this signed index URL instead of the hub"
+    )
+    install_parser.add_argument(
+        "--accept-review",
+        action="store_true",
+        help="Install a bundle the scan marked 'review' (never one it blocked)",
+    )
+
+    export_parser = agent_sub.add_parser(
+        "export", help="Export an installed agent as a portable bundle"
+    )
+    export_parser.add_argument("agent_id", help="Agent ID to export")
+    export_parser.add_argument(
+        "--out",
+        "-o",
+        default=None,
+        help="Output directory, or a .tar.gz path (default: ./agent-<id>-<version>.tar.gz)",
+    )
+    export_parser.add_argument(
+        "--include-adapters",
+        action="store_true",
+        help="Carry this agent's adapter definitions, with credentials collapsed to ${NAME}",
+    )
+    export_parser.add_argument(
+        "--exported-at",
+        default=None,
+        help="Pin the bundle's exported_at timestamp (ISO-8601) for a reproducible build",
     )
 
     remove_parser = agent_sub.add_parser("remove", help="Remove an installed agent")
