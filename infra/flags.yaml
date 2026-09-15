@@ -702,9 +702,17 @@ flags:
       pre-existing deadline note's `logger.info` line was unreadable in
       `agent.log` for exactly that reason.
 
+      `off` is the engine that shipped, byte for byte — main's note text, main's
+      INFO log line, no iteration-0 guard, and no guard object built at all — so
+      an off-vs-enforce sweep measures the controls and nothing else.
+
       BLOCKER: a re-measured WildClawBench 02_Code and
       01_Productivity sweep in the sandbox showing timed-out tasks falling,
       plus `agent_guardrail_events` rows with guardrail_name = 'repeat_guard'
       proving the guard fired on a real repeat rather than on nothing. Enforce
       changes what the model sees mid-run and can REFUSE a fifth identical
-      `exec`, so it is a behaviour change, not bookkeeping.
+      `exec`, so it is a behaviour change, not bookkeeping. Read a quiet table
+      carefully: the first cut of this control was INERT on exactly the shape it
+      targets, because the timeout clamp's per-call annotation changed the
+      result digest the repeat counter keyed on, and a zero here would have been
+      misread as "the workload has no repeats".

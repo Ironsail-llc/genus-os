@@ -151,12 +151,14 @@ class TestAnUnchangedRead:
             guard.before("read_file", {"path": str(tmp_path / "b.py")}, workspace=tmp_path) is None
         )
 
-    def test_a_directory_listing_is_guarded_the_same_way(self, tmp_path: Path) -> None:
+    def test_a_directory_listing_is_not_short_circuited(self, tmp_path: Path) -> None:
+        """A listing reports sizes the fingerprint never stats — see
+        TestListDirectoryIsNeverAnsweredStale for what that cost."""
         args = {"path": str(tmp_path)}
         guard = _guard()
         _run(guard, "list_directory", args, {"entries": [], "count": 0}, tmp_path)
         decision = guard.before("list_directory", args, workspace=tmp_path)
-        assert decision is not None
+        assert decision is None or decision.result is None
 
     def test_an_errored_read_is_never_remembered(self, tmp_path: Path) -> None:
         """Nothing was learned, so a retry is not a repeat."""
@@ -193,11 +195,10 @@ class TestIdenticalExec:
         decision = guard.before("exec", self.ARGS, workspace=tmp_path)
         assert decision is not None
         assert decision.result is None, "exec may have side effects; it must still run"
-        # Counted honestly: at this point it HAS run twice and is about to run
-        # a third time. A note that rounds that up to three would be the first
-        # false number the agent reads from the engine.
-        assert "run 2 times with identical output" in decision.note
-        assert "3rd time" in decision.note
+        # Present perfect: the note is drained into the conversation AFTER the
+        # third result, so by the time the model reads it the command HAS run
+        # three times. See TestTheNoteReadsCorrectlyWhereItLands.
+        assert "has now run 3 times with identical output" in decision.note
 
     def test_the_note_is_queued_for_the_conversation(self, tmp_path: Path) -> None:
         guard = _guard()
@@ -214,8 +215,9 @@ class TestIdenticalExec:
         decision = guard.before("exec", self.ARGS, workspace=tmp_path)
         assert decision is not None
         assert decision.result is not None
-        assert "error" in decision.result
-        assert "change" in decision.result["error"]
+        # Not an `error`: that key is what the runner's circuit breaker counts.
+        assert decision.result["refused"] is True
+        assert "change" in decision.result["reason"]
 
     def test_a_refusal_names_how_many_times_it_already_ran(self, tmp_path: Path) -> None:
         guard = _guard()
@@ -477,3 +479,464 @@ class TestItIsWiredIntoDispatch:
             assert first is second
         finally:
             session_registry.unregister("run-abc")
+
+
+# ── The two enforce controls must not cancel each other ────────────────────
+
+
+class TestTheClampDoesNotBlindTheGuard:
+    """The review's C1: the clamp writes `timeout_note` into every clamped
+    `exec` result, the remaining-seconds number shrinks on each call, and a
+    digest taken over the WHOLE result therefore changes every time — so the
+    counter reset on every call and nine byte-identical runs of the profiled
+    command produced zero decisions. The two enforce controls cancelled each
+    other in exactly the regime this task targets.
+    """
+
+    ARGS = {"command": "python3 test_sam3.py 2>&1", "timeout": 900}
+
+    def _nine_runs(self, guard: Any, tmp_path: Path, annotate: bool) -> list[str | None]:
+        actions: list[str | None] = []
+        for i in range(9):
+            decision = guard.before("exec", self.ARGS, workspace=tmp_path)
+            actions.append(None if decision is None else decision.action)
+            if decision is not None and decision.result is not None:
+                continue
+            out: dict[str, Any] = {
+                "stdout": "AssertionError: shapes differ\n",
+                "stderr": "",
+                "exit_code": 1,
+            }
+            if annotate:
+                # Exactly what `_exec` attaches while the clamp is engaged.
+                out["timeout_note"] = f"timeout clamped to {212 - i}s: the run has {242 - i}s left"
+            guard.after("exec", self.ARGS, out, workspace=tmp_path)
+            guard.session.record(out)
+        return actions
+
+    def test_nine_identical_execs_still_note_and_refuse_under_an_active_clamp(
+        self, tmp_path: Path
+    ) -> None:
+        actions = self._nine_runs(_guard(), tmp_path, annotate=True)
+        assert actions[2] == "noted", actions
+        assert actions[4] == "refused", actions
+
+    def test_the_annotated_and_bare_results_decide_identically(self, tmp_path: Path) -> None:
+        """The clamp note must be invisible to the digest, not merely tolerated."""
+        assert self._nine_runs(_guard(), tmp_path, annotate=True) == self._nine_runs(
+            _guard(), tmp_path, annotate=False
+        )
+
+    def test_the_digest_ignores_engine_annotations_by_construction(self) -> None:
+        from robothor.engine.repeat_guard import output_digest
+
+        bare = {"stdout": "x", "stderr": "", "exit_code": 0}
+        annotated = {**bare, "timeout_note": "timeout clamped to 5s: the run has 35s left"}
+        assert output_digest("exec", bare) == output_digest("exec", annotated)
+
+    def test_a_real_output_change_still_changes_the_digest(self) -> None:
+        from robothor.engine.repeat_guard import output_digest
+
+        a = {"stdout": "x", "stderr": "", "exit_code": 0}
+        b = {"stdout": "y", "stderr": "", "exit_code": 0}
+        assert output_digest("exec", a) != output_digest("exec", b)
+
+    def test_the_whole_path_through_dispatch_notes_a_repeat(self, tmp_path: Path) -> None:
+        """No unit above drives `_exec` itself; this one does, with a live
+        watchdog so the clamp is genuinely engaged."""
+        import asyncio
+        from types import SimpleNamespace
+
+        import robothor.engine.feature_flags as ff
+        import robothor.engine.permissions as perms
+        from robothor.engine import session_registry
+        from robothor.engine.stall_watchdog import _active_watchdog_var
+        from robothor.engine.tools import dispatch
+
+        session = _Session()
+        session.run_id = "run-clamp"  # type: ignore[attr-defined]
+        session.step_efficiency_mode = "enforce"  # type: ignore[attr-defined]
+        real_perm = perms.check_tool_permission
+        real_mode = ff.step_efficiency_mode
+        perms.check_tool_permission = lambda *a, **kw: None  # type: ignore[assignment]
+        ff.step_efficiency_mode = lambda: "enforce"  # type: ignore[assignment]
+        # The clock MOVES between calls, which is the whole point: a clamp note
+        # carrying "the run has Ns left" is different text every time.
+        watchdog = SimpleNamespace(elapsed_seconds=958.0, _hard_timeout=1200.0)
+        token = _active_watchdog_var.set(watchdog)
+        session_registry.register(session)  # type: ignore[arg-type]
+        try:
+
+            async def _calls() -> list[dict[str, Any]]:
+                out = []
+                for _ in range(3):
+                    res = await dispatch._execute_tool(
+                        "exec",
+                        {"command": "echo steady", "timeout": 900},
+                        run_id="run-clamp",
+                        workspace=str(tmp_path),
+                    )
+                    session.record(res)
+                    out.append(res)
+                    watchdog.elapsed_seconds += 7.0
+                return out
+
+            results = asyncio.run(_calls())
+        finally:
+            _active_watchdog_var.reset(token)
+            session_registry.unregister("run-clamp")
+            perms.check_tool_permission = real_perm  # type: ignore[assignment]
+            ff.step_efficiency_mode = real_mode  # type: ignore[assignment]
+
+        assert results[0]["timeout_note"], "the clamp did not engage; the test proves nothing"
+        assert results[0]["timeout_note"] != results[1]["timeout_note"], (
+            "the clamp note did not change between calls; the test proves nothing"
+        )
+        guard = session.repeat_guard  # type: ignore[attr-defined]
+        assert guard.counters["exec:noted"] == 1, dict(guard.counters)
+        assert guard.pending_notes
+
+
+# ── A refusal is not a tool failure ────────────────────────────────────────
+
+
+class TestARefusalIsNotAFailure:
+    ARGS = {"command": "python3 test_sam3.py 2>&1"}
+    OUT = {"stdout": "AssertionError\n", "stderr": "", "exit_code": 1}
+
+    def _refusal(self, tmp_path: Path) -> dict[str, Any]:
+        guard = _guard()
+        for _ in range(4):
+            _run(guard, "exec", self.ARGS, self.OUT, tmp_path)
+        decision = guard.before("exec", self.ARGS, workspace=tmp_path)
+        assert decision is not None and decision.result is not None
+        return decision.result
+
+    def test_the_refusal_carries_no_error_key(self, tmp_path: Path) -> None:
+        """`runner.py` does `error_msg = result.get("error")`, which feeds the
+        per-tool circuit breaker. A refusal is a redirection, not a fault."""
+        result = self._refusal(tmp_path)
+        assert "error" not in result
+        assert result["refused"] is True
+        assert "change" in result["reason"]
+
+    def test_three_refusals_do_not_tell_the_agent_to_stop_using_exec(self, tmp_path: Path) -> None:
+        """The failure this prevents: a control meant to redirect ONE command
+        telling a Code-task agent to abandon its only way to run code."""
+        from robothor.engine.tool_outcome import record_tool_outcome
+
+        result = self._refusal(tmp_path)
+        session = _Session()
+        failures: dict[str, int] = {}
+        for _ in range(3):
+            record_tool_outcome(
+                session,  # type: ignore[arg-type]
+                tool_name="exec",
+                tool_args=self.ARGS,
+                result=result,
+                # exactly how runner.py derives it
+                error_msg=result.get("error"),
+                elapsed_ms=1,
+                scratchpad=None,
+                failures=failures,
+            )
+        assert failures.get("exec", 0) == 0
+        assert not [m for m in session.messages if "Do NOT call it again" in str(m.get("content"))]
+
+    def test_a_real_exec_failure_still_counts(self, tmp_path: Path) -> None:
+        """The guard must not have disarmed the circuit breaker in general."""
+        from robothor.engine.tool_outcome import record_tool_outcome
+
+        session = _Session()
+        failures: dict[str, int] = {}
+        for _ in range(3):
+            record_tool_outcome(
+                session,  # type: ignore[arg-type]
+                tool_name="exec",
+                tool_args=self.ARGS,
+                result={"error": "Command failed: boom"},
+                error_msg="Command failed: boom",
+                elapsed_ms=1,
+                scratchpad=None,
+                failures=failures,
+            )
+        assert failures["exec"] == 3
+        assert [m for m in session.messages if "Do NOT call it again" in str(m.get("content"))]
+
+
+# ── Silent commands are never refused ──────────────────────────────────────
+
+
+class TestOnlyASpeakingCommandIsRefused:
+    """The review's I1. Output identity is not effect identity, and the proxy
+    is weakest exactly where the risk is: the side-effecting commands an agent
+    runs are disproportionately SILENT (`mkdir -p`, `cp`, `rm -f`, `chmod`,
+    `git add`, anything redirected to /dev/null). Four identical silent
+    successes establish nothing about the fifth, whose inputs may have been
+    changed by the commands in between.
+    """
+
+    SILENT = {"command": "mkdir -p results && cp a.png results/"}
+    QUIET_OUT = {"stdout": "", "stderr": "", "exit_code": 0}
+
+    def test_a_silent_command_is_never_refused(self, tmp_path: Path) -> None:
+        guard = _guard()
+        actions = []
+        for _ in range(9):
+            decision = guard.before("exec", self.SILENT, workspace=tmp_path)
+            actions.append(None if decision is None else decision.action)
+            if decision is not None and decision.result is not None:
+                continue
+            guard.after("exec", self.SILENT, self.QUIET_OUT, workspace=tmp_path)
+            guard.session.record(self.QUIET_OUT)
+        assert "refused" not in actions, actions
+
+    def test_a_silent_command_is_still_noted(self, tmp_path: Path) -> None:
+        """The note costs nothing and may still redirect the agent."""
+        guard = _guard()
+        for _ in range(2):
+            _run(guard, "exec", self.SILENT, self.QUIET_OUT, tmp_path)
+        decision = guard.before("exec", self.SILENT, workspace=tmp_path)
+        assert decision is not None and decision.action == "noted"
+
+    def test_whitespace_only_output_counts_as_silent(self, tmp_path: Path) -> None:
+        guard = _guard()
+        out = {"stdout": "\n \t\n", "stderr": "", "exit_code": 0}
+        actions = []
+        for _ in range(7):
+            decision = guard.before("exec", self.SILENT, workspace=tmp_path)
+            actions.append(None if decision is None else decision.action)
+            if decision is not None and decision.result is not None:
+                continue
+            guard.after("exec", self.SILENT, out, workspace=tmp_path)
+        assert "refused" not in actions, actions
+
+    def test_the_profiled_command_still_reaches_a_refusal(self, tmp_path: Path) -> None:
+        """`sam3_debug`'s nine repeats printed. 100% of the measured value is
+        kept by this narrowing."""
+        guard = _guard()
+        args = {"command": "cd /ws && python3 test_sam3.py 2>&1", "timeout": 900}
+        out = {"stdout": "AssertionError: shapes differ\n", "stderr": "", "exit_code": 1}
+        actions = []
+        for _ in range(6):
+            decision = guard.before("exec", args, workspace=tmp_path)
+            actions.append(None if decision is None else decision.action)
+            if decision is not None and decision.result is not None:
+                continue
+            guard.after("exec", args, out, workspace=tmp_path)
+        assert actions[2] == "noted"
+        assert actions[4] == "refused"
+
+
+# ── Repeated failures are the most expensive repeat there is ───────────────
+
+
+class TestIdenticalErrorsAreCountedToo:
+    ARGS = {"command": "python3 slow.py", "timeout": 900}
+    TIMEOUT = {"error": "Command timed out (212s limit). Ask for more time with the `timeout`..."}
+
+    def test_five_identical_timeouts_are_noted_and_refused(self, tmp_path: Path) -> None:
+        """~1060s of a 1200s budget. Clamping makes timeouts MORE frequent, so
+        leaving them uncounted pointed the guard away from its best case."""
+        guard = _guard()
+        actions = []
+        for _ in range(6):
+            decision = guard.before("exec", self.ARGS, workspace=tmp_path)
+            actions.append(None if decision is None else decision.action)
+            if decision is not None and decision.result is not None:
+                continue
+            guard.after("exec", self.ARGS, self.TIMEOUT, workspace=tmp_path)
+        assert actions[2] == "noted", actions
+        assert actions[4] == "refused", actions
+
+    def test_a_different_error_text_resets_the_count(self, tmp_path: Path) -> None:
+        """'Retry after a transient failure is not a repeat' survives: only a
+        byte-identical error counts."""
+        guard = _guard()
+        for _ in range(3):
+            _run(guard, "exec", self.ARGS, self.TIMEOUT, tmp_path)
+        _run(guard, "exec", self.ARGS, {"error": "Command failed: disk full"}, tmp_path)
+        assert guard.before("exec", self.ARGS, workspace=tmp_path) is None
+
+    def test_an_errored_read_is_still_never_remembered(self, tmp_path: Path) -> None:
+        """Reads keep the old rule: a failed read taught the run nothing, and
+        the short circuit would answer with an error it never has to."""
+        args = {"path": str(tmp_path / "gone.py")}
+        guard = _guard()
+        for _ in range(5):
+            guard.after("read_file", args, {"error": "Failed to read file"}, workspace=tmp_path)
+        assert guard.before("read_file", args, workspace=tmp_path) is None
+
+
+# ── list_directory cannot be answered from a stat ──────────────────────────
+
+
+class TestListDirectoryIsNeverAnsweredStale:
+    """The review's C3. `target_fingerprint` stats the DIRECTORY, but the
+    handler returns each entry's `size`, and with `recursive=True` the whole
+    subtree. A file's contents changing does not touch its parent's mtime, so
+    the guard told the agent "the content is unchanged" about a listing that was
+    out of date — and the loop it broke is exactly "did my deliverable land, and
+    how big is it".
+    """
+
+    def test_a_grown_file_is_not_hidden_behind_an_unchanged_directory(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        (workspace / "out.txt").write_text("", encoding="utf-8")
+        args = {"path": str(workspace)}
+        listing = {
+            "path": str(workspace),
+            "entries": [{"name": "out.txt", "type": "file", "size": 0}],
+            "count": 1,
+        }
+        guard = _guard()
+        _run(guard, "list_directory", args, listing, tmp_path)
+
+        (workspace / "out.txt").write_text("x" * 4600, encoding="utf-8")
+        decision = guard.before("list_directory", args, workspace=tmp_path)
+        assert decision is None or decision.result is None, (
+            "the agent was told an out-of-date listing was current"
+        )
+
+    def test_it_is_counted_by_output_like_a_search(self) -> None:
+        from robothor.engine.repeat_guard import OUTPUT_COUNTED_TOOLS, SHORT_CIRCUIT_TOOLS
+
+        assert "list_directory" not in SHORT_CIRCUIT_TOOLS
+        assert "list_directory" in OUTPUT_COUNTED_TOOLS
+
+    def test_a_genuinely_unchanged_listing_is_noted_on_the_third_call(self, tmp_path: Path) -> None:
+        args = {"path": str(tmp_path)}
+        listing = {"path": str(tmp_path), "entries": [], "count": 0}
+        guard = _guard()
+        for _ in range(2):
+            _run(guard, "list_directory", args, listing, tmp_path)
+        decision = guard.before("list_directory", args, workspace=tmp_path)
+        assert decision is not None
+        assert decision.result is None, "a listing is re-run, never answered from memory"
+
+    def test_a_listing_is_never_refused(self, tmp_path: Path) -> None:
+        args = {"path": str(tmp_path)}
+        listing = {"path": str(tmp_path), "entries": [], "count": 0}
+        guard = _guard()
+        actions = []
+        for _ in range(9):
+            decision = guard.before("list_directory", args, workspace=tmp_path)
+            actions.append(None if decision is None else decision.action)
+            _run(guard, "list_directory", args, listing, tmp_path)
+        assert "refused" not in actions
+
+    def test_read_file_keeps_the_short_circuit(self) -> None:
+        """The 6x repeat in the profile was a read_file; the measured value
+        stays."""
+        from robothor.engine.repeat_guard import SHORT_CIRCUIT_TOOLS
+
+        assert set(SHORT_CIRCUIT_TOOLS) == {"read_file"}
+
+
+# ── dispatch wiring ────────────────────────────────────────────────────────
+
+
+class TestTheGuardDoesNotLeakTheSandboxFlag:
+    def test_a_short_circuited_call_resets_the_benchmark_context(self, tmp_path: Path) -> None:
+        """The guard's early return used to jump over the `finally` that resets
+        `set_benchmark_sandbox`, leaving every later CRM write in that task
+        silently sandboxed."""
+        import asyncio
+
+        import robothor.engine.feature_flags as ff
+        import robothor.engine.permissions as perms
+        from robothor.crm.dal import _benchmark_sandbox
+        from robothor.engine import session_registry
+        from robothor.engine.tools import dispatch
+
+        target = tmp_path / "m.py"
+        target.write_text("print(1)\n", encoding="utf-8")
+        session = _Session()
+        session.run_id = "run-sandbox"  # type: ignore[attr-defined]
+        session.step_efficiency_mode = "enforce"  # type: ignore[attr-defined]
+        real_perm = perms.check_tool_permission
+        real_mode = ff.step_efficiency_mode
+        perms.check_tool_permission = lambda *a, **kw: None  # type: ignore[assignment]
+        ff.step_efficiency_mode = lambda: "enforce"  # type: ignore[assignment]
+        session_registry.register(session)  # type: ignore[arg-type]
+        try:
+
+            async def _both() -> dict[str, Any]:
+                # BOTH calls inside ONE task: a ContextVar leak only shows up
+                # in the context the leaking call ran in, and `asyncio.run`
+                # would hand the second call a fresh one.
+                async def _call() -> dict[str, Any]:
+                    return await dispatch._execute_tool(
+                        "read_file",
+                        {"path": str(target)},
+                        run_id="run-sandbox",
+                        workspace=str(tmp_path),
+                        is_benchmark=True,
+                    )
+
+                first = await _call()
+                session.record(first)
+                assert _benchmark_sandbox.get() is False, "leaked before the guard could"
+                second = await _call()
+                assert "unchanged_since_step" in second, "the guard did not short-circuit"
+                return {"leaked": _benchmark_sandbox.get()}
+
+            assert asyncio.run(_both())["leaked"] is False
+        finally:
+            session_registry.unregister("run-sandbox")
+            perms.check_tool_permission = real_perm  # type: ignore[assignment]
+            ff.step_efficiency_mode = real_mode  # type: ignore[assignment]
+
+
+class TestObserveEvidenceMatchesEnforce:
+    def test_the_shadow_line_names_the_step_enforce_would_have_named(self, tmp_path: Path) -> None:
+        """Under observe the tool keeps running, so the record was overwritten
+        each time and the shadow line drifted to step N-1 while enforce would
+        always have said step 1. Observe evidence that understates enforce is
+        the wrong direction for a promotion gate."""
+        target = tmp_path / "m.py"
+        target.write_text("print(1)\n", encoding="utf-8")
+        args = {"path": str(target)}
+        guard = _guard(mode="observe")
+        for _ in range(4):
+            _run(guard, "read_file", args, {"content": "print(1)\n"}, tmp_path)
+        assert guard.reads[next(iter(guard.reads))].step == 1
+
+
+class TestTheGuardrailRowNamesItsStep:
+    def test_step_number_is_recorded(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import robothor.engine.tracking as tracking
+
+        rows: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            tracking,
+            "log_guardrail_event",
+            lambda run_id, guardrail_name, action, **kw: rows.append(dict(kw)),
+        )
+        target = tmp_path / "m.py"
+        target.write_text("x", encoding="utf-8")
+        args = {"path": str(target)}
+        guard = _guard()
+        guard.run_id = "run-step"
+        for _ in range(3):
+            _run(guard, "read_file", args, {"content": "x"}, tmp_path)
+        guard.before("read_file", args, workspace=tmp_path)
+        assert rows
+        assert rows[-1]["step_number"] > 0
+
+
+class TestTheNoteReadsCorrectlyWhereItLands:
+    def test_the_tense_matches_the_drain_point(self, tmp_path: Path) -> None:
+        """`drain_repeat_notes` puts the note in the conversation AFTER the
+        third result, so "about to run a 3rd time" was already false by the
+        time the model read it."""
+        guard = _guard()
+        args = {"command": "python3 x.py"}
+        out = {"stdout": "same\n", "exit_code": 1}
+        for _ in range(2):
+            _run(guard, "exec", args, out, tmp_path)
+        decision = guard.before("exec", args, workspace=tmp_path)
+        assert decision is not None
+        assert "has now run 3 times" in decision.note
+        assert "about to run" not in decision.note

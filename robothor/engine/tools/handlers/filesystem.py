@@ -67,9 +67,16 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     # The tool's own ceiling, then the RUN's: a command may not outlive the run
     # that owns it, and it must leave time for the write the run is graded on.
     # Every exec in the profiled 1200s failure asked for 900s.
-    from robothor.engine.run_pacing import clamp_tool_timeout
+    # The run id makes the observe-rung line attributable — evidence that cannot
+    # be tied to a run is not evidence — and the mode comes from the run's
+    # cached rung rather than a DB-backed flag read per `exec`, which the
+    # profiled run made 41 times.
+    from robothor.engine.run_pacing import clamp_tool_timeout, mode_for_run
 
-    timeout, clamp_note = clamp_tool_timeout(resolve_exec_timeout(args))
+    run_id = getattr(ctx, "run_id", "") or ""
+    timeout, clamp_note = clamp_tool_timeout(
+        resolve_exec_timeout(args), mode=mode_for_run(run_id), run_id=run_id
+    )
 
     def _with_note(result: dict[str, Any]) -> dict[str, Any]:
         """Say when the timeout the agent asked for is not the one it got."""

@@ -74,11 +74,17 @@ class TestItemZeroTheNoteFires:
         assert pacer.note_for(wd, iteration=40, task_text="", workspace=None) is None
 
     def test_the_log_line_is_warning_not_info(self, caplog: pytest.LogCaptureFixture) -> None:
-        """INFO is invisible in the container this control exists for."""
+        """INFO is invisible in the container this control exists for.
+
+        On the LADDER. `off` keeps main's INFO line verbatim, because `off` has
+        to be the engine that shipped — see test_step_efficiency_off_is_main.py.
+        `observe` is the default every existing install gets, so the fix is live
+        without the baseline moving.
+        """
         from robothor.engine.run_pacing import DeadlinePacer
 
         caplog.set_level(logging.WARNING, logger="robothor.engine.run_pacing")
-        DeadlinePacer(mode="off").note_for(
+        DeadlinePacer(mode="observe").note_for(
             _watchdog(960.0), iteration=40, task_text="", workspace=None, run_id="run-1"
         )
         issued = [r for r in caplog.records if "Deadline warning issued" in r.getMessage()]

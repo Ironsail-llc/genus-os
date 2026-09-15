@@ -53,13 +53,25 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-#: Reads that name one target the filesystem can be asked about. An identical
-#: call on an unchanged target is answerable without running the tool.
-SHORT_CIRCUIT_TOOLS: frozenset[str] = frozenset({"read_file", "list_directory"})
+#: Reads that name one target the filesystem can be asked about AND whose whole
+#: answer is that target's bytes. An identical call on an unchanged target is
+#: answerable without running the tool.
+#:
+#: ``read_file`` and nothing else. ``list_directory`` was here and was wrong:
+#: the handler returns every entry's SIZE, and with ``recursive: true`` the whole
+#: subtree, while the fingerprint stats only the directory — whose mtime does not
+#: move when a file inside it grows, and does not move at all when a file appears
+#: two levels down. The guard therefore said "the content is unchanged on disk"
+#: about a listing that was out of date, and the loop it broke is precisely "did
+#: my deliverable land, and how big is it" — the question the rest of this module
+#: exists to encourage. A listing can only be trusted by taking it again, so it
+#: is output-counted below and costs the call it would have saved.
+SHORT_CIRCUIT_TOOLS: frozenset[str] = frozenset({"read_file"})
 
-#: Calls with no single stat-able target, counted by whether their OUTPUT
-#: changed. ``search_files`` walks a tree; ``exec`` can do anything.
-OUTPUT_COUNTED_TOOLS: frozenset[str] = frozenset({"exec", "search_files"})
+#: Calls with no single stat-able answer, counted by whether their OUTPUT
+#: changed. ``search_files`` walks a tree, ``list_directory`` reports sizes it
+#: does not stat, and ``exec`` can do anything.
+OUTPUT_COUNTED_TOOLS: frozenset[str] = frozenset({"exec", "search_files", "list_directory"})
 
 #: Everything the guard may look at. An allow-list, never a deny-list: a new
 #: tool is unguarded until someone decides it is safe to guard, which is the
@@ -96,6 +108,73 @@ def canonical_key(tool_name: str, args: dict[str, Any] | None) -> str:
     except (TypeError, ValueError):  # pragma: no cover - default=str covers these
         body = repr(args)
     return f"{tool_name}\x00{body}"
+
+
+#: The fields of a result that are the TOOL's answer, per output-counted tool.
+#: An allow-list, because the alternative is a deny-list that has to be extended
+#: every time a control learns to annotate a result — and the first one to do so
+#: silently disarmed this guard.
+#:
+#: ``error`` is in every entry on purpose: a command that fails identically five
+#: times is the most expensive repeat there is (five clamped 212s timeouts is
+#: 1060s of a 1200s budget), and it was invisible while errors were skipped.
+_OUTPUT_FIELDS: dict[str, tuple[str, ...]] = {
+    "exec": ("stdout", "stderr", "exit_code", "error"),
+    "search_files": ("matches", "count", "truncated", "error"),
+    "list_directory": ("path", "entries", "count", "truncated", "error"),
+}
+
+#: Fields of an ``exec``-shaped result that carry what the command SAID. A
+#: command with nothing in any of them is silent, and a silent command is never
+#: refused — see ``_is_silent``.
+_SPOKEN_FIELDS: tuple[str, ...] = ("stdout", "stderr", "error")
+
+
+def output_digest(tool_name: str, result: dict[str, Any]) -> str:
+    """Digest the TOOL's own answer, never the engine's annotations.
+
+    The clamp writes ``timeout_note`` — "the run has 242s left" — into every
+    clamped ``exec`` result, and the number shrinks with the clock. Digesting
+    the whole dict therefore produced a different digest on every call, reset
+    the repeat counter every time, and made the repeat guard fire NEVER on the
+    exact shape it was built for: nine byte-identical runs of one command, on a
+    budget where the clamp is engaged for essentially all of them. Two enforce
+    controls cancelling each other, with a test suite that drove them
+    separately and saw nothing.
+    """
+    fields = _OUTPUT_FIELDS.get(tool_name)
+    payload = (
+        {k: result.get(k) for k in fields if k in result}
+        if fields
+        else {k: v for k, v in result.items() if k not in _ENGINE_ANNOTATIONS}
+    )
+    return _digest(payload)
+
+
+#: Only consulted for a tool with no declared projection above, so that a future
+#: guarded tool fails safe (annotations stripped) rather than silently inert.
+_ENGINE_ANNOTATIONS: frozenset[str] = frozenset(
+    {"timeout_note", "unchanged_since_step", "repeat_guard", "refused", "reason"}
+)
+
+
+def _is_silent(tool_name: str, result: dict[str, Any]) -> bool:
+    """Did this call say anything at all?
+
+    Output identity is not effect identity, and the proxy is weakest exactly
+    where the risk is: the side-effecting commands an agent runs are
+    disproportionately SILENT — ``mkdir -p``, ``cp``, ``rm -f``, ``chmod``,
+    ``git add``, anything redirected to /dev/null. Their result is
+    ``{"stdout": "", "stderr": "", "exit_code": 0}``, byte-identical forever,
+    whatever they did, and four identical silent successes establish nothing
+    about the fifth — whose inputs the commands in between may have changed.
+
+    So a silent call is still NOTED and never REFUSED. The measured case keeps
+    all of its value: ``sam3_debug``'s nine repeats printed an AssertionError.
+    """
+    if tool_name not in REFUSABLE_TOOLS:
+        return True
+    return not any(str(result.get(field) or "").strip() for field in _SPOKEN_FIELDS)
 
 
 def _digest(value: Any) -> str:
@@ -144,6 +223,7 @@ class _Counted:
 
     runs: int
     digest: str
+    silent: bool = False
 
 
 @dataclass(frozen=True)
@@ -250,28 +330,41 @@ class RepeatGuard:
             return None
         occurrence = previous.runs + 1
 
-        if occurrence >= REFUSE_AT and tool_name in REFUSABLE_TOOLS:
+        if occurrence >= REFUSE_AT and tool_name in REFUSABLE_TOOLS and not previous.silent:
             note = (
                 f"This exact command has already run {previous.runs} times with "
                 "byte-identical output. Running it again unchanged will not "
                 "change the result — change something first: the command, the "
                 "code it exercises, or the question you are asking of it."
             )
+            # NO `error` key. `runner.py` reads `result.get("error")` straight
+            # into `record_tool_outcome`, whose per-tool circuit breaker appends
+            # "Tool 'exec' has failed 3 times this run. Do NOT call it again." at
+            # three — so a control built to redirect ONE command would have told
+            # a Code-task agent to abandon its only way to run code. The same
+            # value drives escalation's STOP-RETRYING hints and suppresses the
+            # checkpoint's success. A refusal is a redirection, not a fault.
             return GuardDecision(
                 "refused",
                 tool_name,
                 note,
-                {"error": note, "identical_runs": previous.runs, "repeat_guard": "refused"},
+                {
+                    "refused": True,
+                    "reason": note,
+                    "identical_runs": previous.runs,
+                    "repeat_guard": "refused",
+                },
             )
 
         if occurrence == NOTE_AT:
+            # Present perfect, because `drain_repeat_notes` puts this in the
+            # conversation AFTER the third result: by the time the model reads
+            # it, "about to run" is already false.
             note = (
-                f"[SYSTEM] This exact {tool_name} call has run {previous.runs} times "
-                "with identical output and is about to run a "
-                f"{occurrence}{'rd' if occurrence == 3 else 'th'} time. Running it "
-                "again without changing something will not change the result. "
-                "Change the command, change the code it exercises, or move on to "
-                "writing what the task asked for."
+                f"[SYSTEM] This exact {tool_name} call has now run {occurrence} times "
+                "with identical output. Running it again without changing something "
+                "will not change the result. Change the command, change the code it "
+                "exercises, or move on to writing what the task asked for."
             )
             return GuardDecision("noted", tool_name, note, None)
         return None
@@ -299,8 +392,16 @@ class RepeatGuard:
         """Record what a call returned, so the next identical one can be judged."""
         if self.mode == "off" or tool_name not in GUARDED_TOOLS:
             return
-        if not isinstance(result, dict) or "error" in result:
-            # Nothing was learned, so a retry is not a repeat.
+        if not isinstance(result, dict):
+            return
+        if "error" in result and tool_name in SHORT_CIRCUIT_TOOLS:
+            # A failed READ taught the run nothing about the file, and the short
+            # circuit has no content it could ever answer with. Errors on the
+            # output-counted tools DO count: five identical clamped timeouts is
+            # ~1060s of a 1200s budget, the most expensive repeat a run can
+            # make, and it was invisible here. Only a byte-identical error text
+            # counts, so a retry after a transient failure still reads as
+            # progress.
             return
         try:
             self._remember(tool_name, args or {}, result, workspace)
@@ -319,17 +420,27 @@ class RepeatGuard:
             if len(payload) > MAX_TRACKED_CHARS:
                 self.reads.pop(key, None)
                 return
+            existing = self.reads.get(key)
+            if existing is not None and existing.fingerprint == fingerprint:
+                # Under `observe` the tool keeps running, so without this the
+                # record walked forward and the shadow line said "unchanged
+                # since step N-1" where `enforce` would have said step 1.
+                # Observe evidence that understates enforce is the wrong
+                # direction for a promotion gate.
+                return
             self.reads[key] = _Read(
                 step=self._step(), fingerprint=fingerprint, payload=payload, result=result
             )
             return
 
-        digest = _digest(result)
+        digest = output_digest(tool_name, result)
+        silent = _is_silent(tool_name, result)
         previous = self.counted.get(key)
         if previous is None or previous.digest != digest:
-            self.counted[key] = _Counted(runs=1, digest=digest)
+            self.counted[key] = _Counted(runs=1, digest=digest, silent=silent)
         else:
             previous.runs += 1
+            previous.silent = silent
 
     def _step(self) -> int:
         return int(getattr(self.session, "_step_counter", 0) or 0) + 1
@@ -350,6 +461,9 @@ class RepeatGuard:
                 tool_name=decision.tool_name,
                 reason=decision.note[:500],
                 mode=self.mode,
+                # Without this every row landed at step 0 and the sweep could
+                # not tie a decision to the step it happened on.
+                step_number=self._step(),
             )
         except Exception as exc:  # noqa: BLE001
             logger.debug("repeat guard event not recorded: %s", exc)
@@ -375,9 +489,15 @@ def guard_for_run(run_id: str) -> RepeatGuard | None:
         return None
     guard = getattr(session, "repeat_guard", None)
     if guard is None:
-        from robothor.engine.feature_flags import step_efficiency_mode
+        from robothor.engine.run_pacing import mode_for_run
 
-        guard = RepeatGuard(mode=step_efficiency_mode(), session=session, run_id=run_id)
+        mode = mode_for_run(run_id)
+        if mode == "off":
+            # None, not an inert guard: dispatch then skips two
+            # `asyncio.to_thread` hops on every tool call, and a disabled
+            # control should cost nothing at all.
+            return None
+        guard = RepeatGuard(mode=mode, session=session, run_id=run_id)
         try:
             session.repeat_guard = guard
         except AttributeError:  # pragma: no cover - a session that refuses state

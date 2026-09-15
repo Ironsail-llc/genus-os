@@ -474,24 +474,19 @@ async def _execute_tool(
     if handler is None:
         return {"error": f"Unknown tool: {name}"}
 
-    # Benchmark sandbox: mirror ctx.is_benchmark into the CRM DAL's
-    # ContextVar for the duration of the handler call. DAL paths that
-    # create operator-facing state (dal.create_session_goal) cannot see
-    # ToolContext, so this is how the sandbox reaches them regardless of
-    # which handler (create_goal, thread machinery, …) invoked the write.
-    sandbox_token = None
-    if is_benchmark:
-        from robothor.crm.dal import set_benchmark_sandbox
-
-        sandbox_token = set_benchmark_sandbox(True)
-
     # ── Repeat-call guard ──
     # The one place every tool call passes through BEFORE the handler runs, so
     # a call the run has already made and already been answered the same way
     # can be answered from what it has. Read-only allow-list, never skips a
     # write, and below `enforce` it decides nothing and only logs. Per-run
     # state lives on the run's session (robothor/engine/repeat_guard.py); a
-    # call from outside a live run finds no guard and is unaffected.
+    # call from outside a live run, or a run at `off`, finds no guard at all
+    # and pays nothing.
+    #
+    # Deliberately ABOVE the benchmark-sandbox token: its reset lives in the
+    # `finally` of the handler's try, and an early return from here used to
+    # jump straight over it, leaving the DAL's ContextVar True for the rest of
+    # the task — "CRM writes silently sandboxed" being the failure mode.
     from robothor.engine.repeat_guard import guard_for_run
 
     guard = guard_for_run(run_id)
@@ -507,6 +502,17 @@ async def _execute_tool(
                 error=decision.note if decision.action == "refused" else None,
             )
             return decision.result
+
+    # Benchmark sandbox: mirror ctx.is_benchmark into the CRM DAL's
+    # ContextVar for the duration of the handler call. DAL paths that
+    # create operator-facing state (dal.create_session_goal) cannot see
+    # ToolContext, so this is how the sandbox reaches them regardless of
+    # which handler (create_goal, thread machinery, …) invoked the write.
+    sandbox_token = None
+    if is_benchmark:
+        from robothor.crm.dal import set_benchmark_sandbox
+
+        sandbox_token = set_benchmark_sandbox(True)
 
     # Wrap handler invocation: an unhandled exception here used to propagate
     # out of the runner, leaving agent_runs rows in 'running' state until the

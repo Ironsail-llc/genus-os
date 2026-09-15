@@ -28,6 +28,7 @@ therefore WARNING and says so out loud below.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -74,10 +75,17 @@ def pace_phrase(elapsed: float, remaining: float, iteration: int) -> str:
     average = elapsed / iteration
     if average <= 0:
         return ""
+    left = int(max(0.0, remaining) / average)
     return (
-        f"You have taken {iteration} steps at about {average:.0f}s each, so "
-        f"about {int(max(0.0, remaining) / average)} more steps fit in the time left."
+        f"You have taken {iteration} {_plural(iteration, 'step')} at about "
+        f"{average:.0f}s each, so about {left} more {_plural(left, 'step')} fit in "
+        "the time left."
     )
+
+
+def _plural(count: int, noun: str) -> str:
+    """The model reads these sentences; "1 steps" is the engine miscounting."""
+    return noun if count == 1 else f"{noun}s"
 
 
 def due_fraction(
@@ -115,8 +123,14 @@ def note_at(
     iteration: int,
     task_text: str | None,
     workspace: str | Path | None,
+    mode: str = "off",
 ) -> str | None:
-    """The text for one rung, or None when there is nothing to say."""
+    """The text for one rung, or None when there is nothing to say.
+
+    ``mode`` is here for one reason: under ``off`` the 80% rung must be the
+    string main produced, with nothing appended. The pace sentence is a feature
+    of the ladder, not of the note.
+    """
     from robothor.engine.deliverables import (
         deadline_note,
         declared_paths,
@@ -124,7 +138,7 @@ def note_at(
     )
 
     remaining = max(0, int(hard_timeout - elapsed))
-    pace = pace_phrase(elapsed, float(remaining), iteration)
+    pace = "" if mode == "off" else pace_phrase(elapsed, float(remaining), iteration)
 
     if fraction == DEADLINE_WARNING_FRACTION:
         # The rung that already shipped, wording untouched: write-FIRST,
@@ -168,9 +182,14 @@ class DeadlinePacer:
     """Per-run state: which rungs this run has had, and which rung is due.
 
     One instance per run, built from ``feature_flags.step_efficiency_mode()``.
-    ``off`` is bit-for-bit the behaviour that already shipped — one note at 80%
-    — so an operator who dislikes this can have the old engine back with a flag
-    rather than a revert.
+
+    ``off`` is bit-for-bit the engine that shipped: ONE note at 80%, with main's
+    exact text and no pace sentence appended, announced with main's exact log
+    line at main's level (INFO), and with no iteration guard — main had none.
+    Three things that all read as improvements and all belong to the ladder
+    rather than to the baseline, because an operator who turns this off has to
+    get the previous engine back, and a sweep comparing `off` to `enforce` is
+    only measuring the controls if `off` is what it says it is.
     """
 
     mode: str = "off"
@@ -193,10 +212,11 @@ class DeadlinePacer:
     ) -> str | None:
         """The note to append to the conversation this iteration, or None.
 
-        ``iteration < 1`` is silent on purpose: the pace numbers are measured
-        over completed steps, and a run that has taken none has no pace.
+        ``iteration < 1`` is silent on the ladder's rungs: the pace numbers are
+        measured over completed steps, and a run that has taken none has no
+        pace. Not under ``off``, which had no such condition.
         """
-        if watchdog is None or iteration < 1:
+        if watchdog is None or (iteration < 1 and self.mode != "off"):
             return None
         hard_timeout = float(getattr(watchdog, "_hard_timeout", 0) or 0)
         if hard_timeout <= 0:
@@ -217,11 +237,19 @@ class DeadlinePacer:
             iteration=iteration,
             task_text=task_text,
             workspace=workspace,
+            mode=self.mode,
         )
         if not note:
             return None
 
         percent = round(fraction * 100)
+        if self.mode == "off":
+            # Main's line, at main's level. Raising it to WARNING is item 0's
+            # fix and belongs to the ladder: `observe` is the default every
+            # existing install gets, so the fix is live without `off` having to
+            # stop being the baseline.
+            logger.info("Deadline warning issued at iteration %d", iteration)
+            return note
         # The 80% rung is what already shipped, so it injects on every rung of
         # the ladder including `observe` — observe must not take away a control
         # that is already live. The other two are the new behaviour and wait
@@ -243,6 +271,35 @@ class DeadlinePacer:
             note.replace("\n", " ")[:300],
         )
         return None
+
+
+def mode_for_run(run_id: str) -> str:
+    """The rung this run resolved, read once and cached on its session.
+
+    ``step_efficiency_mode()`` goes through the DB-backed flag store (5s TTL, a
+    synchronous read on a miss). The pacer and the repeat guard each resolve it
+    once per run; the timeout clamp is called from ``exec``, which the profiled
+    run invoked 41 times, and a database read per tool call on the event loop is
+    not a price a pacing aid gets to charge.
+
+    A call with no live session — an untracked run, a tool called from outside a
+    run — falls back to resolving it, which is the pre-cache behaviour.
+    """
+    from robothor.engine.feature_flags import step_efficiency_mode
+
+    if not run_id:
+        return step_efficiency_mode()
+    from robothor.engine import session_registry
+
+    session = session_registry.lookup(run_id)
+    if session is None:
+        return step_efficiency_mode()
+    mode = getattr(session, "step_efficiency_mode", None)
+    if mode is None:
+        mode = step_efficiency_mode()
+        with contextlib.suppress(AttributeError):
+            session.step_efficiency_mode = mode
+    return str(mode)
 
 
 def clamp_tool_timeout(
@@ -268,9 +325,7 @@ def clamp_tool_timeout(
     ceiling, means nothing to clamp to and the request stands.
     """
     if mode is None:
-        from robothor.engine.feature_flags import step_efficiency_mode
-
-        mode = step_efficiency_mode()
+        mode = mode_for_run(run_id)
     if mode == "off" or requested <= 0:
         return requested, ""
     if watchdog is None:
@@ -337,16 +392,24 @@ def checkin_note(
     """
     if iteration < 1:
         return None
-    if checkin_interval > 0 and iteration % checkin_interval == 0:
-        return _SHIPPED_CHECKIN.format(iteration=iteration)
-    if mode == "off" or iteration % CHECKIN_EVERY != 0:
-        return None
-    if mode != "enforce":
+    shipped_due = checkin_interval > 0 and iteration % checkin_interval == 0
+    cadence_due = mode != "off" and iteration % CHECKIN_EVERY == 0
+
+    # The added cadence wins a collision. An agent whose `max_iterations` is a
+    # multiple of 25 (25, 50, 100 …) would otherwise silently lose the
+    # deliverable ask at every one of its own cadence points — the control
+    # would be off for exactly the agents that check in most often.
+    if cadence_due and mode == "enforce":
+        logger.warning(
+            "Deliverable check-in issued at iteration %d, run %s", iteration, run_id or "?"
+        )
+        return _DELIVERABLE_CHECKIN.format(iteration=iteration)
+    if cadence_due:
         logger.warning(
             "step-efficiency observe: run %s would inject a deliverable check-in at iteration %d",
             run_id or "?",
             iteration,
         )
-        return None
-    logger.warning("Deliverable check-in issued at iteration %d, run %s", iteration, run_id or "?")
-    return _DELIVERABLE_CHECKIN.format(iteration=iteration)
+    if shipped_due:
+        return _SHIPPED_CHECKIN.format(iteration=iteration)
+    return None

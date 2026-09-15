@@ -1893,10 +1893,9 @@ class AgentRunner(
             # this for heartbeat + worker per operator directive 2026-04-20). The
             # check only fires when the cap is positive.
             # ── [DEADLINE] Tell the agent while it can still act ──
-            # A run killed at its ceiling loses whatever it had not yet
-            # written. Rungs, their wording and the ladder live in
-            # robothor/engine/run_pacing.py — this is the one place that knows
-            # the live watchdog, the task text and the workspace.
+            # Rungs, wording and ladder live in robothor/engine/run_pacing.py;
+            # this is the one place that knows the live watchdog, the task text
+            # and the workspace.
             _dl_note = _pacer.note_for(
                 self._active_watchdog,
                 iteration=_iteration,
