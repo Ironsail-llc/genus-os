@@ -114,9 +114,29 @@ def test_get_accepts_a_deprecated_alias(monkeypatch, capsys) -> None:
 
 
 def test_get_an_unknown_name_exits_two_and_suggests(capsys) -> None:
+    """The exact two lines, not a substring.
+
+    This test used to assert only that the right name appeared SOMEWHERE in
+    stderr, and it stayed green through a refactor that collapsed the two
+    lines into one -- the format an HTTP body wanted, printed at a terminal.
+    A regression net that cannot see the regression is not one, so both lines
+    are pinned here: the failure first, the fix second.
+    """
     assert cmd_config(_args(config_command="get", name="ROBOTHOR_MAX_CONCURENT_AGENTS")) == 2
-    err = capsys.readouterr().err
-    assert "ROBOTHOR_MAX_CONCURRENT_AGENTS" in err
+    lines = capsys.readouterr().err.splitlines()
+    assert lines[0] == "ROBOTHOR_MAX_CONCURENT_AGENTS: no such setting."
+    assert lines[1].startswith("Did you mean: ")
+    assert "ROBOTHOR_MAX_CONCURRENT_AGENTS" in lines[1]
+    assert len(lines) == 2
+
+
+def test_an_unknown_name_with_no_near_miss_names_the_command_that_lists_them(capsys) -> None:
+    assert cmd_config(_args(config_command="explain", name="QQQQZZZZ")) == 2
+    lines = capsys.readouterr().err.splitlines()
+    assert lines == [
+        "QQQQZZZZ: no such setting.",
+        "`genus config list` shows every declared setting.",
+    ]
 
 
 def test_get_json_shape(capsys) -> None:

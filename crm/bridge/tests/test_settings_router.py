@@ -531,3 +531,234 @@ def test_the_route_handlers_stay_synchronous():
 
     for route in router.router.routes:
         assert not inspect.iscoroutinefunction(route.endpoint), route.path
+
+
+# ── I1/I2: the Flags page must be able to save what it displays ──────────────
+
+
+def test_every_governed_value_is_one_the_same_api_would_accept(
+    controls_client_as_operator, clean_env
+):
+    """GET -> PATCH must round-trip for all 21 flags.
+
+    ``enum`` comes from the flag store and is always strings; the value used to
+    come from the pydantic-typed default, which for a boolean flag is JSON
+    ``false`` and for ROBOTHOR_SANDBOX_DEFAULT_MODE is ``""``. A ``<select>``
+    populated from ``enum`` cannot preselect either, and saving the form
+    unchanged was a 422.
+    """
+    from robothor.flags.store import GOVERNED_FLAGS
+
+    schema = controls_client_as_operator.get(SCHEMA).json()
+    fields = {f["name"]: f for g in schema["groups"] for f in g["fields"]}
+    values = controls_client_as_operator.get(SETTINGS).json()["values"]
+
+    offenders = []
+    for name in sorted(GOVERNED_FLAGS):
+        field = fields[name]
+        for label, candidate in (("value", values[name]["value"]), ("default", field["default"])):
+            if candidate not in field["enum"]:
+                offenders.append((name, label, candidate, field["enum"]))
+    assert not offenders, offenders
+
+
+def test_patching_back_what_get_returned_is_never_refused(
+    controls_client_as_operator, clean_env, monkeypatch
+):
+    monkeypatch.setattr("robothor.flags.store.set_flag", lambda *a, **k: None)
+    values = controls_client_as_operator.get(SETTINGS).json()["values"]
+
+    from robothor.flags.store import GOVERNED_FLAGS
+
+    changes = {name: values[name]["value"] for name in sorted(GOVERNED_FLAGS)}
+    r = controls_client_as_operator.patch(SETTINGS, json={"changes": changes})
+    assert r.status_code == 200, r.text
+
+
+def test_the_settings_page_and_the_controls_page_agree_on_every_flag(
+    controls_client_as_operator, clean_env, fake_verdict
+):
+    """Two surfaces, one question. The engine reads ``robothor.flags.store``:
+    DB row -> environment -> the flag's own default. config.yaml is not a layer
+    for a governed flag at all, so resolving one through the settings
+    precedence reported a value the engine never reads -- ROBOTHOR_DNC_MODE in
+    particular, which Controls knows is floored at ``enforce`` and the settings
+    page called ``observe``.
+    """
+    controls = {
+        flag["name"]: flag["value"]
+        for flag in controls_client_as_operator.get("/api/controls").json()
+    }
+    values = controls_client_as_operator.get(SETTINGS).json()["values"]
+
+    disagree = {
+        name: (values[name]["value"], shown)
+        for name, shown in controls.items()
+        if values[name]["value"] != shown
+    }
+    assert not disagree, disagree
+
+
+def test_config_yaml_is_not_a_layer_for_a_governed_flag(
+    controls_client_as_operator, clean_env, env_workspace
+):
+    """An operator can put ``flags.rbac_mode`` in config.yaml. The engine will
+    never read it, so neither may this page."""
+    _write_config(env_workspace, "settings:\n  flags:\n    rbac_mode: enforce\n")
+    entry = controls_client_as_operator.get(SETTINGS).json()["values"][GOVERNED]
+    assert entry["value"] == "observe", "config.yaml is not a layer the flag store reads"
+    assert entry["source"] == "default"
+
+
+def test_a_governed_flag_set_in_the_environment_reports_env(
+    controls_client_as_operator, clean_env, monkeypatch
+):
+    monkeypatch.setenv(GOVERNED, "alert")
+    entry = controls_client_as_operator.get(SETTINGS).json()["values"][GOVERNED]
+    assert entry["value"] == "alert"
+    assert entry["source"] == "env"
+
+
+# ── I3: the config half of a batch is one atomic replace ─────────────────────
+
+
+def test_a_config_batch_is_written_in_exactly_one_replace(
+    controls_client_as_operator, clean_env, env_workspace, monkeypatch
+):
+    from pathlib import Path
+
+    _write_config(env_workspace, "settings:\n")
+    replaces: list[object] = []
+    real = Path.replace
+
+    def _counting(self, target):
+        replaces.append(target)
+        return real(self, target)
+
+    monkeypatch.setattr(Path, "replace", _counting)
+    r = controls_client_as_operator.patch(
+        SETTINGS, json={"changes": {HOT_INT: 8, RESTART_STR: "/var/log/two"}}
+    )
+    assert r.status_code == 200, r.text
+    assert sorted(r.json()["applied"]) == sorted([HOT_INT, RESTART_STR])
+    assert len(replaces) == 1, "a batch must be one replace, not one per field"
+
+
+def test_a_failure_part_way_through_a_batch_leaves_the_file_byte_identical(
+    controls_client_as_operator, clean_env, env_workspace, monkeypatch
+):
+    """The commit says "atomic patch"; per-field replaces made it atomic per
+    FIELD, so a failure on the second field left the first one written and the
+    operator could not say what the instance was now configured to do."""
+    from pathlib import Path
+
+    path = _write_config(env_workspace, "settings:\n  engine:\n    max_concurrent_agents: 3\n")
+    before = path.read_bytes()
+
+    def _boom(self, target):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(Path, "replace", _boom)
+    r = controls_client_as_operator.patch(
+        SETTINGS, json={"changes": {HOT_INT: 8, RESTART_STR: "/var/log/two"}}
+    )
+    assert r.status_code == 500, r.text
+    body = r.json()
+    assert body["applied"] == [], "nothing landed, so nothing may be reported as applied"
+    assert {e["name"] for e in body["errors"]} == {HOT_INT, RESTART_STR}
+    assert path.read_bytes() == before
+    assert [p.name for p in (env_workspace / ".robothor").iterdir()] == ["config.yaml"]
+
+
+# ── C1 over HTTP: a 200 must never leave an unparseable config.yaml ──────────
+
+
+def test_a_yaml_indicator_in_a_value_round_trips_rather_than_breaking_the_file(
+    controls_client_as_operator, clean_env, env_workspace
+):
+    """``- item`` used to be written bare. The file stopped parsing, the
+    operator was told the setting applied, and the page they would use to undo
+    it started returning 500."""
+    path = _write_config(env_workspace, "settings:\n")
+    r = controls_client_as_operator.patch(SETTINGS, json={"changes": {RESTART_STR: "- item"}})
+    assert r.status_code == 200, r.text
+
+    import yaml
+
+    loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert loaded["settings"]["paths"]["log_dir"] == "- item"
+    # And the page still renders afterwards.
+    after = controls_client_as_operator.get(SETTINGS)
+    assert after.status_code == 200
+    assert after.json()["values"][RESTART_STR]["value"] == "- item"
+
+
+# ── I4: a credential is refused as a credential, whatever supplies it ────────
+
+
+def test_an_env_supplied_secret_is_refused_as_a_secret_not_as_an_override(
+    controls_client_as_operator, clean_env, monkeypatch
+):
+    """Secrets are the field class most likely to be env-supplied, so the
+    env-override sentence -- "clear the variable on the box and restart ..." --
+    was the common answer, and it is both false (the vault owns credentials)
+    and harmful (the running services need that variable)."""
+    monkeypatch.setenv(SECRET, "already-in-the-environment")
+    from robothor.settings import reset_settings
+
+    reset_settings()
+    r = controls_client_as_operator.patch(SETTINGS, json={"changes": {SECRET: "a-new-token"}})
+    assert r.status_code == 422
+    message = r.json()["errors"][0]["message"]
+    assert "credential" in message
+    assert "Clear the variable" not in message
+    assert "a-new-token" not in message and "already-in-the-environment" not in message
+
+
+# ── minors ───────────────────────────────────────────────────────────────────
+
+
+def test_a_name_and_its_deprecated_alias_in_one_batch_is_an_error(
+    controls_client_as_operator, clean_env, env_workspace
+):
+    """Two keys, one field: written, they are last-one-wins by dict order and
+    the response names the field twice."""
+    path = _config_path(env_workspace)
+    r = controls_client_as_operator.patch(
+        SETTINGS, json={"changes": {"ROBOTHOR_CODEX_HOME": "/one", "CODEX_HOME": "/two"}}
+    )
+    assert r.status_code == 422
+    assert "same setting" in r.json()["errors"][0]["message"]
+    assert not path.exists()
+
+
+def test_a_batch_larger_than_the_cap_is_refused_before_any_work(
+    controls_client_as_operator, clean_env
+):
+    from routers.settings import MAX_CHANGES
+
+    changes = {f"ROBOTHOR_NOT_A_SETTING_{i}": "x" for i in range(MAX_CHANGES + 1)}
+    r = controls_client_as_operator.patch(SETTINGS, json={"changes": changes})
+    assert r.status_code == 422
+
+
+def test_an_oversized_note_is_refused(controls_client_as_operator, clean_env):
+    from routers.settings import MAX_NOTE
+
+    r = controls_client_as_operator.patch(
+        SETTINGS, json={"changes": {}, "note": "x" * (MAX_NOTE + 1)}
+    )
+    assert r.status_code == 422
+
+
+def test_a_rejected_key_is_never_written_verbatim_into_the_audit_log(
+    controls_client_as_operator, clean_env, audit_rows
+):
+    """ "Names only" is true; "names from the registry" was not. A typo'd
+    credential in a key would otherwise become a durable SIEM record."""
+    secretish = "sk-live-DEADBEEF-not-a-setting"
+    controls_client_as_operator.patch(SETTINGS, json={"changes": {secretish: "x"}})
+    assert audit_rows
+    flat = _strings(audit_rows[-1])
+    assert all(secretish not in s for s in flat)
+    assert audit_rows[-1]["details"]["unknown_names"] == 1

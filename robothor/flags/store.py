@@ -153,6 +153,86 @@ def resolve(name: str) -> str | None:
     return db_val if db_val is not None else os.environ.get(name)
 
 
+#: Flags whose engine default deliberately differs from the value their settings
+#: field declares. ``ROBOTHOR_DNC_MODE`` is declared ``observe`` like every other
+#: ladder, and ``feature_flags.do_not_contact_mode`` floors it at ``enforce``
+#: because a compliance opt-out has no dark rung. Only that class of flag belongs
+#: here: an entry that merely repeats the declaration is dead weight, and
+#: ``crm/bridge/tests/test_controls_unset_defaults.py`` fails on one.
+#:
+#: Lives here rather than in a router because THREE surfaces need the answer --
+#: the Controls page, the Settings page and ``genus config get`` -- and the one
+#: that had it was a bridge module the other two must not import.
+_UNSET_DEFAULTS: dict[str, str] = {"ROBOTHOR_DNC_MODE": "enforce"}
+
+
+def _declared_default(name: str) -> str | None:
+    """What ``robothor/settings/model.py`` says this flag is when nobody sets it.
+
+    One source, read rather than restated. The registry is also where
+    ``GOVERNED_FLAGS`` itself comes from, so every flag a page can render has a
+    declared default by construction.
+    """
+    try:
+        from robothor.settings.registry import field_index
+
+        record = field_index().get(name)
+    except Exception:  # noqa: BLE001 — a page must render without the model
+        return None
+    if record is None:
+        return None
+    declared = record.get("default")
+    if isinstance(declared, bool):
+        return "true" if declared else "false"
+    text = str(declared or "").strip()
+    return text or None
+
+
+def default_value_for(name: str) -> str:
+    """A flag-appropriate "unset" default — what the ENGINE runs, not a guess.
+
+    Reached only when there is neither a DB row nor an environment variable
+    (:func:`resolve` covers both), so the answer is the flag's own hardcoded
+    default and every surface must show exactly that. It is DERIVED from the
+    settings registry rather than inferred from the shape of the value set: the
+    old rule ("boolean → false, else observe") was right for every flag that
+    starts dark and gets promoted, and it silently became wrong the first time a
+    governed flag shipped at ``enforce``, so a page would have contradicted the
+    engine with no test noticing.
+
+    :data:`_UNSET_DEFAULTS` still wins, for the flags whose engine accessor
+    deliberately ignores the declared value. The heuristic survives only as the
+    last resort for a declaration that is empty or outside the value set --
+    ``ROBOTHOR_SANDBOX_DEFAULT_MODE`` declares ``""``.
+    """
+    if name in _UNSET_DEFAULTS:
+        return _UNSET_DEFAULTS[name]
+    valid = valid_values_for(name)
+    declared = _declared_default(name)
+    if declared is not None and declared in valid:
+        return declared
+    return "false" if "false" in valid else "observe"
+
+
+def normalise(name: str, value: Any) -> str:
+    """One flag value, spelled the way this store and every page spell it.
+
+    The settings model types ``ROBOTHOR_RIP_1_ENABLED`` as a ``bool``, so its
+    declared default resolves to Python ``False`` — which is not a member of
+    ``valid_values_for`` and cannot be sent back in a PATCH. A surface that
+    serves a value its own enum rejects is a form that cannot save what it
+    displays. Anything that does not name a member of the value set falls back
+    to :func:`default_value_for`, which is what the engine runs.
+    """
+    if value is True:
+        text = "true"
+    elif value is False:
+        text = "false"
+    else:
+        text = str(value if value is not None else "").strip()
+    return text if text in valid_values_for(name) else default_value_for(name)
+
+
 def set_flag(name: str, value: str, actor: str, reason: str) -> None:
     if name not in governed_flags():
         raise ValueError(f"{name} is not a governed flag")

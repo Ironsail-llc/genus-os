@@ -86,12 +86,18 @@ def _operator_name() -> str:
 
 
 def _unknown_name(name: str) -> int:
-    """Exit code 2 and the closest declared names.
+    """Exit code 2 and the closest declared names, on TWO stderr lines.
 
     A typo in a variable name is otherwise indistinguishable from a setting
     that does not exist yet, and both look like the command doing nothing.
+
+    Two lines, as this command has always printed: the failure on the first,
+    the fix on the second. The library returns them as a pair for exactly this
+    reason — the bridge joins them into one HTTP string, and a terminal is not
+    an HTTP body. ``robothor/cli/tests/test_config_cmd.py`` pins both lines.
     """
-    _err(operator.unknown_name_message(name))
+    for line in operator.unknown_name_lines(name):
+        _err(line)
     return 2
 
 

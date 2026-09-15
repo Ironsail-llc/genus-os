@@ -51,7 +51,7 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from robothor.settings import operator, provenance
 from robothor.settings.registry import field_index, groups
@@ -74,6 +74,24 @@ _API_SOURCE = {
 }
 
 
+#: How many changes one request may carry. The registry declares 371 fields and
+#: no form edits them all; the bound exists because validating an unknown name
+#: runs a fuzzy match over every candidate, and a plain ``def`` handler holds a
+#: threadpool worker for as long as it takes. Operator-only, so this is a
+#: guard-rail rather than a defence — but one wedged worker per request is a
+#: cheap enough self-DoS to close.
+MAX_CHANGES = 200
+
+#: Beyond this many unknown names in one batch, stop computing suggestions. The
+#: first errors an operator reads are the ones worth a "did you mean"; a form
+#: that sent two thousand typos wants the list, not the help.
+MAX_SUGGESTIONS = 20
+
+#: An operator's note is a sentence, not a payload. It reaches the audit log and
+#: ``feature_flag_audit.reason``, both of which are read back by people.
+MAX_NOTE = 500
+
+
 class SettingsPatch(BaseModel):
     """A batch of changes, keyed by the setting's declared environment name.
 
@@ -83,8 +101,8 @@ class SettingsPatch(BaseModel):
     this, and why" has an answer six months later.
     """
 
-    changes: dict[str, Any] = {}
-    note: str | None = None
+    changes: dict[str, Any] = Field(default_factory=dict, max_length=MAX_CHANGES)
+    note: str | None = Field(default=None, max_length=MAX_NOTE)
 
 
 def _declared() -> list[dict[str, Any]]:
@@ -141,6 +159,17 @@ def _hot(record: dict[str, Any]) -> bool:
     return bool(record["governed"]) or not record["restart_required"]
 
 
+def _default_for(record: dict[str, Any]) -> Any:
+    """The default a form may preselect — never a credential, always in the enum."""
+    if record["secret"]:
+        return None
+    if record["governed"]:
+        from robothor.flags import store
+
+        return store.default_value_for(record["env"])
+    return record["default"]
+
+
 def _field_schema(record: dict[str, Any]) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "name": record["env"],
@@ -150,9 +179,13 @@ def _field_schema(record: dict[str, Any]) -> dict[str, Any]:
         "aliases": list(record["aliases"]),
         "type": record["type"],
         "description": record["description"],
+        # A governed flag's default is what the ENGINE runs when nothing sets
+        # it, spelled the way its own enum spells it. The registry types
+        # ROBOTHOR_RIP_1_ENABLED as a bool, so the declared default is Python
+        # False -- which is not in ["true","false"] and cannot be sent back.
         # A secret has no default by construction (``declare()`` refuses one),
         # but null rather than "" states that rather than relying on it.
-        "default": None if record["secret"] else record["default"],
+        "default": _default_for(record),
         "secret": record["secret"],
         "governed": record["governed"],
         "restart_required": record["restart_required"],
@@ -269,14 +302,48 @@ def _plan(
     """
     planned: list[tuple[dict[str, Any], Any]] = []
     errors: list[dict[str, str]] = []
+    seen: dict[str, str] = {}
+    unknown = 0
     for name, raw in changes.items():
         record = operator.record(name)
         if record is None:
-            errors.append({"name": name, "message": operator.unknown_name_message(name)})
+            unknown += 1
+            errors.append(
+                {
+                    "name": name,
+                    "message": operator.unknown_name_message(
+                        name, suggest=unknown <= MAX_SUGGESTIONS
+                    ),
+                }
+            )
             continue
-        # Governed flags are exempt: the ``feature_flags`` row outranks the
-        # environment in ``robothor.flags.store.resolve``, so a variable set
-        # for one does NOT make the write invisible.
+        # A field answers to its declared name AND to every deprecated alias, so
+        # two keys in one batch can be the same setting. Written, they are two
+        # splices of one field and last-one-wins by dict order, and the response
+        # names the field twice -- an operator cannot tell which value took.
+        if record["env"] in seen:
+            errors.append(
+                {
+                    "name": record["env"],
+                    "message": (
+                        f"{name} and {seen[record['env']]} are the same setting "
+                        f"({record['env']}). Send it once."
+                    ),
+                }
+            )
+            continue
+        seen[record["env"]] = name
+        # Secret FIRST. A credential is the field class most likely to be
+        # supplied by the environment, and the env refusal below would tell the
+        # operator to clear the variable and manage it here -- advice that is
+        # false (the vault owns credentials) and harmful (the running services
+        # need that variable).
+        if record["secret"]:
+            errors.append({"name": record["env"], "message": operator.secret_refusal(record)})
+            continue
+        # Governed flags are exempt from the env check: the ``feature_flags``
+        # row outranks the environment in ``robothor.flags.store.resolve``, so a
+        # variable set for one does NOT make the write invisible.
         env_name = None if record["governed"] else operator.env_override(record)
         if env_name is not None:
             errors.append({"name": record["env"], "message": _env_refusal(record, env_name)})
@@ -303,31 +370,29 @@ def patch_settings(patch: SettingsPatch, request: Request) -> Any:
 
     planned, errors = _plan(patch.changes)
     if errors:
+        # Only names the REGISTRY knows. A rejected key is a string the client
+        # chose, and an audit row is exported to a SIEM: logging it verbatim
+        # turns a typo'd `sk-live-…` into a durable record of a credential.
+        # The ones that do not resolve are a count.
+        known = sorted({e["name"] for e in errors if operator.record(e["name"]) is not None})
         audited(
             request,
             "settings.change",
             action="patch",
             status="denied",
-            names=sorted({e["name"] for e in errors}),
+            names=known,
             count=len(errors),
+            unknown_names=len(errors) - len(known),
         )
         return JSONResponse(
             status_code=422,
             content={"applied": [], "pending_restart": [], "errors": errors},
         )
 
-    applied: list[str] = []
-    pending: set[str] = set()
-    wrote_file = False
     reason = patch.note or "settings page"
-    for record, value in planned:
-        try:
-            pending.update(operator.apply_change(record, value, actor=actor, reason=reason))
-        except operator.SettingError as exc:
-            errors.append({"name": exc.name, "message": exc.message})
-            continue
-        wrote_file = wrote_file or not record["governed"]
-        applied.append(record["env"])
+    applied, pending_units, errors = operator.apply_batch(planned, actor=actor, reason=reason)
+    pending = set(pending_units)
+    wrote_file = any(not record["governed"] for record, _ in planned)
 
     if wrote_file:
         # This process caches its settings; it has just changed the file they

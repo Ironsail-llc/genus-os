@@ -53,69 +53,32 @@ class FlagPatch(BaseModel):
     reason: str
 
 
-#: Flags whose engine default deliberately differs from the value their settings
-#: field declares. ``ROBOTHOR_DNC_MODE`` is declared ``observe`` like every other
-#: ladder, and ``feature_flags.do_not_contact_mode`` floors it at ``enforce``
-#: because a compliance opt-out has no dark rung. Only that class of flag belongs
-#: here: an entry that merely repeats the declaration is dead weight, and
-#: ``test_controls_unset_defaults`` fails on one.
-_UNSET_DEFAULTS: dict[str, str] = {"ROBOTHOR_DNC_MODE": "enforce"}
-
-
-def _declared_default(name: str) -> str | None:
-    """What ``robothor/settings/model.py`` says this flag is when nobody sets it.
-
-    One source, read rather than restated. The registry is also where
-    ``GOVERNED_FLAGS`` itself comes from, so every flag this page can render has
-    a declared default by construction.
-    """
-    try:
-        from robothor.settings.registry import field_index
-
-        record = field_index().get(name)
-    except Exception:  # noqa: BLE001 — the page must render without the model
-        return None
-    if record is None:
-        return None
-    declared = record.get("default")
-    if isinstance(declared, bool):
-        return "true" if declared else "false"
-    text = str(declared or "").strip()
-    return text or None
-
-
-def _default_value_for(name: str) -> str:
-    """A flag-appropriate "unset" default — what the ENGINE runs, not a guess.
-
-    Reached only when there is neither a DB row nor an environment variable
-    (``store.resolve`` covers both), so the answer is the flag's own hardcoded
-    default and this page must show exactly that. It is DERIVED from the settings
-    registry rather than inferred from the shape of the value set: the old rule
-    ("boolean → false, else observe") was right for every flag that starts dark
-    and gets promoted, and it silently became wrong the first time a governed
-    flag shipped at ``enforce``, so the page would have contradicted the engine
-    with no test noticing.
-
-    ``_UNSET_DEFAULTS`` still wins, for the flags whose engine accessor
-    deliberately ignores the declared value. The heuristic survives only as the
-    last resort for a declaration that is empty or outside the value set —
-    ``ROBOTHOR_SANDBOX_DEFAULT_MODE`` declares ``""``.
-    """
-    if name in _UNSET_DEFAULTS:
-        return _UNSET_DEFAULTS[name]
-    valid = store.valid_values_for(name)
-    declared = _declared_default(name)
-    if declared is not None and declared in valid:
-        return declared
-    return "false" if "false" in valid else "observe"
+# The unset-default rule moved WHOLE into ``robothor.flags.store``, beside
+# ``valid_values_for`` and ``resolve``. Three surfaces need it — this page, the
+# Settings page and ``genus config get`` — and the two that are not the bridge
+# must not import a bridge module, so a copy here would have been a second
+# answer to "what does the engine run when nobody has written this flag". The
+# names stay bound here because this module's tests and importers call them.
+_UNSET_DEFAULTS = store._UNSET_DEFAULTS
+_declared_default = store._declared_default
+_default_value_for = store.default_value_for
+# Bound to the REAL store on purpose: ``store`` itself is monkeypatched by the
+# suite's ``fake_store`` fixture to fake the DB layer, and spelling a flag's
+# value is not the part being faked.
+_normalise = store.normalise
 
 
 @router.get("")
-def list_controls(request: Request) -> list[dict]:
+def list_controls(request: Request) -> list[dict[str, object]]:
     _require_operator(request)
-    out = []
+    out: list[dict[str, object]] = []
     for name in sorted(store.GOVERNED_FLAGS):
-        value = store.resolve(name) or _default_value_for(name)
+        # ``normalise`` subsumes the old ``resolve(name) or _default_value_for(name)``
+        # and adds the case that rule missed: a variable set to something outside
+        # the value set (``ROBOTHOR_RBAC_MODE=ALERT``) rendered a picker whose
+        # current selection was not one of its options. The settings API resolves
+        # governed flags the same way, so the two pages cannot disagree.
+        value = _normalise(name, store.resolve(name))
         v = verdict(name, value)
         out.append(
             {
@@ -134,7 +97,7 @@ def list_controls(request: Request) -> list[dict]:
 
 
 @router.patch("/{name}")
-def set_control(name: str, patch: FlagPatch, request: Request) -> dict:
+def set_control(name: str, patch: FlagPatch, request: Request) -> dict[str, str]:
     actor = _require_operator(request)
     if name not in store.GOVERNED_FLAGS:
         raise HTTPException(status_code=404, detail="unknown flag")

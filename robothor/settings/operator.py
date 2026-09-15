@@ -42,7 +42,7 @@ from functools import lru_cache
 from typing import Any
 
 from robothor.settings import provenance
-from robothor.settings.config_file import write_setting
+from robothor.settings.config_file import write_settings
 from robothor.settings.provenance import (
     SOURCE_DEFAULT,
     SOURCE_ENV,
@@ -58,6 +58,7 @@ __all__ = [
     "SOURCE_RUNTIME",
     "SettingError",
     "agree",
+    "apply_batch",
     "apply_change",
     "coerce",
     "db_rows",
@@ -69,8 +70,10 @@ __all__ = [
     "record",
     "reset_db_rows",
     "resolve",
+    "secret_refusal",
     "secret_status",
     "units_for",
+    "unknown_name_lines",
     "unknown_name_message",
     "validate",
 ]
@@ -109,19 +112,50 @@ def record(name: str) -> dict[str, Any] | None:
     return field_index().get(name)
 
 
-def unknown_name_message(name: str) -> str:
-    """Why ``name`` is not a setting, and what the operator probably meant.
+def unknown_name_lines(name: str, *, suggest: bool = True) -> tuple[str, str]:
+    """``(what is wrong, what to do)`` for a name the registry does not know.
 
     A typo in a variable name is otherwise indistinguishable from a setting
     that does not exist yet, and both look like the command doing nothing.
+
+    Two sentences rather than one because the CLI prints them as two stderr
+    lines and always has -- a fuzzy-match list is long, and an operator scans
+    the first line for the failure and the second for the fix.
+    :func:`unknown_name_message` joins them for an HTTP body.
+
+    ``suggest=False`` skips the fuzzy match, which walks 371 candidates. A
+    caller validating a large batch pays that per unknown name, and a request
+    can name as many as it likes.
     """
     from robothor.settings.registry import field_index
 
-    candidates = sorted({row["env"] for row in field_index().values()})
-    close = difflib.get_close_matches(name.upper(), candidates, n=3, cutoff=0.6)
+    close: list[str] = []
+    if suggest:
+        candidates = sorted({row["env"] for row in field_index().values()})
+        close = difflib.get_close_matches(name.upper(), candidates, n=3, cutoff=0.6)
     if close:
-        return f"{name}: no such setting. Did you mean: " + ", ".join(close) + "?"
-    return f"{name}: no such setting. `genus config list` shows every declared setting."
+        return f"{name}: no such setting.", "Did you mean: " + ", ".join(close) + "?"
+    return f"{name}: no such setting.", "`genus config list` shows every declared setting."
+
+
+def unknown_name_message(name: str, *, suggest: bool = True) -> str:
+    """:func:`unknown_name_lines`, joined — for a caller with one string to fill."""
+    return " ".join(unknown_name_lines(name, suggest=suggest))
+
+
+def secret_refusal(row: dict[str, Any]) -> str:
+    """Why a credential is not written here, and where it goes instead.
+
+    One sentence, one place. Every surface that refuses a secret write says
+    exactly this, so an operator who reads it in the terminal recognises it in
+    the browser. Never echoes the submitted value.
+    """
+    return (
+        f"{row['env']} holds a credential. `genus config set` never writes "
+        "secrets -- config.yaml is a plain file that gets copied into bug "
+        "reports. Store it with `genus vault set <key>` and give the service "
+        "the key; `genus vault list` shows the naming in use."
+    )
 
 
 def units_for(row: dict[str, Any]) -> tuple[str, ...]:
@@ -219,14 +253,48 @@ def db_value(row: dict[str, Any]) -> str | None:
 def resolve(row: dict[str, Any]) -> tuple[Any, str, str]:
     """``(value, source, detail)`` — what the platform reads, and why.
 
-    The DB layer is resolved here rather than in ``settings.provenance``: only
-    governed flags have one, and the settings package proper has no business
-    opening a database connection to answer what a variable is set to.
+    A governed flag takes a different path entirely; see
+    :func:`_resolve_governed`. For everything else the file/env/default
+    precedence is ``settings.provenance``'s, which mirrors the sources.
     """
+    if row["governed"]:
+        return _resolve_governed(row)
+    return provenance.resolve(row)
+
+
+def _resolve_governed(row: dict[str, Any]) -> tuple[Any, str, str]:
+    """What the ENGINE reads for a guardrail flag — nothing else is an answer.
+
+    ``robothor.flags.store.resolve`` is operator DB row -> ``os.environ`` ->
+    the flag's own default. **config.yaml is not a layer for a governed flag
+    at all**, so resolving one through ``provenance`` reported a value the
+    engine has never read: an operator who put ``flags.rbac_mode: enforce`` in
+    config.yaml was told by ``genus config get`` and by the Settings page that
+    RBAC was enforcing while the engine ran ``observe``, and the Controls page
+    — reading the store — said so. Two surfaces, one question, two answers.
+
+    The value is normalised the way the store spells it, so the value served
+    is always one the same API's ``enum`` contains and a PATCH will accept.
+    The DB layer comes from the batched :func:`db_rows` snapshot rather than a
+    per-flag ``store.resolve``: a caller listing every setting would otherwise
+    make twenty-one round trips to answer one page.
+    """
+    from robothor.flags import store
+
+    name = row["env"]
     db = db_value(row)
     if db is not None:
-        return db, SOURCE_RUNTIME, f"feature_flags row for {row['env']}"
-    return provenance.resolve(row)
+        return store.normalise(name, db), SOURCE_RUNTIME, f"feature_flags row for {name}"
+    # ``store.resolve`` reads the declared name out of os.environ and treats an
+    # empty value as unset (``resolve(name) or default``); mirrored exactly.
+    running = provenance.running_env_value(name)
+    if running and running.strip():
+        return store.normalise(name, running), SOURCE_ENV, name
+    return (
+        store.default_value_for(name),
+        SOURCE_DEFAULT,
+        "the value the engine runs when nothing sets it",
+    )
 
 
 def env_override(row: dict[str, Any]) -> str | None:
@@ -286,13 +354,7 @@ def validate(row: dict[str, Any], raw: Any) -> Any:
             governed flag honours, or the field's own type rejects it.
     """
     if row["secret"]:
-        raise SettingError(
-            row["env"],
-            f"{row['env']} holds a credential. `genus config set` never writes "
-            "secrets -- config.yaml is a plain file that gets copied into bug "
-            "reports. Store it with `genus vault set <key>` and give the service "
-            "the key; `genus vault list` shows the naming in use.",
-        )
+        raise SettingError(row["env"], secret_refusal(row))
 
     if row["governed"]:
         from robothor.flags import store
@@ -344,20 +406,88 @@ def apply_change(row: dict[str, Any], value: Any, *, actor: str, reason: str) ->
             raise SettingError(row["env"], f"{row['env']}: {exc}") from exc
         return ()
 
+    _write_config([(row, value)])
+    return units_for(row) if row["restart_required"] else ()
+
+
+def _write_config(changes: list[tuple[dict[str, Any], Any]]) -> None:
+    """Splice every non-governed change into config.yaml in ONE atomic replace.
+
+    Raises:
+        SettingError: no workspace resolves, or the file could not be replaced
+            — in which case NONE of ``changes`` was written. ``name`` is the
+            first field in the batch; the caller reports the message against
+            every field it asked for, because none of them landed.
+    """
     from robothor.settings.sources import config_yaml_path
 
+    first = changes[0][0]["env"]
     path = config_yaml_path()
     if path is None:
-        raise SettingError(row["env"], "no workspace: set ROBOTHOR_WORKSPACE and try again")
+        raise SettingError(first, "no workspace: set ROBOTHOR_WORKSPACE and try again")
 
-    group, field = row["field"].split(".", 1)
     try:
         # One writer, shared with the first-run wizard's operator step: two
         # implementations of "store a setting in config.yaml" would be two
         # opinions about indentation, comments and deprecated spellings, and a
         # surface that reports "applied" while the service reads something else.
-        write_setting(group, field, value, names=(row["env"], *row["aliases"]), path=path)
+        write_settings(
+            [
+                (
+                    row["field"].split(".", 1)[0],
+                    row["field"].split(".", 1)[1],
+                    value,
+                    (row["env"], *row["aliases"]),
+                )
+                for row, value in changes
+            ],
+            path=path,
+        )
     except OSError as exc:
-        raise SettingError(row["env"], f"{path}: {exc}") from exc
+        raise SettingError(first, f"{path}: {exc}") from exc
 
-    return units_for(row) if row["restart_required"] else ()
+
+def apply_batch(
+    planned: list[tuple[dict[str, Any], Any]], *, actor: str, reason: str
+) -> tuple[list[str], list[str], list[dict[str, str]]]:
+    """Apply a whole batch. Returns ``(applied names, units, errors)``.
+
+    The config.yaml half is ONE read-splice-replace, so it lands completely or
+    not at all — a per-field loop made a batch atomic per FIELD, which left an
+    operator who saved a form unable to say which half of it took.
+
+    The governed half cannot join it: a file and a database table are not one
+    transaction, and pretending otherwise is how a surface reports a guarantee
+    it does not have. So the file is written FIRST — if it fails, no flag has
+    been touched — and each flag then goes to the store on its own. A flag that
+    fails after an earlier one succeeded is reported as an error beside the
+    names that did land, which is the honest shape.
+    """
+    config_changes = [(row, value) for row, value in planned if not row["governed"]]
+    governed = [(row, value) for row, value in planned if row["governed"]]
+
+    applied: list[str] = []
+    pending: set[str] = set()
+    errors: list[dict[str, str]] = []
+
+    if config_changes:
+        try:
+            _write_config(config_changes)
+        except SettingError as exc:
+            # None of them landed, so all of them are the error.
+            errors.extend({"name": row["env"], "message": exc.message} for row, _ in config_changes)
+        else:
+            for row, _value in config_changes:
+                applied.append(row["env"])
+                if row["restart_required"]:
+                    pending.update(units_for(row))
+
+    for row, value in governed:
+        try:
+            apply_change(row, value, actor=actor, reason=reason)
+        except SettingError as exc:
+            errors.append({"name": exc.name, "message": exc.message})
+        else:
+            applied.append(row["env"])
+
+    return applied, sorted(pending), errors
