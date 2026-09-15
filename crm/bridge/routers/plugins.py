@@ -65,6 +65,15 @@ router = APIRouter(
 #: has to decide about.
 _DIST_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
+#: What ``install`` accepts: a distribution name with an optional exact
+#: version. No slash, no scheme, no space. Checked here as well as in the
+#: engine because a refusal the browser gets is a refusal that never became a
+#: request, and because the two surfaces must not disagree about what a plugin
+#: name is.
+_INSTALL_SPEC = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}(?:==[A-Za-z0-9][A-Za-z0-9._+!-]{0,63})?$"
+)
+
 
 def _proxied(status: int, body: Any) -> JSONResponse:
     """The engine's answer, with its status code. Never manufactured here."""
@@ -75,6 +84,30 @@ def _name(value: str) -> str:
     if not _DIST_NAME.match(value or ""):
         raise HTTPException(status_code=422, detail="not a distribution name")
     return value
+
+
+def _optional(value: Any) -> str | None:
+    """A body field as a string, or None when it was absent or empty.
+
+    Empty-string-as-absent matters: a form that posts ``version=""`` must mean
+    "any version", not "the version whose name is the empty string", which the
+    engine would refuse with a message about the wrong thing.
+    """
+    text = str(value or "").strip()
+    return text or None
+
+
+async def _body(request: Request) -> dict[str, Any]:
+    """The request's JSON object, or ``{}``.
+
+    A POST with no body at all is the normal shape for ``remove`` with no
+    options, and it must not be a 422 about malformed JSON.
+    """
+    try:
+        payload = await request.json()
+    except Exception:  # noqa: BLE001 - an absent or unparseable body is "no options"
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 @router.get("")
@@ -130,6 +163,82 @@ async def reload_plugins(request: Request) -> JSONResponse:
         status="ok" if status < 400 else "error",
     )
     return _proxied(status, body)
+
+
+@router.post("/install")
+async def install_plugin(request: Request) -> JSONResponse:
+    """Install a plugin from a signed index.
+
+    Declared before ``/{name}/...`` so the literal path is matched as itself.
+
+    The body takes a distribution NAME and nothing that could become a path or
+    a URL, and that is checked HERE as well as in the engine: a browser naming
+    a filesystem path would be a dashboard reading any file the engine can
+    reach, and one naming a URL would be the engine fetching on a caller's
+    say-so. Installing a wheel from disk stays on the CLI, where the operator
+    is standing at the box.
+    """
+    require_operator(request)
+    body = await _body(request)
+    name = str(body.get("name") or "").strip()
+    if not _INSTALL_SPEC.match(name):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "name must be a distribution name (optionally name==version). "
+                "Installing a wheel from a path or a URL is a CLI-only act."
+            ),
+        )
+    index = body.get("index")
+    if index is not None and not str(index).startswith("https://"):
+        raise HTTPException(status_code=422, detail="index must be an https URL")
+
+    status, payload = await engine_request(
+        "POST",
+        "/api/admin/plugins/install",
+        json={
+            "name": name,
+            "version": _optional(body.get("version")),
+            "index": _optional(index),
+            "accept_review": bool(body.get("accept_review")),
+            "dry_run": bool(body.get("dry_run")),
+        },
+    )
+    # Identifiers and the decision, never the engine's whole answer: the scan
+    # reasons name files inside a wheel and the plan carries a hash and a
+    # filename, none of which is what an audit trail is for.
+    plan = payload.get("plan") if isinstance(payload, dict) else None
+    audited(
+        request,
+        "plugin.install",
+        action=name,
+        plugin=name,
+        version=str((plan or {}).get("version") or ""),
+        verdict=str((plan or {}).get("verdict") or ""),
+        status="ok" if status < 400 else "error",
+    )
+    return _proxied(status, payload)
+
+
+@router.post("/{name}/remove")
+async def remove_plugin(name: str, request: Request) -> JSONResponse:
+    """Uninstall a plugin this platform installed and drop its lockfile row."""
+    require_operator(request)
+    plugin = _name(name)
+    body = await _body(request)
+    status, payload = await engine_request(
+        "POST",
+        f"/api/admin/plugins/{plugin}/remove",
+        json={"force": bool(body.get("force"))},
+    )
+    audited(
+        request,
+        "plugin.remove",
+        action=plugin,
+        plugin=plugin,
+        status="ok" if status < 400 else "error",
+    )
+    return _proxied(status, payload)
 
 
 @router.post("/{name}/enable")

@@ -42,9 +42,11 @@ _T = TypeVar("_T")
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "install_plugin",
     "plugin_listing",
     "register",
     "reload_plugin_stack",
+    "remove_plugin",
     "set_plugin_enabled",
     "sync_lockfile",
 ]
@@ -54,6 +56,19 @@ __all__ = [
 #: ``action`` value, so anything else is a 422 rather than a lookup that
 #: quietly matches nothing.
 _DIST_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+#: A distribution name with an optional exact version, which is all the install
+#: route accepts. No slash, no scheme, no space — a browser must not be able to
+#: name a filesystem path or a URL, because the one is a file read and the other
+#: is the engine fetching on a caller's say-so.
+_INSTALL_SPEC = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}(?:==[A-Za-z0-9][A-Za-z0-9._+!-]{0,63})?$"
+)
+
+#: Seconds one plugin operation may take. An install runs pip, which has its
+#: own five-minute cap; this is the HTTP caller's, so a stuck download cannot
+#: own a connection forever.
+_OPERATION_TIMEOUT = 60.0
 
 
 def plugin_listing() -> dict[str, Any]:
@@ -124,6 +139,44 @@ def sync_lockfile(force: bool = False) -> dict[str, Any]:
     }
 
 
+def install_plugin(
+    name: str,
+    version: str | None = None,
+    index: str | None = None,
+    accept_review: bool = False,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Install one plugin from a signed index, and answer the plan.
+
+    A distribution NAME and nothing that could become a path. The CLI can be
+    handed a wheel on disk because the operator is standing at the box; a
+    browser naming a filesystem path would be a dashboard reading any file the
+    engine can reach, and a browser naming a URL would be the engine fetching
+    on a caller's say-so. Both stay on the CLI.
+
+    ``include_command`` is deliberately not passed to ``as_json``: the pip
+    command holds a temp directory and the interpreter's location, and no
+    response here carries a path.
+    """
+    from robothor.plugins import installer
+
+    outcome = installer.install(
+        name,
+        version=version,
+        index=index,
+        accept_review=accept_review,
+        dry_run=dry_run,
+    )
+    return outcome.as_json()
+
+
+def remove_plugin(name: str, force: bool = False) -> dict[str, Any]:
+    """Uninstall one plugin this platform installed, and drop its row."""
+    from robothor.plugins import installer
+
+    return installer.remove(name, force=force)
+
+
 def reload_plugin_stack() -> dict[str, Any]:
     """Re-run discovery and report what the new set holds.
 
@@ -163,7 +216,7 @@ def register(app: FastAPI) -> None:
             raise HTTPException(status_code=422, detail="not a distribution name")
         return name
 
-    async def _write(fn: Callable[..., _T], *args: Any) -> _T:
+    async def _write(fn: Callable[..., _T], *args: Any, **kwargs: Any) -> _T:
         """Run one blocking plugin operation off the loop, reporting OSError.
 
         Everything in this module walks ``importlib.metadata`` over every
@@ -174,10 +227,26 @@ def register(app: FastAPI) -> None:
         ``asyncio.to_thread``; doing it inline here meant one slow package
         stalled every other request the engine was serving.
         """
+        from robothor.plugins.installer import InstallError
+        from robothor.plugins.registry import RegistryError
+
         try:
-            return await asyncio.to_thread(fn, *args)
+            return await asyncio.wait_for(
+                asyncio.to_thread(fn, *args, **kwargs), timeout=_OPERATION_TIMEOUT
+            )
         except LockfileRefusedError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (InstallError, RegistryError) as exc:
+            # A blocked wheel, an unverifiable index, a hash that did not
+            # match. Every one of those is a correct ANSWER about the caller's
+            # request, so it is a 422 with the sentence rather than a 500 with
+            # a traceback — and the sentence is what the Helm renders.
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except TimeoutError as exc:
+            raise HTTPException(
+                status_code=504,
+                detail=f"the plugin operation did not finish within {_OPERATION_TIMEOUT:.0f}s",
+            ) from exc
         except OSError as exc:
             # A lockfile path that is a directory, a read-only filesystem, a
             # full disk. The message names the error class, never the path.
@@ -204,6 +273,48 @@ def register(app: FastAPI) -> None:
         disables should have read the doctor line first, so that escape lives
         on the CLI."""
         return await _write(sync_lockfile)
+
+    @router.post("/plugins/install")
+    async def install(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Install one plugin from a signed index.
+
+        Declared before ``/{name}/...`` so the literal path is matched as
+        itself. The body takes a distribution NAME (optionally ``name==version``
+        via the separate ``version`` field) and nothing that could become a
+        path: installing a wheel off the filesystem is a CLI act, because a
+        browser naming a path would be a dashboard reading any file the engine
+        can reach.
+        """
+        body = payload or {}
+        spec = str(body.get("name") or "").strip()
+        if not _INSTALL_SPEC.match(spec):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "name must be a distribution name (optionally name==version). "
+                    "Installing a wheel from a path or a URL is a CLI-only act."
+                ),
+            )
+        version = body.get("version")
+        if version is not None and not _DIST_NAME.match(str(version)):
+            raise HTTPException(status_code=422, detail="not a version")
+        index = body.get("index")
+        if index is not None and not str(index).startswith("https://"):
+            raise HTTPException(status_code=422, detail="index must be an https URL")
+        return await _write(
+            install_plugin,
+            spec,
+            version=None if version is None else str(version),
+            index=None if index is None else str(index),
+            accept_review=bool(body.get("accept_review")),
+            dry_run=bool(body.get("dry_run")),
+        )
+
+    @router.post("/plugins/{name}/remove")
+    async def remove(name: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Uninstall a plugin this platform installed and drop its row."""
+        body = payload or {}
+        return await _write(remove_plugin, _checked(name), force=bool(body.get("force")))
 
     @router.post("/plugins/{name}/enable")
     async def enable(name: str) -> dict[str, Any]:

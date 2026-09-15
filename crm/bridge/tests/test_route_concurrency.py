@@ -85,6 +85,11 @@ def test_only_genuinely_async_routes_run_on_the_event_loop():
         ("POST", "/api/plugins/reload"),
         ("POST", "/api/plugins/{name}/enable"),
         ("POST", "/api/plugins/{name}/disable"),
+        # Install and remove await the engine too. The pip subprocess and the
+        # lockfile write happen in the ENGINE's threadpool, behind its own
+        # asyncio.to_thread and a 60s cap; this side is one HTTP call.
+        ("POST", "/api/plugins/install"),
+        ("POST", "/api/plugins/{name}/remove"),
         # The doctor route awaits asyncio.to_thread and nothing else. Every
         # check underneath it is synchronous -- psycopg2, urllib, a subprocess
         # -- and run_sync opens its own event loop, which it cannot do on the
