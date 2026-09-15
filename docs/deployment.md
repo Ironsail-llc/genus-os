@@ -757,6 +757,49 @@ The three checks that cost money, leave the box or fork report themselves
 `skip` with the reason; run the CLI for those. Checks the total budget does not
 reach are reported as **not run**, never as passing.
 
+### The Helm's Observe pages
+
+Three more operator surfaces on the bridge, behind the same operator gate as
+`/api/doctor` (owner or admin, platform tenant, never a service token).
+
+**Memory.** `GET /api/memory/facts` pages what this tenant believes, newest
+first, filtered by `q` (which goes through the same search path as
+`/api/memory/search`), `entity`, and `active=true|false|all`.
+`POST /api/memory/facts/{id}/forget/preview` answers what a forget would do —
+which entities the fact is filed under, how many nightly episodes cite it, and
+which always-in-context memory blocks quote its text — and writes nothing.
+`POST /api/memory/facts/{id}/forget` takes a reason (3–500 characters) and
+**bounds** the fact: `is_active=false`, `valid_to=now()`. Nothing is deleted,
+and only the named row changes — supersession chains are not followed. A second
+forget is a `409`; a fact in another tenant is a `404`. The audit row carries
+the fact id and the reason, never the text.
+
+**Audit.** `GET /api/controls/audit` reads the guardrail change log
+(`feature_flag_audit`, written on every `PATCH /api/controls`), newest first.
+`GET /api/audit/events.csv` exports the audit log itself — same filters as
+`/api/audit/events`, up to 5,000 rows, as a `text/csv` attachment. Both admit
+the `auditor` role as well as an operator; nothing else on `/api/controls`
+does. Cells are sanitised and anything a spreadsheet would evaluate is prefixed
+with an apostrophe, so an audit detail cannot become a formula. A failed export
+is a real `500` rather than an empty file.
+
+**Logs.** `GET /api/logs/units` lists the units that may be followed — derived
+from the unit files `scripts/install-units.sh` installs, so a unit added to
+`infra/systemd` appears without a code change — and `GET /api/logs?unit=…`
+serves the last `lines` (1–1000) of one, with optional `since` (`30m`, `1h`,
+`7d`, or an ISO-8601 timestamp) and a `grep` substring applied in the bridge,
+never by journalctl. Every message passes through the platform's secret
+redactor before it leaves the process.
+
+**Logs need journald**, and a container does not have it. Both routes answer
+`{"available": false, "reason": "…"}` with a `200` when `journalctl` is absent
+or unusable — the Helm renders that as "not available on this deployment"
+rather than an error. On a systemd install the bridge runs as
+`$ROBOTHOR_SERVICE_USER`, which must be able to read the journals it is asked
+for: membership of `systemd-journal` is enough for the system journal, and the
+route reports `available: false` rather than empty output if it is missing. In
+Kubernetes and Docker Compose, use the container runtime's own log stream.
+
 ## Health Endpoints
 
 | Service | Endpoint | Expected |
