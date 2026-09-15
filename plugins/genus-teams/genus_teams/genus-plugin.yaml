@@ -1,0 +1,27 @@
+# What this distribution contributes. Read from the packaging layer BEFORE the
+# module is imported, so an undeclared plugin never executes inside the daemon.
+name: genus-teams
+contract_version: 1
+
+# The channel itself. `genus.channels` is one of the two groups an install does
+# NOT arm: `teams` stays inert until the operator names it in ROBOTHOR_CHANNELS.
+channels:
+  - teams
+
+# Two diagnostics, so "is Teams configured" and "is its endpoint mounted" have
+# answers that do not require sending yourself a test message. The doctor's
+# registry requires a plugin's check ids to carry the distribution's own name.
+checks:
+  - genus_teams_credentials
+  - genus_teams_endpoint
+
+# What this distribution publishes into each group, by ENTRY-POINT name. An
+# entry-point name is not a contribution name, so the two are declared
+# separately -- and declaring this is what lets `genus plugin install` compare
+# the wheel's actual surface to the declaration exactly, before anything is
+# imported. Omitting it is allowed and caps the install verdict at `review`.
+entry_points:
+  genus.channels:
+    - teams
+  genus.doctor:
+    - teams

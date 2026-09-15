@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "genus-teams"
+version = "0.1.0"
+description = "Microsoft Teams as a Genus OS channel: outbound delivery, an authenticated messaging endpoint, pairing and Adaptive Card asks"
+requires-python = ">=3.11"
+dependencies = [
+    # The Bot Framework REST API and the Entra token endpoint. httpx is the
+    # platform's own client, so an install pins nothing new in practice.
+    "httpx>=0.27",
+    # RS256 against the Bot Framework's published keys. `crypto` pulls
+    # `cryptography`, which PyJWT needs for RSA and which the platform already
+    # depends on for federation.
+    "PyJWT[crypto]>=2.8",
+]
+
+[project.entry-points."genus.channels"]
+teams = "genus_teams:CHANNEL"
+
+[project.entry-points."genus.doctor"]
+teams = "genus_teams:PLUGIN"
+
+[tool.setuptools]
+packages = ["genus_teams"]
+
+[tool.setuptools.package-data]
+genus_teams = ["genus-plugin.yaml"]
