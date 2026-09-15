@@ -1,3 +1,15 @@
+## [1.81.0](https://github.com/Ironsail-llc/genus-os/compare/v1.80.0...v1.81.0) (2026-09-15)
+
+### Features
+
+* **helm:** inbox answers approvals and questions in place ([#552](https://github.com/Ironsail-llc/genus-os/issues/552)) ([ab0ca2e](https://github.com/Ironsail-llc/genus-os/commit/ab0ca2e9a7b8482863f77685141e9f5482a7c82c)), closes [520/#521](https://github.com/520/genus-os/issues/521)
+
+### Bug Fixes
+
+* **engine:** litellm never fetches its price list at import ([#556](https://github.com/Ironsail-llc/genus-os/issues/556)) ([43c8d13](https://github.com/Ironsail-llc/genus-os/commit/43c8d130dcf18d3b45419de5eb32822205d40009))
+* **helm:** a marker's nested arrays no longer leak into the chat ([#554](https://github.com/Ironsail-llc/genus-os/issues/554)) ([a69f79f](https://github.com/Ironsail-llc/genus-os/commit/a69f79f080ec7b6a23e519dbde6d53f99c2737c8))
+* **memory:** canvas markers never reach a chat; identity blocks cannot rot ([#553](https://github.com/Ironsail-llc/genus-os/issues/553)) ([6904fa9](https://github.com/Ironsail-llc/genus-os/commit/6904fa97a8cb3c953c9cdfb91899c3ebbc975cdf))
+
 ## [1.80.0](https://github.com/Ironsail-llc/genus-os/compare/v1.79.0...v1.80.0) (2026-09-14)
 
 ### Features
