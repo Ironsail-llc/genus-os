@@ -1,3 +1,14 @@
+## [1.85.0](https://github.com/Ironsail-llc/genus-os/compare/v1.84.0...v1.85.0) (2026-09-15)
+
+### Features
+
+* **bridge:** settings schema, values with provenance, and atomic patch ([#562](https://github.com/Ironsail-llc/genus-os/issues/562)) ([d3c1955](https://github.com/Ironsail-llc/genus-os/commit/d3c19554e575460e5a2c31e63b5dcd68bbf82f0d))
+* **helm:** config form from the settings schema, and a flags page ([#564](https://github.com/Ironsail-llc/genus-os/issues/564)) ([5a2ca65](https://github.com/Ironsail-llc/genus-os/commit/5a2ca6549acf00f5f45fe6a8bf55acdd20cb620e)), closes [#562](https://github.com/Ironsail-llc/genus-os/issues/562)
+
+### Bug Fixes
+
+* **engine:** git and cloud credential files are secret paths ([#563](https://github.com/Ironsail-llc/genus-os/issues/563)) ([d013321](https://github.com/Ironsail-llc/genus-os/commit/d01332179d0d061fe573d5b0f376d89b47c9926e)), closes [537/#538](https://github.com/537/genus-os/issues/538)
+
 ## [1.84.0](https://github.com/Ironsail-llc/genus-os/compare/v1.83.0...v1.84.0) (2026-09-15)
 
 ### Features
