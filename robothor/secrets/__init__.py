@@ -155,14 +155,31 @@ def _vault_read(
         if vault_key is not None:
             found = vault.get(vault_key, tenant_id=tenant_id)
         else:
-            # ``vault.naming.env_name()`` is the one env<->vault mapping, and it
-            # upper-cases and replaces "/" with "_", so it has no inverse: both
-            # ``providers/x/api_key`` and ``providers/x_api/key`` export to the
-            # same name. Looking the ENVIRONMENT name up in the vault's own
-            # export therefore uses that mapping rather than inventing a second
-            # one to drift from it — the same thing ``key_pool._vault_lookup``
-            # does.
-            found = vault.export_env(tenant_id=tenant_id).get(name)
+            # Two ways in, and both are needed.
+            #
+            # ``export_env()`` applies ``naming.env_name`` to every row, so a
+            # row stored under the literal lower-cased name is found without
+            # this code re-deriving that transform (and drifting from it) —
+            # what ``key_pool._vault_lookup`` does.
+            #
+            # But ``env_name`` has no inverse, and one shape already has a
+            # richer vault spelling: ``OPENROUTER_API_KEY`` is written as
+            # ``providers/openrouter/api_key`` by the wizard, the Helm provider
+            # page and ``key_pool``, and exports as ``PROVIDERS_OPENROUTER_
+            # API_KEY``. Looking only in the export therefore could not see the
+            # row the wizard itself had written, and a vault-only instance read
+            # as having no key at all. ``vault_keys_for_env_name`` is the one
+            # place that inverse is spelled; the accessor searches with it and
+            # ``genus secrets migrate`` writes with it.
+            from robothor.vault.naming import vault_keys_for_env_name
+
+            exported = vault.export_env(tenant_id=tenant_id)
+            found = exported.get(name)
+            if found is None:
+                for candidate in vault_keys_for_env_name(name):
+                    found = vault.get(candidate, tenant_id=tenant_id)
+                    if found is not None:
+                        break
     except Exception as exc:  # noqa: BLE001 - the vault is optional, by design
         _vault_retry_after = _clock() + VAULT_RETRY_SECONDS
         # The exception TYPE, never its text: a psycopg2 error carries the
