@@ -56,6 +56,26 @@ describe("bridge proxy denylist", () => {
     }
   });
 
+  it("does not refuse the settings routes the Config and Flags pages live on", () => {
+    // Settings › Config reads the schema and the values and PATCHes changes
+    // through this proxy, and Settings › Flags reads and writes the governed
+    // controls through it. `/api/settings` shares four letters with
+    // `/api/setup`, which IS denied, so this is the pair a blunt pattern
+    // confuses — and the failure would be a 404 that reads as a missing route
+    // rather than as a policy decision. Nothing here answers with a
+    // credential: the settings route projects every secret down to
+    // `{configured, fingerprint}` before it serializes.
+    for (const path of [
+      "/api/settings",
+      "/api/settings/schema",
+      "/settings",
+      "/api/controls",
+      "/api/controls/ROBOTHOR_RBAC_MODE",
+    ]) {
+      expect(isDeniedBridgePath(path)).toBe(false);
+    }
+  });
+
   it("still allows vault writes, which carry no secret back", () => {
     for (const path of ["/api/vault/set", "/api/vault/delete"]) {
       expect(isDeniedBridgePath(path)).toBe(false);

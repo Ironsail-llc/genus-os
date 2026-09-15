@@ -13,9 +13,14 @@ import { render, screen, fireEvent } from "@testing-library/react";
 
 import { SettingsView } from "../settings-view";
 
-vi.mock("../controls-view", () => ({
-  ControlsView: ({ visible }: { visible?: boolean }) =>
-    visible ? <div data-testid="controls-view" /> : null,
+vi.mock("@/components/views/settings/config-page", () => ({
+  ConfigPage: ({ visible }: { visible?: boolean }) =>
+    visible ? <div data-testid="config-page" /> : null,
+}));
+
+vi.mock("@/components/views/settings/flags-page", () => ({
+  FlagsPage: ({ visible }: { visible?: boolean }) =>
+    visible ? <div data-testid="flags-page" /> : null,
 }));
 
 vi.mock("@/components/views/settings/providers-page", () => ({

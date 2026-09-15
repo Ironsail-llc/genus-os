@@ -2,9 +2,17 @@ import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { SettingsView } from "../settings-view";
 
-vi.mock("../controls-view", () => ({
-  ControlsView: ({ visible }: { visible?: boolean }) =>
-    visible ? <div data-testid="controls-view" /> : null,
+// Config and Flags are real pages that read the settings schema on mount. This
+// suite is about the CONTAINER, so they are stubbed — their own suites drive
+// them, and a 164 KB schema fetch here would prove nothing about the sub-nav.
+vi.mock("@/components/views/settings/config-page", () => ({
+  ConfigPage: ({ visible, onOpenFlags }: { visible?: boolean; onOpenFlags?: () => void }) =>
+    visible ? <button data-testid="config-page" onClick={() => onOpenFlags?.()} /> : null,
+}));
+
+vi.mock("@/components/views/settings/flags-page", () => ({
+  FlagsPage: ({ visible, role }: { visible?: boolean; role?: string | null }) =>
+    visible ? <div data-testid="flags-page" data-role={role ?? ""} /> : null,
 }));
 
 // The Providers page is real and fetches on mount. A request that never
@@ -71,9 +79,24 @@ describe("SettingsView", () => {
     expect(onPageChange).toHaveBeenCalledWith("plugins");
   });
 
-  it("gives the Flags page the existing controls screen", () => {
+  it("gives the Flags page the governed-flags screen, with the session's role", () => {
     renderSettings({ page: "flags" });
-    expect(screen.getByTestId("controls-view")).toBeInTheDocument();
+    expect(screen.getByTestId("flags-page")).toHaveAttribute("data-role", "owner");
+  });
+
+  it("gives the Config page the schema-driven form", () => {
+    renderSettings({ page: "config" });
+    expect(screen.getByTestId("config-page")).toBeInTheDocument();
+    expect(screen.queryByText(/coming soon/i)).toBeNull();
+  });
+
+  it("lets the Config page send the operator to Flags for a verdict", () => {
+    // A governed field is editable on both screens, but only Flags says what
+    // the control is actually DOING — so the link has to go somewhere.
+    const onPageChange = vi.fn();
+    renderSettings({ page: "config", onPageChange });
+    fireEvent.click(screen.getByTestId("config-page"));
+    expect(onPageChange).toHaveBeenCalledWith("flags");
   });
 
   it("renders nothing when not visible", () => {
