@@ -13,8 +13,9 @@ person who will believe what the spreadsheet shows them:
   is a formula the moment the file is opened in Excel, Numbers or Sheets. Each
   such cell is prefixed with an apostrophe, the one neutralisation every
   spreadsheet honours. Every cell also goes through
-  :func:`robothor.sanitize.sanitize_log`, so a newline inside a detail cannot
-  forge a row.
+  :func:`robothor.secrets.redaction.redact` and
+  :func:`robothor.sanitize.sanitize_log`, so a credential-shaped detail does
+  not leave the appliance and a newline inside one cannot forge a row.
 * **A failure is a 500, not an empty file.** ``/events`` swallows every
   exception into a 200 with ``{"error": "internal error"}`` — the Helm's Audit
   page is built on that shape, so it stays. The CSV route must not: a zero-row
@@ -39,6 +40,7 @@ from fastapi.responses import JSONResponse, Response
 # at ONE seam rather than patching a lazy import inside each handler.
 from robothor.audit.logger import query_log
 from robothor.sanitize import sanitize_log
+from robothor.secrets.redaction import redact
 from routers._operator import require_audit_reader
 
 logger = logging.getLogger(__name__)
@@ -112,13 +114,21 @@ def _cell(value: Any) -> str:
 
     1. A ``dict``/``list`` becomes compact JSON, so a nested ``details`` is one
        cell rather than a shape the reader has to guess at.
-    2. ``sanitize_log`` escapes every C0/C1 control character. That is what
+    2. ``redact`` takes out anything credential-shaped. ``routers/_audit.py``
+       says details carry identifiers only and the routes that use it obey, but
+       ``log_event`` has callers across the whole platform and THIS is the
+       route whose output leaves the appliance — into a downloads folder, an
+       email, a ticket. The JSON ``/events`` route has no such pass; that
+       asymmetry is deliberate, not an oversight.
+    3. ``sanitize_log`` escapes every C0/C1 control character. That is what
        stops a newline inside a detail from forging a second CSV row, and what
        stops a CR from repositioning the cursor in a terminal that ``cat``s the
-       file.
-    3. The leading character is classified against BOTH spellings — what
-       arrived and what sanitisation left — and either one being a formula
-       opener earns the apostrophe.
+       file. It runs AFTER the redactor, whose shapes are written against
+       ordinary text and would have to learn ``\\x3d`` to keep working on
+       escaped input.
+    4. The leading character is classified against BOTH spellings — what
+       arrived and what redaction/sanitisation left — and either one being a
+       formula opener earns the apostrophe.
 
     Checking both is the part worth stating. ``sanitize_log`` rewrites a
     leading tab or CR into the visible text ``\\x09`` / ``\\x0d``, so a cell
@@ -136,7 +146,7 @@ def _cell(value: Any) -> str:
     if isinstance(value, dict | list):
         value = json.dumps(value, default=str, separators=(",", ":"))
     raw = "" if value is None else str(value)
-    text = sanitize_log(raw)
+    text = sanitize_log(redact(raw))
     dangerous = raw.startswith(_FORMULA_PREFIXES) or text.startswith(_FORMULA_PREFIXES)
     return f"'{text}" if dangerous else text
 

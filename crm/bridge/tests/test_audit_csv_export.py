@@ -142,6 +142,23 @@ def test_a_formula_cell_is_neutralised(controls_client_as_operator, monkeypatch,
     assert rows[1][rows[0].index("action")].startswith("'")
 
 
+def test_a_credential_shaped_detail_is_redacted(controls_client_as_operator, monkeypatch):
+    """``_audit.audited`` says identifiers only, and the routes that use it obey.
+
+    ``log_event`` has callers all over the platform, though, and this is the
+    route whose output LEAVES the appliance — into a downloads folder, an
+    email, a ticket. So the same redactor the log routes use runs here too,
+    even though the JSON ``/events`` route does not have it.
+    """
+    _events(
+        monkeypatch,
+        [_event(details={"note": "retry with OPENROUTER_API_KEY=sk-or-abc123def456ghi789"})],
+    )
+    text = controls_client_as_operator.get(CSV).text
+    assert "sk-or-abc123def456ghi789" not in text
+    assert "OPENROUTER_API_KEY" in text
+
+
 def test_a_newline_in_a_detail_cannot_forge_a_row(controls_client_as_operator, monkeypatch):
     _events(monkeypatch, [_event(action="one\r\n9,forged,row,,,,,,,,,")])
     rows = _rows(controls_client_as_operator.get(CSV).text)
