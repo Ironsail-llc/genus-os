@@ -53,3 +53,9 @@ robothor-alert@
 # (`brew install python@3.11`). The email regex reads "name@host" in it.
 # Same class as the pnpm@ entry above: a package spec, not an address.
 python@3.11
+
+# Microsoft Teams conversation ids (`19:<opaque>@thread.v2`). The email regex
+# reads "name@host" in them; they are Bot Framework conversation identifiers,
+# never mailboxes, and the ones in this repo are fixtures. Same class as the
+# pnpm@ and python@ entries above.
+@thread.v2

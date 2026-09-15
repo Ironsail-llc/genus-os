@@ -116,6 +116,38 @@ def test_another_tenants_operator_cannot_list_channels(
 # ── The listing ─────────────────────────────────────────────────────────
 
 
+def test_a_plugin_channel_is_listed_with_no_change_to_this_page(
+    controls_client_as_operator, fake_engine, local_state
+):
+    """The claim `genus-teams` makes: a channel that ships as a plugin appears
+    on the Channels page without a line of this route, or of the Helm, changing.
+
+    This route composes; it does not enumerate. So the only thing that has to be
+    true is that whatever the engine's registry returned flows through with the
+    bridge's two facts added — which is what makes the engine's armed-plugin
+    listing the single place a channel becomes visible."""
+    ENGINE_CHANNELS["channels"].append(
+        {
+            "name": "teams",
+            "builtin": False,
+            "configured": True,
+            "health": {"channel": "teams", "configured": True, "ok": True},
+            "verify_available": True,
+        }
+    )
+    try:
+        body = controls_client_as_operator.get("/api/channels").json()
+    finally:
+        ENGINE_CHANNELS["channels"].pop()
+
+    by_name = {entry["name"]: entry for entry in body["channels"]}
+    assert "teams" in by_name, "a plugin channel the engine returned was dropped here"
+    assert by_name["teams"]["builtin"] is False
+    assert by_name["teams"]["access_mode"] == "pairing"
+    assert by_name["teams"]["pending_pairings"] == 2
+    assert by_name["teams"]["verify_available"] is True
+
+
 def test_it_composes_the_engine_listing_with_what_the_bridge_knows(
     controls_client_as_operator, fake_engine, local_state
 ):

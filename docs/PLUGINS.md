@@ -263,6 +263,21 @@ can replace merely by being installed is not a control. See
 Naming a channel that is not installed does not fall back to Telegram:
 delivery records `failed:no_channel:<name>` instead.
 
+**The reference channel plugin is [`genus-teams`](channels/teams.md)** — the
+first channel to ship outside the engine, and the reason this group is no longer
+a socket with nothing plugged into it. It is worth reading before you write your
+own, because it exercises the parts of this page that an outbound-only channel
+never touches: it contributes an authenticated FastAPI router through
+`Channel.inbound_router` (the engine mounts it under `/api/channels/<name>`, and
+only for an armed channel), it takes the runner through `bind_runtime` rather
+than reaching into the engine for it, it runs inbound messages through the same
+`channels.inbound` pipeline Slack uses instead of copying it, it implements
+`ask` over an Adaptive Card bound to one conversation and one person, and it
+contributes two `genus.doctor` checks. Its install verdict is `review` rather
+than `safe`, which is the correct verdict for a channel: it reaches off the box
+and it runs without a tool call, and an operator should see both before
+accepting it.
+
 **Declare your chunk size if you split.** `register_platform_sender(...,
 chunk_size=N)` is how the platform tells a truncated send from a complete one.
 Without it, two answers are recorded `failed:<name>_unproven`, because neither
