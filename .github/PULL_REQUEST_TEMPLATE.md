@@ -8,7 +8,11 @@
 - [ ] No ruff warnings (`ruff check .`)
 - [ ] Documentation updated for user-facing changes
 - [ ] No secrets or credentials in commits
-- [ ] CHANGELOG.md updated (if applicable)
+- [ ] Release note written — `changelog.d/<PR>.<audience>.md`, two to four
+      sentences for operators / admins / agent-authors, naming the page to
+      open (`changelog.d/README.md`). Required for `feat:`, `fix:`, `perf:`
+      and breaking changes; the `no-changelog` label is the deliberate opt-out.
+      **Do not hand-edit `CHANGELOG.md`** — semantic-release writes it.
 
 ## AI Disclosure (optional)
 
