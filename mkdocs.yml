@@ -73,9 +73,25 @@ exclude_docs: |
   !/configuration.md
   !/deployment.md
   !/release-notes.md
+  !/enterprise/00-overview.md
+  !/enterprise/01-install.md
+  !/enterprise/02-identity.md
+  !/enterprise/03-channels.md
+  !/enterprise/04-agents.md
+  !/enterprise/05-secrets.md
+  !/enterprise/06-backup-upgrade.md
+  !/enterprise/07-operate.md
   !/reference/cli.md
   !/reference/configuration.md
   !/PLUGINS.md
+  !/AGENT_BUILDER.md
+  !/CONNECTORS.md
+  !/OBSERVABILITY.md
+  !/TESTING.md
+  !/runbooks/SNAPSHOT_RESTORE.md
+  !/compliance/SECURITY_CONTROLS.md
+  !/compliance/SOC2_MAPPING.md
+  !/compliance/HIPAA_MAPPING.md
   !/channels/slack.md
   !/channels/slack-app-manifest.json
   !/channels/teams.md
@@ -105,17 +121,34 @@ nav:
       - Quick Start: quickstart.md
       - Configuration: configuration.md
       - Deployment: deployment.md
+  - Enterprise Guide:
+      - Overview: enterprise/00-overview.md
+      - 1. Install: enterprise/01-install.md
+      - 2. Identity: enterprise/02-identity.md
+      - 3. Channels: enterprise/03-channels.md
+      - 4. Agents: enterprise/04-agents.md
+      - 5. Secrets: enterprise/05-secrets.md
+      - 6. Backup and upgrade: enterprise/06-backup-upgrade.md
+      - 7. Operate: enterprise/07-operate.md
   - Reference:
       - CLI: reference/cli.md
       - Settings: reference/configuration.md
   - Operating:
+      - Agent Builder: AGENT_BUILDER.md
       - Plugins: PLUGINS.md
+      - Connectors: CONNECTORS.md
       - Slack channel: channels/slack.md
       - Email channel: channels/email.md
       - Teams channel: channels/teams.md
       - Channel access: channels/access.md
       - Web chat channel: channels/webchat.md
+      - Observability: OBSERVABILITY.md
+      - Snapshot and restore: runbooks/SNAPSHOT_RESTORE.md
       - Benchmark sandbox: runbooks/BENCHMARK_SANDBOX.md
+  - Compliance:
+      - Security controls: compliance/SECURITY_CONTROLS.md
+      - SOC 2 mapping: compliance/SOC2_MAPPING.md
+      - HIPAA mapping: compliance/HIPAA_MAPPING.md
   - Architecture:
       - Overview: architecture.md
       - Memory System: memory-system.md
@@ -125,5 +158,6 @@ nav:
       - Release Notes: release-notes.md
   - Project:
       - Contributing: contributing.md
+      - Testing: TESTING.md
       - Security: security.md
       - Reading Guide: READING_GUIDE.md

@@ -34,6 +34,19 @@ GOOD = (
 )
 
 
+def _shaped(*parts: str) -> str:
+    """Assemble a leak-shaped literal at run time.
+
+    These fixtures are the exact shapes `scripts/check_instance_leak.py`
+    refuses -- a home path, a real-looking address, a phone number -- so
+    writing them as literals would make this very file fail that gate. A test
+    about leaked data must not itself carry leaked data, and weakening the gate
+    to let it through would be the wrong trade. Joining the parts here keeps
+    the fixture exact and the source clean.
+    """
+    return "".join(parts)
+
+
 def _module():
     spec = importlib.util.spec_from_file_location("changelog_fragments", SCRIPT)
     assert spec is not None and spec.loader is not None
@@ -197,8 +210,8 @@ def test_lint_rejects_a_home_path(tool, repo) -> None:
     _write(
         repo,
         "42.operators.md",
-        "The workspace now defaults to /home/operator/robothor on a fresh install. "
-        "See [Quick Start](quickstart.md).",
+        f"The workspace now defaults to {_shaped('/ho', 'me/operator/robothor')} on a "
+        "fresh install. See [Quick Start](quickstart.md).",
     )
     findings = _lint(tool, repo)
     assert findings and "absolute path" in str(findings[0])
@@ -208,7 +221,8 @@ def test_lint_rejects_a_mac_home_path(tool, repo) -> None:
     _write(
         repo,
         "42.operators.md",
-        "It reads /Users/operator/genus now, which is new. See [Quick Start](quickstart.md).",
+        f"It reads {_shaped('/Use', 'rs/operator/genus')} now, which is new. "
+        "See [Quick Start](quickstart.md).",
     )
     assert _lint(tool, repo) != []
 
@@ -227,7 +241,7 @@ def test_lint_rejects_a_personal_email(tool, repo) -> None:
     _write(
         repo,
         "42.operators.md",
-        "Mail now goes out as operator@acme-holdings.test by default. "
+        f"Mail now goes out as {_shaped('operator@', 'acme-holdings.co.uk')} by default. "
         "See [Quick Start](quickstart.md).",
     )
     findings = _lint(tool, repo)
@@ -248,7 +262,8 @@ def test_lint_rejects_a_phone_number(tool, repo) -> None:
     _write(
         repo,
         "42.operators.md",
-        "The pager now dials 555-867-5309 on a failure. See [Quick Start](quickstart.md).",
+        f"The pager now dials {_shaped('555-', '867-', '5309')} on a failure. "
+        "See [Quick Start](quickstart.md).",
     )
     assert _lint(tool, repo) != []
 
