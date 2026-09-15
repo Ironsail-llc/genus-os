@@ -138,6 +138,21 @@ def test_a_wheel_without_sha256_is_refused_at_the_cli(isolated, capsys) -> None:
     assert "--sha256" in capsys.readouterr().err
 
 
+def test_the_dry_run_prints_how_many_members_were_accounted_for(
+    isolated, capsys, monkeypatch
+) -> None:
+    """The one place an operator can compare the count against the wheel."""
+    path = isolated / "acme_tools-1.2.3-py3-none-any.whl"
+    data = _wheel(path)
+    monkeypatch.setattr(installer, "_run_pip", _Pip())
+    cmd_plugin(
+        _args("install", name=str(path), sha256=hashlib.sha256(data).hexdigest(), dry_run=True)
+    )
+    out = capsys.readouterr().out
+    assert "accounted for" in out
+    assert "scanned" in out
+
+
 def test_dry_run_prints_the_pip_command_and_writes_nothing(isolated, capsys, monkeypatch) -> None:
     path = isolated / "acme_tools-1.2.3-py3-none-any.whl"
     data = _wheel(path)

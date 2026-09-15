@@ -320,6 +320,29 @@ def test_installing_from_the_index_verifies_scans_and_records(registry_fixture) 
     assert row.source.installed_at
 
 
+def test_the_scan_counts_reach_the_plan_and_the_lock_row(registry_fixture) -> None:
+    """`ScanResult.as_json()` was called nowhere, so `members_accounted` existed
+    only inside the scanner. It is the number that makes "every member is
+    accounted for" a check rather than a claim, so it has to land where somebody
+    can read it."""
+    outcome = _install(registry_fixture)
+    assert outcome.plan.members_accounted > 0
+    assert outcome.plan.files_scanned > 0
+    payload = outcome.as_json()
+    assert payload["plan"]["members_accounted"] == outcome.plan.members_accounted
+
+    row = lockfile.read_lockfile(registry_fixture.lock).row("acme-tools")
+    assert row is not None
+    assert row.members_accounted == outcome.plan.members_accounted
+    assert row.as_json()["members_accounted"] == outcome.plan.members_accounted
+
+
+def test_a_lock_row_with_no_scan_count_does_not_serialise_one(tmp_path) -> None:
+    """Additive, like `source` and `dist_sha256`: a zero would read as "the scan
+    accounted for nothing" rather than "nothing recorded a count"."""
+    assert "members_accounted" not in lockfile.LockRow(name="acme-tools").as_json()
+
+
 def test_the_result_tells_the_operator_to_reload(registry_fixture) -> None:
     outcome = _install(registry_fixture)
     assert "SIGHUP" in outcome.reload_hint
@@ -909,4 +932,6 @@ def test_the_plan_json_shape_is_what_the_ui_reads(registry_fixture) -> None:
         "groups",
         "accept_review",
         "summary",
+        "files_scanned",
+        "members_accounted",
     }

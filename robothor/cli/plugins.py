@@ -316,6 +316,12 @@ def _print_plan(plan: Any, *, would: bool) -> None:
     if plan.groups:
         print(f"  contributes  {', '.join(plan.groups)}")
     print(f"  verdict      {plan.verdict} (prompt scan: {plan.prompt_scan})")
+    # The count an operator can compare against the wheel: it is what turns
+    # "every member is accounted for" from a claim into a check.
+    print(
+        f"  scanned      {plan.files_scanned} source file(s), "
+        f"{plan.members_accounted} member(s) accounted for"
+    )
     for reason in plan.reasons:
         print(f"      - {reason}")
     if would:

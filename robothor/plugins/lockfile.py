@@ -147,6 +147,11 @@ class LockRow:
     #: recorded by ``sync`` over a hand-installed distribution has no artifact
     #: to hash, because the installed form is a directory tree.
     dist_sha256: str = ""
+    #: How many wheel members the scan classified when this row was written.
+    #: 0 means "nothing recorded a count", never "the scan accounted for
+    #: nothing" -- which is why it is omitted rather than written as 0. It is
+    #: what makes the verdict beside it a measurement instead of a claim.
+    members_accounted: int = 0
     #: Where this came from, or None for anything this platform did not
     #: install. Added after the lockfile shipped, so it is written only when
     #: set and read only when present -- an older lockfile parses unchanged,
@@ -169,6 +174,8 @@ class LockRow:
         }
         if self.dist_sha256:
             row["dist_sha256"] = self.dist_sha256
+        if self.members_accounted:
+            row["members_accounted"] = self.members_accounted
         if self.source is not None:
             row["source"] = self.source.as_json()
         return row
@@ -398,6 +405,9 @@ def _row_from_json(data: Any) -> LockRow | None:
         kinds=tuple(str(k) for k in kinds) if isinstance(kinds, list) else (),
         recorded_at=str(data.get("recorded_at") or ""),
         dist_sha256=str(data.get("dist_sha256") or ""),
+        members_accounted=(
+            int(data["members_accounted"]) if isinstance(data.get("members_accounted"), int) else 0
+        ),
         source=_source_from_json(data.get("source")),
     )
 
@@ -688,6 +698,7 @@ def sync(path: Path | None = None, *, force: bool = False) -> SyncResult:
             kinds=tuple(sorted(groups.get(name, set()))),
             recorded_at=now,
             dist_sha256=previous.dist_sha256 if previous else "",
+            members_accounted=previous.members_accounted if previous else 0,
             # Carried like `enabled` and `verdict`, and for the same reason:
             # a rebuild that forgot WHERE a plugin came from would make every
             # `genus plugin remove` refuse the next time, or -- worse, if the
@@ -737,6 +748,7 @@ def record_install(
     verdict: str,
     dist_sha256: str,
     source: LockSource,
+    members_accounted: int = 0,
     path: Path | None = None,
 ) -> LockRow | None:
     """Write the row for a distribution this platform just installed.
@@ -768,6 +780,7 @@ def record_install(
         kinds=kinds,
         recorded_at=datetime.now(UTC).isoformat(timespec="seconds"),
         dist_sha256=dist_sha256,
+        members_accounted=members_accounted,
         source=source,
     )
     rows = dict(lock.rows)
@@ -827,6 +840,7 @@ def set_enabled(name: str, enabled: bool, path: Path | None = None) -> LockRow |
         kinds=row.kinds,
         recorded_at=row.recorded_at,
         dist_sha256=row.dist_sha256,
+        members_accounted=row.members_accounted,
         source=row.source,
     )
     rows = dict(lock.rows)

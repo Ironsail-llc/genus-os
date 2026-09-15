@@ -104,6 +104,20 @@ def test_install_answers_the_plan_and_the_row(client) -> None:
     assert "SIGHUP" in body["reload_hint"]
 
 
+def test_the_install_response_carries_the_scan_counts(client) -> None:
+    """The report promised C6b a `members_accounted` field and PLUGINS.md called
+    the every-member claim "checkable rather than asserted" -- while
+    `ScanResult.as_json()` was called on no code path at all, so the number
+    reached no operator surface. A number nobody can read is not a check."""
+    outcome = installer.InstallOutcome(
+        plan=_plan(members_accounted=9, files_scanned=3), installed=True
+    )
+    with patch.object(installer, "install", return_value=outcome):
+        body = client.post("/api/admin/plugins/install", json={"name": "acme-tools"}).json()
+    assert body["plan"]["members_accounted"] == 9
+    assert body["plan"]["files_scanned"] == 3
+
+
 def test_no_install_response_carries_a_path(client) -> None:
     outcome = installer.InstallOutcome(plan=_plan(), installed=True)
     with patch.object(installer, "install", return_value=outcome):
@@ -289,6 +303,41 @@ def test_the_cap_bounds_the_wall_clock_not_just_the_status_code(client, monkeypa
     assert started.is_set()
     detail = response.json()["detail"]
     assert "may still be running" in detail
+
+
+def test_an_abandoned_worker_that_fails_is_logged(client, monkeypatch, caplog) -> None:
+    """N-3. `_swallow` suppressed BaseException with no logging, so an install
+    that was 504'd and then FAILED in the background left no record anywhere:
+    the listing correctly showed nothing installed, and the reason was gone.
+    That is the piece that makes "it may still be running, check the listing"
+    fully honest."""
+    import logging
+    import time
+
+    from robothor.engine import admin_plugins
+
+    monkeypatch.setattr(admin_plugins, "_OPERATION_TIMEOUT", 0.2)
+    failed = threading.Event()
+
+    def slow_and_broken(*_args, **_kwargs):
+        time.sleep(0.5)
+        failed.set()
+        raise installer.InstallError("the mirror went away")
+
+    with caplog.at_level(logging.WARNING, logger="robothor.engine.admin_plugins"):
+        with patch.object(installer, "install", slow_and_broken):
+            response = client.post("/api/admin/plugins/install", json={"name": "acme-tools"})
+        assert response.status_code == 504
+        # The worker outlives the response by design; wait for it to finish.
+        for _ in range(100):
+            if failed.is_set():
+                break
+            time.sleep(0.02)
+        time.sleep(0.2)
+
+    messages = " | ".join(r.getMessage() for r in caplog.records)
+    assert "acme-tools" in messages, messages
+    assert "the mirror went away" in messages or "InstallError" in messages, messages
 
 
 def test_the_install_is_cancelled_at_a_checkpoint_before_pip(tmp_path) -> None:

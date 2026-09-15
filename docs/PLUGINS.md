@@ -396,6 +396,7 @@ install, what gets recorded, and what `enable`/`disable` act on:
       "kinds": ["genus.schemas", "genus.services", "genus.tools"],
       "recorded_at": "2026-09-15T00:00:00+00:00",
       "dist_sha256": "…",
+      "members_accounted": 14,
       "source": {
         "origin": "registry",
         "index_url": "https://ironsail-llc.github.io/genus-plugins/index.json",
@@ -413,11 +414,13 @@ a field reading `safe` because no scanner ran would be worse than no field at
 all. A plugin that arrived through `genus plugin install` carries the verdict
 its wheel actually got.
 
-`dist_sha256` and `source` appear only for plugins this platform installed.
-Their **absence** is information: a row without a `source` is one an operator
-pip-installed by hand, and `genus plugin remove` refuses those without
-`--force`. Both fields are additive — a lockfile written before they existed
-parses unchanged.
+`dist_sha256`, `members_accounted` and `source` appear only for plugins this
+platform installed. Their **absence** is information: a row without a `source`
+is one an operator pip-installed by hand, and `genus plugin remove` refuses
+those without `--force`; `members_accounted` is how many wheel members the scan
+classified when the row was written, which is what makes the `verdict` beside it
+a measurement rather than a claim. All three are additive — a lockfile written
+before they existed parses unchanged.
 
 ### The verbs
 
@@ -666,6 +669,8 @@ enabled, to run.
 | any `subprocess.*` call | a plugin runs inside the daemon; spawning is outside every guardrail applied to it |
 | `shell=True` | a string handed to a shell |
 | `eval` / `exec` / `compile` on non-literal input | what runs cannot be read |
+| `eval` / `exec` / `compile` on a **literal** whose code is itself refused, or which will not parse | a literal is not safe because it is readable — it is safe only if something reads it, and now something does |
+| `pickle` / `marshal` / `shelve` / `dill` loading anything but a literal | deserialising executes whatever the bytes say, by design |
 | a decoder (`b64decode`, `unhexlify`, …) feeding `exec` | code hidden from review inside encoded data |
 | **dynamic name resolution** — a non-literal `getattr`, `__import__` or `importlib.import_module`, or a `globals()` / `locals()` / `vars()` lookup | a name this cannot read is a name it cannot judge |
 | `import ctypes` / `cffi` | native code outside every guardrail the engine applies to Python |
@@ -686,8 +691,11 @@ kind used to grade `safe`.
   call, on a schedule or on every turn, so installing one changes what the
   engine does by itself
 - it imports `requests` / `httpx` / `urllib` — it reaches off the box
-- it imports `os`, `subprocess`, `socket`, `importlib`, `shutil`, `pty` or
-  `multiprocessing` — named with the line, whatever the call sites look like
+- it imports `os`, `subprocess`, `socket`, `importlib`, `shutil`, `pty`,
+  `multiprocessing`, `pickle`, `marshal`, `shelve` or `dill` — named with the
+  line, whatever the call sites look like
+- it calls `exec` / `eval` / `compile` on a string literal that *was* parsed and
+  scanned and came back clean — code arriving as data is worth an eye
 - it reads `os.environ` directly rather than through the settings accessor
 - it ships prompt text — a `*.prompt` file, a `SKILL.md`, an `instructions*`,
   or anything under a `skills/`, `prompts/` or `instructions/` directory.
@@ -701,9 +709,11 @@ kind used to grade `safe`.
 - **anything the scan could not read**: a file that would not parse, one over
   the size cap, or a wheel with more files than the scan bound
 
-Every reason names a `file:line` inside the wheel, and `members_accounted` in
-the result says how many files were classified, so the claim is checkable
-rather than asserted.
+Every reason names a `file:line` inside the wheel, and the count of classified
+members is reported where an operator can compare it to the wheel — printed by
+`genus plugin install --dry-run`, carried as `members_accounted` in the install
+response, and recorded on the lockfile row — so the claim is checkable rather
+than asserted.
 
 **Expect `review` to be the common verdict.** `safe` means "contributes tools,
 and touches nothing outside this process" — a genuinely narrow plugin. Anything
@@ -724,6 +734,29 @@ documents it flagged three, including a runbook containing `rm -rf /var/cache/�
 and a scheduling doc containing `cron('0 3 * * *')`. And its findings are never
 `blocked` — they are reasons under a `review`. A screen that cannot run at all
 reports `static-only` with a sentence rather than reporting clean.
+
+### What the scanner cannot see
+
+The binding table follows names through imports, aliases, straight-line
+assignment, walrus bindings, class attributes and `functools.partial`. It is a
+**lower bound on what the code can reach, not a proof**, and the honest list of
+what still gets past it is short and worth knowing:
+
+- **Indirection through data.** A list or dict holding `os.system`, indexed at
+  the call site; `self.run = os.system` set in `__init__`; passing a dangerous
+  callable as an argument to something else. These come back `review` rather
+  than `blocked` — the import is named, the call is not.
+- **Reflection the table cannot follow**, such as
+  `operator.attrgetter('system')(os)`.
+- **`types.FunctionType(compile(...))`** and similar constructions of a callable
+  from parts.
+- **Anything decided at run time** by control flow the scan does not execute.
+
+Two things bound the damage. The modules those tricks have to reach through —
+`os`, `subprocess`, `socket`, `importlib`, `pickle` and friends — are all
+`review` reasons on the import alone, so a wheel using any of them stops and
+asks. And the verdict is re-computed by the installer on the bytes it actually
+downloaded, so a publisher's own `safe` is never taken on trust.
 
 **The scan is not a sandbox and does not claim to be.** A plugin that passes
 still runs with the daemon's privileges once it is imported. What the scan buys

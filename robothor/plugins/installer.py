@@ -145,6 +145,12 @@ class InstallPlan:
     prompt_scan: str = "static-only"
     groups: tuple[str, ...] = ()
     accept_review: bool = False
+    #: What the scan actually looked at. Carried because "every member is
+    #: accounted for" is only a check if somebody can compare the number to the
+    #: wheel; a re-review found the field existed inside the scanner and reached
+    #: no operator surface at all.
+    files_scanned: int = 0
+    members_accounted: int = 0
     pip_command: tuple[str, ...] = ()
 
     def as_json(self, *, include_command: bool = False) -> dict[str, Any]:
@@ -163,6 +169,8 @@ class InstallPlan:
             "prompt_scan": self.prompt_scan,
             "groups": list(self.groups),
             "accept_review": self.accept_review,
+            "files_scanned": self.files_scanned,
+            "members_accounted": self.members_accounted,
         }
         if include_command:
             payload["pip_command"] = list(self.pip_command)
@@ -457,6 +465,8 @@ def install(
             prompt_scan=verdict.prompt_scan,
             groups=contents.genus_groups(),
             accept_review=accept_review,
+            files_scanned=verdict.files_scanned,
+            members_accounted=verdict.members_accounted,
             pip_command=tuple(_pip_install_command(dist_name, dist_version, staging)),
         )
 
@@ -667,6 +677,7 @@ def _record(plan: InstallPlan, contents: Any, *, lock_path: Path | None) -> dict
         verdict=plan.verdict,
         dist_sha256=plan.sha256,
         source=source,
+        members_accounted=plan.members_accounted,
         path=lock_path,
     )
     return row.as_json() if row is not None else None

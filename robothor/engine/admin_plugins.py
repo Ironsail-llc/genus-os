@@ -187,14 +187,28 @@ async def _bounded(fn: Callable[..., _T], *args: Any, **kwargs: Any) -> _T:
     cancel = threading.Event()
     if "cancel" in inspect.signature(fn).parameters:
         kwargs = {**kwargs, "cancel": cancel}
+    # What this operation was about, for the abandoned-worker log line.
+    # "something failed" is not a line anybody can act on.
+    subject = next((str(a) for a in args if isinstance(a, str)), fn.__name__)
 
     def _run() -> None:
         try:
             value, error = fn(*args, **kwargs), None
         except BaseException as exc:  # noqa: BLE001 - reported to the awaiting caller
             value, error = None, exc
-        # The caller may have given up and the loop may have gone with it; an
-        # abandoned worker's last act must not raise inside a daemon thread
+        if cancel.is_set():
+            # The caller gave up at the cap. The outcome is logged HERE, from
+            # the worker thread, and not from a future callback: by then the
+            # request is over, and on a short-lived loop there may be nothing
+            # left to run a callback on. An install that was 504'd and then
+            # FAILED used to leave no record anywhere -- the listing correctly
+            # showed nothing installed and the reason was gone, which makes the
+            # 504's "it may still be running, check the listing" only half
+            # honest.
+            _report_abandoned(fn.__name__, subject, error)
+            return
+        # The loop may still have gone (a test harness closes one per request);
+        # an abandoned worker's last act must not raise inside a daemon thread
         # where nothing can report it.
         with contextlib.suppress(RuntimeError):
             loop.call_soon_threadsafe(_settle, future, value, error)
@@ -211,7 +225,9 @@ async def _bounded(fn: Callable[..., _T], *args: Any, **kwargs: Any) -> _T:
         cancel.set()
         # Deliberately NOT awaited: the point of the cap is that the caller
         # stops waiting. The token, the per-step timeouts and pip's own cap are
-        # what bound the thread.
+        # what bound the thread. Its OUTCOME is logged by the worker itself;
+        # this callback only consumes a result that raced the cap, so Python
+        # does not report it as an exception nobody retrieved.
         future.add_done_callback(_swallow)
         raise TimeoutError
     # The future is untyped at the bridge (it is settled from another thread),
@@ -230,8 +246,38 @@ def _settle(future: asyncio.Future[Any], value: Any, exc: BaseException | None) 
         future.set_result(value)
 
 
+def _report_abandoned(operation: str, subject: str, error: BaseException | None) -> None:
+    """Say what became of a worker the caller stopped waiting for.
+
+    The 504 tells the operator the work may still be running and to re-read the
+    listing. That is only honest if the other outcome leaves a trace: an install
+    that was capped and then FAILED used to vanish entirely -- the listing
+    correctly showed nothing installed, and the reason was gone.
+    """
+    if error is not None:
+        logger.warning(
+            "Plugin %s for %r was abandoned at the request cap and then failed: %s: %s",
+            operation,
+            subject,
+            type(error).__name__,
+            error,
+        )
+    else:
+        logger.warning(
+            "Plugin %s for %r was abandoned at the request cap but COMPLETED "
+            "afterwards; the caller was told it did not finish.",
+            operation,
+            subject,
+        )
+
+
 def _swallow(future: asyncio.Future[Any]) -> None:
-    """Consume an abandoned future's result so it is not logged as "never retrieved"."""
+    """Consume an abandoned future's result so it is not logged as "never retrieved".
+
+    Only reached when a worker settled the future in the moment the cap fired.
+    The OUTCOME is reported by :func:`_report_abandoned` from the worker thread,
+    which is the one place that still exists once the request is over.
+    """
     with contextlib.suppress(BaseException):
         future.result()
 
