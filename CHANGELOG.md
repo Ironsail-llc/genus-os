@@ -1,3 +1,14 @@
+## [1.82.0](https://github.com/Ironsail-llc/genus-os/compare/v1.81.0...v1.82.0) (2026-09-15)
+
+### Features
+
+* **bridge:** channels status and verify; users and roles API ([#558](https://github.com/Ironsail-llc/genus-os/issues/558)) ([b355767](https://github.com/Ironsail-llc/genus-os/commit/b3557678c6156514c03f3028efa99175180826e6))
+* **helm:** automations with ran, delivered and completed ([#557](https://github.com/Ironsail-llc/genus-os/issues/557)) ([f5e89e0](https://github.com/Ironsail-llc/genus-os/commit/f5e89e0ae4678f53595f011adf5ee2c76173bf73))
+
+### Bug Fixes
+
+* **bench:** a pod that lost its database is rebuilt, not benchmarked ([#555](https://github.com/Ironsail-llc/genus-os/issues/555)) ([de3c232](https://github.com/Ironsail-llc/genus-os/commit/de3c232c336ec8f369f66614ce7c2794a5ebb34c))
+
 ## [1.81.0](https://github.com/Ironsail-llc/genus-os/compare/v1.80.0...v1.81.0) (2026-09-15)
 
 ### Features
