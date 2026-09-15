@@ -107,9 +107,15 @@ UNKNOWN_KID_REFETCH_SECONDS = 60.0
 #: box whose NTP is slightly out, not for a token that has expired.
 LEEWAY_SECONDS = 60
 
-#: How long the metadata and key fetches may take. Bounded because they happen
-#: inside an inbound request that Teams abandons after about 15 seconds.
-TIMEOUT_SECONDS = 10.0
+#: How long the metadata and key fetches may take.
+#:
+#: Five seconds, not ten, and the arithmetic is the reason: a COLD key cache
+#: costs two of these in series, inside a request Teams abandons at about 15
+#: seconds. At ten each, a cold start could exceed the window before the
+#: activity was even acknowledged — and Teams would redeliver it, into the same
+#: cold start. Ten seconds is also far longer than either fetch has any business
+#: taking; a Microsoft endpoint that has not answered in five is not about to.
+TIMEOUT_SECONDS = 5.0
 
 _clock = time.monotonic
 

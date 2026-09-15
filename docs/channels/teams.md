@@ -235,7 +235,11 @@ probing which half to keep working on.
 
 A valid activity is acknowledged **200 immediately** and answered afterwards,
 because Teams abandons the request after about 15 seconds and a real run takes
-longer than that routinely.
+longer than that routinely. Everything else — recording the conversation, the
+access gate, the run, the reply — happens after the acknowledgement. What is
+left before it is a size-capped read and one signature check against a cached
+key; the first activity after a restart also fetches Microsoft's published keys,
+which is two requests bounded at five seconds each.
 
 ## Questions the agent asks you
 

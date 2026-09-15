@@ -442,6 +442,10 @@ class TestAValidActivity:
 
     def test_the_conversation_reference_is_recorded(self, client, recorded, allow_everyone):
         _post(client)
+        # After the acknowledgement: the row is needed by the work that follows,
+        # never by the response, and holding a 200 for a database round trip
+        # spends the 15-second window on nothing.
+        _drain(client)
         assert len(recorded) == 1
         written = recorded[0]
         assert written["channel"] == "teams"
@@ -455,6 +459,7 @@ class TestAValidActivity:
         """``from.id`` is per-Teams-client and changes; ``aadObjectId`` is the
         person in the directory. Pairing binds the one that survives."""
         _post(client)
+        _drain(client)
         assert recorded[0]["native_id"] == ALICE_AAD
 
     def test_a_sender_with_no_directory_id_falls_back_to_the_platform_id(
@@ -464,6 +469,7 @@ class TestAValidActivity:
         are still somebody, and refusing them silently would be a channel that
         works for staff and mysteriously not for guests."""
         _post(client, activity=_activity(**{"from": {"id": ALICE_OBJECT_ID, "name": "Alice"}}))
+        _drain(client)
         assert recorded[0]["native_id"] == ALICE_OBJECT_ID
 
     def test_the_shared_pipeline_runs_exactly_once_with_the_senders_identity(

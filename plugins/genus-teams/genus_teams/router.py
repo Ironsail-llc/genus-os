@@ -298,39 +298,29 @@ def build_router(channel: Any) -> APIRouter:
             )
             return Response(status_code=429)
 
-        # Recorded BEFORE the gate: the pairing code this sender is about to be
-        # sent has nowhere to go otherwise. A reference is routing, not a grant
-        # — see the conversation store's own module docstring.
-        await asyncio.to_thread(
-            _record,
+        # EVERYTHING else happens after the acknowledgement, including the
+        # database write that records the conversation reference.
+        #
+        # Teams abandons the request at about 15 seconds. What is left on the
+        # request path is a size-capped read and one signature check against a
+        # warm key cache; a cold cache adds two bounded fetches, which is why
+        # those are capped well inside the window. Holding the ack for a
+        # `to_thread` DB round trip as well bought nothing: the reference is
+        # needed by the work that follows it, not by the response.
+        #
+        # The reference is still written BEFORE the gate, because the pairing
+        # code the gate mints is a message and this row is where it goes. A
+        # reference is routing, not a grant — see the store's own docstring.
+        # A process that dies in between loses one reference, and the sender's
+        # next message writes it again.
+        work = _dispatch(
             channel,
-            native_id,
-            conversation_id,
-            str(activity.get("serviceUrl") or ""),
-            display_name,
-        )
-
-        # A card answer and a sentence are dispatched differently, but BOTH go
-        # through the access gate and both go after the acknowledgement: the
-        # gate costs an identity lookup, and Teams stops waiting at 15 seconds.
-        work = (
-            _settle(
-                channel,
-                activity,
-                native_id=native_id,
-                display_name=display_name,
-                conversation_id=conversation_id,
-                surface=_surface(activity),
-            )
-            if ask_module.is_ask_submit(activity)
-            else _handle(
-                channel,
-                text=_text(activity),
-                native_id=native_id,
-                display_name=display_name,
-                conversation_id=conversation_id,
-                surface=_surface(activity),
-            )
+            activity,
+            native_id=native_id,
+            display_name=display_name,
+            conversation_id=conversation_id,
+            service_url=str(activity.get("serviceUrl") or ""),
+            surface=_surface(activity),
         )
         spawn(work)
         return Response(status_code=200)
@@ -370,6 +360,43 @@ def _record(
         )
     except Exception as exc:  # noqa: BLE001
         logger.error("Teams: could not record a conversation reference: %s", type(exc).__name__)
+
+
+async def _dispatch(
+    channel: Any,
+    activity: dict[str, Any],
+    *,
+    native_id: str,
+    display_name: str,
+    conversation_id: str,
+    service_url: str,
+    surface: str,
+) -> None:
+    """Record the reference, then hand the activity to the right half.
+
+    A card answer and a sentence are dispatched differently and BOTH go through
+    the access gate; what they share is this row, which has to exist before
+    either can reply.
+    """
+    await asyncio.to_thread(_record, channel, native_id, conversation_id, service_url, display_name)
+    if ask_module.is_ask_submit(activity):
+        await _settle(
+            channel,
+            activity,
+            native_id=native_id,
+            display_name=display_name,
+            conversation_id=conversation_id,
+            surface=surface,
+        )
+        return
+    await _handle(
+        channel,
+        text=_text(activity),
+        native_id=native_id,
+        display_name=display_name,
+        conversation_id=conversation_id,
+        surface=surface,
+    )
 
 
 async def _settle(
