@@ -225,14 +225,31 @@ def settings_schema(request: Request) -> dict[str, Any]:
     }
 
 
-def _editable(record: dict[str, Any]) -> bool:
-    """May this surface change the field?
+def _refusal(record: dict[str, Any]) -> str | None:
+    """Why a PATCH of this field would be refused, or None if it would not.
 
-    No for a credential (the vault owns those) and no for a field an
-    environment variable supplies — writing config.yaml under a variable that
-    overrides it reports applied and changes nothing.
+    **The same two checks, in the same order, as** :func:`_plan`. GET and PATCH
+    answering "may I change this?" differently is a page that has to
+    reimplement the write path to be right — and it did: ``editable`` was false
+    for a governed flag the environment supplied, while ``_plan`` exempts
+    governed flags and ``PATCH /api/controls`` has always accepted that write.
+    A greyed-out control that works is as wrong as an enabled one that does
+    not, so both answers now come from here.
+
+    A governed flag is editable whatever supplied it: ``store.resolve`` reads
+    the operator's DB row FIRST and only falls back to ``os.environ``, so a
+    write is not invisible the way a config.yaml write under a variable is.
+
+    The sentence returned is the exact one the PATCH would put in
+    ``errors[].message``, so the UI never restates this wording — and a change
+    to either is a change to both.
     """
-    return not record["secret"] and operator.env_override(record) is None
+    if record["secret"]:
+        return operator.secret_refusal(record)
+    if record["governed"]:
+        return None
+    env_name = operator.env_override(record)
+    return None if env_name is None else _env_refusal(record, env_name)
 
 
 def _pending_restart() -> list[str]:
@@ -279,10 +296,12 @@ def settings_values(request: Request) -> dict[str, Any]:
     values: dict[str, Any] = {}
     for record in _declared():
         value, source, _detail = operator.resolve(record)
+        reason = _refusal(record)
         values[record["env"]] = {
             "value": operator.secret_status(record) if record["secret"] else value,
             "source": _API_SOURCE.get(source, source),
-            "editable": _editable(record),
+            "editable": reason is None,
+            "reason": reason,
         }
     return {"values": values, "pending_restart": _pending_restart()}
 
@@ -350,20 +369,15 @@ def _plan(
             )
             continue
         seen[record["env"]] = name
-        # Secret FIRST. A credential is the field class most likely to be
-        # supplied by the environment, and the env refusal below would tell the
-        # operator to clear the variable and manage it here -- advice that is
-        # false (the vault owns credentials) and harmful (the running services
-        # need that variable).
-        if record["secret"]:
-            errors.append({"name": record["env"], "message": operator.secret_refusal(record)})
-            continue
-        # Governed flags are exempt from the env check: the ``feature_flags``
-        # row outranks the environment in ``robothor.flags.store.resolve``, so a
-        # variable set for one does NOT make the write invisible.
-        env_name = None if record["governed"] else operator.env_override(record)
-        if env_name is not None:
-            errors.append({"name": record["env"], "message": _env_refusal(record, env_name)})
+        # The one gate. ``_refusal`` is what GET reports as ``editable`` and
+        # ``reason``, so a field the form greys out is exactly a field this
+        # refuses -- and neither can drift without the other. Secrets are
+        # checked before the env override inside it, because a credential is
+        # the field class most likely to be env-supplied and the env sentence
+        # would tell the operator to clear a variable the services need.
+        refusal = _refusal(record)
+        if refusal is not None:
+            errors.append({"name": record["env"], "message": refusal})
             continue
         try:
             planned.append((record, operator.validate(record, raw)))

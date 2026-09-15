@@ -1017,3 +1017,126 @@ def test_every_refusal_this_route_makes_has_the_same_three_keys(
         assert r.status_code == 422, (payload, r.status_code, r.text)
         assert set(r.json()) == {"applied", "pending_restart", "errors"}, payload
         assert r.json()["errors"], payload
+
+
+# ── round 3: `editable` and the PATCH must agree, and say why ────────────────
+
+
+def test_a_governed_flag_is_editable_even_when_the_environment_sets_it(
+    controls_client_as_operator, clean_env, monkeypatch
+):
+    """The flag store outranks the environment for a governed flag.
+
+    ``store.resolve`` reads the DB row first and only falls back to
+    ``os.environ``, so writing one is NOT invisible the way a config.yaml write
+    under a variable is. ``PATCH /api/controls`` has always accepted it and
+    ``_plan`` exempts governed flags from the env refusal -- so a GET that said
+    ``editable: false`` was the one surface disagreeing, and the Flags page
+    would have greyed out a control that works.
+    """
+    monkeypatch.setenv(GOVERNED, "alert")
+    entry = controls_client_as_operator.get(SETTINGS).json()["values"][GOVERNED]
+    assert entry["source"] == "env"
+    assert entry["editable"] is True
+    assert entry["reason"] is None
+
+
+def test_what_get_calls_editable_is_exactly_what_patch_accepts(
+    controls_client_as_operator, clean_env, env_workspace, monkeypatch
+):
+    """One walker over every field, in a state where several are refused.
+
+    A form that greys out a field the API would accept, or offers one it would
+    refuse, is a page that has to reimplement the write path to be right. This
+    asserts the two answers are the same answer.
+    """
+    monkeypatch.setattr("robothor.flags.store.set_flag", lambda *a, **k: None)
+    monkeypatch.setenv(HOT_INT, "9")
+    monkeypatch.setenv(SECRET, "already-set")
+    monkeypatch.setenv(GOVERNED, "alert")
+    from robothor.settings import reset_settings
+
+    reset_settings()
+
+    values = controls_client_as_operator.get(SETTINGS).json()["values"]
+    schema = controls_client_as_operator.get(SCHEMA).json()
+    fields = {f["name"]: f for g in schema["groups"] for f in g["fields"]}
+
+    for name in (HOT_INT, SECRET, GOVERNED, RESTART_STR):
+        sample = fields[name]["enum"][0] if "enum" in fields[name] else "x"
+        r = controls_client_as_operator.patch(SETTINGS, json={"changes": {name: sample}})
+        accepted = r.status_code == 200
+        assert values[name]["editable"] is accepted, (
+            f"{name}: GET says editable={values[name]['editable']} and PATCH "
+            f"returned {r.status_code}"
+        )
+        if not accepted:
+            assert values[name]["reason"] == r.json()["errors"][0]["message"], (
+                f"{name}: the reason GET gives is not the sentence PATCH returns"
+            )
+        else:
+            assert values[name]["reason"] is None
+
+
+def test_an_env_overridden_field_carries_the_env_sentence(
+    controls_client_as_operator, clean_env, monkeypatch
+):
+    monkeypatch.setenv(HOT_INT, "9")
+    from robothor.settings import reset_settings
+
+    reset_settings()
+    entry = controls_client_as_operator.get(SETTINGS).json()["values"][HOT_INT]
+    assert entry["editable"] is False
+    assert HOT_INT in entry["reason"]
+    assert "wins over config.yaml" in entry["reason"]
+
+
+def test_a_secret_carries_the_secrets_are_elsewhere_sentence(
+    controls_client_as_operator, clean_env, monkeypatch
+):
+    """Even when the environment supplies it: a credential is refused as a
+    credential, and the reason must not tell the operator to clear a variable
+    the running services need."""
+    monkeypatch.setenv(SECRET, "already-in-the-environment")
+    from robothor.settings import reset_settings
+
+    reset_settings()
+    entry = controls_client_as_operator.get(SETTINGS).json()["values"][SECRET]
+    assert entry["editable"] is False
+    assert "credential" in entry["reason"]
+    assert "Clear the variable" not in entry["reason"]
+    assert "already-in-the-environment" not in entry["reason"]
+
+
+def test_every_value_entry_carries_the_same_four_keys(controls_client_as_operator, clean_env):
+    values = controls_client_as_operator.get(SETTINGS).json()["values"]
+    assert values
+    for name, entry in values.items():
+        assert set(entry) == {"value", "source", "editable", "reason"}, name
+        assert (entry["reason"] is None) is entry["editable"], name
+
+
+def test_no_reason_sentence_ever_carries_a_secret_value(
+    controls_client_as_operator, clean_env, monkeypatch
+):
+    """``reason`` is new prose on the read path, so it goes under the same
+    canary walk as everything else this API serves."""
+    from robothor.settings.registry import field_index
+
+    planted = {}
+    seen = set()
+    for record in field_index().values():
+        if not record["secret"] or record["env"] in seen:
+            continue
+        seen.add(record["env"])
+        planted[record["env"]] = f"reason-canary-{record['env'].lower()}"
+        monkeypatch.setenv(record["env"], planted[record["env"]])
+    from robothor.settings import reset_settings
+
+    reset_settings()
+
+    reasons = json.dumps(
+        [e["reason"] for e in controls_client_as_operator.get(SETTINGS).json()["values"].values()]
+    )
+    leaked = sorted(name for name, value in planted.items() if value in reasons)
+    assert not leaked, leaked
