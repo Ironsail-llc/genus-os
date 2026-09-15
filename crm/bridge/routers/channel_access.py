@@ -121,7 +121,7 @@ def _code(value: str) -> str:
 
 
 def _identity_id(value: str) -> str:
-    """An identity id, or 422.
+    """An identity id in its CANONICAL form, or 422.
 
     ``uuid.UUID`` and not a regex. The regex this replaced was
     ``[0-9a-fA-F-]{36}``, which matches thirty-six hyphens, and equally
@@ -129,12 +129,19 @@ def _identity_id(value: str) -> str:
     ``WHERE id = %s`` on a UUID column and came back as a 500. A caller's typo
     is not an application crash, and a shape check that admits values the column
     cannot hold is not a shape check.
+
+    Returning ``str(uuid.UUID(...))`` rather than the caller's spelling is the
+    other half: ``uuid.UUID`` accepts ``{braces}``, hyphen-less hex, upper case
+    and ``urn:uuid:``, and PostgreSQL accepts most of the same for the same
+    value -- so one row could be addressed under four different strings, each
+    of which reached the audit trail and the DAL verbatim. The identical
+    pattern on the users router let a caller walk past a guard that compares
+    ids (review round 1, I1); here it is "only" an audit that does not group.
     """
     try:
-        uuid.UUID(str(value))
+        return str(uuid.UUID(str(value)))
     except (ValueError, AttributeError, TypeError):
         raise HTTPException(status_code=422, detail="not an identity id") from None
-    return str(value)
 
 
 async def _tell_the_engine_to_forget() -> None:
@@ -314,16 +321,20 @@ async def verify_channel(name: str, body: VerifyRequest, request: Request) -> JS
         timeout=_VERIFY_TIMEOUT_SECONDS,
     )
     steps = result.get("steps") or [] if isinstance(result, dict) else []
+    failed = sum(1 for step in steps if isinstance(step, dict) and not step.get("ok"))
     audited(
         request,
         "channel.verify",
         action=channel,
-        status="ok" if status < 400 else "error",
+        # "ok" means the CHANNEL proved itself, not that the HTTP call worked.
+        # A row saying ok beside four failed steps is the wrong fact recorded
+        # in the one place that is read after something has gone wrong.
+        status="ok" if status < 400 and not failed else "error",
         # Counts, never the step details: an upstream error string is the one
         # place a token has historically come back (a 401 echoes the credential)
         # and the audit log is exported to a SIEM.
         step_count=len(steps),
-        failed_steps=sum(1 for step in steps if isinstance(step, dict) and not step.get("ok")),
+        failed_steps=failed,
         aimed=bool(aimed),
     )
     return JSONResponse(content=result, status_code=status)

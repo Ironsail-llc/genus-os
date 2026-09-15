@@ -266,6 +266,51 @@ async def test_a_credential_shaped_value_under_an_innocent_name_is_redacted(regi
 
 
 @pytest.mark.asyncio
+async def test_an_integer_under_a_secret_name_is_fingerprinted_too(registry):
+    """**Telegram chat ids are integers**, and the module docstring singles a
+    chat id out as the thing this redactor exists for. The scalar
+    short-circuit ran BEFORE the name test, so every integer went through
+    untouched — the one shape the named field actually takes."""
+    from robothor.engine.admin_channels import channel_status
+
+    registry["carrier_pigeon"] = FakeChannel(
+        "carrier_pigeon",
+        {
+            "channel": "carrier_pigeon",
+            "configured": True,
+            "chat_id": 123456789,
+            "admin_chat_id": -1001234567890,
+            "webhook_secret": 42,
+        },
+    )
+
+    health = (await channel_status())["channels"][0]["health"]
+
+    assert "123456789" not in str(health)
+    assert "-1001234567890" not in str(health)
+    assert health["chat_id"].startswith("sha256:")
+    assert health["admin_chat_id"].startswith("sha256:")
+    assert health["webhook_secret"].startswith("sha256:")
+
+
+@pytest.mark.asyncio
+async def test_a_boolean_under_a_secret_name_still_answers_the_question(registry):
+    """``"token_configured": true`` is the answer the page wants, and a
+    fingerprint of ``"True"`` would be worse than useless — it is the same
+    twelve characters on every instance in the world."""
+    from robothor.engine.admin_channels import channel_status
+
+    registry["carrier_pigeon"] = FakeChannel(
+        "carrier_pigeon",
+        {"channel": "carrier_pigeon", "configured": True, "bot_token_present": True},
+    )
+
+    health = (await channel_status())["channels"][0]["health"]
+
+    assert health["bot_token_present"] is True
+
+
+@pytest.mark.asyncio
 async def test_a_fingerprint_identifies_without_carrying(registry):
     """Two different credentials must fingerprint differently, or the field is
     decoration; the same one twice must match, or it cannot be compared."""
@@ -350,6 +395,51 @@ async def test_a_verify_that_raises_is_a_failed_step_not_a_500(registry):
 
     assert body["steps"][0]["ok"] is False
     assert "RuntimeError" in body["steps"][0]["detail"]
+
+
+@pytest.mark.asyncio
+async def test_a_verify_that_raises_reports_configured_as_unknown(registry):
+    """``configured`` was derived by elimination — "not the unconfigured
+    shape" — so a channel that raised because it has no credential at all came
+    back ``configured: true``. That is a claim nobody observed, which is what
+    this module's header says it will never make. Unknown is ``null``, the same
+    answer the listing gives."""
+    from robothor.engine.admin_channels import verify_channel
+
+    registry["slack"] = FakeChannel("slack", verify_raises=RuntimeError("no credential"))
+
+    body = await verify_channel("slack")
+
+    assert body["configured"] is None
+    assert body["error_class"] == "RuntimeError"
+
+
+@pytest.mark.asyncio
+async def test_a_verify_that_hangs_reports_configured_as_unknown(registry, monkeypatch):
+    import robothor.engine.admin_channels as admin_channels
+
+    monkeypatch.setattr(admin_channels, "VERIFY_TIMEOUT_SECONDS", 0.05)
+    registry["slack"] = FakeChannel("slack", steps=[("auth", True, "ok")], health_delay=0.0)
+
+    async def _hang(target=None):
+        await asyncio.sleep(5.0)
+
+    registry["slack"].verify = _hang
+
+    body = await admin_channels.verify_channel("slack")
+
+    assert body["configured"] is None
+    assert body["error_class"] == "TimeoutError"
+    assert body["steps"][0]["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_verify_that_answers_carries_no_error_class(registry):
+    from robothor.engine.admin_channels import verify_channel
+
+    registry["slack"] = FakeChannel("slack", steps=[("auth", True, "team acme")])
+
+    assert (await verify_channel("slack"))["error_class"] is None
 
 
 @pytest.mark.asyncio

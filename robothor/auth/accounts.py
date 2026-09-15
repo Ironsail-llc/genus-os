@@ -185,19 +185,33 @@ def get_admin_account(user_id: str, tenant_id: str) -> dict[str, Any] | None:
         return dict(row) if row else None
 
 
-def active_owner_count(tenant_id: str, *, excluding_id: str | None = None) -> int:
-    """How many ACTIVE owners a tenant has, optionally ignoring one account.
+def owner_count(
+    tenant_id: str, *, excluding_id: str | None = None, active_only: bool = True
+) -> int:
+    """How many owners a tenant has, optionally ignoring one account.
 
-    The question a demotion or a disable has to ask first. An appliance whose
-    only owner is disabled has nobody who can administer it and no supported
-    way back in — ``bootstrap_owner_account`` runs from ``owner.yaml`` on the
-    box, which is a shell an operator locked out of the Helm may not have.
+    The question a demotion or a disable has to ask first. An appliance with no
+    owner has nobody who can administer it and no supported way back in —
+    ``bootstrap_owner_account`` runs from ``owner.yaml`` on the box, which is a
+    shell an operator locked out of the Helm may not have.
+
+    ``active_only=False`` counts owner ROWS whatever their status, and that is
+    the question the administration API asks. An ``invited`` or ``disabled``
+    owner still occupies migration 071's ``uq_user_accounts_owner`` slot — the
+    partial unique index is on ``tenant_id WHERE role = 'owner'`` and knows
+    nothing about status — so demoting one does not merely change a row, it
+    FREES THE SLOT for whoever asks next. Counting only active owners is what
+    let an admin take it (review round 1, C1), and ``invited`` is the state
+    ``genus user add --role owner`` leaves behind on every CLI-built instance.
     """
+    # A literal fragment chosen by a boolean, never a caller's string — the
+    # same rule ``_UPDATABLE`` follows.
+    status_clause = " AND status = 'active'" if active_only else ""
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT COUNT(*) FROM user_accounts "
-            "WHERE tenant_id = %s AND role = 'owner' AND status = 'active' "
+            "SELECT COUNT(*) FROM user_accounts "  # noqa: S608
+            f"WHERE tenant_id = %s AND role = 'owner'{status_clause} "
             "AND (%s::text IS NULL OR id <> %s::uuid)",
             (tenant_id, excluding_id, excluding_id),
         )

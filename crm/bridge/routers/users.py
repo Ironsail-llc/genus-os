@@ -16,11 +16,19 @@ them:
   them away and every response here is assembled field by field, so widening
   one of the two cannot widen the API. Same shape as ``providers.py``: a
   secret goes IN and never comes OUT.
-* **Authority cannot be dropped by accident.** The last active owner cannot be
-  demoted or disabled, and no caller may demote or disable *themselves* — an
-  appliance with no owner has nobody who can administer it, and a session whose
-  role the appliance no longer agrees with keeps its old claims until the token
-  expires.
+* **A caller cannot hand itself authority it does not have.** ``owner`` is
+  granted and taken away only by an owner, the owner ROW is only an owner's to
+  demote, disable or bind to an identity provider, and the tenant's only owner
+  cannot be demoted or disabled at all. Without the first two rules an admin
+  reached owner in two PATCHes: migration 071 caps a tenant at one owner row,
+  so demoting the incumbent — which on a CLI-built instance is ``invited``, not
+  ``active`` — frees the slot for whoever asks next.
+* **A caller cannot drop its OWN authority.** The session keeps its old claims
+  until the token expires, so the appliance's state and the session's would
+  disagree for fifteen minutes. That guard compares account ids, so every id is
+  canonicalised at the boundary: ``uuid.UUID`` accepts braces, hyphen-less hex
+  and upper case, and a raw string compare on the caller's spelling is a
+  control a text transformation walks past.
 * **Another tenant's account does not exist.** Every query is scoped by the
   caller's verified tenant and a miss is 404, never 403: the difference between
   those two answers is a confirmation that the id is real.
@@ -68,6 +76,12 @@ router = APIRouter(tags=["users"])
 #: VERIFIED SSO claim for exactly that email from an allowlisted issuer.
 BINDING_GRANT_TTL_SECONDS = 3600
 
+#: The one role that is not an ordinary role. It is the tenant's single
+#: administrative slot (migration 071's ``uq_user_accounts_owner``), the account
+#: ``bootstrap_owner_account`` seeds, and the one whose loss has no recovery
+#: path short of a shell on the box.
+OWNER_ROLE = "owner"
+
 #: Deliberately loose. This is a shape check to catch a typed mistake before it
 #: becomes a row nobody can sign in as; the authority on whether an address
 #: exists is the identity provider, and a stricter pattern here would refuse
@@ -107,8 +121,8 @@ class AccountPatch(BaseModel):
     status: Literal["active", "disabled"] | None = None
 
 
-def _identity(request: Request) -> tuple[str, str]:
-    """``(caller account id, tenant)`` from the VERIFIED session.
+def _identity(request: Request) -> tuple[str, str, str]:
+    """``(caller account id, tenant, caller role)`` from the VERIFIED session.
 
     Only ever called after ``require_operator``, which is spelled out in each
     handler rather than folded in here: ``test_mutations_are_gated.py`` walks
@@ -117,25 +131,112 @@ def _identity(request: Request) -> tuple[str, str]:
 
     The tenant comes from the token, never from ``X-Tenant-Id``: that header is
     the unverified legacy fallback, and every query below is scoped by whatever
-    this returns.
+    this returns. The ROLE comes from the token too, and is the caller's own
+    authority — ``require_operator`` admits owner and admin alike, so nothing
+    but the rules below separates them.
     """
     auth = request.state.auth
-    return str(auth.user_id), str(auth.tenant_id)
+    return str(auth.user_id), str(auth.tenant_id), str(auth.role)
 
 
 def _account_id(value: str) -> str:
-    """An account id, or 422.
+    """An account id in its CANONICAL form, or 422.
 
     ``uuid.UUID`` and not a regex, for the reason ``channel_access._identity_id``
     spells out: ``WHERE id = %s`` on a UUID column turns a caller's typo into a
     500, and a shape check that admits values the column cannot hold is not a
     shape check.
+
+    Returning ``str(uuid.UUID(...))`` rather than what the caller typed is the
+    other half, and it is load-bearing: ``uuid.UUID`` accepts ``{braces}``,
+    hyphen-less hex, upper case and ``urn:uuid:``, and PostgreSQL's ``uuid``
+    input accepts most of the same spellings for the SAME value. So the row was
+    found while ``target_id == caller_id`` — a raw string compare — was not,
+    and the self-demotion guard could be walked past by retyping one's own id
+    in braces. The audit ``action`` and the ``revoke_user_sessions`` argument
+    were whatever the caller typed, too.
     """
     try:
-        uuid.UUID(str(value))
+        return str(uuid.UUID(str(value)))
     except (ValueError, AttributeError, TypeError):
         raise HTTPException(status_code=422, detail="not an account id") from None
-    return str(value)
+
+
+def _configured_issuers() -> list[str]:
+    """The IdPs this appliance accepts, from the settings model.
+
+    Through ``get_settings()`` rather than ``os.environ``: the env-read ratchet
+    in ``tests/test_settings_registry.py`` counts raw reads, and a setting only
+    reachable by knowing a variable name is one ``genus config`` cannot show.
+    """
+    from robothor.settings import get_settings
+
+    raw = get_settings().auth.oidc_issuers or ""
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _issuer_pin() -> str | None:
+    """Which issuer to pin a binding grant to, if the answer is unambiguous.
+
+    ``genus auth grant-binding --issuer`` exists because an unpinned grant can
+    be consumed by a verified claim for that address from ANY allowlisted
+    issuer. Where the appliance has exactly one, pinning costs nothing and
+    narrows the grant to the IdP the operator actually runs.
+
+    ``None`` for zero (the pin would name nothing) and for two or more (pinning
+    one of them would refuse a sign-in the operator expects to work). The grant
+    is still bounded by the address, the TTL and its single use.
+    """
+    issuers = _configured_issuers()
+    return issuers[0] if len(issuers) == 1 else None
+
+
+def _drops_authority(new_role: str | None, new_status: str | None) -> bool:
+    """Whether this change takes authority AWAY from the account it names."""
+    return (new_role is not None and new_role != OWNER_ROLE) or new_status == "disabled"
+
+
+def _refuse_an_authority_change_the_caller_cannot_make(
+    request: Request,
+    *,
+    caller_role: str,
+    event: str,
+    action: str,
+    target_role: str | None = None,
+    new_role: str | None = None,
+    new_status: str | None = None,
+) -> None:
+    """The one rule about who may move the OWNER role around.
+
+    One function rather than a clause in each handler because the two halves
+    are only dangerous together, and the first version had neither: promoting
+    *to* owner was not treated as an authority change at all, and the guard on
+    the owner row only fired when that row was ``active``. Migration 071 caps a
+    tenant at one owner row, so an admin demoted the (``invited``) incumbent and
+    took the slot it freed — two PATCHes, no other check in the way.
+
+    ``require_operator`` cannot express this: it admits owner and admin alike,
+    which is correct for every other account on the appliance.
+
+    403 rather than 409: this is about the CALLER's authority, not about the
+    appliance's state, and the same request from the owner succeeds.
+    """
+    if new_role == OWNER_ROLE and caller_role != OWNER_ROLE:
+        audited(request, event, action=action, status="denied", reason="grant_owner")
+        raise HTTPException(
+            status_code=403,
+            detail="only an owner may grant the owner role",
+        )
+    if (
+        target_role == OWNER_ROLE
+        and caller_role != OWNER_ROLE
+        and _drops_authority(new_role, new_status)
+    ):
+        audited(request, event, action=action, status="denied", reason="demote_owner")
+        raise HTTPException(
+            status_code=403,
+            detail="only an owner may demote or disable the owner account",
+        )
 
 
 def _role(value: str) -> str:
@@ -190,16 +291,23 @@ def _account_payload(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _grant_payload(row: dict[str, Any]) -> dict[str, Any]:
-    """A freshly armed grant: what it is, and when it dies.
+    """A freshly armed grant: what it is, when it dies, and what may spend it.
 
-    Two fields, and this is not laziness. ``sso_binding_grants`` has no secret
+    Three fields, and this is not laziness. ``sso_binding_grants`` has no secret
     column — the grant IS the row, consumed by the next verified SSO claim for
     that address — but it does record ``used_by_subject``, an identity
     provider's own id for a person, and ``create_binding_grant`` returns the
-    whole row. Naming the two fields that travel means widening the DAL cannot
-    widen this.
+    whole row. Naming the fields that travel means widening the DAL cannot
+    widen this. ``issuer`` is appliance configuration and already public
+    metadata (``GET /api/auth/methods`` serves the list unauthenticated), and
+    the operator needs it: it is the difference between "any configured IdP can
+    spend this" and "only that one".
     """
-    return {"id": str(row["id"]), "expires_at": _iso(row.get("expires_at"))}
+    return {
+        "id": str(row["id"]),
+        "expires_at": _iso(row.get("expires_at")),
+        "issuer": row.get("issuer"),
+    }
 
 
 def _grant_listing_payload(row: dict[str, Any]) -> dict[str, Any]:
@@ -248,9 +356,14 @@ def _arm_grant(request: Request, email: str, tenant_id: str, actor: str) -> dict
             ttl_seconds=BINDING_GRANT_TTL_SECONDS,
             reason="armed from the Helm",
             created_by=actor,
+            issuer=_issuer_pin(),
         )
     except accounts.GrantTargetError as exc:
-        logger.info("binding grant refused for an account in %s: %s", tenant_id, exc)
+        # The CLASS, never the message: ``create_binding_grant``'s own text is
+        # ``f"no account with email {email!r} …"``, and this module's header
+        # forbids an address reaching a second system — an application log is
+        # one of those.
+        logger.info("binding grant refused for an account in %s: %s", tenant_id, type(exc).__name__)
         raise HTTPException(
             status_code=409,
             detail=(
@@ -288,7 +401,7 @@ def list_roles(request: Request) -> dict[str, Any]:
 def list_users(request: Request) -> dict[str, Any]:
     """Every account in the caller's tenant. No credentials, ever."""
     require_operator(request)
-    _, tenant_id = _identity(request)
+    _, tenant_id, _ = _identity(request)
     try:
         rows = accounts.list_accounts(tenant_id)
     except (psycopg2.Error, OSError) as exc:
@@ -298,7 +411,17 @@ def list_users(request: Request) -> dict[str, Any]:
 
 @router.post("/api/users", status_code=201)
 def invite_user(body: InviteRequest, request: Request) -> JSONResponse:
-    """Create one account, exactly as ``genus user add`` creates the row.
+    """Create one sign-in account.
+
+    **Narrower than ``genus user add``, deliberately.** That command writes a
+    whole identity: a ``crm_people`` row, a ``tenant_users`` membership, a
+    ``contact_identifiers`` mapping per channel and a memory-entity link, all
+    in one transaction, with ``user_accounts`` as the last of five. This route
+    writes the ``user_accounts`` row and nothing else, so the account has no
+    ``person_id`` and will not resolve through ``get_owner_person`` or the
+    channel identity path. Saying "the same thing the CLI does" was wrong, and
+    a false equivalence in a docstring is how the next person ships the gap
+    rather than the rest of it.
 
     ``status`` depends on ``sso``, and the difference is load-bearing rather
     than cosmetic:
@@ -316,9 +439,16 @@ def invite_user(body: InviteRequest, request: Request) -> JSONResponse:
       a grant" would be an invitation nobody could accept.
     """
     actor = require_operator(request)
-    _, tenant_id = _identity(request)
+    _, tenant_id, caller_role = _identity(request)
     email = _email(body.email)
     role = _role(body.role)
+    # Before anything is written, and before the address is even looked up: an
+    # invite is how a caller would mint the authority it could not grant by
+    # PATCH, and an SSO invite at `owner` would come with a live binding grant
+    # attached.
+    _refuse_an_authority_change_the_caller_cannot_make(
+        request, caller_role=caller_role, event="user.invite", action="-", new_role=role
+    )
     display_name = (body.display_name or "").strip() or email.split("@", 1)[0]
     status = "active" if body.sso else "invited"
 
@@ -373,12 +503,47 @@ def update_user(user_id: str, body: AccountPatch, request: Request) -> dict[str,
     about the CALLER (a session must not drop its own authority).
     """
     actor = require_operator(request)
-    caller_id, tenant_id = _identity(request)
+    caller_id, tenant_id, caller_role = _identity(request)
     target_id = _account_id(user_id)
     row = _load(target_id, tenant_id)
 
     role = _role(body.role) if body.role is not None else None
-    drops_authority = (role is not None and role != "owner") or body.status == "disabled"
+    drops_authority = _drops_authority(role, body.status)
+
+    _refuse_an_authority_change_the_caller_cannot_make(
+        request,
+        caller_role=caller_role,
+        event="user.update",
+        action=target_id,
+        target_role=row.get("role"),
+        new_role=role,
+        new_status=body.status,
+    )
+
+    # The belt to the role check's braces, and it counts owner ROWS whatever
+    # their status: an ``invited`` owner still holds migration 071's single
+    # owner slot, so demoting it leaves the appliance with no owner and the
+    # slot free. Keyed on ``status == "active"``, this guard did not fire at
+    # all for the state ``genus user add --role owner`` actually writes.
+    #
+    # Before the self-check, not after it: the owner demoting themselves trips
+    # both, and "this is the tenant's only owner" is the reason that survives
+    # asking somebody else to do it.
+    if drops_authority and row.get("role") == OWNER_ROLE:
+        try:
+            remaining = accounts.owner_count(tenant_id, excluding_id=target_id, active_only=False)
+        except (psycopg2.Error, OSError) as exc:
+            raise _unavailable(exc) from exc
+        if remaining == 0:
+            audited(request, "user.update", action=target_id, status="denied", reason="last_owner")
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "this is the tenant's only owner — an instance with no owner "
+                    "cannot be administered. Make somebody else an owner first, "
+                    "or use `genus user` on the box."
+                ),
+            )
 
     if drops_authority and target_id == caller_id:
         audited(request, "user.update", action=target_id, status="denied", reason="self_demotion")
@@ -390,21 +555,6 @@ def update_user(user_id: str, body: AccountPatch, request: Request) -> dict[str,
                 "operator, or use `genus user` on the box."
             ),
         )
-
-    if drops_authority and row.get("role") == "owner" and row.get("status") == "active":
-        try:
-            remaining = accounts.active_owner_count(tenant_id, excluding_id=target_id)
-        except (psycopg2.Error, OSError) as exc:
-            raise _unavailable(exc) from exc
-        if remaining == 0:
-            audited(request, "user.update", action=target_id, status="denied", reason="last_owner")
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "this is the last active owner — an instance with no owner "
-                    "cannot be administered. Make somebody else an owner first."
-                ),
-            )
 
     try:
         updated = accounts.update_account(
@@ -459,6 +609,10 @@ def update_user(user_id: str, body: AccountPatch, request: Request) -> dict[str,
         "user.update",
         action=target_id,
         role=role,
+        # The role it REPLACED. Without it an owner→member demotion and a
+        # member→member no-op are the same row in the SIEM, which is the wrong
+        # side of the investigation this surface would be investigated for.
+        previous_role=row.get("role"),
         account_status=body.status,
         renamed=body.display_name is not None,
         sessions_revoked=revoked or None,
@@ -477,11 +631,31 @@ def arm_binding_grant(user_id: str, request: Request) -> JSONResponse:
     The address comes from the ROW, never from the request: a grant is armed
     against an email, and letting the caller name it would turn this route into
     a way to arm a grant for an address that is not the account's.
+
+    **Only an owner may arm one on the owner's account.** This is the second
+    road to the owner slot and it stays open when the first is blocked:
+    ``bootstrap_owner_account`` leaves the owner ``active`` with no password
+    and no IdP binding, which is precisely the shape ``create_binding_grant``
+    accepts — and consuming the grant binds the presenter's identity onto that
+    account. The CLI equivalent is a shell on the box; this is an HTTP route.
     """
     actor = require_operator(request)
-    _, tenant_id = _identity(request)
+    _, tenant_id, caller_role = _identity(request)
     target_id = _account_id(user_id)
     row = _load(target_id, tenant_id)
+
+    if row.get("role") == OWNER_ROLE and caller_role != OWNER_ROLE:
+        audited(
+            request,
+            "user.binding_grant",
+            action=target_id,
+            status="denied",
+            reason="owner_account",
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="only an owner may arm a binding grant on the owner account",
+        )
 
     grant = _arm_grant(request, accounts.canonical_email(row.get("email")), tenant_id, actor)
     audited(
@@ -503,7 +677,7 @@ def list_user_binding_grants(user_id: str, request: Request) -> dict[str, Any]:
     per-email query is not a question anything else asks.
     """
     require_operator(request)
-    _, tenant_id = _identity(request)
+    _, tenant_id, _ = _identity(request)
     target_id = _account_id(user_id)
     row = _load(target_id, tenant_id)
     email = accounts.canonical_email(row.get("email"))

@@ -182,6 +182,17 @@ def test_verify_writes_one_audit_event_with_identifiers_only(
     assert "not_in_channel" not in str(kwargs), "a step detail is not an identifier"
 
 
+def test_a_verify_whose_steps_failed_is_not_audited_as_ok(
+    controls_client_as_operator, fake_engine, local_state
+):
+    """``status`` was "did the HTTP call work", which is not what anybody reads
+    an audit row for. The fixture's verify has a failing step."""
+    with patch("routers.channel_access.audited") as audited:
+        controls_client_as_operator.post("/api/channels/slack/verify", json={})
+
+    assert audited.call_args.kwargs["status"] == "error"
+
+
 def test_an_unrecognized_channel_name_is_refused_before_the_engine(
     controls_client_as_operator, fake_engine, local_state
 ):

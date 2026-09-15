@@ -92,6 +92,34 @@ def store(monkeypatch):
     return channel_access
 
 
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        f"{{{IDENTITY_ID}}}",
+        IDENTITY_ID.replace("-", ""),
+        IDENTITY_ID.upper(),
+        f"urn:uuid:{IDENTITY_ID}",
+    ],
+)
+def test_an_identity_id_reaches_the_dal_canonically(
+    controls_client_as_operator, store, monkeypatch, spelling
+):
+    """``uuid.UUID`` accepts braces, hyphen-less hex, upper case and the URN
+    form, and PostgreSQL's ``uuid`` input accepts most of the same for the SAME
+    value — so a validator that hands back what the caller typed lets one row
+    be addressed under four different strings. Here that reaches the audit
+    ``identity_id`` and the DAL argument; on the users router the identical
+    pattern walked past the self-demotion guard (review round 1, I1)."""
+    seen: list[str] = []
+    monkeypatch.setattr(store.identities, "revoke", lambda ident, **kw: seen.append(ident) or True)
+
+    response = controls_client_as_operator.delete(f"/api/channels/slack/identities/{spelling}")
+
+    assert response.status_code == 200
+    assert seen == [IDENTITY_ID]
+    assert response.json()["id"] == IDENTITY_ID
+
+
 ROUTES = [
     ("get", "/api/channels/slack/pending", None),
     ("post", f"/api/channels/slack/pairings/{CODE}/approve", {"user_id": "u-alice"}),

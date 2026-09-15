@@ -34,6 +34,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 OPERATOR_ID = "00000000-0000-4000-8000-000000000001"
 MEMBER_ID = "00000000-0000-4000-8000-000000000002"
 OWNER_ID = "00000000-0000-4000-8000-000000000003"
+#: Hex letters on purpose: an upper-case spelling of this id is a different
+#: string and the same UUID, which is the gap I1 walked through.
+ADMIN_ID = "00000000-0000-4000-8000-00000000000a"
 OTHER_TENANT_ID = "00000000-0000-4000-8000-0000000000ff"
 
 PASSWORD_HASH = "$argon2id$v=19$m=65536,t=3,p=4$PLACEHOLDERHASHVALUE"
@@ -91,14 +94,34 @@ def _grant(email: str) -> dict:
     }
 
 
+def _canonical(user_id: object) -> str:
+    """Resolve an id the way PostgreSQL's ``uuid`` column does.
+
+    The first version of this fake keyed ``rows`` on the exact string it was
+    given, so ``{0000…}``, ``0000…`` (no hyphens) and the canonical spelling
+    were three different accounts — which is not what the database does, and is
+    why the self-demotion guard could be walked past with a green suite behind
+    it (review round 1, I1). A fake that is more literal-minded than the real
+    store hides exactly the bugs the real store would expose.
+    """
+    try:
+        return str(uuid.UUID(str(user_id)))
+    except (ValueError, AttributeError, TypeError):
+        return str(user_id)
+
+
 class FakeAccounts:
     """The account DAL, in memory. Records every call the router makes."""
 
     def __init__(self) -> None:
+        # Exactly ONE owner row, because migration 071's partial unique index
+        # allows exactly one. A fake with two owners would make the sole-owner
+        # guard untestable and every demotion look safe.
         self.rows: dict[str, dict] = {
+            OWNER_ID: _row(OWNER_ID, "alice@example.com", role="owner"),
+            ADMIN_ID: _row(ADMIN_ID, "admin@example.com", role="admin"),
             OPERATOR_ID: _row(OPERATOR_ID, "operator@example.com", role="admin"),
             MEMBER_ID: _row(MEMBER_ID, "bob@example.com"),
-            OWNER_ID: _row(OWNER_ID, "alice@example.com", role="owner"),
         }
         self.revoked: list[str] = []
         self.created: list[dict] = []
@@ -106,22 +129,37 @@ class FakeAccounts:
         self.duplicate = False
         self.grant_error: Exception | None = None
 
+    def set_owner_status(self, status: str) -> None:
+        """Put the owner row in a state a CLI-built instance really has.
+
+        ``genus user add --role owner`` writes ``status='invited'`` and leaves
+        it there until somebody runs ``genus user set-password``, so ``invited``
+        is the DEFAULT owner state on a fresh instance rather than an exotic
+        one. The first version of this fake could only express ``active``, so
+        every guard keyed on "an active owner" tested green against the one
+        state the guard did cover.
+        """
+        self.rows[OWNER_ID]["status"] = status
+
     # ── reads ────────────────────────────────────────────────────────
     def list_accounts(self, tenant_id: str) -> list[dict]:
         return [dict(row) for row in self.rows.values() if row["tenant_id"] == tenant_id]
 
     def get_admin_account(self, user_id: str, tenant_id: str) -> dict | None:
-        row = self.rows.get(user_id)
+        row = self.rows.get(_canonical(user_id))
         return dict(row) if row and row["tenant_id"] == tenant_id else None
 
-    def active_owner_count(self, tenant_id: str, *, excluding_id: str | None = None) -> int:
+    def owner_count(
+        self, tenant_id: str, *, excluding_id: str | None = None, active_only: bool = True
+    ) -> int:
+        excluded = _canonical(excluding_id) if excluding_id else None
         return sum(
             1
             for row in self.rows.values()
             if row["tenant_id"] == tenant_id
             and row["role"] == "owner"
-            and row["status"] == "active"
-            and row["id"] != excluding_id
+            and (row["status"] == "active" or not active_only)
+            and row["id"] != excluded
         )
 
     # ── writes ───────────────────────────────────────────────────────
@@ -136,7 +174,7 @@ class FakeAccounts:
         return dict(created)
 
     def update_account(self, user_id: str, **kwargs) -> dict | None:
-        row = self.rows.get(user_id)
+        row = self.rows.get(_canonical(user_id))
         if not row or row["tenant_id"] != kwargs.get("tenant_id"):
             return None
         for field in ("role", "display_name", "status"):
@@ -152,6 +190,7 @@ class FakeAccounts:
         if self.grant_error is not None:
             raise self.grant_error
         grant = _grant(kwargs["email"])
+        grant["issuer"] = kwargs.get("issuer")
         self.grants.append({**kwargs, "id": grant["id"]})
         return grant
 
@@ -170,7 +209,7 @@ def store(monkeypatch):
     for name in (
         "list_accounts",
         "get_admin_account",
-        "active_owner_count",
+        "owner_count",
         "create_account",
         "update_account",
         "revoke_user_sessions",
@@ -181,13 +220,14 @@ def store(monkeypatch):
     return fake
 
 
-@pytest.fixture
-def operator(_controls_auth_key):
-    """An operator session whose ``sub`` is a real account id.
+def _session(user_id: str, role: str):
+    """A verified operator session for one account id and role.
 
-    The shared fixture mints ``operator-1``, which every id check would reject
-    as malformed before the rule under test could run — and a self-demotion
-    guard that is never reached is not a guard.
+    The shared conftest fixture mints ``operator-1``, which every id check would
+    reject as malformed before the rule under test could run — and a
+    self-demotion guard that is never reached is not a guard. The ROLE matters
+    too: it is the caller's own authority, and the rules added in review round 1
+    turn on the difference between an owner and an admin.
     """
     from bridge_service import app
     from fastapi.testclient import TestClient
@@ -195,10 +235,27 @@ def operator(_controls_auth_key):
 
     from robothor.auth import tokens
 
-    token = tokens.issue_access_token(OPERATOR_ID, PLATFORM_TENANT, "owner")
+    token = tokens.issue_access_token(user_id, PLATFORM_TENANT, role)
     client = TestClient(app)
     client.headers.update({"Authorization": f"Bearer {token}"})
     return client
+
+
+@pytest.fixture
+def operator(_controls_auth_key):
+    """The owner's own session — the caller with the most authority there is."""
+    return _session(OWNER_ID, "owner")
+
+
+@pytest.fixture
+def admin(_controls_auth_key):
+    """An admin session — an operator, but not the owner.
+
+    The caller every authority rule below is aimed at: ``require_operator``
+    admits owner and admin alike, so nothing but an explicit role check keeps
+    an admin from taking the owner slot.
+    """
+    return _session(ADMIN_ID, "admin")
 
 
 def _walk(payload: object) -> str:
@@ -239,6 +296,7 @@ def test_it_lists_the_accounts_in_the_callers_tenant(operator, store):
 
     assert {user["email"] for user in body["users"]} == {
         "operator@example.com",
+        "admin@example.com",
         "bob@example.com",
         "alice@example.com",
     }
@@ -330,7 +388,10 @@ def test_an_sso_invite_returns_no_grant_internals(operator, store):
     )
 
     _assert_no_credentials(response.json())
-    assert set(response.json()["grant"]) == {"id", "expires_at"}
+    # ``issuer`` is the IdP the grant is pinned to — appliance configuration and
+    # public metadata, not a person's identifier. ``used_by_subject`` is the
+    # person's, and is what must never appear.
+    assert set(response.json()["grant"]) == {"id", "expires_at", "issuer"}
 
 
 def test_a_plain_invite_arms_no_grant(operator, store):
@@ -400,7 +461,15 @@ def test_a_role_change_is_applied(operator, store):
     assert response.json()["user"]["role"] == "viewer"
 
 
-def test_the_last_active_owner_cannot_be_demoted(operator, store):
+@pytest.mark.parametrize("owner_status", ["active", "invited", "disabled"])
+def test_the_only_owner_cannot_be_demoted_whatever_its_status(operator, store, owner_status):
+    """The guard used to require ``status == "active"``, and an owner row is
+    ``invited`` on every CLI-built instance until somebody sets a password
+    (``genus user add`` writes that status). An unprotected owner row is an
+    unprotected OWNER SLOT: migration 071 caps a tenant at one owner, so
+    demoting the incumbent frees the slot for whoever asks next."""
+    store.set_owner_status(owner_status)
+
     response = operator.patch(f"/api/users/{OWNER_ID}", json={"role": "member"})
 
     assert response.status_code == 409
@@ -408,40 +477,156 @@ def test_the_last_active_owner_cannot_be_demoted(operator, store):
     assert store.rows[OWNER_ID]["role"] == "owner"
 
 
-def test_the_last_active_owner_cannot_be_disabled(operator, store):
+@pytest.mark.parametrize("owner_status", ["active", "invited", "disabled"])
+def test_the_only_owner_cannot_be_disabled_whatever_its_status(operator, store, owner_status):
+    store.set_owner_status(owner_status)
+
     response = operator.patch(f"/api/users/{OWNER_ID}", json={"status": "disabled"})
 
     assert response.status_code == 409
-    assert store.rows[OWNER_ID]["status"] == "active"
+    assert store.rows[OWNER_ID]["status"] == owner_status
 
 
-def test_an_owner_can_be_demoted_when_another_active_owner_exists(operator, store):
-    second = _row("00000000-0000-4000-8000-00000000000a", "dana@example.com", role="owner")
-    store.rows[second["id"]] = second
+def test_an_owner_can_be_demoted_when_a_second_owner_row_exists(operator, store):
+    """The count is the belt to the role check's braces, and it counts owner
+    ROWS rather than active owners — an invited owner still holds the slot.
+    The owner demotes the OTHER owner here; demoting themselves is the sole-
+    owner case above, and would be refused for that reason rather than this."""
+    second_id = "00000000-0000-4000-8000-00000000000d"
+    second = _row(second_id, "dana@example.com", role="owner")
+    second["status"] = "invited"
+    store.rows[second_id] = second
 
-    assert operator.patch(f"/api/users/{OWNER_ID}", json={"role": "member"}).status_code == 200
+    assert operator.patch(f"/api/users/{second_id}", json={"role": "member"}).status_code == 200
+    assert store.rows[second_id]["role"] == "member"
 
 
-def test_a_caller_cannot_demote_themselves(operator, store):
+# ── C1: an admin must not be able to take the owner slot ────────────────
+
+
+@pytest.mark.parametrize("owner_status", ["active", "invited", "disabled"])
+def test_an_admin_cannot_demote_the_owner(admin, store, owner_status):
+    """Half of the two-PATCH escalation chain: demote the incumbent to free
+    migration 071's single owner slot, then take it."""
+    store.set_owner_status(owner_status)
+
+    response = admin.patch(f"/api/users/{OWNER_ID}", json={"role": "member"})
+
+    assert response.status_code == 403
+    assert store.rows[OWNER_ID]["role"] == "owner"
+
+
+@pytest.mark.parametrize("owner_status", ["active", "invited", "disabled"])
+def test_an_admin_cannot_disable_the_owner(admin, store, owner_status):
+    store.set_owner_status(owner_status)
+
+    assert admin.patch(f"/api/users/{OWNER_ID}", json={"status": "disabled"}).status_code == 403
+    assert store.rows[OWNER_ID]["status"] == owner_status
+
+
+@pytest.mark.parametrize("owner_status", ["invited", "disabled"])
+def test_the_whole_escalation_chain_is_refused_at_both_steps(admin, store, owner_status):
+    """The probe from review round 1, end to end: demote the non-active owner,
+    then promote yourself into the slot it freed. Both halves must refuse, and
+    no row may change."""
+    store.set_owner_status(owner_status)
+
+    demote = admin.patch(f"/api/users/{OWNER_ID}", json={"role": "member"})
+    promote = admin.patch(f"/api/users/{ADMIN_ID}", json={"role": "owner"})
+
+    assert demote.status_code == 403
+    assert promote.status_code == 403
+    assert store.rows[OWNER_ID]["role"] == "owner"
+    assert store.rows[ADMIN_ID]["role"] == "admin"
+
+
+def test_an_admin_cannot_promote_anybody_to_owner(admin, store):
+    response = admin.patch(f"/api/users/{MEMBER_ID}", json={"role": "owner"})
+
+    assert response.status_code == 403
+    assert store.rows[MEMBER_ID]["role"] == "member"
+
+
+def test_an_admin_cannot_invite_an_owner(admin, store):
+    response = admin.post("/api/users", json={"email": "mallory@example.com", "role": "owner"})
+
+    assert response.status_code == 403
+    assert not store.created
+
+
+def test_a_refused_authority_change_is_audited(admin, store):
+    """An admin probing for the seam leaves a trail. The denial arms of
+    ``invite_user`` and ``update_user`` already audited; these are the two that
+    did not exist."""
+    with patch("routers.users.audited") as audited:
+        admin.patch(f"/api/users/{MEMBER_ID}", json={"role": "owner"})
+
+    assert audited.call_args.kwargs["status"] == "denied"
+    assert audited.call_args.kwargs["reason"] == "grant_owner"
+
+
+def test_an_admin_may_still_administer_everybody_else(admin, store):
+    """The rule is about the owner and the owner role, not about admins being
+    second-class: an admin still runs the fleet of ordinary accounts."""
+    assert admin.patch(f"/api/users/{MEMBER_ID}", json={"role": "viewer"}).status_code == 200
+    assert admin.patch(f"/api/users/{OWNER_ID}", json={"display_name": "Alice"}).status_code == 200
+
+
+def test_a_caller_cannot_demote_themselves(admin, store):
     """Not a courtesy. An admin who demotes their own session keeps a token
     carrying the old role until it expires, so the appliance's state and the
     session's claims disagree for the next fifteen minutes."""
-    response = operator.patch(f"/api/users/{OPERATOR_ID}", json={"role": "viewer"})
+    response = admin.patch(f"/api/users/{ADMIN_ID}", json={"role": "viewer"})
 
     assert response.status_code == 409
-    assert store.rows[OPERATOR_ID]["role"] == "admin"
+    assert store.rows[ADMIN_ID]["role"] == "admin"
 
 
-def test_a_caller_cannot_disable_themselves(operator, store):
-    response = operator.patch(f"/api/users/{OPERATOR_ID}", json={"status": "disabled"})
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        "{00000000-0000-4000-8000-00000000000a}",
+        "0000000000004000800000000000000a",
+        "00000000-0000-4000-8000-00000000000A",
+        "urn:uuid:00000000-0000-4000-8000-00000000000a",
+    ],
+)
+def test_the_self_guard_survives_every_spelling_of_the_callers_own_id(admin, store, spelling):
+    """``uuid.UUID`` accepts braces, hyphen-less hex, upper case and the URN
+    form; PostgreSQL's ``uuid`` input accepts most of the same. So the row was
+    found while ``target_id == caller_id`` — a raw string compare — was not,
+    and a stated control was walked past by a text transformation. That is this
+    project's canonical inert-control shape."""
+    response = admin.patch(f"/api/users/{spelling}", json={"status": "disabled"})
+
+    assert response.status_code == 409
+    assert store.rows[ADMIN_ID]["status"] == "active"
+    assert not store.revoked
+
+
+def test_an_id_reaches_the_dal_and_the_audit_canonically(operator, store):
+    """The audit ``action`` and the ``revoke_user_sessions`` argument used to be
+    whatever the caller typed rather than an id."""
+    with patch("routers.users.audited") as audited:
+        response = operator.patch(
+            f"/api/users/{{{MEMBER_ID.upper()}}}", json={"status": "disabled"}
+        )
+
+    assert response.status_code == 200
+    assert store.revoked == [MEMBER_ID]
+    assert audited.call_args.kwargs["action"] == MEMBER_ID
+
+
+def test_a_caller_cannot_disable_themselves(admin, store):
+    response = admin.patch(f"/api/users/{ADMIN_ID}", json={"status": "disabled"})
 
     assert response.status_code == 409
     assert not store.revoked
 
 
-def test_a_caller_may_still_rename_themselves(operator, store):
+def test_a_caller_may_still_rename_themselves(admin, store):
     """The self-guard is about authority, not about the row."""
-    response = operator.patch(f"/api/users/{OPERATOR_ID}", json={"display_name": "Ops"})
+    response = admin.patch(f"/api/users/{ADMIN_ID}", json={"display_name": "Ops"})
 
     assert response.status_code == 200
 
@@ -491,6 +676,17 @@ def test_a_patch_is_audited_with_identifiers_only(operator, store):
     assert "bob@example.com" not in str(kwargs)
 
 
+def test_a_role_change_records_the_role_it_replaced(operator, store):
+    """Recording only the new role makes an owner→member demotion and a
+    member→member no-op the same row in the SIEM — the wrong side of exactly
+    the investigation this surface would be investigated for."""
+    with patch("routers.users.audited") as audited:
+        operator.patch(f"/api/users/{MEMBER_ID}", json={"role": "viewer"})
+
+    kwargs = audited.call_args.kwargs
+    assert (kwargs["previous_role"], kwargs["role"]) == ("member", "viewer")
+
+
 # ── Tenant isolation and id validation ──────────────────────────────────
 
 
@@ -526,9 +722,71 @@ def test_a_grant_can_be_armed_for_an_existing_account(operator, store):
     response = operator.post(f"/api/users/{MEMBER_ID}/binding-grant")
 
     assert response.status_code == 201
-    assert set(response.json()["grant"]) == {"id", "expires_at"}
+    assert set(response.json()["grant"]) == {"id", "expires_at", "issuer"}
     assert store.grants[0]["email"] == "bob@example.com"
     _assert_no_credentials(response.json())
+
+
+# ── C2: the owner's account is not an admin's to bind ───────────────────
+
+
+def test_an_admin_cannot_arm_a_binding_grant_on_the_owner(admin, store):
+    """``bootstrap_owner_account`` leaves the owner active, with no password and
+    no IdP binding — which is exactly the shape ``create_binding_grant``
+    accepts. Consuming the grant binds the presenter's identity onto the owner
+    account, so an unguarded route here is the second path to owner."""
+    response = admin.post(f"/api/users/{OWNER_ID}/binding-grant")
+
+    assert response.status_code == 403
+    assert not store.grants
+
+
+def test_an_admin_cannot_invite_an_sso_owner_either(admin, store):
+    response = admin.post(
+        "/api/users", json={"email": "mallory@example.com", "role": "owner", "sso": True}
+    )
+
+    assert response.status_code == 403
+    assert not store.grants
+    assert not store.created
+
+
+def test_the_owner_may_arm_a_grant_on_their_own_account(operator, store):
+    assert operator.post(f"/api/users/{OWNER_ID}/binding-grant").status_code == 201
+
+
+def test_a_refused_grant_is_audited(admin, store):
+    """An admin probing which accounts are SSO-bindable left no trail at all."""
+    with patch("routers.users.audited") as audited:
+        admin.post(f"/api/users/{OWNER_ID}/binding-grant")
+
+    assert audited.call_args.kwargs["status"] == "denied"
+
+
+def test_a_grant_is_pinned_to_the_one_configured_issuer(operator, store, monkeypatch):
+    """``genus auth grant-binding --issuer`` exists because an UNPINNED grant is
+    spendable by a verified claim from ANY allowlisted issuer. Where the
+    appliance has exactly one, there is no reason to leave it open."""
+    monkeypatch.setattr("routers.users._configured_issuers", lambda: ["https://idp.example.com"])
+
+    response = operator.post(f"/api/users/{MEMBER_ID}/binding-grant")
+
+    assert store.grants[0]["issuer"] == "https://idp.example.com"
+    assert response.json()["grant"]["issuer"] == "https://idp.example.com"
+
+
+@pytest.mark.parametrize("issuers", [[], ["https://a.example.com", "https://b.example.com"]])
+def test_a_grant_is_left_unpinned_when_the_instance_has_no_single_issuer(
+    operator, store, monkeypatch, issuers
+):
+    """Zero configured issuers means the pin would name nothing; two means
+    pinning one of them would refuse a sign-in the operator expects to work.
+    The grant is still bounded by the email, the one hour and its single use."""
+    monkeypatch.setattr("routers.users._configured_issuers", lambda: issuers)
+
+    operator.post(f"/api/users/{MEMBER_ID}/binding-grant")
+
+    assert store.grants[0]["issuer"] is None
 
 
 def test_arming_a_grant_for_an_unusable_account_is_a_409(operator, store):
@@ -537,6 +795,23 @@ def test_arming_a_grant_for_an_unusable_account_is_a_409(operator, store):
     store.grant_error = GrantTargetError("account is already bound to an SSO identity")
 
     assert operator.post(f"/api/users/{MEMBER_ID}/binding-grant").status_code == 409
+
+
+def test_a_refused_grant_never_logs_the_address(operator, store, caplog):
+    """``create_binding_grant``'s own message is
+    ``f"no account with email {email!r} …"``, and it is reachable if the row
+    goes away between the load and the call. This module's header forbids an
+    address reaching a second system; the application log is one."""
+    import logging
+
+    from robothor.auth.accounts import GrantTargetError
+
+    store.grant_error = GrantTargetError("no account with email 'bob@example.com' in tenant")
+
+    with caplog.at_level(logging.DEBUG):
+        operator.post(f"/api/users/{MEMBER_ID}/binding-grant")
+
+    assert "bob@example.com" not in caplog.text
 
 
 def test_listing_grants_shows_only_this_accounts_own(operator, store):

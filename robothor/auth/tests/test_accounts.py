@@ -531,12 +531,25 @@ def test_update_account_with_nothing_to_change_does_not_write():
     assert "UPDATE" not in " ".join(str(c[0][0]) for c in cur.execute.call_args_list)
 
 
-def test_active_owner_count_can_exclude_the_account_being_changed():
+def test_owner_count_can_exclude_the_account_being_changed():
     """The question a demotion asks: is there another owner BESIDES this one."""
     conn, cur = _mock_conn([(0,)])
     with patch("robothor.auth.accounts.get_connection", return_value=conn):
-        assert accounts.active_owner_count("default", excluding_id="uid-1") == 0
+        assert accounts.owner_count("default", excluding_id="uid-1") == 0
     sql, params = cur.execute.call_args[0]
     assert "role = 'owner'" in sql
     assert "status = 'active'" in sql
     assert params == ("default", "uid-1", "uid-1")
+
+
+def test_owner_count_can_count_owner_rows_whatever_their_status():
+    """An invited or disabled owner still holds migration 071's single owner
+    slot — the partial unique index is on ``tenant_id WHERE role = 'owner'``
+    and knows nothing about status. Counting only ACTIVE owners is what let an
+    admin demote a non-active owner and take the slot it freed."""
+    conn, cur = _mock_conn([(1,)])
+    with patch("robothor.auth.accounts.get_connection", return_value=conn):
+        assert accounts.owner_count("default", active_only=False) == 1
+    sql, _params = cur.execute.call_args[0]
+    assert "role = 'owner'" in sql
+    assert "status" not in sql

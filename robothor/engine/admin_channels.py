@@ -136,14 +136,20 @@ def _redact(value: Any, *, secret_name: bool = False, depth: int = 0) -> Any:
         }
     if isinstance(value, (list, tuple)):
         return [_redact(item, secret_name=secret_name, depth=depth + 1) for item in value]
-    if value is None or isinstance(value, (bool, int, float)):
-        # A bool under a secret name is "is it set", which is the answer the
-        # page wants; a number is not a credential this platform issues.
+    if isinstance(value, bool) or value is None:
+        # A bool under a secret name is "is it set", which is exactly the answer
+        # the page wants — and a fingerprint of ``"True"`` would be the same
+        # twelve characters on every instance in the world.
         return value
-    text = str(value)
-    if secret_name and text:
-        return _fingerprint(text)
-    return redact(text)
+    if secret_name:
+        # BEFORE the scalar short-circuit, not after it. A Telegram chat id is
+        # an INTEGER, and ``chat_id`` is the field this redactor's docstring
+        # singles out; short-circuiting on type first meant the one shape the
+        # named field actually takes went through untouched.
+        return _fingerprint(value)
+    if isinstance(value, (int, float)):
+        return value
+    return redact(str(value))
 
 
 def _is_secret_name(key: str) -> bool:
@@ -278,10 +284,12 @@ async def verify_channel(name: str, target: str | None = None) -> dict[str, Any]
             "channel": name,
             "configured": _configured(report),
             "verify_available": False,
+            "error_class": None,
             "steps": [],
         }
 
     aimed = _checked_target(target)
+    error_class: str | None = None
     try:
         raw = await asyncio.wait_for(prove(aimed), timeout=VERIFY_TIMEOUT_SECONDS)
         steps = [
@@ -289,6 +297,7 @@ async def verify_channel(name: str, target: str | None = None) -> dict[str, Any]
             for step, ok, detail in raw
         ]
     except TimeoutError:
+        error_class = "TimeoutError"
         steps = [
             {
                 "step": "verify",
@@ -297,12 +306,22 @@ async def verify_channel(name: str, target: str | None = None) -> dict[str, Any]
             }
         ]
     except Exception as exc:  # noqa: BLE001 — a broken channel is a report, not a traceback
+        error_class = type(exc).__name__
         steps = [{"step": "verify", "ok": False, "detail": redact(f"{type(exc).__name__}: {exc}")}]
 
     return {
         "channel": name,
-        "configured": not _steps_say_unconfigured(steps),
+        # ``None`` — unknown — when the channel never answered. ``configured``
+        # was derived by elimination ("not the unconfigured shape"), so a
+        # channel that raised BECAUSE it has no credential came back
+        # ``configured: true``: a pass nobody observed, which is the one thing
+        # this module says it will never report. The listing already answers
+        # unknown with null and the UI already renders it.
+        "configured": None if error_class else not _steps_say_unconfigured(steps),
         "verify_available": True,
+        # What went wrong, as a class name rather than a message: an operator
+        # reading "unknown" needs to know whether the channel hung or threw.
+        "error_class": error_class,
         "steps": steps,
     }
 
