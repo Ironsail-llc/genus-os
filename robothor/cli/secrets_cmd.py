@@ -184,6 +184,19 @@ def _migrate(args: argparse.Namespace) -> int:
             continue
         planned.append((name, _vault_key_for(name), fingerprint(value)))
 
+    # Said FIRST, before any per-name line. An operator running this against a
+    # box whose assistant has been rotating credentials needs to know, before
+    # they read anything else, that the existing rows are safe — the previous
+    # behaviour silently reverted every one of them.
+    existing = len(conflicts) + len(unchanged)
+    if existing:
+        print(
+            f"{existing} vault row(s) already exist and will NOT be touched "
+            f"({len(unchanged)} identical, {len(conflicts)} holding a different value). "
+            "The vault wins for application credentials; a migration never reverts a "
+            "rotation.\n"
+        )
+
     for name in refused:
         print(
             f"refused  {name}  — a bootstrap credential. It is what brings this "

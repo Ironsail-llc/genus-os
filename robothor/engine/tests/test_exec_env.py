@@ -439,16 +439,18 @@ def test_each_agent_gets_its_own_empty_config_dir(boxlike_env):
 def test_the_empty_config_dir_is_not_writable(boxlike_env):
     """Unwritable is what makes per-agent enough: there is nothing to
     accumulate, and nothing one command can leave for the next."""
-    import os
     import stat
+    from pathlib import Path
 
     import robothor.engine.exec_env as exec_env
 
     exec_env._CONFIG_DIRS.clear()
-    made = build_exec_env(agent_id="a", mode=MODE_ENFORCE, base=boxlike_env).env["GH_CONFIG_DIR"]
-    mode = stat.S_IMODE(os.stat(made).st_mode)
+    made = Path(
+        build_exec_env(agent_id="a", mode=MODE_ENFORCE, base=boxlike_env).env["GH_CONFIG_DIR"]
+    )
+    mode = stat.S_IMODE(made.stat().st_mode)
     assert not mode & stat.S_IWUSR, f"the empty config dir is writable ({mode:04o})"
-    assert os.listdir(made) == []
+    assert list(made.iterdir()) == []
     exec_env._CONFIG_DIRS.clear()
 
 
