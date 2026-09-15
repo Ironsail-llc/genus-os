@@ -185,6 +185,38 @@ class TestListing:
             == "does not hold a 'plugins' list"
         )
 
+    def test_unreadable_rows_are_a_problem_without_being_malformed(
+        self, client, one_plugin, lock_path
+    ):
+        """The PARTIAL fault, which `malformed` deliberately does not cover.
+
+        A file that parses but holds rows that do not keeps every row it could
+        read — discarding them would put every other disabled plugin back into
+        service — so `malformed` stays false and `rows` counts only the
+        readable ones. The rows it could not read are operator decisions that
+        cannot be honoured, and `problem` is the only place the payload says so:
+        a consumer reading `problem` only under `malformed` reports a healthy
+        file with a row count while some plugins the operator turned off are
+        loading.
+        """
+        lock_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "plugins": [
+                        {"name": "acme-tools", "enabled": False},
+                        {"no": "name"},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        lock = client.get("/api/admin/plugins").json()["lockfile"]
+        assert lock["malformed"] is False
+        assert lock["rows"] == 1
+        assert lock["problem"] == lockfile.read_lockfile().problem
+        assert "cannot be read" in lock["problem"]
+
     def test_a_healthy_lockfile_has_no_problem(self, client, one_plugin):
         lockfile.sync()
         body = client.get("/api/admin/plugins").json()
@@ -217,18 +249,51 @@ class TestListing:
 
         body = client.get("/api/admin/plugins").json()
         assert body["indexes"] == list(registry.configured_indexes())
-        assert all(url.startswith("https://") for url in body["indexes"])
 
     def test_the_configured_indexes_are_carried_in_order(self, client, one_plugin, monkeypatch):
         """First publishing a name wins, so the order is part of the answer."""
-        monkeypatch.setenv(
-            "ROBOTHOR_PLUGIN_INDEXES",
+        self._configure(
+            monkeypatch,
             "https://example.invalid/first.json,https://example.invalid/second.json",
         )
         assert client.get("/api/admin/plugins").json()["indexes"] == [
             "https://example.invalid/first.json",
             "https://example.invalid/second.json",
         ]
+
+    def test_an_index_the_install_route_would_refuse_is_still_reported(
+        self, client, one_plugin, monkeypatch
+    ):
+        """What is CONFIGURED, verbatim — including what cannot be used.
+
+        ``install`` refuses a non-https ``index`` with a 422, so a listing that
+        silently dropped one would leave an operator with a setting that has no
+        effect and no explanation: the picker would simply be missing an entry.
+        This route answers the configuration; filtering what can be OFFERED is
+        the consumer's job, and the Helm names what it left out.
+        """
+        self._configure(
+            monkeypatch,
+            "https://example.invalid/first.json,http://internal.invalid/index.json",
+        )
+        assert client.get("/api/admin/plugins").json()["indexes"] == [
+            "https://example.invalid/first.json",
+            "http://internal.invalid/index.json",
+        ]
+
+    @staticmethod
+    def _configure(monkeypatch, value: str) -> None:
+        """Set the index list and clear the settings cache.
+
+        ``get_settings()`` is ``lru_cache``d for the process, so a bare
+        ``setenv`` is served whatever an earlier resolution in the same test
+        already read. The suite's autouse fixture resets between tests, not
+        within one.
+        """
+        from robothor.settings import reset_settings
+
+        monkeypatch.setenv("ROBOTHOR_PLUGIN_INDEXES", value)
+        reset_settings()
 
 
 class TestEnableDisable:

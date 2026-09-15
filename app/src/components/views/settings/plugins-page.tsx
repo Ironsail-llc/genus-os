@@ -327,6 +327,21 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
    * that appears beside the card being removed names it by being next to it.
    */
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+  /**
+   * What the last removal answered.
+   *
+   * Page-level rather than a row note, because a successful removal takes the
+   * card away with the next listing read — a note keyed on that distribution
+   * would be written and then become invisible, which is how "pip reported the
+   * distribution was not installed; the row was dropped anyway" turned into a
+   * clean-looking removal.
+   */
+  const [removeReport, setRemoveReport] = useState<{
+    name: string;
+    removed: boolean;
+    rowDropped: boolean;
+    note: string;
+  } | null>(null);
 
   const { busyRow, rowErrors, rowNotes, act, setRowNote, setRowError } = useRowActions();
 
@@ -377,6 +392,11 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
     setSyncForcible(false);
     setReloadReport(null);
     setReloadError(null);
+    setRemoveReport(null);
+    // An open destructive confirmation is part of "the last act", and leaving
+    // one sitting under a fresh install plan is one mis-click from an act the
+    // operator has already moved on from.
+    setConfirmRemove(null);
   }, []);
 
   const record = useCallback(async () => {
@@ -460,7 +480,17 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
         plugin.name,
         `${BRIDGE}/api/plugins/${encodeURIComponent(plugin.name)}/remove`,
         { method: "POST", body: JSON.stringify({}) },
-        () => {
+        (body) => {
+          const answer = (body ?? {}) as Record<string, unknown>;
+          setRemoveReport({
+            name: plugin.name,
+            // Both default to the optimistic reading ONLY because the route
+            // always sends them; an absent field is not evidence of success,
+            // and `note` is what the route uses to say the outcome was mixed.
+            removed: answer.removed !== false,
+            rowDropped: answer.row_dropped !== false,
+            note: typeof answer.note === "string" ? answer.note : "",
+          });
           // The listing is the truth about what is installed, and this changed
           // it: re-read rather than editing a row out of the local copy.
           setPending(true);
@@ -651,9 +681,11 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
               {data.lockfile.malformed
                 ? "lockfile: unreadable"
                 : data.lockfile.present
-                  ? `lockfile: ${data.lockfile.rows} recorded ${
+                  ? // A row count alone over a `problem` is the chip reporting a
+                    // healthy file while some of its rows govern nothing.
+                    `lockfile: ${data.lockfile.rows} recorded ${
                       data.lockfile.rows === 1 ? "row" : "rows"
-                    }`
+                    }${data.lockfile.problem ? ", and rows that could not be read" : ""}`
                   : "lockfile: not written yet"}
             </span>
           </div>
@@ -704,7 +736,9 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
             will not read, the bytes are not decodable text, the JSON does not
             parse, or there is no `plugins` list
             (`robothor/plugins/lockfile.py::read_lockfile`). Unreadable ROWS
-            leave the flag false and are not visible in this payload at all.
+            leave the flag FALSE and are reported through `problem` instead —
+            they get their own card below, because their consequence is the
+            partial one and this one's is total.
 
             So the consequence is the opposite of a partial one.
             `Lockfile.usable = present and not malformed`, and the loader opens
@@ -736,6 +770,36 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
               {data.lockfile.problem
                 ? "Recording is what tells you whether the write can succeed once it is repaired."
                 : "Record installed plugins to find out which fault it is — the refusal says whether the file's contents are damaged or its path cannot be written, and those have different remedies."}
+            </p>
+          ) : null}
+
+          {/*
+            The PARTIAL damage, which is a different fault with a different
+            consequence and was invisible here until the engine started
+            answering `problem`.
+
+            `read_lockfile` keeps every row it could parse and counts the ones
+            it could not; `malformed` stays false and `rows` reports only the
+            readable ones. So the rows that DID parse still govern — which is
+            deliberate, since discarding them would put every other disabled
+            plugin back into service — and the ones that did not are operator
+            decisions that cannot be honoured, with nothing on screen to say so.
+            The page showed "lockfile: 1 recorded row" and a clean bill.
+
+            Warning, not destructive: the file is doing most of its job. And no
+            `--force` here either, for the reason the card above gives — the
+            server's own refusal is what names it, and only when it applies.
+          */}
+          {!data.lockfile.malformed && data.lockfile.problem ? (
+            <p
+              data-testid="plugins-lockfile-rows-damaged"
+              className="max-w-3xl break-words rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning"
+            >
+              The lockfile {data.lockfile.problem}. Every row it <em>could</em> read still governs,
+              so most of what you turned off is still off — but{" "}
+              <strong>whatever the unreadable rows turned off is loading right now</strong>, and
+              this screen cannot show you which plugins those were. Repairing the file by hand
+              keeps those decisions; recording over it cannot, and will refuse for that reason.
             </p>
           ) : null}
 
@@ -1053,6 +1117,31 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
             );
           })}
 
+          {removeReport ? (
+            <p
+              data-testid="plugins-remove-result"
+              className="max-w-3xl break-words rounded-lg border border-border bg-card p-3 text-xs text-muted-foreground"
+            >
+              {removeReport.removed
+                ? `Uninstalled ${removeReport.name}`
+                : `${removeReport.name} was not uninstalled`}
+              {removeReport.rowDropped
+                ? " and dropped its lockfile row."
+                : " and its lockfile row is still there."}{" "}
+              Removing is not unloading — the engine keeps the modules it has already imported
+              until it is reloaded.
+              {/*
+                The route's `note`, which it uses for exactly the mixed outcome:
+                "pip reported the distribution was not installed; the lockfile
+                row was dropped anyway". Without it a partial removal reads as a
+                clean one, and the card it described has already left the screen.
+              */}
+              {removeReport.note ? (
+                <span className="block pt-1 text-warning">{removeReport.note}</span>
+              ) : null}
+            </p>
+          ) : null}
+
           {reloadError ? (
             <p
               data-testid="plugins-reload-error"
@@ -1088,10 +1177,12 @@ export function PluginsPage({ visible = true }: PluginsPageProps) {
                 problem — which is the operator's own decision printed back at
                 them as something to fix.
 
-                Every line carries `group/entry-point` beside the reason, so the
-                attribution below can be checked rather than believed: that is
-                the only evidence the payload gives for the match, and the match
-                is a judgement this page made, not one the engine sent.
+                Every line still carries `group/entry-point` beside the reason,
+                although the match is now the engine's answer rather than this
+                page's guess. It is kept because the entry point is the thing an
+                operator greps for in a traceback or a journal, and because one
+                distribution appears here once per group it publishes into — a
+                line without it would read as the same refusal reported twice.
               */}
               {attributed.byPlugin.map(({ name, failures }) => {
                 const intended = failures.filter((f) => f.reason === BY_OPERATOR);
