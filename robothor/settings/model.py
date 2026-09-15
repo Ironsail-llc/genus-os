@@ -458,7 +458,11 @@ class RedisSettings(SettingsGroup):
         "so a plain pytest run cannot XADD onto live streams.",
     )
     password: str = declare(
-        "", "ROBOTHOR_REDIS_PASSWORD", "Redis password, if the server requires one.", secret=True, bootstrap=True
+        "",
+        "ROBOTHOR_REDIS_PASSWORD",
+        "Redis password, if the server requires one.",
+        secret=True,
+        bootstrap=True,
     )
     maxmemory: str = declare(
         "2gb",
@@ -1449,6 +1453,19 @@ class FlagSettings(SettingsGroup):
         "ROBOTHOR_HA_LEADER_ENABLED",
         "Elect a leader among engine replicas so scheduled work runs once. "
         "Unset means single-node, where every process is the leader.",
+    )
+    exec_env_mode: str = declare(
+        "observe",
+        "ROBOTHOR_EXEC_ENV_MODE",
+        "What an agent's `exec` child may see of the engine's environment. "
+        "enforce builds the child environment from an allowlist — the process "
+        "essentials plus the non-secret platform settings — so no credential "
+        "reaches an agent's shell unless that agent's own manifest grants it "
+        "by name under `secrets:`. observe (the default, so an upgrade takes "
+        "nothing from an agent that was using it) changes nothing and logs, "
+        "per agent, the names enforce would have withheld. off disables the "
+        "control. New installs are set to enforce by the init wizard.",
+        since="1.91.0",
     )
     manifest_schema_mode: str = declare(
         "observe",
