@@ -222,3 +222,51 @@ async def test_a_write_answers_with_a_fingerprint_and_never_the_value(stored):
     )
     assert "ghp_FAKE3333" not in _flatten(result)
     assert result["fingerprint"].startswith("sha256:")
+
+
+@pytest.mark.asyncio
+async def test_a_reader_inside_the_vault_failure_cooldown_still_sees_the_write(stored, monkeypatch):
+    """The race a hostile reviewer will run: rotate against a cached reader.
+
+    The accessor sits out an unreadable vault for five minutes
+    (``VAULT_RETRY_SECONDS``), so a per-call retry does not put a synchronous
+    database connect on every credential lookup. That cooldown is also a window
+    in which a ``vault_set`` would be correct and invisible: the next reader is
+    inside it, does not probe the vault, and resolves from the stale
+    environment instead.
+
+    So the write re-arms the probe as well as reloading the key pool. Without
+    the re-arm a rotation is silently deferred by up to five minutes — the same
+    class of failure as the incident, with a shorter fuse.
+    """
+    from robothor import secrets as secrets_module
+    from robothor import vault
+
+    monkeypatch.setenv("PROVIDERS_GITHUB_API_KEY", "ghp_FAKE0000_stale_environment")
+
+    # Put the accessor into its failure cooldown, the way a database blip would.
+    def boom(*args, **kwargs):
+        raise RuntimeError("vault briefly unreadable")
+
+    monkeypatch.setattr(vault, "export_env", boom)
+    monkeypatch.setattr(vault, "get", boom)
+    assert secrets_module.resolve_secret("PROVIDERS_GITHUB_API_KEY").source == "env"
+
+    # The vault comes back, and the assistant writes the replacement.
+    rows = {"providers/github/api_key": "ghp_FAKE4444_the_replacement"}
+    monkeypatch.setattr(vault, "get", lambda key, **kw: rows.get(key))
+    monkeypatch.setattr(
+        vault,
+        "export_env",
+        lambda **kw: {"PROVIDERS_GITHUB_API_KEY": rows["providers/github/api_key"]},
+    )
+    monkeypatch.setattr(vault, "set", lambda key, value, **kw: rows.__setitem__(key, value))
+
+    await HANDLERS["vault_set"](
+        {"key": "providers/github/api_key", "value": "ghp_FAKE4444_the_replacement"}, _ctx()
+    )
+
+    assert secrets_module.resolve_secret("PROVIDERS_GITHUB_API_KEY") == (
+        "ghp_FAKE4444_the_replacement",
+        "vault",
+    ), "a reader inside the vault failure cooldown was still served the stale environment value"
