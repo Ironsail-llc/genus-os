@@ -4,8 +4,9 @@ import { Loader2, Lock } from "lucide-react";
 import { PageHeader } from "@/components/business/page-header";
 import { ThemeToggle } from "@/components/business/theme-toggle";
 import { ErrorBoundary } from "@/components/error-boundary";
-import { ControlsView } from "@/components/views/controls-view";
 import { ChannelsPage } from "@/components/views/settings/channels-page";
+import { ConfigPage } from "@/components/views/settings/config-page";
+import { FlagsPage } from "@/components/views/settings/flags-page";
 import { ProvidersPage } from "@/components/views/settings/providers-page";
 import { UsersPage } from "@/components/views/settings/users-page";
 import {
@@ -36,7 +37,15 @@ function groupPages(pages: SettingsPage[]): Array<{ label: string; pages: Settin
   return groups;
 }
 
-function PageBody({ page, role }: { page: SettingsPage; role?: string | null }) {
+function PageBody({
+  page,
+  role,
+  onPageChange,
+}: {
+  page: SettingsPage;
+  role?: string | null;
+  onPageChange: (page: SettingsPageId) => void;
+}) {
   if (page.id === "providers") {
     // The first real settings page. It renders only inside this container, so
     // the role gate above is the only one it needs on the client — and the
@@ -60,9 +69,17 @@ function PageBody({ page, role }: { page: SettingsPage; role?: string | null }) 
     return <UsersPage visible role={role} />;
   }
 
+  if (page.id === "config") {
+    // The schema-driven form. It reads the settings schema once per mount, so
+    // `visible` is what keeps a 164 KB fetch off every Helm page load.
+    return <ConfigPage visible onOpenFlags={() => onPageChange("flags")} />;
+  }
+
   if (page.id === "flags") {
-    // The existing controls screen is the Flags page — same component, new home.
-    return <ControlsView visible />;
+    // The governed flags, with the verdict beside each one. It replaced the
+    // standalone Controls view; `?v=controls` still lands here, via
+    // `use-view-route.ts`'s alias table.
+    return <FlagsPage visible role={role} />;
   }
 
   return (
@@ -205,7 +222,7 @@ export function SettingsView({
             like a broken Settings screen forever.
           */}
           <ErrorBoundary key={active.id} fallback={<PageFailed />}>
-            <PageBody page={active} role={role} />
+            <PageBody page={active} role={role} onPageChange={onPageChange} />
           </ErrorBoundary>
         </div>
       </div>

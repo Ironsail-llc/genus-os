@@ -87,6 +87,30 @@ reporting a value for something nothing reads.
 A secret is never printed. `get` and `list` show `<set, sha256:ab12cd34>` —
 enough to tell two boxes apart without putting the value on your screen.
 
+### From the Helm, without a shell
+
+Everything above is also a screen. **Settings › Config** renders the same
+declarations `genus config list` prints — one collapsible section per group,
+with a filter over names and descriptions — and saves a section's changed
+fields in one all-or-nothing write. It obeys the same three routing rules as
+`set`, because it calls the same code: a secret is shown as
+`configured · sha256:ab12cd34` with no box to type in, a field the box's
+environment supplies is read-only with the sentence explaining why a write
+would apply to nothing, and a governed flag carries a link to the page that
+says what it is actually doing. **Settings › Flags** is that page: every
+governed flag, its rungs, and the verdict — what the control has done, and when
+it last did it. A change there is live within seconds and needs no restart, and
+it records the reason you type alongside it.
+
+After a save that is *not* hot, Config shows a banner naming the units to
+restart — `robothor-engine`, `robothor-bridge`, whatever the settings you
+changed declare. Until you restart them the running services keep the values
+they started with, and the file and the processes disagree. That banner is the
+browser session's own memory of what it just saved: nothing on the instance
+records it, so it is gone after a reload, and it is not the same thing as
+`genus doctor --only config.pending_restart`, which reports the other case —
+config.yaml being *ignored* because an environment variable overrides it.
+
 ### Hot or restart?
 
 Every setting declares this, and both the reference table and
