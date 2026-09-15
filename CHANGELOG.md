@@ -1,3 +1,9 @@
+## [1.88.0](https://github.com/Ironsail-llc/genus-os/compare/v1.87.0...v1.88.0) (2026-09-15)
+
+### Features
+
+* **helm:** plugins page with record, enable, disable and reload ([#568](https://github.com/Ironsail-llc/genus-os/issues/568)) ([6eb2e89](https://github.com/Ironsail-llc/genus-os/commit/6eb2e899f21b66725d16a84791b145280f92c4b2)), closes [#566](https://github.com/Ironsail-llc/genus-os/issues/566)
+
 ## [1.87.0](https://github.com/Ironsail-llc/genus-os/compare/v1.86.0...v1.87.0) (2026-09-15)
 
 ### Features
