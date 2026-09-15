@@ -220,10 +220,85 @@ class TestTheJournalLine:
             "the API key was rejected",
             "task-management-service started",
             "risk-weighted-average-of-the-quarter",
+            "MAX_TOKENS=4096",
+            "ROBOTHOR_KEY_POOL_SIZE=3",
         ],
     )
     def test_ordinary_log_lines_are_untouched(self, innocent: str) -> None:
         assert redact(innocent) == innocent
+
+    @pytest.mark.parametrize(
+        "innocent",
+        [
+            "sort_key=created_at",
+            "Cache-Key=home-page-v2",
+            "idempotency-key=abc123",
+            "primary_key=id, foreign_key=user_id",
+            "key=value pairs are fine",
+            "public_key=ssh-rsa AAAAB3Nza",
+            "partition_key=tenant",
+            "row_key=42",
+        ],
+    )
+    def test_an_ambiguous_key_is_not_a_credential(self, innocent: str) -> None:
+        """``KEY`` and ``TOKEN`` are ordinary words; ``API_KEY`` is not.
+
+        ``/api/logs`` redacts every line of every unit, third-party libraries
+        included, and this repo does not control their ``key=`` idiom. The
+        worst of the set is ``public_key=``: a public key is not a secret, and
+        a rule that ate only its first token would leave half of it visible —
+        redaction that neither protects nor informs.
+        """
+        assert redact(innocent) == innocent
+
+    def test_an_assignment_inside_json_leaves_the_json_parseable(self) -> None:
+        """The audit CSV's ``details`` cell is compact JSON by contract.
+
+        A value class that ran to the next space would swallow the closing
+        quote and brace and truncate the record — an export that mangles its
+        own details is an integrity problem, not a cosmetic one.
+        """
+        import json as _json
+
+        blob = _json.dumps({"note": f"retry with OPENROUTER_API_KEY={self.API_KEY}", "n": 1})
+        cleaned = redact(blob)
+
+        assert self.API_KEY not in cleaned
+        assert _json.loads(cleaned)["n"] == 1, cleaned
+
+    @pytest.mark.parametrize("closer", ['"', "'", "}", "]", ">", ")"])
+    def test_the_value_stops_at_a_delimiter(self, closer: str) -> None:
+        cleaned = redact(f"API_KEY={self.API_KEY}{closer}tail")
+        assert self.API_KEY not in cleaned
+        assert cleaned.endswith(f"{closer}tail"), cleaned
+
+    @pytest.mark.parametrize("quote", ['"', "'"])
+    def test_a_quoted_value_keeps_its_quotes(self, quote: str) -> None:
+        """A shell or env-file line stays a shell or env-file line.
+
+        Replacing ``KEY="x"`` with ``KEY=<redacted>`` would leave the operator
+        unable to tell a quoted setting from an unquoted one — and in a
+        ``.env`` excerpt that difference is the bug they are reading the log to
+        find.
+        """
+        cleaned = redact(f"export API_KEY={quote}{self.API_KEY}{quote} # rotated")
+
+        assert self.API_KEY not in cleaned
+        assert cleaned == f"export API_KEY={quote}{PLACEHOLDER}{quote} # rotated"
+
+    def test_a_long_hyphenated_run_is_linear_not_quadratic(self) -> None:
+        """The name's prefix group is bounded so it cannot backtrack.
+
+        ``/api/logs`` runs this over up to 1000 journal lines per request. An
+        unbounded ``(?:segment[-_])*`` took 0.54s on this input, which is half a
+        second per line on a request path.
+        """
+        import time
+
+        pathological = "ab-" * 3000 + "="
+        start = time.perf_counter()
+        redact(pathological)
+        assert time.perf_counter() - start < 0.05
 
 
 class TestItIsSafeOnTheFailurePathItLivesOn:

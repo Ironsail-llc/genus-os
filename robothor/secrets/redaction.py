@@ -81,32 +81,69 @@ _AUTH_BLOB = r"(?:[A-Za-z0-9+/_-]{16,}={0,2}|[A-Za-z0-9+/_-]{4,}={1,2})"
 #: ``task-management-service`` out of the match.
 _API_KEY = r"\bsk-[A-Za-z0-9_-]{16,}"
 
-#: The credential words a NAME can end in. A password has no shape of its own —
-#: it is whatever the provider issued — so for a whole class of secrets the
-#: name on the left of the ``=`` is the only thing there is to match on.
-_CREDENTIAL_WORD = r"(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)"
+#: Words that mean "credential" on their own, wherever a name ends in one.
+#: A password has no shape of its own — it is whatever the provider issued — so
+#: for a whole class of secrets the name on the left of the ``=`` is the only
+#: thing there is to match on. ``SECRET`` and ``PASSWORD`` are unambiguous in
+#: English; a name ending in either is not describing anything else.
+_UNAMBIGUOUS_WORD = r"(?:SECRET|SECRETS|PASSWORD|PASSWD|PASSPHRASE|CREDENTIAL|CREDENTIALS)"
 
-#: ``NAME=value``, where NAME ends in one of the words above. Deliberately
-#: narrow in three ways, each paid for by a false positive that would cost an
-#: operator their own log line:
+#: ``KEY`` and ``TOKEN`` are ORDINARY WORDS, and this is the correction that
+#: matters most. ``sort_key``, ``primary_key``, ``Cache-Key``,
+#: ``idempotency-key``, ``partition_key`` and a bare ``key=`` are all ordinary
+#: log lines, and ``/api/logs`` redacts every line of every unit — third-party
+#: libraries whose ``key=`` idiom this platform does not control included. The
+#: worst of the set is ``public_key=``: a public key is not a secret, and a rule
+#: that ate only its first token left half the key visible, which is redaction
+#: that neither protects nor informs.
 #:
-#: * the separator is ``=`` and only ``=``. ``TOKEN: expected`` in prose is a
-#:   sentence, and a ``:`` rule would eat the word after it.
-#: * the name is underscore/hyphen segments, so ``monkey=business`` does not
-#:   match: the ``\b`` before the name cannot land mid-word, and "monkey" is
-#:   not "…_key".
-#: * the VALUE stops at whitespace, a comma or a semicolon, so one assignment
-#:   in a line of many takes only its own value with it.
+#: So ``KEY``/``TOKEN`` count only behind a qualifier that is itself about
+#: authority. The list is closed and each entry is a credential name this
+#: platform, or something it talks to, actually issues.
+_QUALIFIER = (
+    r"(?:API|AUTH|ACCESS|REFRESH|SIGNING|SECRET|PRIVATE|SESSION|BEARER"
+    r"|BOT|APP|CLIENT|ENCRYPTION|MASTER|ADMIN|ROOT|WEBHOOK|LICENSE|SUBSCRIPTION)"
+)
+
+#: At most eight segments, at most forty characters each. NOT a taste: an
+#: unbounded ``(?:[A-Za-z0-9]+[-_])*`` backtracks over every split of a long
+#: hyphenated run, and ``redact("ab-" * 3000 + "=")`` took 0.54s. Bounded, the
+#: work per start position is constant and the whole pass is linear — which it
+#: has to be, because ``/api/logs`` runs it over up to 1000 journal lines per
+#: request.
+_NAME_PREFIX = r"(?:[A-Za-z0-9]{1,40}[-_]){0,8}"
+
+#: Where a VALUE ends. Whitespace, a comma or a semicolon separate one
+#: assignment from the next; the quote/bracket/angle characters are structural,
+#: and eating them is how a redacted assignment inside a JSON string took the
+#: closing quote and brace with it and left the audit CSV's ``details`` cell
+#: unparseable. An export that mangles its own details is an integrity problem.
+_VALUE_END = r"\s,;\"'}\]>)"
+
+#: ``NAME=value``. The separator is ``=`` and only ``=``: ``TOKEN: expected`` in
+#: prose is a sentence, and a ``:`` rule would eat the word after it.
 #:
-#: The name is captured so the replacement can keep it: "which variable" is
-#: what the operator needs from the line, and "what its value was" is what they
-#: must not get.
+#: The name is captured so the replacement can keep it — "which variable" is
+#: what the operator needs from the line, and "what it was set to" is what they
+#: must not get — and the QUOTE is captured so a quoted value is replaced
+#: quotes and all, leaving the surrounding JSON or shell line structurally
+#: intact.
 _ASSIGNMENT = re.compile(
-    rf"(?P<name>\b(?:[A-Za-z0-9]+[-_])*{_CREDENTIAL_WORD}\b)"
+    rf"(?P<name>\b{_NAME_PREFIX}(?:{_UNAMBIGUOUS_WORD}|{_QUALIFIER}[-_](?:KEY|TOKEN))\b)"
     r"\s*=\s*"
-    r"(?P<value>\"[^\"]+\"|'[^']+'|[^\s,;]+)",
+    rf"(?:(?P<quote>[\"'])(?P<quoted>[^\"'\n]{{1,4096}})(?P=quote)"
+    rf"|(?P<value>[^{_VALUE_END}]{{1,4096}}))",
     re.IGNORECASE,
 )
+
+
+def _redact_assignment(match: re.Match[str]) -> str:
+    name = match.group("name")
+    quote = match.group("quote")
+    if quote:
+        return f"{name}={quote}{PLACEHOLDER}{quote}"
+    return f"{name}={PLACEHOLDER}"
+
 
 _SHAPES = (
     r"xox[abceprs]-[\w-]+",
@@ -137,7 +174,7 @@ def redact(text: str) -> str:
     if not text:
         return text
     try:
-        named = _ASSIGNMENT.sub(lambda m: f"{m.group('name')}={PLACEHOLDER}", text)
+        named = _ASSIGNMENT.sub(_redact_assignment, text)
         return _CREDENTIAL_SHAPED.sub(PLACEHOLDER, named)
     except Exception:  # noqa: BLE001 - pragma: no cover - a regex that cannot fail
         # If this ever somehow raises, printing nothing beats printing a token.
