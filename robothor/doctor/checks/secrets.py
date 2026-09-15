@@ -225,6 +225,19 @@ async def _shadowed(ctx: DoctorContext) -> Result:
     except Exception as exc:  # noqa: BLE001 - a diagnostic must not raise
         return skip(f"the secret stores could not be compared ({type(exc).__name__})")
 
+    # Before any verdict: could the two stores be compared at all? The check
+    # used to swallow an unreadable vault and answer "nothing differs", which
+    # is true only in the sense that it compared nothing — a dead environment
+    # value served while the control that exists to say so reported green.
+    # That is the inert-control shape this repo has shipped more than once.
+    if rows and not all(row.vault_readable for row in rows):
+        return skip(
+            "the vault could not be read, so the two stores were not compared — "
+            "a stale environment value could be shadowing a live vault row and "
+            "this check cannot tell. `genus doctor --only secrets.backend` and "
+            "`--only secrets.signing_key` say whether the vault is usable at all"
+        )
+
     shadows = [row for row in rows if row.shadowed]
     if not shadows:
         return ok("no credential is configured differently in the environment and the vault")
