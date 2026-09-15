@@ -76,6 +76,21 @@ describe("bridge proxy denylist", () => {
     }
   });
 
+  it("does not refuse the plugin routes the Plugins page lives on", () => {
+    // The Plugins page reads what is installed and turns one off through this
+    // proxy. Nothing here answers with a credential — a plugin listing is a
+    // distribution name, a version and a load state, and the engine's own
+    // response deliberately carries no filesystem path at all.
+    for (const path of [
+      "/api/plugins",
+      "/api/plugins/reload",
+      "/api/plugins/genus-hostinfo/enable",
+      "/api/plugins/genus-hostinfo/disable",
+    ]) {
+      expect(isDeniedBridgePath(path)).toBe(false);
+    }
+  });
+
   it("still allows vault writes, which carry no secret back", () => {
     for (const path of ["/api/vault/set", "/api/vault/delete"]) {
       expect(isDeniedBridgePath(path)).toBe(false);
