@@ -434,3 +434,40 @@ def test_preview_is_quiet_for_a_type_that_needs_no_fragment(tool, repo) -> None:
 def test_the_repositorys_own_fragments_lint() -> None:
     tool = _module()
     assert tool.lint(REPO_ROOT) == []
+
+
+# --------------------------------------------------------------------------
+# The wiring. A gate nothing runs is not a gate.
+# --------------------------------------------------------------------------
+
+CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+PREVIEW_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release-preview.yml"
+RELEASERC = REPO_ROOT / ".releaserc.js"
+
+
+def test_ci_runs_check_and_lint_on_every_pull_request() -> None:
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    assert "changelog-fragment:" in workflow
+    assert "changelog_fragments.py lint" in workflow
+    assert "changelog_fragments.py check" in workflow
+
+
+def test_the_sticky_comment_shows_the_fragment() -> None:
+    workflow = PREVIEW_WORKFLOW.read_text(encoding="utf-8")
+    assert "changelog_fragments.py preview" in workflow
+    assert "actions/checkout@" in workflow, "preview needs the tree to read the fragment"
+
+
+def test_the_release_assembles_and_commits_both_halves() -> None:
+    releaserc = RELEASERC.read_text(encoding="utf-8")
+    assert "changelog_fragments.py assemble --version ${nextRelease.version}" in releaserc
+    # The deletions of consumed fragments must ride in the release commit, or
+    # the next release assembles them a second time.
+    assert "'changelog.d'" in releaserc
+    assert "'docs/release-notes.md'" in releaserc
+
+
+def test_the_release_notes_page_is_published() -> None:
+    mkdocs = (REPO_ROOT / "mkdocs.yml").read_text(encoding="utf-8")
+    assert "!/release-notes.md" in mkdocs, "the page the release writes must be on the site"
+    assert "release-notes.md" in mkdocs.split("nav:", 1)[1]

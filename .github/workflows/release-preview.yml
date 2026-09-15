@@ -13,6 +13,11 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.pull_request.base.ref == 'main'
     steps:
+      # The comment now quotes the pull request's own release-note fragment,
+      # so the author reads what the release will say about their change while
+      # they can still change it. Needs the tree, hence the checkout.
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
       - name: Compute release impact
         id: impact
         env:
@@ -47,11 +52,29 @@ jobs:
           echo "bump=$BUMP" >> "$GITHUB_OUTPUT"
           echo "type=$TYPE" >> "$GITHUB_OUTPUT"
 
+      # What the release notes will say for this change, in the author's own
+      # words, or the sentence that asks for them. Never fails the check: the
+      # blocking half is the `changelog-fragment` job in ci.yml.
+      - name: Read this pull request's release-note fragment
+        id: fragment
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          {
+            echo 'notes<<FRAGMENT_EOF'
+            python3 scripts/changelog_fragments.py preview \
+              --pr "$PR_NUMBER" --title "$PR_TITLE" --labels "$PR_LABELS" || true
+            echo FRAGMENT_EOF
+          } >> "$GITHUB_OUTPUT"
+
       - name: Compose comment body
         id: comment
         env:
           BUMP: ${{ steps.impact.outputs.bump }}
           TYPE: ${{ steps.impact.outputs.type }}
+          NOTES: ${{ steps.fragment.outputs.notes }}
         run: |
           {
             echo 'body<<EOF'
@@ -63,6 +86,12 @@ jobs:
               echo "✅ **Will trigger release on merge.** Expected bump: **$BUMP** (from \`$TYPE\`)."
               echo ""
               echo "Production image will be built and \`helm/genus-os/values-production.yaml\` updated. To deploy to staging first, add the \`deploy-staging\` label."
+            fi
+            if [ -n "$(printf '%s' "$NOTES" | tr -d '[:space:]')" ]; then
+              echo ""
+              echo "---"
+              echo ""
+              printf '%s\n' "$NOTES"
             fi
             echo EOF
           } >> "$GITHUB_OUTPUT"

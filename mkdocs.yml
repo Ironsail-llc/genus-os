@@ -72,6 +72,7 @@ exclude_docs: |
   !/install.sh
   !/configuration.md
   !/deployment.md
+  !/release-notes.md
   !/reference/cli.md
   !/reference/configuration.md
   !/PLUGINS.md
@@ -120,6 +121,8 @@ nav:
       - Memory System: memory-system.md
       - Event Bus: event-bus.md
       - Platform vs Instance: PLATFORM_INSTANCE.md
+  - Releases:
+      - Release Notes: release-notes.md
   - Project:
       - Contributing: contributing.md
       - Security: security.md
