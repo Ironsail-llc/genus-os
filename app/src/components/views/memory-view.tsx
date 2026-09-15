@@ -154,6 +154,36 @@ function when(value: string | null): string {
   });
 }
 
+export interface FactsQuery {
+  query: string;
+  entity: string;
+  active: ActiveFilter;
+  limit: number;
+  cursor?: string;
+}
+
+/**
+ * The one place a facts request is spelled.
+ *
+ * Its own exported function rather than a closure inside the component so the
+ * rule below can be tested for what it is: `cursor` is **dropped** when `q` is
+ * set, because the route answers that pair with a 422 — "cursor cannot be
+ * combined with q; a relevance ranking has no keyset". The page also hides the
+ * pager in search mode, so the two of them are belt and braces; a guard that
+ * can only be reached through a control that is not on the screen is exactly
+ * the kind this repo has shipped inert before, and this one is reachable from
+ * a test.
+ */
+export function factsUrl({ query, entity, active, limit, cursor }: FactsQuery): string {
+  const params = new URLSearchParams();
+  if (query) params.set("q", query);
+  if (entity) params.set("entity", entity);
+  params.set("active", active);
+  params.set("limit", String(limit));
+  if (cursor && !query) params.set("cursor", cursor);
+  return `${BRIDGE}/api/memory/facts?${params.toString()}`;
+}
+
 export interface MemoryViewProps {
   /** The shell keeps every view mounted; this is the load gate. */
   visible?: boolean;
@@ -169,6 +199,14 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
   const [loading, setLoading] = useState(true);
   const [paging, setPaging] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * The bridge says this listing is not this caller's. Not a failure — the
+   * rule `use-bridge-poll`'s header states for the whole Helm, which this view
+   * has to keep even though it hand-rolls its fetch. Reachable without any
+   * bridge change: the Helm decides "operator" from the session role, and
+   * `require_operator` also demands the platform tenant and a human session.
+   */
+  const [forbidden, setForbidden] = useState(false);
 
   // Two pairs on purpose: the DRAFT is what the operator is typing, the
   // applied value is what has been asked for. Only the applied pair is in the
@@ -200,17 +238,7 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
   }, [queryDraft, entityDraft, query, entity]);
 
   const listUrl = useCallback(
-    (cursor?: string) => {
-      const params = new URLSearchParams();
-      if (query) params.set("q", query);
-      if (entity) params.set("entity", entity);
-      params.set("active", active);
-      params.set("limit", String(limit));
-      // Never with a `q`: the route refuses the pair with a 422, and it is
-      // right to — a relevance ranking has no keyset to resume from.
-      if (cursor && !query) params.set("cursor", cursor);
-      return `${BRIDGE}/api/memory/facts?${params.toString()}`;
-    },
+    (cursor?: string) => factsUrl({ query, entity, active, limit, cursor }),
     [query, entity, active, limit]
   );
 
@@ -221,9 +249,15 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
       try {
         const res = await fetch(listUrl(cursor));
         if (!res.ok) {
+          if (res.status === 403) {
+            setForbidden(true);
+            setError(null);
+            return;
+          }
           setError(await readBridgeReply(res));
           return;
         }
+        setForbidden(false);
         const body = (await res.json()) as Record<string, unknown>;
         const page = Array.isArray(body.facts)
           ? body.facts.map(normalizeFact).filter((f): f is Fact => f !== null)
@@ -298,11 +332,20 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
         (res) => {
           // 409 is not a failure to understand — it is the server saying this
           // row is already bounded, which makes the list, not the server, the
-          // thing that is wrong. The sentence is already on the row.
+          // thing that is wrong. The sentence is already on the row; the list
+          // catches up, and the card closes with it. Leaving the card open
+          // under a fresh `inactive` pill would put "this fact is bounded" and
+          // "Forget this fact" on the screen together, and the only thing a
+          // second click could produce is a second 409.
           if (res.status === 409) {
             setFacts((previous) =>
               previous.map((row) => (row.id === id ? { ...row, isActive: false } : row))
             );
+            setPreviews((previous) => {
+              const next = { ...previous };
+              delete next[id];
+              return next;
+            });
           }
           // Anything the server refused about the request itself belongs beside
           // the only field the operator can change.
@@ -318,6 +361,16 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
   const canWiden = searching && limit < WIDE_LIMIT;
 
   const body = useMemo(() => {
+    if (forbidden) {
+      return (
+        <p className="text-xs text-muted-foreground" data-testid="memory-forbidden">
+          The instance&rsquo;s memory is operator-only on this appliance, so there is nothing to show
+          here. A role that looks like an operator in this browser can still be refused by the
+          bridge — it also requires the platform tenant and a human session. Ask an owner or admin
+          on this instance.
+        </p>
+      );
+    }
     if (loading && facts.length === 0) {
       return (
         <div
@@ -344,7 +397,7 @@ export function MemoryView({ visible = true, role, roleLoading = false }: Memory
       );
     }
     return null;
-  }, [loading, facts.length, error, searching]);
+  }, [forbidden, loading, facts.length, error, searching]);
 
   if (!visible) return null;
 

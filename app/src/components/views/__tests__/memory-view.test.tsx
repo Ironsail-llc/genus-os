@@ -27,7 +27,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { MemoryView } from "../memory-view";
+import { MemoryView, factsUrl } from "../memory-view";
 
 interface Fact {
   id: number;
@@ -126,6 +126,35 @@ function lastRequest(pattern: RegExp): string {
   const matched = requests.filter((url) => pattern.test(url));
   return matched[matched.length - 1] ?? "";
 }
+
+/**
+ * The request rule, tested where it can actually be reached.
+ *
+ * The page hides the pager in search mode, which means the `cursor`-with-`q`
+ * guard inside the URL builder cannot be driven through the UI at all — and a
+ * guard that no test can reach is the shape of every inert control this repo
+ * has shipped. So the builder is exported and exercised directly.
+ */
+describe("factsUrl", () => {
+  const base = { query: "", entity: "", active: "true" as const, limit: 50 };
+
+  it("carries the keyset cursor when there is no query", () => {
+    expect(factsUrl({ ...base, cursor: "4709" })).toContain("cursor=4709");
+  });
+
+  it("drops the cursor the moment a query is set — that pair is a 422", () => {
+    const url = factsUrl({ ...base, query: "tea", cursor: "4709" });
+    expect(url).toContain("q=tea");
+    expect(url).not.toContain("cursor");
+  });
+
+  it("composes q with entity, and always states the active filter", () => {
+    const url = factsUrl({ ...base, query: "tea", entity: "Alice", active: "all" });
+    expect(url).toContain("q=tea");
+    expect(url).toContain("entity=Alice");
+    expect(url).toContain("active=all");
+  });
+});
 
 describe("Observe › Memory", () => {
   it("renders a fact with its entities, source, confidence and dates", async () => {
@@ -226,6 +255,15 @@ describe("Observe › Memory", () => {
     fireEvent.change(screen.getByTestId("memory-entity"), { target: { value: "Alice" } });
     await waitFor(() => expect(lastRequest(/memory\/facts/)).toContain("q=tea"));
     expect(lastRequest(/memory\/facts/)).toContain("entity=Alice");
+    /*
+      PAGE_ONE carries `next_cursor: "4709"`. The route does not send one in
+      search mode — but if it ever did, or if a stale cursor survived the
+      switch into search mode, the pager would still have to be gone, because
+      following it is a 422. So this asserts the pager is hidden against a
+      fixture that HAS a cursor; asserting it against a null-cursor fixture
+      would pass whether the search-mode guard existed or not.
+    */
+    expect(screen.queryByTestId("memory-load-more")).toBeNull();
     // `limit` is the only lever a ranked page has, so the note says so and the
     // button raises it. It never says "3 of N" — a q+entity page is short for a
     // reason that has nothing to do with how many results exist.
@@ -256,7 +294,17 @@ describe("Observe › Memory", () => {
     expect(requests.filter((u) => /\/forget$/.test(u))).toHaveLength(0);
   });
 
-  it("says a short fact was not scanned rather than warning about no blocks", async () => {
+  /**
+   * `blocks` is non-empty here ON PURPOSE, with `blocks_scanned: false`.
+   *
+   * A fixture with `blocks: []` cannot tell the two guards apart: the warning
+   * stays away because the list is empty, whether or not the page consults
+   * `blocks_scanned` at all. The state that separates them is a scan that did
+   * not happen over a list that is not empty — and there the page must say
+   * "too short to check" and warn about nothing, because under twelve
+   * characters `strpos(content, '')` matched every block on the instance.
+   */
+  it("says a short fact was not scanned rather than warning about the blocks named", async () => {
     respond([
       [
         /forget\/preview/,
@@ -264,7 +312,12 @@ describe("Observe › Memory", () => {
           body: {
             fact: fact({ id: 4711, fact_text: "tea" }),
             would_deactivate: [4711],
-            references: { entities: ["Alice"], episodes: 0, blocks: [], blocks_scanned: false },
+            references: {
+              entities: ["Alice"],
+              episodes: 0,
+              blocks: ["working_context"],
+              blocks_scanned: false,
+            },
             already_inactive: false,
           },
         }),
@@ -280,6 +333,9 @@ describe("Observe › Memory", () => {
     expect(within(card).getByTestId("memory-blocks-unscanned-4711").textContent).toMatch(
       /too short/i
     );
+    // And the block the server listed without having scanned for it is not
+    // quoted back at the operator as if it had been found.
+    expect(card.textContent).not.toContain("working_context");
   });
 
   it("requires a reason of 3 to 500 characters and counts it", async () => {
@@ -307,11 +363,20 @@ describe("Observe › Memory", () => {
     expect(confirm).not.toBeDisabled();
   });
 
+  /**
+   * The response's `valid_to` is the thing asserted, not the `inactive` pill.
+   *
+   * An optimistic `{...row, isActive: false}` produces that pill just as well,
+   * so a test that stops there passes whether the page waits for the server or
+   * guesses. `valid_to` only exists in the reply — a year away from every other
+   * date in the fixture so it cannot be confused with one — and a page that
+   * guessed would render no bound at all.
+   */
   it("forgets with the reason and updates the row from the response, not from hope", async () => {
     const forgotten = fact({
       id: 4711,
       is_active: false,
-      valid_to: "2026-09-15T13:00:00+00:00",
+      valid_to: "2031-03-04T13:00:00+00:00",
     });
     const posted: Array<Record<string, unknown>> = [];
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
@@ -342,8 +407,13 @@ describe("Observe › Memory", () => {
     await waitFor(() => expect(screen.getByTestId("memory-inactive-4711")).toBeTruthy());
     expect(posted).toEqual([{ reason: "she asked for it to be dropped" }]);
     expect(screen.queryByTestId("memory-confirm-4711")).toBeNull();
+    // The bound the SERVER set, which only the response carries.
+    const row = screen.getByTestId("memory-fact-4711");
+    expect(row.textContent).toContain("bounded");
+    expect(row.textContent).toContain("2031");
     // The other rows are untouched — one forget bounds one row.
     expect(screen.queryByTestId("memory-inactive-4710")).toBeNull();
+    expect(screen.getByTestId("memory-fact-4710").textContent).not.toContain("bounded");
   });
 
   it("renders a 409 in the server's own words and marks the row inactive", async () => {
@@ -371,6 +441,15 @@ describe("Observe › Memory", () => {
     await waitFor(() => expect(screen.getByTestId("memory-error-4711").textContent).toBe(sentence));
     // The server just said the row is inactive; the list must agree with it.
     expect(screen.getByTestId("memory-inactive-4711")).toBeTruthy();
+    /*
+      And the offer to do it again has to go. The card left open under an
+      `inactive` pill puts two contradictory things on the screen at once —
+      "this fact is bounded" and "Forget this fact" — and the only thing a
+      second click can produce is a second 409.
+    */
+    expect(screen.queryByTestId("memory-confirm-4711")).toBeNull();
+    expect(screen.queryByTestId("memory-confirm-go-4711")).toBeNull();
+    expect(screen.queryByTestId("memory-forget-4711")).toBeNull();
   });
 
   /**
@@ -417,6 +496,28 @@ describe("Observe › Memory", () => {
     listOnly({ facts: [], next_cursor: null });
     render(<MemoryView role="owner" />);
     expect((await screen.findByTestId("memory-empty")).textContent).toBeTruthy();
+  });
+
+  /**
+   * `use-bridge-poll`'s header states the rule for the whole Helm: a 403 is the
+   * bridge saying the listing belongs to an operator, and nobody must be shown
+   * red for it. This view hand-rolls its fetch and has to obey it anyway — and
+   * it is reachable without any bridge change, because the Helm reads
+   * "operator" off the session role while `require_operator` also demands the
+   * platform tenant and a human session.
+   */
+  it("renders a 403 as a refusal in the house style, not as a failure", async () => {
+    respond([
+      [
+        /\/api\/memory\/facts\?/,
+        () => ({ status: 403, body: { detail: "operator role required" } }),
+      ],
+    ]);
+    render(<MemoryView role="owner" />);
+
+    expect(await screen.findByTestId("memory-forbidden")).toBeTruthy();
+    expect(screen.queryByTestId("memory-error")).toBeNull();
+    expect(screen.queryByTestId("memory-empty")).toBeNull();
   });
 
   it("reads a refusal in the bridge's words", async () => {
