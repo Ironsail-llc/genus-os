@@ -1,0 +1,387 @@
+"""What happens to a picture or a file the operator sends over Telegram.
+
+The operator, 2026-09-15: "In Telegram we should be able to send and receive
+pictures and files to one another, and that doesn't work well, but it should."
+
+What it did: downloaded the bytes, turned them into text (or into the string
+``[Binary file: name, N bytes]``) and threw them away, with a 5 MB ceiling of
+our own invention where Telegram allows 20 MB — and, for a photo, consumed the
+operator's caption as the vision model's prompt so the agent never saw the
+question that was actually asked.
+
+No test here reaches Telegram. The bot is a fake with ``get_file`` and
+``download_file`` recorders, which is the whole API surface the intake uses.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from robothor.engine import attachments
+from robothor.engine.chat import _sessions
+from robothor.engine.telegram import TelegramBot
+
+ALICE = {
+    "tenant_id": "t-alpha",
+    "display_name": "Alice",
+    "role": "owner",
+    "user_id": "tu-1",
+    "telegram_user_id": "1001",
+}
+
+
+@pytest.fixture
+def bot(engine_config):
+    _sessions.clear()
+    with (
+        patch("robothor.engine.telegram.Bot") as mock_bot_cls,
+        patch("robothor.engine.telegram.Dispatcher"),
+    ):
+        fake = MagicMock()
+        fake.send_message = AsyncMock()
+        mock_bot_cls.return_value = fake
+        instance = TelegramBot(engine_config, MagicMock())
+        instance.bot = fake
+        instance._resolve_user = MagicMock(return_value=dict(ALICE))
+        instance._enqueue_message = AsyncMock()
+        yield instance
+    _sessions.clear()
+
+
+def arm_download(bot, payload: bytes, *, file_path: str = "documents/file_0.bin") -> None:
+    """Teach the fake bot to hand back ``payload`` for any file id."""
+    bot.bot.get_file = AsyncMock(return_value=MagicMock(file_path=file_path))
+
+    async def _download(path, destination):
+        destination.write(payload)
+        return destination
+
+    bot.bot.download_file = AsyncMock(side_effect=_download)
+
+
+def message(
+    *,
+    chat_id: int = 100200300,
+    caption: str = "",
+    document=None,
+    photo=None,
+    media_group_id=None,
+    **kw,
+):
+    msg = MagicMock()
+    msg.from_user.id = 1001
+    msg.from_user.first_name = "Alice"
+    msg.chat.id = chat_id
+    msg.chat.type = "private"
+    msg.caption = caption
+    msg.media_group_id = media_group_id
+    msg.message_id = 7
+    msg.document = document
+    msg.photo = photo
+    msg.audio = None
+    msg.video = None
+    msg.voice = None
+    msg.video_note = None
+    msg.sticker = None
+    msg.answer = AsyncMock()
+    for key, value in kw.items():
+        setattr(msg, key, value)
+    return msg
+
+
+def document(name="report.pdf", size=1024, mime="application/pdf", uid="AgACdoc"):
+    doc = MagicMock()
+    doc.file_name = name
+    doc.file_size = size
+    doc.mime_type = mime
+    doc.file_id = "BQAC" + uid
+    doc.file_unique_id = uid
+    return doc
+
+
+def photo(width=1280, height=720, size=2048, uid="AgACpic"):
+    size_obj = MagicMock()
+    size_obj.width = width
+    size_obj.height = height
+    size_obj.file_size = size
+    size_obj.file_id = "AgAD" + uid
+    size_obj.file_unique_id = uid
+    return [size_obj]
+
+
+def enqueued(bot) -> tuple[str, list[dict]]:
+    """``(user_text, attachment rows)`` from the one enqueued turn."""
+    assert bot._enqueue_message.await_count == 1, bot._enqueue_message.await_args_list
+    call = bot._enqueue_message.await_args
+    return call.args[3], list(call.kwargs.get("attachments") or [])
+
+
+class TestDocuments:
+    @pytest.mark.asyncio
+    async def test_a_pdf_gives_the_agent_the_text_and_the_path(self, bot, monkeypatch) -> None:
+        async def fake_pdf(raw):
+            return "Q3 revenue was up"
+
+        monkeypatch.setattr(
+            "robothor.engine.telegram_handlers._extract_pdf_text", fake_pdf, raising=True
+        )
+        arm_download(bot, b"%PDF-1.7 fake")
+        await bot.handle_file(message(caption="summarise this", document=document()))
+
+        text, rows = enqueued(bot)
+        assert "summarise this" in text
+        assert "Q3 revenue was up" in text
+        assert len(rows) == 1
+        assert Path(rows[0]["path"]).read_bytes() == b"%PDF-1.7 fake"
+        assert rows[0]["path"] in text
+
+    @pytest.mark.asyncio
+    async def test_a_zip_is_kept_and_the_agent_is_told_where(self, bot) -> None:
+        arm_download(bot, b"PK\x03\x04binary")
+        await bot.handle_file(
+            message(document=document(name="bundle.zip", mime="application/zip", uid="AgACzip"))
+        )
+        text, rows = enqueued(bot)
+        assert Path(rows[0]["path"]).exists()
+        assert rows[0]["path"] in text
+        assert "Binary file" not in text, "the old shape threw the bytes away"
+
+    @pytest.mark.asyncio
+    async def test_the_extract_says_how_much_was_left_behind(self, bot) -> None:
+        arm_download(bot, b"x" * (attachments.TEXT_EXTRACT_CHARS + 500))
+        await bot.handle_file(
+            message(document=document(name="big.txt", mime="text/plain", uid="AgACbig"))
+        )
+        text, _ = enqueued(bot)
+        assert str(attachments.TEXT_EXTRACT_CHARS + 500) in text
+        assert "read_file" in text
+
+    @pytest.mark.asyncio
+    async def test_a_traversal_filename_lands_inside_the_inbox(self, bot) -> None:
+        arm_download(bot, b"not a key")
+        await bot.handle_file(
+            message(
+                document=document(name="../../../../.ssh/id_rsa", mime="text/plain", uid="AgACevil")
+            )
+        )
+        _, rows = enqueued(bot)
+        inbox = (Path(bot.config.workspace) / "inbox").resolve()
+        assert inbox in Path(rows[0]["path"]).resolve().parents
+
+    @pytest.mark.asyncio
+    async def test_the_same_file_twice_is_stored_once(self, bot) -> None:
+        arm_download(bot, b"same bytes")
+        await bot.handle_file(message(document=document(name="a.txt", mime="text/plain")))
+        first = enqueued(bot)[1][0]["path"]
+        bot._enqueue_message.reset_mock()
+        await bot.handle_file(message(document=document(name="a.txt", mime="text/plain")))
+        second = enqueued(bot)[1][0]["path"]
+        assert first == second
+
+
+class TestSizeCeiling:
+    @pytest.mark.asyncio
+    async def test_a_25mb_file_is_refused_with_the_real_limit(self, bot) -> None:
+        msg = message(document=document(name="clip.mp4", size=25 * 1024 * 1024, mime="video/mp4"))
+        await bot.handle_file(msg)
+        msg.answer.assert_awaited_once()
+        said = msg.answer.await_args.args[0]
+        assert "20 MB" in said
+        assert "clip.mp4" in said
+        bot._enqueue_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_19_9mb_file_is_accepted(self, bot) -> None:
+        arm_download(bot, b"nearly too big")
+        size = int(19.9 * 1024 * 1024)
+        await bot.handle_file(
+            message(document=document(name="big.bin", size=size, mime="application/octet-stream"))
+        )
+        _, rows = enqueued(bot)
+        assert rows
+
+    @pytest.mark.asyncio
+    async def test_the_old_five_megabyte_ceiling_is_gone(self) -> None:
+        from robothor.engine import telegram_handlers
+
+        assert telegram_handlers.MAX_FILE_SIZE == attachments.MAX_DOWNLOAD_BYTES
+
+
+class TestPhotos:
+    @pytest.mark.asyncio
+    async def test_the_caption_is_the_instruction_not_the_vision_prompt(
+        self, bot, monkeypatch
+    ) -> None:
+        seen: dict[str, str] = {}
+
+        async def fake_vlm(data, prompt="", **kw):
+            seen["prompt"] = prompt
+            return "a whiteboard covered in boxes"
+
+        monkeypatch.setattr("robothor.engine.tools.handlers.images.describe_image_bytes", fake_vlm)
+        arm_download(bot, b"\xff\xd8\xffJPEGBYTES")
+        await bot.handle_file(message(caption="what's this?", photo=photo()))
+
+        text, rows = enqueued(bot)
+        assert text.startswith("what's this?")
+        assert seen["prompt"] != "what's this?", (
+            "the caption is the operator's question, never the VLM's prompt"
+        )
+        assert rows[0]["kind"] == "image"
+        assert rows[0]["width"] == 1280
+
+    @pytest.mark.asyncio
+    async def test_the_image_is_kept_and_view_image_is_offered(self, bot, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "robothor.engine.tools.handlers.images.describe_image_bytes",
+            AsyncMock(return_value="a cat"),
+        )
+        arm_download(bot, b"\xff\xd8\xffJPEGBYTES")
+        await bot.handle_file(message(photo=photo()))
+        text, rows = enqueued(bot)
+        assert Path(rows[0]["path"]).read_bytes() == b"\xff\xd8\xffJPEGBYTES"
+        assert "view_image" in text
+
+    @pytest.mark.asyncio
+    async def test_no_caption_asks_what_to_do(self, bot, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "robothor.engine.tools.handlers.images.describe_image_bytes",
+            AsyncMock(return_value="a cat"),
+        )
+        arm_download(bot, b"\xff\xd8\xff")
+        await bot.handle_file(message(photo=photo()))
+        text, _ = enqueued(bot)
+        assert "ask what they want done" in text
+
+    @pytest.mark.asyncio
+    async def test_a_failing_vision_model_never_stops_the_file_being_kept(
+        self, bot, monkeypatch
+    ) -> None:
+        async def broken(data, prompt="", **kw):
+            raise RuntimeError("connection refused")
+
+        monkeypatch.setattr("robothor.engine.tools.handlers.images.describe_image_bytes", broken)
+        arm_download(bot, b"\xff\xd8\xff")
+        await bot.handle_file(message(caption="look", photo=photo()))
+        text, rows = enqueued(bot)
+        assert Path(rows[0]["path"]).exists()
+        assert "view_image" in text
+
+    @pytest.mark.asyncio
+    async def test_a_four_thousand_character_caption_survives_intact(
+        self, bot, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(
+            "robothor.engine.tools.handlers.images.describe_image_bytes",
+            AsyncMock(return_value="a cat"),
+        )
+        arm_download(bot, b"\xff\xd8\xff")
+        caption = "please " * 570
+        await bot.handle_file(message(caption=caption.strip(), photo=photo()))
+        text, _ = enqueued(bot)
+        assert caption.strip() in text
+
+
+class TestAlbums:
+    @pytest.mark.asyncio
+    async def test_three_photos_arrive_as_one_turn(self, bot, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "robothor.engine.tools.handlers.images.describe_image_bytes",
+            AsyncMock(return_value="a photo"),
+        )
+        arm_download(bot, b"\xff\xd8\xff")
+        monkeypatch.setattr(
+            "robothor.engine.telegram_handlers.ALBUM_WINDOW_SECONDS", 0.05, raising=True
+        )
+        for index in range(3):
+            await bot.handle_file(
+                message(
+                    caption="three shots" if index == 0 else "",
+                    photo=photo(uid=f"AgACpic{index}"),
+                    media_group_id="MG1",
+                )
+            )
+        await asyncio.sleep(0.25)
+        text, rows = enqueued(bot)
+        assert len(rows) == 3
+        assert text.startswith("three shots")
+        for row in rows:
+            assert row["path"] in text
+
+    @pytest.mark.asyncio
+    async def test_an_album_of_ten_keeps_all_ten(self, bot, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "robothor.engine.tools.handlers.images.describe_image_bytes",
+            AsyncMock(return_value="a photo"),
+        )
+        arm_download(bot, b"\xff\xd8\xff")
+        monkeypatch.setattr(
+            "robothor.engine.telegram_handlers.ALBUM_WINDOW_SECONDS", 0.05, raising=True
+        )
+        for index in range(10):
+            await bot.handle_file(message(photo=photo(uid=f"AgACten{index}"), media_group_id="MG2"))
+        await asyncio.sleep(0.3)
+        _, rows = enqueued(bot)
+        assert len(rows) == 10
+
+
+class TestOtherKinds:
+    @pytest.mark.asyncio
+    async def test_a_sticker_is_kept_as_an_image(self, bot, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "robothor.engine.tools.handlers.images.describe_image_bytes",
+            AsyncMock(return_value="a sticker of a duck"),
+        )
+        arm_download(bot, b"RIFFwebp")
+        sticker = MagicMock()
+        sticker.file_id = "CAAC1"
+        sticker.file_unique_id = "AgACstick"
+        sticker.file_size = 20
+        sticker.width = 512
+        sticker.height = 512
+        sticker.is_animated = False
+        sticker.is_video = False
+        sticker.emoji = "🦆"
+        await bot.handle_file(message(sticker=sticker))
+        _, rows = enqueued(bot)
+        assert rows[0]["kind"] == "image"
+
+    @pytest.mark.asyncio
+    async def test_a_video_is_kept(self, bot) -> None:
+        arm_download(bot, b"\x00\x00\x00 ftypmp42")
+        video = MagicMock()
+        video.file_id = "BAAC1"
+        video.file_unique_id = "AgACvid"
+        video.file_size = 4096
+        video.file_name = "clip.mp4"
+        video.mime_type = "video/mp4"
+        video.width = 1920
+        video.height = 1080
+        await bot.handle_file(message(video=video))
+        _, rows = enqueued(bot)
+        assert rows[0]["kind"] == "video"
+        assert Path(rows[0]["path"]).exists()
+
+    @pytest.mark.asyncio
+    async def test_a_message_with_nothing_attached_says_so(self, bot) -> None:
+        msg = message()
+        await bot.handle_file(msg)
+        msg.answer.assert_awaited_once()
+        bot._enqueue_message.assert_not_awaited()
+
+
+class TestPersistence:
+    @pytest.mark.asyncio
+    async def test_attachments_reach_the_stored_user_turn(self, bot) -> None:
+        """The row shape the Helm chat UI will read lives on the user turn's
+        JSONB, beside the text, under ``attachments``."""
+        import inspect
+
+        from robothor.engine import telegram
+
+        source = inspect.getsource(telegram)
+        assert 'user_extras["attachments"]' in source

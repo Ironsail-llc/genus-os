@@ -254,15 +254,30 @@ class TestCleanupTable:
 # ─── Orchestrator Tests ─────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _never_prune_a_real_inbox():
+    """``run_retention_cleanup`` deletes FILES now, not only rows.
+
+    The inbox prune resolves its own workspace from settings, which on a
+    developer's box or on the instance itself is the REAL one. No test in this
+    module may be allowed to reach it: a suite that quietly deleted the
+    operator's received files would be a far worse defect than anything these
+    tests are checking for.
+    """
+    with patch("robothor.engine.attachments.prune_inbox", return_value=0) as pruned:
+        yield pruned
+
+
 class TestRunRetentionCleanup:
     @patch("robothor.engine.retention._cleanup_table")
     def test_processes_all_tables(self, mock_cleanup):
         mock_cleanup.return_value = 0
         with patch("robothor.engine.messaging.purge_old_messages", return_value=0):
             results = run_retention_cleanup()
-        # +1: agent_messages purges via messaging.purge_old_messages, outside
-        # RETENTION_POLICY (it carries two clocks the table loop can't express).
-        assert len(results) == len(RETENTION_POLICY) + 1
+        # +2, and neither is a table: agent_messages purges via
+        # messaging.purge_old_messages (it carries two clocks the table loop
+        # can't express), and `inbox` is the channel attachment tree on disk.
+        assert len(results) == len(RETENTION_POLICY) + 2
         assert all(v == 0 for v in results.values())
 
     @patch("robothor.engine.retention._cleanup_table")
@@ -279,10 +294,11 @@ class TestRunRetentionCleanup:
             results = run_retention_cleanup()
 
         assert results["telemetry"] == -1  # failure marker
-        # All other tables should succeed
+        # All other tables should succeed. `inbox` is not a table and does not
+        # go through _cleanup_table, so it is not one of the ten.
         for table, count in results.items():
-            if table != "telemetry":
-                assert count == 10
+            if table not in ("telemetry", "inbox"):
+                assert count == 10, table
 
     @patch("robothor.engine.retention._cleanup_table")
     def test_returns_correct_counts(self, mock_cleanup):

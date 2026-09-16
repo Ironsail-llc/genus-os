@@ -38,6 +38,7 @@ tree and is no longer this module's business.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import re
@@ -352,14 +353,12 @@ def save_attachment(
             with os.fdopen(fd, "wb") as handle:
                 handle.write(data)
         except BaseException:
-            with_suppress = getattr(path, "unlink", None)
-            if with_suppress is not None:
-                try:
-                    path.unlink()
-                except OSError:
-                    pass
+            # A half-written attachment is worse than none: the agent would be
+            # handed a path to truncated bytes and no way to tell.
+            with contextlib.suppress(OSError):
+                path.unlink()
             raise
-        os.chmod(path, 0o600)
+        path.chmod(0o600)
         if when is not None:
             stamp = when.timestamp()
             os.utime(path, (stamp, stamp))
@@ -517,8 +516,7 @@ def prune_inbox(
     # Empty day/chat directories left behind are noise; the tree, never above it.
     for path in sorted(root.rglob("*"), reverse=True):
         if path.is_dir():
-            try:
+            # Non-empty is the normal case and not an error.
+            with contextlib.suppress(OSError):
                 path.rmdir()
-            except OSError:
-                pass
     return removed

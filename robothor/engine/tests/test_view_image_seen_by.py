@@ -71,9 +71,7 @@ class TestRejectingModel:
         async def fake_vlm(data, prompt="", **kw):
             return "a red rectangle"
 
-        monkeypatch.setattr(
-            "robothor.engine.tools.handlers.images.describe_image_bytes", fake_vlm
-        )
+        monkeypatch.setattr("robothor.engine.tools.handlers.images.describe_image_bytes", fake_vlm)
         token = mr.note_active_model("ollama_chat/qwen3:8b")
         try:
             out = await _call({"path": str(_png(tmp_path))})
@@ -89,9 +87,7 @@ class TestRejectingModel:
         async def fake_vlm(data, prompt="", **kw):
             return "a red rectangle"
 
-        monkeypatch.setattr(
-            "robothor.engine.tools.handlers.images.describe_image_bytes", fake_vlm
-        )
+        monkeypatch.setattr("robothor.engine.tools.handlers.images.describe_image_bytes", fake_vlm)
         token = mr.note_active_model("openrouter/anthropic/claude-sonnet-4.6")
         try:
             first = await _call({"path": str(_png(tmp_path))})
@@ -103,9 +99,7 @@ class TestRejectingModel:
         assert second["seen_by"] == "vision-model"
 
     @pytest.mark.asyncio
-    async def test_no_vision_model_is_said_plainly_never_faked(
-        self, tmp_path, monkeypatch
-    ) -> None:
+    async def test_no_vision_model_is_said_plainly_never_faked(self, tmp_path, monkeypatch) -> None:
         async def broken_vlm(data, prompt="", **kw):
             raise RuntimeError("connection refused")
 
