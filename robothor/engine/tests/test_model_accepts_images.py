@@ -37,6 +37,15 @@ class TestDeclaredCapability:
     def test_a_local_text_model_is_not(self) -> None:
         assert mr.get_model_limits("ollama_chat/qwen3:8b").accepts_images is False
 
+    def test_the_cheapest_vision_route_is_declared(self) -> None:
+        """`analyze_image` sends a batch of images to whichever model
+        `ROBOTHOR_VISION_REMOTE_MODEL` names, and refuses any model this flag
+        is False for. The benchmark sandbox points that setting at GLM 5.3
+        Flash (the cheapest vision-capable route on this account), so an entry
+        that lost the flag would turn every sandbox vision task blind again
+        with nothing but a per-image refusal to say why."""
+        assert mr.get_model_limits("openrouter/z-ai/glm-5.3-flash").accepts_images is True
+
 
 class TestImageCapability:
     def test_a_registered_multimodal_model_accepts(self) -> None:

@@ -647,6 +647,78 @@ class ProviderSettings(SettingsGroup):
         "Fleet default for compressing tool results as soon as they land "
         "rather than at the next compaction. A manifest setting wins over it.",
     )
+    vision_remote_model: str = declare(
+        "",
+        "ROBOTHOR_VISION_REMOTE_MODEL",
+        "Vision-capable provider model `analyze_image` sends images to, "
+        "instead of the local Ollama VLM (ROBOTHOR_VISION_MODEL). Set it "
+        "where there is no local vision model -- a container, a cloud "
+        "deployment, the benchmark sandbox. The model must be DECLARED "
+        "`accepts_images=True` in the engine's model registry -- a model the "
+        "registry declares text-only AND a model it has never heard of are "
+        "both refused rather than dialled, because a provider answers an "
+        "image block from an unsupported model with a 404 per image. When a "
+        "local vision model is configured it answers instead, and the result "
+        "says so; when it is not, the call refuses and names the model.",
+        restart_required=False,
+        since="unreleased",
+    )
+    vision_batch_concurrency: int = declare(
+        4,
+        "ROBOTHOR_VISION_BATCH_CONCURRENCY",
+        "Ceiling on the vision calls `analyze_image` keeps in flight at once. "
+        "An agent may ask for fewer and never for more, so an operator on a "
+        "single-GPU box can hold it at 1 or 2 without an agent overruling "
+        "them. Four is what one local VLM serves without queueing into its own "
+        "timeout; a remote backend takes more, up to the platform's own 16.",
+        restart_required=False,
+        since="unreleased",
+    )
+    vision_batch_timeout: float = declare(
+        90.0,
+        "ROBOTHOR_VISION_BATCH_TIMEOUT",
+        "Seconds one image gets inside an `analyze_image` batch before it is "
+        "marked timed out. The batch keeps going -- a slow image fails alone.",
+        restart_required=False,
+        since="unreleased",
+    )
+    vision_batch_max_chars: int = declare(
+        3500,
+        "ROBOTHOR_VISION_BATCH_MAX_CHARS",
+        "How much of an `analyze_image` result comes back inline. Past it the "
+        "full per-image table is written to a JSON file under "
+        "<workspace>/.robothor/analyze_image/ and the result carries the path, "
+        "the first rows and the totals. The default sits just under the "
+        "4000-character cap the step writer truncates a tool result at, so "
+        "what the agent reads is also what the run record keeps -- and a "
+        "larger value is clamped back to 3800 for that reason, rather than "
+        "silently flattening the run's per-image record. 0 or less means the "
+        "default; there is no way to turn the bound off, because the result it "
+        "bounds reached 108,000 tokens in one message before it existed.",
+        restart_required=False,
+        since="unreleased",
+    )
+    vision_batch_retention_days: int = declare(
+        7,
+        "ROBOTHOR_VISION_BATCH_RETENTION_DAYS",
+        "How long a spilled `analyze_image` table is kept in "
+        "<workspace>/.robothor/analyze_image/ before the daily retention sweep "
+        "deletes it. Short by default: these are working files an agent reads "
+        "in the run that wrote them, not the operator's own data. 0 disables "
+        "the prune rather than deleting everything.",
+        restart_required=False,
+        since="unreleased",
+    )
+    vision_batch_deadline: float = declare(
+        600.0,
+        "ROBOTHOR_VISION_BATCH_DEADLINE",
+        "Seconds one whole `analyze_image` call gets. Images not reached by "
+        "then come back as errors rather than answers. Without it a backend "
+        "that hangs for EVERY image would hold a single tool call open for "
+        "the per-image timeout times 200 divided by the concurrency.",
+        restart_required=False,
+        since="unreleased",
+    )
     rlm_root_model: str = declare(
         "openrouter/anthropic/claude-sonnet-4.6",
         "ROBOTHOR_RLM_ROOT_MODEL",

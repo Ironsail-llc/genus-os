@@ -260,6 +260,15 @@ def _container_name(task: dict[str, Any]) -> str:
 #: What a task's grade() reads besides the key, with the benchmark's defaults.
 #: One table for both grader paths (in-container and ground-truth), so they
 #: cannot drift apart again.
+#: The vision backend inside the container. GLM 5.3 Flash is the cheapest
+#: model on this account that `robothor.engine.model_registry` declares
+#: `accepts_images` ($0.150/M in, $0.500/M out — the same rate as the fleet
+#: primary, and a fifth of the next vision-capable option), it is already a
+#: fleet model rather than a benchmark-only dependency, and it is served on
+#: the OpenRouter key the harness already carries. Declared here so the
+#: choice is one line to change and one line to read.
+BENCH_VISION_MODEL = "openrouter/z-ai/glm-5.3-flash"
+
 GRADER_ENV_DEFAULTS = {
     "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
     "JUDGE_MODEL": "openai/gpt-5.4",
@@ -303,6 +312,18 @@ def _container_command(
         # measuring `enforce` is what the harness is for; the host value wins
         # when there is one, so an off-vs-enforce differential still works.
         "ROBOTHOR_STEP_EFFICIENCY_MODE": os.environ.get("ROBOTHOR_STEP_EFFICIENCY_MODE", "enforce"),
+        # The container has no Ollama, so the local vision model this fleet
+        # uses answers nothing in here: every vision task ran BLIND, which is
+        # measuring a harness without a capability the platform ships. The
+        # remote vision model runs on the same OpenRouter key the agent
+        # already uses, and it is the cheapest one on the account that the
+        # engine's registry declares `accepts_images` -- so `view_image` can
+        # fall back to it and `analyze_image` has a backend at all. Host
+        # override honoured, same idiom as the rung above, so a sweep can
+        # measure a different vision model without an image rebuild.
+        "ROBOTHOR_VISION_REMOTE_MODEL": os.environ.get(
+            "ROBOTHOR_VISION_REMOTE_MODEL", BENCH_VISION_MODEL
+        ),
         # Genus resolves its skills directory from this, so the task's skills
         # land somewhere the loader actually reads.
         "ROBOTHOR_WORKSPACE": CONTAINER_WORKSPACE,

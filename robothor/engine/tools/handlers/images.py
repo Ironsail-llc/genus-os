@@ -43,6 +43,7 @@ from __future__ import annotations
 import base64
 import io
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -204,6 +205,88 @@ def _capability_for_caller() -> tuple[str, str]:
     return model, image_capability(model)
 
 
+class UnsupportedImageError(ValueError):
+    """This file cannot be turned into something a model may be shown.
+
+    Carries the exact sentence the tool returns, so the two callers of
+    :func:`prepare_image_bytes` cannot drift into two different refusals for
+    the same file.
+    """
+
+
+@dataclass(frozen=True)
+class PreparedImage:
+    """The bytes a model gets, plus what was done to them on the way.
+
+    Extracted from ``view_image`` when ``analyze_image`` arrived: the size and
+    format rules are the ones a provider actually enforces, and a second
+    implementation of them is a second set of files that silently fail to
+    reach a model.
+    """
+
+    data: bytes
+    mime: str
+    width: int
+    height: int
+    original_width: int
+    original_height: int
+
+    @property
+    def downscaled(self) -> bool:
+        return (self.width, self.height) != (self.original_width, self.original_height)
+
+
+def prepare_image_bytes(path: Path) -> PreparedImage:
+    """*path* decoded, size-limited and re-encoded if the format needs it.
+
+    Raises :class:`UnsupportedImageError` for a file no model will accept, and lets
+    Pillow's own exceptions out for a file that is not an image at all — the
+    two callers report them differently and neither should have to guess which
+    happened.
+    """
+    try:
+        from PIL import Image
+    except ImportError as exc:  # pragma: no cover - Pillow ships with the image extra
+        raise UnsupportedImageError("Pillow is not installed — cannot read images") from exc
+
+    with Image.open(path) as img:
+        img.load()
+        fmt = (img.format or "").upper()
+        mime = _MIME_BY_FORMAT.get(fmt)
+        if mime is None:
+            raise UnsupportedImageError(f"unsupported image format: {fmt or 'unknown'}")
+
+        original = img.size
+        # Typed as the base Image, not ImageFile: `resize` returns the
+        # former, and LANCZOS moved to the Resampling enum in Pillow 10.
+        work: Image.Image = img
+        if max(original) > MAX_DIMENSION:
+            scale = MAX_DIMENSION / max(original)
+            work = img.resize(
+                (max(1, int(original[0] * scale)), max(1, int(original[1] * scale))),
+                Image.Resampling.LANCZOS,
+            )
+
+        if fmt in _REENCODE_TO_PNG or work is not img:
+            buf = io.BytesIO()
+            # Alpha and palette modes do not survive every encoder; RGB is
+            # the safe common denominator for anything being re-encoded.
+            work.convert("RGB").save(buf, format="PNG")
+            data = buf.getvalue()
+            mime = "image/png"
+        else:
+            data = path.read_bytes()
+
+        return PreparedImage(
+            data=data,
+            mime=mime,
+            width=work.size[0],
+            height=work.size[1],
+            original_width=original[0],
+            original_height=original[1],
+        )
+
+
 async def view_image(args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
     """Return an image file as content the agent's own model can see.
 
@@ -235,104 +318,95 @@ async def view_image(args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
             return {"error": f"no such file: {raw_path}"}
 
     try:
-        from PIL import Image
-    except ImportError:  # pragma: no cover - Pillow ships with the image extra
-        return {"error": "Pillow is not installed — cannot read images"}
-
-    try:
-        with Image.open(path) as img:
-            img.load()
-            fmt = (img.format or "").upper()
-            mime = _MIME_BY_FORMAT.get(fmt)
-            if mime is None:
-                return {"error": f"unsupported image format: {fmt or 'unknown'}"}
-
-            original = img.size
-            # Typed as the base Image, not ImageFile: `resize` returns the
-            # former, and LANCZOS moved to the Resampling enum in Pillow 10.
-            work: Image.Image = img
-            if max(original) > MAX_DIMENSION:
-                scale = MAX_DIMENSION / max(original)
-                work = img.resize(
-                    (max(1, int(original[0] * scale)), max(1, int(original[1] * scale))),
-                    Image.Resampling.LANCZOS,
-                )
-
-            reencode = fmt in _REENCODE_TO_PNG or work is not img
-            if reencode:
-                buf = io.BytesIO()
-                # Alpha and palette modes do not survive every encoder; RGB is
-                # the safe common denominator for anything being re-encoded.
-                work.convert("RGB").save(buf, format="PNG")
-                data = buf.getvalue()
-                mime = "image/png"
-            else:
-                data = path.read_bytes()
-
-            model, capability = _capability_for_caller()
-            result: dict[str, Any] = {
-                "width": work.size[0],
-                "height": work.size[1],
-                "path": str(path),
-                "resolved_from": resolved_from,
-            }
-            if capability == "rejects":
-                # No blocks. The client would strip them and the agent would be
-                # told it looked at something it never saw.
-                result["model"] = model
-                try:
-                    result["description"] = await describe_image_bytes(
-                        data, str(args.get("prompt") or "")
-                    )
-                    result["seen_by"] = "vision-model"
-                    result["note"] = (
-                        f"{model or 'this model'} cannot accept images, so this is the local "
-                        "vision model's description rather than the picture itself. Treat it "
-                        "as a second-hand account: if a detail decides the task, read the "
-                        "file programmatically to confirm it."
-                    )
-                except Exception as exc:  # noqa: BLE001 - reported, never invented
-                    logger.warning("local vision model could not describe %s: %s", path.name, exc)
-                    result["seen_by"] = "nobody"
-                    result["error"] = (
-                        f"{model or 'this model'} cannot accept images and the local vision "
-                        f"model is unavailable ({type(exc).__name__}). Nobody has looked at "
-                        f"{path.name}. Inspect it programmatically — e.g. Pillow via exec — "
-                        "or say plainly that you could not see it."
-                    )
-                return result
-
-            result["image_base64"] = base64.b64encode(data).decode("ascii")
-            result["image_mime"] = mime
-            result["seen_by"] = "primary"
-            # Notes ACCUMULATE. Each of these used to assign `note` outright,
-            # so a substituted file that was also downscaled reported only the
-            # downscale and the agent never learned it had been handed a
-            # different file from the one it asked for.
-            notes: list[str] = []
-            if capability == "unknown":
-                notes.append(
-                    f"{model or 'the current model'} is not confirmed to accept images. If "
-                    "the picture does not appear, call view_image again — the refusal is "
-                    "recorded and you will be given the local description instead."
-                )
-            if resolved_from:
-                notes.append(
-                    f"{raw_path} does not exist; read {Path(resolved_from).name} "
-                    "instead, which shares its name"
-                )
-            if work.size != original:
-                result["original_width"] = original[0]
-                result["original_height"] = original[1]
-                notes.append(
-                    f"downscaled from {original[0]}x{original[1]} to fit the "
-                    f"{MAX_DIMENSION}px limit — fine detail may be lost"
-                )
-            if notes:
-                result["note"] = " ".join(notes)
-            return result
+        prepared = prepare_image_bytes(path)
+    except UnsupportedImageError as e:
+        return {"error": str(e)}
     except Exception as e:  # Pillow raises a wide family on malformed input
         return {"error": f"could not read as an image: {type(e).__name__}: {e}"}
 
+    data = prepared.data
+    model, capability = _capability_for_caller()
+    result: dict[str, Any] = {
+        "width": prepared.width,
+        "height": prepared.height,
+        "path": str(path),
+        "resolved_from": resolved_from,
+    }
+    if capability == "rejects":
+        # No blocks. The client would strip them and the agent would be
+        # told it looked at something it never saw.
+        result["model"] = model
+        try:
+            result["description"] = await describe_image_bytes(data, str(args.get("prompt") or ""))
+            result["seen_by"] = "vision-model"
+            result["note"] = (
+                f"{model or 'this model'} cannot accept images, so this is the local "
+                "vision model's description rather than the picture itself. Treat it "
+                "as a second-hand account: if a detail decides the task, read the "
+                "file programmatically to confirm it."
+            )
+        except Exception as exc:  # noqa: BLE001 - reported, never invented
+            logger.warning("local vision model could not describe %s: %s", path.name, exc)
+            result["seen_by"] = "nobody"
+            result["error"] = (
+                f"{model or 'this model'} cannot accept images and the local vision "
+                f"model is unavailable ({type(exc).__name__}). Nobody has looked at "
+                f"{path.name}. Inspect it programmatically — e.g. Pillow via exec — "
+                "or say plainly that you could not see it."
+            )
+        return result
 
-HANDLERS: dict[str, Any] = {"view_image": view_image}
+    result["image_base64"] = base64.b64encode(data).decode("ascii")
+    result["image_mime"] = prepared.mime
+    result["seen_by"] = "primary"
+    # Notes ACCUMULATE. Each of these used to assign `note` outright,
+    # so a substituted file that was also downscaled reported only the
+    # downscale and the agent never learned it had been handed a
+    # different file from the one it asked for.
+    notes: list[str] = []
+    if capability == "unknown":
+        notes.append(
+            f"{model or 'the current model'} is not confirmed to accept images. If "
+            "the picture does not appear, call view_image again — the refusal is "
+            "recorded and you will be given the local description instead."
+        )
+    if resolved_from:
+        notes.append(
+            f"{raw_path} does not exist; read {Path(resolved_from).name} "
+            "instead, which shares its name"
+        )
+    if prepared.downscaled:
+        result["original_width"] = prepared.original_width
+        result["original_height"] = prepared.original_height
+        notes.append(
+            f"downscaled from {prepared.original_width}x{prepared.original_height} to fit "
+            f"the {MAX_DIMENSION}px limit — fine detail may be lost"
+        )
+    if notes:
+        result["note"] = " ".join(notes)
+    return result
+
+
+async def analyze_image(args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
+    """Answer one question about many images, OUT of the agent's own context.
+
+    The counterpart to ``view_image``, and the reason both exist: this one
+    never returns a picture. Each image is sent to the vision backend on its
+    own, concurrently, and only the text answer comes back — so an agent can
+    afford to ask about a hundred files, which is the difference between 0.28
+    and 0.99 on the benchmark task that measured it. See
+    :mod:`robothor.engine.vision_batch`.
+    """
+    from robothor.engine.vision_batch import analyze_images
+
+    return await analyze_images(
+        paths=args.get("paths"),
+        question=str(args.get("question") or ""),
+        detail=str(args.get("detail") or ""),
+        max_concurrency=args.get("max_concurrency"),
+        workspace=str(getattr(ctx, "workspace", "") or ""),
+        run_id=str(getattr(ctx, "run_id", "") or ""),
+    )
+
+
+HANDLERS: dict[str, Any] = {"view_image": view_image, "analyze_image": analyze_image}

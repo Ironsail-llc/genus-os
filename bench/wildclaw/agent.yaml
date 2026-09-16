@@ -68,6 +68,13 @@ tools_allowed:
   # ships to every agent on this fleet, so withholding it here would measure
   # a weaker platform than the one under test. Capability parity, not a hint.
   - view_image
+  # And the batch form. Task 8 of Productivity hands the agent ~100 photos
+  # and asks it to categorise them: the competing harness called its own
+  # vision tool 100 times and scored 0.992 while we called `view_image` four
+  # times and scored 0.424 (classification accuracy 0.99 against our 0.28, on
+  # five classes — guessing scores 0.20). Withholding the tool that closes
+  # that gap would measure a weaker platform than the one under test.
+  - analyze_image
   # A task's skill is how the benchmark tells an agent which APIs exist and
   # how to call them, and it hands the same SKILL.md to every harness.
   # OpenClaw reads those files straight into its context; Genus surfaces only

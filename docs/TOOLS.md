@@ -182,6 +182,117 @@ command.
 `send_email` is not a tool either — it is the `send-email` **skill**, invoked
 with `invoke_skill(name="send-email")`.
 
+### Vision: `view_image` and `analyze_image`
+
+Two tools, one rule:
+
+| You want to… | Call | What comes back |
+|---|---|---|
+| Study **one** picture — read a chart, find the bug in a screenshot, describe a photo | `view_image` | The picture itself, in the agent's own context |
+| Ask the **same question of many** pictures — sort, label, filter, search a folder | `analyze_image` | One text answer per image; no picture enters the context |
+
+**Why the split.** `view_image` puts the image in front of the agent's own
+model. That is the right thing for one image and the wrong thing for fifty:
+every call costs a turn, the image tokens stay in the conversation for the
+rest of the run, and an agent that has learned looking is expensive stops
+looking. Measured on 2026-09-16: on a task that hands an agent a folder of
+photographs to categorise, a competing harness called its out-of-band vision
+tool 100 times and scored 0.992 on the task; this engine called `view_image`
+four times and scored 0.424, classifying at 0.28 accuracy where five classes
+make 0.20 random — it was guessing from filenames.
+
+`analyze_image` is the out-of-band form. Each image goes to a vision model on
+its own, concurrently, and only the text answer returns — so the hundredth
+call costs the same as the first.
+
+```jsonc
+// call
+{"paths": ["photos/a.jpg", "photos/b.jpg"],   // 1-200, inside the workspace
+ "question": "Is there a person in this photo? Answer yes or no.",
+ "detail": "low",                              // or "high" for small text
+ "max_concurrency": 4}                         // 1-16
+
+// result
+{"question": "...", "model": "…", "backend": "remote", "analyzed": 2, "failed": 0,
+ "results": [{"path": "…/a.jpg", "answer": "yes", "model": "…", "ms": 812,
+              "tokens": 612, "cost_usd": 0.000123},
+             {"path": "…/b.jpg", "error": "the vision model timed out after 90s on this image",
+              "ms": 90004}],
+ "summary": "2 of 2 images answered by … in 3.1s (4 at a time)",
+ "tokens": 1224, "cost_usd": 0.000246}
+```
+
+Answers arrive in the order the paths were given. A row carries `answer` or
+`error`, never both — one image that fails does not cost you the batch.
+
+**Refusals.** A path resolving outside the workspace (symlinks followed
+first), a credentials file, a missing file, something that is not an image,
+and anything over 32 MB are each refused as that image's `error`, without a
+model ever being called. A refused row reports the same resolved path an
+answered row does, so an agent can line its request up against the results.
+
+**Plan mode.** `analyze_image` counts as read-only — it changes nothing on the
+box or anywhere else — so an agent in plan mode may call it. On a remote
+backend that is real money spent while planning; `ROBOTHOR_VISION_BATCH_MAX_CHARS`
+and the concurrency ceiling bound the call, not the spend. Deny the tool for
+an agent where that is not wanted.
+
+**Cost.** Per-image tokens and cost are reported where the backend gives them,
+and the call's total `cost_usd` is added to the run's spend like any other
+tool cost. `detail: "low"` is the default deliberately: it is what makes the
+tool cheap enough to call in a loop. On the local (Ollama) backend `detail` is
+ignored and the result says so — the API has no such knob.
+
+**Big batches spill to a file.** Two hundred rows are ~40,000 characters of
+short answers and ~432,000 of long ones, which would put back in the context
+what the tool exists to keep out of it. Past
+`ROBOTHOR_VISION_BATCH_MAX_CHARS` the result keeps its totals, its counts and
+its first rows, and the **whole** table goes to
+`<workspace>/.robothor/analyze_image/<run>-<n>.json`:
+
+```jsonc
+{"question": "…", "model": "…", "analyzed": 198, "failed": 2,
+ "results": [ /* the first rows that fit */ ],
+ "results_shown": 12, "results_total": 200,
+ "results_file": "/…/.robothor/analyze_image/<run>-1.json",
+ "tokens": 121600, "cost_usd": 0.0243,
+ "note": "200 rows did not fit … work over that file …"}
+```
+
+Work over that file with `exec` (jq, python) rather than reading it whole —
+that keeps the win. It matters for the record as well as the context: the
+engine replaces any tool output over 4,000 characters in `agent_run_steps`
+with a flat head/tail string, so the per-image `tokens`/`cost_usd` ledger
+survives in the JSON file and in the run total, and the inline result is kept
+under that cap so the step row is never flattened — including when every note
+fires and the workspace path is long. That is the invariant; raising the
+setting cannot break it, because the budget is clamped below the cap.
+
+Spilled tables are deleted by the daily retention sweep after
+`ROBOTHOR_VISION_BATCH_RETENTION_DAYS` (7), so the directory does not grow
+without bound. Copy one somewhere else if you want to keep it.
+
+#### Configuring the backend
+
+| Setting | What it does |
+|---|---|
+| `ROBOTHOR_VISION_MODEL` | The local VLM, served by Ollama. The default backend. |
+| `ROBOTHOR_VISION_REMOTE_MODEL` | A provider model used instead, for a deployment with no local GPU (a container, the cloud, the benchmark sandbox). Must be **declared** `accepts_images=True` in the engine's model registry — a model the registry has never heard of is refused, same as one it declares text-only. |
+| `ROBOTHOR_VISION_BATCH_CONCURRENCY` | Ceiling on images in flight at once (default 4, platform maximum 16). An agent's `max_concurrency` may ask for fewer, never for more. |
+| `ROBOTHOR_VISION_BATCH_TIMEOUT` | Seconds one image gets (default 90). |
+| `ROBOTHOR_VISION_BATCH_DEADLINE` | Seconds the whole call gets (default 600). |
+| `ROBOTHOR_VISION_BATCH_MAX_CHARS` | How much of the result comes back inline before the table spills to a file (default 3500). Clamped to 3800 — the step writer flattens a tool result over 4,000 characters, so a larger value would destroy the per-image record it exists to keep. 0 or less means the default; the bound cannot be turned off. |
+| `ROBOTHOR_VISION_BATCH_RETENTION_DAYS` | How long a spilled table is kept before the daily retention sweep deletes it (default 7). 0 disables the prune. |
+
+A remote model the registry does not **declare** able to accept images is
+**not** dialled — whether it declares the model text-only or has no entry for
+it at all. The batch falls back to the local model (the result's `note` says
+it did, and which model answered), or refuses and names the model and the
+registry field to set. Handing images to a model that cannot take them is the
+failure `view_image` was fixed for: a provider 404 one layer down and an agent
+that believes it looked. It is worth being strict here rather than optimistic,
+because one misconfigured setting is 200 of those 404s in a single call.
+
 ### Everything else
 
 The full registry is large and changes with the release; `tool_search` over the
@@ -196,7 +307,7 @@ agent's own allow-set is the authoritative answer. The families:
 | Notifications | `get_inbox`, `ack_notification`, `send_notification` |
 | Skills | `list_skills`, `invoke_skill` |
 | Sub-agents | `spawn_agent`, `spawn_agents` (only with `can_spawn_agents`) |
-| Vision | `look`, `who_is_here` (a real camera) |
+| Vision | `view_image`, `analyze_image` (image files — see above); `look`, `who_is_here` (a real camera) |
 | Desktop | `desktop_*` (a real screen) |
 
 ---
@@ -322,6 +433,14 @@ truncates it on the way there. Cutting blind lands the hole wherever the
 character count falls, which is why the stored record of every long email used
 to be two halves of a base64 blob. A handler that caps itself keeps the
 beginning and says `body_truncated`.
+
+[`analyze_image`](#vision-view_image-and-analyze_image) is the other handler
+that caps itself, and the reason its budget is 3,500 rather than a round
+number: 200 rows of answers are tens of thousands of characters, so the result
+keeps its totals and its first rows under this cap and writes the rest to a
+file. What the agent reads is therefore also what the step row keeps —
+including the per-image token and cost ledger, which a head-and-tail cut would
+destroy.
 
 ## See also
 

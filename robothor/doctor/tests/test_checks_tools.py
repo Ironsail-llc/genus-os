@@ -243,6 +243,140 @@ class TestTheDoctorModelsTheRegistrysFilters:
         assert "spawn_agent" in result.detail
 
 
+class TestTheMetaToolsAreGrantedByDeferral:
+    """Two false positives on the live instance, both of them the check
+    disagreeing with the loader rather than the loader being wrong.
+
+    `tool_search`/`tool_describe`/`tool_call` are never in `tools_allowed` and
+    never can be: `build_for_agent` INJECTS them when it defers an agent's
+    toolset. Modelling only the strip — which `_get_filtered_names` does — and
+    not the injection made every deferred agent whose instructions explain the
+    meta-tools read as a mismatch.
+    """
+
+    @staticmethod
+    def _deferral_on(monkeypatch, threshold: int = 2) -> None:
+        monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "1")
+        monkeypatch.delenv("ROBOTHOR_DISABLE_ALL_RIPS", raising=False)
+        monkeypatch.setenv("ROBOTHOR_DEFERRED_TOOLS_THRESHOLD", str(threshold))
+
+    @pytest.mark.asyncio
+    async def test_a_deferred_agent_may_be_told_how_to_search_for_tools(
+        self, instance: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._deferral_on(monkeypatch)
+        _write_agent(
+            instance,
+            "broad",
+            {"tools_allowed": ["read_file", "write_file", "exec", "web_search"]},
+            instructions=(
+                "Most of your tools load on demand: call `tool_search` to find one, "
+                "`tool_describe` to read its schema, and `tool_call` to run it."
+            ),
+        )
+        result = await _run("agents.tools_named_but_not_granted")
+        assert result.status == "pass", result.detail
+
+    @pytest.mark.asyncio
+    async def test_an_agent_too_small_to_defer_is_still_reported(
+        self, instance: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The tools really are absent for it, and the instruction really is
+        wrong — which is the whole point of the check."""
+        self._deferral_on(monkeypatch, threshold=40)
+        _write_agent(
+            instance,
+            "narrow",
+            {"tools_allowed": ["read_file"]},
+            instructions="Call `tool_search` when you need something else.",
+        )
+        result = await _run("agents.tools_named_but_not_granted")
+        assert result.status == "fail"
+        assert "tool_search" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_with_deferral_off_nobody_gets_them(
+        self, instance: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ROBOTHOR_RIP_16_ENABLED", raising=False)
+        _write_agent(
+            instance,
+            "broad",
+            {"tools_allowed": ["read_file", "write_file", "exec", "web_search"]},
+            instructions="Use `tool_search` to find a tool.",
+        )
+        result = await _run("agents.tools_named_but_not_granted")
+        assert result.status == "fail"
+        assert "tool_search" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_a_prohibition_is_never_a_mismatch_either_way(
+        self, instance: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ROBOTHOR_RIP_16_ENABLED", raising=False)
+        _write_agent(
+            instance,
+            "narrow",
+            {"tools_allowed": ["read_file"]},
+            instructions="Never use `tool_call`; everything you need is granted.",
+        )
+        result = await _run("agents.tools_named_but_not_granted")
+        assert result.status == "pass", result.detail
+
+
+class TestAdapterToolsResolve:
+    """The second false positive: `tools_allowed` was judged against the
+    BUILT-IN schemas only, so every MCP-adapter tool an instance grants read as
+    "resolves to nothing" — a permanent red on any instance with an adapter,
+    which is a check an operator learns to ignore."""
+
+    @staticmethod
+    def _adapter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *tools: str) -> None:
+        directory = tmp_path / "adapters"
+        directory.mkdir(exist_ok=True)
+        (directory / "acme.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "name": "acme",
+                    "transport": "http",
+                    "url": "https://mcp.example.com",
+                    "tools_allowed": list(tools),
+                }
+            )
+        )
+        monkeypatch.setenv("ROBOTHOR_ADAPTER_DIR", str(directory))
+
+    @pytest.mark.asyncio
+    async def test_a_registered_adapters_tool_resolves(
+        self, instance: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._adapter(tmp_path, monkeypatch, "acme_search", "acme_get")
+        _write_agent(instance, "worker", {"tools_allowed": ["read_file", "acme_search"]})
+        result = await _run("agents.tools_named_but_not_granted")
+        assert result.status == "pass", result.detail
+
+    @pytest.mark.asyncio
+    async def test_a_name_no_adapter_serves_is_still_reported(
+        self, instance: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._adapter(tmp_path, monkeypatch, "acme_search")
+        _write_agent(instance, "worker", {"tools_allowed": ["read_file", "acme_delete"]})
+        result = await _run("agents.tools_named_but_not_granted")
+        assert result.status == "fail"
+        assert "acme_delete" in result.detail
+        assert "resolves to nothing" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_with_no_adapters_configured_nothing_changes(
+        self, instance: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ROBOTHOR_ADAPTER_DIR", str(tmp_path / "nowhere"))
+        _write_agent(instance, "worker", {"tools_allowed": ["read_file", "acme_search"]})
+        result = await _run("agents.tools_named_but_not_granted")
+        assert result.status == "fail"
+        assert "acme_search" in result.detail
+
+
 # ── agents.tools_named_but_not_granted ────────────────────────────────
 
 

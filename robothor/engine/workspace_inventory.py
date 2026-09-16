@@ -87,7 +87,16 @@ def workspace_inventory(workspace: str | Path | None, limit: int = DEFAULT_LIMIT
     if total > len(entries):
         body += f"\n  … and {total - len(entries)} more — list the directory for the rest"
     if images:
-        body += "\n  Use view_image to look at an image; you cannot read one with read_file."
+        # Both tools, with the rule for choosing, at the moment the agent first
+        # sees the folder. `analyze_image` shipped without this line being
+        # updated and a hostile review caught it: rule 18 of the instruction
+        # contract says the same thing but is far away, and an agent handed two
+        # tools and no nearby rule reaches for the familiar one. The tasks this
+        # preamble fires on are exactly the many-image tasks.
+        body += (
+            "\n  Use view_image to look at one image, or analyze_image to ask the same "
+            "question about many at once; you cannot read either with read_file."
+        )
     return f"{header}\n{body}"
 
 
