@@ -30,7 +30,7 @@ class TestItNeverTellsTheModelToGiveUp:
 
     @pytest.mark.parametrize("tool", ["exec", "web_fetch", "some_plugin_tool"])
     def test_every_message_names_something_to_do(self, tool):
-        """"Try a different approach" is the only instruction the model was
+        """ "Try a different approach" is the only instruction the model was
         given, and it followed it. The remedy has to be in the message."""
         text = timeout_guidance(tool).lower()
         assert "narrow" in text or "smaller" in text or "more time" in text, tool

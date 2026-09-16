@@ -20,12 +20,15 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
-def record_deliverable_verdicts(run: Any, session: Any, workspace: str | None) -> None:
+def record_deliverable_verdicts(run: Any, session: Any, workspace: str | Path | None) -> None:
     """The deliverable verdict for one finished run, at whatever rung is configured.
 
     The complement of the completion contract: that one asks whether the

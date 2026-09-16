@@ -28,7 +28,10 @@ import contextlib
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -198,7 +201,7 @@ def _spawn_hard_cap_alert(session: Any, agent_config: Any, used: int) -> None:
         logger.debug("Runaway-token alert dispatch failed", exc_info=True)
 
 
-def append_engine_note(session: Any, note: str | None, workspace: str | None = None) -> None:
+def append_engine_note(session: Any, note: str | None, workspace: str | Path | None = None) -> None:
     """Put an engine-context note in front of the model, or nothing if there is none.
 
     Given a ``workspace``, a check-in becomes a COMPARISON where the task
@@ -224,7 +227,7 @@ def append_engine_note(session: Any, note: str | None, workspace: str | None = N
     session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": note})
 
 
-def nudge_for_missing_deliverable(session: Any, workspace: str | None = None) -> bool:
+def nudge_for_missing_deliverable(session: Any, workspace: str | Path | None = None) -> bool:
     """The agent stopped; does it still owe a correct deliverable?
 
     Two questions, asked in order: is the artifact the task named there at all,
@@ -254,7 +257,7 @@ def nudge_for_missing_deliverable(session: Any, workspace: str | None = None) ->
     return reask_for_wrong_deliverable_shape(session, workspace)
 
 
-def reask_for_wrong_deliverable_shape(session: Any, workspace: str | None = None) -> bool:
+def reask_for_wrong_deliverable_shape(session: Any, workspace: str | Path | None = None) -> bool:
     """The artifact exists; is it the SHAPE the task described?
 
     The guard above asks whether the file is there. Measured 2026-09-16, three
