@@ -64,19 +64,20 @@ import logging
 import shutil
 import stat
 import tempfile
-import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from robothor.constants import DEFAULT_TENANT
-from robothor.engine.code_exec_process import PR_SET_CHILD_SUBREAPER, run_snippet
+from robothor.engine.code_exec_process import (
+    MAX_TIMEOUT_SECONDS,
+    PR_SET_CHILD_SUBREAPER,
+    run_snippet,
+)
+from robothor.engine.code_exec_result import HARD_CAP_MULTIPLIER, shape
 from robothor.engine.code_execution import (
     DEFAULT_MAX_TOOL_CALLS,
     DEFAULT_TIMEOUT_SECONDS,
-    MAX_STDERR_BYTES,
     MAX_STDOUT_BYTES,
-    SandboxResult,
-    truncate_with_marker,
 )
 
 if TYPE_CHECKING:
@@ -96,22 +97,6 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
 
     return decorator
 
-
-#: How much more than the model's stdout budget is kept for the spill file.
-#: The spill exists so the agent can page the whole output back, so it has to
-#: hold more than the inline cut — and it cannot hold everything, because
-#: "everything" is whatever a runaway loop printed.
-HARD_CAP_MULTIPLIER = 20
-
-#: The ceiling an agent cannot ask past, matching `exec`'s. A snippet that
-#: outlives the run owning it is a leak, not a long job.
-MAX_TIMEOUT_SECONDS = 900
-
-#: Where an oversized stdout is spilled. Under the workspace so the agent can
-#: `read_file` it back; under `.robothor/` so it is never mistaken for a
-#: deliverable; not under `.robothor/secret*`, which is the prefix
-#: `secret_paths` refuses.
-WORKDIR_NAME = ".robothor/execute_code"
 
 #: Top-level packages the in-sandbox import guard refuses. Defence in depth
 #: only — see the module docstring — but it turns "the snippet imported the
@@ -177,24 +162,6 @@ def _child_environment(ctx: ToolContext, tools_dir: Path) -> dict[str, str]:
     env["GENUS_TOOLS_DIR"] = str(tools_dir)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     return env
-
-
-def _spill(workspace: Path, stdout: str) -> str:
-    """Full stdout to a file the agent can page back, or "" if it cannot be written.
-
-    The same trade the `analyze_image` batch makes: the model reads a bounded
-    head and is told where the rest is, so truncation becomes pagination rather
-    than the invisible amputation `exec` used to do at 4,000 characters.
-    """
-    try:
-        root = workspace / WORKDIR_NAME
-        root.mkdir(parents=True, exist_ok=True)
-        path = root / f"stdout-{uuid.uuid4().hex[:12]}.txt"
-        path.write_text(stdout, encoding="utf-8")
-        return str(path)
-    except OSError as exc:
-        logger.warning("execute_code could not spill stdout: %s", exc)
-        return ""
 
 
 def _run_scratch_root(ctx: ToolContext) -> str:
@@ -279,7 +246,7 @@ async def _execute_code(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
             logger.warning("execute_code: closing the tool socket failed: %r", exc)
         shutil.rmtree(tools_dir, ignore_errors=True)
 
-    return _shape(result, server=server, workspace=workspace, stdout_cap=stdout_cap)
+    return shape(result, server=server, workspace=workspace, stdout_cap=stdout_cap)
 
 
 def _resolved_timeout(args: dict[str, Any], ctx: ToolContext) -> int:
@@ -312,43 +279,3 @@ def _stage(tools_dir: Path, code: str) -> None:
         BOOT_TEMPLATE.format(guarded=GUARDED_IMPORTS, subreaper=PR_SET_CHILD_SUBREAPER),
         encoding="utf-8",
     )
-
-
-def _shape(
-    result: SandboxResult, *, server: Any, workspace: Path, stdout_cap: int
-) -> dict[str, Any]:
-    """The result the model reads: bounded, marked, and never silently cut."""
-    full_stdout = result.stdout
-    stdout, stdout_cut = truncate_with_marker(full_stdout, stdout_cap)
-    stderr, stderr_cut = truncate_with_marker(result.stderr, MAX_STDERR_BYTES)
-
-    shaped = SandboxResult(
-        stdout=stdout,
-        stderr=stderr,
-        returncode=result.returncode,
-        tool_call_count=server.calls_served,
-        timed_out=result.timed_out,
-        stdout_truncated=stdout_cut,
-        stderr_truncated=stderr_cut,
-    ).as_dict()
-
-    if stdout_cut:
-        path = _spill(workspace, full_stdout)
-        if path:
-            shaped["stdout_file"] = path
-            shaped["note"] = (
-                f"Output was {len(full_stdout)} characters; the first {stdout_cap} are "
-                f"above and the whole of it is at {path}. Work over that file "
-                "rather than re-running the snippet to see the rest."
-            )
-    if result.timed_out:
-        shaped["error"] = (
-            "The snippet ran out of time. Its process group and every descendant "
-            "the engine could still see were killed; a process that both left the "
-            "group and detached itself may have survived. Ask for more with the "
-            f"`timeout` parameter (up to {MAX_TIMEOUT_SECONDS}s), or do less per "
-            "snippet."
-        )
-    if server.calls_served >= server.max_calls:
-        shaped["tool_call_limit_reached"] = True
-    return shaped

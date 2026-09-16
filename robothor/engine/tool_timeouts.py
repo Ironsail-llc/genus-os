@@ -111,8 +111,10 @@ def self_timed_ceiling(tool_name: str) -> int:
     call.
     """
     if not _self_timed_ceilings:
-        from robothor.engine.code_exec_process import DRAIN_GRACE_SECONDS
-        from robothor.engine.tools.handlers.code_exec import MAX_TIMEOUT_SECONDS
+        from robothor.engine.code_exec_process import (
+            DRAIN_GRACE_SECONDS,
+            MAX_TIMEOUT_SECONDS,
+        )
         from robothor.engine.tools.handlers.filesystem import MAX_EXEC_TIMEOUT
 
         _self_timed_ceilings.update(

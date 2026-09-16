@@ -159,6 +159,12 @@ CAPS = {
     # the handler's admission/staging/shaping is another. The split is what
     # paid for the cancellation fix rather than a bigger cap, and it is where
     # the descendant walk lands.
+    # 351 -> 281: the result shaping and the stdout spill left for
+    # code_exec_result.py. "Given what the process produced, what goes into the
+    # context and what goes to disk" is its own question, and it is the one the
+    # escape-disclosure wording lives in — so it belongs where a reader looking
+    # for that sentence would go. The ratchet caught this file three lines over
+    # after a style commit; the answer is the extraction, not the number.
     # 395 -> 351: the pre-spawn refusals and the process hardening left for
     # code_exec_guards.py — "may this run at all, and is the engine ready" is a
     # different question from staging, spawning and shaping, and it is what
@@ -168,14 +174,15 @@ CAPS = {
     # sandbox_runtime/boot_template.py, beside the client it loads. Ninety
     # lines of code that runs somewhere else was the shape `genus_tools.py`
     # was deliberately not written in; the reaper it grew made that obvious.
-    "robothor/engine/tools/handlers/code_exec.py": 351,
+    "robothor/engine/tools/handlers/code_exec.py": 281,
+    "robothor/engine/code_exec_result.py": 103,
     "robothor/engine/code_exec_guards.py": 116,
     "robothor/engine/sandbox_runtime/boot_template.py": 122,
     # 211 -> 341: the descendant census. `killpg` alone reached neither a
     # `setsid` child nor a double-forked daemon, and a probe left 16 of 16
     # running after the call returned. This is the module that owns "nothing
     # survives", so the census belongs here and nowhere else.
-    "robothor/engine/code_exec_process.py": 341,
+    "robothor/engine/code_exec_process.py": 350,  # +9: MAX_TIMEOUT_SECONDS joins the other two clocks
     # The per-tool wall-clock rule, with one definition instead of four.
     "robothor/engine/tool_timeouts.py": 144,
     "robothor/engine/tools/read_only.py": 87,

@@ -540,7 +540,7 @@ class TestTheContainerCase:
 def test_the_scratch_directory_is_not_a_secret_path():
     """`secret_paths` refuses anything under `.robothor/secret*`; the spill
     lives under `.robothor/` and must not collide with that prefix."""
-    from robothor.engine.tools.handlers.code_exec import WORKDIR_NAME
+    from robothor.engine.code_exec_result import WORKDIR_NAME
 
     assert WORKDIR_NAME.startswith(".robothor/")
     assert not WORKDIR_NAME.startswith(".robothor/secret")

@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "DRAIN_GRACE_SECONDS",
     "EXIT_POLL_SECONDS",
+    "MAX_TIMEOUT_SECONDS",
     "DescendantCensus",
     "descendants_of",
     "kill_descendants",
@@ -49,6 +50,14 @@ __all__ = [
     "run_snippet",
     "wait_for_exit",
 ]
+
+#: The ceiling an agent cannot ask past, matching `exec`'s. A snippet that
+#: outlives the run owning it is a leak, not a long job. It lives beside the
+#: other two clocks rather than in the handler, because `tool_timeouts` reads
+#: it to size the registry deadline that wraps this tool — and a ceiling the
+#: outer bound has to import from a HANDLER is a dependency pointing the
+#: wrong way.
+MAX_TIMEOUT_SECONDS = 900
 
 #: How often the exit poll wakes. Short enough that a snippet printing one line
 #: does not feel slow, long enough that a fifteen-minute one costs a few
