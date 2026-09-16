@@ -177,12 +177,22 @@ CAPS = {
     "robothor/engine/tools/handlers/code_exec.py": 281,
     "robothor/engine/code_exec_result.py": 103,
     "robothor/engine/code_exec_guards.py": 116,
-    "robothor/engine/sandbox_runtime/boot_template.py": 122,
+    # 122 -> 129: the same disclosure, said where the reaper is, because this
+    # is the `finally` that `os._exit` skips and a reader here is the one who
+    # would otherwise conclude the reaper is complete.
+    "robothor/engine/sandbox_runtime/boot_template.py": 129,
     # 211 -> 341: the descendant census. `killpg` alone reached neither a
     # `setsid` child nor a double-forked daemon, and a probe left 16 of 16
     # running after the call returned. This is the module that owns "nothing
     # survives", so the census belongs here and nowhere else.
-    "robothor/engine/code_exec_process.py": 350,  # +9: MAX_TIMEOUT_SECONDS joins the other two clocks
+    # 350 -> 355. Nine of those lines were MAX_TIMEOUT_SECONDS joining the
+    # other two clocks; the last five are the disclosure the re-check
+    # required — that a snippet can FORCE the escape (a `setsid` child, then
+    # `os._exit` to skip its own reaper) rather than merely win a race. That
+    # is the `deliverable_extract.py` case: splitting a file to hide a comment
+    # would be the ratchet working against its own purpose, and a limit
+    # rediscovered by the next reviewer costs more than five lines.
+    "robothor/engine/code_exec_process.py": 355,
     # The per-tool wall-clock rule, with one definition instead of four.
     "robothor/engine/tool_timeouts.py": 144,
     "robothor/engine/tools/read_only.py": 87,

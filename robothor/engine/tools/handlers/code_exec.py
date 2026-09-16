@@ -32,15 +32,13 @@ A subprocess, from the workspace, with:
   is that the environment holds nothing worth importing the engine for.
 * **its own process group, plus a census of its descendants**, killed on the
   way out whether the snippet finished, timed out or was cancelled. The census
-  is taken WHILE the snippet runs, because on the ordinary exit path its
-  children have already reparented by the time we kill. What survives: a
-  child started with `start_new_session=True` whose parent then calls
-  `os._exit`, which skips the reaper's `finally` and leaves the census nothing
-  to have sampled. That is a snippet FORCING the escape, not winning a race,
-  and it is reproducible. Closing it needs a cgroup the engine can kill as a
-  unit, which needs `Delegate=yes` on the unit — an operator change, not a code
-  one, and every place that describes this says so rather than promising what
-  it cannot do.
+  is taken WHILE the snippet runs: on the ordinary exit path its children have
+  already reparented by the time we kill. What survives: a child started with
+  `start_new_session=True` whose parent then calls `os._exit`, skipping the
+  reaper's `finally` and leaving the census nothing to have sampled. A snippet
+  FORCING the escape, reproducibly — not winning a race. Only a cgroup the
+  engine can kill as a unit closes it, which needs `Delegate=yes` on the unit:
+  an operator change. Every place that describes this says so.
 
 What it can reach
 -----------------
