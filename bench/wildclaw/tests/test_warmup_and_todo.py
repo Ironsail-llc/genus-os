@@ -21,22 +21,123 @@ the other is giving the agent under test the tools the platform actually ships.
 
 from __future__ import annotations
 
+import re
+import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 from bench.wildclaw import harness
 
 REPO = Path(__file__).resolve().parents[3]
 
+#: The benchmark declares a warmup as a fenced block under a `## Warmup`
+#: heading. Read straight from the spec rather than through the harness's own
+#: loader, so the test reads what the benchmark wrote.
+_WARMUP_RE = re.compile(
+    r"^##\s+Warmup\s*$\n+```[a-z]*\n(.*?)^```", re.MULTILINE | re.DOTALL | re.IGNORECASE
+)
+
+
+def _declared_warmup(spec_text: str) -> str:
+    match = _WARMUP_RE.search(spec_text)
+    return match.group(1) if match else ""
+
+
+class TestTheWarmupParses:
+    """A prelude that does not parse is worse than one that does not check.
+
+    The whole container script is one `sh -c`: a parse error means the agent
+    never starts, the grader never runs, and `/out/warmup.failed` is never
+    written — the operator gets a bare `Syntax error` with no marker, which is
+    the indistinguishable-from-an-agent-crash case the marker exists to
+    prevent. The first version rewrote each line as `<line> || _warmup_failed`,
+    and a warmup that backgrounds a mock service (`cmd &`) then became
+    `cmd & || …`, a dash SYNTAX ERROR for 7 of 60 tasks — the whole mock-service
+    half of one category (hostile review 2026-09-16, C2).
+    """
+
+    @staticmethod
+    def _parses(script: str) -> tuple[bool, str]:
+        if not script:
+            return True, ""
+        for shell in ("/bin/dash", "/bin/sh"):
+            if Path(shell).exists():
+                proc = subprocess.run(  # noqa: S603 — fixed argv, our own text
+                    [shell, "-n"], input=script, capture_output=True, text=True
+                )
+                return proc.returncode == 0, proc.stderr.strip()
+        pytest.skip("no POSIX shell to parse with")
+
+    @pytest.mark.parametrize(
+        "warmup",
+        [
+            "npm install -g agent-browser",
+            "python /root/mock_service.py &",
+            "python /root/mock_service.py &\nsleep 2",
+            "pip install foo && pip install bar",
+            "cd /tmp && python -m http.server 8000 &",
+            "echo 'single quoted' > /tmp/x",
+            "a=1; export a",
+            "for i in 1 2 3; do echo $i; done",
+        ],
+        ids=[
+            "plain",
+            "backgrounded",
+            "backgrounded-then-sync",
+            "chained",
+            "cd-and-background",
+            "single-quotes",
+            "assignment",
+            "loop",
+        ],
+    )
+    def test_generated_preludes_parse(self, warmup):
+        ok, err = self._parses(harness._warmup_prelude({"warmup": warmup}))
+        assert ok, f"{warmup!r} -> {err}"
+
+    def test_every_benchmark_task_s_prelude_parses(self):
+        """The corpus, read-only, because a unit fixture is what missed this:
+        the one command smoke-tested by hand was the one that already parsed."""
+        tasks = Path("/home/philip/robothor-bench/WildClawBench/tasks")
+        if not tasks.is_dir():
+            pytest.skip("benchmark checkout not present")
+        failures: list[str] = []
+        seen = 0
+        for spec in sorted(tasks.rglob("*.md")):
+            warmup = _declared_warmup(spec.read_text(encoding="utf-8", errors="replace"))
+            if not warmup:
+                continue
+            seen += 1
+            ok, err = self._parses(harness._warmup_prelude({"warmup": warmup}))
+            if not ok:
+                failures.append(f"{spec.name}: {err}")
+        assert seen >= 40, f"only {seen} specs declared a warmup — is the corpus right?"
+        assert not failures, failures
+
+    def test_a_backgrounded_service_survives_the_prelude(self):
+        """Not just parseable — the point of backgrounding is that the process
+        outlives the line, which is why the grader runs in this same container."""
+        ok, err = self._parses(harness._warmup_prelude({"warmup": "sleep 30 &\necho started"}))
+        assert ok, err
+
+    def test_a_warmup_that_is_not_shell_becomes_the_marker_not_a_syntax_error(self):
+        """No wrapper can rescue the parse — the lines share one shell on
+        purpose, so a backgrounded service outlives its line and `cd` reaches
+        the next one. What it CAN do is fail with the marker, which is the
+        difference between "this task's setup is wrong" and an unexplained
+        container exit. (The benchmark's own task template carries a prose
+        block in its warmup field, which is how this case was found.)"""
+        prelude = harness._warmup_prelude({"warmup": "`unterminated\n<!-- prose -->"})
+        ok, err = self._parses(prelude)
+        assert ok, f"the fallback prelude must itself parse: {err}"
+        assert "WARMUP FAILED" in prelude
+        assert "/out/warmup.failed" in prelude
+        assert "exit 3" in prelude
+
 
 class TestTheWarmupFailsLoudly:
-    def test_a_declared_warmup_stops_the_container_when_it_fails(self):
-        """`set -e` is the whole mechanism: without it a failing install is one
-        line of stderr scrolling past, and the agent runs anyway."""
-        prelude = harness._warmup_prelude({"warmup": "npm install -g agent-browser"})
-        assert prelude.startswith("set -e")
-
     def test_it_says_which_command_failed(self):
         prelude = harness._warmup_prelude({"warmup": "npm install -g agent-browser"})
         assert "WARMUP FAILED" in prelude
