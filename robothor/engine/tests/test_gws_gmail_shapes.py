@@ -790,6 +790,60 @@ class TestLabelsAreShedLikeEverythingElse:
         assert out["messages"][0]["labels_omitted"] > 0
 
 
+class TestMetadataFormatObeysTheCapToo:
+    """Round 3, Important 2: `format=metadata`/`minimal` returned
+    `_shape_envelope(raw)` with no header bound and no fitting, so the same
+    message was bounded one way and 6,975 characters the other — R3's "same
+    message, two entry points, opposite answers" surviving in a third entry
+    point. `format` is a schema enum the model can pass.
+    """
+
+    @staticmethod
+    def _message(recipients: int):
+        return {
+            "id": "m",
+            "threadId": "t",
+            "labelIds": ["INBOX"],
+            "snippet": "s" * 200,
+            "payload": {
+                "mimeType": "text/plain",
+                "headers": [
+                    {"name": "From", "value": "alice@example.com"},
+                    {
+                        "name": "To",
+                        "value": ", ".join(f"person{i:03d}@example.com" for i in range(recipients)),
+                    },
+                    {"name": "Subject", "value": "A subject"},
+                ],
+                "body": {"data": _b64("hello")},
+            },
+        }
+
+    @pytest.mark.parametrize("fmt", ["metadata", "minimal"])
+    def test_a_200_recipient_envelope_fits(self, fake_gws, fmt: str) -> None:
+        fake_gws.responses["gmail users messages get --params"] = self._message(200)
+        out = _call("gws_gmail_get", {"message_id": "m", "format": fmt})
+
+        assert len(json.dumps(out)) <= MAX_TOOL_OUTPUT_CHARS, fmt
+
+    @pytest.mark.parametrize("fmt", ["metadata", "minimal"])
+    def test_what_was_shed_is_reported(self, fake_gws, fmt: str) -> None:
+        fake_gws.responses["gmail users messages get --params"] = self._message(200)
+        out = _call("gws_gmail_get", {"message_id": "m", "format": fmt})
+
+        assert out["truncated"] is True
+        assert out.get("fields_omitted"), "a cut header that says nothing is a silent loss"
+
+    @pytest.mark.parametrize("fmt", ["metadata", "minimal"])
+    def test_a_small_envelope_is_untouched(self, fake_gws, fmt: str) -> None:
+        fake_gws.responses["gmail users messages get --params"] = self._message(1)
+        out = _call("gws_gmail_get", {"message_id": "m", "format": fmt})
+
+        assert out["to"] == "person000@example.com"
+        assert not out.get("truncated")
+        assert "body_text" not in out, "metadata means metadata"
+
+
 class TestOneBadFetchDoesNotLoseTheSearch:
     def test_a_raising_fetch_is_isolated(self, fake_gws) -> None:
         """`pool.map` re-raises on iteration, so one exception took the whole

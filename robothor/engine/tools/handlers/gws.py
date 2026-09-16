@@ -1516,7 +1516,13 @@ def _gmail_get(args: dict[str, Any]) -> dict[str, Any]:
     if "error" in raw:
         return raw
     if not with_body:
-        return _shape_envelope(raw)
+        # Through the SAME fitting as every other shape. This returned
+        # `_shape_envelope(raw)` raw — no header bound, no cap — so one message
+        # came back bounded through `format=full` and 6,975 characters through
+        # `format=metadata`, which the model chooses from a schema enum. It is
+        # the "same message, two entry points, opposite answers" defect the
+        # thread path was fixed for, in a third entry point.
+        return _fit_one_message(_shape_envelope(raw))
     message = _shape_message(raw, max_chars=max_chars)
     # A single pathological body (a 3 MB newsletter) can still overflow once
     # the envelope is counted; tighten until it fits rather than hand the
