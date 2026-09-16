@@ -453,7 +453,7 @@ def test_run_stats_query_runs(db_conn, monkeypatch):
 - [ ] **Step 6: Run unit + integration tests**
 
 Run: `cd crm/bridge && python -m pytest tests/test_fleet_router.py -v` (no DB) then
-`cd /home/philip/robothor && ROBOTHOR_DB_NAME=robothor_test python -m pytest crm/bridge/tests/test_fleet_query_integration.py -v -m integration`
+`cd $ROBOTHOR_WORKSPACE && ROBOTHOR_DB_NAME=robothor_test python -m pytest crm/bridge/tests/test_fleet_query_integration.py -v -m integration`
 Expected: unit PASS with no DB; integration PASS against `robothor_test`.
 
 - [ ] **Step 7: Commit**
@@ -696,7 +696,7 @@ def test_steps_and_events_sql_valid(db_conn, monkeypatch):
 - [ ] **Step 6: Run unit + integration**
 
 Run: `cd crm/bridge && python -m pytest tests/test_runs_router.py -v` then
-`cd /home/philip/robothor && ROBOTHOR_DB_NAME=robothor_test python -m pytest crm/bridge/tests/test_runs_query_integration.py -v -m integration`
+`cd $ROBOTHOR_WORKSPACE && ROBOTHOR_DB_NAME=robothor_test python -m pytest crm/bridge/tests/test_runs_query_integration.py -v -m integration`
 Expected: both PASS.
 
 - [ ] **Step 7: Commit**
@@ -875,7 +875,7 @@ def test_workflow_queries_valid(db_conn, monkeypatch):
 - [ ] **Step 6: Run unit + integration**
 
 Run: `cd crm/bridge && python -m pytest tests/test_workflows_router.py -v` then
-`cd /home/philip/robothor && ROBOTHOR_DB_NAME=robothor_test python -m pytest crm/bridge/tests/test_workflows_query_integration.py -v -m integration`
+`cd $ROBOTHOR_WORKSPACE && ROBOTHOR_DB_NAME=robothor_test python -m pytest crm/bridge/tests/test_workflows_query_integration.py -v -m integration`
 Expected: both PASS.
 
 - [ ] **Step 7: Commit**

@@ -119,7 +119,7 @@ def pg_scratch():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /home/philip/robothor && PYTHONPATH=. venv/bin/python -m pytest robothor/tests/test_migration_084_feature_flags.py -q`
+Run: `cd $ROBOTHOR_WORKSPACE && PYTHONPATH=. venv/bin/python -m pytest robothor/tests/test_migration_084_feature_flags.py -q`
 Expected: FAIL — `084_feature_flags.sql must exist`.
 
 - [ ] **Step 3: Write the migration**
@@ -182,7 +182,7 @@ ON CONFLICT (name) DO NOTHING;
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /home/philip/robothor && PYTHONPATH=. venv/bin/python -m pytest robothor/tests/test_migration_084_feature_flags.py -q`
+Run: `cd $ROBOTHOR_WORKSPACE && PYTHONPATH=. venv/bin/python -m pytest robothor/tests/test_migration_084_feature_flags.py -q`
 Expected: PASS (3 tests).
 
 - [ ] **Step 5: Commit**
@@ -334,7 +334,7 @@ assert only the audit row; the pg_notify path is proven end-to-end in Task 7).
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /home/philip/robothor && PYTHONPATH=. venv/bin/python -m pytest robothor/tests/test_flag_store.py -q`
+Run: `cd $ROBOTHOR_WORKSPACE && PYTHONPATH=. venv/bin/python -m pytest robothor/tests/test_flag_store.py -q`
 Expected: FAIL — `ModuleNotFoundError: robothor.flags`.
 
 - [ ] **Step 3: Write the store**
@@ -438,7 +438,7 @@ def set_flag(name: str, value: str, actor: str, reason: str) -> None:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /home/philip/robothor && PYTHONPATH=. venv/bin/python -m pytest robothor/tests/test_flag_store.py -q`
+Run: `cd $ROBOTHOR_WORKSPACE && PYTHONPATH=. venv/bin/python -m pytest robothor/tests/test_flag_store.py -q`
 Expected: PASS (5 tests).
 
 - [ ] **Step 5: Commit**
@@ -513,7 +513,7 @@ def test_enforce_with_recent_evidence_is_enforcing(db_cursor):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /home/philip/robothor && PYTHONPATH=. venv/bin/python -m pytest robothor/tests/test_flag_evidence.py -q`
+Run: `cd $ROBOTHOR_WORKSPACE && PYTHONPATH=. venv/bin/python -m pytest robothor/tests/test_flag_evidence.py -q`
 Expected: FAIL — `ModuleNotFoundError: robothor.flags.evidence`.
 
 - [ ] **Step 3: Write the detector**
@@ -600,7 +600,7 @@ def verdict(name: str, mode: str) -> Verdict:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /home/philip/robothor && PYTHONPATH=. venv/bin/python -m pytest robothor/tests/test_flag_evidence.py -q`
+Run: `cd $ROBOTHOR_WORKSPACE && PYTHONPATH=. venv/bin/python -m pytest robothor/tests/test_flag_evidence.py -q`
 Expected: PASS (4 tests). If `test_enforce_with_zero_evidence_is_inert` fails because `human_approval` has since fired, that is real data — adjust the fixture flag to one still at zero and note it.
 
 - [ ] **Step 5: Commit**
@@ -652,7 +652,7 @@ def test_env_still_works_when_store_returns_none(monkeypatch):
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd /home/philip/robothor && PYTHONPATH=. venv/bin/python -m pytest robothor/tests/test_feature_flags_seam.py -q`
+Run: `cd $ROBOTHOR_WORKSPACE && PYTHONPATH=. venv/bin/python -m pytest robothor/tests/test_feature_flags_seam.py -q`
 Expected: FAIL — `rip_7_mode()` returns `observe` (store not consulted).
 
 - [ ] **Step 3: Add the seam**
@@ -697,7 +697,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /home/philip/robothor && PYTHONPATH=. venv/bin/python -m pytest robothor/tests/test_feature_flags_seam.py robothor/engine/tests/ -q -m "not slow and not llm and not e2e" --ignore=robothor/engine/tests/test_channel_bus_crm.py`
+Run: `cd $ROBOTHOR_WORKSPACE && PYTHONPATH=. venv/bin/python -m pytest robothor/tests/test_feature_flags_seam.py robothor/engine/tests/ -q -m "not slow and not llm and not e2e" --ignore=robothor/engine/tests/test_channel_bus_crm.py`
 Expected: the 2 seam tests PASS; no regression in the engine suite beyond the known pre-existing DB-fixture failures.
 
 - [ ] **Step 5: Commit**
@@ -787,9 +787,9 @@ def test_no_tool_exposes_flag_control():
 
 - [ ] **Step 2: Run to verify they fail**
 
-Run bridge test: `cd /home/philip/robothor/crm/bridge && PYTHONPATH=.:../.. /home/philip/robothor/venv/bin/python -m pytest tests/test_controls_router.py -q`
+Run bridge test: `cd $ROBOTHOR_WORKSPACE/crm/bridge && PYTHONPATH=.:../.. $ROBOTHOR_WORKSPACE/venv/bin/python -m pytest tests/test_controls_router.py -q`
 Expected: FAIL — router not registered / fixtures missing.
-Run guard test: `cd /home/philip/robothor && PYTHONPATH=. venv/bin/python -m pytest robothor/engine/tests/test_no_control_tool.py -q`
+Run guard test: `cd $ROBOTHOR_WORKSPACE && PYTHONPATH=. venv/bin/python -m pytest robothor/engine/tests/test_no_control_tool.py -q`
 Expected: PASS immediately (no such tool exists) — this is a regression guard, green from birth.
 
 - [ ] **Step 3: Write the router + register it**
@@ -858,7 +858,7 @@ Add the fixtures to `crm/bridge/tests/conftest.py` (operator vs service `AuthCon
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /home/philip/robothor/crm/bridge && PYTHONPATH=.:../.. /home/philip/robothor/venv/bin/python -m pytest tests/test_controls_router.py -q`
+Run: `cd $ROBOTHOR_WORKSPACE/crm/bridge && PYTHONPATH=.:../.. $ROBOTHOR_WORKSPACE/venv/bin/python -m pytest tests/test_controls_router.py -q`
 Expected: PASS (4 tests).
 
 - [ ] **Step 5: Commit**
@@ -909,7 +909,7 @@ it("renders an INERT flag as a warning, never as healthy/green", async () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd /home/philip/robothor/app && npx pnpm@10 exec vitest run src/components/views/__tests__/controls-view.test.tsx`
+Run: `cd $ROBOTHOR_WORKSPACE/app && npx pnpm@10 exec vitest run src/components/views/__tests__/controls-view.test.tsx`
 Expected: FAIL — `controls-view` not found.
 
 - [ ] **Step 3: Write the view**
@@ -918,7 +918,7 @@ Write `controls-view.tsx`: fetch `/api/bridge/api/controls`, render a row per fl
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /home/philip/robothor/app && npx pnpm@10 exec vitest run src/components/views/__tests__/controls-view.test.tsx`
+Run: `cd $ROBOTHOR_WORKSPACE/app && npx pnpm@10 exec vitest run src/components/views/__tests__/controls-view.test.tsx`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**

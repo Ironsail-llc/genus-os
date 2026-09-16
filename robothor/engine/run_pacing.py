@@ -372,13 +372,26 @@ _SHIPPED_CHECKIN = (
 #: The added one. "Are you making progress" is a question an agent answers yes
 #: to; what is on disk, and where, is checkable — and it is what the graders
 #: and the operator actually read.
+#:
+#: It asks about SHAPE as well as path, measured 2026-09-16. The path-only
+#: version fired once on a task that then wrote a five-column file to the right
+#: path where the spec required six named columns: every criterion scored 0 and
+#: every pacing control in the engine had fallen silent, because the file
+#: existed. A check-in that stops at "is it there" certifies exactly the
+#: failure it was built to catch.
 _DELIVERABLE_CHECKIN = (
     "[SYSTEM] Progress check-in (iteration {iteration}): what have you WRITTEN to "
     "the deliverable path so far? Name the path and say what is in it. If nothing "
     "is written yet, write your current partial answer there NOW before continuing "
     "— an incomplete file at the requested path is worth more than a perfect "
-    "answer that was never saved. If the task is done, give your final answer and "
-    "stop calling tools."
+    "answer that was never saved.\n"
+    "Then check its SHAPE against the task, not against your own plan: quote the "
+    "task's required format back — the exact filename, the exact header or field "
+    "names, the exact section headings, the exact directory contents — and show "
+    "that what you have written matches it, line for line. If it does not match, "
+    "fix it now; a file at the right path in the wrong shape scores the same as "
+    "no file at all. If the task is done and the shape matches, give your final "
+    "answer and stop calling tools."
 )
 
 

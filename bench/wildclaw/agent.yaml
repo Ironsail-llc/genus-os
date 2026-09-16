@@ -48,6 +48,18 @@ v2:
   # not a hint about the answer — the same reasoning as `view_image` above.
   workspace_inventory: true
   rate_limit_per_minute: 300
+  # The engine ships `todo_write` and this manifest withheld it, so the
+  # agent's requirement list was prose — which compaction summarises away, and
+  # which was itself truncated (finish_reason=length) five times in one sweep.
+  # The competing scaffold's first action on its highest-scoring task was to
+  # decompose that task's numbered output requirements into a tracked list,
+  # and it closed the task by marking them complete. Measuring a platform
+  # without a tool that platform ships measures the wrong platform.
+  #
+  # BOTH halves are needed: the registry filters TODO_TOOLS out again unless
+  # this flag is set, so `tools_allowed` alone advertises nothing and looks
+  # configured.
+  todo_list_enabled: true
 
 delivery:
   mode: none
@@ -88,6 +100,10 @@ tools_allowed:
   # hint: nothing here is task-specific.
   - list_skills
   - skill_view
+  # A structured requirement list that survives compaction, where a prose
+  # plan does not. See `v2.todo_list_enabled` above for why this is parity
+  # rather than a hint: nothing here is task-specific.
+  - todo_write
 
 instructions: |
   You are a capable autonomous agent working on a task in a Linux container.

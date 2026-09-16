@@ -511,6 +511,62 @@ def _is_retained_context(msg: dict[str, Any]) -> bool:
     return isinstance(content, str) and RETAINED_CONTEXT_MARKER in content
 
 
+#: Fallback when the settings read fails. Compaction must never break on config.
+DEFAULT_PROTECT_FIRST_N = 3
+
+
+def _split_for_summary(
+    messages: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """The pinned head, the retained-context messages, and everything else.
+
+    Extracted from ``compact`` because the function-size ratchet asked for it:
+    the head is now a slice rather than ``messages[0]``, and the arithmetic for
+    where it ends belongs beside ``protected_prefix_len`` rather than inside a
+    276-line function.
+    """
+    head_len = protected_prefix_len(messages)
+    tail = messages[head_len:]
+    return (
+        messages[:head_len],
+        [m for m in tail if _is_retained_context(m)],
+        [m for m in tail if not _is_retained_context(m)],
+    )
+
+
+def protected_prefix_len(messages: list[dict[str, Any]], protect_first_n: int | None = None) -> int:
+    """How many messages at the head compaction may never summarise away.
+
+    MEASURED 2026-09-16 across ten benchmark runs on one model: the four whose
+    transcript began with a compaction summary scored a mean of 0.016, the six
+    that never compacted 0.450. The required output header appears three times
+    in the competing scaffold's context for the worst of them and ZERO times in
+    ours — the spec had been summarised away, and the agent then invented the
+    deliverable's shape. The competing scaffold compacts harder than we do and
+    is immune, on one constant: it pins the first three messages.
+
+    At least 1, because the system prompt was already unconditionally
+    protected and turning this setting off must not take that away.
+
+    Never ending on an assistant turn that called a tool: protecting the CALL
+    while its RESULT is summarised away leaves a dangling tool_call, which
+    several providers reject outright. The prefix shrinks instead.
+    """
+    if not messages:
+        return 0
+    if protect_first_n is None:
+        from robothor.settings import get_settings
+
+        try:
+            protect_first_n = int(get_settings().providers.compaction_protect_first_n)
+        except Exception:  # noqa: BLE001 — compaction must never fail on config
+            protect_first_n = DEFAULT_PROTECT_FIRST_N
+    n = max(1, min(int(protect_first_n or 0), len(messages)))
+    while n > 1 and messages[n - 1].get("tool_calls"):
+        n -= 1
+    return n
+
+
 def _find_safe_split_index(messages: list[dict[str, Any]], target_idx: int) -> int:
     """Find a split point that never orphans tool_call/tool_result pairs.
 
@@ -782,11 +838,9 @@ async def compact(
         )
 
     # ── Pass 2: Structured fact extraction ────────────────────────────
-    system_msg = working[0]
-
-    # Separate retained context messages — they always survive
-    retained_msgs = [m for m in working[1:] if _is_retained_context(m)]
-    non_retained = [m for m in working[1:] if not _is_retained_context(m)]
+    # The pinned HEAD, not just messages[0]: the task statement lives there,
+    # and a run that summarises it away invents its own output's shape.
+    head_msgs, retained_msgs, non_retained = _split_for_summary(working)
 
     # Split into old and recent (from non-retained messages).
     # Use a safe split point that never orphans tool_call/tool_result pairs.
@@ -830,7 +884,7 @@ async def compact(
 
     if not old_messages:
         # Nothing old to summarize — just inject facts and return
-        result_msgs = [system_msg]
+        result_msgs = list(head_msgs)
         if all_facts:
             result_msgs.append(_build_retained_context_message(all_facts, messages))
         result_msgs.extend(recent_messages)
@@ -855,7 +909,7 @@ async def compact(
         segment_summaries.append(summary)
 
     # Build compacted message list
-    result_msgs = [system_msg]
+    result_msgs = list(head_msgs)
 
     # Retained facts always first (after system)
     if all_facts:
@@ -889,7 +943,7 @@ async def compact(
     # Drop oldest segment summaries, keep facts
     while est >= drain_to and len(segment_summaries) > 1:
         segment_summaries.pop(0)
-        result_msgs = [system_msg]
+        result_msgs = list(head_msgs)
         if all_facts:
             result_msgs.append(_build_retained_context_message(all_facts, messages))
         if segment_summaries:

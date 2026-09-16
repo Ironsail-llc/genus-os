@@ -33,6 +33,34 @@ DEFAULT_EXEC_TIMEOUT = 30
 #: media work while staying inside every agent's wall-clock ceiling.
 MAX_EXEC_TIMEOUT = 900
 
+#: How much of a command's output reaches the model. Unchanged in size and
+#: named for the first time: they were two bare literals inside a subprocess
+#: result, which is how the real defect went unnoticed — the slice was silent.
+STDOUT_LIMIT = 4_000
+STDERR_LIMIT = 2_000
+
+
+def truncate_stream(text: str, limit: int) -> str:
+    """One stream of a command's output, cut visibly rather than silently.
+
+    MEASURED 2026-09-16. The four benchmark tasks that scored worst were bulk
+    extraction over 21 to 130 documents with 57 to 70 `exec` calls each, and
+    every listing, dump and diagnostic on those runs lost its tail to a bare
+    `[:4000]`. The model cannot tell a command that printed forty lines from
+    one that printed four thousand and showed it the first eight percent, so it
+    reasons from the visible part as though it were the whole.
+
+    The remedy is not a bigger slice — that has the same defect one order of
+    magnitude later. It is that the cut is named, counted, and paired with what
+    to do instead, so truncation becomes something the agent can act on.
+    """
+    if len(text) <= limit:
+        return text
+    return (
+        text[:limit] + f"\n\n[truncated: {limit} of {len(text)} chars shown — re-run with a "
+        "narrower command, or write the full output to a file and read_file it]"
+    )
+
 
 def resolve_exec_timeout(args: dict[str, Any]) -> int:
     """The timeout for one exec call: what was asked for, within the ceiling.
@@ -171,8 +199,8 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 env=child_env.env,
             )
             return {
-                "stdout": proc.stdout[:4000],
-                "stderr": proc.stderr[:2000],
+                "stdout": truncate_stream(proc.stdout, STDOUT_LIMIT),
+                "stderr": truncate_stream(proc.stderr, STDERR_LIMIT),
                 "exit_code": proc.returncode,
             }
         except subprocess.TimeoutExpired:

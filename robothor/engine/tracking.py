@@ -66,11 +66,11 @@ def create_run(run: AgentRun) -> str:
                     id, tenant_id, user_id, user_role, agent_id, trigger_type,
                     trigger_detail, correlation_id, status, started_at,
                     model_used, system_prompt_chars, user_prompt_chars,
-                    tools_provided, delivery_mode, parent_run_id,
+                    task_text, tools_provided, delivery_mode, parent_run_id,
                     nesting_depth, task_id, person_id
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s
+                    %s, %s, %s, %s, %s
                 )
                 """,
                 (
@@ -96,6 +96,12 @@ def create_run(run: AgentRun) -> str:
                     run.model_used,
                     run.system_prompt_chars,
                     run.user_prompt_chars,
+                    # The prompt itself, redacted and capped by
+                    # `deliverable_contract.task_text_for_column` at the
+                    # session door. `user_prompt_chars` above is a count, and
+                    # the deliverable contract cannot read a contract from a
+                    # count (migration 123).
+                    getattr(run, "task_text", None),
                     run.tools_provided,
                     run.delivery_mode,
                     run.parent_run_id,

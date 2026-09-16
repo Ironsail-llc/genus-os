@@ -622,6 +622,15 @@ class ProviderSettings(SettingsGroup):
         "parked. Too short and a WEEKLY cap is retried every few minutes for "
         "days, which is how one capped key stalled the whole fleet.",
     )
+    compaction_protect_first_n: int = declare(
+        3,
+        "ROBOTHOR_COMPACTION_PROTECT_FIRST_N",
+        "How many messages at the head of a conversation compaction may never "
+        "summarise away. The statement of the task lives there, and a run that "
+        "loses it invents the shape of its own output.",
+        restart_required=False,
+        since="unreleased",
+    )
     compaction_trigger_tokens: int = declare(
         80000,
         "ROBOTHOR_COMPACTION_TRIGGER_TOKENS",

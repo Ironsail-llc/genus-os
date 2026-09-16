@@ -21,6 +21,8 @@ from robothor.engine.tools.schemas import get_engine_schemas
 from robothor.engine.workflow_budget import WorkflowDeadlineError
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from robothor.engine.models import AgentConfig
     from robothor.identity import IdentityContext
 
@@ -1143,11 +1145,57 @@ class ToolRegistry:
             logger.warning("Tool %s timed out after %ds", tool_name, timeout)
             return {
                 "error": f"Tool '{tool_name}' timed out after {timeout}s. "
-                "Try a different approach or skip this step."
+                + timeout_guidance(tool_name)
             }
         except Exception as e:
             logger.error("Tool %s failed: %s", tool_name, e, exc_info=True)
             return {"error": f"Tool execution failed: {e}"}
+
+
+#: What to tell a model whose tool ran out of time, when the tool itself has a
+#: documented escalation. Named here, and lazily, because this layer is the one
+#: that SHADOWS the handler's own message: `asyncio.timeout` above fires before
+#: the handler's own `TimeoutExpired` branch can speak, so whatever this branch
+#: says is what the model actually reads.
+#:
+#: MEASURED 2026-09-16: an image task timed out three times on `exec` and was
+#: told each time to "try a different approach or skip this step", with 780s of
+#: budget left and a 900s ceiling available on a parameter it was never told
+#: about. It did exactly as instructed, guessed, and scored 0.28 against a
+#: competitor's 0.99 on a task whose structure it had already got perfect.
+_TIMEOUT_GUIDANCE: dict[str, Callable[[], str]] = {}
+
+
+def _exec_timeout_guidance() -> str:
+    from robothor.engine.tools.handlers.filesystem import MAX_EXEC_TIMEOUT
+
+    return (
+        f"Ask for more time with the `timeout` parameter (up to {MAX_EXEC_TIMEOUT}s), "
+        "or narrow the command so it finishes sooner."
+    )
+
+
+_TIMEOUT_GUIDANCE["exec"] = _exec_timeout_guidance
+
+
+def timeout_guidance(tool_name: str) -> str:
+    """What this tool allows when it runs out of time. Never "skip".
+
+    A timeout is a statement about this call, not about the approach. The
+    generic text therefore names the two things every tool permits — a smaller
+    scope, or a longer limit where the tool takes one — and leaves the decision
+    to abandon the method to the model, on evidence rather than on instruction.
+    """
+    builder = _TIMEOUT_GUIDANCE.get(tool_name)
+    if builder is not None:
+        try:
+            return builder()
+        except Exception:  # noqa: BLE001 — a guidance string must never raise
+            logger.debug("timeout guidance for %s failed", tool_name, exc_info=True)
+    return (
+        "Retry with a narrower scope, or with a longer timeout if this tool takes one. "
+        "A timeout is a statement about this call, not about the approach."
+    )
 
 
 # Singleton

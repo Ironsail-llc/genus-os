@@ -24,10 +24,14 @@ resumed run and be applied at a moment the operator never chose.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -197,29 +201,125 @@ def _spawn_hard_cap_alert(session: Any, agent_config: Any, used: int) -> None:
         logger.debug("Runaway-token alert dispatch failed", exc_info=True)
 
 
-def nudge_for_missing_deliverable(session: Any) -> bool:
-    """The agent stopped; does it still owe an artifact the task named?
+def append_engine_note(session: Any, note: str | None, workspace: str | Path | None = None) -> None:
+    """Put an engine-context note in front of the model, or nothing if there is none.
 
-    True means "do not end this iteration" — a message has been appended and
-    the loop should continue. This is a guard in the same sense as the others
-    here: it answers whether the run may finish, and the answer is no while a
-    named deliverable is absent and the nudge budget is unspent.
+    Given a ``workspace``, a check-in becomes a COMPARISON where the task
+    stated a shape: "are you making progress" is a question an agent answers
+    yes to, and "your header is X and the task requires Y" is not — it is
+    checkable, and it is what the graders and the operator actually read.
+    Silent, and cheap, on every task that stated no shape, which is most of
+    them.
+    """
+    from robothor.engine.session import ENGINE_CONTEXT_ROLE
+
+    if not note:
+        return
+    with contextlib.suppress(Exception):
+        from robothor.engine.deliverable_contract import contract_checkin_note, task_text_for_run
+        from robothor.engine.feature_flags import deliverable_contract_mode
+
+        if deliverable_contract_mode() != "off":
+            # `task_text_for_run`, not `session.originating_message`. On a
+            # RESUMED run the session carries no originating message, so the
+            # comparison stayed silent while the re-ask still fired — the agent
+            # was failed for a contract it was never shown mid-run (hostile
+            # review 2026-09-16, I5). Both halves read the same source or the
+            # run is judged on something it did not see.
+            text = task_text_for_run(getattr(session, "run", None), session)
+            comparison = contract_checkin_note(text, workspace)
+            if comparison:
+                note = f"{note}\n{comparison}"
+    session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": note})
+
+
+def nudge_for_missing_deliverable(session: Any, workspace: str | Path | None = None) -> bool:
+    """The agent stopped; does it still owe a correct deliverable?
+
+    Two questions, asked in order: is the artifact the task named there at all,
+    and — if it is — is it the shape the task described. True means "do not end
+    this iteration": a message has been appended and the loop should continue.
+    This is a guard in the same sense as the others here.
 
     It has to live on this path rather than in `run_finalizer`, where the same
-    verdict already lands: the finalizer runs AFTER the loop and can record a
-    missing artifact but never prevent one. WildClawBench task_4 spent 333
-    requests and 704 seconds, reported "completed", and wrote nothing.
+    verdicts land: the finalizer runs AFTER the loop and can record a missing or
+    misshapen artifact but never prevent one. WildClawBench task_4 spent 333
+    requests and 704 seconds, reported "completed", and wrote nothing; three
+    Productivity tasks a year's engineering later reported "completed" with the
+    file present and every grader criterion at 0.
 
-    The budget is kept on the SESSION so the loop needs no counter of its own.
+    Both budgets are kept on the SESSION so the loop needs no counter of its own.
     """
     from robothor.engine.deliverable_contract import deliverable_nudge
     from robothor.engine.session import ENGINE_CONTEXT_ROLE
 
     used = int(getattr(session, "_deliverable_nudges", 0) or 0)
     nudge = deliverable_nudge(session, used)
-    if not nudge:
+    if nudge:
+        session._deliverable_nudges = used + 1
+        session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": nudge})
+        logger.info("Deliverable nudge: the artifact the task named is absent")
+        return True
+    return reask_for_wrong_deliverable_shape(session, workspace)
+
+
+def reask_for_wrong_deliverable_shape(session: Any, workspace: str | Path | None = None) -> bool:
+    """The artifact exists; is it the SHAPE the task described?
+
+    The guard above asks whether the file is there. Measured 2026-09-16, three
+    benchmark tasks scored 0 with the file there: the right path with the
+    agent's own TSV columns, the right directory left empty while the answer
+    went to a name of its own, the right document with the headings renamed.
+    An existence check cannot see any of that.
+
+    True means "do not end this iteration". Ladder-gated, unlike the guard
+    above, because this one CHANGES the run: at `enforce` it re-asks once with
+    the report; at `observe` it records the verdict in the log and lets the run
+    end; at `off` it is never computed. The budget is one for the reason the
+    nudge budget is one — an unbounded "you are not done" is a loop.
+    """
+    from robothor.engine.deliverable_contract import contract_reask_note, contract_report_for_run
+    from robothor.engine.feature_flags import deliverable_contract_mode
+    from robothor.engine.session import ENGINE_CONTEXT_ROLE
+
+    mode = deliverable_contract_mode()
+    if mode == "off":
         return False
-    session._deliverable_nudges = used + 1
-    session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": nudge})
-    logger.info("Deliverable nudge: the artifact the task named is absent")
+    run = getattr(session, "run", None)
+    # Record the root actually judged against, so the finalizer judges the same
+    # one rather than falling back to the engine-wide workspace (I4).
+    from robothor.engine.deliverable_verdict import WORKSPACE_ATTR
+
+    if workspace:
+        setattr(session, WORKSPACE_ATTR, str(workspace))
+    report = contract_report_for_run(run, session, workspace)
+    # Written on EVERY outcome, cleared included. A satisfied re-check used to
+    # return without touching the stash, leaving the previous stop's failing
+    # verdict behind for anything that read it later — which is how a run that
+    # did exactly what the re-ask asked was still recorded `failed` (hostile
+    # review 2026-09-16, C1). A stale verdict is worse than none: it is a
+    # confident answer to a question the workspace has since re-answered.
+    session._deliverable_contract_report = None if (report is None or report.satisfied) else report
+    if report is None or report.satisfied:
+        return False
+    if mode != "enforce":
+        logger.warning(
+            "deliverable contract %s: run %s would be held for %s",
+            mode,
+            getattr(run, "id", "?"),
+            report.message.replace("\n", " | "),
+        )
+        return False
+    if int(getattr(session, "_deliverable_contract_reasks", 0) or 0) >= 1:
+        return False
+    note = contract_reask_note(report)
+    if not note:
+        return False
+    session._deliverable_contract_reasks = 1
+    session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": note})
+    logger.warning(
+        "deliverable contract enforce: run %s re-asked once for %s",
+        getattr(run, "id", "?"),
+        report.message.replace("\n", " | "),
+    )
     return True

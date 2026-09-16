@@ -125,3 +125,4 @@ crm/119_workflow_step_timeout.sql
 crm/120_tenant_rls_cover_new_tables.sql
 crm/121_channel_conversation_refs.sql
 crm/122_trigger_type_channel.sql
+crm/123_agent_run_task_text.sql

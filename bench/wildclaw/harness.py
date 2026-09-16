@@ -183,6 +183,20 @@ def _warmup_prelude(task: dict[str, Any]) -> str:
 
     Runs in the SAME container as the agent, so background services started
     here are still listening when the agent runs.
+
+    FAILS THE TASK. The benchmark's own runner raises on a warmup command that
+    exits non-zero; ours logged it and carried on, and measured 2026-09-16 that
+    meant six of ten Productivity tasks opened with `sh: 1: npm: not found` —
+    the `npm install -g agent-browser` those tasks declare — and then ran
+    without the skill the benchmark hands every harness. Six scores that were
+    not scores for this platform.
+
+    A silent `||true` is the shape this codebase keeps re-learning: the run
+    fails for an unrelated-looking reason and nothing anywhere says the thing
+    it needed was never installed. So `set -e`, a named failure on stderr, and
+    a marker on the host mount — a container that exits non-zero with nothing
+    on /out is indistinguishable from an agent crash, and the two have opposite
+    remedies.
     """
     warmup = str(task.get("warmup") or "")
     lines = [
@@ -190,7 +204,74 @@ def _warmup_prelude(task: dict[str, Any]) -> str:
         for line in warmup.splitlines()
         if line.strip() and not line.strip().startswith("#")
     ]
-    return "\n".join(lines)
+    if not lines:
+        return ""
+    # Checked per line rather than with a trap: the container's /bin/sh is
+    # dash, which has `set -e` but no `trap ... ERR`. Explicit is also better
+    # here — the marker names the exact command that failed, which is the first
+    # thing an operator wants.
+    #
+    # The status is read on its OWN line, not with `cmd || handler`. Six of the
+    # ten Social Interaction tasks (and the task template) background a mock
+    # service, and `cmd & || _warmup_failed …` is a dash SYNTAX ERROR, not a
+    # runtime failure — the whole script is one `sh -c`, so the agent never
+    # started, the grader never ran, and `/out/warmup.failed` was never written.
+    # The operator got a bare `Syntax error` with no marker: exactly the
+    # indistinguishable-from-an-agent-crash case the marker exists to prevent
+    # (hostile review 2026-09-16, C2). Backgrounding is also why `set -e` is
+    # NOT used: it would abort on the first non-zero status inside a pipeline
+    # the task intended to survive.
+    checked = "\n".join(
+        f"{line}\n_st=$?\n[ $_st -eq 0 ] || _warmup_failed '{_sq(line)}' $_st" for line in lines
+    )
+    prelude = (
+        "_warmup_failed() { "
+        'echo "WARMUP FAILED (exit $2): $1" >&2; '
+        'echo "$1" > /out/warmup.failed 2>/dev/null || true; '
+        "exit 3; }\n"
+        f"{checked}"
+    )
+    # Checked on the HOST, before the container is built. A declared warmup
+    # that is not valid shell cannot be rescued by any wrapper — but it can be
+    # turned into the marker instead of a bare `Syntax error`, which is the
+    # difference between "this task's setup is wrong" and an unexplained
+    # container exit. No wrapper can save the parse otherwise: the lines share
+    # one shell on purpose, because a backgrounded mock service has to outlive
+    # its line and `cd`/`export` have to reach the next one.
+    ok, error = _prelude_parses(prelude)
+    if ok:
+        return prelude
+    logger.error("warmup does not parse as shell: %s", error)
+    return (
+        'echo "WARMUP FAILED: the task\'s declared warmup is not valid shell" >&2\n'
+        f"echo {_sq_quoted(error)} >&2\n"
+        'echo "warmup is not valid shell" > /out/warmup.failed 2>/dev/null || true\n'
+        "exit 3"
+    )
+
+
+def _sq_quoted(text: str) -> str:
+    return "'" + _sq(text) + "'"
+
+
+def _prelude_parses(prelude: str) -> tuple[bool, str]:
+    """Does this script parse? Best-effort — an absent shell is not a failure."""
+    for shell in ("/bin/dash", "/bin/sh"):
+        if not Path(shell).exists():
+            continue
+        try:
+            proc = subprocess.run(  # noqa: S603 — fixed argv, our own generated text
+                [shell, "-n"], input=prelude, capture_output=True, text=True, timeout=10
+            )
+        except (OSError, subprocess.SubprocessError):
+            return True, ""
+        return proc.returncode == 0, proc.stderr.strip()
+    return True, ""
+
+
+def _sq(text: str) -> str:
+    """Escape a command for embedding inside single quotes in the prelude."""
+    return text.replace("'", "'\\''")
 
 
 def _install_skills(task: dict[str, Any], repo: Path, workspace: Path) -> int:
@@ -323,6 +404,17 @@ def _container_command(
         # measure a different vision model without an image rebuild.
         "ROBOTHOR_VISION_REMOTE_MODEL": os.environ.get(
             "ROBOTHOR_VISION_REMOTE_MODEL", BENCH_VISION_MODEL
+        ),
+        # Same idiom again, for the control this sweep exists to measure.
+        # Three Productivity tasks scored 0 against a competitor's 86 / 91 / 49
+        # purely on output shape (2026-09-16), and the harness was running
+        # with the deliverable contract off — so the measurement could not have
+        # shown the fix working even once it existed.
+        "ROBOTHOR_DELIVERABLE_CONTRACT_ENABLED": os.environ.get(
+            "ROBOTHOR_DELIVERABLE_CONTRACT_ENABLED", "1"
+        ),
+        "ROBOTHOR_DELIVERABLE_CONTRACT_MODE": os.environ.get(
+            "ROBOTHOR_DELIVERABLE_CONTRACT_MODE", "enforce"
         ),
         # Genus resolves its skills directory from this, so the task's skills
         # land somewhere the loader actually reads.
