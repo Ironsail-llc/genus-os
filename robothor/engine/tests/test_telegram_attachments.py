@@ -110,6 +110,11 @@ def photo(width=1280, height=720, size=2048, uid="AgACpic"):
     size_obj.file_size = size
     size_obj.file_id = "AgAD" + uid
     size_obj.file_unique_id = uid
+    # aiogram's PhotoSize has NO file_name. A bare MagicMock invents one, and
+    # the intake would then name the saved file after a mock repr instead of
+    # taking its `photo.jpg` fallback — a test fixture that does not behave
+    # like the object it stands in for.
+    size_obj.file_name = None
     return [size_obj]
 
 
@@ -358,6 +363,96 @@ class TestAlbums:
         assert len(rows) == 10
 
 
+class TestALateAlbumMember:
+    """Hostile review I4. The flush popped its buffer and then awaited the
+    route. A member arriving in that window found no buffer, created a fresh
+    one and a fresh timer — and the OLD flush's unconditional `finally` then
+    deleted both. The new timer fired into nothing: the photo was on disk and
+    the agent was never told it existed, and because `_album_tasks[key]` went
+    too, `stop()` could no longer cancel the orphan timer.
+    """
+
+    @pytest.mark.asyncio
+    async def test_it_gets_its_own_turn_instead_of_vanishing(
+        self, bot, monkeypatch, tmp_path
+    ) -> None:
+        import robothor.engine.telegram_attachments as ta
+
+        monkeypatch.setattr(ta, "ALBUM_WINDOW_SECONDS", 0.05, raising=True)
+        gate = asyncio.Event()
+        routed: list[list[str]] = []
+
+        async def slow_route(chat_id, note, rows, user_info, message):
+            # Hold the flush open exactly as a real enqueue or DB write would.
+            await gate.wait()
+            routed.append([Path(row["path"]).name for row in rows])
+
+        bot._route_attachment_turn = slow_route
+        monkeypatch.setattr(
+            "robothor.engine.tools.handlers.images.describe_image_bytes",
+            AsyncMock(return_value="a photo"),
+        )
+        arm_download(bot, b"\xff\xd8\xff")
+
+        for uid in ("D01", "D02"):
+            await bot.handle_file(message(photo=photo(uid=uid), media_group_id="GX"))
+        await asyncio.sleep(0.15)
+        key = ("100200300", "GX")
+        assert key not in bot._album_buffers, "the flush should hold its own copy by now"
+
+        # The late member arrives while the first flush is still routing.
+        await bot.handle_file(message(photo=photo(uid="D99"), media_group_id="GX"))
+        late_task = bot._album_tasks[key]
+
+        gate.set()
+        await asyncio.sleep(0.05)
+        assert bot._album_buffers.get(key) is not None, "the old flush destroyed it"
+        assert bot._album_tasks.get(key) is late_task, "stop() could no longer cancel it"
+
+        await asyncio.sleep(0.25)
+        assert [name for turn in routed for name in turn] == [
+            "D01-photo.jpg",
+            "D02-photo.jpg",
+            "D99-photo.jpg",
+        ]
+        assert late_task.done()
+
+    @pytest.mark.asyncio
+    async def test_every_saved_file_is_named_in_some_turn(self, bot, monkeypatch, tmp_path) -> None:
+        """The property that actually matters: nothing is kept in silence."""
+        import robothor.engine.telegram_attachments as ta
+
+        monkeypatch.setattr(ta, "ALBUM_WINDOW_SECONDS", 0.05, raising=True)
+        gate = asyncio.Event()
+        told: set[str] = set()
+
+        async def slow_route(chat_id, note, rows, user_info, message):
+            await gate.wait()
+            told.update(Path(row["path"]).name for row in rows)
+
+        bot._route_attachment_turn = slow_route
+        monkeypatch.setattr(
+            "robothor.engine.tools.handlers.images.describe_image_bytes",
+            AsyncMock(return_value="a photo"),
+        )
+        arm_download(bot, b"\xff\xd8\xff")
+
+        for uid in ("E01", "E02"):
+            await bot.handle_file(message(photo=photo(uid=uid), media_group_id="GY"))
+        await asyncio.sleep(0.15)
+        await bot.handle_file(message(photo=photo(uid="E99"), media_group_id="GY"))
+        gate.set()
+        await asyncio.sleep(0.35)
+
+        on_disk = {
+            path.name
+            for path in (Path(bot.config.workspace) / "inbox" / "telegram").rglob("E*")
+            if path.is_file()
+        }
+        assert on_disk, "the probe wrote nothing"
+        assert on_disk - told == set(), "saved but never mentioned to the agent"
+
+
 class TestOtherKinds:
     @pytest.mark.asyncio
     async def test_a_sticker_is_kept_as_an_image(self, bot, monkeypatch) -> None:
@@ -375,6 +470,7 @@ class TestOtherKinds:
         sticker.is_animated = False
         sticker.is_video = False
         sticker.emoji = "🦆"
+        sticker.file_name = None  # aiogram Sticker has none either
         await bot.handle_file(message(sticker=sticker))
         _, rows = enqueued(bot)
         assert rows[0]["kind"] == "image"

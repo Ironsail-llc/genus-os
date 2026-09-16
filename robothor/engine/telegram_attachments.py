@@ -369,8 +369,19 @@ class TelegramAttachmentsMixin:
             pending["caption"] = caption
 
     async def _flush_album(self, chat_id: str, group_id: str) -> None:
-        """Wait out the window, then enqueue the whole album as one turn."""
+        """Wait out the window, then enqueue the whole album as one turn.
+
+        The cleanup removes only what THIS flush owns. It used to pop the key
+        unconditionally in a ``finally``, and the window between popping the
+        buffer and finishing the route is long enough for a late member to
+        arrive, find no buffer, create a fresh one and start a fresh timer — at
+        which point the old flush's ``finally`` deleted both. The new timer
+        then fired into nothing, so the late photo was saved to disk and the
+        agent was never told it existed; worse, dropping ``_album_tasks[key]``
+        also meant ``stop()`` could no longer cancel the orphan timer.
+        """
         key = (chat_id, group_id)
+        mine = asyncio.current_task()
         try:
             await asyncio.sleep(ALBUM_WINDOW_SECONDS)
             pending = self._album_buffers.pop(key, None)
@@ -397,8 +408,10 @@ class TelegramAttachmentsMixin:
         except Exception:
             logger.exception("Telegram album %s could not be delivered", group_id)
         finally:
-            self._album_buffers.pop(key, None)
-            self._album_tasks.pop(key, None)
+            # Identity, not the key. A buffer under this key now belongs to the
+            # NEXT album — this flush already took its own at the top.
+            if self._album_tasks.get(key) is mine:
+                self._album_tasks.pop(key, None)
 
     async def _route_attachment_turn(
         self,
