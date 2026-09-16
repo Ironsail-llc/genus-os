@@ -84,14 +84,23 @@ never has to tell "unknown" from "zero".
 A file named like a credentials file (`.env`, `credentials.json`, `id_rsa`, …)
 carries `"secret": true` and `"original_name"`, and is kept one level deeper,
 in `<date>/secret/`. It is still **saved** — you sent it on purpose and may
-want it moved or renamed — but its contents are never quoted into a prompt,
-`read_file` refuses it with the secrets-file sentence, and `send_file` refuses
-to send it back out.
+want it moved or renamed — but its contents are never quoted into a prompt, and
+every way an agent could read it is closed: `read_file` and `send_file` refuse
+it, and so does `exec` — `cat`, `head`, `grep` and `python3 -c` on that path all
+come back with the same secrets-file sentence. One rule, one wording, whichever
+tool the agent reached for.
 
 The verdict is taken from the name Telegram supplied and recorded as the
 DIRECTORY, because sanitising a name for the filesystem is exactly what
 destroys the evidence (`.env` becomes `env`) and a name that has to be parsed
-to be understood eventually gets parsed wrongly.
+to be understood eventually gets parsed wrongly. The `secret/` directory under
+a dated inbox folder is a recognised secrets location in its own right, so a
+tool that learns about secrets files at all learns about this one too.
+
+`cp` is not refused, here or for a `.env` on disk — the refusals cover the
+commands that **print**. A copy is caught at the other end instead: `send_file`
+scans what it is about to hand the channel and refuses a file whose contents
+are credential-shaped.
 
 ## Sending: `send_file`
 
