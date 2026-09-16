@@ -50,6 +50,7 @@ import hashlib
 import logging
 import re
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -109,29 +110,119 @@ _CREDENTIAL_KEYS = (
     "token",
 )
 
-#: ``"client_secret": "abc123"`` (JSON) or ``client_secret: abc123`` (YAML), the
-#: key matched as a WHOLE word and the value an actual secret-shaped string.
-#: Anchored per line, so prose mentioning a token is not a finding.
-#:
-#: Every exclusion here is a real config file that must stay sendable: a
-#: ``${VAR}`` reference is the correct way to name a credential, an empty value
-#: is a template, ``null``/``true``/``false`` is a disabled setting, and a bare
-#: number is ``max_tokens: 4096``.
-_CREDENTIAL_KEY_LINE = re.compile(
+#: One ``key: value`` / ``key = value`` assignment whose key means "credential".
+#: The key must sit at the START of the line or right after a structural ``{``,
+#: ``[`` or ``,`` — never merely after a word, because "Set the token: paste it
+#: into the field" is a sentence in a README, not an assignment, and
+#: documentation is exactly the kind of file an agent hands to the operator
+#: (re-review R7). The value is captured so :func:`_is_placeholder` can judge it.
+_CREDENTIAL_ASSIGNMENT = re.compile(
     r"""(?ix)
-    (?:^|[\s,{\[])                              # line start or structural boundary
+    (?:^|[{\[,])[\s\-]*
     ["']?(?:"""
     + "|".join(_CREDENTIAL_KEYS)
-    + r""")["']?    # the key, whole word
-    \s*[:=]\s*                                  # JSON or YAML assignment
-    ["']?                                       # optional opening quote
-    (?!\$\{)                                    # not a ${VAR} reference
-    (?!["']\s*[,}\]]|\s*$)                      # not an empty value
-    (?!(?:null|nil|none|true|false|~)[\s,}\]"']*$)   # not a disabled setting
-    (?![\d.]+[\s,}\]"']*$)                      # not a bare number
-    [^\s"',}\]]{3,}                             # something value-shaped
+    + r""")["']?
+    \s*[:=]\s*
+    (?P<value>"[^"]*"|'[^']*'|\$\{[^}]*\}|[^,}\]]*)
     """
 )
+
+#: Trailing characters that belong to the surrounding structure, not the value.
+#: Stripped one at a time rather than as a class, because ``${PASSWORD}`` ends
+#: in a brace of its own — eating it turned the reference into ``${PASSWORD``
+#: and the exclusion stopped matching.
+_STRUCTURAL_TAIL = ",}] \t"
+
+#: A comment line carries no configuration. ``# password: hunter2`` in an
+#: example file documents a setting; it is not the setting.
+#:
+#: SQL's ``--`` is deliberately ABSENT. It was here for one draft, and it made
+#: ``-----BEGIN RSA PRIVATE KEY-----`` look like a comment — a false NEGATIVE
+#: that would have let a private key through, which is the opposite of the
+#: mistake this whole exclusion list is guarding against. A SQL comment holding
+#: a credential-shaped value keeps being refused, and that is the safe direction.
+_COMMENT_LINE = re.compile(r"^\s*(?:#|//|;)")
+
+#: Values that NAME a credential rather than being one. Every entry is a real
+#: file an operator sends: a reference, a blank to fill in, a disabled setting,
+#: a count, a redaction, or a YAML tag pointing at a vault.
+_PLACEHOLDER_VALUE = re.compile(
+    r"""(?ix)^(?:
+        |\$\{[^}]*\}|\$[a-z_][a-z0-9_]*|%[a-z0-9_]+%|\{\{[^}]*\}\}
+        |<[^>]*>|\[[^\]]*\]
+        |null|nil|none|nan|~|true|false|yes|no|on|off
+        |disabled|enabled|auto|default|required|optional|unset|todo|fixme|tbd
+        |redacted|changeme|change[_-]me|placeholder|example|sample|dummy|secret
+        |x{3,}|\.{2,}|\*+|-+|_+
+        |your[_\- ][a-z0-9_\- ]*
+        |[\d.]+
+        |!.*
+    )$"""
+)
+
+#: ``YOUR_API_KEY_HERE``, ``CHANGE_ME``, ``<REPLACE_ME>`` — a placeholder shouts.
+#: Case-SENSITIVE and deliberately narrow: a lowercase value ending in "-here"
+#: is an ordinary string, and treating it as a placeholder would excuse a real
+#: secret. (It excused one of this module's own test fixtures, which is how the
+#: breadth was noticed.)
+_SHOUTED_PLACEHOLDER = re.compile(
+    r"^(?:YOUR[_\- ][A-Z0-9_\- ]*|[A-Z0-9_\- ]*[_\- ]HERE|REPLACE[_\- ]?ME|CHANGE[_\- ]?ME)$"
+)
+
+
+def _is_placeholder(value: str) -> bool:
+    """Is this value a NAME for a credential rather than one?
+
+    The value arrives with whatever followed it on the line still attached — a
+    closing brace, a comma, an inline comment — so this peels those off one at a
+    time and asks again after each. One character at a time rather than as a
+    character class, because ``${PASSWORD}`` ends in a brace of its own and
+    stripping it wholesale turned the reference into ``${PASSWORD``.
+
+    Quotes come off too: ``"${DB_PASSWORD}"`` in TOML is the same reference as a
+    bare ``${DB_PASSWORD}`` in YAML, and the shared scanner sees the quoted form
+    as a literal.
+    """
+    candidate = value.strip()
+    # An inline comment is not part of the value. Only when the `#` is preceded
+    # by whitespace — `abc#123` is a value that contains a hash.
+    head = re.split(r"\s+#", candidate, maxsplit=1)[0]
+    if head != candidate:
+        candidate = head.strip()
+
+    for _ in range(4):
+        probe = candidate.strip().strip("\"'").strip()
+        if _PLACEHOLDER_VALUE.fullmatch(probe) or _SHOUTED_PLACEHOLDER.fullmatch(probe):
+            return True
+        if candidate and candidate[-1] in _STRUCTURAL_TAIL:
+            candidate = candidate[:-1]
+        else:
+            return False
+    return False
+
+
+def _line_is_excluded(line: str) -> bool:
+    """Is this line a credential assignment that carries no credential?
+
+    A comment, or an assignment whose value is a placeholder. Used BOTH to
+    filter the shared scanner's findings and to gate this module's own rule,
+    which is the correction re-review R7 asked for: the exclusions used to live
+    only on the second rule, ``scan_secret_literals``'s own "credential-named
+    field" rule fired first and had none of them, so none of them ever ran.
+    """
+    if _COMMENT_LINE.match(line):
+        return True
+    # EVERY assignment on the line, not the first: `{"password": "", "token": ""}`
+    # is one line with two of them, and judging only the first left the file
+    # refused. Excluded only when all of them are placeholders — one real
+    # credential beside three blanks is still a credential.
+    values = [match.group("value") for match in _CREDENTIAL_ASSIGNMENT.finditer(line)]
+    if not values:
+        # Not an assignment this module recognises, so it has no opinion and
+        # the shared scanner's finding stands on its own merits.
+        return False
+    return all(_is_placeholder(value) for value in values)
+
 
 #: The token a refusal carries when the file is not the one that was approved.
 #: Matched by callers and by tests, so the wording above it can change.
@@ -219,7 +310,9 @@ def _credential_key_line(text: str) -> int | None:
     refused.
     """
     for number, line in enumerate(text.splitlines(), start=1):
-        if _CREDENTIAL_KEY_LINE.search(line):
+        if _line_is_excluded(line):
+            continue
+        if any(m.group("value").strip() for m in _CREDENTIAL_ASSIGNMENT.finditer(line)):
             return number
     return None
 
@@ -260,7 +353,23 @@ def _credential_refusal(path: Path) -> str | None:
 
     from robothor.templates.bundle import scan_secret_literals
 
-    findings = scan_secret_literals(text, path.name)
+    # The shared scanner's findings, MINUS the lines this module knows carry no
+    # credential. `templates/bundle.py` is not touched: its rules are right for
+    # an export bundle, where a placeholder in a shipped manifest is still worth
+    # querying. Here the file is one the operator asked for, and refusing every
+    # scaffold, README and commented-out example is how a gate gets switched off
+    # (re-review R7 — the exclusions existed and this filter is what makes them
+    # reachable, because the scanner's own credential-named-field rule fires
+    # first and has none of them).
+    source_lines = text.splitlines()
+
+    def _carries_a_credential(finding: Any) -> bool:
+        index = int(getattr(finding, "line", 0)) - 1
+        if not 0 <= index < len(source_lines):
+            return True
+        return not _line_is_excluded(source_lines[index])
+
+    findings = [f for f in scan_secret_literals(text, path.name) if _carries_a_credential(f)]
     if not findings:
         # The export gate's scanner looks for credential-shaped VALUES. A
         # credentials file often has none — an OAuth `client_secret` is a short

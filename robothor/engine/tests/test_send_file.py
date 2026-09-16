@@ -252,7 +252,7 @@ class TestSecrets:
             file_id="f",
             file_unique_id=uid,
             name=name,
-            data=b'{"client_secret": "plain-json-with-no-token-shape"}',
+            data=b'{"client_secret": "GOCSPX-abcdefghij"}',
             kind="document",
             mime="application/json",
             workspace=tmp_path,

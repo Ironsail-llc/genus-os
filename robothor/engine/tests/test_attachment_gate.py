@@ -206,14 +206,14 @@ class TestCredentialKeyNames:
         ],
     )
     def test_each_credential_key_name_is_refused_in_json(self, tmp_path, key) -> None:
-        path = make(tmp_path, "c.json", f'{{"{key}": "opaque-value-here"}}'.encode())
+        path = make(tmp_path, "c.json", f'{{"{key}": "s3cr3tliteral"}}'.encode())
         assert gate.refuse_to_send(path, tmp_path) is not None, key
 
     @pytest.mark.parametrize(
         "key", ["client_secret", "private_key", "api_key", "access_token", "password"]
     )
     def test_each_credential_key_name_is_refused_in_yaml(self, tmp_path, key) -> None:
-        path = make(tmp_path, "c.yaml", f"{key}: opaque-value-here\n".encode())
+        path = make(tmp_path, "c.yaml", f"{key}: s3cr3tliteral\n".encode())
         assert gate.refuse_to_send(path, tmp_path) is not None, key
 
     def test_a_nested_google_oauth_file_is_refused(self, tmp_path) -> None:
@@ -260,6 +260,95 @@ class TestCredentialKeyNames:
         """The rule is `key: value`, not the word appearing anywhere."""
         body = b"name,password_changed_at\nAlice,2026-01-02\nBob,2026-03-04\n"
         assert gate.refuse_to_send(make(tmp_path, "rows.csv", body), tmp_path) is None
+
+
+class TestCredentialExclusionsThroughTheRealGate:
+    """Re-review R7. The exclusions existed and were tested — on
+    ``_credential_key_line``, in isolation. They never ran end to end, because
+    ``_credential_refusal`` only reaches that helper when
+    ``scan_secret_literals`` found nothing, and the shared scanner has its own
+    "credential-named field" rule with no exclusions at all. So `send_file`
+    refused ordinary config scaffolds, a README, and a commented-out example.
+
+    **Every case here goes through `refuse_to_send`.** Asserting on the helper
+    is what let this through, and a test that cannot see the defect it is named
+    for is worse than no test.
+    """
+
+    SENDS = [
+        pytest.param("cfg.yaml", b"password: ${PASSWORD}\n", id="yaml-env-ref"),
+        pytest.param("cfg.json", b'{"client_secret": "${CLIENT_SECRET}"}\n', id="json-env-ref"),
+        pytest.param("cfg.toml", b'password = "${DB_PASSWORD}"\n', id="toml-env-ref"),
+        pytest.param("cfg.yaml", b'password: ""\n', id="yaml-empty"),
+        pytest.param("cfg.json", b'{"password": ""}\n', id="json-empty"),
+        pytest.param("cfg.yaml", b"api_key: null\n", id="null"),
+        pytest.param("cfg.yaml", b"password: none\n", id="none"),
+        pytest.param("cfg.yaml", b"secret: false\n", id="false"),
+        pytest.param("cfg.yaml", b"token: ~\n", id="tilde"),
+        pytest.param("cfg.yaml", b"max_tokens: 4096\n", id="bare-number"),
+        pytest.param("cfg.yaml", b"token: 12345\n", id="numeric-token"),
+        pytest.param("cfg.yaml", b"token_path: /etc/app/token\n", id="token-path"),
+        pytest.param("rows.csv", b"id,password_changed_at\n1,2026-01-02\n", id="csv-column"),
+        pytest.param("cfg.yaml", b"token: disabled\n", id="disabled"),
+        pytest.param("cfg.yaml", b"secret: REDACTED\n", id="redacted"),
+        pytest.param("cfg.yaml", b"api_key: YOUR_API_KEY_HERE\n", id="your-key-here"),
+        pytest.param("cfg.yaml", b"password: changeme\n", id="changeme"),
+        pytest.param("cfg.yaml", b"secret: !vault |\n  encrypted\n", id="yaml-vault-tag"),
+        pytest.param(
+            "readme.md",
+            b"Set the token: paste it into the field and save.\n",
+            id="prose",
+        ),
+        pytest.param("example.yaml", b"# password: hunter2\n", id="commented-out"),
+        pytest.param("example.yaml", b"  # api_key: abcdef\n", id="indented-comment"),
+    ]
+
+    @pytest.mark.parametrize(("name", "body"), SENDS)
+    def test_a_scaffold_or_a_document_still_sends(self, tmp_path, name, body) -> None:
+        refusal = gate.refuse_to_send(make(tmp_path, name, body), tmp_path)
+        assert refusal is None, refusal
+
+    REFUSES = [
+        pytest.param("cfg.yaml", b"password: hunter2\n", id="yaml-real"),
+        pytest.param("cfg.json", b'{"client_secret":"abc123"}\n', id="json-real"),
+        pytest.param("key.json", b'  "private_key": "-----BEGIN RSA PRIVATE KEY-----"\n', id="pem"),
+        pytest.param("cfg.yaml", b"password: hunter2  # the live one\n", id="trailing-comment"),
+        pytest.param(
+            "cfg.json",
+            b'{"env": "prod", "client_secret": "GOCSPX-abcdefghij"}\n',
+            id="second-key-on-the-line",
+        ),
+        pytest.param("notes.txt", b"ghp_0123456789abcdefghijklmnopqrstuvwxyz\n", id="bare-token"),
+    ]
+
+    @pytest.mark.parametrize(("name", "body"), REFUSES)
+    def test_a_real_credential_is_still_refused(self, tmp_path, name, body) -> None:
+        refusal = gate.refuse_to_send(make(tmp_path, name, body), tmp_path)
+        assert refusal is not None
+        for secret in (b"hunter2", b"abc123", b"GOCSPX", b"ghp_0123"):
+            assert secret.decode() not in refusal, "the refusal must never quote the value"
+
+    def test_a_scaffold_with_one_real_secret_in_it_is_refused(self, tmp_path) -> None:
+        """Excluding the placeholder lines must not excuse the file."""
+        body = b"api_key: ${API_KEY}\npassword: \nlive_token: ghp_0123456789abcdefghijk\n"
+        assert gate.refuse_to_send(make(tmp_path, "cfg.yaml", body), tmp_path) is not None
+
+    def test_a_dash_run_is_not_a_comment(self, tmp_path) -> None:
+        """Regression, found building this: `--` was in the comment markers for
+        SQL, and PEM armour starts `-----BEGIN`. That made a private key look
+        like a comment — a false NEGATIVE, the opposite of the mistake these
+        exclusions guard against."""
+        pem = b"-----BEGIN RSA PRIVATE KEY-----\nMIIEow...\n-----END RSA PRIVATE KEY-----\n"
+        assert gate.refuse_to_send(make(tmp_path, "k.txt", pem), tmp_path) is not None
+
+    def test_a_lowercase_value_ending_in_here_is_not_a_placeholder(self, tmp_path) -> None:
+        """Also found building this. `.*[_-]here` matched `opaque-value-here`,
+        so a real value would have been excused for ending in an English word.
+        A placeholder SHOUTS: the rule is case-sensitive now."""
+        body = b"client_secret: some-value-here\n"
+        assert gate.refuse_to_send(make(tmp_path, "cfg.yaml", body), tmp_path) is not None
+        shouted = b"client_secret: YOUR_SECRET_HERE\n"
+        assert gate.refuse_to_send(make(tmp_path, "tpl.yaml", shouted), tmp_path) is None
 
 
 class TestHardLinks:
