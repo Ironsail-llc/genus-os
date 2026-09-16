@@ -20,7 +20,7 @@ from robothor.engine.tools.read_only import (
 
 class TestTheUnion:
     def test_it_contains_cores_own_table(self):
-        assert READONLY_TOOLS <= declared_read_only_tools()
+        assert declared_read_only_tools() >= READONLY_TOOLS
 
     def test_a_write_is_not_in_it(self):
         declared = declared_read_only_tools()

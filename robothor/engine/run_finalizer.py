@@ -61,49 +61,6 @@ from robothor.engine.thin_announce import (
 )
 from robothor.engine.tracking import create_step, create_steps_batch, update_run
 
-#: Tools whose work is several sub-agent runs, so the agent-level per-tool cap
-#: (120s by default) is far too short. Kept at a 600s floor.
-_LONG_RUNNING_TOOLS = frozenset(
-    {
-        "benchmark_run",
-        "benchmark_run_fleet",
-        "benchmark_run_for_agent",
-        "benchmark_compare",
-        "experiment_measure",
-        "spawn_agent",
-        "spawn_agents",
-        # Measured 2026-08-22 against 14 days of real calls: each of these died
-        # at exactly the 120s default and NONE ever completed above it.
-        # buddy_review_pass 8 of 10 (main had no buddy review since 08-19,
-        # vision-monitor since 08-17), deep_reason 4 of 18, look 3 of 70.
-        # detectors.find_tools_capped_at_timeout reports the next one.
-        "buddy_review_pass",
-        "deep_reason",
-        "look",
-    }
-)
-
-#: Of those, the tools that already enforce their OWN per-task budget: the
-#: benchmark harness caps each case at the suite's ``timeout_seconds:`` (or 900s
-#: by default) and records an overrun as a timeout rather than a grade. A second,
-#: smaller cap out here can only cut a case short *below* the budget its suite
-#: declared, and the run is then filed against the agent.
-#:
-#: This list previously named ``benchmark_run`` only, while the tools the fleet
-#: grader actually calls are ``benchmark_run_fleet`` and
-#: ``benchmark_run_for_agent`` -- so the two tools that run every benchmark
-#: inherited the 120s default. Measured 2026-08-22: agent-architect
-#: ``fleet-analysis`` had never once completed above 120.0s across 91 completed
-#: runs, against a 512s production mean with zero production timeouts.
-_HARNESS_BUDGETED_TOOLS = frozenset(
-    {
-        "benchmark_run",
-        "benchmark_run_fleet",
-        "benchmark_run_for_agent",
-    }
-)
-
-
 #: How stale an interactive preamble may be before the next turn re-warms.
 #: The old gate was "history is empty", which never fires on a persistent
 #: session: main.yaml sets session_target: persistent and that session holds
@@ -158,19 +115,6 @@ def should_warm_interactive(*, history_len: int, seconds_since_warmup: float | N
     if seconds_since_warmup is None:
         return True
     return seconds_since_warmup > INTERACTIVE_WARMUP_MAX_AGE_S
-
-
-def _resolve_tool_timeout(tool_name: str, configured: int) -> int:
-    """Per-tool wall-clock cap, in seconds. 0 means unlimited.
-
-    One owner per budget: where the callee already bounds its own work, this
-    layer must not impose a second, smaller bound.
-    """
-    if tool_name in _HARNESS_BUDGETED_TOOLS:
-        return 0
-    if tool_name in _LONG_RUNNING_TOOLS:
-        return max(configured, 600)
-    return configured
 
 
 # Init timeout: max seconds for agent setup before first LLM call.

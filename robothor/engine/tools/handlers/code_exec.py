@@ -46,19 +46,15 @@ that cannot run commands does not get a way to run commands.
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import logging
-import os
 import shutil
-import signal
-import sys
 import tempfile
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from robothor.constants import DEFAULT_TENANT
+from robothor.engine.code_exec_process import run_snippet
 from robothor.engine.code_execution import (
     DEFAULT_MAX_TOOL_CALLS,
     DEFAULT_TIMEOUT_SECONDS,
@@ -99,16 +95,6 @@ HARD_CAP_MULTIPLIER = 20
 #: The ceiling an agent cannot ask past, matching `exec`'s. A snippet that
 #: outlives the run owning it is a leak, not a long job.
 MAX_TIMEOUT_SECONDS = 900
-
-#: How often the exit poll wakes. Short enough that a snippet printing one line
-#: does not feel slow, long enough that a fifteen-minute one costs a few
-#: thousand cheap wakeups rather than a hundred thousand.
-EXIT_POLL_SECONDS = 0.05
-
-#: After the process group is killed, how long the pipes get to give up what
-#: they still hold. Bounded because an orphan the kill could not reach (one
-#: that changed its own group) would otherwise hold this call open.
-DRAIN_GRACE_SECONDS = 5.0
 
 #: Where an oversized stdout is spilled. Under the workspace so the agent can
 #: `read_file` it back; under `.robothor/` so it is never mistaken for a
@@ -235,33 +221,6 @@ def _spill(workspace: Path, stdout: str) -> str:
         return ""
 
 
-def _kill_group(pgid: int) -> None:
-    """Kill the snippet's whole process group. Never raises.
-
-    `start_new_session=True` makes the child a session leader, so its process
-    GROUP id equals its pid and everything it starts inherits that group. This
-    is what reaches a `subprocess.Popen` the snippet left running after it
-    returned — exactly the leak the `exec` handler warns the model about and
-    had no way to enforce.
-
-    The caller passes the pgid it captured at SPAWN time, never
-    ``os.getpgid(pid)`` at kill time: once the child has been waited on it is
-    reaped, `getpgid` raises, and the suppression below would swallow the
-    failure and let the orphan live. That is how the first cut of this
-    function passed its own test on the timeout path and failed it on the
-    success path.
-
-    The self-check is not paranoia about a value we computed — it is a check
-    that ``start_new_session`` did what it said. If it ever silently did not,
-    this would be the engine killing its own process group.
-    """
-    if pgid <= 0 or pgid == os.getpgid(0):
-        logger.error("execute_code refused to kill process group %s — it is our own", pgid)
-        return
-    with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
-        os.killpg(pgid, signal.SIGKILL)
-
-
 @_handler("execute_code")
 async def _execute_code(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.engine.code_exec_rpc import ToolRpcServer
@@ -319,7 +278,7 @@ async def _execute_code(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     try:
         await server.start()
         _stage(tools_dir, code)
-        result = await _run_snippet(
+        result = await run_snippet(
             tools_dir=tools_dir,
             workspace=workspace,
             env=_child_environment(ctx, tools_dir),
@@ -329,7 +288,15 @@ async def _execute_code(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     except OSError as exc:
         return {"error": f"execute_code could not start: {exc}"}
     finally:
-        await server.aclose()
+        # `BaseException`, deliberately: on the cancellation path `aclose()`
+        # awaits, so a second cancel can land inside it — and skipping the
+        # rmtree would leak the directory holding this call's token. The
+        # original exception still propagates after this block; all that is
+        # swallowed is a failure to clean up.
+        try:
+            await server.aclose()
+        except BaseException as exc:  # noqa: BLE001 - cleanup must not be skipped
+            logger.warning("execute_code: closing the tool socket failed: %r", exc)
         shutil.rmtree(tools_dir, ignore_errors=True)
 
     return _shape(result, server=server, workspace=workspace, stdout_cap=stdout_cap)
@@ -380,108 +347,6 @@ def _stage(tools_dir: Path, code: str) -> None:
     (tools_dir / "snippet.py").write_text(code, encoding="utf-8")
     (tools_dir / "_boot.py").write_text(
         _BOOT_TEMPLATE.format(guarded=GUARDED_IMPORTS), encoding="utf-8"
-    )
-
-
-async def _drain(stream: Any, sink: list[bytes], hard_cap: int) -> None:
-    """Read one pipe, stopping at the hard cap rather than at EOF.
-
-    The cap is applied WHILE reading, not after. A snippet printing fifty
-    megabytes must not get the engine to hold fifty megabytes first and decide
-    afterwards that it was too much — buffering-then-capping is the hole the
-    plugin scanner review recorded on 2026-09-15, in a different file.
-    """
-    held = 0
-    while held < hard_cap:
-        chunk = await stream.read(65536)
-        if not chunk:
-            return
-        sink.append(chunk)
-        held += len(chunk)
-    # Past the cap: keep draining so the child is not blocked on a full pipe,
-    # and keep none of it.
-    while await stream.read(65536):
-        pass
-
-
-async def _wait_for_exit(proc: Any, timeout: float) -> bool:
-    """Wait for the SNIPPET to exit. True if it did, False on the deadline.
-
-    Polls ``proc.returncode`` rather than awaiting ``proc.wait()``, and the
-    difference is the whole point. asyncio's subprocess transport only finishes
-    ``wait()`` once the process has exited AND every pipe it handed out has
-    closed — and a child the snippet backgrounded inherited stdout, so it holds
-    one open. Awaiting ``wait()`` therefore keeps the tool call alive for as
-    long as the orphan runs, which is the opposite of the property this tool
-    promises. ``returncode`` is set by the child watcher the moment the process
-    itself exits, independent of any pipe.
-    """
-    deadline = asyncio.get_running_loop().time() + timeout
-    while proc.returncode is None:
-        if asyncio.get_running_loop().time() >= deadline:
-            return False
-        await asyncio.sleep(EXIT_POLL_SECONDS)
-    return True
-
-
-async def _run_snippet(
-    *, tools_dir: Path, workspace: Path, env: dict[str, str], timeout: int, hard_cap: int
-) -> SandboxResult:
-    """Spawn, wait, and make sure nothing survives."""
-    proc = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-I",
-        "-B",
-        str(tools_dir / "_boot.py"),
-        cwd=str(workspace) if workspace.is_dir() else None,
-        env=env,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        start_new_session=True,
-    )
-    # Captured now, not at kill time: once the child is waited on it is reaped
-    # and `os.getpgid` raises, which would leave anything it backgrounded
-    # running while the kill looked like it had happened.
-    pgid = proc.pid
-    out: list[bytes] = []
-    err: list[bytes] = []
-
-    # The pipes are drained CONCURRENTLY with the wait, and the wait is on the
-    # snippet's own exit — not on the pipes closing. Those are different
-    # events, and conflating them is a bug in both directions:
-    #
-    #   * waiting for exit without draining deadlocks the moment the snippet
-    #     prints more than the pipe buffer (64 KiB) and blocks on a reader that
-    #     is not reading;
-    #   * waiting for the pipes to CLOSE keeps this call alive for as long as
-    #     anything the snippet backgrounded holds the inherited stdout — which
-    #     is to say, a daemon the snippet started holds the tool call open. The
-    #     first cut did that and its own "nothing survives" test passed for the
-    #     wrong reason: the handler had simply waited for the orphan to finish.
-    drains = asyncio.gather(
-        _drain(proc.stdout, out, hard_cap),
-        _drain(proc.stderr, err, hard_cap),
-    )
-
-    timed_out = not await _wait_for_exit(proc, timeout)
-    # On BOTH paths. A snippet that returned after backgrounding a child leaves
-    # that child in this group, and "it finished" is not the same as "nothing it
-    # started is still running". Killing the group also closes the inherited
-    # pipe ends, which is what lets the drains below reach EOF rather than wait
-    # on an orphan.
-    _kill_group(pgid)
-    with contextlib.suppress(Exception):
-        await asyncio.wait_for(drains, timeout=DRAIN_GRACE_SECONDS)
-    drains.cancel()
-    with contextlib.suppress(Exception):
-        await proc.wait()
-
-    return SandboxResult(
-        stdout=b"".join(out).decode("utf-8", errors="replace"),
-        stderr=b"".join(err).decode("utf-8", errors="replace"),
-        returncode=-1 if timed_out else (proc.returncode if proc.returncode is not None else -1),
-        tool_call_count=0,
-        timed_out=timed_out,
     )
 
 

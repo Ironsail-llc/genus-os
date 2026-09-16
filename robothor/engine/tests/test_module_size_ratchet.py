@@ -59,7 +59,13 @@ CAPS = {
     # an extraction rather than a bigger number when parallel execution and
     # the tool proxy needed somewhere to live, and got one; the cap follows
     # the file DOWN rather than banking 244 lines of headroom.
-    "robothor/engine/runner.py": 2268,
+    # 2268 -> 2224: the per-tool wall-clock tables and the rule that reads
+    # them left for tool_timeouts.py, taking three DEAD verbatim copies in
+    # run_llm_calls / run_lifecycle / run_finalizer with them (three of the
+    # four had already drifted -- `ask_user` was in this one alone). That is
+    # what paid for teaching the resolver about self-timed tools, instead of
+    # raising this number for it.
+    "robothor/engine/runner.py": 2224,
     # 2545: a concurrent session ratcheted this to 2539 by lifting injection
     # screening and journal resume out of execute(); the deliverable guard's call
     # site adds the rest. Its 25 lines of logic went to loop_guards.py, so what
@@ -88,7 +94,7 @@ CAPS = {
     # lines here; it paid for itself by taking the ~100 that were already there.
     # The ratchet asked for an extraction rather than a bigger number, by this
     # file's own header, and got one.
-    "robothor/engine/run_finalizer.py": 1048,
+    "robothor/engine/run_finalizer.py": 992,  # -69: dead copy of the tool-timeout tables
     # The deliverable-contract cluster, capped at the size it was split to.
     # Hostile review 2026-09-16 (I6): `deliverable_contract.py` had reached
     # 1,354 lines and none of the three new modules was listed here, so "the
@@ -120,8 +126,8 @@ CAPS = {
     # why the fallback and the send are both helpers now rather than more
     # inline branches.
     "robothor/engine/delivery.py": 950,
-    "robothor/engine/run_lifecycle.py": 800,
-    "robothor/engine/run_llm_calls.py": 450,
+    "robothor/engine/run_lifecycle.py": 709,  # -69: dead copy of the tool-timeout tables
+    "robothor/engine/run_llm_calls.py": 381,  # -69: dead copy of the tool-timeout tables
     "robothor/engine/tool_admission.py": 400,
     # One assistant message's tool calls, from admission to the ledger.
     # Bounded from the day it lands, like schedule_reconcile.py: this is the
@@ -139,7 +145,15 @@ CAPS = {
     "robothor/engine/parallel_tools.py": 173,
     "robothor/engine/tool_proxy.py": 277,
     "robothor/engine/code_exec_rpc.py": 209,
-    "robothor/engine/tools/handlers/code_exec.py": 523,
+    # 523 -> 388: spawning a snippet, reading its pipes without deadlocking
+    # it, detecting its exit and killing its descendants is one subject and
+    # the handler's admission/staging/shaping is another. The split is what
+    # paid for the cancellation fix rather than a bigger cap, and it is where
+    # the descendant walk lands.
+    "robothor/engine/tools/handlers/code_exec.py": 388,
+    "robothor/engine/code_exec_process.py": 198,
+    # The per-tool wall-clock rule, with one definition instead of four.
+    "robothor/engine/tool_timeouts.py": 144,
     "robothor/engine/tools/read_only.py": 87,
     "robothor/engine/run_budget.py": 120,
     # Live host state for the warmup preamble (2026-09-13). Bounded from the

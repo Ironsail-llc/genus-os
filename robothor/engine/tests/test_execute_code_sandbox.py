@@ -12,7 +12,9 @@ milliseconds. That is the price of testing a boundary instead of a mock of one.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
+import signal
 import textwrap
 from pathlib import Path
 
@@ -41,6 +43,20 @@ class _StubProxy:
 @pytest.fixture
 def workspace(tmp_path) -> Path:
     return tmp_path
+
+
+def _alive(pid: int) -> bool:
+    """Is this pid still there? `signal 0` asks without sending anything."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _reap(pid: int) -> None:
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.kill(pid, signal.SIGKILL)
 
 
 def _ctx(workspace: Path) -> ToolContext:
@@ -304,6 +320,53 @@ class TestTheBounds:
         result, _ = await _run("print('z' * 500_000)", workspace)
         spilled = Path(result["stdout_file"])
         assert len(spilled.read_text()) < 100_000
+
+
+@pytest.mark.asyncio
+class TestCancellationIsNotAnEscapeHatch:
+    """`registry.execute` wraps every handler in `asyncio.timeout`, and the run
+    watchdog and the workflow deadline cancel the task outright. Measured on
+    the first cut: a registry-style cancel at 2 s returned nothing and left the
+    snippet AND its child running on the host with no deadline at all, socket
+    directory deleted from under them. Every snippet longer than the agent's
+    `tool_timeout_seconds` was an orphan — which is exactly the long research
+    loop this tool exists for."""
+
+    async def test_a_cancelled_handler_still_kills_the_snippet(self, workspace):
+        marker = workspace / "cancelled.pid"
+        code = f"""
+            import os, time
+            open({str(marker)!r}, 'w').write(str(os.getpid()))
+            time.sleep(60)
+        """
+        with contextlib.suppress(TimeoutError):
+            async with asyncio.timeout(2):
+                await _run(code, workspace, timeout=30)
+        await asyncio.sleep(0.5)
+        pid = int(marker.read_text())
+        assert not _alive(pid), "a cancelled execute_code left the snippet running"
+
+    async def test_the_registry_deadline_is_wider_than_the_tools_own(self):
+        """The two bounds must not compete. The tool's kill path fires first;
+        the registry stays a backstop."""
+        from robothor.engine.code_exec_process import DRAIN_GRACE_SECONDS
+        from robothor.engine.runner import _resolve_tool_timeout
+        from robothor.engine.tools.handlers.code_exec import MAX_TIMEOUT_SECONDS
+
+        registry_bound = _resolve_tool_timeout("execute_code", 120)
+        assert registry_bound > MAX_TIMEOUT_SECONDS + DRAIN_GRACE_SECONDS
+
+    async def test_exec_carried_the_same_mismatch_and_no_longer_does(self):
+        from robothor.engine.runner import _resolve_tool_timeout
+        from robothor.engine.tools.handlers.filesystem import MAX_EXEC_TIMEOUT
+
+        assert _resolve_tool_timeout("exec", 120) > MAX_EXEC_TIMEOUT
+
+    async def test_an_ordinary_tool_keeps_the_agents_configured_cap(self):
+        """The widening is per tool, not a general loosening."""
+        from robothor.engine.runner import _resolve_tool_timeout
+
+        assert _resolve_tool_timeout("read_file", 120) == 120
 
 
 @pytest.mark.asyncio
