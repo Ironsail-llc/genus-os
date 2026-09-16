@@ -89,6 +89,20 @@ helm test genus --namespace genus
 The chart version is the release tag with the leading `v` removed; the publish
 job refuses to push when the chart and the tag disagree.
 
+**Check that first line resolves before you plan around it.** A GHCR package is
+created **private** on its first push, and stays private until somebody changes
+it, so an anonymous pull can answer `401 Unauthorized` rather than `not found` —
+which reads like a typo in the version. From a machine with no GHCR credentials:
+
+```bash
+helm show chart oci://ghcr.io/ironsail-llc/charts/genus-os --version X.Y.Z
+```
+
+If that 401s, either the package needs to be made public, or authenticate first
+(`helm registry login ghcr.io`) — which is also what a private mirror of your
+own would need. The images are pulled the same way, so whatever your cluster
+uses to pull `ghcr.io` applies to the chart too.
+
 The values you must decide, rather than accept:
 
 | Value | Why you must choose |
