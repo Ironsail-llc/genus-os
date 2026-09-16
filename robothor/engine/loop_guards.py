@@ -216,11 +216,17 @@ def append_engine_note(session: Any, note: str | None, workspace: str | Path | N
     if not note:
         return
     with contextlib.suppress(Exception):
-        from robothor.engine.deliverable_contract import contract_checkin_note
+        from robothor.engine.deliverable_contract import contract_checkin_note, task_text_for_run
         from robothor.engine.feature_flags import deliverable_contract_mode
 
         if deliverable_contract_mode() != "off":
-            text = str(getattr(session, "originating_message", "") or "")
+            # `task_text_for_run`, not `session.originating_message`. On a
+            # RESUMED run the session carries no originating message, so the
+            # comparison stayed silent while the re-ask still fired — the agent
+            # was failed for a contract it was never shown mid-run (hostile
+            # review 2026-09-16, I5). Both halves read the same source or the
+            # run is judged on something it did not see.
+            text = task_text_for_run(getattr(session, "run", None), session)
             comparison = contract_checkin_note(text, workspace)
             if comparison:
                 note = f"{note}\n{comparison}"
@@ -280,6 +286,12 @@ def reask_for_wrong_deliverable_shape(session: Any, workspace: str | Path | None
     if mode == "off":
         return False
     run = getattr(session, "run", None)
+    # Record the root actually judged against, so the finalizer judges the same
+    # one rather than falling back to the engine-wide workspace (I4).
+    from robothor.engine.deliverable_verdict import WORKSPACE_ATTR
+
+    if workspace:
+        setattr(session, WORKSPACE_ATTR, str(workspace))
     report = contract_report_for_run(run, session, workspace)
     # Written on EVERY outcome, cleared included. A satisfied re-check used to
     # return without touching the stash, leaving the previous stop's failing

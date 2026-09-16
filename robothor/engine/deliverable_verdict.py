@@ -70,6 +70,27 @@ def reads_as_a_refusal(output_text: str | None) -> bool:
     return _REFUSAL_RE.search(str(output_text)[-_REFUSAL_TAIL_CHARS:]) is not None
 
 
+#: Where the loop stashes the root it judged against, so the finalizer judges
+#: the same one.
+WORKSPACE_ATTR = "_deliverable_workspace"
+
+
+def resolve_workspace(session: Any, fallback: str | Path | None = None) -> str | None:
+    """The one root both halves of this control read.
+
+    The loop resolves `agent_config.workspace or config.workspace`; the
+    finalizer only ever had `config.workspace`. When a manifest sets its own
+    workspace the two differ, and the finalizer could produce a verdict about a
+    directory the agent never wrote to (hostile review 2026-09-16, I4). The
+    loop records what it used; this returns that, or the caller's fallback for
+    a run that never reached the guard.
+    """
+    for candidate in (getattr(session, WORKSPACE_ATTR, None), fallback):
+        if candidate:
+            return str(candidate)
+    return None
+
+
 def record_deliverable_verdicts(run: Any, session: Any, workspace: str | Path | None) -> None:
     """The deliverable verdict for one finished run, at whatever rung is configured.
 
@@ -113,7 +134,7 @@ def record_deliverable_verdicts(run: Any, session: Any, workspace: str | Path | 
         # the re-ask was still recorded `failed`, with a `blocked` row and an
         # operator alert — the one success path this feature exists to create
         # was unreachable (hostile review 2026-09-16, C1).
-        report = contract_report_for_run(run, session, workspace)
+        report = contract_report_for_run(run, session, resolve_workspace(session, workspace))
     except Exception as exc:  # noqa: BLE001 — never block finalization
         logger.debug("deliverable shape check raised: %s", exc)
         return
