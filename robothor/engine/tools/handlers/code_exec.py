@@ -221,8 +221,11 @@ async def _execute_code(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
 
     proxy = get_tool_proxy()
     refusal = preflight(args.get("code") or "", proxy)
-    if refusal is not None:
-        return refusal
+    if refusal is not None or proxy is None:
+        # `preflight` already refuses a None proxy; the second half of this
+        # condition says so to the type checker, which cannot read that from
+        # the other module.
+        return refusal or {"error": "execute_code is only available inside an agent run."}
     # After the refusals and before the spawn: nothing exists yet that could
     # read this process, and everything after this line can.
     harden_this_process()

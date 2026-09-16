@@ -58,7 +58,9 @@ class TestTheDetectorIsNarrow:
     def test_it_does_not_swallow_an_unrelated_schema_error(self):
         """A writer that degrades on every failure is a writer that cannot tell
         you it is broken."""
-        exc = _MissingColumnError('column "tool_output" of relation "agent_run_steps" does not exist')
+        exc = _MissingColumnError(
+            'column "tool_output" of relation "agent_run_steps" does not exist'
+        )
         assert tracking._missing_batch_columns(exc) is False
 
     def test_it_does_not_swallow_a_permission_error(self):
