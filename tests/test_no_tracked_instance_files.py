@@ -47,3 +47,38 @@ def test_no_tracked_instance_files():
         "Instance files tracked in the platform repo (untrack with "
         f"`git rm --cached` and gitignore them): {sorted(leaked)}"
     )
+
+
+#: The secret files Genus itself writes into ``ROBOTHOR_WORKSPACE``. A
+#: workspace is very often the checkout — `genus init` in a clone, a container
+#: whose working copy IS the instance — so anything written there has to be
+#: ignored, or the next `git add -A` commits it. `.vault-key` was already
+#: ignored; `.fingerprint-salt` was not, and a salt in the repository is a key
+#: every reader holds, which is the whole reason it stopped being a constant.
+WORKSPACE_SECRET_FILES = (".vault-key", ".fingerprint-salt")
+
+
+@pytest.mark.parametrize("name", WORKSPACE_SECRET_FILES)
+def test_workspace_secret_files_are_gitignored(name):
+    if not (REPO_ROOT / ".git").exists():
+        pytest.skip("not a git checkout — nothing to check-ignore against")
+
+    ignored = subprocess.run(
+        ["git", "check-ignore", "-q", name],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=False,
+    )
+    assert ignored.returncode == 0, (
+        f"{name} is written into the workspace and is not gitignored; a checkout "
+        "used as a workspace would commit it"
+    )
+
+
+@pytest.mark.parametrize("name", WORKSPACE_SECRET_FILES)
+def test_workspace_secret_files_are_also_refused_to_agents(name):
+    """The two lists must not drift apart: a file worth hiding from git is a
+    file worth refusing to an agent that was told where the workspace is."""
+    from robothor.engine.secret_paths import is_secret_path
+
+    assert is_secret_path(f"/workspace/{name}")
