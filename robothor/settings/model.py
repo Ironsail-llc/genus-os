@@ -666,9 +666,11 @@ class ProviderSettings(SettingsGroup):
     vision_batch_concurrency: int = declare(
         4,
         "ROBOTHOR_VISION_BATCH_CONCURRENCY",
-        "Vision calls `analyze_image` keeps in flight at once. Four is what a "
-        "single local VLM on one GPU serves without queueing into its own "
-        "timeout; a remote backend takes more, per call, up to 16.",
+        "Ceiling on the vision calls `analyze_image` keeps in flight at once. "
+        "An agent may ask for fewer and never for more, so an operator on a "
+        "single-GPU box can hold it at 1 or 2 without an agent overruling "
+        "them. Four is what one local VLM serves without queueing into its own "
+        "timeout; a remote backend takes more, up to the platform's own 16.",
         restart_required=False,
         since="unreleased",
     )

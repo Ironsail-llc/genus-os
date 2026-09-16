@@ -86,13 +86,16 @@ logger = logging.getLogger(__name__)
 #: completely dead backend still ends inside the batch deadline below.
 MAX_PATHS = 200
 
-#: Vision calls in flight at once when nobody says otherwise. Four is what a
-#: single local VLM on one GPU serves without queueing into its own timeout;
-#: a remote backend can be told to go wider per call.
+#: Vision calls in flight at once when the operator has not said otherwise.
+#: Four is what a single local VLM on one GPU serves without queueing into its
+#: own timeout. The SETTING that overrides this is a ceiling, not a default —
+#: see :func:`_clamp_concurrency` — so an agent can ask for fewer and never for
+#: more.
 DEFAULT_CONCURRENCY = 4
 
-#: The ceiling on that, whatever an agent asks for. An agent that asks for 500
-#: is not making a considered judgement about the provider's rate limit.
+#: The platform's own ceiling, above which no setting or request goes. An agent
+#: that asks for 500 is not making a considered judgement about the provider's
+#: rate limit.
 MAX_CONCURRENCY = 16
 
 #: Seconds one image gets before it is marked timed out and the batch moves on.
@@ -200,7 +203,7 @@ def _configured_local_model() -> str:
         return ""
 
 
-def _default_concurrency() -> int:
+def _configured_concurrency() -> int:
     try:
         return int(_settings().providers.vision_batch_concurrency)
     except Exception:  # noqa: BLE001
@@ -533,13 +536,23 @@ async def _analyze_one(
 
 
 def _clamp_concurrency(requested: Any) -> int:
+    """How many calls run at once: what was asked for, under the operator's cap.
+
+    The setting is a CEILING, not a default. It read as a default for one
+    draft, and a hostile review measured the consequence: with the setting at
+    4, an agent asking for 12 got 12 and an agent asking for 500 got 16. The
+    number exists because it is what a single local VLM on one GPU serves
+    without queueing into its own timeout — an operator who lowers it to 1 on a
+    small box means it, and an agent is in no position to overrule them.
+    """
+    ceiling = max(1, min(_configured_concurrency(), MAX_CONCURRENCY))
     try:
         wanted = int(requested)
     except (TypeError, ValueError):
-        wanted = _default_concurrency()
+        wanted = ceiling
     if wanted <= 0:
-        wanted = _default_concurrency()
-    return max(1, min(wanted, MAX_CONCURRENCY))
+        wanted = ceiling
+    return max(1, min(wanted, ceiling))
 
 
 def _spill_path(root: Path, run_id: str) -> Path:

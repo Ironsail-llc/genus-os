@@ -265,7 +265,7 @@ step row starts being truncated instead.
 |---|---|
 | `ROBOTHOR_VISION_MODEL` | The local VLM, served by Ollama. The default backend. |
 | `ROBOTHOR_VISION_REMOTE_MODEL` | A provider model used instead, for a deployment with no local GPU (a container, the cloud, the benchmark sandbox). Must be **declared** `accepts_images=True` in the engine's model registry — a model the registry has never heard of is refused, same as one it declares text-only. |
-| `ROBOTHOR_VISION_BATCH_CONCURRENCY` | Images in flight at once (default 4, ceiling 16). |
+| `ROBOTHOR_VISION_BATCH_CONCURRENCY` | Ceiling on images in flight at once (default 4, platform maximum 16). An agent's `max_concurrency` may ask for fewer, never for more. |
 | `ROBOTHOR_VISION_BATCH_TIMEOUT` | Seconds one image gets (default 90). |
 | `ROBOTHOR_VISION_BATCH_DEADLINE` | Seconds the whole call gets (default 600). |
 | `ROBOTHOR_VISION_BATCH_MAX_CHARS` | How much of the result comes back inline before the table spills to a file (default 3500 — just under the 4,000-character cap the step writer truncates at). |

@@ -114,7 +114,9 @@ _ATTACHMENT_SCHEMAS: dict[str, dict[str, Any]] = {
                     "max_concurrency": {
                         "type": "integer",
                         "description": (
-                            "How many images are analysed at once (default 4, maximum 16)."
+                            "How many images are analysed at once. The instance sets "
+                            "the ceiling (4 unless the operator changed it); ask for "
+                            "fewer to go gentler, never more."
                         ),
                     },
                 },

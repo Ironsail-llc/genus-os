@@ -174,6 +174,41 @@ class TestConcurrency:
         await _analyze(tmp_path, _images(tmp_path, 12), max_concurrency=500)
         assert fake.max_in_flight <= vision_batch.MAX_CONCURRENCY
 
+    @pytest.mark.parametrize("requested", [12, 500])
+    async def test_the_setting_is_a_ceiling_the_agent_cannot_raise(
+        self, tmp_path, monkeypatch, requested
+    ):
+        """Hostile review I-3. With the setting at 4, an agent asking for 12
+        got 12 and one asking for 500 got 16 — the operator's number was a
+        default, not a limit. On a single-GPU box that is the self-inflicted
+        queueing the number exists to prevent."""
+        fake = FakeVision(delay=0.02)
+        monkeypatch.setattr(vision_batch, "describe_image_bytes", fake)
+        monkeypatch.setattr(vision_batch, "_configured_concurrency", lambda: 4)
+        monkeypatch.setattr(
+            vision_batch,
+            "resolve_backend",
+            lambda: (vision_batch.Backend("local", "test-vlm"), ""),
+        )
+        await _analyze(tmp_path, _images(tmp_path, 20), max_concurrency=requested)
+        assert fake.max_in_flight <= 4, f"the operator said 4, {fake.max_in_flight} ran"
+
+    async def test_an_agent_may_still_ask_to_go_gentler(self, tmp_path, monkeypatch):
+        fake = FakeVision(delay=0.02)
+        monkeypatch.setattr(vision_batch, "describe_image_bytes", fake)
+        monkeypatch.setattr(vision_batch, "_configured_concurrency", lambda: 8)
+        monkeypatch.setattr(
+            vision_batch,
+            "resolve_backend",
+            lambda: (vision_batch.Backend("local", "test-vlm"), ""),
+        )
+        await _analyze(tmp_path, _images(tmp_path, 12), max_concurrency=2)
+        assert fake.max_in_flight == 2
+
+    def test_an_operator_cannot_exceed_the_platform_ceiling_either(self, monkeypatch):
+        monkeypatch.setattr(vision_batch, "_configured_concurrency", lambda: 10_000)
+        assert vision_batch._clamp_concurrency(None) == vision_batch.MAX_CONCURRENCY
+
 
 class TestOneImageFailsAlone:
     async def test_a_timeout_marks_that_image_only(self, tmp_path, monkeypatch):
