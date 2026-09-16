@@ -1533,6 +1533,12 @@ def _gmail_get(args: dict[str, Any]) -> dict[str, Any]:
 #: it only ever shrank the body.
 _GMAIL_MAX_LISTED_ATTACHMENTS = 10
 
+#: Labels listed in full before the list is summarised. Gmail's own system
+#: labels are short and few; a mailbox with a hundred long USER label ids is
+#: rare and not impossible, and 120 of them is 6,889 characters on their own.
+#: Eight keeps every system label a message realistically carries.
+_GMAIL_MAX_LISTED_LABELS = 8
+
 
 def _fit_one_message(message: dict[str, Any]) -> dict[str, Any]:
     """Shrink the ENVELOPE when the body alone was not the problem.
@@ -1545,45 +1551,75 @@ def _fit_one_message(message: dict[str, Any]) -> dict[str, Any]:
     subject and it reached 10,237 against a 4,000 cap.
 
     Shed in order of what it costs the reader: the attachment list first (it is
-    the biggest and the least often needed), then the recipient headers, then
-    the snippet — which is redundant beside a body — and only then the body.
+    the biggest and the least often needed), then the label list, then the
+    recipient headers, then the snippet — which is redundant beside a body —
+    and only then the body.
+
+    Everything shed is REPORTED. A result that quietly loses a 6,798-character
+    ``To`` and comes back saying ``truncated: false`` is the contradiction the
+    thread path was fixed to remove, and the single-message path had it too:
+    only a trailing ``…`` recorded the loss.
     """
     if _fits(message):
         return message
 
     out = dict(message)
+    shed: list[str] = []
+
+    def done() -> dict[str, Any]:
+        """Stamp what this cost before handing the result back."""
+        if shed:
+            out["truncated"] = True
+            out["fields_omitted"] = list(shed)
+        return out
+
     attachments = out.get("attachments") or []
     if len(attachments) > _GMAIL_MAX_LISTED_ATTACHMENTS:
         out["attachments"] = attachments[:_GMAIL_MAX_LISTED_ATTACHMENTS]
         out["attachments_omitted"] = len(attachments) - _GMAIL_MAX_LISTED_ATTACHMENTS
-        if _fits(out):
-            return out
+        shed.append("attachments")
+        if _fits(done()):
+            return done()
+
+    # `labels` was the one field this never touched, which contradicted the
+    # docstring above it — and no test gave a message more than one label, so a
+    # commit could claim this was here while it was not.
+    labels = out.get("labels") or []
+    if len(labels) > _GMAIL_MAX_LISTED_LABELS:
+        out["labels"] = labels[:_GMAIL_MAX_LISTED_LABELS]
+        out["labels_omitted"] = len(labels) - _GMAIL_MAX_LISTED_LABELS
+        shed.append("labels")
+        if _fits(done()):
+            return done()
 
     for field in ("to", "cc"):
         if out.get(field):
             out[field] = str(out[field])[:GMAIL_SEARCH_HEADER_MAX_CHARS] + "…"
-            if _fits(out):
-                return out
+            shed.append(field)
+            if _fits(done()):
+                return done()
 
     if out.get("snippet"):
         # The snippet is Gmail's preview of the body, and the body is right
         # there. It is the one field that costs nothing to lose.
         out.pop("snippet")
-        if _fits(out):
-            return out
+        shed.append("snippet")
+        if _fits(done()):
+            return done()
 
     if out.get("subject"):
         out["subject"] = str(out["subject"])[:GMAIL_SEARCH_HEADER_MAX_CHARS] + "…"
-        if _fits(out):
-            return out
+        shed.append("subject")
+        if _fits(done()):
+            return done()
 
     # Everything above failed, so the body is what is left to cut.
     body = str(out.get("body_text", ""))
-    while body and len(body) > 100 and not _fits(out):
+    while body and len(body) > 100 and not _fits(done()):
         body = body[: len(body) // 2]
         out["body_text"] = body
         out["body_truncated"] = True
-    return out
+    return done()
 
 
 def _resolve_gws_binary() -> str:

@@ -715,6 +715,81 @@ class TestOneResultNeverExceedsTheCap:
         assert "hello" in out["body_text"]
 
 
+class TestLabelsAreShedLikeEverythingElse:
+    """Round 3, Important 1: `labels` was the one field `_fit_one_message`
+    never touched, and no test gave a message more than ONE label — which is
+    why a commit subject could claim label shedding, the code not have it, and
+    CI stay green.
+
+    Real Gmail `labelIds` are short; this needs ~90 long user label ids. The
+    defect is not the size of the hole, it is a result over the cap reporting
+    `truncated: false`.
+    """
+
+    @staticmethod
+    def _message(labels: int):
+        return {
+            "id": "m",
+            "threadId": "t",
+            "labelIds": [
+                f"Label_a_very_long_user_label_identifier_number_{i:04d}" for i in range(labels)
+            ],
+            "snippet": "s" * 50,
+            "payload": {
+                "mimeType": "text/plain",
+                "headers": [
+                    {"name": "From", "value": "alice@example.com"},
+                    {"name": "To", "value": "bob@example.com"},
+                    {"name": "Subject", "value": "A subject"},
+                ],
+                "body": {"data": _b64("hello " * 20)},
+            },
+        }
+
+    def test_a_message_with_120_long_labels_fits(self, fake_gws) -> None:
+        fake_gws.responses["gmail users messages get --params"] = self._message(120)
+        out = _call("gws_gmail_get", {"message_id": "m"})
+
+        assert len(json.dumps(out)) <= MAX_TOOL_OUTPUT_CHARS
+
+    def test_the_label_list_is_summarised_not_silently_cut(self, fake_gws) -> None:
+        fake_gws.responses["gmail users messages get --params"] = self._message(120)
+        out = _call("gws_gmail_get", {"message_id": "m"})
+
+        kept = len(out["labels"])
+        assert kept == gws_handlers._GMAIL_MAX_LISTED_LABELS
+        assert out["labels_omitted"] == 120 - kept
+        assert out["truncated"] is True, "over-cap shedding that reports nothing is the R3 defect"
+
+    def test_the_body_outlives_the_labels(self, fake_gws) -> None:
+        """A hundred user labels is the least-needed thing in the result; the
+        body is what was asked for."""
+        fake_gws.responses["gmail users messages get --params"] = self._message(120)
+        out = _call("gws_gmail_get", {"message_id": "m"})
+
+        assert "hello" in out["body_text"]
+
+    def test_a_normal_message_is_untouched(self, fake_gws) -> None:
+        fake_gws.responses["gmail users messages get --params"] = self._message(3)
+        out = _call("gws_gmail_get", {"message_id": "m"})
+
+        assert len(out["labels"]) == 3
+        assert "labels_omitted" not in out
+        assert not out.get("truncated")
+
+    def test_a_thread_of_one_with_120_labels_fits_and_says_so(self, fake_gws) -> None:
+        """The worse half: the thread path reported `truncated: false` while
+        exceeding the cap — the exact contradiction R3 was written to remove."""
+        fake_gws.responses["gmail users threads get --params"] = {
+            "id": "t",
+            "messages": [self._message(120)],
+        }
+        out = _call("gws_gmail_get", {"thread_id": "t"})
+
+        assert len(json.dumps(out)) <= MAX_TOOL_OUTPUT_CHARS
+        assert out["messages"][0]["labels_omitted"] > 0
+
+
 class TestOneBadFetchDoesNotLoseTheSearch:
     def test_a_raising_fetch_is_isolated(self, fake_gws) -> None:
         """`pool.map` re-raises on iteration, so one exception took the whole
