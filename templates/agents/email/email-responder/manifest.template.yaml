@@ -26,6 +26,7 @@ tools_allowed:
   - read_file
   - write_file
   - search_memory
+  - search_records
   - get_entity
   - store_memory
   - log_interaction
@@ -101,6 +102,8 @@ v2:
     - "brain/memory/response-status.md"
 
 changelog:
+  - date: "2026-09-16"
+    change: "Grant search_records — the instructions tell the agent to look an answer up with it before escalating, and the manifest did not have it: the exact mismatch `genus doctor --category agents` exists to report."
   - date: "2026-09-16"
     change: "Grant gws_gmail_reply. Drop `exec` and its Google-CLI allowlist — the gog fallback in the instructions was a second route to the mailbox with none of the tool's guards. Drop the tools_denied entry for `message`, which is not a registered tool."
   - date: "2026-03-09"

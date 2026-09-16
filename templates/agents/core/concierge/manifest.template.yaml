@@ -33,8 +33,6 @@ tools_allowed:
   - resolve_task
   - list_agent_runs
   - get_agent_stats
-  - get_fleet_health
-  - detect_anomalies
 
 task_protocol: true
 status_file: brain/memory/concierge-status.md

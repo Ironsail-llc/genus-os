@@ -374,15 +374,6 @@ Use RAG to enhance enrichment and dedup decisions:
 
 ---
 
-## Password Vault Tools
-
-When you need credentials for enrichment research or CRM operations:
-- `vault_list(category?)` — List all vault keys
-- `vault_get(key)` — Get a decrypted secret by key
-- `vault_set(key, value, category?)` — Store a secret
-
----
-
 ## Merge Tool Details
 
 `merge_contacts(primaryId, secondaryId)` — Primary absorbs secondary: empty fields filled, emails/phones collected into JSONB arrays, contact_identifiers/conversations/notes/tasks re-linked. Secondary is soft-deleted. A merge audit note is created automatically.

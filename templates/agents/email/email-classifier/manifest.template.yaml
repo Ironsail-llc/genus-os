@@ -29,6 +29,7 @@ tools_allowed:
   - list_conversations
   - log_interaction
   - create_person
+  - create_note
   - create_task
   - list_tasks
   - list_my_tasks
@@ -36,7 +37,6 @@ tools_allowed:
   - update_task
   - append_to_block
 tools_denied:
-  - message
 bridge_endpoints:
   - "GET /health"
   - "GET /api/conversations"

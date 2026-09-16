@@ -161,6 +161,201 @@ class TestToolsNamedButNotGranted:
         assert result.status == "skip"
 
 
+class TestTheCheckDoesNotFabricate:
+    """The four ways it invented findings, each reproduced on a fixture.
+
+    A check that cries wolf on a clean install is the check operators learn to
+    ignore — which is the argument the calendar check's own docstring makes.
+    """
+
+    @pytest.mark.asyncio
+    async def test_defaults_yaml_is_merged_like_the_engine_merges_it(self, instance: Path) -> None:
+        """A fleet whose `_defaults.yaml` grants a tool to everyone had every
+        inheriting agent reported as missing it. The sibling check merges for
+        exactly this reason: "a doctor whose verdict differs from the loader's
+        is worse than no doctor"."""
+        (instance / "docs" / "agents" / "_defaults.yaml").write_text(
+            yaml.safe_dump({"tools_allowed": ["read_file", "exec", "gws_gmail_send"]})
+        )
+        _write_agent(
+            instance,
+            "inherits",
+            {},
+            instructions="Use `exec` then `gws_gmail_send`.",
+        )
+        result = await _run("agents.tools_named_but_not_granted")
+        assert result.status == "pass", result.detail
+
+    @pytest.mark.asyncio
+    async def test_a_default_that_denies_is_merged_too(self, instance: Path) -> None:
+        """The mirror case, which used to be a false NEGATIVE."""
+        (instance / "docs" / "agents" / "_defaults.yaml").write_text(
+            yaml.safe_dump({"tools_denied": ["gws_gmail_send"]})
+        )
+        _write_agent(
+            instance,
+            "inherits-deny",
+            {"tools_allowed": ["read_file"]},
+            instructions="Send it with `gws_gmail_send`.",
+        )
+        result = await _run("agents.tools_named_but_not_granted")
+
+        assert result.status == "fail"
+        assert "DENIES" in result.detail
+        assert "gws_gmail_send" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_an_absent_tools_allowed_grants_every_tool(self, instance: Path) -> None:
+        """`ToolRegistry._get_filtered_names` falls through to every schema for
+        an absent or empty `tools_allowed` — and that is the DEFAULT manifest
+        shape, so this check used to fail on a freshly initialised instance."""
+        _write_agent(
+            instance,
+            "unrestricted",
+            {},
+            instructions="Use `gws_gmail_search`, `read_file` and `exec`.",
+        )
+        result = await _run("agents.tools_named_but_not_granted")
+        assert result.status == "pass", result.detail
+
+    @pytest.mark.asyncio
+    async def test_an_empty_tools_allowed_grants_every_tool(self, instance: Path) -> None:
+        _write_agent(
+            instance,
+            "empty-list",
+            {"tools_allowed": []},
+            instructions="Use `gws_gmail_search`.",
+        )
+        result = await _run("agents.tools_named_but_not_granted")
+        assert result.status == "pass", result.detail
+
+    @pytest.mark.asyncio
+    async def test_a_prohibition_is_not_a_requirement(self, instance: Path) -> None:
+        """This landed on the branch's own rewritten template, which says
+        "Do NOT reach for a shell: this agent has no `exec`." """
+        _write_agent(
+            instance,
+            "prohibits",
+            {"tools_allowed": ["read_file"]},
+            instructions=(
+                "Never use `exec`. It is forbidden.\n"
+                "The `write_file` tool is NOT available.\n"
+                "Do NOT reach for a shell: this agent has no `exec`.\n"
+                "Avoid `browser` entirely.\n"
+            ),
+        )
+        result = await _run("agents.tools_named_but_not_granted")
+        assert result.status == "pass", result.detail
+
+    def test_a_requirement_beside_a_prohibition_still_counts(self) -> None:
+        """Clauses, not sentences: "Use X, not Y" keeps X and drops Y."""
+        registered = {"gws_gmail_reply", "gws_gmail_send", "read_file"}
+        found = mentioned_tools(
+            "Use `gws_gmail_reply`, not `gws_gmail_send`. Then `read_file`.", registered
+        )
+        assert found == {"gws_gmail_reply", "read_file"}
+
+    @pytest.mark.asyncio
+    async def test_a_denied_tool_the_instructions_name_is_the_loud_case(
+        self, instance: Path
+    ) -> None:
+        """It was suppressed, which put the code and the module docstring in
+        disagreement: the docstring opens on exactly this shape."""
+        _write_agent(
+            instance,
+            "contradicts",
+            {"tools_allowed": ["read_file"], "tools_denied": ["gws_gmail_send"]},
+            instructions="Send the reply with `gws_gmail_send`.",
+        )
+        result = await _run("agents.tools_named_but_not_granted")
+
+        assert result.status == "fail"
+        assert "DENIES" in result.detail
+        assert "gws_gmail_send" in result.detail
+
+
+class TestTheStockTemplatesAreQuiet:
+    """A check that fires on a clean install is a check nobody reads.
+
+    It fired on 10 of the 16 shipped templates, and the single largest source
+    was `templates/TOOLS.md` — a bootstrap file loaded into EVERY agent, which
+    this branch had rewritten to enumerate nine tool names. Naming a tool in a
+    shared bootstrap file tells every agent that loads it to use that tool,
+    including the ones without it: the defect the check exists to find,
+    committed fleet-wide in one file.
+    """
+
+    def test_no_shared_bootstrap_template_names_a_tool(self) -> None:
+        from pathlib import Path
+
+        from robothor.engine.tools.registry import builtin_schema_names
+
+        registered = builtin_schema_names()
+        repo = Path(__file__).resolve().parents[3]
+        offenders = {}
+        for name in ("AGENTS.md", "TOOLS.md", "SOUL.md"):
+            path = repo / "templates" / name
+            if not path.is_file():
+                continue
+            named = mentioned_tools(path.read_text(), registered)
+            if named:
+                offenders[name] = sorted(named)
+        assert offenders == {}, (
+            "a bootstrap file is loaded into every agent that lists it, so a tool "
+            "named here is named for agents that do not have it"
+        )
+
+    def test_every_stock_template_grants_what_its_instructions_name(self) -> None:
+        """Rendered crudely — Jinja out, tools_allowed read off the file — which
+        is enough to compare the two lists this check compares."""
+        from pathlib import Path
+
+        from robothor.engine.tools.registry import builtin_schema_names
+
+        registered = builtin_schema_names()
+        repo = Path(__file__).resolve().parents[3]
+        shared = ""
+        for name in ("AGENTS.md", "TOOLS.md"):
+            path = repo / "templates" / name
+            if path.is_file():
+                shared += path.read_text()
+
+        mismatches = {}
+        seen = 0
+        for manifest in sorted(repo.glob("templates/agents/*/*/manifest.template.yaml")):
+            instructions = manifest.parent / "instructions.template.md"
+            if not instructions.is_file():
+                continue
+            seen += 1
+            raw = manifest.read_text()
+            granted, collecting = set(), False
+            for line in raw.splitlines():
+                if line.startswith("tools_allowed:"):
+                    collecting = bool(line.split(":", 1)[1].strip() in ("", "|", ">"))
+                    continue
+                if collecting:
+                    if line.startswith("  - "):
+                        granted.add(line[4:].strip())
+                        continue
+                    if line.startswith("  #"):
+                        continue
+                    if line.strip() and not line.startswith(" "):
+                        collecting = False
+            if not granted:
+                continue  # absent/empty tools_allowed grants everything
+            named = mentioned_tools(instructions.read_text() + shared, registered)
+            missing = sorted(named - granted)
+            unresolved = sorted(n for n in granted if n not in registered)
+            if missing or unresolved:
+                mismatches[manifest.parent.name] = {
+                    "named but not granted": missing,
+                    "granted but not registered": unresolved,
+                }
+
+        assert seen >= 16, f"only found {seen} stock templates"
+        assert mismatches == {}
+
+
 # ── tools.exec_allowlist_bypasses_denied_tool ─────────────────────────
 
 

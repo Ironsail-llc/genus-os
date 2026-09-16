@@ -43,7 +43,6 @@ tools_denied:
   - create_note
   - update_note
   - delete_note
-  - message
   - web_search
   - web_fetch
 bridge_endpoints:

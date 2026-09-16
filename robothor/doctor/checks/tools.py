@@ -53,6 +53,27 @@ _MENTION_RE = re.compile(
     r"|(?P<bare>gws_[a-z_]+)"
 )
 
+#: Where one clause ends and the next begins. A sentence is too coarse — "Use
+#: `gws_gmail_reply`, not `gws_gmail_send`" would lose both — and a line is too
+#: coarse for a bulleted instruction file.
+_CLAUSE_SPLIT_RE = re.compile(r"[.!?;:\n]|(?<=[a-z0-9`\)])\s*,\s*")
+
+#: Words that turn the rest of a clause into a prohibition.
+_NEGATION_RE = re.compile(
+    r"\b(?:never|not|no|none|non|without|avoid|avoids|forbidden|unavailable|"
+    r"cannot|can't|don't|doesn't|won't|shouldn't|lacks|lack|denied|deny|"
+    r"refuse|refuses|instead|rather)\b",
+    re.IGNORECASE,
+)
+
+#: Predicates that negate a tool named EARLIER in the same clause —
+#: "The `write_file` tool is NOT available."
+_TRAILING_NEGATION_RE = re.compile(
+    r"\b(?:is|are|was|were|will\s+be)\s+(?:not|no\s+longer)\b"
+    r"|\bnot\s+(?:available|granted|allowed|permitted|enabled)\b",
+    re.IGNORECASE,
+)
+
 
 def _manifest_dir(ctx: DoctorContext) -> Path:
     from robothor.engine.config import EngineConfig
@@ -73,11 +94,38 @@ def _registered_names() -> set[str]:
 
 
 def mentioned_tools(text: str, registered: set[str]) -> set[str]:
-    """Registered tool names that appear in a piece of instruction text."""
+    """Registered tool names an instruction file tells the agent to USE.
+
+    A prohibition is not a requirement. ``Never use `exec`.`` and ``The
+    `write_file` tool is NOT available.`` are instructions that the agent must
+    NOT call those tools, and reading them as "this agent needs exec" is how
+    this check came to fire on its own repository's rewritten template — which
+    says, in a line this branch added, ``Do NOT reach for a shell: this agent
+    has no `exec`.``
+
+    So each mention is judged in its own clause: negated if a negation word
+    precedes it there, or if the clause carries a trailing predicate that
+    negates it ("is not available"). Clauses, not sentences, so that "Use
+    `gws_gmail_reply`, not `gws_gmail_send`" keeps the first and drops the
+    second.
+
+    This deliberately under-reports rather than over-reports. A missed mention
+    costs an operator nothing; a fabricated one costs them their trust in the
+    check, and a check nobody trusts is the one they learn to skip.
+    """
     found: set[str] = set()
-    for match in _MENTION_RE.finditer(text):
-        name = match.group("ticked") or match.group("called") or match.group("bare")
-        if name in registered:
+    for clause in _CLAUSE_SPLIT_RE.split(text):
+        if not clause or not clause.strip():
+            continue
+        trailing = _TRAILING_NEGATION_RE.search(clause) is not None
+        for match in _MENTION_RE.finditer(clause):
+            name = match.group("ticked") or match.group("called") or match.group("bare")
+            if name not in registered:
+                continue
+            if trailing:
+                continue
+            if _NEGATION_RE.search(clause[: match.start()]):
+                continue
             found.add(name)
     return found
 
@@ -113,16 +161,31 @@ def _read_instruction_text(workspace: Path, manifest: dict[str, Any]) -> str:
     return "\n".join(chunks)
 
 
-def _granted(manifest: dict[str, Any]) -> set[str]:
-    """Every tool name this manifest grants on any of its run shapes."""
-    granted = {str(n) for n in (manifest.get("tools_allowed") or [])}
-    heartbeat = manifest.get("heartbeat") or {}
-    if isinstance(heartbeat, dict):
-        granted |= {str(n) for n in (heartbeat.get("heartbeat_tools_allowed") or [])}
-    worker = manifest.get("worker") or {}
-    if isinstance(worker, dict):
-        granted |= {str(n) for n in (worker.get("worker_tools_allowed") or [])}
-    return granted
+def _granted(manifest: dict[str, Any], registered: set[str]) -> set[str] | None:
+    """Every tool this manifest grants, or ``None`` for "all of them".
+
+    ``None`` is the engine's own semantics for an absent or empty
+    ``tools_allowed``: ``ToolRegistry._get_filtered_names`` falls through to
+    ``names = list(self._schemas.keys())``. That is the DEFAULT manifest shape,
+    so treating it as "grants nothing" made this check fail on a freshly
+    initialised instance — every tool its instructions named was reported
+    missing from an agent that had all of them.
+    """
+    allowed = manifest.get("tools_allowed")
+    if not allowed:
+        return None
+    granted = {str(n) for n in allowed}
+    for block_key, list_key in (
+        ("heartbeat", "heartbeat_tools_allowed"),
+        ("worker", "worker_tools_allowed"),
+    ):
+        block = manifest.get(block_key) or {}
+        if isinstance(block, dict) and block.get(list_key):
+            granted |= {str(n) for n in block[list_key]}
+    # GOAL_TOOLS are appended unconditionally by the registry filter.
+    from robothor.engine.tools.constants import GOAL_TOOLS
+
+    return granted | (set(GOAL_TOOLS) & registered)
 
 
 def _denied(manifest: dict[str, Any], name: str) -> bool:
@@ -135,7 +198,23 @@ def _denied(manifest: dict[str, Any], name: str) -> bool:
 
 
 def _scan_manifests(directory: Path) -> list[dict[str, Any]]:
+    """Every agent manifest, MERGED with ``_defaults.yaml`` as the engine merges it.
+
+    Reading the raw per-file document reports tools the agent has. A fleet
+    whose ``_defaults.yaml`` grants ``exec`` and ``gws_gmail_send`` to everyone
+    had every inheriting agent reported as missing both — and the mirror case,
+    a default that DENIES a tool the agent's instructions name, went unreported.
+    The sibling check merges for exactly this reason and says why: "a doctor
+    whose verdict differs from the loader's is worse than no doctor".
+    """
     import yaml
+
+    from robothor.engine import config as engine_config
+
+    try:
+        defaults = engine_config._load_defaults(directory)
+    except Exception:  # noqa: BLE001 - a broken defaults file is manifests.broken's
+        defaults = {}
 
     found: list[dict[str, Any]] = []
     for path in sorted(directory.glob("*.yaml")):
@@ -143,8 +222,16 @@ def _scan_manifests(directory: Path) -> list[dict[str, Any]]:
             data = yaml.safe_load(path.read_text())
         except Exception:  # noqa: BLE001 - manifests.broken owns unreadable files
             continue
-        if isinstance(data, dict) and "id" in data:
-            found.append(data)
+        if not isinstance(data, dict) or "id" not in data:
+            continue
+        agent_id = str(data.get("id") or path.stem)
+        try:
+            merged = engine_config._merged_manifest(
+                data, agent_id=agent_id, defaults=defaults, workspace=None, trigger_type=None
+            )
+        except Exception:  # noqa: BLE001 - judge what parses; the rest is manifests.schema's
+            merged = data
+        found.append(merged if isinstance(merged, dict) else data)
     return found
 
 
@@ -156,14 +243,26 @@ def _scan_named_but_not_granted(directory: Path, workspace: Path) -> list[str]:
     lines: list[str] = []
     for manifest in _scan_manifests(directory):
         agent_id = str(manifest.get("id") or "")
-        granted = _granted(manifest)
+        granted = _granted(manifest, registered)
         text = _read_instruction_text(workspace, manifest)
-
         named = mentioned_tools(text, registered)
-        ungranted = sorted(n for n in named if n not in granted and not _denied(manifest, n))
-        unresolved = sorted(n for n in granted if n not in registered)
+
+        # A DENIED tool the instructions still name is the loud case, not a
+        # quiet one: the agent is told to do something its manifest forbids,
+        # and it will find another way. It was suppressed here, which put the
+        # code and the module docstring in disagreement.
+        denied = sorted(n for n in named if _denied(manifest, n))
+        if granted is None:
+            # "All tools" — only a deny can make a named tool unreachable.
+            ungranted: list[str] = []
+            unresolved: list[str] = []
+        else:
+            ungranted = sorted(n for n in named if n not in granted and n not in denied)
+            unresolved = sorted(n for n in granted if n not in registered)
 
         parts: list[str] = []
+        if denied:
+            parts.append("instructions name but manifest DENIES: " + ", ".join(denied))
         if ungranted:
             parts.append("instructions name but manifest omits: " + ", ".join(ungranted))
         if unresolved:
@@ -292,9 +391,12 @@ def _calendar_tool_granted(directory: Path) -> bool:
     """
     from robothor.engine.tools.constants import GWS_TOOLS
 
+    registered = _registered_names()
     calendar_tools = {name for name in GWS_TOOLS if name.startswith("gws_calendar_")}
     for manifest in _scan_manifests(directory):
-        if _granted(manifest) & calendar_tools:
+        granted = _granted(manifest, registered)
+        # `None` is "every tool", which includes the calendar ones.
+        if granted is None or (granted & calendar_tools):
             return True
     return False
 

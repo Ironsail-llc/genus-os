@@ -30,7 +30,7 @@ on every run — keep it short, and keep it to facts the platform cannot know.
 - build-box → 10.0.0.12, user: deploy
 
 ### Chat spaces
-- "Ops" → spaces/AAAA1111 (use with gws_chat_send)
+- "Ops" → spaces/AAAA1111
 
 ### TTS
 - Preferred voice: "Nova"
@@ -48,27 +48,27 @@ description is wrong, fix the schema, not this.
 demand — the engine shows it a small core each turn and tells it how many more
 are reachable. A fixed list here contradicts what the run actually hands it.
 
-**Do not name a CLI where a tool exists.** `gws_gmail_reply` threads the reply,
-replies to everyone on the thread, checks the do-not-contact list and refuses a
-duplicate. `gog gmail send` does none of that. An instruction that prefers the
-CLI is an instruction to go around four guards.
+**Do not name a CLI where a tool exists.** The native Gmail tool threads a
+reply, keeps everyone on the thread, checks the do-not-contact list and refuses
+a duplicate. A shell command does none of that, so an instruction that prefers
+the CLI is an instruction to go around four guards.
 
 **Do not name a tool this agent's manifest does not grant.** The agent cannot
 see its manifest; a tool it was told to use and does not have just fails, and
 it will find another way. `genus doctor --category agents` reports these.
 
-## Which mail tool
+**Do not name tools here at all.** This file is a bootstrap file: it is loaded
+into EVERY agent that lists it, and most of them hold different toolsets. A
+tool named here is a tool every one of them is told to use, including the ones
+that do not have it — which is the defect above, committed fleet-wide in a
+single file. The catalogue is `docs/TOOLS.md`; it is written once, for the
+platform, and an agent that needs a specific tool is told so in its own
+instruction file.
 
-The one thing worth repeating here, because three different things answer to
-"inbox":
-
-| You want | Use |
-|---|---|
-| Live email, right now | `gws_gmail_search` → `gws_gmail_get` |
-| The CRM's stored correspondence with a contact | `list_messages`, `get_conversation` |
-| This agent's own notifications | `get_inbox`, `ack_notification` |
-
-`look` is a camera.
+That includes the one thing most worth knowing — that "inbox" means three
+different things here: the live mailbox, the CRM's stored correspondence, and
+the agent's own notification queue. `docs/TOOLS.md` has the table under
+"Which mail tool", and that is where it belongs.
 
 ---
 

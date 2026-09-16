@@ -26,6 +26,8 @@ tools_allowed:
   - search_memory
   - get_entity
   - store_memory
+  - gws_gmail_get
+  - list_people
   - create_task
   - list_my_tasks
   - resolve_task

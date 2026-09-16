@@ -30,6 +30,10 @@ tools_allowed:
   - update_company
   - merge_contacts
   - merge_companies
+  # The 0.2 hygiene scan calls delete_person on furniture, system accounts and
+  # automated senders. It was in the instructions and not the manifest, so the
+  # scan reported a count it had not deleted.
+  - delete_person
   - create_note
   - create_task
   - list_tasks
@@ -40,7 +44,6 @@ tools_allowed:
   - ack_notification
   - append_to_block
 tools_denied:
-  - message
 bridge_endpoints:
   - "GET /health"
   - "GET /api/people"

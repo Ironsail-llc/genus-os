@@ -30,6 +30,7 @@ tools_allowed:
   - list_messages
   - toggle_conversation_status
   - create_task
+  - list_tasks
   - get_inbox
   - ack_notification
   - append_to_block
@@ -37,7 +38,6 @@ tools_allowed:
   - update_task
   - resolve_task
 tools_denied:
-  - message
 bridge_endpoints:
   - "GET /health"
   - "GET /api/conversations"

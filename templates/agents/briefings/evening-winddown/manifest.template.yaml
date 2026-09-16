@@ -29,6 +29,10 @@ tools_allowed:
   - memory_block_read
   - list_tasks
   - list_agent_tasks
+  - list_my_tasks
+  - list_conversations
+  - list_notes
+  - create_note
   - gws_calendar_list
   - list_tasks_summary
 tools_denied:
