@@ -162,6 +162,28 @@ class WebchatChannel:
         """No-op: see :meth:`start`."""
         return
 
+    async def send_attachment(
+        self,
+        target: str,
+        path: str,
+        caption: str = "",
+        *,
+        as_: str = "auto",
+        **kw: Any,
+    ) -> Any:
+        """Refuse: the Helm chat has no attachment surface yet.
+
+        This is the next task's slot. The attachment row shape the inbound half
+        writes (``robothor.engine.attachments``) is what the UI will read, and
+        this method is where the download/upload half lands — declared and
+        raising rather than quietly returning a receipt for a file no browser
+        would ever render.
+        """
+        raise NotImplementedError(
+            "the webchat channel cannot send files yet — the Helm chat has no "
+            "attachment surface. Say where the file is instead."
+        )
+
     async def health(self) -> dict[str, Any]:
         """What the operator needs to see. Never raises (a diagnostic that
         raises on a broken box helps nobody), and names no member."""

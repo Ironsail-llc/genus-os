@@ -191,6 +191,29 @@ class SlackChannel:
         """No-op: see :meth:`start`."""
         return
 
+    async def send_attachment(
+        self,
+        target: str,
+        path: str,
+        caption: str = "",
+        *,
+        as_: str = "auto",
+        **kw: Any,
+    ) -> Any:
+        """Refuse: Slack file upload is not wired yet.
+
+        Raising is the contract (``channels/base.py``), not a gap in it. Slack's
+        ``files.upload_v2`` needs a scope this app does not request and an
+        upload flow this channel does not have, so the honest answer is that
+        the file will not arrive. Returning a receipt here would tell an agent
+        the operator has a document that was never sent.
+        """
+        raise NotImplementedError(
+            "the slack channel cannot send files yet — it has no upload scope. "
+            "Put the file somewhere reachable and send the link, or say plainly "
+            "that you could not attach it."
+        )
+
     async def health(self) -> dict[str, Any]:
         """What the operator needs to see. No token, and no fragment of one."""
         token = self.bot_token()

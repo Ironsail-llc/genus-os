@@ -585,6 +585,16 @@ class AgentRun:
     # instead of failing their own insert on the parent FK.
     tracking_disabled: bool = False
 
+    # Files this run wants delivered WITH its announcement. Paths, never bytes:
+    # the run row is not where a PDF belongs, and the channel reads the file at
+    # send time so a run that rewrote its report ships the final version.
+    #
+    # A scheduled run has nobody watching while it works, so `send_file` queues
+    # into this instead of pushing a document into the operator's chat minutes
+    # before the report that explains it — or hours before nothing at all, if
+    # the run then fails.
+    attachments: list[str] = field(default_factory=list)
+
     steps: list[RunStep] = field(default_factory=list)
     # Index of the first not-yet-persisted step. Bumped as the session
     # flushes steps mid-run so _persist_run_sync doesn't re-insert

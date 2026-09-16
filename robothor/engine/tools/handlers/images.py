@@ -17,14 +17,36 @@ it could "see".
 The output convention (`image_base64` + `image_mime`) is what `session.py`
 now keys on, so any future tool that produces an image gets the same
 treatment without touching the session.
+
+Telling the truth about who looked
+----------------------------------
+Returning those blocks unconditionally was its own defect, and the operator
+found it on 2026-09-15. A text-only model answers an image block with a hard
+refusal; `llm_client._call_with_image_fallback` catches that, strips the
+blocks and retries — so the agent was handed a caption where the picture had
+been and went on believing it had looked. Every result now carries `seen_by`:
+
+* ``primary``      — the blocks are in the result; the agent's own model sees them.
+* ``vision-model`` — the model cannot accept images, so the local VLM's
+  description is in the result INSTEAD of blocks the client would only strip.
+* ``nobody``       — neither worked. Said plainly, with an ``error``, because a
+  description nobody produced is the one thing this must never invent.
+
+The capability comes from `model_registry.image_capability`, which answers
+``unknown`` for a model nobody has declared. ``unknown`` keeps the blocks (a
+multimodal model missing from the curated table must still be shown pictures)
+and says so in ``note``.
 """
 
 from __future__ import annotations
 
 import base64
 import io
+import logging
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 #: Longest edge, in pixels, that reaches the model. Provider payload limits
 #: are real (a 6000px screenshot base64s past several megabytes), but the
@@ -80,6 +102,106 @@ def _same_stem_images(path: Path) -> list[Path]:
         and candidate.is_file()
         and candidate.suffix.lower() in _IMAGE_SUFFIXES
     )
+
+
+#: What the local VLM is asked when nobody said what to look for. Literal and
+#: insistent: a vision model that decides it "cannot access websites" because
+#: the screenshot contains a URL has described nothing.
+DEFAULT_VISION_PROMPT = (
+    "Describe what you see in this image in detail. Read and transcribe ALL visible text "
+    "exactly. Note any URLs, names, numbers, UI elements, or content shown."
+)
+
+#: The system prompt for the same call. Moved here from
+#: ``engine/telegram_handlers._analyze_photo_bytes`` so one description path
+#: serves the inbound channel and the tool, rather than the channel owning a
+#: private copy the tool could not reach.
+_VISION_SYSTEM = (
+    "You are the local vision system. Your ONLY job is to describe what is visible in "
+    "images. You MUST always describe image content — never refuse, never say you cannot "
+    "access websites or URLs. If you see a URL in an image, READ and REPORT the text — do "
+    "not try to visit it. Transcribe ALL visible text exactly as shown. Report people, UI "
+    "elements, screenshots, diagrams, app names, domain names, error messages, and any "
+    "other visible content. Be literal and precise."
+)
+
+#: Seconds the local VLM gets. Generous because a 27B-class model on a busy GPU
+#: is slow, bounded because an inbound photo must not hold a chat open forever.
+VISION_TIMEOUT_SECONDS = 120.0
+
+
+def vision_model_name() -> str:
+    """Which local model describes pictures, from settings.
+
+    Read through ``get_settings()`` rather than ``os.environ``: the handler this
+    moved from read a raw ``OLLAMA_URL`` and a hardcoded model id, so the
+    instance's declared vision model was ignored by the one path that used it
+    most.
+    """
+    try:
+        from robothor.settings import get_settings
+
+        return str(get_settings().ollama.vision_model or "")
+    except Exception:  # noqa: BLE001 - a description must not depend on config loading
+        return ""
+
+
+async def describe_image_bytes(
+    data: bytes,
+    prompt: str = "",
+    *,
+    timeout: float = VISION_TIMEOUT_SECONDS,
+) -> str:
+    """The local vision model's description of *data*, or raise.
+
+    Raises rather than returning an error string: a caller that cannot tell a
+    description from a failure will eventually show the failure to the operator
+    as though it were what the picture contains. ``view_image`` catches this and
+    answers ``seen_by: "nobody"``.
+    """
+    import httpx
+
+    from robothor.settings import get_settings
+
+    settings = get_settings()
+    model = str(settings.ollama.vision_model or "")
+    if not model:
+        raise RuntimeError("no local vision model is configured (ROBOTHOR_VISION_MODEL)")
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": _VISION_SYSTEM},
+            {
+                "role": "user",
+                "content": prompt or DEFAULT_VISION_PROMPT,
+                "images": [base64.b64encode(data).decode("ascii")],
+            },
+        ],
+        "stream": False,
+        "options": {"temperature": 0.1, "num_predict": 1024, "num_gpu": 999},
+    }
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.post(f"{settings.ollama.base_url}/api/chat", json=payload)
+        response.raise_for_status()
+        content = str((response.json().get("message") or {}).get("content") or "").strip()
+    if not content:
+        raise RuntimeError("the local vision model returned nothing")
+    return content
+
+
+def _capability_for_caller() -> tuple[str, str]:
+    """``(model id, "accepts"|"rejects"|"unknown")`` for whoever is asking.
+
+    The model is the one the current task is dialling, recorded by
+    ``llm_client`` at the moment of the call. Nothing is inferred from the
+    manifest here on purpose: reading the fleet chain would make a tool result
+    depend on files outside the run, and a test or a benchmark would answer
+    differently from production for reasons nobody could see.
+    """
+    from robothor.engine.model_registry import active_model, image_capability
+
+    model = active_model()
+    return model, image_capability(model)
 
 
 async def view_image(args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
@@ -147,26 +269,67 @@ async def view_image(args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
             else:
                 data = path.read_bytes()
 
+            model, capability = _capability_for_caller()
             result: dict[str, Any] = {
-                "image_base64": base64.b64encode(data).decode("ascii"),
-                "image_mime": mime,
                 "width": work.size[0],
                 "height": work.size[1],
                 "path": str(path),
                 "resolved_from": resolved_from,
             }
+            if capability == "rejects":
+                # No blocks. The client would strip them and the agent would be
+                # told it looked at something it never saw.
+                result["model"] = model
+                try:
+                    result["description"] = await describe_image_bytes(
+                        data, str(args.get("prompt") or "")
+                    )
+                    result["seen_by"] = "vision-model"
+                    result["note"] = (
+                        f"{model or 'this model'} cannot accept images, so this is the local "
+                        "vision model's description rather than the picture itself. Treat it "
+                        "as a second-hand account: if a detail decides the task, read the "
+                        "file programmatically to confirm it."
+                    )
+                except Exception as exc:  # noqa: BLE001 - reported, never invented
+                    logger.warning("local vision model could not describe %s: %s", path.name, exc)
+                    result["seen_by"] = "nobody"
+                    result["error"] = (
+                        f"{model or 'this model'} cannot accept images and the local vision "
+                        f"model is unavailable ({type(exc).__name__}). Nobody has looked at "
+                        f"{path.name}. Inspect it programmatically — e.g. Pillow via exec — "
+                        "or say plainly that you could not see it."
+                    )
+                return result
+
+            result["image_base64"] = base64.b64encode(data).decode("ascii")
+            result["image_mime"] = mime
+            result["seen_by"] = "primary"
+            # Notes ACCUMULATE. Each of these used to assign `note` outright,
+            # so a substituted file that was also downscaled reported only the
+            # downscale and the agent never learned it had been handed a
+            # different file from the one it asked for.
+            notes: list[str] = []
+            if capability == "unknown":
+                notes.append(
+                    f"{model or 'the current model'} is not confirmed to accept images. If "
+                    "the picture does not appear, call view_image again — the refusal is "
+                    "recorded and you will be given the local description instead."
+                )
             if resolved_from:
-                result["note"] = (
+                notes.append(
                     f"{raw_path} does not exist; read {Path(resolved_from).name} "
                     "instead, which shares its name"
                 )
             if work.size != original:
                 result["original_width"] = original[0]
                 result["original_height"] = original[1]
-                result["note"] = (
+                notes.append(
                     f"downscaled from {original[0]}x{original[1]} to fit the "
                     f"{MAX_DIMENSION}px limit — fine detail may be lost"
                 )
+            if notes:
+                result["note"] = " ".join(notes)
             return result
     except Exception as e:  # Pillow raises a wide family on malformed input
         return {"error": f"could not read as an image: {type(e).__name__}: {e}"}

@@ -33,6 +33,87 @@ _ASK_USER_DESCRIPTION = (
     "started interactively; on a scheduled or sub-agent run it refuses and says so."
 )
 
+#: Attachments: looking at a picture and handing a file back. Hoisted out of
+#: ``get_engine_schemas`` as one cluster, the way ``_HUMAN_IN_THE_LOOP_SCHEMAS``
+#: was: that function is the largest in the engine, so a new schema pays for
+#: itself by taking its neighbours with it. These two belong together — an
+#: agent that was sent a photo looks at it with the first and answers with a
+#: file through the second.
+_ATTACHMENT_SCHEMAS: dict[str, dict[str, Any]] = {
+    "view_image": {
+        "type": "function",
+        "function": {
+            "name": "view_image",
+            "description": (
+                "Look at an image file — a photo, screenshot, chart, diagram or "
+                "scan. The picture itself is placed in front of you, so read it "
+                "directly rather than writing code to inspect its pixels. Use "
+                "this whenever a task depends on what an image SHOWS."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the image (PNG, JPEG, GIF, WEBP, BMP, TIFF)",
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    "send_file": {
+        "type": "function",
+        "function": {
+            "name": "send_file",
+            "description": (
+                "Send a file you made or were given — a chart, a PDF, a "
+                "screenshot, a CSV, an export — to the person you are talking "
+                "to. Write the file first, then send it by path; never paste "
+                "binary or base64 into a message. The file must be inside the "
+                "workspace, and anything holding credentials is refused."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Path to the file to send, inside the workspace "
+                            "(relative paths resolve against it)."
+                        ),
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": (
+                            "One line shown with the file. Say what it is and what to do with it."
+                        ),
+                    },
+                    "as": {
+                        "type": "string",
+                        "enum": ["photo", "document", "auto"],
+                        "description": (
+                            "How to show it. `auto` (the default) sends an "
+                            "image as a photo when it fits and as a document "
+                            "otherwise; `document` keeps the original file "
+                            "intact."
+                        ),
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": (
+                            "Another chat to send to. Leave this out to reply "
+                            "where the request came from — only an "
+                            "operator-tier agent may redirect a file."
+                        ),
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+}
+
 
 #: The secrets vault's four tools, as one cluster.
 #:
@@ -282,28 +363,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             },
         },
     }
-    schemas["view_image"] = {
-        "type": "function",
-        "function": {
-            "name": "view_image",
-            "description": (
-                "Look at an image file — a photo, screenshot, chart, diagram or "
-                "scan. The picture itself is placed in front of you, so read it "
-                "directly rather than writing code to inspect its pixels. Use "
-                "this whenever a task depends on what an image SHOWS."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Path to the image (PNG, JPEG, GIF, WEBP, BMP, TIFF)",
-                    },
-                },
-                "required": ["path"],
-            },
-        },
-    }
+    schemas.update(_ATTACHMENT_SCHEMAS)
 
     schemas["read_file"] = {
         "type": "function",

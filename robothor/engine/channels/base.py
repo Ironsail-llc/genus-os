@@ -292,6 +292,39 @@ class Channel(Protocol):
         """
         ...
 
+    async def send_attachment(
+        self,
+        target: str,
+        path: str,
+        caption: str = "",
+        *,
+        as_: str = "auto",
+        **kw: Any,
+    ) -> SendReceipt:
+        """Put the FILE at ``path`` in front of the person at ``target``.
+
+        The outbound half of attachments, and a protocol slot rather than a
+        Telegram special case so the next surface to grow file sends does not
+        make the tool grow a branch per channel.
+
+        ``as_`` is ``photo``, ``document`` or ``auto``. It is a rendering hint,
+        not a format: ``auto`` means the channel decides from the file's type
+        and its own limits, and a channel with only one way to attach a file
+        may ignore it entirely. The caller is told which was used.
+
+        Same evidence rule as :meth:`send`: the receipt is derived from what the
+        platform returned, and an ordinary failure is a receipt with
+        ``acknowledged == 0`` rather than an exception.
+
+        **A channel that cannot send files raises** :exc:`NotImplementedError`
+        naming itself. That is the contract, not a gap in it — Slack, email,
+        webchat and the event bus all raise today. A channel that answered with
+        a plausible receipt for a file it never sent would tell an agent the
+        operator has a document they will never receive, which is precisely the
+        failure this module exists to prevent.
+        """
+        ...
+
     async def health(self) -> dict[str, Any]:
         """Whatever the operator needs to see about this channel's readiness."""
         ...

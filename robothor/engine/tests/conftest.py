@@ -9,6 +9,7 @@ Follows brain/memory_system/conftest.py patterns:
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
@@ -319,3 +320,20 @@ def _mock_run_persistence():
         patch("robothor.engine.runner.AgentRunner._persist_run"),
     ):
         yield
+
+
+@contextmanager
+def voice_notes(*, enabled: bool):
+    """Arm or disarm inbound voice transcription for the block.
+
+    Through the SETTING, not the environment variable. `handle_voice` used to
+    read `os.environ["ROBOTHOR_VOICE_NOTES_ENABLED"]` directly and the tests
+    patched that; routing the handler through
+    `get_settings().channels.voice_notes_enabled` (re-review R5) made the env
+    patch a no-op, which would have left these tests passing for the wrong
+    reason — the disabled ones by accident and the enabled ones not at all.
+    """
+    from robothor.engine import telegram_attachments
+
+    with patch.object(telegram_attachments, "_voice_notes_enabled", return_value=enabled) as flag:
+        yield flag

@@ -317,7 +317,16 @@ async def _releasing_stream(stream: Any, cm: Any) -> Any:
 
 
 async def _gated_acompletion(model: str, kwargs: dict[str, Any]) -> Any:
-    """``litellm.acompletion``, holding a local slot for the whole stream."""
+    """``litellm.acompletion``, holding a local slot for the whole stream.
+
+    Also records which model this task is dialling, so a tool handler further
+    down the loop can ask what its own caller is able to see. The streaming
+    path has no image-fallback retry (see ``_call_with_image_fallback``), which
+    is exactly why the capability has to be knowable BEFORE the call.
+    """
+    from robothor.engine import model_registry
+
+    model_registry.note_active_model(model)
     if not is_local_model(model):
         return await litellm.acompletion(**kwargs)
 
@@ -1199,7 +1208,10 @@ def chain_with_last_resort(model: str) -> list[str]:
 #: inspecting the file programmatically.
 IMAGE_UNSUPPORTED_NOTE = (
     "[the image could not be shown to this model — it accepts text only. "
-    "Inspect the file programmatically instead, e.g. with Pillow via exec.]"
+    "Call view_image again on the path above: the refusal has been recorded, "
+    "so this time you get the local vision model's description instead of a "
+    "picture that would only be stripped again. Or inspect the file "
+    "programmatically, e.g. with Pillow via exec.]"
 )
 
 #: Provider phrasings for "I cannot accept an image". OpenRouter answers a
@@ -2031,13 +2043,24 @@ class LLMClient:
         than in ``_call_llm``: every local model reaches litellm through this
         method (codex is never local), and the image retry then stays inside the
         slot it already holds instead of queueing for a second one.
+
+        The refusal is also the one moment the platform ever learns, from a real
+        provider, that a model cannot see. It is recorded on the registry
+        (:func:`robothor.engine.model_registry.note_image_rejection`) so
+        ``view_image`` stops handing this model blocks it will only have to
+        strip again — an agent being told it looked and then shown a note where
+        the picture was is the defect this whole path exists to end.
         """
+        from robothor.engine import model_registry
+
+        model_registry.note_active_model(model)
         async with _local_slot(model):
             try:
                 return await litellm.acompletion(**kwargs)
             except Exception as e:
                 if not is_image_unsupported_error(e):
                     raise
+                model_registry.note_image_rejection(model)
                 stripped, changed = strip_image_blocks(messages)
                 if not changed:
                     raise

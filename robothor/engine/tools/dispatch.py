@@ -160,6 +160,7 @@ def builtin_handlers() -> dict[str, Any]:
     from robothor.engine.tools.handlers import (  # noqa: E501
         approvals,
         ask_user,
+        attachments,
         benchmark,
         browser,
         crm,
@@ -236,6 +237,7 @@ def builtin_handlers() -> dict[str, Any]:
         approvals,
         ask_user,
         images,
+        attachments,
     ]:
         all_handlers.update(mod.HANDLERS)
 

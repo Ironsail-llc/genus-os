@@ -167,6 +167,54 @@ def _normalise_paths(command: str) -> str:
     return _PROC_PATH.sub(lambda match: posixpath.normpath(match.group(0)), command)
 
 
+#: The channel inbox's quarantine directory, as a SHAPE:
+#: ``…/inbox/<channel>/<chat id>/<YYYY-MM-DD>/secret/<file>``. A file the
+#: operator sent whose ORIGINAL name said "credentials" is written there by
+#: ``robothor.engine.attachments``, because sanitising a name for the
+#: filesystem destroys what every rule in this module matches on — ``.env``
+#: becomes ``env`` and ``.ssh/id_rsa`` becomes ``id_rsa``.
+#:
+#: Without this, ``read_file`` and ``send_file`` refused the inbox copy (they
+#: ask ``attachments.is_inbox_secret``, which anchors on the resolved workspace)
+#: and ``exec`` did not, because ``exec_reads_secret`` gates on this function.
+#: So ``cat``/``head``/``grep``/``python3 -c`` printed the operator's own
+#: credentials file into the tool result, hence into the model's context and
+#: ``agent_run_steps``.
+#:
+#: Matched as a shape rather than against the resolved inbox root, because this
+#: function is PURE by contract and is imported BY ``attachments`` — asking it
+#: back would be both a filesystem read and a cycle. The shape is specific
+#: enough to carry the weight: four segments in a fixed order with a date among
+#: them. ``projects/inbox/secret/design.md`` has one segment where this needs
+#: three, so the false positive the last review found here cannot recur. The
+#: tools keep their stricter root check on top of this.
+_INBOX_SECRET = re.compile(r"(?:^|/)inbox/[^/]+/[^/]+/\d{4}-\d{2}-\d{2}/secret/[^/]+$")
+
+
+def is_inbox_secret_path(path: str | os.PathLike[str]) -> bool:
+    """True for the channel inbox's copy of a credentials file. Pure.
+
+    Normalised first. This rule matches a directory SEQUENCE, so unlike every
+    other rule in this module it cannot fall back on a basename: ``.env`` and
+    ``id_rsa`` survive a ``..`` in the middle of a path because ``..`` cannot
+    hide the last segment, and this one did not —
+    ``…/secret/../secret/<file>`` named the same bytes and walked straight
+    past. That is the lesson the vault work wrote into this very module for
+    ``/proc``: a denylist that matches a STRING rather than a PATH means
+    nothing, because the kernel resolves every spelling to one file.
+
+    ``normpath`` is textual — no filesystem access, no symlink resolution — so
+    the function stays pure and still answers the same for a file that does
+    not exist. It is also purely narrowing in the direction that matters: a
+    ``..`` that walks OUT of the quarantine normalises to a path outside it,
+    which is an ordinary file and stays readable.
+    """
+    import posixpath
+
+    spelled = PurePath(Path(str(path)).expanduser()).as_posix()
+    return bool(_INBOX_SECRET.search(posixpath.normpath(spelled)))
+
+
 def is_secret_path(path: str | os.PathLike[str]) -> bool:
     """True when *path* names a file that holds credentials.
 
@@ -176,6 +224,12 @@ def is_secret_path(path: str | os.PathLike[str]) -> bool:
     p = PurePath(Path(str(path)).expanduser())
     name = p.name
     lowered = name.lower()
+
+    # BEFORE the documentation suffixes: a file the operator sent as
+    # `notes.md` holding their credentials is quarantined on the way in, and
+    # `.md` must not read it back out again.
+    if is_inbox_secret_path(p):
+        return True
 
     if lowered.endswith(_DOC_SUFFIXES):
         return False

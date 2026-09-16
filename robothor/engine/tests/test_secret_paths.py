@@ -67,6 +67,28 @@ SECRET = [
     "credentials.json",
     "token.json",
     "vault.kdbx",
+    # The channel inbox's quarantine directory. A `.env` the operator sent over
+    # Telegram is stored as `<file_unique_id>-env`, which no name rule can
+    # recognise, so the verdict is taken at save time and recorded as the
+    # DIRECTORY the file is kept in.
+    "/srv/app/inbox/telegram/100200300/2026-09-16/secret/AgAC-xQ-env",
+    "inbox/telegram/100200300/2026-09-16/secret/BQAD-77-credentials.json",
+    # Including when the sanitised name ends in a documentation suffix: the
+    # operator sent their credentials as `notes.md` and the quarantine outranks
+    # the "examples stay readable" rule.
+    "inbox/telegram/100200300/2026-09-16/secret/CQAE-11-notes.md",
+    # M8. The shape matches a directory SEQUENCE, and `PurePath` does not
+    # resolve `..` — so `secret/../secret/<file>` named the same bytes and
+    # walked past the rule. `.env` and `id_rsa` survived that spelling because
+    # their rules match a basename, which `..` cannot hide; this one did not.
+    # It is the lesson the vault branch wrote into this very module for
+    # `/proc`: a denylist that matches a string rather than a path means
+    # nothing, because the kernel resolves every spelling to one file.
+    "inbox/telegram/100200300/2026-09-16/secret/../secret/AgAC-xQ-env",
+    "inbox/telegram/100200300/2026-09-16/./secret/AgAC-xQ-env",
+    "inbox/telegram/100200300/2026-09-16//secret//AgAC-xQ-env",
+    "inbox/telegram/100200300/2026-09-16/secret/../../2026-09-16/secret/AgAC-xQ-env",
+    "/srv/app/./inbox/telegram/100200300/2026-09-16/secret/../secret/AgAC-xQ-env",
 ]
 NOT_SECRET = [
     "/srv/app/robothor/README.md",
@@ -87,6 +109,17 @@ NOT_SECRET = [
     "/run/robothor/slo-state.json",
     "/run/robothor/alerts.log",
     "/etc/robothor/robothor.conf",
+    # The inbox rule is a SHAPE, and these are the near misses. Re-review R3
+    # found the loose version refusing the first of them.
+    "projects/inbox/secret/design.md",
+    "inbox/secret/design.md",
+    "inbox/telegram/100200300/2026-09-16/AgAC-xQ-photo.jpg",  # not quarantined
+    "inbox/telegram/100200300/latest/secret/AgAC-xQ-env",  # no date, not ours
+    "secret/notes.md",
+    # M8's normalisation must not invent a match either: `..` that walks OUT of
+    # the quarantine names a different file, and that file is ordinary.
+    "inbox/telegram/100200300/2026-09-16/secret/../AgAC-xQ-photo.jpg",
+    "projects/./inbox/secret/design.md",
 ]
 
 

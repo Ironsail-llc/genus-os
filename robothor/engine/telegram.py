@@ -41,6 +41,7 @@ from robothor.engine.chat import (
     get_shared_session,
 )
 from robothor.engine.chat_store import (
+    build_user_extras,
     save_exchange_async,
 )
 from robothor.engine.chunking import (
@@ -56,6 +57,9 @@ if TYPE_CHECKING:
     from robothor.engine.runner import AgentRunner
     from robothor.identity import IdentityContext
 
+from robothor.engine.telegram_attachments import (  # noqa: E402
+    TelegramAttachmentsMixin,
+)
 from robothor.engine.telegram_handlers import (  # noqa: E402
     AVAILABLE_MODELS,
     TelegramHandlersMixin,
@@ -164,7 +168,7 @@ def _md_to_html(text: str) -> str:
     return text
 
 
-class TelegramBot(TelegramHandlersMixin, PlanModeMixin):
+class TelegramBot(TelegramAttachmentsMixin, TelegramHandlersMixin, PlanModeMixin):
     """Aiogram v3 Telegram bot for Genus OS."""
 
     def __init__(self, config: EngineConfig, runner: AgentRunner) -> None:
@@ -193,6 +197,25 @@ class TelegramBot(TelegramHandlersMixin, PlanModeMixin):
         # the prompt and persist the linkage in the user turn's JSONB.
         self._reply_context_buffers: dict[str, dict[str, Any]] = {}
         self._user_message_id_buffers: dict[str, str] = {}
+
+        # Attachments saved into the inbox for the turn currently being
+        # composed, popped by the drain and recorded on the stored user turn.
+        # Same last-write-wins shape as the two buffers above, except this one
+        # EXTENDS: a chat that sends a photo and then a PDF before the drain
+        # fires has sent two files, not replaced one.
+        self._attachment_buffers: dict[str, list[dict[str, Any]]] = {}
+
+        # Album (media_group_id) collection: Telegram sends each member as its
+        # own update and puts the caption on exactly one of them, so handled
+        # one at a time an album became N runs, N-1 of them captionless.
+        # Keyed (chat_id, media_group_id) — two chats can album at once.
+        self._album_buffers: dict[tuple[str, str], dict[str, Any]] = {}
+        # A SET per key, not one slot. A late member arriving while the previous
+        # flush is still routing starts a second timer under the same key, and a
+        # single slot lost the first one — `stop()` then cancelled one of two
+        # live tasks and the orphan went on to deliver its turn afterwards
+        # (re-review R4). Every in-flight task is held until it removes itself.
+        self._album_tasks: dict[tuple[str, str], set[asyncio.Task[Any]]] = {}
 
         # Per-message resolved sender identity, captured once in the handler
         # (where message.from_user.id is available) and popped alongside the
@@ -262,7 +285,13 @@ class TelegramBot(TelegramHandlersMixin, PlanModeMixin):
         self.dp.callback_query(F.data.startswith("runctl:"))(self.on_runctl_callback)
         self.dp.callback_query(F.data.startswith("dp:"))(self.on_delphi_proposal_decision)
         self.dp.message(F.voice | F.video_note)(self.handle_voice)
-        self.dp.message(F.document | F.photo)(self.handle_file)
+        # Every kind that carries a file, not just the two. A video, an audio
+        # file or a sticker used to fall through to `handle_text`, which
+        # returns immediately on a message with no `.text` — so it vanished
+        # without so much as an acknowledgement. Voice and video notes keep
+        # their own handler (registered above, transcription still pending) and
+        # are matched there first.
+        self.dp.message(F.document | F.photo | F.video | F.audio | F.sticker)(self.handle_file)
         self.dp.message(F.text)(self.handle_text)
         self.dp.message_reaction()(self.on_message_reaction)
 
@@ -274,8 +303,15 @@ class TelegramBot(TelegramHandlersMixin, PlanModeMixin):
         user_text: str,
         *,
         sender_info: dict[str, Any] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> None:
         """Buffer a message and schedule a drain if none is pending.
+
+        ``attachments`` are the rows ``robothor.engine.attachments`` wrote for
+        files that arrived with this message. They EXTEND rather than replace:
+        a chat that sends a photo and then a PDF inside the coalescing window
+        sent two files, and a buffer that overwrote would record one and lose
+        the other from the stored turn while both paths stayed in the prompt.
 
         ``sender_info`` is the dict ``_resolve_user`` returned for THIS
         specific incoming message, captured synchronously in the handler
@@ -292,6 +328,8 @@ class TelegramBot(TelegramHandlersMixin, PlanModeMixin):
         self._message_buffers.setdefault(chat_id, []).append(user_text)
         if sender_info is not None:
             self._pending_sender_info[chat_id] = sender_info
+        if attachments:
+            self._attachment_buffers.setdefault(chat_id, []).extend(attachments)
 
         # If a run is already active, the message waits — the run's finally
         # block will kick off a new drain when it finishes.
@@ -332,6 +370,10 @@ class TelegramBot(TelegramHandlersMixin, PlanModeMixin):
         # moment this batch was claimed, immune to a later message's
         # overwrite of _pending_sender_info/_chat_user_info.
         sender_info = self._pending_sender_info.pop(chat_id, None)
+        # Popped in the same synchronous stretch as the text, for the same
+        # reason: the files this batch is about are the ones that were pending
+        # when it was claimed, not whatever has arrived since.
+        attachment_rows = self._attachment_buffers.pop(chat_id, None)
         await self._run_interactive(
             chat_id,
             session_key,
@@ -340,6 +382,7 @@ class TelegramBot(TelegramHandlersMixin, PlanModeMixin):
             reply_ctx=reply_ctx,
             user_message_id=user_message_id,
             sender_info=sender_info,
+            attachments=attachment_rows,
         )
 
     async def _record_interactive_delivery(self, run: Any, sent: Any) -> None:
@@ -395,6 +438,7 @@ class TelegramBot(TelegramHandlersMixin, PlanModeMixin):
         reply_ctx: dict[str, Any] | None = None,
         user_message_id: str | None = None,
         sender_info: dict[str, Any] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> None:
         """Execute an interactive agent run with streaming, typing indicator, and history management.
 
@@ -588,21 +632,11 @@ class TelegramBot(TelegramHandlersMixin, PlanModeMixin):
                     if len(session.history) > self._max_history:
                         session.history[:] = session.history[-self._max_history :]
 
-                # Build user JSONB extras. When the user replied to a
-                # surfaced fleet message, include the linkage in the user
-                # turn's JSONB so history and audits can see the thread.
-                user_extras: dict[str, Any] | None = None
-                if user_message_id or reply_ctx:
-                    user_extras = {}
-                    if user_message_id:
-                        user_extras["telegram_message_id"] = user_message_id
-                    if reply_ctx:
-                        user_extras["replies_to"] = {
-                            "platform_message_id": str(reply_ctx.get("platform_message_id", "")),
-                            "author_agent_id": reply_ctx.get("author_agent_id", ""),
-                            "author_display_name": reply_ctx.get("author_display_name", ""),
-                            "chat_message_id": reply_ctx.get("chat_message_id"),
-                        }
+                user_extras = build_user_extras(
+                    user_message_id=user_message_id,
+                    reply_ctx=reply_ctx,
+                    attachments=attachments,
+                )
 
                 # Delete status message, deliver final output as new message.
                 # Capture the Telegram Message objects returned by send_message
@@ -1911,6 +1945,17 @@ class TelegramBot(TelegramHandlersMixin, PlanModeMixin):
         # Clear message buffers and cancel all active tasks
         self._message_buffers.clear()
         self._drain_scheduled.clear()
+        self._attachment_buffers.clear()
+        # An album timer outliving the bot would fire into a closed session.
+        # The files themselves are already on disk, so nothing is lost by
+        # dropping the composed turn. EVERY task under a key is cancelled, not
+        # the newest: two can be live at once while a late member starts a
+        # second window over a flush that is still routing.
+        for album_tasks in self._album_tasks.values():
+            for album_task in album_tasks:
+                album_task.cancel()
+        self._album_tasks.clear()
+        self._album_buffers.clear()
         for task in self._active_tasks.values():
             task.cancel()
         self._active_tasks.clear()

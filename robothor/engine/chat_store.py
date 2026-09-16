@@ -54,6 +54,105 @@ def upsert_session(
         return int(row["id"])
 
 
+#: The fields on an attachment row the OPERATOR authors. They are the same
+#: class as the message body and get the same treatment.
+#:
+#: ``caption`` is the obvious one. ``name`` and ``original_name`` are here
+#: because the operator chooses the filename too, and a file sent as
+#: ``ghp_….txt`` put the token into the JSONB in the clear while the identical
+#: string in the caption or the body was scrubbed (review M10).
+#:
+#: A list, so the next field added to the row is one line here — and the
+#: covering test is parametrised over this same class of field so that adding
+#: one without adding it here fails.
+_OPERATOR_AUTHORED = ("caption", "name", "original_name")
+
+
+def _redact_captions(extras: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A copy of *extras* with every operator-authored attachment string scrubbed.
+
+    An attachment's ``caption`` is the operator's own words — the same class as
+    the message body, and subject to the same rule. Without this, a credential
+    pasted as a photo caption was written to ``chat_messages.message``
+    unredacted while the identical text in the body was scrubbed, which is the
+    cross-branch gap the hostile review flagged. The filename is the same class
+    and is covered too; see ``_OPERATOR_AUTHORED``.
+
+    Copies rather than edits in place: the caller still holds those dicts (the
+    intake logs them, the album buffer keeps them), and a persistence function
+    that reached back into them would be changing data it does not own.
+
+    **``path`` is deliberately NOT redacted, and that limits what this is
+    worth.** Paths, sizes and Telegram ids are the record every reader
+    downstream relies on — the Helm chat UI reads the path back — and a
+    redactor let loose on them would eat the feature while protecting nothing.
+    A file named after a credential therefore still has that credential in the
+    row, inside ``path``. Scrubbing ``name`` is consistency with the rest of
+    the turn, not elimination; the elimination is that the file itself is
+    quarantined and no tool will open it.
+    """
+    if not extras:
+        return extras
+    rows = extras.get("attachments")
+    if not isinstance(rows, list):
+        return extras
+
+    from robothor.secrets.redaction import redact
+
+    cleaned = []
+    for row in rows:
+        if not isinstance(row, dict):
+            cleaned.append(row)
+            continue
+        scrubbed = {
+            field: redact(row[field])
+            for field in _OPERATOR_AUTHORED
+            if isinstance(row.get(field), str) and row[field]
+        }
+        cleaned.append({**row, **scrubbed} if scrubbed else row)
+    return {**extras, "attachments": cleaned}
+
+
+def build_user_extras(
+    *,
+    user_message_id: str | None = None,
+    reply_ctx: dict[str, Any] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    """The additive JSONB fields recorded on one inbound user turn, or None.
+
+    Three separate facts about the same message, and none of them belongs in
+    the text: the platform message id (so a later reply resolves against a real
+    row), the fleet message this one replies to, and the FILES that arrived with
+    it. ``None`` when there is nothing to add, which is what keeps a plain text
+    turn's payload byte-identical to what it was before any of this.
+
+    Here rather than in ``engine/telegram.py``, where it started: it is pure, it
+    decides the shape of ``chat_messages.message``, and this module is the one
+    that writes that column. (The decomposition ratchet asked for the move —
+    ``telegram.py`` was two lines over its cap — and this is where it belonged
+    anyway. A second inbound channel would otherwise have grown its own copy.)
+    """
+    if not (user_message_id or reply_ctx or attachments):
+        return None
+    extras: dict[str, Any] = {}
+    if attachments:
+        # The attachment row shape, recorded BESIDE the text rather than
+        # embedded in it: the prompt is prose the model rewrites, the JSONB is
+        # the record every reader downstream relies on.
+        extras["attachments"] = list(attachments)
+    if user_message_id:
+        extras["telegram_message_id"] = user_message_id
+    if reply_ctx:
+        extras["replies_to"] = {
+            "platform_message_id": str(reply_ctx.get("platform_message_id", "")),
+            "author_agent_id": reply_ctx.get("author_agent_id", ""),
+            "author_display_name": reply_ctx.get("author_display_name", ""),
+            "chat_message_id": reply_ctx.get("chat_message_id"),
+        }
+    return extras
+
+
 def save_exchange(
     session_key: str,
     user_content: str,
@@ -87,6 +186,13 @@ def save_exchange(
 
     user_content = redact(user_content)
     assistant_content = redact(assistant_content)
+    # The extras carry one more piece of OPERATOR text: an attachment's caption.
+    # Everything else in there is machine-made — paths, sizes, Telegram ids —
+    # and running a redactor over the lot would risk eating the record the Helm
+    # chat UI reads while protecting nothing. Same door, same rule, narrowest
+    # possible reach.
+    user_extras = _redact_captions(user_extras)
+    assistant_extras = _redact_captions(assistant_extras)
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)

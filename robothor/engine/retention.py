@@ -226,4 +226,18 @@ def run_retention_cleanup() -> dict[str, int]:
     except Exception as e:
         logger.warning("Retention cleanup failed for agent_messages: %s", e)
         results["agent_messages"] = -1
+
+    # Files received over a channel are the one retention target that is not a
+    # table. Keyed under `inbox` rather than a table name so the daemon's log
+    # line reads honestly. The prune walks `<workspace>/inbox/` and nothing
+    # else: a file an agent moved somewhere useful has left that tree, and
+    # deleting the operator's own work would be a far worse failure than
+    # keeping a copy of a screenshot too long.
+    try:
+        from robothor.engine.attachments import prune_inbox
+
+        results["inbox"] = prune_inbox()
+    except Exception as e:
+        logger.warning("Retention cleanup failed for the channel inbox: %s", e)
+        results["inbox"] = -1
     return results

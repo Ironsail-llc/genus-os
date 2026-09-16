@@ -27,9 +27,10 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 if TYPE_CHECKING:
-    from aiogram.types import CallbackQuery, Message, PhotoSize
+    from aiogram.types import CallbackQuery, Message
 
 from robothor.constants import DEFAULT_TENANT
+from robothor.engine import attachments, telegram_attachments
 from robothor.engine.chat import (
     _plan_is_expired,
     get_shared_session,
@@ -59,42 +60,24 @@ _PERM_DECISIONS: dict[str, tuple[bool, bool, str]] = {
 }
 
 
-# File handling — max size for text extraction (5 MB)
-MAX_FILE_SIZE = 5 * 1024 * 1024
+# The attachment intake — recognising, downloading, saving, describing and
+# grouping an inbound file — is one cohesive cluster and lives in its own
+# module. These names are re-exported because instances and tests patch them
+# here, where they used to be.
+MAX_FILE_SIZE = telegram_attachments.MAX_FILE_SIZE
+ALBUM_WINDOW_SECONDS = telegram_attachments.ALBUM_WINDOW_SECONDS
+media_ref = telegram_attachments.media_ref
 
-# Units the Telegram /restart family can queue a restart for, mapped to the
-# advisory trigger file that ``robothor-restart.path`` (infra/systemd/) watches.
-# The restart TARGET is hardcoded in that path unit's paired .service — this
-# file's contents are never read as the unit to restart, only as an audit
-# trail (UTC timestamp + sender). Module-level so tests can inject a tmp_path.
-# A unit with no entry here has no path-unit watching for it — the handler
-# tells the caller to use SSH instead. That list is deliberately short: vision
-# and mediamtx are absent because they were disabled by hand after the
-# 2026-08-19 GPU thermal event, and re-enabling them unattended would let the
-# agent undo a thermal-safety decision on a box nobody is standing next to.
-TEXT_EXTENSIONS = {
-    ".txt",
-    ".md",
-    ".csv",
-    ".json",
-    ".yaml",
-    ".yml",
-    ".xml",
-    ".html",
-    ".py",
-    ".js",
-    ".ts",
-    ".sh",
-    ".toml",
-    ".ini",
-    ".cfg",
-    ".log",
-    ".eml",
-    ".tex",
-    ".rst",
-    ".sql",
-    ".env",
-}
+
+#: Which extensions are worth decoding into the first turn. One list now, in
+#: ``robothor.engine.attachments``, because the tool layer needs the same
+#: answer and a second copy here is how two surfaces end up disagreeing about
+#: what a text file is. Re-exported for instances that patch the name.
+#:
+#: ``.env`` was on this list and is NOT on the new one: a file named like a
+#: credentials file is still SAVED, but quoting it into a prompt is the exact
+#: exposure ``robothor.engine.secret_paths`` exists to refuse.
+TEXT_EXTENSIONS = attachments.TEXT_EXTENSIONS
 
 # Models available for /model selection (display name → litellm model id).
 #
@@ -151,39 +134,26 @@ async def _extract_pdf_text(raw_bytes: bytes) -> str:
         return f"[PDF text extraction failed: {e}]"
 
 
-async def _analyze_photo_bytes(
-    raw_bytes: bytes,
-    prompt: str = "Describe what you see in this image in detail. Read and transcribe ALL visible text exactly. Note any URLs, names, numbers, UI elements, or content shown.",
-) -> str:
-    """Send raw image bytes to llama3.2-vision via Ollama for VLM analysis."""
-    import base64
+async def _analyze_photo_bytes(raw_bytes: bytes, prompt: str = "") -> str:
+    """Deprecated shim: the local vision call now lives in the images tool.
 
-    ollama_url = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-    img_b64 = base64.b64encode(raw_bytes).decode("utf-8")
-    payload = {
-        "model": "llama3.2-vision:11b",
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are Robothor's vision system. Your ONLY job is to describe what is visible in images. "
-                    "You MUST always describe image content — never refuse, never say you cannot access websites or URLs. "
-                    "If you see a URL in an image, READ and REPORT the text — do not try to visit it. "
-                    "Transcribe ALL visible text exactly as shown. Report people, UI elements, screenshots, diagrams, "
-                    "app names, domain names, error messages, and any other visible content. Be literal and precise."
-                ),
-            },
-            {"role": "user", "content": prompt, "images": [img_b64]},
-        ],
-        "stream": False,
-        "options": {"temperature": 0.1, "num_predict": 1024, "num_gpu": 999},
-    }
+    It moved because the channel owned a private copy the tool layer could not
+    reach — so ``view_image`` had no way to describe a picture for a model that
+    cannot see one, and the channel's copy read a raw ``OLLAMA_URL`` and a
+    hardcoded model id, ignoring the ``ROBOTHOR_VISION_MODEL`` the instance had
+    declared. Kept as a one-line delegate because instances patch this name.
+
+    Returns the old bracketed error string rather than raising: that is the
+    contract this name has always had, and a caller expecting a description is
+    handed something it can put in a prompt. New code calls
+    :func:`robothor.engine.tools.handlers.images.describe_image_bytes` directly
+    and handles the exception, so it can tell a description from a failure.
+    """
+    from robothor.engine.tools.handlers.images import describe_image_bytes
+
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(f"{ollama_url}/api/chat", json=payload)
-            resp.raise_for_status()
-            return resp.json()["message"]["content"]  # type: ignore[no-any-return]
-    except Exception as e:
+        return await describe_image_bytes(raw_bytes, prompt)
+    except Exception as e:  # noqa: BLE001 - preserved shim contract
         return f"[Vision analysis failed: {e}]"
 
 
@@ -936,187 +906,6 @@ class TelegramHandlersMixin:
                 7: "Apply failed",
             }
             await callback.answer(msg_map.get(rc or -1, f"Apply failed (rc={rc})"), show_alert=True)
-
-    # ── Voice notes / video notes ──
-    # Previously unhandled, so they were silently dropped. Now acknowledged.
-    # Transcription is gated on ROBOTHOR_VOICE_NOTES_ENABLED (no STT provider
-    # is wired yet — Claude has no audio endpoint — so this is a placeholder).
-
-    async def handle_voice(self, message: Message) -> None:
-        """Acknowledge voice/video notes (transcription pending an STT provider)."""
-        if not message.from_user:
-            return
-        enabled = os.environ.get("ROBOTHOR_VOICE_NOTES_ENABLED", "").strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        )
-        if not enabled:
-            await message.answer(
-                "🎤 I can't process voice notes yet — please send text. "
-                "(Voice transcription will arrive once an STT provider is configured.)"
-            )
-            return
-        media = message.voice or message.video_note
-        try:
-            if media is not None:
-                await self.bot.get_file(media.file_id)  # verify reachability
-            await message.answer(
-                "🎤 Voice received — transcription isn't wired yet (placeholder). "
-                "Send text for now."
-            )
-        except Exception as e:
-            await message.answer(f"Couldn't fetch the voice note: {e}")
-
-    # ── File/document/photo messages ──
-
-    async def handle_file(self, message: Message) -> None:
-        """Handle file/document/photo attachments — extract content and process."""
-        if not message.from_user:
-            return
-
-        chat_id = str(message.chat.id)
-
-        # ── Resolve user identity ──
-        user_info = self._resolve_user(chat_id, message)
-        if user_info is None:
-            reply = await self._handle_unregistered_sender(message, str(message.from_user.id))
-            await message.answer(reply)
-            return
-
-        caption = (message.caption or "").strip()
-
-        # Determine what was sent
-        file_desc = ""
-        file_content = ""
-        file_name = ""
-
-        if message.document:
-            doc = message.document
-            file_name = doc.file_name or "unnamed_file"
-            file_size = doc.file_size or 0
-
-            if file_size > MAX_FILE_SIZE:
-                await message.answer(
-                    f"File too large ({file_size // 1024}KB). Max {MAX_FILE_SIZE // 1024 // 1024}MB."
-                )
-                return
-
-            # Download and try to extract text
-            try:
-                file = await self.bot.get_file(doc.file_id)
-                if file.file_path:
-                    from io import BytesIO
-
-                    buf = BytesIO()
-                    await self.bot.download_file(file.file_path, buf)
-                    raw_bytes = buf.getvalue()
-
-                    # Check extension for text extraction
-                    ext = "." + file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
-
-                    if ext in TEXT_EXTENSIONS:
-                        try:
-                            file_content = raw_bytes.decode("utf-8", errors="replace")
-                        except Exception:
-                            file_content = "[Binary content — could not decode as text]"
-                    elif ext == ".pdf":
-                        file_content = await _extract_pdf_text(raw_bytes)
-                    else:
-                        file_content = f"[Binary file: {file_name}, {len(raw_bytes)} bytes]"
-            except Exception as e:
-                logger.warning("Failed to download file %s: %s", file_name, e)
-                file_content = f"[Failed to download file: {e}]"
-
-            file_desc = f"[File: {file_name}]"
-
-        elif message.photo:
-            # Get highest resolution photo
-            photo: PhotoSize = message.photo[-1]
-            file_desc = "[Photo attached]"
-            file_name = f"photo_{photo.file_unique_id}.jpg"
-            try:
-                file = await self.bot.get_file(photo.file_id)
-                if file.file_path:
-                    from io import BytesIO
-
-                    buf = BytesIO()
-                    await self.bot.download_file(file.file_path, buf)
-                    raw_bytes = buf.getvalue()
-                    # Use VLM to analyze the image
-                    vlm_prompt = (
-                        caption
-                        or "Describe what you see in this image in detail. Note any text, people, objects, URLs, or notable details."
-                    )
-                    vision_desc = await _analyze_photo_bytes(raw_bytes, vlm_prompt)
-                    file_content = f"[Image: {photo.width}x{photo.height}px]\n\nVision analysis:\n{vision_desc}"
-                    # Caption already consumed as prompt — clear it to avoid duplication
-                    if caption:
-                        caption = ""
-                else:
-                    file_content = f"[Image: {photo.width}x{photo.height}px — could not download]"
-            except Exception as e:
-                logger.warning("Failed to process photo: %s", e)
-                file_content = f"[Failed to process photo: {e}]"
-
-        # Build the user message with file context
-        parts = []
-        if caption:
-            parts.append(caption)
-        if file_desc:
-            parts.append(file_desc)
-        if file_content and file_content.startswith("["):
-            # Just a descriptor, include it
-            parts.append(file_content)
-        elif file_content:
-            # Actual text content — wrap it
-            # Truncate very long files to avoid blowing context
-            max_chars = 50_000
-            if len(file_content) > max_chars:
-                file_content = (
-                    file_content[:max_chars]
-                    + f"\n\n[... truncated, {len(file_content)} total chars]"
-                )
-            parts.append(f"--- File content: {file_name} ---\n{file_content}\n--- End of file ---")
-
-        user_text = "\n\n".join(parts) if parts else file_desc
-
-        logger.info(
-            "Telegram file from %s (chat %s): %s, caption=%s",
-            message.from_user.first_name,
-            chat_id,
-            file_name or "photo",
-            caption[:50] if caption else "(none)",
-        )
-
-        # Route through the same execution path as text messages
-        session_key = self._session_key(chat_id)
-        session = get_shared_session(session_key)
-
-        # Check for pending plan
-        if session.active_plan and session.active_plan.status == "pending":
-            if not _plan_is_expired(session.active_plan):
-                # File message = feedback on plan, re-plan
-                session.active_plan.rejection_feedback = user_text
-                session.active_plan.status = "superseded"
-                session.active_plan = None
-                await self._run_plan_mode(
-                    chat_id, session_key, session, user_text, message, sender_info=user_info
-                )
-                return
-            session.active_plan.status = "expired"
-            session.active_plan = None
-
-        if session.plan_mode:
-            session.plan_mode = False
-            await self._run_plan_mode(
-                chat_id, session_key, session, user_text, message, sender_info=user_info
-            )
-            return
-
-        # Execute via coalescing buffer (shared with handle_text)
-        await self._enqueue_message(chat_id, session_key, session, user_text, sender_info=user_info)
 
     # ── Interactive text messages ──
 

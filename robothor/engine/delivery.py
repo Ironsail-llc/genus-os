@@ -27,6 +27,16 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from robothor.engine.channels import SendReceipt, get_channel
+
+# Files that ride out with an announcement: their own module, re-exported here
+# because this is where callers look for anything about delivering output.
+from robothor.engine.delivery_attachments import (
+    MAX_QUEUED_ATTACHMENTS,  # noqa: F401 - re-export
+    clear_queued_attachments,  # noqa: F401 - re-export
+    queue_attachment,  # noqa: F401 - re-export
+    take_queued_attachments,  # noqa: F401 - re-export
+)
+from robothor.engine.delivery_attachments import send_attachments as _send_attachments
 from robothor.engine.models import AgentConfig, AgentRun, DeliveryMode
 from robothor.engine.thin_announce import (
     NoteSubstitution,
@@ -669,6 +679,9 @@ async def deliver(config: AgentConfig, run: AgentRun) -> bool:
             result = False
         else:
             result = await _send_announcement(config, run, text, name, channel)
+            # After the report, whether or not the report landed. The two are
+            # separate sends and one is not evidence about the other.
+            await _send_attachments(config, run, name, channel)
         # AFTER the status is known, never before: the note states whether the
         # operator was actually reached, and only `delivered` means that.
         if substitution:
