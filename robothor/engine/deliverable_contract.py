@@ -323,6 +323,10 @@ _MAX_READ_BYTES = 2_000_000
 #: of names is the same defect as no names at all.
 _MAX_LISTED = 10
 
+#: How far a "what is there instead" hint will look. A benchmark workspace
+#: holds thousands of downloaded inputs and this is a hint, not a search.
+_MAX_SCANNED_NEIGHBOURS = 2_000
+
 
 @dataclass(frozen=True)
 class PathItem:
@@ -887,20 +891,28 @@ def _neighbours(root_resolved: Path, target: Path, suffix: str) -> list[str]:
     """
     found: list[str] = []
     for directory in (target.parent, root_resolved):
+        # `iterdir` is lazy, so the error for an absent directory arrives on
+        # the first step of the loop, not on the call — and the absent
+        # directory is exactly the case this hint is for.
+        #
+        # Streamed and capped, not sorted: a workspace can hold tens of
+        # thousands of downloaded inputs, and this is a hint attached to a
+        # verdict, not a search.
         try:
-            entries = sorted(directory.iterdir())
+            for scanned, entry in enumerate(directory.iterdir()):
+                if scanned >= _MAX_SCANNED_NEIGHBOURS:
+                    break
+                if not entry.is_file() or entry.name.startswith("."):
+                    continue
+                if entry.suffix.lower() != suffix.lower() or entry == target:
+                    continue
+                name = _display(root_resolved, entry)
+                if name not in found:
+                    found.append(name)
+                if len(found) >= 2:
+                    return found
         except OSError:
             continue
-        for entry in entries:
-            if not entry.is_file() or entry.name.startswith("."):
-                continue
-            if entry.suffix.lower() != suffix.lower() or entry == target:
-                continue
-            name = _display(root_resolved, entry)
-            if name not in found:
-                found.append(name)
-            if len(found) >= 2:
-                return found
     return found
 
 

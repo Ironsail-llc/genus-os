@@ -545,6 +545,52 @@ class TestSortChecking:
         assert sort == []
 
 
+class TestNothingProducedAtAll:
+    """The run that writes nothing is not the interesting case, but it is the
+    one an enforce rung must not crash on."""
+
+    def test_every_item_reports_missing(self, tmp_path):
+        report = check_contract(extract_contract(TABLE_SPEC), tmp_path)
+        assert not report.satisfied
+        assert {f.status for f in report.failures} == {"missing"}
+
+    def test_the_reason_still_names_the_required_header(self, tmp_path):
+        """ "File not found" alone tells an agent nothing it did not know. It
+        has to leave with the requirement, not only the verdict."""
+        message = check_contract(extract_contract(TABLE_SPEC), tmp_path).message
+        assert "Track Title Speakers Summary Speaker links Commit id" in message
+
+    def test_an_absent_output_directory_is_named(self, tmp_path):
+        message = check_contract(extract_contract(MANIFEST_SPEC), tmp_path).message
+        assert "results/" in message
+        assert "talk_manifest.json" in message
+
+
+class TestItCannotBeHungByTaskText:
+    """Extraction runs over untrusted task text before the agent takes a step,
+    and again at every check-in. Three regex attempts preceded the shipped path
+    pattern, each flagged by CodeQL for polynomial backtracking."""
+
+    @pytest.mark.parametrize(
+        "hostile",
+        [
+            "/" * 4000,
+            "a." * 4000,
+            "-/" * 4000,
+            "You must create the following outputs under `" + ("a/" * 2000),
+            "use exactly the following header:\n\n```text\n" + ("x " * 4000),
+            "sorted by " + ("a" * 4000),
+        ],
+        ids=["slashes", "dots", "dashes", "unclosed-dir", "unclosed-fence", "unclosed-sort"],
+    )
+    def test_pathological_text_returns_promptly(self, hostile):
+        import time
+
+        started = time.monotonic()
+        extract_contract(hostile)
+        assert time.monotonic() - started < 2.0
+
+
 class TestContainment:
     def test_a_path_outside_the_workspace_is_never_touched(self, tmp_path):
         """Task text is untrusted in any deployment where someone else can file
