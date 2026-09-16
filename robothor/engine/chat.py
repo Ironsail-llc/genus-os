@@ -47,7 +47,8 @@ from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 
 from robothor.constants import DEFAULT_TENANT
-from robothor.engine.chat_history import ChatHistory, as_history
+from robothor.engine.chat_history import MAX_HISTORY as _MAX_HISTORY
+from robothor.engine.chat_history import ChatHistory, append_turn, as_history
 from robothor.engine.chat_session_cache import SessionCache
 from robothor.engine.chat_store import (
     clear_plan_state_async,
@@ -69,7 +70,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-MAX_HISTORY = 40  # 20 turns (user + assistant)
+#: Re-exported from ``chat_history``, which owns it now: the cap and the
+#: container it bounds are one concern, and several modules import it from here.
+MAX_HISTORY = _MAX_HISTORY
 SSE_KEEPALIVE_INTERVAL = 15.0  # seconds between keepalive comments
 
 # Module-level references injected by init_chat()
@@ -235,37 +238,6 @@ MAX_SESSIONS = 500
 #: Idle age after which ``evict_idle_sessions`` drops a session (matches the
 #: store's own 7-day session TTL).
 SESSION_IDLE_TTL_S = 7 * 24 * 3600
-
-
-def append_turn(
-    session: ChatSession,
-    *,
-    user_message: str,
-    assistant_text: str | None = None,
-) -> None:
-    """Record one exchange in a session's history, with credentials taken out.
-
-    The ONE place a turn enters ``ChatSession.history``, which is both the
-    replay handed to ``conversation_history=`` on the next run and the thing
-    ``save_session`` persists. So one redaction here closes both halves of the
-    2026-09-15 leak: the operator pastes a token, the model reads it and stores
-    it — that turn has to carry the value, or the assistant cannot do the job —
-    and from the next turn onward nothing does.
-
-    The TEXT is redacted, not the message: "here is the token: <redacted>"
-    keeps an operator's own history readable, which dropping the message would
-    not, and tells them plainly that the platform took the value out.
-
-    Also trims to ``MAX_HISTORY``, because a caller that remembered to append
-    and forgot to trim is how a session grows without bound.
-    """
-    from robothor.secrets.redaction import redact
-
-    session.history.append({"role": "user", "content": redact(user_message)})
-    if assistant_text:
-        session.history.append({"role": "assistant", "content": redact(assistant_text)})
-    if len(session.history) > MAX_HISTORY:
-        session.history[:] = session.history[-MAX_HISTORY:]
 
 
 def _load_for_cache(session_key: str) -> dict[str, Any]:
