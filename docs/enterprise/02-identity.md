@@ -90,14 +90,19 @@ same table the CLI and the token layer use. In practice:
 | `owner` | The instance belongs to this account. One per tenant |
 | `admin` | Configures the instance: agents, users, channels, plugins, flags |
 | `member` | Ordinary staff use: chat, tasks, the agents they are allowed |
-| `user` | A narrower member — give it when `member` is wider than the person needs |
-| `viewer` | Read-only. **The default for a newly paired channel sender** |
-| `auditor` | Read-only across the audit surface: Observe › Audit and the CSV export, and nothing else |
+| `user` | **A legacy alias for `member`** — identical scopes, kept for accounts created before the two were distinguished. It narrows nothing; do not reach for it |
+| `viewer` | Read-only, plus chat. **The default for a newly paired channel sender**, and the narrower role when `member` is wider than a person needs |
+| `auditor` | Read-only, plus the audit log. For review, not operation |
 
-`auditor` is the role to hand your compliance function. It sees Audit; it does
-not see Observe › Memory or Observe › Logs, and the navigation reflects that.
-The gating in the browser is a convenience — the Bridge checks the caller's
-role on every request regardless of what the page shows.
+So the ladder that actually narrows is `admin` → `member` → `viewer`.
+
+`auditor` is the role to hand your compliance function: it sees Observe › Audit
+and the CSV export, and not Observe › Memory or Observe › Logs, and the
+navigation reflects that. It is not a blindfold — an auditor session also
+carries read scope on the Bridge and the engine, so treat it as "may read, may
+not act" rather than "may read only the audit log". The gating in the browser is
+a convenience; the Bridge checks the caller's role on every request regardless
+of what the page shows.
 
 **The owner role is not an ordinary role.** Only an owner may grant or remove
 it; only an owner may demote, disable or arm a binding grant on the owner
@@ -110,7 +115,9 @@ disguised as a change. Changing the owner is a shell operation.
 
 **Settings › Users & roles** in the Helm is built on six operator-only Bridge
 routes, all scoped to the caller's own tenant — an account in another tenant
-answers 404, never 403, because 403 is itself a disclosure.
+answers 404, never 403, because 403 is itself a disclosure. The sixth is
+`GET /api/auth/roles` above, which serves the role list the picker is built
+from; the other five:
 
 | Route | What it does |
 |---|---|
