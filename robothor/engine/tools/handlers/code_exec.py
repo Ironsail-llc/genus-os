@@ -46,8 +46,10 @@ that cannot run commands does not get a way to run commands.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import shutil
+import stat
 import tempfile
 import uuid
 from pathlib import Path
@@ -221,6 +223,22 @@ def _spill(workspace: Path, stdout: str) -> str:
         return ""
 
 
+def _run_scratch_root(ctx: ToolContext) -> str:
+    """A 0700 directory per run, under the engine's temp directory.
+
+    Attribution, not isolation: a leftover directory says which run left it,
+    and the run's own calls are together. The reach control is the peer-session
+    check on the socket — see `code_exec_rpc` — because 0700 owned by the uid
+    every snippet runs as excludes nobody that matters.
+    """
+    run_id = "".join(c for c in (getattr(ctx, "run_id", "") or "") if c.isalnum())[:16]
+    root = Path(tempfile.gettempdir()) / f"genus-run-{run_id or 'unattributed'}"
+    root.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(OSError):
+        root.chmod(stat.S_IRWXU)
+    return str(root)
+
+
 @_handler("execute_code")
 async def _execute_code(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.engine.code_exec_rpc import ToolRpcServer
@@ -273,7 +291,13 @@ async def _execute_code(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     # live in the workspace if a container had to reach it — but a
     # container-sandboxed agent is refused above, so nothing needs it there.)
     # The SPILL still goes under the workspace, where the agent can read it.
-    tools_dir = Path(tempfile.mkdtemp(prefix="genus-code-"))
+    #
+    # Grouped per RUN so an operator reading /tmp can attribute a leftover, and
+    # 0700 at both levels — but neither of those is the control. Every snippet
+    # on this box runs as the engine uid, so file permissions exclude nobody
+    # that matters; `ToolRpcServer.bind_to_session` is what stops one run's
+    # snippet driving another run's proxy.
+    tools_dir = Path(tempfile.mkdtemp(prefix="code-", dir=_run_scratch_root(ctx)))
     server = ToolRpcServer(directory=tools_dir, proxy=proxy, max_calls=max_calls)
     try:
         await server.start()
@@ -284,6 +308,7 @@ async def _execute_code(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
             env=_child_environment(ctx, tools_dir),
             timeout=timeout,
             hard_cap=stdout_cap * HARD_CAP_MULTIPLIER,
+            on_spawn=server.bind_to_session,
         )
     except OSError as exc:
         return {"error": f"execute_code could not start: {exc}"}

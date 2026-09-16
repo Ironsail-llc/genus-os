@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any
 from robothor.engine.code_execution import SandboxResult
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -126,7 +127,13 @@ async def wait_for_exit(proc: Any, timeout: float) -> bool:
 
 
 async def run_snippet(
-    *, tools_dir: Path, workspace: Path, env: dict[str, str], timeout: int, hard_cap: int
+    *,
+    tools_dir: Path,
+    workspace: Path,
+    env: dict[str, str],
+    timeout: int,
+    hard_cap: int,
+    on_spawn: Callable[[int], None] | None = None,
 ) -> SandboxResult:
     """Spawn, wait, and make sure nothing survives."""
     proc = await asyncio.create_subprocess_exec(
@@ -144,6 +151,12 @@ async def run_snippet(
     # and `os.getpgid` raises, which would leave anything it backgrounded
     # running while the kill looked like it had happened.
     pgid = proc.pid
+    # Told to the socket BEFORE the next await, so there is no scheduling point
+    # at which the server would accept a connection without knowing which
+    # session may speak to it. `start_new_session=True` above makes this pid the
+    # session id too.
+    if on_spawn is not None:
+        on_spawn(proc.pid)
     out: list[bytes] = []
     err: list[bytes] = []
 

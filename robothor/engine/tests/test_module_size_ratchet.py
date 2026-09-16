@@ -144,14 +144,19 @@ CAPS = {
     # the place it matters most.
     "robothor/engine/parallel_tools.py": 173,
     "robothor/engine/tool_proxy.py": 277,
-    "robothor/engine/code_exec_rpc.py": 209,
+    # 209 -> 283: the peer-session check. Not a feature, a control: the token
+    # alone could not tell one run's snippet from another's, and a probe drove
+    # a second run's proxy with a stolen token. Correcting a cap set hours
+    # earlier in the same PR for the thing that makes the module correct is
+    # not the same as bumping a long-standing one to dodge a refactor.
+    "robothor/engine/code_exec_rpc.py": 283,
     # 523 -> 388: spawning a snippet, reading its pipes without deadlocking
     # it, detecting its exit and killing its descendants is one subject and
     # the handler's admission/staging/shaping is another. The split is what
     # paid for the cancellation fix rather than a bigger cap, and it is where
     # the descendant walk lands.
-    "robothor/engine/tools/handlers/code_exec.py": 388,
-    "robothor/engine/code_exec_process.py": 198,
+    "robothor/engine/tools/handlers/code_exec.py": 413,  # +25: per-run scratch root
+    "robothor/engine/code_exec_process.py": 211,  # +13: tells the socket which session may speak
     # The per-tool wall-clock rule, with one definition instead of four.
     "robothor/engine/tool_timeouts.py": 144,
     "robothor/engine/tools/read_only.py": 87,

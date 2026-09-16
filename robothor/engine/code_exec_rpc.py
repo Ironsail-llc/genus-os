@@ -23,6 +23,22 @@ The token is written to a 0600 file rather than passed in the environment or on
 the command line: ``/proc/<pid>/environ`` and ``ps`` are both readable by other
 processes of the same uid, and the whole reason the child's environment is
 scrubbed is that same-uid is not a boundary.
+
+**And the token alone is not the control.** Every snippet on this box runs as
+the engine uid, so 0700 on the directory and 0600 on the token exclude nobody
+that matters — a snippet under run A can list the temp directory, read run B's
+token and drive B's proxy. Probed: it did, with B's agent config, B's allow-set,
+B's RBAC identity and B's step trail. That is the one thing this tool grants
+that ``exec`` did not, so the socket also checks WHO is speaking:
+``SO_PEERCRED`` must report the engine's own uid and a process in the SESSION
+this server was bound to. ``start_new_session=True`` makes the snippet a session
+leader, so its session id is its pid and every process it forks inherits that
+session — which is what makes this a check on "is this my snippet" rather than
+on "is this a process I happen to recognise".
+
+The binding happens immediately after the spawn, with no ``await`` between, so
+there is no window in which the server would accept an unbound peer; before it
+is bound, everything is refused.
 """
 
 from __future__ import annotations
@@ -32,8 +48,11 @@ import contextlib
 import hmac
 import json
 import logging
+import os
 import secrets
+import socket as socket_module
 import stat
+import struct
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -45,6 +64,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 __all__ = ["MAX_REQUEST_BYTES", "SOCKET_NAME", "TOKEN_NAME", "ToolRpcServer"]
+
+#: ``struct ucred`` — pid, uid, gid — as ``SO_PEERCRED`` returns it on Linux.
+_UCRED = "3i"
 
 #: Names inside the per-call directory. The client derives both from the single
 #: ``GENUS_TOOLS_DIR`` it is given, so there is one thing to pass and one thing
@@ -76,6 +98,9 @@ class ToolRpcServer:
         self.token = secrets.token_urlsafe(32)
         self.calls_served = 0
         self._server: asyncio.AbstractServer | None = None
+        #: The session id the only legitimate caller belongs to. None until
+        #: :meth:`bind_to_session`, and while it is None nothing is served.
+        self._session_id: int | None = None
 
     @property
     def socket_path(self) -> Path:
@@ -99,6 +124,45 @@ class ToolRpcServer:
         with contextlib.suppress(OSError):
             self.socket_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
 
+    def bind_to_session(self, session_id: int) -> None:
+        """Only this session may speak to this socket.
+
+        Called with the pid returned by the spawn, which IS the session id
+        because the snippet is started with ``start_new_session=True``. Anything
+        it forks stays in that session; anything else on the box — including
+        another run's snippet holding a stolen token — does not.
+        """
+        self._session_id = session_id
+
+    def _peer_is_my_snippet(self, writer: asyncio.StreamWriter) -> str:
+        """ "" when the peer may be served, else the reason it may not.
+
+        Three questions, and the order is the cheapness order: do we know who
+        to expect, can the kernel tell us who this is, and is that process in
+        the expected session.
+        """
+        if self._session_id is None:
+            return "the socket is not yet bound to a snippet"
+        sock = writer.get_extra_info("socket")
+        if sock is None:
+            return "the peer could not be identified"
+        try:
+            raw = sock.getsockopt(
+                socket_module.SOL_SOCKET, socket_module.SO_PEERCRED, struct.calcsize(_UCRED)
+            )
+            peer_pid, peer_uid, _gid = struct.unpack(_UCRED, raw)
+        except (OSError, struct.error):
+            return "the peer could not be identified"
+        if peer_uid != os.getuid():
+            return "the peer runs as another user"
+        try:
+            peer_session = os.getsid(peer_pid)
+        except (ProcessLookupError, PermissionError, OSError):
+            return "the peer is gone"
+        if peer_session != self._session_id:
+            return "the peer belongs to another run"
+        return ""
+
     async def aclose(self) -> None:
         """Stop listening and remove the socket. Never raises."""
         if self._server is not None:
@@ -110,6 +174,16 @@ class ToolRpcServer:
             self.socket_path.unlink()
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        refusal = self._peer_is_my_snippet(writer)
+        if refusal:
+            # Loud: the only process that should ever be here is the snippet
+            # this call started. Anything else is either a bug or the
+            # cross-run reach this check exists to close.
+            logger.warning("execute_code RPC: refused a connection — %s", refusal)
+            with contextlib.suppress(Exception):
+                await self._reply(writer, {"ok": False, "code": "auth", "error": "not authorised"})
+                writer.close()
+            return
         try:
             while True:
                 try:

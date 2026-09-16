@@ -21,6 +21,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import json
+import os
 import socket
 from pathlib import Path
 
@@ -50,13 +51,20 @@ class _FakeProxy(ToolProxy):
         return {"ok": True, "tool": name, "args": args}
 
 
-async def _serve(proxy, tmp_path):
+async def _serve(proxy, tmp_path, *, session: int | None = None):
+    """A live server bound to THIS process's session.
+
+    The requests below come from this process, so binding to our own session is
+    what the spawn does for a real snippet — see `bind_to_session`. Pass
+    `session=` to stand in for another run.
+    """
     server = ToolRpcServer(
         directory=tmp_path,
         proxy=proxy,
         max_calls=proxy.max_calls,
     )
     await server.start()
+    server.bind_to_session(os.getsid(0) if session is None else session)
     return server
 
 
@@ -204,6 +212,67 @@ class TestTheTransport:
             await server.aclose()
         assert reply.get("ok") is False
         assert proxy.seen == []
+
+
+class TestOnlyThisSnippetMaySpeak:
+    """The token is not the control. Every snippet on the box runs as the
+    engine uid, so 0700 and 0600 exclude nobody that matters: a snippet under
+    run A could read run B's token out of the temp directory and drive B's
+    proxy with B's agent config, B's allow-set, B's RBAC identity and B's step
+    trail. Probed before the fix — it did. So the socket asks the kernel who is
+    speaking."""
+
+    @pytest.mark.asyncio
+    async def test_a_peer_in_another_session_is_refused_with_its_token(self, tmp_path):
+        proxy = _FakeProxy()
+        # Bound to a session this process is NOT in. pid 1 is init: always
+        # alive, always its own session, never ours.
+        server = await _serve(proxy, tmp_path, session=1)
+        try:
+            reply = await asyncio.to_thread(
+                _request,
+                server,
+                {"token": server.token, "op": "call", "name": "read_file", "args": {}},
+            )
+        finally:
+            await server.aclose()
+        assert reply["ok"] is False
+        assert reply["code"] == "auth"
+        assert proxy.seen == [], "another run's snippet reached this proxy"
+
+    @pytest.mark.asyncio
+    async def test_an_unbound_socket_serves_nobody(self, tmp_path):
+        """Between `start()` and the spawn there is no legitimate caller, so
+        there is no legitimate answer either."""
+        proxy = _FakeProxy()
+        server = ToolRpcServer(directory=tmp_path, proxy=proxy, max_calls=5)
+        await server.start()
+        try:
+            reply = await asyncio.to_thread(
+                _request,
+                server,
+                {"token": server.token, "op": "call", "name": "read_file", "args": {}},
+            )
+        finally:
+            await server.aclose()
+        assert reply["ok"] is False
+        assert proxy.seen == []
+
+    @pytest.mark.asyncio
+    async def test_the_right_session_is_still_served(self, tmp_path):
+        """The check must not be so eager that it refuses the snippet — the
+        failure mode that makes a control look like it works."""
+        proxy = _FakeProxy()
+        server = await _serve(proxy, tmp_path)
+        try:
+            reply = await asyncio.to_thread(
+                _request,
+                server,
+                {"token": server.token, "op": "call", "name": "read_file", "args": {}},
+            )
+        finally:
+            await server.aclose()
+        assert reply["ok"] is True
 
 
 class TestWhatTheProxyRefusesOutright:
