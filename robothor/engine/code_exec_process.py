@@ -29,19 +29,22 @@ import logging
 import os
 import signal
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from robothor.engine.code_execution import SandboxResult
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "DRAIN_GRACE_SECONDS",
     "EXIT_POLL_SECONDS",
+    "DescendantCensus",
+    "descendants_of",
+    "kill_descendants",
     "kill_group",
     "run_snippet",
     "wait_for_exit",
@@ -56,6 +59,122 @@ EXIT_POLL_SECONDS = 0.05
 #: they still hold. Bounded because an orphan the kill could not reach (one
 #: that changed its own group) would otherwise hold this call open.
 DRAIN_GRACE_SECONDS = 5.0
+
+#: The census rides the exit poll rather than a task of its own, and samples on
+#: two cadences.
+#:
+#: A census rather than one sweep at kill time, because the two cases need
+#: different evidence. On the timeout and cancellation paths the snippet is
+#: still alive, so its parent chain is intact and one walk would do. On the
+#: ORDINARY path it has already exited, its children have already reparented,
+#: and the chain is gone — so what kills them is the union of what was seen
+#: while it lived.
+#:
+#: Fast for the first second, because a snippet that spawns and exits does both
+#: in well under one: fifteen `setsid` children and a `print` took 0.5 s, and a
+#: half-second cadence caught none of them. Slow afterwards, because a
+#: fifteen-minute snippet must not pay 18,000 procfs walks for a burst that
+#: happened at startup.
+FAST_SAMPLE_TICKS = 20
+SLOW_SAMPLE_EVERY_TICKS = 10
+
+#: ``PR_SET_CHILD_SUBREAPER``. The boot script sets it on the SNIPPET, not on
+#: the engine, so a double-forked grandchild reparents to the snippet instead of
+#: to init and stays on the chain the census walks. A snippet can undo it — it
+#: is defence in depth, and it is what makes the honest case complete.
+PR_SET_CHILD_SUBREAPER = 36
+
+
+def _children_of(pid: int) -> list[int]:
+    """The direct children of ``pid``, from procfs. [] when it is gone."""
+    kids: list[int] = []
+    try:
+        tasks = Path(f"/proc/{pid}/task")
+        for task in tasks.iterdir():
+            with contextlib.suppress(OSError, ValueError):
+                raw = (task / "children").read_text()
+                kids.extend(int(part) for part in raw.split())
+    except OSError:
+        return []
+    return kids
+
+
+def descendants_of(pid: int) -> list[int]:
+    """Every process below ``pid`` right now, deepest last.
+
+    Breadth-first, and bounded: a fork bomb must not make this walk forever.
+    The order matters at kill time — killing a parent first lets it fork again
+    before its children die, so the caller reverses this.
+    """
+    seen: list[int] = []
+    frontier = [pid]
+    while frontier and len(seen) < MAX_TRACKED_DESCENDANTS:
+        nxt: list[int] = []
+        for parent in frontier:
+            for kid in _children_of(parent):
+                if kid > 1 and kid not in seen:
+                    seen.append(kid)
+                    nxt.append(kid)
+        frontier = nxt
+    return seen
+
+
+#: Ceiling on the census. A snippet that has forked more than this has already
+#: earned a kill, and the ones we did not enumerate are in the process group.
+MAX_TRACKED_DESCENDANTS = 4096
+
+
+class DescendantCensus:
+    """What the snippet has started, as seen while it was still alive."""
+
+    def __init__(self, pid: int) -> None:
+        self._pid = pid
+        self._seen: dict[int, None] = {}  # insertion-ordered set
+
+    def sample(self) -> None:
+        """One walk. Never raises: a missed sample is a smaller loss than a
+        cancelled kill."""
+        with contextlib.suppress(Exception):
+            for kid in descendants_of(self._pid):
+                self._seen.setdefault(kid, None)
+
+    def sample_on_tick(self, tick: int) -> None:
+        """Sample if this poll tick is due one. See the cadence constants."""
+        if tick < FAST_SAMPLE_TICKS or tick % SLOW_SAMPLE_EVERY_TICKS == 0:
+            self.sample()
+
+    @property
+    def known(self) -> list[int]:
+        return list(self._seen)
+
+
+def kill_descendants(census: DescendantCensus, pgid: int) -> int:
+    """Kill everything the snippet started, then its group. Returns the count.
+
+    Order is load-bearing twice. A final sample runs FIRST, so anything started
+    since the last one is on the list. Then the list is killed deepest-first,
+    because killing a parent before its children gives it the chance to fork
+    again. The process group goes last and catches whatever the census could
+    not see.
+
+    What this does NOT guarantee, and the result text says so: a process that
+    left the group AND detached itself from the snippet in the window between
+    the last sample and the kill is reachable by neither path. Closing that
+    needs a cgroup the engine can kill as a unit, which needs ``Delegate=yes``
+    on the unit — an operator change, not a code one.
+    """
+    census.sample()
+    killed = 0
+    own_pgid = os.getpgid(0)
+    for pid in reversed(census.known):
+        if pid <= 1 or pid == os.getpid():
+            continue
+        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+            os.kill(pid, signal.SIGKILL)
+            killed += 1
+    if pgid > 1 and pgid != own_pgid:
+        kill_group(pgid)
+    return killed
 
 
 def kill_group(pgid: int) -> None:
@@ -106,7 +225,7 @@ async def _drain(stream: Any, sink: list[bytes], hard_cap: int) -> None:
         pass
 
 
-async def wait_for_exit(proc: Any, timeout: float) -> bool:
+async def wait_for_exit(proc: Any, timeout: float, census: DescendantCensus | None = None) -> bool:
     """Wait for the SNIPPET to exit. True if it did, False on the deadline.
 
     Polls ``proc.returncode`` rather than awaiting ``proc.wait()``, and the
@@ -119,10 +238,17 @@ async def wait_for_exit(proc: Any, timeout: float) -> bool:
     itself exits, independent of any pipe.
     """
     deadline = asyncio.get_running_loop().time() + timeout
+    tick = 0
     while proc.returncode is None:
+        # Before the deadline check, so a snippet that is about to be killed
+        # still contributes one last census — the descendants it started are
+        # the reason the kill is happening.
+        if census is not None:
+            census.sample_on_tick(tick)
         if asyncio.get_running_loop().time() >= deadline:
             return False
         await asyncio.sleep(EXIT_POLL_SECONDS)
+        tick += 1
     return True
 
 
@@ -176,10 +302,14 @@ async def run_snippet(
         _drain(proc.stdout, out, hard_cap),
         _drain(proc.stderr, err, hard_cap),
     )
+    # The census runs FROM THE START, not at kill time: on the ordinary exit
+    # path the snippet is already gone when we kill, its children have already
+    # reparented, and the only record of them is what was seen while it lived.
+    census = DescendantCensus(proc.pid)
 
     timed_out = False
     try:
-        timed_out = not await wait_for_exit(proc, timeout)
+        timed_out = not await wait_for_exit(proc, timeout, census)
     finally:
         # A `finally`, not a straight line, because the third way out of the
         # wait is CANCELLATION — `registry.execute` wraps every handler in
@@ -195,7 +325,7 @@ async def run_snippet(
         # finished" is not the same as "nothing it started is still running".
         # Killing also closes the inherited pipe ends, which is what lets the
         # drains below reach EOF rather than wait on an orphan.
-        kill_group(pgid)
+        kill_descendants(census, pgid)
         with contextlib.suppress(Exception):
             await asyncio.wait_for(drains, timeout=DRAIN_GRACE_SECONDS)
         drains.cancel()

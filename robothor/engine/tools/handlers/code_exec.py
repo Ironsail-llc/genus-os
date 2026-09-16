@@ -24,8 +24,15 @@ A subprocess, from the workspace, with:
   packages. The guard is a guardrail and NOT a boundary — a determined snippet
   can remove a meta-path finder — and it does not need to be one: the boundary
   is that the environment holds nothing worth importing the engine for.
-* **its own process group**, killed on the way out whether the snippet finished
-  or timed out, so nothing it backgrounded outlives the call.
+* **its own process group, plus a census of its descendants**, killed on the
+  way out whether the snippet finished, timed out or was cancelled. The census
+  is taken WHILE the snippet runs, because on the ordinary exit path its
+  children have already reparented by the time we kill. What survives: a
+  process that both leaves the group (`setsid`) and detaches itself in the
+  window between the last sample and the kill. Closing that needs a cgroup the
+  engine can kill as a unit, which needs `Delegate=yes` on the unit — an
+  operator change, not a code one, and the docs say so rather than promising
+  what this cannot do.
 
 What it can reach
 -----------------
@@ -56,7 +63,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from robothor.constants import DEFAULT_TENANT
-from robothor.engine.code_exec_process import run_snippet
+from robothor.engine.code_exec_process import PR_SET_CHILD_SUBREAPER, run_snippet
 from robothor.engine.code_execution import (
     DEFAULT_MAX_TOOL_CALLS,
     DEFAULT_TIMEOUT_SECONDS,
@@ -115,41 +122,6 @@ GUARDED_IMPORTS: tuple[str, ...] = (
     "litellm",
     "redis",
 )
-
-_BOOT_TEMPLATE = '''\
-"""Written by the engine. Runs the agent's snippet with genus_tools importable."""
-
-import os
-import sys
-
-_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, _DIR)
-
-_GUARDED = {guarded!r}
-
-
-class _RefuseEngineImports:
-    """The engine's own packages are not part of the sandbox's vocabulary."""
-
-    def find_module(self, fullname, path=None):  # pragma: no cover - legacy hook
-        return None
-
-    def find_spec(self, fullname, path=None, target=None):
-        if fullname.split(".")[0] in _GUARDED:
-            raise ImportError(
-                fullname
-                + " is not importable from execute_code. Call tools through "
-                "genus_tools instead."
-            )
-        return None
-
-
-sys.meta_path.insert(0, _RefuseEngineImports())
-
-import runpy  # noqa: E402
-
-runpy.run_path(os.path.join(_DIR, "snippet.py"), run_name="__main__")
-'''
 
 
 def resolve_timeout(args: dict[str, Any], default: int) -> int:
@@ -364,14 +336,22 @@ def _resolved_timeout(args: dict[str, Any], ctx: ToolContext) -> int:
 
 
 def _stage(tools_dir: Path, code: str) -> None:
-    """Write the three files the snippet runs from."""
-    from robothor.engine.sandbox_runtime import genus_tools as _client
+    """Write the three files the snippet runs from.
 
-    client_source = Path(_client.__file__).read_text(encoding="utf-8")
+    The client is located by PATH, not imported: ``sandbox_runtime`` holds code
+    that runs inside a sandbox, and importing it here would execute its
+    module-level environment read in the ENGINE — which is exactly what its own
+    docstring says it never does.
+    """
+    from robothor.engine.sandbox_runtime.boot_template import BOOT_TEMPLATE
+
+    runtime = Path(__file__).resolve().parents[2] / "sandbox_runtime"
+    client_source = (runtime / "genus_tools.py").read_text(encoding="utf-8")
     (tools_dir / "genus_tools.py").write_text(client_source, encoding="utf-8")
     (tools_dir / "snippet.py").write_text(code, encoding="utf-8")
     (tools_dir / "_boot.py").write_text(
-        _BOOT_TEMPLATE.format(guarded=GUARDED_IMPORTS), encoding="utf-8"
+        BOOT_TEMPLATE.format(guarded=GUARDED_IMPORTS, subreaper=PR_SET_CHILD_SUBREAPER),
+        encoding="utf-8",
     )
 
 
@@ -404,9 +384,11 @@ def _shape(
             )
     if result.timed_out:
         shaped["error"] = (
-            "The snippet ran out of time and its process group was killed. Ask for "
-            f"more with the `timeout` parameter (up to {MAX_TIMEOUT_SECONDS}s), or do "
-            "less per snippet — nothing it backgrounded survived."
+            "The snippet ran out of time. Its process group and every descendant "
+            "the engine could still see were killed; a process that both left the "
+            "group and detached itself may have survived. Ask for more with the "
+            f"`timeout` parameter (up to {MAX_TIMEOUT_SECONDS}s), or do less per "
+            "snippet."
         )
     if server.calls_served >= server.max_calls:
         shaped["tool_call_limit_reached"] = True

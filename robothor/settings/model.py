@@ -828,8 +828,10 @@ class EngineSettings(SettingsGroup):
         "ROBOTHOR_EXECUTE_CODE_TIMEOUT",
         "Wall-clock seconds one `execute_code` snippet gets. The agent may ask "
         "for less and never for more, and the run's own remaining budget still "
-        "clamps it. On expiry the snippet's whole process group is killed, so "
-        "nothing it started outlives the call.",
+        "clamps it. On expiry the snippet's process group is killed, along with "
+        "every descendant the engine has seen it start; a process that both "
+        "leaves that group and detaches itself can still escape both, which "
+        "only a delegated cgroup would close.",
         restart_required=False,
         since="unreleased",
     )

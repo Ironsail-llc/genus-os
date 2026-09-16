@@ -155,8 +155,17 @@ CAPS = {
     # the handler's admission/staging/shaping is another. The split is what
     # paid for the cancellation fix rather than a bigger cap, and it is where
     # the descendant walk lands.
-    "robothor/engine/tools/handlers/code_exec.py": 413,  # +25: per-run scratch root
-    "robothor/engine/code_exec_process.py": 211,  # +13: tells the socket which session may speak
+    # 413 -> 395: the in-sandbox boot source left for
+    # sandbox_runtime/boot_template.py, beside the client it loads. Ninety
+    # lines of code that runs somewhere else was the shape `genus_tools.py`
+    # was deliberately not written in; the reaper it grew made that obvious.
+    "robothor/engine/tools/handlers/code_exec.py": 395,
+    "robothor/engine/sandbox_runtime/boot_template.py": 122,
+    # 211 -> 341: the descendant census. `killpg` alone reached neither a
+    # `setsid` child nor a double-forked daemon, and a probe left 16 of 16
+    # running after the call returned. This is the module that owns "nothing
+    # survives", so the census belongs here and nowhere else.
+    "robothor/engine/code_exec_process.py": 341,
     # The per-tool wall-clock rule, with one definition instead of four.
     "robothor/engine/tool_timeouts.py": 144,
     "robothor/engine/tools/read_only.py": 87,

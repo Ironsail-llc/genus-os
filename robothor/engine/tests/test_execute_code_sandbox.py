@@ -286,6 +286,87 @@ class TestTheBounds:
         await asyncio.sleep(4)
         assert not marker.exists(), "a backgrounded child outlived the snippet that started it"
 
+    async def test_a_child_in_its_own_session_does_not_survive_either(self, workspace):
+        """`start_new_session=True` takes a child OUT of the process group, so
+        `killpg` alone never reached it. Measured on the first cut: 15 of 15
+        survived."""
+        marks = workspace / "sessions"
+        marks.mkdir()
+        await _run(
+            f"""
+            import subprocess
+            for i in range(5):
+                p = subprocess.Popen(['sleep', '120'], start_new_session=True)
+                open({str(marks)!r} + f'/{{i}}', 'w').write(str(p.pid))
+            print('SPAWNED')
+            """,
+            workspace,
+        )
+        await asyncio.sleep(0.5)
+        pids = [int(f.read_text()) for f in marks.iterdir()]
+        survivors = [pid for pid in pids if _alive(pid)]
+        for pid in pids:
+            _reap(pid)
+        assert survivors == [], f"{len(survivors)} of {len(pids)} setsid children survived"
+
+    async def test_a_double_forked_daemon_does_not_survive_either(self, workspace):
+        """The classic daemonisation: fork, setsid, fork again, so the
+        grandchild is orphaned and reparented away from the snippet."""
+        marks = workspace / "daemons"
+        marks.mkdir()
+        await _run(
+            f"""
+            import os, time
+            for i in range(3):
+                if os.fork() == 0:
+                    os.setsid()
+                    if os.fork() == 0:
+                        open({str(marks)!r} + f'/{{i}}', 'w').write(str(os.getpid()))
+                        os.execvp('sleep', ['sleep', '120'])
+                    os._exit(0)
+            time.sleep(0.4)
+            print('SPAWNED')
+            """,
+            workspace,
+        )
+        await asyncio.sleep(0.5)
+        pids = [int(f.read_text()) for f in marks.iterdir()]
+        survivors = [pid for pid in pids if _alive(pid)]
+        for pid in pids:
+            _reap(pid)
+        assert survivors == [], f"{len(survivors)} of {len(pids)} daemons survived"
+
+    async def test_a_detached_child_does_not_survive_a_timeout_either(self, workspace):
+        """The snippet never reaches its own cleanup here, so this is the
+        engine's census doing the work rather than the boot script's reaper."""
+        marker = workspace / "timeout-child.pid"
+        result, _ = await _run(
+            f"""
+            import subprocess, time
+            p = subprocess.Popen(['sleep', '120'], start_new_session=True)
+            open({str(marker)!r}, 'w').write(str(p.pid))
+            time.sleep(60)
+            """,
+            workspace,
+            timeout=2,
+        )
+        assert result["timed_out"] is True
+        await asyncio.sleep(0.5)
+        pid = int(marker.read_text())
+        survived = _alive(pid)
+        _reap(pid)
+        assert not survived
+
+    async def test_the_result_says_what_was_and_was_not_killed(self, workspace):
+        """The first cut promised "nothing it backgrounded survived" while 16
+        of 16 did. A sentence the control cannot back is worse than no
+        sentence."""
+        result, _ = await _run("import time; time.sleep(30)", workspace, timeout=1)
+        message = result["error"]
+        assert "process group and every descendant" in message
+        assert "may have survived" in message
+        assert "nothing it backgrounded survived" not in message
+
     async def test_oversized_stdout_is_cut_with_a_marker_and_spilled_to_a_file(
         self, workspace, monkeypatch
     ):
