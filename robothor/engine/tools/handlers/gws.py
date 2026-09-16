@@ -43,6 +43,14 @@ GMAIL_BODY_MAX_CHARS = MAX_TOOL_OUTPUT_CHARS - _GMAIL_ENVELOPE_CHARS
 #: "the messages in order" does not degrade into a list of empty strings.
 GMAIL_THREAD_MIN_BODY_CHARS = 300
 
+#: The longest a single header may be in a SEARCH result. A `To:` addressed to
+#: a distribution list is routinely a few KB on its own — one realistic header
+#: measured at 2,268 characters, 1.5x the entire envelope allowance — and one
+#: such message used to starve every other result out of the answer. Generous
+#: enough to keep a real recipient list readable, small enough that it cannot
+#: eat the budget.
+GMAIL_SEARCH_HEADER_MAX_CHARS = 200
+
 #: How many messages one search describes, however many the query matched.
 #: Each result carries its headers now, so a hundred of them would be a
 #: hundred results with a hole in the middle. Fewer, whole, beats more, cut.
@@ -806,18 +814,33 @@ def _header_map(payload: dict[str, Any]) -> dict[str, str]:
     return out
 
 
-def _shape_envelope(message: dict[str, Any]) -> dict[str, Any]:
-    """The described-but-unread form: who, when, about what, and its labels."""
+def _shape_envelope(
+    message: dict[str, Any], *, max_header_chars: int | None = None
+) -> dict[str, Any]:
+    """The described-but-unread form: who, when, about what, and its labels.
+
+    ``max_header_chars`` bounds each header, for the search path: a ``To:``
+    addressed to a distribution list is unbounded in the API and one of them
+    used to consume the whole result budget. ``gws_gmail_get`` passes nothing
+    and keeps the headers whole — asking for one message is asking for all of
+    it.
+    """
+
+    def cut(value: str) -> str:
+        if max_header_chars is None or len(value) <= max_header_chars:
+            return value
+        return value[:max_header_chars] + "…"
+
     payload = message.get("payload") or {}
     headers = _header_map(payload)
     return {
         "id": str(message.get("id", "")),
         "thread_id": str(message.get("threadId", "")),
         "date": headers.get("date", ""),
-        "from": headers.get("from", ""),
-        "to": headers.get("to", ""),
-        "subject": headers.get("subject", ""),
-        "snippet": _unescape(str(message.get("snippet", ""))),
+        "from": cut(headers.get("from", "")),
+        "to": cut(headers.get("to", "")),
+        "subject": cut(headers.get("subject", "")),
+        "snippet": cut(_unescape(str(message.get("snippet", "")))),
         "labels": [str(label) for label in (message.get("labelIds") or [])],
     }
 
@@ -912,7 +935,7 @@ def _gmail_search(args: dict[str, Any]) -> dict[str, Any]:
                 }
             )
             continue
-        envelope = _shape_envelope(message)
+        envelope = _shape_envelope(message, max_header_chars=GMAIL_SEARCH_HEADER_MAX_CHARS)
         # The ids we asked with are authoritative: a metadata response that
         # omits them still describes the message we listed.
         if not envelope["id"]:
@@ -921,26 +944,89 @@ def _gmail_search(args: dict[str, Any]) -> dict[str, Any]:
             envelope["thread_id"] = str(stub.get("threadId", ""))
         described.append(envelope)
 
-    # Drop from the END until the whole result fits, rather than letting the
-    # engine cut the last entry in half. Fewer, whole beats more, holed.
+    return _fit_search_results(query, described)
+
+
+#: Envelope fields a search result can do without when the answer will not fit.
+#: `to` and `cc` are the largest and the least load-bearing: an agent deciding
+#: which message to open reads the sender, the subject and the snippet. They are
+#: shed from the biggest entry first, and `gws_gmail_get` still has them.
+_SEARCH_OPTIONAL_FIELDS = ("to", "cc")
+
+
+def _fit_search_results(query: str, described: list[dict[str, Any]]) -> dict[str, Any]:
+    """Make N described messages fit the tool-output cap, losing as little as possible.
+
+    The first version popped from the end with no floor:
+    ``while described and not _fits(out): described.pop()``. The pop was
+    positional, so one oversized entry starved every other — four matches, one
+    of them addressed to a 200-person list, produced ``count: 0`` in a
+    166-character result against a 4,000-character cap. The tool reported no
+    results for a query that matched four messages, and the agent's next move is
+    the search-loop this whole change exists to eliminate.
+
+    Three rules, in order of how much they cost the reader:
+
+    1. **Shed optional fields from the largest entry first.** A recipient list
+       is the usual offender and the least useful field in a search result.
+    2. **Then drop whole entries, largest first** — the offender, not the tail.
+    3. **Never return zero.** One described message beats none: it is what the
+       agent asked for, and a truncated answer it can act on is worth more than
+       an empty one it cannot. The last survivor is shed to its bare identity
+       if that is what fitting takes.
+    """
     total = len(described)
-    out: dict[str, Any] = {
-        "query": query,
-        "count": total,
-        "messages": described,
-        "truncated": False,
-    }
-    while described and not _fits(out):
-        described.pop()
-        out["messages"] = described
-        out["count"] = len(described)
-        out["truncated"] = True
-    if out["truncated"]:
-        out["note"] = (
-            f"{total - len(described)} more match(es) omitted to fit the tool-output "
-            "limit; narrow the query or lower max_results."
+    kept = list(described)
+
+    def envelope(messages: list[dict[str, Any]]) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "query": query,
+            "count": len(messages),
+            "messages": messages,
+            "truncated": len(messages) < total,
+        }
+        if out["truncated"]:
+            out["results_truncated"] = total - len(messages)
+            out["note"] = (
+                f"{total - len(messages)} of {total} match(es) omitted to fit the "
+                "tool-output limit; narrow the query or lower max_results."
+            )
+        return out
+
+    def largest(messages: list[dict[str, Any]]) -> int:
+        import json as _json
+
+        return max(
+            range(len(messages)),
+            key=lambda i: len(_json.dumps(messages[i], default=str)),
         )
-    return out
+
+    # 1. Shed optional fields, biggest entry first, until they are all gone.
+    while not _fits(envelope(kept)):
+        index = largest(kept)
+        shed = [f for f in _SEARCH_OPTIONAL_FIELDS if kept[index].get(f)]
+        if not shed:
+            break
+        trimmed = dict(kept[index])
+        for field in shed:
+            trimmed.pop(field, None)
+        trimmed["fields_omitted"] = list(shed)
+        kept[index] = trimmed
+
+    # 2. Then drop whole entries, biggest first, never below one.
+    while len(kept) > 1 and not _fits(envelope(kept)):
+        kept.pop(largest(kept))
+
+    # 3. A single entry that still does not fit keeps its identity and its
+    #    subject; everything else goes. An id the agent can pass to
+    #    gws_gmail_get is the minimum useful answer.
+    if kept and not _fits(envelope(kept)):
+        bare = {k: kept[0].get(k, "") for k in ("id", "thread_id", "from", "date")}
+        bare["subject"] = str(kept[0].get("subject", ""))[:GMAIL_SEARCH_HEADER_MAX_CHARS]
+        bare["fields_omitted"] = sorted(set(kept[0]) - set(bare))
+        kept = [bare]
+
+    return envelope(kept)
 
 
 def _gmail_get(args: dict[str, Any]) -> dict[str, Any]:

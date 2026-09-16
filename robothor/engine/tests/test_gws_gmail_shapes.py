@@ -448,6 +448,51 @@ class TestGmailSearch:
 
         assert out["truncated"] is True
         assert out["count"] < 25
+        assert out["results_truncated"] == 25 - out["count"]
+        assert len(json.dumps(out)) <= MAX_TOOL_OUTPUT_CHARS
+
+    def test_one_huge_recipient_list_does_not_starve_every_other_result(self, fake_gws) -> None:
+        """The measured defect: four matches, one addressed to a 200-person
+        list, produced `count: 0` in a 166-character result against a
+        4,000-character cap. The pop was positional and had no floor, so one
+        oversized entry starved the rest — and the agent's next move is the
+        search-loop this change exists to eliminate."""
+        crowded = dict(PLAIN_MESSAGE)
+        crowded["payload"] = dict(PLAIN_MESSAGE["payload"])
+        crowded["payload"]["headers"] = [
+            *PLAIN_MESSAGE["payload"]["headers"],
+            {
+                "name": "To",
+                "value": ", ".join(f"person{n}@example.com" for n in range(200)),
+            },
+        ]
+        ids = ["crowded", "a", "b", "c"]
+        messages = {"crowded": crowded, "a": PLAIN_MESSAGE, "b": PLAIN_MESSAGE, "c": PLAIN_MESSAGE}
+        self._script(fake_gws, ids, messages)
+
+        out = _call("gws_gmail_search", {"query": "x", "max_results": 4})
+
+        assert out["count"] == 4, out
+        assert out["truncated"] is False
+        assert len(json.dumps(out)) <= MAX_TOOL_OUTPUT_CHARS
+
+    def test_a_search_never_returns_zero_of_n(self, fake_gws) -> None:
+        """One described message beats none: it is what the agent asked for,
+        and an id it can hand to gws_gmail_get is the minimum useful answer."""
+        vast = dict(PLAIN_MESSAGE)
+        vast["snippet"] = "z" * 50_000
+        vast["payload"] = dict(PLAIN_MESSAGE["payload"])
+        vast["payload"]["headers"] = [
+            *PLAIN_MESSAGE["payload"]["headers"],
+            {"name": "To", "value": "y" * 50_000},
+        ]
+        ids = [f"id-{n}" for n in range(6)]
+        self._script(fake_gws, ids, dict.fromkeys(ids, vast))
+
+        out = _call("gws_gmail_search", {"query": "x", "max_results": 6})
+
+        assert out["count"] >= 1, out
+        assert out["messages"][0]["id"]
         assert len(json.dumps(out)) <= MAX_TOOL_OUTPUT_CHARS
 
     def test_a_search_that_fits_does_not_claim_truncation(self, fake_gws) -> None:
@@ -472,6 +517,93 @@ class TestGmailSearch:
 
 
 # ── Errors that say what went wrong ───────────────────────────────────
+
+
+class TestSearchFitting:
+    """The three fitting rules, driven directly."""
+
+    @staticmethod
+    def _entry(i: int, *, snippet: int = 40, to: int = 20) -> dict[str, Any]:
+        return {
+            "id": f"m{i}",
+            "thread_id": f"t{i}",
+            "date": "Tue, 16 Sep 2026 09:00:00 +0000",
+            "from": f"sender{i}@example.com",
+            "to": "x" * to,
+            "subject": f"Subject {i}",
+            "snippet": "s" * snippet,
+            "labels": ["INBOX"],
+        }
+
+    def test_a_result_that_fits_is_returned_untouched(self) -> None:
+        out = gws_handlers._fit_search_results("q", [self._entry(0), self._entry(1)])
+
+        assert out["count"] == 2
+        assert out["truncated"] is False
+        assert "results_truncated" not in out
+        assert "note" not in out
+        assert all("fields_omitted" not in m for m in out["messages"])
+
+    def test_optional_fields_are_shed_before_anyone_is_dropped(self) -> None:
+        """`to` and `cc` are the largest and least load-bearing fields: an
+        agent choosing which message to open reads sender, subject, snippet."""
+        entries = [self._entry(i, snippet=180, to=400) for i in range(8)]
+        out = gws_handlers._fit_search_results("q", entries)
+
+        assert out["count"] == 8, "nobody should be dropped while `to` is still sheddable"
+        assert any(m.get("fields_omitted") for m in out["messages"])
+        for message in out["messages"]:
+            if message.get("fields_omitted"):
+                assert "to" not in message
+                assert message["from"], "the sender is never shed"
+                assert message["subject"], "the subject is never shed"
+
+    def test_the_biggest_entry_is_dropped_not_the_last(self) -> None:
+        """Positional popping let one oversized entry starve every other."""
+        entries = [self._entry(0, snippet=3000), *(self._entry(i) for i in range(1, 6))]
+        out = gws_handlers._fit_search_results("q", entries)
+
+        kept = [m["id"] for m in out["messages"]]
+        assert "m0" not in kept, kept
+        assert kept == ["m1", "m2", "m3", "m4", "m5"]
+        assert out["results_truncated"] == 1
+
+    def test_the_last_survivor_is_shed_rather_than_dropped(self) -> None:
+        out = gws_handlers._fit_search_results("q", [self._entry(0, snippet=9000, to=9000)])
+
+        assert out["count"] == 1
+        assert out["messages"][0]["id"] == "m0"
+        assert out["messages"][0]["from"] == "sender0@example.com"
+        assert "fields_omitted" in out["messages"][0]
+        assert len(json.dumps(out)) <= MAX_TOOL_OUTPUT_CHARS
+
+    def test_the_note_names_how_many_were_lost(self) -> None:
+        entries = [self._entry(0, snippet=3000), *(self._entry(i) for i in range(1, 6))]
+        out = gws_handlers._fit_search_results("q", entries)
+
+        assert out["results_truncated"] == 1
+        assert "1 of 6" in out["note"]
+        assert out["truncated"] is True
+
+    def test_a_search_result_bounds_its_headers(self, fake_gws) -> None:
+        """`gws_gmail_get` keeps headers whole — asking for one message is
+        asking for all of it — but a search describes many."""
+        crowded = dict(PLAIN_MESSAGE)
+        crowded["payload"] = dict(PLAIN_MESSAGE["payload"])
+        crowded["payload"]["headers"] = [
+            *PLAIN_MESSAGE["payload"]["headers"],
+            {"name": "To", "value": ", ".join(f"p{n}@example.com" for n in range(200))},
+        ]
+        fake_gws.responses["gmail users messages list --params"] = {
+            "messages": [{"id": "crowded", "threadId": "t"}]
+        }
+        fake_gws.responses["gmail users messages get --params"] = crowded
+
+        searched = _call("gws_gmail_search", {"query": "x"})
+        assert len(searched["messages"][0]["to"]) <= gws_handlers.GMAIL_SEARCH_HEADER_MAX_CHARS + 1
+
+        fetched = _call("gws_gmail_get", {"message_id": "crowded", "format": "metadata"})
+        assert len(fetched["to"]) > gws_handlers.GMAIL_SEARCH_HEADER_MAX_CHARS
 
 
 class TestGwsErrors:
