@@ -51,11 +51,17 @@ way.
 
 A hand edit still needs a reconcile before the new schedule fires: the Helm's
 route does it for you, and the scheduler watchdog does it within five minutes
-regardless. Validate before you wait:
+regardless. To check a manifest before you wait, the doctor's `manifests`
+category reads every manifest in the workspace and reports the ones that will
+not parse, break the schema, or use a deprecated key:
 
 ```bash
-python scripts/validate_agents.py --agent reporter
+genus doctor --category manifests
 ```
+
+(`python scripts/validate_agents.py --agent reporter` is the sharper tool, but
+`scripts/` ships in the repository, not in the wheel — it is there for a
+checkout, not for the install this guide describes.)
 
 The manifest schema, the instruction-file contract, the model-tiering strategy
 and worked multi-agent examples are in `docs/AGENT_BUILDER.md` in the
