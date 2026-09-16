@@ -42,7 +42,7 @@ set -euo pipefail
 # Rewritten by scripts/update-helm-values.sh on every release, so the published
 # script defaults to the release it shipped with and the API call below is only
 # a refresh. Keep the exact shape: the updater and its test both match it.
-INSTALL_SH_DEFAULT_VERSION="v1.92.0"
+INSTALL_SH_DEFAULT_VERSION="v1.93.0"
 
 REPO_SLUG="Ironsail-llc/genus-os"
 RAW_BASE="https://raw.githubusercontent.com/${REPO_SLUG}"

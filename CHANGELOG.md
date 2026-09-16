@@ -1,3 +1,9 @@
+## [1.93.0](https://github.com/Ironsail-llc/genus-os/compare/v1.92.0...v1.93.0) (2026-09-16)
+
+### Features
+
+* **telegram:** photos and files travel both ways as attachments the agent can use ([#578](https://github.com/Ironsail-llc/genus-os/issues/578)) ([34a11c9](https://github.com/Ironsail-llc/genus-os/commit/34a11c9898c0c97e78b99e7e5e7c687d01be2f0a)), closes [#576](https://github.com/Ironsail-llc/genus-os/issues/576)
+
 ## [1.92.0](https://github.com/Ironsail-llc/genus-os/compare/v1.91.0...v1.92.0) (2026-09-16)
 
 ### Features
