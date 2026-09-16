@@ -2,7 +2,15 @@
 Graduated Escalation — progressively stronger recovery messages for failing agents.
 
 Tracks consecutive errors and returns escalation messages at thresholds.
-Resets on success. Prevents agents from spinning in retry loops.
+Prevents agents from spinning in retry loops.
+
+Success is credited, in two different ways. The consecutive count resets
+outright; the hard-abort budget is paid back one error at a time
+(``ERRORS_FORGIVEN_PER_SUCCESS``), so a run that recovers from every failure
+never dies of them while a run that fails faster than it recovers still does.
+This docstring used to say "Resets on success" and only the first of those was
+true — the abort counted cumulative errors and never reset, which killed a
+measured run at 341 seconds of a 1,200-second budget.
 """
 
 from __future__ import annotations
@@ -20,13 +28,35 @@ THRESHOLD_REDUCE_SCOPE = 4
 THRESHOLD_STOP = 5
 HARD_ABORT_TOTAL_ERRORS = 10
 
+#: How much of the abort budget one successful tool call pays back.
+#:
+#: MEASURED 2026-09-15: a benchmark run ended `"Too many errors (11 total).
+#: Summarize progress."` at 341 seconds of a 1,200-second budget with a score
+#: of 0.0. The count was cumulative and never reset, so an agent that hit ten
+#: errors spread across a whole run was force-stopped even when the last nine
+#: calls had all succeeded — and against the web these tasks use (403s from one
+#: conference site, 429s from two APIs, a bot check on a third) ten cumulative
+#: failures is a low bar. The whole point of retrying a hostile network is that
+#: some of the retries work.
+#:
+#: One, not a full reset: an agent that fails ten times, succeeds once and
+#: fails ten more is still a broken run, and a reset would make the abort
+#: unreachable for any agent that ever succeeds — which is every agent.
+ERRORS_FORGIVEN_PER_SUCCESS = 1
+
 
 @dataclass
 class EscalationManager:
     """Tracks consecutive errors and produces escalation messages."""
 
     consecutive_errors: int = 0
+    #: Every error this run has hit. Reported to operators and read by the run
+    #: summary, so it stays the TRUE total — forgiveness belongs to the abort
+    #: decision, never to the record of what happened.
     total_errors: int = 0
+    #: Errors charged against the hard-abort budget. Diverges from
+    #: ``total_errors`` the moment a call succeeds.
+    _abort_charge: int = 0
     _stop_issued: bool = False
     _last_error_type: ErrorType = ErrorType.UNKNOWN
     _error_type_counts: dict[ErrorType, int] = field(default_factory=dict)
@@ -37,6 +67,7 @@ class EscalationManager:
         """Record a tool call error with optional type classification."""
         self.consecutive_errors += 1
         self.total_errors += 1
+        self._abort_charge += 1
         self._last_error_type = error_type
         self._error_type_counts[error_type] = self._error_type_counts.get(error_type, 0) + 1
 
@@ -52,12 +83,24 @@ class EscalationManager:
         self._error_kind_counts[key] = self._error_kind_counts.get(key, 0) + 1
 
     def record_success(self) -> None:
-        """Record a successful tool call. Resets consecutive count."""
+        """Record a successful tool call.
+
+        Resets the consecutive count, and pays back one error of the
+        hard-abort budget — see ``ERRORS_FORGIVEN_PER_SUCCESS``. Never below
+        zero: a run that succeeds a hundred times must not bank a hundred free
+        failures, which would leave the threshold meaning nothing for the rest
+        of it.
+        """
         self.consecutive_errors = 0
+        self._abort_charge = max(0, self._abort_charge - ERRORS_FORGIVEN_PER_SUCCESS)
 
     def should_abort(self) -> bool:
-        """Whether the agent should be force-stopped."""
-        return self.total_errors >= HARD_ABORT_TOTAL_ERRORS
+        """Whether the agent should be force-stopped.
+
+        Reads the charge, not the total: the question is whether this run is
+        failing, not whether it has ever failed.
+        """
+        return self._abort_charge >= HARD_ABORT_TOTAL_ERRORS
 
     def get_escalation_message(self) -> str | None:
         """Return the appropriate escalation message, or None if not at threshold.
