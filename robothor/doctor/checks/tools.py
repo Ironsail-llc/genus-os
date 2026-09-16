@@ -305,8 +305,24 @@ async def _tools_named_but_not_granted(ctx: DoctorContext) -> Result:
 #: ``(probe command, the native tools that do the same thing)``. An
 #: ``exec_allowlist`` regex is matched against the probe: if it admits the CLI
 #: and the manifest denies the native tool, the denial does nothing.
+#: Not exhaustive, and cannot be: a shell has infinitely many spellings of the
+#: same command. The catch-all probe above is what covers the general case; this
+#: table is for an allowlist that is specific enough to look careful and still
+#: admits a Google CLI. `^bash -lc`, `^env gog …`, an absolute path and a
+#: `curl` straight at the REST API are all still missed by it, which is why a
+#: finding here is a floor and not a bound.
 _CLI_EQUIVALENTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("gog gmail send --to alice@example.com", ("gws_gmail_send", "gws_gmail_reply")),
+    ("bash -lc 'gog gmail send'", ("gws_gmail_send", "gws_gmail_reply")),
+    ("env gog gmail send", ("gws_gmail_send", "gws_gmail_reply")),
+    ("/usr/local/bin/gog gmail send", ("gws_gmail_send", "gws_gmail_reply")),
+    ("gog gmail drafts send", ("gws_gmail_send",)),
+    ("gog gmail forward --to alice@example.com", ("gws_gmail_send", "gws_gmail_reply")),
+    ("python -m gogcli gmail send", ("gws_gmail_send", "gws_gmail_reply")),
+    (
+        "curl -X POST https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+        ("gws_gmail_send", "gws_gmail_reply"),
+    ),
     ("gws gmail users messages send", ("gws_gmail_send", "gws_gmail_reply")),
     ("gog gmail reply --thread t", ("gws_gmail_reply",)),
     ("gog gmail search --query q", ("gws_gmail_search",)),
@@ -327,28 +343,65 @@ def _exec_patterns(manifest: dict[str, Any]) -> list[str]:
     return [str(p) for p in (v2.get("exec_allowlist") or [])]
 
 
+#: A command that is not a Google CLI at all. A pattern admitting THIS admits
+#: anything, so the agent can reach any denied tool through any route — and a
+#: catch-all used to be reported only for the six natives the probe table
+#: happens to name. `exec_allowlist: ["^.*$"]` with three denied tools produced
+#: no finding at all.
+_CATCH_ALL_PROBE = "echo hello"
+
+
+def _admits(patterns: list[str], probe: str) -> bool:
+    for pattern in patterns:
+        try:
+            if re.search(pattern, probe):
+                return True
+        except re.error:
+            continue  # a broken regex is manifests.schema's problem
+    return False
+
+
+def _has_a_shell(manifest: dict[str, Any], registered: set[str]) -> bool:
+    """Is this agent actually granted ``exec``?
+
+    An ``exec_allowlist`` left behind on an agent with no shell is a tidy-up,
+    not a bypass: ``guardrails._check_exec_allowlist`` returns early for any
+    other tool, and the registry never advertises ``exec`` when a non-empty
+    ``tools_allowed`` omits it. Reporting it as one — with wording about mail
+    going out past the do-not-contact check — was untrue there.
+    """
+    granted = _granted(manifest, registered)
+    if _denied(manifest, "exec"):
+        return False
+    return granted is None or "exec" in granted
+
+
 def _scan_exec_bypasses(directory: Path) -> list[str]:
+    registered = _registered_names()
     lines: list[str] = []
     for manifest in _scan_manifests(directory):
         agent_id = str(manifest.get("id") or "")
         patterns = _exec_patterns(manifest)
-        if not patterns:
+        if not patterns or not _has_a_shell(manifest, registered):
             continue
+
         findings: set[str] = set()
-        for probe, natives in _CLI_EQUIVALENTS:
-            admitted = False
-            for pattern in patterns:
-                try:
-                    if re.search(pattern, probe):
-                        admitted = True
-                        break
-                except re.error:
-                    continue  # a broken regex is manifests.schema's problem
-            if not admitted:
-                continue
-            for native in natives:
-                if _denied(manifest, native):
-                    findings.add(f"{native} via `{probe.split(' --')[0]}`")
+        if _admits(patterns, _CATCH_ALL_PROBE):
+            # It admits anything, so every denied tool is reachable — not just
+            # the ones this module happens to have a probe for.
+            denied_tools = sorted(n for n in registered if _denied(manifest, n) and n != "exec")
+            if denied_tools:
+                shown = ", ".join(denied_tools[:5])
+                if len(denied_tools) > 5:
+                    shown += f" and {len(denied_tools) - 5} more"
+                findings.add(f"an exec allowlist that admits any command, beside deny of {shown}")
+        else:
+            for probe, natives in _CLI_EQUIVALENTS:
+                if not _admits(patterns, probe):
+                    continue
+                for native in natives:
+                    if _denied(manifest, native):
+                        findings.add(f"{native} via `{probe.split(' --')[0]}`")
         if findings:
             lines.append(f"{agent_id}: " + ", ".join(sorted(findings)))
     return lines

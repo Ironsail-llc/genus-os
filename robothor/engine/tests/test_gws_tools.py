@@ -442,10 +442,13 @@ class TestGwsCalendarCreate:
             json_idx = cmd.index("--json")
             body = json.loads(cmd[json_idx + 1])
             assert body["summary"] == "Lunch"
-            assert body["attendees"] == [
-                {"email": "alice@example.com"},
-                {"email": "owner@example.com"},
-            ]
+            # The operator is NOT auto-added here: with no `calendar` argument
+            # the event goes to their own calendar, where they are the
+            # organiser. Adding them made Google ask them to RSVP to their own
+            # itinerary and mail them once per event. See
+            # test_gws_calendar_identity.py for both halves of this rule.
+            assert body["attendees"] == [{"email": "alice@example.com"}]
+            assert json.loads(cmd[cmd.index("--params") + 1])["calendarId"] == ("owner@example.com")
 
     def test_create_includes_meet_by_default(self):
         mock_result = MagicMock(returncode=0, stdout='{"id":"e2","summary":"Sync"}')

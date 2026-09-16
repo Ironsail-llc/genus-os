@@ -427,6 +427,73 @@ class TestExecAllowlistBypass:
         assert result.status == "pass", result.detail
 
     @pytest.mark.asyncio
+    async def test_a_catch_all_is_reported_against_every_denied_tool(self, instance: Path) -> None:
+        """`exec_allowlist: ["^.*$"]` with three denied tools produced NO
+        finding, because a catch-all was only checked against the six natives
+        this module happens to have a probe for."""
+        _write_agent(
+            instance,
+            "wide-open",
+            {
+                "tools_allowed": ["exec"],
+                "tools_denied": ["gws_gmail_get", "gws_gmail_modify", "gws_chat_list_messages"],
+                "v2": {"exec_allowlist": ["^.*$"]},
+            },
+        )
+        result = await _run("tools.exec_allowlist_bypasses_denied_tool")
+
+        assert result.status == "fail"
+        assert "any command" in result.detail
+        assert "gws_gmail_get" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_an_agent_with_no_shell_is_not_a_bypass(self, instance: Path) -> None:
+        """A leftover exec_allowlist on an agent with no `exec` is a tidy-up,
+        not a security finding — and the wording said mail was going out past
+        the do-not-contact check, which was untrue there."""
+        _write_agent(
+            instance,
+            "no-shell",
+            {
+                "tools_allowed": ["read_file"],
+                "tools_denied": ["gws_gmail_send"],
+                "v2": {"exec_allowlist": ["^gog gmail send"]},
+            },
+        )
+        result = await _run("tools.exec_allowlist_bypasses_denied_tool")
+        assert result.status == "pass", result.detail
+
+    @pytest.mark.parametrize(
+        "pattern",
+        [
+            "^bash -lc",
+            "^env gog gmail send",
+            "^/usr/local/bin/gog gmail send",
+            "^gog gmail drafts send",
+            "^gog gmail forward",
+            "^python -m gogcli gmail send",
+            "^curl -X POST https://gmail",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_the_other_routes_to_the_same_cli_are_caught(
+        self, instance: Path, pattern: str
+    ) -> None:
+        _write_agent(
+            instance,
+            "roundabout",
+            {
+                "tools_allowed": ["exec"],
+                "tools_denied": ["gws_gmail_send"],
+                "v2": {"exec_allowlist": [pattern]},
+            },
+        )
+        result = await _run("tools.exec_allowlist_bypasses_denied_tool")
+
+        assert result.status == "fail", pattern
+        assert "gws_gmail_send" in result.detail
+
+    @pytest.mark.asyncio
     async def test_a_broken_regex_does_not_take_the_check_down(self, instance: Path) -> None:
         _write_agent(
             instance,

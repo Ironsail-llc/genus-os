@@ -516,6 +516,179 @@ class TestGmailSearch:
         assert len(failed) == 1
 
 
+class TestOneResultNeverExceedsTheCap:
+    """Only the BODY was shrunk; the envelope was never counted.
+
+    Measured by the review: 60 attachments gave a 7,373-character result with
+    `body_truncated: false`, and adding a 120-recipient `To` and a 400-character
+    subject reached 10,237 against a 4,000 cap.
+    """
+
+    @staticmethod
+    def _message(*, attachments: int = 0, recipients: int = 1, subject: int = 20):
+        parts: list[dict[str, Any]] = [
+            {"mimeType": "text/plain", "body": {"data": _b64("hello " * 30)}}
+        ]
+        parts.extend(
+            {
+                "mimeType": "application/pdf",
+                "filename": f"attachment-number-{i}-with-a-fairly-long-name.pdf",
+                "body": {"attachmentId": "a", "size": 1000},
+            }
+            for i in range(attachments)
+        )
+        return {
+            "id": "m",
+            "threadId": "t",
+            "labelIds": ["INBOX"],
+            "snippet": "s" * 200,
+            "payload": {
+                "mimeType": "multipart/mixed",
+                "headers": [
+                    {"name": "From", "value": "alice@example.com"},
+                    {
+                        "name": "To",
+                        "value": ", ".join(f"p{i}@example.com" for i in range(recipients)),
+                    },
+                    {"name": "Subject", "value": "S" * subject},
+                ],
+                "parts": parts,
+            },
+        }
+
+    @pytest.mark.parametrize(
+        ("label", "kwargs"),
+        [
+            ("30 attachments", {"attachments": 30}),
+            ("60 attachments", {"attachments": 60}),
+            (
+                "60 attachments, 120 recipients, 400-char subject",
+                {"attachments": 60, "recipients": 120, "subject": 400},
+            ),
+        ],
+    )
+    def test_a_fat_envelope_still_fits(self, fake_gws, label: str, kwargs: dict) -> None:
+        fake_gws.responses["gmail users messages get --params"] = self._message(**kwargs)
+        out = _call("gws_gmail_get", {"message_id": "m"})
+
+        assert len(json.dumps(out)) <= MAX_TOOL_OUTPUT_CHARS, label
+
+    def test_the_attachment_list_is_summarised_not_silently_cut(self, fake_gws) -> None:
+        fake_gws.responses["gmail users messages get --params"] = self._message(attachments=60)
+        out = _call("gws_gmail_get", {"message_id": "m"})
+
+        assert out["attachments_omitted"] == 60 - gws_handlers._GMAIL_MAX_LISTED_ATTACHMENTS
+        assert len(out["attachments"]) == gws_handlers._GMAIL_MAX_LISTED_ATTACHMENTS
+
+    def test_the_body_survives_a_fat_envelope(self, fake_gws) -> None:
+        """Shedding order matters: the attachment list and the recipients go
+        before the body, because the body is what was asked for."""
+        fake_gws.responses["gmail users messages get --params"] = self._message(
+            attachments=60, recipients=120
+        )
+        out = _call("gws_gmail_get", {"message_id": "m"})
+
+        assert "hello" in out["body_text"]
+
+
+class TestOneBadFetchDoesNotLoseTheSearch:
+    def test_a_raising_fetch_is_isolated(self, fake_gws) -> None:
+        """`pool.map` re-raises on iteration, so one exception took the whole
+        search down — while the error-DICT path was correctly isolated. The
+        isolation lived one function away from the code that needed it."""
+        fake_gws.responses["gmail users messages list --params"] = {
+            "messages": [{"id": f"m{n}"} for n in range(5)]
+        }
+
+        def _one_explodes(params):
+            if params["id"] == "m2":
+                raise RuntimeError("boom")
+            return PLAIN_MESSAGE
+
+        fake_gws.responses["gmail users messages get --params"] = _one_explodes
+
+        out = _call("gws_gmail_search", {"query": "x", "max_results": 5})
+
+        assert out["count"] == 5
+        failed = [m for m in out["messages"] if m.get("error")]
+        assert len(failed) == 1
+        assert "RuntimeError" in failed[0]["error"]
+
+
+class TestNonJsonStdoutIsNotAnEmptyMailbox:
+    def _banner(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        class _Proc:
+            returncode = 0
+            stdout = "gws 0.9.1 available — run `gws upgrade`\n"
+            stderr = ""
+
+        monkeypatch.setattr(gws_handlers.subprocess, "run", lambda *a, **k: _Proc())
+        monkeypatch.setattr(gws_handlers, "_resolve_gws_binary", lambda: "/nonexistent/gws")
+
+    def test_a_banner_is_an_error_not_a_blank_message(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Zero exit, unparseable stdout used to return {"output": …} with no
+        `error` key, and every call site tests only `"error" in raw` — so a CLI
+        that printed an upgrade notice became "that email is blank"."""
+        self._banner(monkeypatch)
+        out = _call("gws_gmail_get", {"message_id": "m"})
+
+        assert "error" in out
+        assert out["body_text"] == "" if "body_text" in out else True
+        assert "not JSON" in out["error"]
+
+    def test_a_banner_is_not_an_empty_search(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._banner(monkeypatch)
+        out = _call("gws_gmail_search", {"query": "x"})
+
+        assert "error" in out
+        assert out.get("count") != 0 or "error" in out
+
+
+class TestThreadTrimmingIsReported:
+    def test_a_trimmed_thread_says_how_many_it_dropped(self, fake_gws) -> None:
+        """The search path names its losses; the thread path said nothing, so
+        the number needed to decide whether to page back was unrecoverable."""
+        big = dict(THREAD_OF_THREE)
+        one = THREAD_OF_THREE["messages"][0]
+        fat = dict(one)
+        fat["payload"] = dict(one["payload"])
+        fat["payload"]["body"] = {"data": _b64("x" * 4000)}
+        big["messages"] = [fat] * 6
+        fake_gws.responses["gmail users threads get --params"] = big
+
+        out = _call("gws_gmail_get", {"thread_id": "t"})
+
+        assert out["truncated"] is True
+        assert out["messages_in_thread"] == 6
+        assert out["count"] < 6
+        assert "omitted" in out["note"]
+        assert len(json.dumps(out)) <= MAX_TOOL_OUTPUT_CHARS
+
+    def test_an_untrimmed_thread_still_carries_truncated(self, fake_gws) -> None:
+        """`result["truncated"]` KeyError'd on the happy path."""
+        fake_gws.responses["gmail users threads get --params"] = THREAD_OF_THREE
+        out = _call("gws_gmail_get", {"thread_id": "thread-9"})
+
+        assert out["truncated"] is False
+        assert out["messages_in_thread"] == 3
+
+
+class TestFormatIsValidated:
+    def test_an_unknown_format_is_refused_not_silently_body_less(self, fake_gws) -> None:
+        """`format="raw"` returned headers, no content and no warning."""
+        out = _call("gws_gmail_get", {"message_id": "m", "format": "raw"})
+
+        assert out["hint"] == "invalid_params"
+        assert "'full'" in out["error"]
+
+    def test_case_is_forgiven(self, fake_gws) -> None:
+        fake_gws.responses["gmail users messages get --params"] = PLAIN_MESSAGE
+        out = _call("gws_gmail_get", {"message_id": "m", "format": " FULL "})
+        assert out["body_text"].startswith("The Q3 numbers")
+
+
 # ── Errors that say what went wrong ───────────────────────────────────
 
 

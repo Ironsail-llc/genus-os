@@ -69,6 +69,46 @@ def _deny_tables() -> dict[str, frozenset[str]]:
 # ── Allow tables: the agent is told these exist ───────────────────────
 
 
+def _allow_tables() -> dict[str, frozenset[str]]:
+    """Every ``*_TOOLS`` table in ``constants.py``, found by shape.
+
+    It was a hand-written list of seven — "the same kind of second list" this
+    file's own docstring warns against — and the fourteen it did not name are
+    not inert: ``handlers/benchmark.py`` builds a DENY table out of three of
+    them, so a phantom in ``DESKTOP_TOOLS`` becomes a phantom in a benchmark
+    deny-list.
+    """
+    import robothor.engine.tools.constants as constants
+
+    tables: dict[str, frozenset[str]] = {}
+    for attr in dir(constants):
+        if not attr.isupper() or not attr.endswith("TOOLS"):
+            continue
+        value = getattr(constants, attr)
+        if isinstance(value, frozenset) and all(isinstance(v, str) for v in value):
+            tables[attr] = value
+    return tables
+
+
+def test_the_allow_tables_were_actually_found() -> None:
+    """A discovery that finds nothing passes every assertion below."""
+    found = _allow_tables()
+    assert len(found) >= 20, sorted(found)
+    for expected in ("CORE_TOOLS", "GWS_TOOLS", "DESKTOP_TOOLS", "READONLY_TOOLS"):
+        assert expected in found
+
+
+@pytest.mark.parametrize(
+    ("label", "table"),
+    sorted(_allow_tables().items()),
+)
+def test_every_constants_table_name_is_dispatchable(
+    label: str, table: frozenset[str], dispatchable: set[str]
+) -> None:
+    """Every table in constants.py, not the seven someone remembered."""
+    assert sorted(set(table) - dispatchable) == [], label
+
+
 @pytest.mark.parametrize(
     ("label", "table"),
     [
@@ -116,9 +156,16 @@ def test_the_declared_exemptions_are_still_exemptions(dispatchable: set[str]) ->
 
 
 def test_the_deny_tables_were_actually_found() -> None:
-    """A discovery that finds nothing passes every assertion above."""
+    """A discovery that finds nothing passes every assertion above.
+
+    The floor was 6 while 12 existed, so converting half of them from
+    ``frozenset`` to ``set`` and putting a phantom in each left the suite
+    green. The count is exact: a table that stops being discovered — renamed,
+    retyped, moved — has to be noticed here rather than silently dropping out
+    of the check.
+    """
     tables = _deny_tables()
-    assert len(tables) >= 6, sorted(tables)
+    assert len(tables) == 12, sorted(tables)
     assert "guardrails._EMAIL_SEND_TOOLS" in tables
 
 
@@ -150,3 +197,25 @@ def test_the_send_email_skill_is_still_guarded(dispatchable: set[str]) -> None:
 
     assert "send-email" in _EMAIL_SEND_SKILLS
     assert "invoke_skill" in dispatchable
+
+
+# ── The benchmark's "second lock" covers the whole Google family ───────
+
+
+def test_every_gws_tool_is_in_the_benchmark_deny_list() -> None:
+    """`EXTERNAL_SIDE_EFFECT_TOOLS` is subtracted LAST in
+    `benchmark_readonly_tools()`, precisely so a name cannot be re-opened by
+    being added to a read list. It was missing three chat tools — one of which
+    posts a real Google Chat message — so for 27% of the family the documented
+    second lock was one lock.
+    """
+    from robothor.engine.benchmark_sandbox import EXTERNAL_SIDE_EFFECT_TOOLS
+
+    missing = sorted(set(GWS_TOOLS) - set(EXTERNAL_SIDE_EFFECT_TOOLS))
+    assert missing == []
+
+
+def test_no_gws_tool_survives_the_benchmark_allow_list() -> None:
+    from robothor.engine.tools.handlers.benchmark import benchmark_readonly_tools
+
+    assert sorted(set(GWS_TOOLS) & benchmark_readonly_tools()) == []

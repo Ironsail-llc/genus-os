@@ -192,7 +192,7 @@ class TestCalendarIsValidated:
     def test_an_unrecognised_value_is_refused(self, operator, given) -> None:
         if given == "OWN ":
             pytest.skip("whitespace and case are normalised, not refused")
-        with pytest.raises(gws_handlers._InvalidCalendar):
+        with pytest.raises(gws_handlers._InvalidCalendarError):
             gws_handlers._resolve_calendar({"calendar": given})
 
     def test_case_and_whitespace_are_forgiven(self, operator) -> None:
@@ -227,9 +227,7 @@ class TestCalendarIsValidated:
 class TestTheHandlerOnlyClaimsWhatItKnows:
     """Reporting more than the handler can see is the defect this began as."""
 
-    def test_an_event_with_no_attendees_claims_no_invitations(
-        self, operator, recorder
-    ) -> None:
+    def test_an_event_with_no_attendees_claims_no_invitations(self, operator, recorder) -> None:
         out = _create()
 
         assert out["invitations_sent"] is False
@@ -268,9 +266,7 @@ class TestTheHandlerOnlyClaimsWhatItKnows:
         assert out["invitations_sent"] is True
         assert out["attendees_notified"] == [], "who Google mailed is Google's decision"
 
-    def test_a_delete_reports_what_it_asked_for_not_who_was_told(
-        self, operator, recorder
-    ) -> None:
+    def test_a_delete_reports_what_it_asked_for_not_who_was_told(self, operator, recorder) -> None:
         """It never reads the event, so it cannot know there were attendees —
         `cancellations_sent: true` for an event with none is the same untruth
         as "the API said success so I said it is on your calendar"."""

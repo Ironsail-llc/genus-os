@@ -10,7 +10,6 @@ import re
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
-from html import unescape as _unescape
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -26,11 +25,20 @@ logger = logging.getLogger(__name__)
 
 # ── What has to fit in a tool result ──────────────────────────────────
 #
-# `MAX_TOOL_OUTPUT_CHARS` is the engine's cap on one tool result: past it the
-# JSON is cut head-and-tail with a marker in the middle. These three numbers
-# are derived from it rather than picked, so raising the cap raises them.
+# `MAX_TOOL_OUTPUT_CHARS` is the cap applied when a tool result is PERSISTED
+# with the run step (see robothor/engine/tools/constants.py for where it does
+# and does not apply). Past it the stored JSON is cut head-and-tail with a
+# marker in the middle. `GMAIL_BODY_MAX_CHARS` is derived from the cap so that
+# raising the cap raises it; the rest are picked, and `_fit_one_message` is
+# what makes a picked number safe — it measures the real result and sheds
+# fields until it fits.
 
 #: Room for the headers, labels, snippet and JSON punctuation around a body.
+#:
+#: Picked, not derived — the docstring above used to claim otherwise. It is a
+#: measured-generous guess at what a normal envelope costs, and the reason it
+#: does not have to be exact is `_fit_one_message`, which measures the real
+#: thing and sheds fields until it fits.
 _GMAIL_ENVELOPE_CHARS = 1500
 
 #: Default cap on ONE message's decoded body. A body longer than this is cut
@@ -426,7 +434,7 @@ def _send_updates() -> str:
 _CALENDAR_CHOICES = ("operator", "own")
 
 
-class _InvalidCalendar(ValueError):
+class _InvalidCalendarError(ValueError):
     """``calendar`` was given something that is not one of the two choices.
 
     Anything unrecognised used to fall through to the operator branch, so
@@ -490,7 +498,7 @@ def _resolve_calendar(args: dict[str, Any]) -> tuple[str, str]:
     raw = args.get("calendar")
     choice = "operator" if raw is None or raw == "" else str(raw).strip().lower()
     if choice not in _CALENDAR_CHOICES:
-        raise _InvalidCalendar(choice)
+        raise _InvalidCalendarError(choice)
     if choice == "own":
         return "primary", "own"
     if owner_email:
@@ -585,8 +593,8 @@ def _same_start(proposed: str, event: dict[str, Any]) -> bool:
     if not existing or not proposed:
         return False
     try:
-        a = datetime.fromisoformat(proposed.replace("Z", "+00:00"))
-        b = datetime.fromisoformat(str(existing).replace("Z", "+00:00"))
+        a = datetime.fromisoformat(proposed)
+        b = datetime.fromisoformat(str(existing))
     except ValueError:
         return str(existing)[:16] == str(proposed)[:16]
     if (a.tzinfo is None) != (b.tzinfo is None):
@@ -916,7 +924,11 @@ def _shape_envelope(
         "from": cut(headers.get("from", "")),
         "to": cut(headers.get("to", "")),
         "subject": cut(headers.get("subject", "")),
-        "snippet": cut(_unescape(str(message.get("snippet", "")))),
+        # NOT unescaped: `html.unescape` turns `&lt;script&gt;` back into real
+        # `<script>` markup, reconstructing from untrusted mail exactly what the
+        # body path deliberately strips. Gmail's snippet is already text with
+        # its entities escaped; leaving them escaped is both safe and readable.
+        "snippet": cut(str(message.get("snippet", ""))),
         "labels": [str(label) for label in (message.get("labelIds") or [])],
     }
 
@@ -948,11 +960,26 @@ def _shape_message(message: dict[str, Any], *, max_chars: int) -> dict[str, Any]
 
 
 def _fetch_message(message_id: str, fmt: str) -> dict[str, Any]:
-    """One raw message from the CLI, by id."""
+    """One raw message from the CLI, by id. NEVER raises.
+
+    ``pool.map`` re-raises on iteration, so an exception in one of N metadata
+    fetches took the whole search down with it — while the error-DICT path was
+    correctly isolated nine survivors out of ten. The isolation lived in the
+    caller, one function away from the code that needed it. Today ``_run_gws``'s
+    broad except makes this hard to reach; that is what makes it fragile, not
+    what makes it safe.
+    """
     import json as _json
 
     params = {"userId": "me", "id": message_id, "format": fmt}
-    result = _run_gws(["gmail", "users", "messages", "get", "--params", _json.dumps(params)])
+    try:
+        result = _run_gws(["gmail", "users", "messages", "get", "--params", _json.dumps(params)])
+    except Exception as exc:  # noqa: BLE001 - one bad id must not lose the search
+        logger.warning("gws: metadata fetch for %s raised %s", message_id, type(exc).__name__)
+        return {
+            "error": f"could not fetch this message: {type(exc).__name__}",
+            "hint": "the other results in this search are unaffected",
+        }
     return result if isinstance(result, dict) else {"error": str(result)[:200]}
 
 
@@ -1116,13 +1143,23 @@ def _gmail_get(args: dict[str, Any]) -> dict[str, Any]:
 
     message_id = str(args.get("message_id", "") or "")
     thread_id = str(args.get("thread_id", "") or "")
-    fmt = str(args.get("format", "full") or "full")
+    fmt = str(args.get("format", "full") or "full").strip().lower()
+    if fmt not in ("full", "metadata", "minimal"):
+        return {
+            "error": (
+                f"format={fmt!r} is not valid. Use 'full' (the default, with the decoded "
+                "body), or 'metadata'/'minimal' for headers and snippet only."
+            ),
+            "hint": "invalid_params",
+        }
     with_body = fmt == "full"
     try:
         max_chars = int(args.get("max_chars", GMAIL_BODY_MAX_CHARS))
     except (TypeError, ValueError):
         max_chars = GMAIL_BODY_MAX_CHARS
-    max_chars = max(0, max_chars)
+    # Clamped to what can actually survive: an unclamped 10_000_000 re-decoded
+    # a 3 MB base64 payload once per halving of the fit loop.
+    max_chars = max(0, min(max_chars, GMAIL_BODY_MAX_CHARS))
 
     if not message_id and not thread_id:
         return {
@@ -1147,10 +1184,12 @@ def _gmail_get(args: dict[str, Any]) -> dict[str, Any]:
             _shape_message(m, max_chars=per_message) if with_body else _shape_envelope(m)
             for m in messages
         ]
+        total = len(shaped)
         out: dict[str, Any] = {
             "thread_id": thread_id or str(raw.get("id", "")),
-            "count": len(shaped),
+            "count": total,
             "messages": shaped,
+            "truncated": False,
         }
         # Oldest first, newest last — the order the API returns and the order a
         # conversation reads in. Trim the OLDEST when it does not fit: the
@@ -1160,6 +1199,17 @@ def _gmail_get(args: dict[str, Any]) -> dict[str, Any]:
             out["messages"] = shaped
             out["count"] = len(shaped)
             out["truncated"] = True
+        # `count` is what came back, and `messages_in_thread` is what exists —
+        # the search path names how many it dropped and the thread path said
+        # nothing, so the number needed to decide whether to page back was
+        # unrecoverable. `truncated` is always present, so reading it on the
+        # happy path is not a KeyError.
+        out["messages_in_thread"] = total
+        if out["truncated"]:
+            out["note"] = (
+                f"the {total - len(shaped)} oldest of {total} message(s) were omitted to "
+                "fit the tool-output limit; fetch them by id with gws_gmail_get."
+            )
         return out
 
     params = {"userId": "me", "id": message_id, "format": "full" if with_body else "metadata"}
@@ -1178,7 +1228,65 @@ def _gmail_get(args: dict[str, Any]) -> dict[str, Any]:
     while budget > GMAIL_THREAD_MIN_BODY_CHARS and not _fits(message):
         budget //= 2
         message = _shape_message(raw, max_chars=budget)
-    return message
+    return _fit_one_message(message)
+
+
+#: Attachments listed in full before the list is summarised. Sixty attachments
+#: is 7 KB of filenames on its own — the body shrink loop cannot help, because
+#: it only ever shrank the body.
+_GMAIL_MAX_LISTED_ATTACHMENTS = 10
+
+
+def _fit_one_message(message: dict[str, Any]) -> dict[str, Any]:
+    """Shrink the ENVELOPE when the body alone was not the problem.
+
+    ``_gmail_get`` halved the body and gave up at 300 characters regardless of
+    whether the result fitted, because ``to``, ``subject``, ``snippet``,
+    ``labels`` and the whole ``attachments`` list were never counted. Measured:
+    60 attachments produced a 7,373-character result with
+    ``body_truncated: false``; add a 120-recipient ``To`` and a 400-character
+    subject and it reached 10,237 against a 4,000 cap.
+
+    Shed in order of what it costs the reader: the attachment list first (it is
+    the biggest and the least often needed), then the recipient headers, then
+    the snippet — which is redundant beside a body — and only then the body.
+    """
+    if _fits(message):
+        return message
+
+    out = dict(message)
+    attachments = out.get("attachments") or []
+    if len(attachments) > _GMAIL_MAX_LISTED_ATTACHMENTS:
+        out["attachments"] = attachments[:_GMAIL_MAX_LISTED_ATTACHMENTS]
+        out["attachments_omitted"] = len(attachments) - _GMAIL_MAX_LISTED_ATTACHMENTS
+        if _fits(out):
+            return out
+
+    for field in ("to", "cc"):
+        if out.get(field):
+            out[field] = str(out[field])[:GMAIL_SEARCH_HEADER_MAX_CHARS] + "…"
+            if _fits(out):
+                return out
+
+    if out.get("snippet"):
+        # The snippet is Gmail's preview of the body, and the body is right
+        # there. It is the one field that costs nothing to lose.
+        out.pop("snippet")
+        if _fits(out):
+            return out
+
+    if out.get("subject"):
+        out["subject"] = str(out["subject"])[:GMAIL_SEARCH_HEADER_MAX_CHARS] + "…"
+        if _fits(out):
+            return out
+
+    # Everything above failed, so the body is what is left to cut.
+    body = str(out.get("body_text", ""))
+    while body and len(body) > 100 and not _fits(out):
+        body = body[: len(body) // 2]
+        out["body_text"] = body
+        out["body_truncated"] = True
+    return out
 
 
 def _resolve_gws_binary() -> str:
@@ -1229,18 +1337,33 @@ _GWS_ERROR_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
         ("404", "not found", "notfound", "does not exist"),
         "not_found: the id does not exist in this mailbox",
     ),
+    # Rate limiting BEFORE auth: Google returns 403 for `userRateLimitExceeded`,
+    # and classifying a throttle as `auth` sent the agent to `gws auth status`
+    # for a problem that fixes itself in a minute. "token" and "permission"
+    # are gone as needles too — they matched unrelated failures.
+    (
+        (
+            "429",
+            "rate limit",
+            "ratelimit",
+            "quota",
+            "userratelimitexceeded",
+            "too many requests",
+        ),
+        "rate_limited: Google is throttling this account",
+    ),
     (
         (
             "401",
             "403",
             "unauthorized",
             "unauthenticated",
-            "credential",
-            "token",
+            "invalid_grant",
+            "invalid credentials",
             "sign in",
             "signed in",
             "login",
-            "permission",
+            "insufficient permission",
         ),
         "auth: gws is not signed in",
     ),
@@ -1248,13 +1371,19 @@ _GWS_ERROR_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
         ("400", "invalid", "malformed", "bad request", "unrecognized", "required"),
         "invalid_params",
     ),
-    (("429", "rate limit", "quota"), "rate_limited: Google is throttling this account"),
 )
 
-#: What to say when nothing matched. Never a bare exit code.
+#: What to say when nothing matched. Never a bare exit code — and never "it
+#: said nothing" when it said something, which contradicted the `error` beside
+#: it in the same dict.
 _GWS_UNCLASSIFIED_HINT = (
-    "gws failed and said nothing; the arguments may be malformed, or the CLI "
-    "may not be signed in. Check `gws auth status` on the host."
+    "unclassified: gws failed for a reason this handler does not recognise. "
+    "The arguments may be malformed, or the CLI may not be signed in — check "
+    "`gws auth status` on the host."
+)
+_GWS_SILENT_HINT = (
+    "unclassified: gws failed and printed nothing at all. The arguments may be "
+    "malformed, or the CLI may not be signed in — check `gws auth status`."
 )
 
 
@@ -1264,7 +1393,7 @@ def _classify_gws_failure(returncode: int, stdout: str, stderr: str) -> str:
     for needles, hint in _GWS_ERROR_HINTS:
         if any(needle in haystack for needle in needles):
             return hint
-    return _GWS_UNCLASSIFIED_HINT
+    return _GWS_UNCLASSIFIED_HINT if haystack.strip() else _GWS_SILENT_HINT
 
 
 def _run_gws(args: list[str], timeout: int = 30) -> dict[str, Any]:
@@ -1292,15 +1421,28 @@ def _run_gws(args: list[str], timeout: int = 30) -> dict[str, Any]:
             stderr = (proc.stderr or "").strip()
             stdout = (proc.stdout or "").strip()
             hint = _classify_gws_failure(proc.returncode, stdout, stderr)
+            # stdout counts as diagnostics: a failure whose only message went
+            # there was discarded, and the agent got the generic hint while the
+            # real reason sat unread.
             return {
-                "error": stderr[:1000] or hint,
+                "error": (stderr or stdout)[:1000] or hint,
                 "hint": hint,
             }
         try:
             result: dict[str, Any] = _json.loads(proc.stdout)
             return result
         except _json.JSONDecodeError:
-            return {"output": proc.stdout[:MAX_TOOL_OUTPUT_CHARS]}
+            # Zero exit, unparseable stdout — a banner, an upgrade notice, a
+            # progress line. This used to return {"output": …} with NO error
+            # key, and every Gmail call site tests only `"error" in raw`: the
+            # message became "that email is blank" and the search became "your
+            # query matched nothing". A fabricated negative, from the tool
+            # whose stated purpose is to stop lying about mail.
+            return {
+                "error": "gws returned output that is not JSON",
+                "hint": "unparseable: the CLI printed something unexpected — check its version",
+                "output": proc.stdout[:MAX_TOOL_OUTPUT_CHARS],
+            }
     except subprocess.TimeoutExpired:
         return {
             "error": f"gws command timed out after {timeout}s",
@@ -1571,14 +1713,20 @@ def _calendar_list(args: dict[str, Any]) -> dict[str, Any]:
         return {"error": "time_min is required"}
     try:
         calendar_id, calendar_kind = _resolve_calendar(args)
-    except _InvalidCalendar as bad:
+    except _InvalidCalendarError as bad:
         return bad.as_result()
+    try:
+        max_results = int(args.get("max_results") or 20)
+    except (TypeError, ValueError):
+        # A model emitting "max_results": null or "20" is ordinary, and raising
+        # TypeError at it loses the whole call over a coercible argument.
+        max_results = 20
     cal_params: dict[str, Any] = {
         "calendarId": calendar_id,
         "timeMin": time_min,
         "singleEvents": True,
         "orderBy": "startTime",
-        "maxResults": min(args.get("max_results", 20), 250),
+        "maxResults": max(1, min(max_results, 250)),
     }
     time_max = args.get("time_max")
     if time_max:
@@ -1621,7 +1769,7 @@ def _calendar_create(
 
     try:
         calendar_id, calendar_kind = _resolve_calendar(args)
-    except _InvalidCalendar as bad:
+    except _InvalidCalendarError as bad:
         return bad.as_result()
     owner_email = _resolve_owner_email()
 
@@ -1678,9 +1826,12 @@ def _calendar_create(
     # ten-leg trip. That auto-add existed because the default used to be this
     # account's `primary` calendar, where being an attendee was the only way
     # the operator learned the event existed at all. The default is now theirs.
-    if owner_email and calendar_kind != "operator":
-        if not any(a["email"].lower() == owner_email for a in attendees):
-            attendees.append({"email": owner_email})
+    if (
+        owner_email
+        and calendar_kind != "operator"
+        and not any(a["email"].lower() == owner_email for a in attendees)
+    ):
+        attendees.append({"email": owner_email})
     if attendees:
         event_body["attendees"] = attendees
 
@@ -1743,7 +1894,7 @@ def _calendar_delete(args: dict[str, Any]) -> dict[str, Any]:
         return {"error": "event_id is required"}
     try:
         calendar_id, calendar_kind = _resolve_calendar(args)
-    except _InvalidCalendar as bad:
+    except _InvalidCalendarError as bad:
         return bad.as_result()
     # A cancellation nobody is told about is not a cancellation: the attendees
     # keep the slot and turn up. Hoisted, because the flag store caches for 5s
@@ -2162,17 +2313,11 @@ def _benchmark_refusal(tool_name: str) -> dict[str, Any]:
     }
 
 
-# Register all GWS tools as async handlers that delegate to sync _handle_gws_tool
-async def _gws_handler(
-    args: dict[str, Any], ctx: ToolContext, *, tool_name: str = ""
-) -> dict[str, Any]:
-    if ctx.is_benchmark:
-        return _benchmark_refusal(tool_name)
-    return await asyncio.to_thread(
-        _handle_gws_tool, tool_name, args, run_id=ctx.run_id, tenant_id=ctx.tenant_id
-    )
-
-
+# Register all GWS tools as async handlers that delegate to sync
+# _handle_gws_tool. `_make_handler` below is the only producer: a second
+# module-level `_gws_handler` used to sit here, referenced by nothing, carrying
+# its own copy of the benchmark gate — two copies of a safety check, one of
+# them unreachable, which is the shape that makes one of them go stale.
 for _tool_name in (
     "gws_gmail_search",
     "gws_gmail_get",
