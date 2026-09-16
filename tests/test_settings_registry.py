@@ -76,7 +76,14 @@ DISCOVERY_SCRIPT = REPO_ROOT / "scripts" / "list_env_reads.py"
 #: memory generation fell back to local ollama on an instance whose only
 #: OpenRouter key was a vault row. A reader that goes through the accessor gets
 #: the value the operator actually configured.
-ENV_READ_SITE_BASELINE = 478
+#: 478 -> 474: the Telegram bot token, the alert webhook, the SIEM webhook and
+#: the guardrail pager's token now resolve through `robothor.secrets`. Not
+#: tidying: `genus secrets status` measures the ACCESSOR, so a declared
+#: credential read straight from the environment was reported `served=vault`
+#: after a migration while its reader saw nothing — and the SOPS runbook then
+#: told the operator that copy was safe to delete. The next restart would have
+#: disabled Telegram on an operator whose only channel is Telegram.
+ENV_READ_SITE_BASELINE = 474
 
 
 def _discovery():

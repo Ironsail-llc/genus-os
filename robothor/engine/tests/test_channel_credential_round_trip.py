@@ -145,3 +145,17 @@ def test_every_declared_channel_secret_round_trips(stores, monkeypatch, capsys, 
     assert resolve_secret(env).value == "FAKE-channel-value-0000", (
         "the reader that does NOT name the key cannot find it either"
     )
+
+    # And the REAL reader, where one exists. Asserting on `resolve_secret`
+    # alone is what let N2 through a whole round: this file's docstring said it
+    # drove the reader, and it did not, so the Telegram token looked migrated
+    # while `EngineConfig.from_env()` saw nothing.
+    if env == "ROBOTHOR_TELEGRAM_BOT_TOKEN":
+        from robothor.engine.config import EngineConfig
+        from robothor.settings import reset_settings
+
+        reset_settings()
+        assert EngineConfig.from_env().bot_token == "FAKE-channel-value-0000", (
+            "the daemon starts the Telegram channel from this value; after the "
+            "runbook's shrink it would have been empty"
+        )

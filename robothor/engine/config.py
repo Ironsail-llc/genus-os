@@ -67,6 +67,26 @@ def _default_chat_id() -> str:
     return str(_telegram().telegram_chat_id)
 
 
+def _bot_token() -> str:
+    """The Telegram bot token, vault first, environment second.
+
+    Not ``_telegram().telegram_bot_token``: the settings model resolves from
+    the environment only, and ``genus secrets status`` measures the ACCESSOR.
+    So after the runbook's migrate → verify → shrink the table reported this
+    name ``served=vault``, the doctor was green, and the next restart logged
+    "ROBOTHOR_TELEGRAM_BOT_TOKEN is empty — Telegram delivery disabled" at an
+    operator whose only channel is Telegram. A verify step that calls a name
+    safe to delete when it is not is worse than no verify step at all.
+
+    The settings value is the fallback rather than the source, so an instance
+    that sets it through ``config.yaml`` — which the accessor does not read —
+    keeps working.
+    """
+    from robothor.secrets import get_secret
+
+    return get_secret("ROBOTHOR_TELEGRAM_BOT_TOKEN") or _telegram().telegram_bot_token
+
+
 @dataclass(frozen=True)
 class EngineConfig:
     """Top-level engine configuration from environment variables."""
@@ -122,7 +142,7 @@ class EngineConfig:
     def from_env(cls) -> EngineConfig:
         workspace = Path(os.environ.get("ROBOTHOR_WORKSPACE", Path.home() / "robothor"))
         return cls(
-            bot_token=_telegram().telegram_bot_token,
+            bot_token=_bot_token(),
             default_chat_id=_default_chat_id(),
             port=int(os.environ.get("ROBOTHOR_ENGINE_PORT", "18800")),
             tenant_id=os.environ.get("ROBOTHOR_TENANT_ID", "") or _default_tenant(),
