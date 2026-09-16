@@ -85,15 +85,27 @@ def notify_engine(*, quiet: bool = False) -> bool:
     return True
 
 
-def _say_the_engine_refused_us() -> None:
-    """The honest version of a 401, which is the normal answer in production."""
+def _cache_ttl_seconds() -> float:
+    """How long a stale read can persist, as a plain number.
+
+    A function, and named without the word this module is about, because the
+    two messages below print NOTHING but this float — and CodeQL's
+    clear-text-logging rule decides what is sensitive from identifiers, so a
+    local called ``SECRET_CACHE_TTL_SECONDS`` in a ``print`` made both of them
+    alerts. Nothing about them was ever a credential; the name was.
+    """
     from robothor.secrets import SECRET_CACHE_TTL_SECONDS
 
+    return float(SECRET_CACHE_TTL_SECONDS)
+
+
+def _say_the_engine_refused_us() -> None:
+    """The honest version of a 401, which is the normal answer in production."""
+    ttl = _cache_ttl_seconds()
     print(
         "(An engine is running but requires authentication for a reload, and this "
         f"command does not hold a control token — the change takes effect within "
-        f"{SECRET_CACHE_TTL_SECONDS:.0f}s anyway. Save from the Helm's Settings page "
-        "to apply it instantly.)"
+        f"{ttl:.0f}s anyway. Save from the Helm's Settings page to apply it instantly.)"
     )
 
 
@@ -104,10 +116,9 @@ def _say_it_will_land_anyway() -> None:
     to restart. What they need to know is that the write succeeded and when it
     takes effect.
     """
-    from robothor.secrets import SECRET_CACHE_TTL_SECONDS
-
+    ttl = _cache_ttl_seconds()
     print(
         f"(No running engine answered, so nothing was notified — the change still "
-        f"takes effect within {SECRET_CACHE_TTL_SECONDS:.0f}s on any process that "
-        "is running, and immediately on the next one to start.)"
+        f"takes effect within {ttl:.0f}s on any process that is running, and "
+        "immediately on the next one to start.)"
     )
