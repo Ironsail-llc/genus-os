@@ -773,7 +773,12 @@ class TestNonJsonStdoutIsNotAnEmptyMailbox:
 class TestThreadTrimmingIsReported:
     def test_a_trimmed_thread_says_how_many_it_dropped(self, fake_gws) -> None:
         """The search path names its losses; the thread path said nothing, so
-        the number needed to decide whether to page back was unrecoverable."""
+        the number needed to decide whether to page back was unrecoverable.
+
+        Bodies are shed before whole messages, so the conversation still reads
+        end to end — every sender and subject survives and only the oldest
+        bodies go.
+        """
         big = dict(THREAD_OF_THREE)
         one = THREAD_OF_THREE["messages"][0]
         fat = dict(one)
@@ -786,9 +791,11 @@ class TestThreadTrimmingIsReported:
 
         assert out["truncated"] is True
         assert out["messages_in_thread"] == 6
-        assert out["count"] < 6
+        assert out["bodies_omitted"] > 0
         assert "omitted" in out["note"]
         assert len(json.dumps(out)) <= MAX_TOOL_OUTPUT_CHARS
+        # The newest message keeps its body: it is the one that was asked about.
+        assert out["messages"][-1]["body_text"]
 
     def test_an_untrimmed_thread_still_carries_truncated(self, fake_gws) -> None:
         """`result["truncated"]` KeyError'd on the happy path."""
@@ -797,6 +804,94 @@ class TestThreadTrimmingIsReported:
 
         assert out["truncated"] is False
         assert out["messages_in_thread"] == 3
+
+
+class TestAThreadObeysTheCapToo:
+    """R3: `_fit_one_message` ran only on the `message_id` branch, and the
+    `while len(shaped) > 1` guard meant a ONE-message thread could not shrink
+    at all — so the same message read two ways gave opposite answers."""
+
+    @staticmethod
+    def _thread(count: int, *, body: int = 240, recipients: int = 200):
+        crowded = ", ".join(f"p{i}@example.com" for i in range(recipients))
+        return {
+            "id": "t",
+            "messages": [
+                {
+                    "id": f"m{i}",
+                    "threadId": "t",
+                    "labelIds": ["INBOX"],
+                    "snippet": "s" * 200,
+                    "payload": {
+                        "mimeType": "text/plain",
+                        "headers": [
+                            {"name": "From", "value": f"sender{i}@example.com"},
+                            {"name": "To", "value": crowded},
+                            {"name": "Subject", "value": "Subject"},
+                            {"name": "Date", "value": "Tue, 16 Sep 2026 09:00:00 +0000"},
+                        ],
+                        "body": {"data": _b64("x" * body)},
+                    },
+                }
+                for i in range(count)
+            ],
+        }
+
+    @pytest.mark.parametrize(
+        ("label", "kwargs"),
+        [
+            ("one message with a 200-recipient To", {"count": 1}),
+            ("three messages", {"count": 3}),
+            ("ten messages with long bodies", {"count": 10, "body": 600}),
+            ("one message with a 50k body", {"count": 1, "body": 50_000}),
+            ("twenty messages", {"count": 20, "body": 400}),
+        ],
+    )
+    def test_every_thread_shape_fits(self, fake_gws, label: str, kwargs: dict) -> None:
+        fake_gws.responses["gmail users threads get --params"] = self._thread(**kwargs)
+        out = _call("gws_gmail_get", {"thread_id": "t"})
+
+        assert len(json.dumps(out)) <= MAX_TOOL_OUTPUT_CHARS, label
+
+    def test_a_one_message_thread_matches_the_message_id_path(self, fake_gws) -> None:
+        """Same message, two entry points, opposite outcomes — 4,236 chars over
+        the cap one way and 779 under it the other."""
+        thread = self._thread(1)
+        fake_gws.responses["gmail users threads get --params"] = thread
+        fake_gws.responses["gmail users messages get --params"] = thread["messages"][0]
+
+        by_thread = _call("gws_gmail_get", {"thread_id": "t"})
+        by_id = _call("gws_gmail_get", {"message_id": "m0"})
+
+        assert len(json.dumps(by_thread)) <= MAX_TOOL_OUTPUT_CHARS
+        assert len(json.dumps(by_id)) <= MAX_TOOL_OUTPUT_CHARS
+        assert by_thread["messages"][0]["from"] == by_id["from"]
+
+    def test_bodies_are_shed_before_whole_messages(self, fake_gws) -> None:
+        """A thread that still reads end to end beats a shorter one: every
+        sender and subject survives, only the oldest bodies go."""
+        # Small recipient lists, so the BODIES are what does not fit and the
+        # shedding order is what the test observes.
+        fake_gws.responses["gmail users threads get --params"] = self._thread(
+            6, body=600, recipients=2
+        )
+        out = _call("gws_gmail_get", {"thread_id": "t"})
+
+        assert out["count"] == 6, "nobody dropped while a body is still sheddable"
+        assert out["bodies_omitted"] > 0
+        assert all(m["from"] for m in out["messages"])
+        assert out["messages"][-1]["body_text"], "the newest keeps its body"
+        assert out["messages"][0].get("body_omitted") is True
+
+    def test_the_note_is_measured_inside_the_envelope(self, fake_gws) -> None:
+        """The fit loop measured the envelope BEFORE adding its own note, so
+        every truncated thread overshot by the length of the note."""
+        fake_gws.responses["gmail users threads get --params"] = self._thread(20, body=400)
+        out = _call("gws_gmail_get", {"thread_id": "t"})
+
+        assert out["truncated"] is True
+        assert out["note"]
+        assert len(json.dumps(out)) <= MAX_TOOL_OUTPUT_CHARS
 
 
 class TestFormatIsValidated:

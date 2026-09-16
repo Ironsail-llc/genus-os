@@ -1370,6 +1370,91 @@ def _fit_search_results(query: str, described: list[dict[str, Any]]) -> dict[str
     return envelope(kept)
 
 
+def _fit_thread(thread_id: str, shaped: list[dict[str, Any]]) -> dict[str, Any]:
+    """Make a whole thread fit the cap, and say what it cost.
+
+    The per-message fitting never reached this path: `_fit_one_message` ran only
+    on the `message_id` branch, and the `while len(shaped) > 1` guard meant a
+    ONE-message thread could not shrink at all. So the same message read two
+    ways gave opposite answers —
+
+        one-message thread, 200-recipient To:  json_len=4236  truncated: false
+        the same message via message_id:       json_len= 779
+
+    — 3x the cap at worst, while claiming nothing was lost. Three steps, in the
+    order that costs the reader least:
+
+    1. shrink each message's own envelope (attachments, recipients, snippet),
+       which is what the `message_id` path already did;
+    2. drop the OLDEST bodies, keeping their headers, so the conversation still
+       reads end to end and only the newest messages carry their text;
+    3. only then drop whole messages, oldest first — the newest is the one that
+       was asked about.
+
+    The note is added BEFORE the final fit check, because measuring the envelope
+    without it overshot by the length of the note on every truncated thread.
+    """
+    total = len(shaped)
+    kept = [_fit_one_message(m) for m in shaped]
+
+    def envelope(messages: list[dict[str, Any]], bodies_dropped: int) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "thread_id": thread_id,
+            "count": len(messages),
+            "messages": messages,
+            "messages_in_thread": total,
+            "truncated": len(messages) < total or bool(bodies_dropped),
+        }
+        if out["truncated"]:
+            lost = []
+            if len(messages) < total:
+                lost.append(f"the {total - len(messages)} oldest of {total} message(s)")
+            if bodies_dropped:
+                lost.append(f"the body of the {bodies_dropped} oldest kept message(s)")
+            out["bodies_omitted"] = bodies_dropped
+            out["note"] = (
+                " and ".join(lost)
+                + " were omitted to fit the tool-output limit; fetch them by id with "
+                "gws_gmail_get."
+            )
+        return out
+
+    bodies_dropped = 0
+    # 2. Shed bodies oldest-first, keeping the headers so the thread still reads.
+    for index in range(len(kept)):
+        if _fits(envelope(kept, bodies_dropped)):
+            break
+        if len(kept) - index <= 1:
+            break  # never strip the newest message's body here
+        if not kept[index].get("body_text"):
+            continue
+        stripped = dict(kept[index])
+        stripped["body_text"] = ""
+        stripped["body_truncated"] = True
+        stripped["body_omitted"] = True
+        kept[index] = stripped
+        bodies_dropped += 1
+
+    # 3. Then whole messages, oldest first, never below one.
+    while len(kept) > 1 and not _fits(envelope(kept, bodies_dropped)):
+        dropped = kept.pop(0)
+        if dropped.get("body_omitted"):
+            bodies_dropped -= 1
+
+    # A single remaining message that still does not fit gets the same
+    # last-resort shedding the search path uses.
+    if len(kept) == 1 and not _fits(envelope(kept, bodies_dropped)):
+        only = dict(kept[0])
+        body = str(only.get("body_text", ""))
+        while body and len(body) > 100 and not _fits(envelope([only], bodies_dropped)):
+            body = body[: len(body) // 2]
+            only["body_text"] = body
+            only["body_truncated"] = True
+        kept = [only]
+
+    return envelope(kept, bodies_dropped)
+
+
 def _gmail_get(args: dict[str, Any]) -> dict[str, Any]:
     """Read one message, or a whole thread, as text.
 
@@ -1422,33 +1507,7 @@ def _gmail_get(args: dict[str, Any]) -> dict[str, Any]:
             _shape_message(m, max_chars=per_message) if with_body else _shape_envelope(m)
             for m in messages
         ]
-        total = len(shaped)
-        out: dict[str, Any] = {
-            "thread_id": thread_id or str(raw.get("id", "")),
-            "count": total,
-            "messages": shaped,
-            "truncated": False,
-        }
-        # Oldest first, newest last — the order the API returns and the order a
-        # conversation reads in. Trim the OLDEST when it does not fit: the
-        # newest message is the one that was asked about.
-        while len(shaped) > 1 and not _fits(out):
-            shaped.pop(0)
-            out["messages"] = shaped
-            out["count"] = len(shaped)
-            out["truncated"] = True
-        # `count` is what came back, and `messages_in_thread` is what exists —
-        # the search path names how many it dropped and the thread path said
-        # nothing, so the number needed to decide whether to page back was
-        # unrecoverable. `truncated` is always present, so reading it on the
-        # happy path is not a KeyError.
-        out["messages_in_thread"] = total
-        if out["truncated"]:
-            out["note"] = (
-                f"the {total - len(shaped)} oldest of {total} message(s) were omitted to "
-                "fit the tool-output limit; fetch them by id with gws_gmail_get."
-            )
-        return out
+        return _fit_thread(thread_id or str(raw.get("id", "")), shaped)
 
     params = {"userId": "me", "id": message_id, "format": "full" if with_body else "metadata"}
     raw = _run_gws(["gmail", "users", "messages", "get", "--params", _json.dumps(params)])
