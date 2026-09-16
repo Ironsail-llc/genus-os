@@ -149,6 +149,52 @@ class TestTheEnvironmentProbe:
         )
         assert "ABSENT" in result["stdout"]
 
+    async def test_the_engines_own_environ_is_not_readable_from_the_snippet(
+        self, workspace, monkeypatch
+    ):
+        """The child's environment is scrubbed — and the snippet's PARENT is the
+        engine, whose `/proc/<pid>/environ` a same-uid process may read.
+        Measured on the first cut: one line returned all nine seeded
+        credentials, while the report called this probe closed. The handler
+        calls `harden_process()` (PR_SET_DUMPABLE=0) before spawning, so the
+        guarantee holds for whatever process is running engine code rather than
+        only for the daemon that remembered.
+
+        This test hardens the pytest process, which is the point: a mocked
+        `prctl` would prove nothing about the kernel.
+        """
+        monkeypatch.setenv("ROBOTHOR_PROBE_PARENT_TOKEN", "ghp_not-a-real-token-01234")
+        result, _ = await _run(
+            """
+            import os
+            try:
+                raw = open(f'/proc/{os.getppid()}/environ', 'rb').read().decode('utf-8', 'replace')
+                print('READ', 'HIT' if 'ghp_not-a-real-token' in raw else 'MISS')
+            except PermissionError:
+                print('BLOCKED')
+            except FileNotFoundError:
+                print('GONE')
+            """,
+            workspace,
+        )
+        assert "BLOCKED" in result["stdout"], result["stdout"]
+
+    async def test_the_handler_hardens_before_it_spawns(self, workspace, monkeypatch):
+        """Order, not just presence: hardening after the fork would leave the
+        window this closes."""
+        calls: list[str] = []
+        import robothor.engine.process_hardening as hardening
+
+        real = hardening.harden_process
+
+        def spy():
+            calls.append("hardened")
+            return real()
+
+        monkeypatch.setattr(hardening, "harden_process", spy)
+        await _run("import os; print(os.getpid())", workspace)
+        assert calls == ["hardened"]
+
     async def test_the_snippet_still_gets_a_working_process(self, workspace):
         """The scrub must not be so thorough that nothing runs."""
         result, _ = await _run(

@@ -17,8 +17,14 @@ A subprocess, from the workspace, with:
   that an upgrade must not break. This tool has none, so it ships closed: the
   child gets the process essentials, the declared non-secret `ROBOTHOR_*`
   settings, and this agent's own `secrets:` grants. No database password, no
-  provider key, no channel token — which is also why `/proc/self/environ` is a
-  probe with a boring answer here.
+  provider key, no channel token — which is why `/proc/SELF/environ` is a probe
+  with a boring answer here.
+* **a hardened engine, checked rather than assumed.** Scrubbing removes
+  INHERITANCE, not the credentials from the engine — and the snippet's parent
+  IS the engine, whose `/proc/<pid>/environ` a same-uid process may read
+  (measured: one line, all nine seeded credentials). `code_exec_guards.
+  harden_this_process` closes that before the spawn. A mitigation, not a
+  boundary; see its docstring.
 * **an isolated interpreter** (`-I`: no `PYTHONPATH`, no user site, no implicit
   script directory) plus an import guard that refuses the engine's own
   packages. The guard is a guardrail and NOT a boundary — a determined snippet
@@ -90,10 +96,6 @@ def _handler(name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
 
     return decorator
 
-
-#: The most source one call may carry. A snippet is code; a caller sending a
-#: megabyte of it is sending data, and data belongs in a file the code reads.
-MAX_CODE_CHARS = 100_000
 
 #: How much more than the model's stdout budget is kept for the spill file.
 #: The spill exists so the agent can page the whole output back, so it has to
@@ -213,40 +215,17 @@ def _run_scratch_root(ctx: ToolContext) -> str:
 
 @_handler("execute_code")
 async def _execute_code(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    from robothor.engine.code_exec_guards import harden_this_process, preflight
     from robothor.engine.code_exec_rpc import ToolRpcServer
     from robothor.engine.tool_proxy import get_tool_proxy
 
-    code = args.get("code") or ""
-    if not isinstance(code, str) or not code.strip():
-        return {"error": "No code provided. Pass the Python source as `code`."}
-    if len(code) > MAX_CODE_CHARS:
-        return {
-            "error": (
-                f"Snippet is {len(code)} characters, over the {MAX_CODE_CHARS} limit. "
-                "Write the data to a file and have the snippet read it."
-            )
-        }
-
     proxy = get_tool_proxy()
-    if proxy is None:
-        return {
-            "error": (
-                "execute_code is only available inside an agent run — there is no "
-                "tool proxy on this call."
-            )
-        }
-
-    if "exec" not in getattr(proxy, "allowed", frozenset()):
-        return {
-            "error": (
-                "execute_code needs the `exec` capability, and this agent's manifest "
-                "does not grant it. Ask the operator to add `exec` to tools_allowed."
-            )
-        }
-
-    refusal = _refuse_if_sandboxed()
-    if refusal:
+    refusal = preflight(args.get("code") or "", proxy)
+    if refusal is not None:
         return refusal
+    # After the refusals and before the spawn: nothing exists yet that could
+    # read this process, and everything after this line can.
+    harden_this_process()
 
     workspace = Path(getattr(ctx, "workspace", "") or Path.cwd())
     timeout = _resolved_timeout(args, ctx)
@@ -269,6 +248,7 @@ async def _execute_code(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     # on this box runs as the engine uid, so file permissions exclude nobody
     # that matters; `ToolRpcServer.bind_to_session` is what stops one run's
     # snippet driving another run's proxy.
+    code = str(args.get("code") or "")
     tools_dir = Path(tempfile.mkdtemp(prefix="code-", dir=_run_scratch_root(ctx)))
     server = ToolRpcServer(directory=tools_dir, proxy=proxy, max_calls=max_calls)
     try:
@@ -297,30 +277,6 @@ async def _execute_code(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
         shutil.rmtree(tools_dir, ignore_errors=True)
 
     return _shape(result, server=server, workspace=workspace, stdout_cap=stdout_cap)
-
-
-def _refuse_if_sandboxed() -> dict[str, Any] | None:
-    """A containerised agent is refused, and told why.
-
-    An agent declaring `sandbox: docker` runs its commands inside a container
-    with `--network none` and no host environment. The tool proxy lives in the
-    engine process, so a snippet in that container could not reach it — and
-    running the snippet on the HOST instead would silently undo the isolation
-    the manifest asked for. Refusing names the trade; falling back would hide
-    it, which is the failure this codebase keeps recording.
-    """
-    from robothor.engine.sandbox import SandboxMode, get_current_sandbox
-
-    sandbox = get_current_sandbox()
-    if sandbox is None or sandbox.mode == SandboxMode.LOCAL:
-        return None
-    return {
-        "error": (
-            "execute_code is not available to a container-sandboxed agent: the "
-            "tool proxy runs in the engine and the container has no route to it. "
-            "Use `exec` for shell work, or call the tools directly from a turn."
-        )
-    }
 
 
 def _resolved_timeout(args: dict[str, Any], ctx: ToolContext) -> int:

@@ -159,11 +159,17 @@ CAPS = {
     # the handler's admission/staging/shaping is another. The split is what
     # paid for the cancellation fix rather than a bigger cap, and it is where
     # the descendant walk lands.
+    # 395 -> 351: the pre-spawn refusals and the process hardening left for
+    # code_exec_guards.py — "may this run at all, and is the engine ready" is a
+    # different question from staging, spawning and shaping, and it is what
+    # paid for teaching this tool to harden its own process rather than trust
+    # that some entry point remembered.
     # 413 -> 395: the in-sandbox boot source left for
     # sandbox_runtime/boot_template.py, beside the client it loads. Ninety
     # lines of code that runs somewhere else was the shape `genus_tools.py`
     # was deliberately not written in; the reaper it grew made that obvious.
-    "robothor/engine/tools/handlers/code_exec.py": 395,
+    "robothor/engine/tools/handlers/code_exec.py": 351,
+    "robothor/engine/code_exec_guards.py": 116,
     "robothor/engine/sandbox_runtime/boot_template.py": 122,
     # 211 -> 341: the descendant census. `killpg` alone reached neither a
     # `setsid` child nor a double-forked daemon, and a probe left 16 of 16
