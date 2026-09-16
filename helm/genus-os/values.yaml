@@ -271,9 +271,9 @@ engine:
   # BOTH names are required. `_enforcement_mode` returns "off" whenever the
   # _ENABLED var is falsy no matter what the _MODE var says, so setting the
   # mode alone is a no-op — and the mode is the one an operator reaches for.
-  # The name is ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED; there is no
-  # ROBOTHOR_APPROVAL_ENABLED, and tests/test_flag_audit.py exists because that
-  # guess is the easy one to make.
+  # The name is ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED. The shorter spelling
+  # without FAILCLOSED does not exist and silently leaves the gate off;
+  # tests/test_flag_audit.py exists because that guess is the easy one to make.
   #
   # The mode ships as "observe", NOT "enforce", and deliberately differs from
   # this instance's drop-in. `enforce` denies an escalated call when no
