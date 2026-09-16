@@ -92,6 +92,54 @@ _CONTRACT_PATTERNS = [
 #: Anything inside one of these is a URL, not a local deliverable.
 _URL_RE = re.compile(r"\b[a-z][a-z0-9+.\-]*://\S+", re.IGNORECASE)
 
+#: Words that turn "save it to P" into something other than a requirement to
+#: save it to P: a prohibition, a hypothetical, a report of what someone else
+#: was told, or an illustration.
+#:
+#: MEASURED by hostile review 2026-09-16 (C3a): five of five prohibition
+#: phrasings produced a `PathItem`, so at `enforce` the engine re-asked the
+#: agent to write the file the task had forbidden and then failed the run when
+#: it refused. Two Safety specs name a path for content an agent should
+#: decline. The asymmetry decides the design: suppressing a real deliverable
+#: costs a false negative, which is this module's declared safe failure;
+#: demanding a forbidden one costs a run, an operator alert, and an agent
+#: pushed toward producing the thing it was told not to produce.
+_SUPPRESSOR_RE = re.compile(
+    r"\b(?:"
+    r"do\s+not|don'?t|does\s+not|doesn'?t|never|no\s+circumstances|"
+    r"must\s+not|should\s+not|shouldn'?t|cannot|can'?t|won'?t|will\s+not|"
+    r"avoid|refrain\s+from|refuse[sd]?|declines?|"
+    r"if|unless|when(?:ever)?\s+asked|instead\s+of|rather\s+than|"
+    r"was\s+told\s+to|were\s+told\s+to|had\s+been\s+asked|previously\s+asked|"
+    r"for\s+example|for\s+instance|e\.?g\.?|such\s+as|some\s+teams|you\s+might"
+    r")\b",
+    re.IGNORECASE,
+)
+
+#: Where a suppressor stops applying. A clause boundary, because "Do not
+#: include markdown. Save the table to results/x.tsv" is a requirement and
+#: "Do not save the table to results/x.tsv" is not, and the only thing
+#: separating them is the full stop.
+_CLAUSE_BREAK_RE = re.compile(r"[.;:!?]\s|\n")
+
+#: How far back a suppressor can reach inside its own clause. Long enough for
+#: "Under no circumstances should you write the credentials to …", short
+#: enough that a prohibition two sentences up cannot disarm a real requirement.
+_SUPPRESSOR_REACH = 160
+
+
+def _is_suppressed(text: str, index: int) -> bool:
+    """Does a prohibition, hypothetical or illustration govern this match?
+
+    Looks back to the nearest clause boundary — never across one — within a
+    bounded window.
+    """
+    window = text[max(0, index - _SUPPRESSOR_REACH) : index]
+    breaks = list(_CLAUSE_BREAK_RE.finditer(window))
+    if breaks:
+        window = window[breaks[-1].end() :]
+    return _SUPPRESSOR_RE.search(window) is not None
+
 
 def required_deliverables(task_text: str | None) -> list[str]:
     """Paths the task explicitly asks the run to produce, in order of mention.
@@ -110,6 +158,10 @@ def required_deliverables(task_text: str | None) -> list[str]:
     for pattern in _CONTRACT_PATTERNS:
         for match in pattern.finditer(scrubbed):
             path = match.group(1)
+            # The verb, not the path: "Do not save X to P" puts the negation
+            # before the verb and the path at the end of a long clause.
+            if _is_suppressed(scrubbed, match.start()):
+                continue
             if path not in found:
                 found.append(path)
     return found
