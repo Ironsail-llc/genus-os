@@ -90,3 +90,7 @@ tags_consumed: []
 
 v2:
   error_feedback: true
+
+changelog:
+  - date: "2026-09-16"
+    change: "Grant create_note, which the escalation step calls. Drop the tools_denied entry for `message`, which is not a registered tool."

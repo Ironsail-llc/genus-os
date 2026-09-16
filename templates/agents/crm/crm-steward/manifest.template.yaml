@@ -95,10 +95,25 @@ v2:
   error_feedback: true
   guardrails:
     - write_path_restrict
+    # delete_person is granted below because the 0.2 hygiene scan calls it, and
+    # the scan was reporting a count it had not deleted. But what it deletes is
+    # chosen by the MODEL matching CRM rows against a prose blocklist, on an
+    # unattended schedule, with no dry-run and no cap — so it goes through a
+    # human. Both halves are needed: this policy, and the tool list below.
+    # Verified enforced end to end, not assumed: with the policy enabled and
+    # the pattern set, delete_person returns allowed=False action='escalate'
+    # while list_people stays allowed. Under ROBOTHOR_APPROVAL_MODE=enforce —
+    # production's setting — an unreachable approver fails CLOSED.
+    - human_approval
+  human_approval_tools:
+    - delete_person
   write_path_allowlist:
     - "brain/memory/crm-steward-status.md"
 
 changelog:
+  - date: "2026-09-16"
+    change: "Grant delete_person for the 0.2 hygiene scan, which called it without holding it, and gate it behind human_approval — the rows it removes are chosen by the model from a prose blocklist on an unattended run. Drop the Password Vault Tools section: it documented three tools this agent is not granted and should not have."
+
   - date: "2026-03-09"
     change: "Swap to GLM-5 — merge_contacts/update_person need reliable multi-param tool calls"
   - date: "2026-03-09"

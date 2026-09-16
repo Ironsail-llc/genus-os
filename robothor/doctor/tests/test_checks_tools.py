@@ -68,6 +68,134 @@ class TestMentionScanner:
         assert mentioned_tools(text, registered) == set()
 
 
+class TestTheScannerDoesNotReadCodeOrLinks:
+    """R8: none of the round-1 false positives were addressed — the templates
+    went quiet because the TEMPLATES were rewritten, not because the scanner
+    got safer. The module docstring promises under-reporting; on these inputs
+    it over-reported."""
+
+    @pytest.fixture
+    def registered(self) -> set[str]:
+        from robothor.engine.tools.registry import builtin_schema_names
+
+        return builtin_schema_names()
+
+    @pytest.mark.parametrize(
+        ("label", "text"),
+        [
+            ("a URL", "See https://api.example.com/v1/gws_gmail_send?x=1 for details."),
+            ("a log path", "Logs land in /var/lib/gws_gmail_send/out.log"),
+            ("a windows path", r"Check C:\logs\gws_gmail_send\out.txt"),
+            ("a bash fence", "Example:\n```bash\ngws_gmail_send --to a@b.com\n```\n"),
+            (
+                "another vendor's SDK in a python fence",
+                "```python\nclient.read_file('x')\nsdk.web_search(q)\n```\n",
+            ),
+            ("a backticked name inside a fence", "```\nUse `gws_gmail_send` here\n```\n"),
+            ("a markdown link", "[`read_file`](https://example.com/docs)"),
+            ("a tilde fence", "~~~\n`gws_gmail_send`\n~~~\n"),
+            ("an unterminated fence", "Intro\n```\n`gws_gmail_send` and more"),
+        ],
+    )
+    def test_it_is_not_an_instruction(self, registered: set[str], label: str, text: str) -> None:
+        assert mentioned_tools(text, registered) == set(), label
+
+    def test_a_bare_adjective_is_still_a_prohibition(self, registered: set[str]) -> None:
+        """The trailing-negation rule covered "is not available"; a bare
+        "`exec` is forbidden" has no "not" in it at all."""
+        for text in (
+            "`exec` is forbidden.",
+            "`exec` is strictly prohibited.",
+            "`browser` is off-limits.",
+            "`write_file` remains disallowed.",
+        ):
+            assert mentioned_tools(text, registered) == set(), text
+
+    def test_a_real_instruction_beside_all_of_that_still_counts(self, registered: set[str]) -> None:
+        text = (
+            "Docs: https://example.com/v1/gws_gmail_send\n"
+            "```bash\ngws_gmail_modify --add UNREAD\n```\n"
+            "Reply with `gws_gmail_reply` when a thread needs an answer.\n"
+        )
+        assert mentioned_tools(text, registered) == {"gws_gmail_reply"}
+
+
+class TestTheDoctorModelsTheRegistrysFilters:
+    """R9: `_granted` modelled `tools_allowed` and `GOAL_TOOLS` but not the
+    three families the registry strips regardless — so a manifest listing
+    `spawn_agent` without `can_spawn_agents` was judged to HAVE it, and the
+    check's own headline defect was invisible for those families."""
+
+    @pytest.mark.asyncio
+    async def test_spawn_tools_need_the_flag(self, instance: Path) -> None:
+        _write_agent(
+            instance,
+            "delegator",
+            {"tools_allowed": ["read_file", "spawn_agent"]},
+            instructions="Delegate with `spawn_agent`.",
+        )
+        result = await _run("agents.tools_named_but_not_granted")
+
+        assert result.status == "fail", result.detail
+        assert "spawn_agent" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_with_the_flag_it_passes(self, instance: Path) -> None:
+        _write_agent(
+            instance,
+            "delegator",
+            {
+                "tools_allowed": ["read_file", "spawn_agent"],
+                "v2": {"can_spawn_agents": True},
+            },
+            instructions="Delegate with `spawn_agent`.",
+        )
+        result = await _run("agents.tools_named_but_not_granted")
+        assert result.status == "pass", result.detail
+
+    @pytest.mark.asyncio
+    async def test_todo_tools_need_their_flag_too(self, instance: Path) -> None:
+        _write_agent(
+            instance,
+            "planner",
+            {"tools_allowed": ["read_file", "todo_write"]},
+            instructions="Track the plan with `todo_write`.",
+        )
+        result = await _run("agents.tools_named_but_not_granted")
+
+        assert result.status == "fail"
+        assert "todo_write" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_the_flags_are_read_where_the_engine_reads_them(self, instance: Path) -> None:
+        """Both live under `v2:` — `config.py` does `v2.get("can_spawn_agents")`.
+        Reading the top level found neither and stripped the tools from every
+        agent that legitimately has them."""
+        _write_agent(
+            instance,
+            "top-level",
+            {"tools_allowed": ["spawn_agent"], "can_spawn_agents": True},
+            instructions="Delegate with `spawn_agent`.",
+        )
+        result = await _run("agents.tools_named_but_not_granted")
+
+        assert result.status == "fail", "a top-level flag is not what the engine reads"
+
+    @pytest.mark.asyncio
+    async def test_an_unrestricted_agent_still_does_not_get_spawn(self, instance: Path) -> None:
+        """Absent `tools_allowed` means every tool MINUS the same filters."""
+        _write_agent(
+            instance,
+            "unrestricted",
+            {},
+            instructions="Delegate with `spawn_agent`.",
+        )
+        result = await _run("agents.tools_named_but_not_granted")
+
+        assert result.status == "fail"
+        assert "spawn_agent" in result.detail
+
+
 # ── agents.tools_named_but_not_granted ────────────────────────────────
 
 

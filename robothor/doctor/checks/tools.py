@@ -53,6 +53,32 @@ _MENTION_RE = re.compile(
     r"|(?P<bare>gws_[a-z_]+)"
 )
 
+#: A fenced code block. Everything inside one is an EXAMPLE — a shell
+#: transcript, another vendor's SDK, a JSON payload — not an instruction to
+#: this agent, and reading `client.read_file('x')` out of a python fence as
+#: "this agent needs read_file" is the fabrication this scanner promises not to
+#: make.
+_FENCE_RE = re.compile(r"^[ \t]*(```|~~~).*?^[ \t]*\1[ \t]*$", re.MULTILINE | re.DOTALL)
+
+#: An unterminated fence runs to the end of the file, which is what a truncated
+#: instruction file looks like.
+_OPEN_FENCE_RE = re.compile(r"^[ \t]*(?:```|~~~).*\Z", re.MULTILINE | re.DOTALL)
+
+#: A URL or a filesystem path. `https://api.example.com/v1/gws_gmail_send` and
+#: `/var/lib/gws_gmail_send/out.log` both contain a registered tool name and
+#: neither is telling the agent to call it.
+_URL_OR_PATH_RE = re.compile(r"\S*[/\\]\S*|\b[a-z0-9_.-]+\.[a-z]{2,}\b", re.IGNORECASE)
+
+#: Adjectives that make a bare mention a prohibition — "`exec` is forbidden".
+#: The trailing-negation rule covers "is not available"; this covers the case
+#: with no "not" in it at all.
+_NEGATIVE_PREDICATE_RE = re.compile(
+    r"\b(?:is|are|was|were|stays?|remains?)\s+"
+    r"(?:strictly\s+|absolutely\s+|completely\s+)?"
+    r"(?:forbidden|prohibited|banned|disallowed|off[- ]limits|unavailable|denied)\b",
+    re.IGNORECASE,
+)
+
 #: Where one clause ends and the next begins. A sentence is too coarse — "Use
 #: `gws_gmail_reply`, not `gws_gmail_send`" would lose both — and a line is too
 #: coarse for a bulleted instruction file.
@@ -109,20 +135,34 @@ def mentioned_tools(text: str, registered: set[str]) -> set[str]:
     `gws_gmail_reply`, not `gws_gmail_send`" keeps the first and drops the
     second.
 
+    Fenced code blocks, URLs and filesystem paths are removed before scanning.
+    Everything inside a fence is an EXAMPLE — a shell transcript, another
+    vendor's SDK, a JSON payload — and
+    ``https://api.example.com/v1/gws_gmail_send`` and
+    ``/var/lib/gws_gmail_send/out.log`` both contain a registered tool name
+    while neither tells the agent to call anything.
+
     This deliberately under-reports rather than over-reports. A missed mention
     costs an operator nothing; a fabricated one costs them their trust in the
     check, and a check nobody trusts is the one they learn to skip.
     """
+    text = _FENCE_RE.sub(" ", text)
+    text = _OPEN_FENCE_RE.sub(" ", text)
+    text = _URL_OR_PATH_RE.sub(" ", text)
+
     found: set[str] = set()
     for clause in _CLAUSE_SPLIT_RE.split(text):
         if not clause or not clause.strip():
             continue
-        trailing = _TRAILING_NEGATION_RE.search(clause) is not None
+        negated_after = (
+            _TRAILING_NEGATION_RE.search(clause) is not None
+            or _NEGATIVE_PREDICATE_RE.search(clause) is not None
+        )
         for match in _MENTION_RE.finditer(clause):
             name = match.group("ticked") or match.group("called") or match.group("bare")
             if name not in registered:
                 continue
-            if trailing:
+            if negated_after:
                 continue
             if _NEGATION_RE.search(clause[: match.start()]):
                 continue
@@ -161,19 +201,52 @@ def _read_instruction_text(workspace: Path, manifest: dict[str, Any]) -> str:
     return "\n".join(chunks)
 
 
-def _granted(manifest: dict[str, Any], registered: set[str]) -> set[str] | None:
-    """Every tool this manifest grants, or ``None`` for "all of them".
+def _granted(manifest: dict[str, Any], registered: set[str]) -> set[str]:
+    """Every tool this manifest actually grants at runtime.
 
-    ``None`` is the engine's own semantics for an absent or empty
-    ``tools_allowed``: ``ToolRegistry._get_filtered_names`` falls through to
-    ``names = list(self._schemas.keys())``. That is the DEFAULT manifest shape,
-    so treating it as "grants nothing" made this check fail on a freshly
-    initialised instance — every tool its instructions named was reported
-    missing from an agent that had all of them.
+    Modelled on ``ToolRegistry._get_filtered_names``, because a doctor whose
+    verdict differs from the loader's is worse than no doctor:
+
+    * an absent or empty ``tools_allowed`` means EVERY registered tool — that
+      is the default manifest shape, and reading it as "grants nothing" made
+      this check fail on a freshly initialised instance;
+    * ``GOAL_TOOLS`` are appended unconditionally;
+    * ``SPAWN_TOOLS`` are stripped without ``can_spawn_agents``, ``TODO_TOOLS``
+      without ``todo_list_enabled``, and the meta-tools always — so a manifest
+      listing ``spawn_agent`` without the flag does NOT have it, which the
+      check used to get backwards.
     """
+    from robothor.engine.tools.constants import (
+        GOAL_TOOLS,
+        SPAWN_TOOLS,
+        TODO_TOOLS,
+        TOOLSEARCH_TOOLS,
+    )
+
+    # The registry strips these regardless of what `tools_allowed` says
+    # (`ToolRegistry._get_filtered_names`). Not modelling them meant a manifest
+    # granting `spawn_agent` without `can_spawn_agents` was judged to HAVE it,
+    # so the check's own headline defect — instructions naming a tool the run
+    # does not grant — was invisible for the three families the registry
+    # filters. `tool_search`/`tool_describe`/`tool_call` are never in the
+    # normal advertised set at all.
+    # Both flags live under `v2:`, which is where config.py reads them
+    # (`v2.get("can_spawn_agents", False)`); reading the top level found
+    # neither and stripped the tools from every agent that has them.
+    v2 = manifest.get("v2") or {}
+    if not isinstance(v2, dict):
+        v2 = {}
+    stripped: set[str] = set(TOOLSEARCH_TOOLS)
+    if not v2.get("can_spawn_agents"):
+        stripped |= set(SPAWN_TOOLS)
+    if not v2.get("todo_list_enabled"):
+        stripped |= set(TODO_TOOLS)
+
     allowed = manifest.get("tools_allowed")
     if not allowed:
-        return None
+        # Every registered tool, minus the same filters.
+        return registered - stripped
+
     granted = {str(n) for n in allowed}
     for block_key, list_key in (
         ("heartbeat", "heartbeat_tools_allowed"),
@@ -183,9 +256,8 @@ def _granted(manifest: dict[str, Any], registered: set[str]) -> set[str] | None:
         if isinstance(block, dict) and block.get(list_key):
             granted |= {str(n) for n in block[list_key]}
     # GOAL_TOOLS are appended unconditionally by the registry filter.
-    from robothor.engine.tools.constants import GOAL_TOOLS
-
-    return granted | (set(GOAL_TOOLS) & registered)
+    granted |= set(GOAL_TOOLS) & registered
+    return granted - stripped
 
 
 def _denied(manifest: dict[str, Any], name: str) -> bool:
@@ -252,13 +324,9 @@ def _scan_named_but_not_granted(directory: Path, workspace: Path) -> list[str]:
         # and it will find another way. It was suppressed here, which put the
         # code and the module docstring in disagreement.
         denied = sorted(n for n in named if _denied(manifest, n))
-        if granted is None:
-            # "All tools" — only a deny can make a named tool unreachable.
-            ungranted: list[str] = []
-            unresolved: list[str] = []
-        else:
-            ungranted = sorted(n for n in named if n not in granted and n not in denied)
-            unresolved = sorted(n for n in granted if n not in registered)
+        ungranted = sorted(n for n in named if n not in granted and n not in denied)
+        declared = {str(n) for n in (manifest.get("tools_allowed") or [])}
+        unresolved = sorted(n for n in declared if n not in registered)
 
         parts: list[str] = []
         if denied:
@@ -370,10 +438,9 @@ def _has_a_shell(manifest: dict[str, Any], registered: set[str]) -> bool:
     ``tools_allowed`` omits it. Reporting it as one — with wording about mail
     going out past the do-not-contact check — was untrue there.
     """
-    granted = _granted(manifest, registered)
     if _denied(manifest, "exec"):
         return False
-    return granted is None or "exec" in granted
+    return "exec" in _granted(manifest, registered)
 
 
 def _scan_exec_bypasses(directory: Path) -> list[str]:
@@ -447,9 +514,7 @@ def _calendar_tool_granted(directory: Path) -> bool:
     registered = _registered_names()
     calendar_tools = {name for name in GWS_TOOLS if name.startswith("gws_calendar_")}
     for manifest in _scan_manifests(directory):
-        granted = _granted(manifest, registered)
-        # `None` is "every tool", which includes the calendar ones.
-        if granted is None or (granted & calendar_tools):
+        if _granted(manifest, registered) & calendar_tools:
             return True
     return False
 

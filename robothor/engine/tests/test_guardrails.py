@@ -287,6 +287,54 @@ class TestInboundOnly:
         assert r.allowed
 
 
+class TestDaysFromNowSurvivesANaiveStart:
+    """R10: it caught only ValueError, then subtracted a tz-aware `now`.
+
+    `"2026-10-01T09:00:00"` is exactly the start format the calendar schema
+    invites, and an all-day event is a bare date — both raised TypeError, which
+    `check_pre_execution` does not catch for built-in policies, so the guardrail
+    took the whole tool call down rather than declining to judge. The calendar
+    path reaches it more often now that the tools default to a human's calendar.
+    """
+
+    @pytest.mark.parametrize(
+        "start",
+        ["2026-10-01T09:00:00", "2026-10-01", "2026-10-01T09:00:00Z", "2026-10-01T09:00:00+02:00"],
+    )
+    def test_it_returns_a_number_not_an_exception(self, start: str) -> None:
+        from robothor.engine.guardrails import _days_from_now
+
+        assert isinstance(_days_from_now(start), float)
+
+    @pytest.mark.parametrize("start", ["", "nonsense", None, 12345])
+    def test_it_declines_to_judge_rather_than_raising(self, start) -> None:
+        from robothor.engine.guardrails import _days_from_now
+
+        assert _days_from_now(start) is None
+
+    def test_a_naive_start_is_read_as_utc(self) -> None:
+        """What the Calendar API does with a start carrying no offset and no
+        timeZone — so the two spellings of the same instant agree."""
+        from robothor.engine.guardrails import _days_from_now
+
+        naive = _days_from_now("2026-10-01T09:00:00")
+        aware = _days_from_now("2026-10-01T09:00:00Z")
+        assert naive is not None and aware is not None
+        assert abs(naive - aware) < 0.001
+
+    def test_the_guardrail_does_not_crash_on_a_naive_start(self) -> None:
+        engine = GuardrailEngine(enabled_policies=["recurring_meeting_proposal_required"])
+        result = engine.check_pre_execution(
+            "gws_calendar_create",
+            {
+                "summary": "Kickoff",
+                "start": "2026-10-01T09:00:00",
+                "attendees": ["a@x.example", "b@y.example", "c@z.example"],
+            },
+        )
+        assert result.guardrail_name in ("", "recurring_meeting_proposal_required")
+
+
 class TestUnknownPolicyValidation:
     def test_unknown_policy_logged(self, caplog):
         import logging

@@ -600,8 +600,17 @@ def _days_from_now(start: str) -> float | None:
         return None
     try:
         dt = datetime.fromisoformat(start)
-    except ValueError:
+    except (ValueError, TypeError):
         return None
+    if dt.tzinfo is None:
+        # A naive start is the format the calendar schema invites
+        # ("2026-10-01T09:00:00") and an all-day event is a bare date. Both
+        # subtracted against a tz-aware `now` and raised TypeError, which
+        # `check_pre_execution` does not catch for built-in policies — so the
+        # guardrail took the whole tool call down rather than declining to
+        # judge. Treating a naive time as UTC is what the Calendar API does
+        # with a start carrying no offset and no timeZone.
+        dt = dt.replace(tzinfo=UTC)
     now = datetime.now(tz=UTC)
     return (dt - now).total_seconds() / 86400.0
 

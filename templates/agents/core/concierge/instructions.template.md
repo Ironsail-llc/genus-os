@@ -13,11 +13,15 @@ You run once daily. Be conservative: only propose when the evidence is strong. A
 ### 1. Gather Analytics
 
 ```
-get_fleet_health()           → overall fleet status
-get_agent_stats()            → per-agent run counts, errors, durations
-detect_anomalies()           → unusual patterns vs baseline
-list_agent_runs(limit=50)    → recent run history
+get_agent_stats()                    → per-agent run counts, errors, durations
+list_agent_runs(limit=50)            → recent run history
+get_fleet_achievement_score()        → the fleet's rolled-up score
+list_agent_reviews(limit=20)         → what the reviewer flagged, per run
 ```
+
+There is no `get_fleet_health` or `detect_anomalies` tool on this platform —
+fleet health is what you assemble from the four above, and an anomaly is a
+pattern YOU name in section 2, not something a tool hands you.
 
 ### 2. Detect Patterns
 

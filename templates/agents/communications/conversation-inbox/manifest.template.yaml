@@ -84,6 +84,8 @@ v2:
     - "brain/memory/conversation-inbox-status.md"
 
 changelog:
+  - date: "2026-09-16"
+    change: "Grant list_tasks, which the duplicate check calls before creating an escalation. Drop the tools_denied entry for `message`, which is not a registered tool."
   - date: "2026-03-10"
     change: "Revert to GLM-5 — Qwen 3.5 122B caused intermittent timeouts (22% rate)"
   - date: "2026-03-09"
