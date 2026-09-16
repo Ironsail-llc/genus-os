@@ -4,6 +4,10 @@ on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
 
+# `pull-requests: write` is the minimum the sticky-comment action needs to
+# create and update its comment, and it is why the two checkouts below are
+# split: a job holding a write token must not execute code the pull request
+# can rewrite.
 permissions:
   pull-requests: write
   contents: read
@@ -13,10 +17,32 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.pull_request.base.ref == 'main'
     steps:
-      # The comment now quotes the pull request's own release-note fragment,
-      # so the author reads what the release will say about their change while
-      # they can still change it. Needs the tree, hence the checkout.
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      # The comment quotes the pull request's own release-note fragment, so the
+      # author reads what the release will say while they can still change it.
+      # That needs the tree, and this job holds `pull-requests: write` -- so the
+      # TOOL is checked out from the BASE commit and only the FRAGMENTS come
+      # from the head. A pull request can therefore change what the comment
+      # says about itself, which is the point, but not what code produces it.
+      # Both checkouts are sparse and drop their credentials: `preview` reads
+      # `changelog.d/` and nothing else.
+      - name: The tool, from the base commit
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          sparse-checkout: |
+            scripts/changelog_fragments.py
+            scripts/check_doc_links.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: The fragments, from the pull request
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          path: pr
+          sparse-checkout: |
+            changelog.d
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
 
       - name: Compute release impact
         id: impact
@@ -64,7 +90,7 @@ jobs:
         run: |
           {
             echo 'notes<<FRAGMENT_EOF'
-            python3 scripts/changelog_fragments.py preview \
+            python3 scripts/changelog_fragments.py --repo-root "$PWD/pr" preview \
               --pr "$PR_NUMBER" --title "$PR_TITLE" --labels "$PR_LABELS" || true
             echo FRAGMENT_EOF
           } >> "$GITHUB_OUTPUT"
