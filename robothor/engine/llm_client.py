@@ -2622,6 +2622,14 @@ class LLMClient:
                         rotations_left -= 1
                         continue
                     if is_context_overflow(e):
+                        # Safe to re-ask in place for the same reason the
+                        # credential rotation above is: an oversized
+                        # conversation is refused at stream CREATION, before
+                        # any chunk has reached `on_content`, so nothing the
+                        # user has already seen can be duplicated. Every
+                        # signature in `OVERFLOW_SIGNATURES` is a request-time
+                        # failure; one that arrived mid-stream would need a
+                        # "nothing emitted yet" guard instead.
                         if overflow_shrinks_left > 0 and shrink_after_overflow(messages, model):
                             overflow_shrinks_left -= 1
                             input_est = estimate_tokens(messages)
