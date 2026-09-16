@@ -308,6 +308,86 @@ class TestPrune:
         assert attachments.prune_inbox(retention_days=30, workspace=tmp_path / "nope") == 0
 
 
+class TestSecretsTheOperatorSent:
+    """Sanitising a filename destroys what ``secret_paths`` matches on.
+
+    ``.env`` becomes ``env``; ``.ssh/id_rsa`` becomes ``id_rsa``. A file that
+    was refused on the way in would then be readable, quotable into a prompt,
+    and sendable back out under a name the rules no longer recognise —
+    ``credentials.json`` worst of all, because ``.json`` is an extractable
+    suffix and the whole file would otherwise be decoded into the first turn.
+
+    The file is still KEPT. The operator sent it deliberately and may want it
+    moved or renamed. What is refused is putting its contents in front of a
+    model.
+    """
+
+    def test_the_original_name_is_what_decides(self) -> None:
+        assert attachments.holds_credentials(".env") is True
+        assert attachments.holds_credentials("../../.ssh/id_rsa") is True
+        assert attachments.holds_credentials("credentials.json") is True
+        assert attachments.holds_credentials("notes.txt") is False
+        assert attachments.holds_credentials("env.example") is False
+
+    def test_the_row_carries_the_verdict(self, tmp_path) -> None:
+        row = attachments.save_attachment(
+            chat_id="100200300",
+            file_id="f",
+            file_unique_id="u",
+            name="credentials.json",
+            data=b'{"token": "abc"}',
+            kind="document",
+            mime="application/json",
+            workspace=tmp_path,
+        )
+        assert row["secret"] is True
+
+    def test_an_ordinary_file_is_not_marked(self, tmp_path) -> None:
+        row = attachments.save_attachment(
+            chat_id="100200300",
+            file_id="f",
+            file_unique_id="u2",
+            name="notes.txt",
+            data=b"hello",
+            kind="document",
+            mime="text/plain",
+            workspace=tmp_path,
+        )
+        assert "secret" not in row
+
+    def test_it_is_still_saved(self, tmp_path) -> None:
+        from pathlib import Path
+
+        row = attachments.save_attachment(
+            chat_id="100200300",
+            file_id="f",
+            file_unique_id="u",
+            name=".env",
+            data=b"TOKEN=abc",
+            kind="document",
+            mime="text/plain",
+            workspace=tmp_path,
+        )
+        assert Path(row["path"]).read_bytes() == b"TOKEN=abc"
+
+    def test_the_note_says_kept_but_not_read_and_quotes_nothing(self) -> None:
+        row = {
+            "path": "/w/inbox/telegram/100200300/2026-09-15/u-env",
+            "name": "env",
+            "kind": "document",
+            "mime": "text/plain",
+            "size": 9,
+            "secret": True,
+        }
+        note = attachments.format_attachment_note(
+            "here you go",
+            [attachments.NotedAttachment(row=row, text="TOKEN=abc", text_total_chars=9)],
+        )
+        assert "kept, but not read" in note
+        assert "TOKEN=abc" not in note, "an extract must never survive the secret verdict"
+        assert row["path"] in note, "the operator can still be told where it went"
+
+
 class TestKindForMessageParts:
     @pytest.mark.parametrize(
         ("mime", "name", "expected"),

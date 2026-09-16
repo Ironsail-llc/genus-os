@@ -183,6 +183,35 @@ class TestDocuments:
         assert first == second
 
 
+class TestASecretsFileTheOperatorSends:
+    @pytest.mark.asyncio
+    async def test_it_is_kept_but_never_quoted_into_the_turn(self, bot) -> None:
+        """`.json` is an extractable suffix, so `credentials.json` would have
+        been decoded and pasted whole into the prompt."""
+        arm_download(bot, b'{"private_key": "super-secret-value"}')
+        await bot.handle_file(
+            message(
+                document=document(name="credentials.json", mime="application/json", uid="AgACcred")
+            )
+        )
+        text, rows = enqueued(bot)
+        assert rows[0]["secret"] is True
+        assert Path(rows[0]["path"]).exists(), "the operator sent it; it is kept"
+        assert "super-secret-value" not in text
+        assert "kept, but not read" in text
+        assert rows[0]["path"] in text, "they can still be told where it went"
+
+    @pytest.mark.asyncio
+    async def test_a_dotenv_is_marked_despite_the_sanitised_name(self, bot) -> None:
+        arm_download(bot, b"TOKEN=abc")
+        await bot.handle_file(
+            message(document=document(name=".env", mime="text/plain", uid="AgACenv"))
+        )
+        _, rows = enqueued(bot)
+        assert rows[0]["secret"] is True
+        assert rows[0]["name"] == "env", "sanitising is exactly what loses the evidence"
+
+
 class TestSizeCeiling:
     @pytest.mark.asyncio
     async def test_a_25mb_file_is_refused_with_the_real_limit(self, bot) -> None:

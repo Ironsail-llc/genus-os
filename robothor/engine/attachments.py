@@ -276,6 +276,31 @@ def extractable(suffix: str, mime: str = "") -> str | None:
     return None
 
 
+def holds_credentials(name: str) -> bool:
+    """Does the name Telegram supplied say this file holds credentials?
+
+    Asked on the ORIGINAL name, because sanitising destroys the evidence:
+    ``.env`` becomes ``env`` and ``.ssh/id_rsa`` becomes ``id_rsa``, and
+    :func:`robothor.engine.secret_paths.is_secret_path` recognises neither. A
+    file saved under a sanitised name would otherwise be readable, quotable and
+    sendable where the original was refused.
+    """
+    from robothor.engine.secret_paths import is_secret_path
+
+    raw = str(name or "").replace("\\", "/")
+    return is_secret_path(raw) or is_secret_path(raw.rsplit("/", 1)[-1])
+
+
+#: What the agent is told in place of a secrets file's contents. The file IS
+#: kept — the operator sent it deliberately and may want it moved, renamed or
+#: handed to a tool — but nothing quotes it into a prompt.
+SECRET_FILE_NOTE = (
+    "kept, but not read: this is named like a credentials file, and credentials "
+    "reach tools through the platform rather than through the transcript. If a "
+    "value is missing, say so instead of opening it."
+)
+
+
 def human_size(size: int) -> str:
     """``5 B`` / ``245.3 KB`` / ``12.0 MB`` — a size an operator can read."""
     value = float(max(0, int(size)))
@@ -366,6 +391,16 @@ def save_attachment(
     row: dict[str, Any] = {
         "path": str(path),
         "name": safe_name(name),
+        # Judged on the name Telegram gave it, NOT on the sanitised one: `.env`
+        # sanitises to `env` and `.ssh/id_rsa` to `id_rsa`, so by the time the
+        # file is on disk `secret_paths` no longer recognises either. Recorded
+        # here, once, so every reader downstream can ask — the intake uses it to
+        # refuse quoting the file into a prompt, and `send_file` reads it before
+        # it reads the bytes.
+        #
+        # The file is still SAVED. The operator sent it on purpose; refusing to
+        # keep it would be a different kind of unhelpful. What is refused is
+        # putting its contents in front of a model.
         "kind": kind,
         "mime": mime or "",
         "size": len(data),
@@ -373,6 +408,8 @@ def save_attachment(
         "telegram_file_unique_id": str(file_unique_id or ""),
         "caption": caption or "",
     }
+    if holds_credentials(name):
+        row["secret"] = True
     if width:
         row["width"] = int(width)
     if height:
@@ -412,6 +449,9 @@ def _describe(item: NotedAttachment, index: int, total: int) -> list[str]:
     bits.append(human_size(int(row.get("size") or 0)))
     prefix = f"{index}. " if total > 1 else "- "
     lines = [f"{prefix}{name} — {', '.join(bits)}", f"   path: {row.get('path', '')}"]
+    if row.get("secret"):
+        lines.append(f"   {SECRET_FILE_NOTE}")
+        return lines
     if item.error:
         lines.append(f"   note: {item.error}")
     if kind == "image":

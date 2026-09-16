@@ -229,6 +229,13 @@ class TelegramAttachmentsMixin:
 
         from robothor.engine.telegram_handlers import _extract_pdf_text
 
+        if noted.row.get("secret"):
+            # Named like a credentials file. It is on disk and the operator can
+            # ask for it to be moved or renamed, but its CONTENTS never reach a
+            # prompt — `credentials.json` would otherwise have been decoded and
+            # quoted whole, because `.json` is an extractable suffix.
+            return
+
         suffix = PurePath(media.name).suffix.lower()
         extract = attachments.extractable(suffix, media.mime)
         if extract is not None and media.kind != "image":

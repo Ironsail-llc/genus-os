@@ -76,6 +76,13 @@ Each saved file is recorded on the stored user turn's JSONB under
 `height` are present only when known, and absent rather than null — a reader
 never has to tell "unknown" from "zero".
 
+A file named like a credentials file (`.env`, `credentials.json`, `id_rsa`, …)
+also carries `"secret": true`. It is still **saved** — you sent it on purpose
+and may want it moved or renamed — but nothing quotes its contents into a
+prompt and `send_file` refuses to send it back out. The verdict is taken from
+the name Telegram supplied, because sanitising it for the filesystem is exactly
+what destroys the evidence: `.env` becomes `env`.
+
 ## Sending: `send_file`
 
 ```

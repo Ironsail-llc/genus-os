@@ -217,6 +217,33 @@ class TestSecrets:
         assert "hunter2" not in out.get("error", "")
 
     @pytest.mark.asyncio
+    async def test_an_inbox_copy_of_a_secrets_file_cannot_be_sent_back(
+        self, tmp_path, sent
+    ) -> None:
+        """`.env` was saved as `<uid>-env`, which `secret_paths` no longer
+        matches. Refused on the way in, refused on the way out."""
+        path = make_file(
+            tmp_path / "inbox" / "telegram" / "100200300" / "2026-09-15",
+            "AgACenv-env",
+            b"TOKEN=abc",
+        )
+        out = await tool.send_file({"path": str(path)}, Ctx(tmp_path))
+        assert "error" in out
+        assert "credentials file" in out["error"]
+        assert "abc" not in out["error"]
+        assert not sent
+
+    @pytest.mark.asyncio
+    async def test_an_ordinary_inbox_file_still_goes(self, tmp_path, sent) -> None:
+        path = make_file(
+            tmp_path / "inbox" / "telegram" / "100200300" / "2026-09-15",
+            "AgACdoc-notes.txt",
+            b"nothing secret here",
+        )
+        out = await tool.send_file({"path": str(path)}, Ctx(tmp_path))
+        assert out.get("sent") is True
+
+    @pytest.mark.asyncio
     async def test_a_binary_file_is_not_scanned_as_text(self, tmp_path, sent) -> None:
         """The scan is for text an agent could have written a secret into. A PNG
         is not text, and decoding one as UTF-8 to grep it would refuse at random."""

@@ -159,12 +159,35 @@ def _image_dimensions(path: Path) -> tuple[int, int] | None:
         return None
 
 
+def _saved_as_a_secret(path: Path) -> bool:
+    """Is this an inbox copy of a file that was named like a credentials file?
+
+    The inbox stores ``<file_unique_id>-<sanitised name>``, and sanitising
+    destroys what ``secret_paths`` matches on: ``.env`` becomes ``env`` and
+    ``id_rsa`` keeps only its stem. So the stored name is stripped of its uid
+    prefix and asked again, with the leading dot restored — otherwise a file the
+    operator sent could be sent back out under a name the rules no longer
+    recognise, having been refused on the way in.
+    """
+    from robothor.engine.attachments import INBOX_DIRNAME, holds_credentials
+
+    if INBOX_DIRNAME not in path.parts:
+        return False
+    stored = path.name.split("-", 1)[-1] if "-" in path.name else path.name
+    return holds_credentials(stored) or holds_credentials(f".{stored}")
+
+
 def _credential_refusal(path: Path, size: int) -> str | None:
     """Why this file may not leave the box, or None.
 
     Only text is scanned, and only up to :data:`MAX_SCAN_BYTES`; a text file
     too large to check is refused rather than sent unchecked.
     """
+    if _saved_as_a_secret(path):
+        return (
+            f"refused: {path.name} was received over a channel and is named like a "
+            "credentials file. It is kept on disk, but its contents do not leave the box."
+        )
     if path.suffix.lower() not in _SCANNABLE:
         return None
     if size > MAX_SCAN_BYTES:
