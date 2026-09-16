@@ -155,6 +155,52 @@ class TestTheCaptionIsScrubbed:
         )
         assert _user_turn(written)["attachments"][0]["caption"] == "what's this?"
 
+    @pytest.mark.parametrize("field", ["caption", "name", "original_name"])
+    def test_every_operator_authored_string_is_scrubbed(self, written, field) -> None:
+        """Review M10, and the property the earlier version lacked.
+
+        A caption is not the only thing on the row the operator writes. They
+        choose the FILENAME too, and a file sent as `ghp_….txt` put the token
+        into `name` in the clear while the identical string in the caption or
+        the body was scrubbed. `original_name` is the same class — it is the
+        raw name Telegram supplied, kept for a quarantined file.
+
+        Parametrised rather than written out three times so that the next
+        operator-authored field added to the row fails here until it is added
+        to the redactor, which is the whole point.
+        """
+        import robothor.engine.chat_store as chat_store
+
+        row = dict(ROW, **{field: f"{TOKEN}.txt" if field != "caption" else TOKEN})
+        chat_store.save_exchange(
+            "telegram:100200300",
+            "here",
+            "Got it.",
+            user_extras=chat_store.build_user_extras(attachments=[row]),
+        )
+        stored = _user_turn(written)["attachments"][0]
+        assert TOKEN not in str(stored[field]), f"{field} carried the credential to the column"
+
+    def test_the_path_is_deliberately_left_alone_and_that_is_said_out_loud(self, written) -> None:
+        """The honest half of M10. `path` is load-bearing — the Helm chat UI
+        reads it back — so it is NOT redacted, which means a file named after a
+        token still has that token in the row. Redacting `name` is consistency
+        with the rest of the turn, not elimination. Asserted so nobody reads
+        the fix as more than it is.
+        """
+        import robothor.engine.chat_store as chat_store
+
+        row = dict(ROW, name=f"{TOKEN}.txt", path=f"/w/inbox/telegram/1/2026-09-16/AB-{TOKEN}.txt")
+        chat_store.save_exchange(
+            "telegram:100200300",
+            "here",
+            "ok",
+            user_extras=chat_store.build_user_extras(attachments=[row]),
+        )
+        stored = _user_turn(written)["attachments"][0]
+        assert stored["path"] == row["path"], "the path must reach the column byte for byte"
+        assert TOKEN not in stored["name"]
+
     def test_the_caller_s_own_row_is_not_mutated(self, written) -> None:
         """Redacting must not reach back into the dict the handler still holds
         — the intake logs it and the album buffer keeps it."""

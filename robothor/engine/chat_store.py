@@ -54,22 +54,42 @@ def upsert_session(
         return int(row["id"])
 
 
+#: The fields on an attachment row the OPERATOR authors. They are the same
+#: class as the message body and get the same treatment.
+#:
+#: ``caption`` is the obvious one. ``name`` and ``original_name`` are here
+#: because the operator chooses the filename too, and a file sent as
+#: ``ghp_….txt`` put the token into the JSONB in the clear while the identical
+#: string in the caption or the body was scrubbed (review M10).
+#:
+#: A list, so the next field added to the row is one line here — and the
+#: covering test is parametrised over this same class of field so that adding
+#: one without adding it here fails.
+_OPERATOR_AUTHORED = ("caption", "name", "original_name")
+
+
 def _redact_captions(extras: dict[str, Any] | None) -> dict[str, Any] | None:
-    """A copy of *extras* with every attachment caption scrubbed.
+    """A copy of *extras* with every operator-authored attachment string scrubbed.
 
     An attachment's ``caption`` is the operator's own words — the same class as
     the message body, and subject to the same rule. Without this, a credential
     pasted as a photo caption was written to ``chat_messages.message``
     unredacted while the identical text in the body was scrubbed, which is the
-    cross-branch gap the hostile review flagged.
+    cross-branch gap the hostile review flagged. The filename is the same class
+    and is covered too; see ``_OPERATOR_AUTHORED``.
 
     Copies rather than edits in place: the caller still holds those dicts (the
     intake logs them, the album buffer keeps them), and a persistence function
     that reached back into them would be changing data it does not own.
 
-    Nothing else in the row is touched. Paths, sizes and Telegram ids are the
-    record every reader downstream relies on, and a redactor let loose on them
-    could eat the feature while protecting nothing.
+    **``path`` is deliberately NOT redacted, and that limits what this is
+    worth.** Paths, sizes and Telegram ids are the record every reader
+    downstream relies on — the Helm chat UI reads the path back — and a
+    redactor let loose on them would eat the feature while protecting nothing.
+    A file named after a credential therefore still has that credential in the
+    row, inside ``path``. Scrubbing ``name`` is consistency with the rest of
+    the turn, not elimination; the elimination is that the file itself is
+    quarantined and no tool will open it.
     """
     if not extras:
         return extras
@@ -81,10 +101,15 @@ def _redact_captions(extras: dict[str, Any] | None) -> dict[str, Any] | None:
 
     cleaned = []
     for row in rows:
-        if isinstance(row, dict) and isinstance(row.get("caption"), str) and row["caption"]:
-            cleaned.append({**row, "caption": redact(row["caption"])})
-        else:
+        if not isinstance(row, dict):
             cleaned.append(row)
+            continue
+        scrubbed = {
+            field: redact(row[field])
+            for field in _OPERATOR_AUTHORED
+            if isinstance(row.get(field), str) and row[field]
+        }
+        cleaned.append({**row, **scrubbed} if scrubbed else row)
     return {**extras, "attachments": cleaned}
 
 
