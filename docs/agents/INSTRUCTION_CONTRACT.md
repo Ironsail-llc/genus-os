@@ -146,6 +146,17 @@ If the manifest declares `heartbeat.instruction_file`, the same rule applies to
 `heartbeat_tools_allowed`: the heartbeat run has its own, usually smaller,
 toolset.
 
+**Many similar calls → `execute_code`.** When an instruction describes work
+that repeats the same call over many items — "for each open task", "check every
+file in the directory", "fetch all the linked pages" — say so in those words
+and name `execute_code`. A snippet calling tools through `genus_tools` costs one
+turn however many calls it makes; a call per item costs a turn per item, and a
+long list does not fit in a context window. The manifest must grant both
+`execute_code` and `exec` (the tool refuses without the second). For a handful
+of independent READS, saying "look these up together" is enough: the engine
+already runs several read-only calls of one turn at the same time. See
+[Tools](../TOOLS.md).
+
 **Do not describe the toolset as a fixed list.** A broad agent's tools are
 loaded on demand — the model is shown a small core and reaches the rest with
 `tool_search` then `tool_call`, and the engine tells it so each turn. Writing

@@ -316,6 +316,38 @@ TOOL_HINTS: dict[str, ToolHint] = {
         ),
         when_to_use="Ask one question about up to 200 images at once.",
     ),
+    # The words a model reaches for when it is ABOUT to write fifty turns of
+    # the same call. Measured 2026-09-16: the three benchmark tasks we scored
+    # zero on are the three where the competing harness looped its tools from
+    # inside code, and none of "loop", "batch", "for each" or "every" appeared
+    # anywhere in a schema that could have answered.
+    "execute_code": ToolHint(
+        keywords=(
+            "loop",
+            "batch",
+            "each",
+            "every",
+            "many",
+            "bulk",
+            "iterate",
+            "repeat",
+            "script",
+            "python",
+            "code",
+            "programmatic",
+            "automate",
+            "ids",
+            "list",
+            "fetch",
+            "process",
+            "parse",
+            "transform",
+        ),
+        when_to_use=(
+            "Use this when the SAME tool call repeats over many items — loop over ids, "
+            "fetch each page, check every file."
+        ),
+    ),
 }
 
 

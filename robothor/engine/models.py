@@ -518,6 +518,15 @@ class RunStep:
 
     error_message: str | None = None
 
+    #: When several of one turn's tool calls ran at the same time, the id they
+    #: shared and this call's position in the MODEL's order. Both are NULL on
+    #: a turn that ran one call at a time, which is what lets the ledger answer
+    #: "which turns fanned out, and did the results come back in order?" —
+    #: a question no amount of timestamp arithmetic can answer, because two
+    #: calls that overlap are indistinguishable from two that merely queued.
+    batch_id: str | None = None
+    batch_position: int = 0
+
 
 @dataclass
 class AgentRun:

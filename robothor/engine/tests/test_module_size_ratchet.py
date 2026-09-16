@@ -54,7 +54,12 @@ CAPS = {
     # run_pacing.py, so the cap follows the file DOWN rather than banking the
     # difference as headroom — the whole point of a ratchet, and this one had
     # quietly consumed its last line before the cap was re-read.
-    "robothor/engine/runner.py": 2512,
+    # 2512 -> 2268: the tool-call block — admission, execution and recording
+    # for one assistant message — left for tool_turn.py. The ratchet asked for
+    # an extraction rather than a bigger number when parallel execution and
+    # the tool proxy needed somewhere to live, and got one; the cap follows
+    # the file DOWN rather than banking 244 lines of headroom.
+    "robothor/engine/runner.py": 2268,
     # 2545: a concurrent session ratcheted this to 2539 by lifting injection
     # screening and journal resume out of execute(); the deliverable guard's call
     # site adds the rest. Its 25 lines of logic went to loop_guards.py, so what
@@ -118,6 +123,24 @@ CAPS = {
     "robothor/engine/run_lifecycle.py": 800,
     "robothor/engine/run_llm_calls.py": 450,
     "robothor/engine/tool_admission.py": 400,
+    # One assistant message's tool calls, from admission to the ledger.
+    # Bounded from the day it lands, like schedule_reconcile.py: this is the
+    # module that would otherwise absorb every per-turn concern the runner
+    # used to, one branch at a time — which is exactly how runner.py became
+    # the 4,660-line god-object this file's header blames.
+    "robothor/engine/tool_turn.py": 528,
+    # The code-sandbox cluster, each piece capped at the size it was written
+    # to. They are deliberately four small modules rather than one: the
+    # POLICY (which calls may share a batch) is a table of names with no
+    # runtime behind it, the PROXY is admission plus the ledger, the SERVER
+    # is a wire format, and the HANDLER is a subprocess. A single
+    # `code_execution.py` holding all four would be untestable in exactly
+    # the place it matters most.
+    "robothor/engine/parallel_tools.py": 173,
+    "robothor/engine/tool_proxy.py": 277,
+    "robothor/engine/code_exec_rpc.py": 209,
+    "robothor/engine/tools/handlers/code_exec.py": 523,
+    "robothor/engine/tools/read_only.py": 87,
     "robothor/engine/run_budget.py": 120,
     # Live host state for the warmup preamble (2026-09-13). Bounded from the
     # day it lands, like schedule_reconcile.py: this is the module that would

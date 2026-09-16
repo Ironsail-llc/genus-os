@@ -335,9 +335,9 @@ def create_step(step: RunStep) -> str:
                     model, input_tokens, output_tokens,
                     cache_creation_tokens, cache_read_tokens,
                     started_at, completed_at, duration_ms,
-                    error_message
+                    error_message, batch_id, batch_position
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 """,
                 (
@@ -359,6 +359,8 @@ def create_step(step: RunStep) -> str:
                     step.completed_at,
                     step.duration_ms,
                     step.error_message,
+                    step.batch_id,
+                    step.batch_position,
                 ),
             )
         return step.id
@@ -405,6 +407,8 @@ def create_steps_batch(steps: list[RunStep]) -> int:
                 step.completed_at,
                 step.duration_ms,
                 step.error_message,
+                step.batch_id,
+                step.batch_position,
             )
             for step in steps
         ]
@@ -421,7 +425,7 @@ def create_steps_batch(steps: list[RunStep]) -> int:
                     model, input_tokens, output_tokens,
                     cache_creation_tokens, cache_read_tokens,
                     started_at, completed_at, duration_ms,
-                    error_message
+                    error_message, batch_id, batch_position
                 ) VALUES %s
                 ON CONFLICT (id) DO NOTHING
                 """,

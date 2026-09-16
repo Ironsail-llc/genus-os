@@ -1,0 +1,333 @@
+"""The `execute_code` handler, running a real subprocess.
+
+`test_execute_code.py` probes the transport in isolation. This file probes what
+the snippet can actually DO once it is running: what is in its environment,
+what it can import, what happens when it overruns its time, its output budget
+or its tool-call cap, and whether anything it starts survives the call.
+
+These spawn a real interpreter, so they are a few seconds rather than
+milliseconds. That is the price of testing a boundary instead of a mock of one.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import textwrap
+from pathlib import Path
+
+import pytest
+
+from robothor.engine.tool_proxy import clear_tool_proxy, set_tool_proxy
+from robothor.engine.tools.dispatch import ToolContext
+from robothor.engine.tools.handlers.code_exec import _execute_code
+
+
+class _StubProxy:
+    """A proxy with no runner behind it, so the subprocess is the subject."""
+
+    def __init__(self, *, allowed=("exec", "read_file"), max_calls=10):
+        self.allowed = frozenset(allowed)
+        self.max_calls = max_calls
+        self.calls_made = 0
+        self.seen: list[tuple[str, dict]] = []
+
+    async def call(self, name, args):
+        self.calls_made += 1
+        self.seen.append((name, args))
+        return {"echo": name, "args": args}
+
+
+@pytest.fixture
+def workspace(tmp_path) -> Path:
+    return tmp_path
+
+
+def _ctx(workspace: Path) -> ToolContext:
+    return ToolContext(agent_id="probe-agent", run_id="", workspace=str(workspace))
+
+
+async def _run(code: str, workspace: Path, *, proxy=None, timeout: int | None = None):
+    proxy = proxy or _StubProxy()
+    args: dict = {"code": textwrap.dedent(code)}
+    if timeout is not None:
+        args["timeout"] = timeout
+    token = set_tool_proxy(proxy)
+    try:
+        return await _execute_code(args, _ctx(workspace)), proxy
+    finally:
+        clear_tool_proxy(token)
+
+
+@pytest.mark.asyncio
+class TestItRunsAtAll:
+    async def test_stdout_comes_back(self, workspace):
+        result, _ = await _run("print('hello from the snippet')", workspace)
+        assert "hello from the snippet" in result["stdout"]
+        assert result["returncode"] == 0
+
+    async def test_a_traceback_comes_back_on_stderr_rather_than_as_a_crash(self, workspace):
+        result, _ = await _run("raise ValueError('nope')", workspace)
+        assert result["returncode"] != 0
+        assert "ValueError" in result["stderr"]
+
+    async def test_it_runs_from_the_workspace(self, workspace):
+        (workspace / "marker.txt").write_text("found me")
+        result, _ = await _run("print(open('marker.txt').read())", workspace)
+        assert "found me" in result["stdout"]
+
+    async def test_it_leaves_nothing_behind_but_what_the_snippet_wrote(self, workspace):
+        await _run("print('x')", workspace)
+        scratch = workspace / ".robothor" / "execute_code"
+        leftovers = list(scratch.iterdir()) if scratch.is_dir() else []
+        assert leftovers == [], f"per-call directory was not cleaned up: {leftovers}"
+
+
+@pytest.mark.asyncio
+class TestWhoMayCallIt:
+    async def test_without_a_run_behind_it_there_is_no_allow_set_to_improvise(self, workspace):
+        result = await _execute_code({"code": "print(1)"}, _ctx(workspace))
+        assert "only available inside an agent run" in result["error"]
+
+    async def test_an_agent_without_exec_is_refused(self, workspace):
+        result, _ = await _run("print(1)", workspace, proxy=_StubProxy(allowed=("read_file",)))
+        assert "needs the `exec` capability" in result["error"]
+
+    async def test_an_empty_snippet_is_refused_rather_than_run(self, workspace):
+        proxy = _StubProxy()
+        token = set_tool_proxy(proxy)
+        try:
+            result = await _execute_code({"code": "   "}, _ctx(workspace))
+        finally:
+            clear_tool_proxy(token)
+        assert "No code provided" in result["error"]
+
+
+@pytest.mark.asyncio
+class TestTheEnvironmentProbe:
+    async def test_a_credential_in_the_engines_environment_is_not_in_the_childs(
+        self, workspace, monkeypatch
+    ):
+        """The probe the brief names: read /proc/self/environ and see what is there."""
+        monkeypatch.setenv("ROBOTHOR_PROBE_API_KEY", "sk-not-a-real-key-0123456789")
+        result, _ = await _run(
+            """
+            import pathlib
+            raw = pathlib.Path('/proc/self/environ').read_bytes().decode('utf-8', 'replace')
+            print('PROBE_PRESENT' if 'ROBOTHOR_PROBE_API_KEY' in raw else 'PROBE_ABSENT')
+            """,
+            workspace,
+        )
+        assert "PROBE_ABSENT" in result["stdout"]
+        assert "sk-not-a-real-key" not in result["stdout"]
+
+    async def test_the_database_password_is_not_in_the_childs_environment(
+        self, workspace, monkeypatch
+    ):
+        monkeypatch.setenv("ROBOTHOR_DB_PASSWORD", "hunter2-not-real")
+        result, _ = await _run(
+            "import os; print(os.environ.get('ROBOTHOR_DB_PASSWORD', 'ABSENT'))", workspace
+        )
+        assert "ABSENT" in result["stdout"]
+
+    async def test_the_snippet_still_gets_a_working_process(self, workspace):
+        """The scrub must not be so thorough that nothing runs."""
+        result, _ = await _run(
+            "import os; print('PATH' in os.environ, 'HOME' in os.environ)", workspace
+        )
+        assert "True True" in result["stdout"]
+
+
+@pytest.mark.asyncio
+class TestTheImportGuard:
+    async def test_importing_the_engine_fails(self, workspace):
+        result, _ = await _run(
+            """
+            try:
+                import robothor
+                print('IMPORTED')
+            except ImportError as exc:
+                print('REFUSED', exc)
+            """,
+            workspace,
+        )
+        assert "REFUSED" in result["stdout"]
+        assert "IMPORTED" not in result["stdout"]
+
+    async def test_importing_the_database_driver_fails(self, workspace):
+        result, _ = await _run(
+            """
+            try:
+                import psycopg2
+                print('IMPORTED')
+            except ImportError:
+                print('REFUSED')
+            """,
+            workspace,
+        )
+        assert "REFUSED" in result["stdout"]
+
+    async def test_an_ordinary_module_still_imports(self, workspace):
+        result, _ = await _run("import json; print(json.dumps({'ok': True}))", workspace)
+        assert '{"ok": true}' in result["stdout"]
+
+
+@pytest.mark.asyncio
+class TestTheToolProxyFromInsideTheSnippet:
+    async def test_a_tool_call_round_trips(self, workspace):
+        result, proxy = await _run(
+            """
+            from genus_tools import read_file
+            print(read_file(path='notes.md'))
+            """,
+            workspace,
+        )
+        assert proxy.seen == [("read_file", {"path": "notes.md"})]
+        assert "'echo': 'read_file'" in result["stdout"]
+        assert result["tool_call_count"] == 1
+
+    async def test_the_computed_form_works_too(self, workspace):
+        _, proxy = await _run(
+            """
+            import genus_tools
+            for name in ('read_file', 'read_file'):
+                genus_tools.call(name, path=name)
+            """,
+            workspace,
+        )
+        assert len(proxy.seen) == 2
+
+    async def test_a_tool_the_agent_cannot_reach_is_refused_from_code_too(self, workspace):
+        result, proxy = await _run(
+            """
+            import genus_tools
+            try:
+                genus_tools.call('execute_code', code='print(1)')
+                print('REACHED')
+            except genus_tools.ToolError as exc:
+                print('REFUSED', exc)
+            """,
+            workspace,
+        )
+        assert "REFUSED" in result["stdout"]
+        assert proxy.seen == []
+
+    async def test_the_call_cap_ends_the_loop_loudly(self, workspace):
+        result, proxy = await _run(
+            """
+            import genus_tools
+            made = 0
+            try:
+                for i in range(20):
+                    genus_tools.call('read_file', path=str(i))
+                    made += 1
+            except genus_tools.ToolError:
+                pass
+            print('MADE', made)
+            """,
+            workspace,
+            proxy=_StubProxy(max_calls=3),
+        )
+        assert "MADE 3" in result["stdout"]
+        assert proxy.calls_made == 3
+        assert result["tool_call_limit_reached"] is True
+
+    async def test_the_socket_is_gone_once_the_call_returns(self, workspace):
+        result, _ = await _run(
+            """
+            import os
+            print('DIR', os.environ['GENUS_TOOLS_DIR'])
+            """,
+            workspace,
+        )
+        directory = result["stdout"].split("DIR ", 1)[1].strip()
+        assert not Path(directory).exists()
+
+
+@pytest.mark.asyncio
+class TestTheBounds:
+    async def test_a_snippet_that_sleeps_past_its_timeout_is_killed(self, workspace):
+        result, _ = await _run(
+            "import time; time.sleep(30); print('FINISHED')", workspace, timeout=1
+        )
+        assert result["timed_out"] is True
+        assert "FINISHED" not in result["stdout"]
+        assert "ran out of time" in result["error"]
+
+    async def test_nothing_the_snippet_backgrounded_survives_the_call(self, workspace):
+        marker = workspace / "survivor.txt"
+        await _run(
+            f"""
+            import subprocess, sys
+            subprocess.Popen([
+                sys.executable, '-c',
+                "import time; time.sleep(3); open({str(marker)!r}, 'w').write('alive')",
+            ])
+            print('SPAWNED')
+            """,
+            workspace,
+        )
+        await asyncio.sleep(4)
+        assert not marker.exists(), "a backgrounded child outlived the snippet that started it"
+
+    async def test_oversized_stdout_is_cut_with_a_marker_and_spilled_to_a_file(
+        self, workspace, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "robothor.engine.tools.handlers.code_exec._settings_int",
+            lambda name, default: 2_000 if name == "execute_code_max_output" else default,
+        )
+        result, _ = await _run("print('y' * 50_000)", workspace)
+        assert result["stdout_truncated"] is True
+        assert "[truncated" in result["stdout"]
+        spilled = Path(result["stdout_file"])
+        assert spilled.is_file()
+        assert len(spilled.read_text()) > 40_000
+
+    async def test_a_snippet_larger_than_the_source_cap_is_refused(self, workspace):
+        proxy = _StubProxy()
+        token = set_tool_proxy(proxy)
+        try:
+            result = await _execute_code({"code": "#" * 200_000}, _ctx(workspace))
+        finally:
+            clear_tool_proxy(token)
+        assert "over the" in result["error"]
+
+    async def test_output_past_the_hard_cap_is_never_held_whole(self, workspace, monkeypatch):
+        """The spill is generous, not unbounded: a runaway loop printing far
+        past it must not make the engine hold everything it printed first."""
+        monkeypatch.setattr(
+            "robothor.engine.tools.handlers.code_exec._settings_int",
+            lambda name, default: 1_000 if name == "execute_code_max_output" else default,
+        )
+        monkeypatch.setattr("robothor.engine.tools.handlers.code_exec.HARD_CAP_MULTIPLIER", 2)
+        result, _ = await _run("print('z' * 500_000)", workspace)
+        spilled = Path(result["stdout_file"])
+        assert len(spilled.read_text()) < 100_000
+
+
+@pytest.mark.asyncio
+class TestTheContainerCase:
+    async def test_a_container_sandboxed_agent_is_refused_and_told_why(
+        self, workspace, monkeypatch
+    ):
+        """Never a silent fall-back to the host: that would undo the isolation
+        the manifest asked for while the result looked identical."""
+        from robothor.engine.sandbox import Sandbox, SandboxMode
+
+        sandbox = Sandbox(mode=SandboxMode.DOCKER, run_id="r", workspace=str(workspace))
+        monkeypatch.setattr(
+            "robothor.engine.sandbox.get_current_sandbox", lambda: sandbox, raising=False
+        )
+        result, _ = await _run("print(1)", workspace)
+        assert "container-sandboxed agent" in result["error"]
+
+
+def test_the_scratch_directory_is_not_a_secret_path():
+    """`secret_paths` refuses anything under `.robothor/secret*`; the spill
+    lives under `.robothor/` and must not collide with that prefix."""
+    from robothor.engine.tools.handlers.code_exec import WORKDIR_NAME
+
+    assert WORKDIR_NAME.startswith(".robothor/")
+    assert not WORKDIR_NAME.startswith(".robothor/secret")
+    assert os.sep not in WORKDIR_NAME.removeprefix(".robothor/")

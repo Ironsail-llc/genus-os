@@ -800,6 +800,50 @@ class EngineSettings(SettingsGroup):
         "How many sub-agent spawns may be in flight at once.",
         restart_required=False,
     )
+    parallel_tool_calls: int = declare(
+        4,
+        "ROBOTHOR_PARALLEL_TOOL_CALLS",
+        "How many of ONE turn's tool calls run at the same time. Only calls "
+        "the platform has classified read-only are ever grouped, and the "
+        "first call that is not -- a write, `exec`, `execute_code`, a "
+        "`send_*`/`spawn_*`, or anything under this agent's "
+        "`human_approval_tools` -- runs alone and forces the rest of that turn "
+        "sequential in the model's order. 1 restores fully sequential "
+        "execution; the platform ceiling is 16.",
+        restart_required=False,
+        since="unreleased",
+    )
+    execute_code_max_calls: int = declare(
+        200,
+        "ROBOTHOR_EXECUTE_CODE_MAX_CALLS",
+        "How many tools one `execute_code` snippet may call through "
+        "`genus_tools` before the proxy refuses the rest. Every proxied call "
+        "still passes the same admission gates a direct call does; this bounds "
+        "a runaway loop, not what the code is allowed to reach.",
+        restart_required=False,
+        since="unreleased",
+    )
+    execute_code_timeout: int = declare(
+        300,
+        "ROBOTHOR_EXECUTE_CODE_TIMEOUT",
+        "Wall-clock seconds one `execute_code` snippet gets. The agent may ask "
+        "for less and never for more, and the run's own remaining budget still "
+        "clamps it. On expiry the snippet's whole process group is killed, so "
+        "nothing it started outlives the call.",
+        restart_required=False,
+        since="unreleased",
+    )
+    execute_code_max_output: int = declare(
+        50_000,
+        "ROBOTHOR_EXECUTE_CODE_MAX_OUTPUT",
+        "Characters of a snippet's stdout that reach the model. Past this the "
+        "output is cut with a marker saying how much was cut, and the FULL "
+        "text is written to a file under the workspace whose path comes back "
+        "in the result -- truncation becomes pagination rather than invisible "
+        "data loss.",
+        restart_required=False,
+        since="unreleased",
+    )
     max_spawn_batch: int = declare(
         10,
         "ROBOTHOR_MAX_SPAWN_BATCH",

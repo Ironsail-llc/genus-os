@@ -153,11 +153,12 @@ class TestTheRunnerFeedsTheDetector:
         assert "result=" in call, "the result is never passed — detector is inert"
         assert "tool_input=" in call, "the arguments are never passed"
 
-    def test_the_runner_still_calls_the_recorder(self):
+    def test_the_turn_still_calls_the_recorder(self):
         """The other half. A recorder nothing invokes is the same inert shape
-        one module further out."""
+        one module further out. Moved again with the tool-call block, from
+        `runner` to `tool_turn`: the check follows the code."""
         from pathlib import Path
 
-        import robothor.engine.runner as m
+        import robothor.engine.tool_turn as m
 
         assert "record_tool_outcome(" in Path(m.__file__).read_text(encoding="utf-8")

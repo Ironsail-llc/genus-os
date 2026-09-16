@@ -416,6 +416,13 @@ def _container_command(
         "ROBOTHOR_DELIVERABLE_CONTRACT_MODE": os.environ.get(
             "ROBOTHOR_DELIVERABLE_CONTRACT_MODE", "enforce"
         ),
+        # Same host-override idiom again, for the other half of the throughput
+        # work. Measured 2026-09-16: ten runs issued ZERO parallel tool calls
+        # while the competing harness batched on twenty turns of one task, so a
+        # sweep that cannot vary this cannot measure whether it helped. The
+        # default is the platform's own; setting it to 1 in the environment
+        # gives a clean sequential control run.
+        "ROBOTHOR_PARALLEL_TOOL_CALLS": os.environ.get("ROBOTHOR_PARALLEL_TOOL_CALLS", "4"),
         # Genus resolves its skills directory from this, so the task's skills
         # land somewhere the loader actually reads.
         "ROBOTHOR_WORKSPACE": CONTAINER_WORKSPACE,

@@ -41,7 +41,11 @@ KNOWN_LARGE: dict[str, int] = {
     # workflow-approval tools) left as one cluster, `_HUMAN_IN_THE_LOOP_SCHEMAS`.
     # ask_user's own schema is in that constant, so the new tool cost this
     # function nothing and paid down 66 lines on the way in.
-    "tools/schemas.py::get_engine_schemas": 3453,
+    # 3453 -> 3417: `exec`'s schema left for the module-level `_CODE_SCHEMAS`
+    # cluster, taking `execute_code` with it. The new tool cost this function
+    # nothing and paid down 36 lines on the way in, the same trade
+    # `_ATTACHMENT_SCHEMAS` made.
+    "tools/schemas.py::get_engine_schemas": 3417,
     # -29: every subsystem router mount extracted to _mount_subsystem_routers,
     # which is what made room for the /api/admin registration rather than
     # raising this number for it.
@@ -64,7 +68,11 @@ KNOWN_LARGE: dict[str, int] = {
     # deadline and check-in blocks returned when they left for run_pacing.py.
     # The cap follows the function down; leaving it at 775 would bank two lines
     # this method did not earn.
-    "runner.py::_run_loop": 773,
+    # 773 -> 529: the whole tool-call block (admit, execute, record) left for
+    # tool_turn.py. That extraction is what paid for parallel execution and
+    # the tool proxy rather than growing the largest loop in the engine by
+    # another 120 lines.
+    "runner.py::_run_loop": 529,
     # 473 -> 346. The Gmail and Calendar branches left for functions of their
     # own (_gmail_search/_gmail_get, _calendar_list/_calendar_create/
     # _calendar_delete) when each of them grew a real body: decoding a MIME

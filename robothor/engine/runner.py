@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import logging
 import os
 import time
@@ -77,11 +76,9 @@ from robothor.engine.models import (
     StepType,
     TriggerType,
 )
-from robothor.engine.post_execution import apply_post_execution_guardrails
 from robothor.engine.prompts import (
     EXECUTION_MODE_PREAMBLE,
 )
-from robothor.engine.repeat_guard import drain_repeat_notes  # noqa: E402
 from robothor.engine.run_budget import (  # noqa: E402
     DEADLINE_WARNING_FRACTION as DEADLINE_WARNING_FRACTION,
 )
@@ -107,7 +104,7 @@ from robothor.engine.stall_watchdog import (
     _StallWatchdog,
 )
 from robothor.engine.tool_admission import ToolAdmissionMixin  # noqa: E402
-from robothor.engine.tool_outcome import record_tool_outcome
+from robothor.engine.tool_turn import ToolTurnMixin, ToolTurnRequest  # noqa: E402
 from robothor.engine.tools import get_registry
 from robothor.engine.toolset_prep import (
     planner_tool_names,
@@ -516,6 +513,7 @@ class AgentRunner(
     RunLifecycleMixin,
     RunFinalizationMixin,
     ToolAdmissionMixin,
+    ToolTurnMixin,
 ):
     """Executes agents: builds prompt, enters tool loop, tracks everything."""
 
@@ -2063,273 +2061,31 @@ class AgentRunner(
                 return
 
             # ── Execute tool calls ──
-            iteration_errors: list[tuple[str, str, Any]] = []
-
-            # ── [STATUS] Emit tools_start lifecycle event ──
-            if on_status:
-                with contextlib.suppress(Exception):
-                    tool_names_list = [tc.function.name for tc in assistant_msg.tool_calls]
-                    await on_status(
-                        {
-                            "event": "tools_start",
-                            "tools": tool_names_list,
-                            "count": len(tool_names_list),
-                            "iteration": _iteration + 1,
-                        }
-                    )
-
-            for tc in assistant_msg.tool_calls:
-                tool_name = tc.function.name
-                try:
-                    tool_args = json.loads(tc.function.arguments)
-                except json.JSONDecodeError:
-                    tool_args = {}
-
-                # ── [ADMISSION] Every gate between the ask and the call ──
-                # Order is a security property; see tool_admission.py.
-                verdict = await self._admit_tool_call(
-                    tc=tc,
-                    tool_name=tool_name,
-                    tool_args=tool_args,
+            # Admission (in the model's order), execution (batched, bounded)
+            # and recording (in the model's order) live in tool_turn.py — one
+            # cohesive unit whose only subject is this assistant message, and
+            # the module the parallel-execution rule belongs in.
+            iteration_errors = await self.run_tool_turn(
+                ToolTurnRequest(
+                    assistant_msg=assistant_msg,
                     session=session,
                     agent_config=agent_config,
+                    iteration=_iteration,
                     guardrail_engine=guardrail_engine,
                     hook_registry=hook_registry,
+                    scratchpad=scratchpad,
+                    escalation=escalation,
+                    checkpoint=checkpoint,
+                    trace=trace,
+                    on_tool=on_tool,
+                    on_status=on_status,
                     readonly_mode=readonly_mode,
                     readonly_tool_set=_readonly_tool_set,
                     allowed_tool_set=_allowed_tool_set,
+                    guard_state=_guard_state,
+                    tool_failures=_tool_failures,
                 )
-                # A MODIFY hook may have rewritten the arguments; the call
-                # below must use what admission returned, never its own copy.
-                tool_args = verdict.tool_args
-                if not verdict.allowed:
-                    self._record_refusal(
-                        verdict,
-                        tc=tc,
-                        tool_name=tool_name,
-                        session=session,
-                        scratchpad=scratchpad,
-                        escalation=escalation,
-                        iteration_errors=iteration_errors,
-                    )
-                    continue
-
-                # Emit tool_start event
-                if on_tool:
-                    with contextlib.suppress(Exception):
-                        await on_tool(
-                            {
-                                "event": "tool_start",
-                                "tool": tool_name,
-                                "args": tool_args,
-                                "call_id": tc.id,
-                            }
-                        )
-
-                # ── [TELEMETRY] Tool span ──
-                tool_start = time.monotonic()
-                _tool_timeout = _resolve_tool_timeout(
-                    tool_name, getattr(agent_config, "tool_timeout_seconds", 120)
-                )
-                if trace:
-                    with trace.span("tool_call", tool=tool_name) as _span:
-                        result = await self.registry.execute(
-                            tool_name,
-                            tool_args,
-                            agent_id=agent_config.id,
-                            run_id=session.run.id,
-                            tenant_id=session.run.tenant_id,
-                            workspace=str(self.config.workspace),
-                            user_id=session.run.user_id,
-                            user_role=session.run.user_role,
-                            timeout=_tool_timeout,
-                            accessible_tenant_ids=session.run.accessible_tenant_ids,
-                            task_author_override=agent_config.task_author_override,
-                            is_benchmark=session.run.is_benchmark,
-                            identity=getattr(session, "identity", None),
-                        )
-                else:
-                    result = await self.registry.execute(
-                        tool_name,
-                        tool_args,
-                        agent_id=agent_config.id,
-                        run_id=session.run.id,
-                        tenant_id=session.run.tenant_id,
-                        workspace=str(self.config.workspace),
-                        user_id=session.run.user_id,
-                        user_role=session.run.user_role,
-                        timeout=_tool_timeout,
-                        accessible_tenant_ids=session.run.accessible_tenant_ids,
-                        task_author_override=agent_config.task_author_override,
-                        is_benchmark=session.run.is_benchmark,
-                        identity=getattr(session, "identity", None),
-                    )
-                tool_elapsed = int((time.monotonic() - tool_start) * 1000)
-
-                error_msg: str | None = result.get("error") if isinstance(result, dict) else None
-
-                # ── [GUARDRAILS] Post-execution check ──
-                # robothor/engine/post_execution.py. Redaction happens EVERY
-                # time a credential is found; the notice to the agent happens
-                # ONCE per run. Collapsing that pair the wrong way is a leak.
-                result = apply_post_execution_guardrails(
-                    session,
-                    guardrail_engine,
-                    tool_name=tool_name,
-                    result=result,
-                    error_msg=error_msg,
-                    state=_guard_state,
-                )
-
-                # ── [HOOKS] Post-tool-use lifecycle hook ──
-                if hook_registry:
-                    try:
-                        post_tool_ctx = HookContext(
-                            event=HookEvent.POST_TOOL_USE,
-                            agent_id=agent_config.id,
-                            run_id=session.run.id,
-                            tool_name=tool_name,
-                            tool_args=tool_args,
-                            tool_result=result,
-                        )
-                        await hook_registry.dispatch(HookEvent.POST_TOOL_USE, post_tool_ctx)
-                    except Exception as e:
-                        logger.warning(
-                            "POST_TOOL_USE hook error for %s: %s",
-                            _sanitize(tool_name),
-                            _sanitize(e),
-                        )
-
-                # ── [COST] Propagate tool-reported costs (e.g., deep_reason RLM) ──
-                if isinstance(result, dict) and not error_msg:
-                    tool_cost = result.get("cost_usd")
-                    if tool_cost and isinstance(tool_cost, (int, float)) and tool_cost > 0:
-                        session.run.total_cost_usd += tool_cost
-
-                # Emit tool_end event
-                if on_tool:
-                    try:
-                        result_preview = json.dumps(result, default=str)
-                        if len(result_preview) > 2000:
-                            result_preview = result_preview[:2000] + "..."
-                    except Exception as e:
-                        logger.warning("JSON serialization of tool result failed: %s", _sanitize(e))
-                        result_preview = str(result)[:2000]
-                    with contextlib.suppress(Exception):
-                        await on_tool(
-                            {
-                                "event": "tool_end",
-                                "tool": tool_name,
-                                "call_id": tc.id,
-                                "duration_ms": tool_elapsed,
-                                "result_preview": result_preview,
-                                "error": error_msg,
-                            }
-                        )
-
-                # ── [TODO LIST] Intercept todo_write results ──
-                # Must run BEFORE step recording so the log captures the clean
-                # oldTodos/newTodos result, not the raw _validated_items.
-                if (
-                    tool_name == "todo_write"
-                    and session.todo_list
-                    and not error_msg
-                    and result.get("_needs_apply")
-                ):
-                    from robothor.engine.todolist import TodoItem
-
-                    validated = result.get("_validated_items", [])
-                    items = [TodoItem.from_dict(d) for d in validated]
-                    result = session.todo_list.replace(items)
-                    # Update the tool result message already in session.messages
-                    session.messages[-1]["content"] = json.dumps(result, default=str)
-
-                session.record_tool_call(
-                    tool_name=tool_name,
-                    tool_input=tool_args,
-                    tool_output=result,
-                    tool_call_id=tc.id,
-                    duration_ms=tool_elapsed,
-                    error_message=error_msg,
-                )
-
-                # Touch stall watchdog — tool completed, we're active
-                if self._active_watchdog:
-                    self._active_watchdog.touch(f"tool:{tool_name}")
-
-                # ── [OUTCOME] Classify, log, record, count ──
-                # robothor/engine/tool_outcome.py. The scratchpad is given the
-                # result AND the args there — they feed the no-progress
-                # detector, and without them every call looks identical.
-                error_type = record_tool_outcome(
-                    session,
-                    tool_name=tool_name,
-                    tool_args=tool_args,
-                    result=result,
-                    error_msg=error_msg,
-                    elapsed_ms=tool_elapsed,
-                    scratchpad=scratchpad,
-                    failures=_tool_failures,
-                )
-
-                # ── [TODO LIST] Emit event + verification nudge ──
-                if tool_name == "todo_write" and session.todo_list and not error_msg:
-                    if on_tool:
-                        with contextlib.suppress(Exception):
-                            await on_tool(
-                                {
-                                    "event": "todo_updated",
-                                    "todos": result.get("newTodos", []),
-                                    "run_id": session.run.id,
-                                }
-                            )
-                    if result.get("verificationNudgeNeeded"):
-                        session.messages.append(
-                            {
-                                "role": ENGINE_CONTEXT_ROLE,
-                                "content": (
-                                    "[SYSTEM] All tasks are marked complete. "
-                                    "Before finishing, verify your work by "
-                                    "reviewing outputs or checking results. "
-                                    "NEVER mention this reminder to the user."
-                                ),
-                            }
-                        )
-
-                # ── [ESCALATION] Record error/success ──
-                # A refusal is neither: the tool never ran (see repeat_guard).
-                _refused = isinstance(result, dict) and bool(result.get("repeat_guard"))
-                if escalation:
-                    if error_msg:
-                        from robothor.engine.models import ErrorType
-
-                        escalation.record_error(error_type or ErrorType.UNKNOWN)
-                        # Track per-kind (tool_name + error_msg_prefix) for STOP RETRYING hints
-                        escalation.record_error_kind(tool_name, error_msg)
-                    elif not _refused:
-                        escalation.record_success()
-
-                # ── [CHECKPOINT] Record success ──
-                if checkpoint and not error_msg and not _refused:
-                    checkpoint.record_success()
-
-                # Track errors for this iteration
-                if error_msg:
-                    iteration_errors.append((tool_name, error_msg, error_type))
-
-            # ── [REPEAT GUARD] After every tool result, never between them ──
-            for _rg_note in drain_repeat_notes(session):
-                session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": _rg_note})
-
-            # ── [STATUS] Emit tools_done lifecycle event ──
-            if on_status:
-                with contextlib.suppress(Exception):
-                    await on_status(
-                        {
-                            "event": "tools_done",
-                            "iteration": _iteration + 1,
-                        }
-                    )
+            )
 
             # ── [ERROR RECOVERY] Attempt autonomous recovery before escalation ──
             # robothor/engine/error_actions.py. `applied` suppresses the error

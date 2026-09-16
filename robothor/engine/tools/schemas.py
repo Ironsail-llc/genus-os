@@ -33,6 +33,86 @@ _ASK_USER_DESCRIPTION = (
     "started interactively; on a scheduled or sub-agent run it refuses and says so."
 )
 
+#: Running things. ``exec`` shells out; ``execute_code`` runs Python that can
+#: call the agent's own tools through ``genus_tools``. Hoisted out of
+#: ``get_engine_schemas`` as one cluster, the way ``_ATTACHMENT_SCHEMAS`` was:
+#: that function is the largest in the engine and the size ratchet only lets it
+#: shrink, so a new schema pays for itself by taking its neighbour with it.
+#: They belong together — both answer "run this", and the descriptions have to
+#: send the model to the right one.
+_CODE_SCHEMAS: dict[str, dict[str, Any]] = {
+    "exec": {
+        "type": "function",
+        "function": {
+            "name": "exec",
+            "description": (
+                "Execute a shell command. Defaults to a 30s limit; pass "
+                "`timeout` (seconds, up to 900) for anything slower — a model "
+                "call, a build, media processing. Do NOT background a long "
+                "command to dodge the limit: a backgrounded child is killed "
+                "when exec returns, and its output file is left truncated."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Shell command to execute",
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": (
+                            "Seconds to allow before killing the command (default 30, maximum 900)."
+                        ),
+                    },
+                },
+                "required": ["command"],
+            },
+        },
+    },
+    "execute_code": {
+        "type": "function",
+        "function": {
+            "name": "execute_code",
+            # Kept under the 400-character cap `tool_search` shows a
+            # disambiguating description whole at: a tool carrying a
+            # `when_to_use` sentence is one that competes with a sibling.
+            "description": (
+                "Use this when the SAME tool call repeats over many items — loop "
+                "over ids, fetch each page, check every file. The snippet calls "
+                "your tools with `from genus_tools import web_fetch, read_file` "
+                "(or `genus_tools.call(name, **args)`), so fifty lookups cost one "
+                "turn instead of fifty. Print what you need; only stdout comes "
+                "back. Needs `exec`."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": (
+                            "The Python source. It runs from the workspace. `print()` "
+                            "what you want to see — nothing else is returned. A tool "
+                            "returns its own result dictionary, and a failed one "
+                            "returns {'error': ...} rather than raising, so a loop "
+                            "survives one bad item."
+                        ),
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": (
+                            "Seconds before the snippet and everything it started are "
+                            "killed (default 300, maximum 900)."
+                        ),
+                    },
+                },
+                "required": ["code"],
+            },
+        },
+    },
+}
+
+
 #: Attachments: looking at a picture and handing a file back. Hoisted out of
 #: ``get_engine_schemas`` as one cluster, the way ``_HUMAN_IN_THE_LOOP_SCHEMAS``
 #: was: that function is the largest in the engine, so a new schema pays for
@@ -396,35 +476,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
     """Return all engine-specific tool schemas keyed by tool name."""
     schemas: dict[str, dict[str, Any]] = {}
 
-    schemas["exec"] = {
-        "type": "function",
-        "function": {
-            "name": "exec",
-            "description": (
-                "Execute a shell command. Defaults to a 30s limit; pass "
-                "`timeout` (seconds, up to 900) for anything slower — a model "
-                "call, a build, media processing. Do NOT background a long "
-                "command to dodge the limit: a backgrounded child is killed "
-                "when exec returns, and its output file is left truncated."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "Shell command to execute",
-                    },
-                    "timeout": {
-                        "type": "integer",
-                        "description": (
-                            "Seconds to allow before killing the command (default 30, maximum 900)."
-                        ),
-                    },
-                },
-                "required": ["command"],
-            },
-        },
-    }
+    schemas.update(_CODE_SCHEMAS)
     schemas.update(_ATTACHMENT_SCHEMAS)
 
     schemas["read_file"] = {
