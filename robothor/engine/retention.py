@@ -240,4 +240,19 @@ def run_retention_cleanup() -> dict[str, int]:
     except Exception as e:
         logger.warning("Retention cleanup failed for the channel inbox: %s", e)
         results["inbox"] = -1
+
+    # The other file-shaped target: `analyze_image` writes a batch's full
+    # per-image table to `<workspace>/.robothor/analyze_image/` whenever the
+    # result is too big to return inline. One ~67 KB JSON per big batch, in a
+    # directory no operator looks at, and nothing deleted them — which is what
+    # a retention sweep is for. Its own window (a week) because these are
+    # working files an agent reads in the run that wrote them, not the
+    # operator's own data the inbox holds for a month.
+    try:
+        from robothor.engine.vision_batch import prune_spill_files
+
+        results["analyze_image"] = prune_spill_files()
+    except Exception as e:
+        logger.warning("Retention cleanup failed for the analyze_image spill files: %s", e)
+        results["analyze_image"] = -1
     return results

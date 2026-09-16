@@ -659,6 +659,57 @@ def _spill_path(root: Path, run_id: str) -> Path:
             return candidate
 
 
+#: How long a spilled table is kept. These are working files — an agent reads
+#: one in the run that wrote it and never again — so the window is short. The
+#: alternative is what shipped for one release: one ~67 KB JSON per big batch,
+#: forever, in a directory no operator looks at and nothing prunes.
+DEFAULT_SPILL_RETENTION_DAYS = 7
+
+
+def prune_spill_files(
+    *,
+    retention_days: int | None = None,
+    workspace: str | Path | None = None,
+    now: float | None = None,
+) -> int:
+    """Delete spilled batch tables older than the retention window.
+
+    Walks ``<workspace>/.robothor/analyze_image/`` and nothing else — the same
+    rule ``attachments.prune_inbox`` follows, and for the same reason: a file
+    an agent copied somewhere useful has left this tree and is not the prune's
+    business. ``retention_days <= 0`` disables the prune rather than deleting
+    everything, because "keep for zero days" is far likelier to be a
+    misconfiguration than an instruction.
+    """
+    days = retention_days if retention_days is not None else _configured_spill_retention_days()
+    if days <= 0:
+        return 0
+    root = _workspace_root(str(workspace) if workspace else "")
+    if root is None:
+        return 0
+    directory = root / SPILL_DIRNAME
+    if not directory.is_dir():
+        return 0
+    cutoff = (now if now is not None else time.time()) - days * 86400
+    removed = 0
+    for path in sorted(directory.glob("*.json")):
+        try:
+            if path.stat().st_mtime >= cutoff:
+                continue
+            path.unlink()
+            removed += 1
+        except OSError as exc:  # noqa: PERF203 - one bad file must not stop the sweep
+            logger.warning("the analyze_image prune could not remove a file: %s", exc)
+    return removed
+
+
+def _configured_spill_retention_days() -> int:
+    try:
+        return int(_settings().providers.vision_batch_retention_days)
+    except Exception:  # noqa: BLE001 - a prune must never break on config
+        return DEFAULT_SPILL_RETENTION_DAYS
+
+
 def _fit(out: dict[str, Any], rows: list[dict[str, Any]], budget: int) -> int:
     """How many of *rows* fit in *budget* once the rest of *out* is counted.
 

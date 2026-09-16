@@ -878,6 +878,68 @@ class TestTheStepWriterCapInvariant:
         assert out["results_file"]
 
 
+class TestTheSpillDirectoryIsHousekept:
+    """Re-review R-3. One ~67 KB JSON per big batch, forever, in a directory no
+    operator looks at — and the file index was computed by globbing that
+    directory, so every spill paid for its own growth."""
+
+    def _spill_dir(self, tmp_path):
+        return tmp_path / vision_batch.SPILL_DIRNAME
+
+    async def test_old_tables_are_pruned_and_fresh_ones_are_not(
+        self, tmp_path, local_backend, monkeypatch
+    ):
+        monkeypatch.setattr(vision_batch, "_max_total_chars", lambda: 900)
+        out = await _analyze(tmp_path, _images(tmp_path, 30))
+        stale = Path(out["results_file"])
+        fresh = stale.with_name("other-run-1.json")
+        fresh.write_text("{}")
+        import os
+
+        old = time.time() - 30 * 86400
+        os.utime(stale, (old, old))
+
+        assert vision_batch.prune_spill_files(retention_days=7, workspace=tmp_path) == 1
+        assert not stale.exists()
+        assert fresh.exists(), "a table written today is still the run's own working file"
+
+    def test_zero_days_disables_the_prune_rather_than_deleting_everything(self, tmp_path):
+        directory = self._spill_dir(tmp_path)
+        directory.mkdir(parents=True)
+        (directory / "r-1.json").write_text("{}")
+        assert vision_batch.prune_spill_files(retention_days=0, workspace=tmp_path) == 0
+        assert (directory / "r-1.json").exists()
+
+    def test_a_missing_directory_is_not_an_error(self, tmp_path):
+        assert vision_batch.prune_spill_files(retention_days=7, workspace=tmp_path) == 0
+
+    def test_the_daily_sweep_actually_calls_it(self):
+        """A pruner nothing invokes is a directory that still grows."""
+        from pathlib import Path as _Path
+
+        import robothor.engine.retention as retention
+
+        source = _Path(retention.__file__).read_text(encoding="utf-8")
+        assert "prune_spill_files" in source
+
+    async def test_the_index_does_not_scan_the_directory(
+        self, tmp_path, local_backend, monkeypatch
+    ):
+        """The glob assumed the directory is only ever appended to: delete
+        `run-x-2.json` and the next spill recomputed index 3 and overwrote
+        `run-x-3.json`. A run lives in one process, so the counter is the
+        authority and the existence check covers the rest."""
+        monkeypatch.setattr(vision_batch, "_max_total_chars", lambda: 900)
+        vision_batch._SPILL_COUNTS.clear()
+        first = Path((await _analyze(tmp_path, _images(tmp_path, 30)))["results_file"])
+        second = Path((await _analyze(tmp_path, _images(tmp_path, 30)))["results_file"])
+        first.unlink()
+        third = Path((await _analyze(tmp_path, _images(tmp_path, 30)))["results_file"])
+
+        assert {first.name, second.name, third.name} == {"r1-1.json", "r1-2.json", "r1-3.json"}
+        assert second.exists() and third.exists(), "a spill overwrote an earlier table"
+
+
 class TestTheResultIsOffloadableLikeAnyOther:
     def test_a_large_batch_result_offloads_instead_of_filling_the_context(self, tmp_path):
         """Nothing special is needed — the session already spills any oversized

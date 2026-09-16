@@ -698,6 +698,17 @@ class ProviderSettings(SettingsGroup):
         restart_required=False,
         since="unreleased",
     )
+    vision_batch_retention_days: int = declare(
+        7,
+        "ROBOTHOR_VISION_BATCH_RETENTION_DAYS",
+        "How long a spilled `analyze_image` table is kept in "
+        "<workspace>/.robothor/analyze_image/ before the daily retention sweep "
+        "deletes it. Short by default: these are working files an agent reads "
+        "in the run that wrote them, not the operator's own data. 0 disables "
+        "the prune rather than deleting everything.",
+        restart_required=False,
+        since="unreleased",
+    )
     vision_batch_deadline: float = declare(
         600.0,
         "ROBOTHOR_VISION_BATCH_DEADLINE",
