@@ -38,6 +38,22 @@ def _allowed_names() -> list[str]:
     return sorted(n for n in allowed if n not in TOOLSEARCH_TOOLS)
 
 
+def _advertised_names(ctx: ToolContext) -> set[str]:
+    """The names the model can already see this turn.
+
+    On a deferred run the searchable set is the agent's WHOLE allow-set, which
+    includes every CORE_TOOLS name that is advertised directly — so marking
+    every hit ``in_toolset: false`` told the agent to route ``read_file``
+    through two extra round-trips it did not need. On the hot path, in a
+    campaign whose current lever is step efficiency.
+    """
+    from robothor.engine.tools.constants import CORE_TOOLS, TOOLSEARCH_TOOLS
+    from robothor.engine.tools.registry import get_registry
+
+    registry = get_registry()
+    return {n for n in (CORE_TOOLS | TOOLSEARCH_TOOLS) if n in registry._schemas}
+
+
 def _searchable_names() -> tuple[list[str], bool]:
     """``(names, deferred)`` — what this run may search, and which set it is.
 
@@ -101,17 +117,29 @@ async def _tool_search(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
         return out
 
     results = registry.search_tools(names, query, limit=limit)
+    # Per HIT, not per run: on a deferred run the CORE tools are in the
+    # searchable set AND already advertised, and telling the agent to
+    # tool_call one of those costs two round-trips for nothing.
+    advertised = _advertised_names(ctx) if deferred else set(names)
     for hit in results:
-        hit["in_toolset"] = not deferred
+        hit["in_toolset"] = hit["name"] in advertised
+    visible = [h["name"] for h in results if h["in_toolset"]]
+    if not deferred:
+        hint = "These are already in your toolset — call them directly, not via tool_call."
+    elif visible:
+        hint = (
+            f"{', '.join(visible)} are already in your toolset — call them directly. "
+            "For the rest, tool_describe(name=...) then tool_call(name=..., arguments=...)."
+        )
+    else:
+        hint = (
+            "Use tool_describe(name=...) for the full schema, then "
+            "tool_call(name=..., arguments=...)."
+        )
     out = {
         "results": results,
         "count": len(results),
-        "hint": (
-            "Use tool_describe(name=...) for the full schema, then "
-            "tool_call(name=..., arguments=...)."
-            if deferred
-            else "These are already in your toolset — call them directly, not via tool_call."
-        ),
+        "hint": hint,
     }
     if note:
         out["note"] = note
@@ -154,14 +182,30 @@ async def _tool_call(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         return {"error": "name is required"}
     if name in TOOLSEARCH_TOOLS:
         return {"error": f"{name} cannot invoke itself or another meta-tool"}
-    if name not in _allowed_names():
+    allowed = _allowed_names()
+    if not allowed:
+        # Not a deferred run, so tool_call has nothing to reach THROUGH — but
+        # "not in your allow-list" is the wrong reason and the agent gets no
+        # suggestions from it. Audit finding 4 is 18 refusals a week on exactly
+        # these runs, where "the agent keeps calling it because it worked on
+        # the last run". Say what is actually true, and suggest from the tools
+        # it does have.
+        searchable, _deferred = _searchable_names()
+        return {
+            "error": (
+                f"tool_call is only needed on a deferred run; this run's tools are "
+                f"already in your toolset, so call {name!r} directly."
+            ),
+            "did_you_mean": _closest(name, searchable),
+        }
+    if name not in allowed:
         # Defense in depth: deferral shrinks the advertised schema list, so the
         # agent's tools_denied / allow-list is enforced HERE for indirect calls.
         # The suggestion is computed from the SAME set the check just refused,
         # so it can never name a tool the agent may not call.
         return {
             "error": f"tool '{name}' is not in your allow-list",
-            "did_you_mean": _closest(name, _allowed_names()),
+            "did_you_mean": _closest(name, allowed),
         }
     tool_args = args.get("arguments", {})
     if not isinstance(tool_args, dict):

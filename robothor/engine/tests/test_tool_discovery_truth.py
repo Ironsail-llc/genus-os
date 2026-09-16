@@ -340,6 +340,113 @@ class TestToolSearchOutsideDeferral:
         assert "no Google Tasks tool" in out["note"]
 
 
+class TestInToolsetIsPerHit:
+    """`in_toolset` was `not deferred` — a property of the RUN, not the hit.
+
+    But the deferred searchable set is the agent's WHOLE allow-set, which
+    includes every CORE_TOOLS name the model can already see. So the agent was
+    told to route `read_file` through tool_describe + tool_call: two extra
+    round-trips for a tool already in front of it, on the hot path, in a
+    campaign whose current lever is step efficiency.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_core_tool_is_marked_visible_on_a_deferred_run(self) -> None:
+        from robothor.engine.tools.constants import CORE_TOOLS
+        from robothor.engine.tools.dispatch import (
+            ToolContext,
+            clear_deferred_allowed,
+            set_deferred_allowed,
+        )
+        from robothor.engine.tools.handlers.toolsearch import HANDLERS
+
+        assert "read_file" in CORE_TOOLS
+        token = set_deferred_allowed(frozenset({"read_file", "write_file", "gws_gmail_search"}))
+        try:
+            out = await HANDLERS["tool_search"]({"query": "read a file"}, ToolContext())
+        finally:
+            clear_deferred_allowed(token)
+
+        by_name = {h["name"]: h for h in out["results"]}
+        assert by_name["read_file"]["in_toolset"] is True
+        assert "read_file" in out["hint"]
+        assert "call them directly" in out["hint"]
+
+    @pytest.mark.asyncio
+    async def test_a_deferred_only_tool_is_still_marked_reachable(self) -> None:
+        from robothor.engine.tools.dispatch import (
+            ToolContext,
+            clear_deferred_allowed,
+            set_deferred_allowed,
+        )
+        from robothor.engine.tools.handlers.toolsearch import HANDLERS
+
+        token = set_deferred_allowed(frozenset({"gws_gmail_search", "read_file"}))
+        try:
+            out = await HANDLERS["tool_search"]({"query": "check my email"}, ToolContext())
+        finally:
+            clear_deferred_allowed(token)
+
+        by_name = {h["name"]: h for h in out["results"]}
+        assert by_name["gws_gmail_search"]["in_toolset"] is False
+        assert "tool_describe" in out["hint"]
+
+
+class TestToolCallOnANonDeferredRun:
+    """I8: `_allowed_names()` is [] there, so `did_you_mean` was empty and the
+    reason given was wrong.
+
+    Audit finding 4 is 18 refusals a week on exactly these runs, where "the
+    agent keeps calling it because it worked on the last run" — and it got
+    "not in your allow-list", which is not why, with no suggestions.
+    `tool_describe` on the same run did suggest.
+    """
+
+    @pytest.mark.asyncio
+    async def test_it_says_why_and_suggests(self) -> None:
+        from robothor.engine.tools.dispatch import (
+            ToolContext,
+            clear_agent_toolset,
+            set_agent_toolset,
+        )
+        from robothor.engine.tools.handlers.toolsearch import HANDLERS
+
+        token = set_agent_toolset(frozenset({*GWS_TOOLS, "read_file"}))
+        try:
+            out = await HANDLERS["tool_call"](
+                {"name": "gws_gmail_draft", "arguments": {}}, ToolContext()
+            )
+        finally:
+            clear_agent_toolset(token)
+
+        assert "already in your toolset" in out["error"]
+        assert "call it directly" in out["error"] or "directly" in out["error"]
+        assert out["did_you_mean"], "the run has tools; it can suggest from them"
+        assert any(n.startswith("gws_gmail") for n in out["did_you_mean"]), out
+
+    @pytest.mark.asyncio
+    async def test_a_deferred_run_still_refuses_a_denied_tool_by_name(self) -> None:
+        """The security posture is unchanged: the allow-list check is what
+        stops escalation, and it still fires first on a deferred run."""
+        from robothor.engine.tools.dispatch import (
+            ToolContext,
+            clear_deferred_allowed,
+            set_deferred_allowed,
+        )
+        from robothor.engine.tools.handlers.toolsearch import HANDLERS
+
+        token = set_deferred_allowed(frozenset({"read_file"}))
+        try:
+            out = await HANDLERS["tool_call"](
+                {"name": "gws_gmail_send", "arguments": {}}, ToolContext()
+            )
+        finally:
+            clear_deferred_allowed(token)
+
+        assert "not in your allow-list" in out["error"]
+        assert "gws_gmail_send" in out["error"]
+
+
 # ── A wrong name gets the right ones back ─────────────────────────────
 
 
