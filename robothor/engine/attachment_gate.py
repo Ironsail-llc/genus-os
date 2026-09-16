@@ -33,9 +33,11 @@ The order matters and each rung earns its place:
 7. **The pin** — for a queued file, the digest it was approved with. Before the
    content scan: if the bytes are not the approved bytes, judging the new ones
    on their merits answers the wrong question.
-8. **Credential shapes** — every file small enough, whatever its name: the
-   decode is the "is this text?" test, and it is better than a suffix list
-   (review I2).
+8. **Credential shapes** — every file, whatever its name and whatever its size:
+   the decode of the first 256 KB is the "is this text?" test, and it is better
+   than a suffix list (review I2). There is no size rung on the scan — one was
+   left behind when the suffix list went and it refused every binary over 4 MB
+   (re-review R1).
 
 A refusal is a sentence for the agent. It names the file and the reason and
 **never the value**, because an error that helpfully echoes the credential
@@ -53,7 +55,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "CHANGED_MARKER",
     "MAX_DOCUMENT_BYTES",
-    "MAX_SCAN_BYTES",
+    "SCAN_HEAD_BYTES",
     "digest_of",
     "refuse_to_send",
     "resolve_for_send",
@@ -62,11 +64,6 @@ __all__ = [
 #: Telegram's ceiling for an outbound document. Checked before the read, so a
 #: 2 GB file is refused rather than buffered into memory first.
 MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
-
-#: Largest file scanned in full for credential shapes. Above this a file is
-#: refused rather than sent unscanned: "too big to check" must not quietly mean
-#: "sent anyway".
-MAX_SCAN_BYTES = 4 * 1024 * 1024
 
 #: How many bytes of a file are decoded to decide whether it is text at all.
 #: A real binary raises ``UnicodeDecodeError`` inside the first few hundred
@@ -152,20 +149,29 @@ def _decode_head(head: bytes) -> str | None:
         return None
 
 
-def _credential_refusal(path: Path, size: int) -> str | None:
+def _credential_refusal(path: Path) -> str | None:
     """Why this file's CONTENTS may not leave the box, or None.
 
-    Every file is offered to the decoder, whatever it is called. The
-    ``UnicodeDecodeError`` catch is the "is this actually text?" test and it is
-    strictly better than a suffix list: ``tok.txt`` was refused and the same
-    bytes as ``tok.png`` were sent (review I2). Only the head is decoded, so the
-    cost is bounded for a large file.
+    Every file is offered to the decoder, whatever it is called and **whatever
+    it weighs**. The ``UnicodeDecodeError`` catch is the "is this actually
+    text?" test and it is strictly better than a suffix list: ``tok.txt`` was
+    refused and the same bytes as ``tok.png`` were sent (review I2).
+
+    There is no size rung here. There used to be — ``size > MAX_SCAN_BYTES``
+    refused anything too big to read in full — and it belonged to the text-only
+    scanner the suffix list fed. With the list gone it applied to everything,
+    and re-review R1 caught the result: a 12 MB PNG, a 6 MB PDF and a 20 MB MP4
+    were all refused as "too large to check for credentials", which broke the
+    brief's own acceptance case and the operator's actual request ("send me
+    that as a PDF").
+
+    Deleting it costs nothing, because the read was already bounded to
+    :data:`SCAN_HEAD_BYTES`. Refusing at 4 MB never bought coverage either: a
+    credential past 256 KB is unseen in a 3 MB file that passes, so the rung was
+    enforcing a limit the scanner had already stopped honouring. The size rules
+    that remain are the ones about what a chat can carry — the photo and
+    document ceilings in :func:`refuse_to_send`.
     """
-    if size > MAX_SCAN_BYTES:
-        return (
-            f"refused: {path.name} is {size // 1024 // 1024} MB, too large to check for "
-            "credentials before sending. Send a smaller extract of it."
-        )
     try:
         with path.open("rb") as handle:
             head = handle.read(SCAN_HEAD_BYTES)
@@ -280,4 +286,4 @@ def refuse_to_send(
             "new version is the one you meant to send."
         )
 
-    return _credential_refusal(resolved, size)
+    return _credential_refusal(resolved)

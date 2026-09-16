@@ -114,13 +114,39 @@ class TestTheScanIsNotExtensionGated:
         assert gate.refuse_to_send(make(tmp_path, name, self.PEM), tmp_path) is not None
 
     def test_a_real_binary_is_not_refused_by_the_scan(self, tmp_path) -> None:
-        """The decode is the binary test; a PNG must still be sendable."""
-        png = b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 8
+        """The decode is the binary test; a PNG must still be sendable.
+
+        The fixture is deliberately **over 4 MB**. The first version of this
+        test used a 2 KB PNG and passed while `send_file` was refusing every
+        binary above `MAX_SCAN_BYTES` — a test that could not see the
+        regression it was supposed to cover (re-review R1).
+        """
+        png = b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 48_000  # ~12 MB
+        assert len(png) > 4 * 1024 * 1024
         assert gate.refuse_to_send(make(tmp_path, "chart.png", png), tmp_path) is None
 
+    def test_a_six_megabyte_pdf_is_not_refused_by_the_scan(self, tmp_path) -> None:
+        """The brief's own case: "send me that as a PDF" for a real report."""
+        pdf = b"%PDF-1.7\n" + bytes(range(256)) * 24_000  # ~6 MB
+        assert len(pdf) > 4 * 1024 * 1024
+        assert gate.refuse_to_send(make(tmp_path, "report.pdf", pdf), tmp_path) is None
+
+    def test_a_twenty_megabyte_video_is_not_refused_by_the_scan(self, tmp_path) -> None:
+        clip = b"\x00\x00\x00 ftypmp42" + bytes(range(256)) * 80_000  # ~20 MB
+        assert gate.refuse_to_send(make(tmp_path, "clip.mp4", clip), tmp_path) is None
+
     def test_a_large_clean_text_file_is_not_refused(self, tmp_path) -> None:
-        body = b"month,total\n2026-09,12\n" * 20_000
+        """Over MAX_SCAN_BYTES and still text — only the head is read, so the
+        size of the file has nothing to do with whether it can be checked."""
+        body = b"month,total\n2026-09,12\n" * 250_000  # ~5.5 MB
+        assert len(body) > 4 * 1024 * 1024
         assert gate.refuse_to_send(make(tmp_path, "report.csv", body), tmp_path) is None
+
+    def test_a_credential_in_a_large_text_file_is_still_caught(self, tmp_path) -> None:
+        """Dropping the size rung must not drop the scan with it."""
+        body = b"ghp_0123456789abcdefghijklmnopqrstuvwxyz\n" + b"x,y\n" * 2_000_000
+        assert len(body) > 4 * 1024 * 1024
+        assert gate.refuse_to_send(make(tmp_path, "rows.csv", body), tmp_path) is not None
 
     def test_a_multibyte_character_split_by_the_head_read_is_still_text(
         self, tmp_path, monkeypatch
