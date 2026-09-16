@@ -281,11 +281,15 @@ def reask_for_wrong_deliverable_shape(session: Any, workspace: str | Path | None
         return False
     run = getattr(session, "run", None)
     report = contract_report_for_run(run, session, workspace)
+    # Written on EVERY outcome, cleared included. A satisfied re-check used to
+    # return without touching the stash, leaving the previous stop's failing
+    # verdict behind for anything that read it later — which is how a run that
+    # did exactly what the re-ask asked was still recorded `failed` (hostile
+    # review 2026-09-16, C1). A stale verdict is worse than none: it is a
+    # confident answer to a question the workspace has since re-answered.
+    session._deliverable_contract_report = None if (report is None or report.satisfied) else report
     if report is None or report.satisfied:
         return False
-    # Kept on the session so the run finalizer can tell a shape that was never
-    # re-asked about from one the agent was given a chance to fix.
-    session._deliverable_contract_report = report
     if mode != "enforce":
         logger.warning(
             "deliverable contract %s: run %s would be held for %s",

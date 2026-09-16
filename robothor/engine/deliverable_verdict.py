@@ -63,12 +63,15 @@ def record_deliverable_verdicts(run: Any, session: Any, workspace: str | Path | 
     try:
         from robothor.engine.deliverable_contract import contract_report_for_run
 
-        # The loop already read the workspace at the moment the agent stopped;
-        # reading it again would be a second answer to the same question. The
-        # fallback catches runs that never reached that path.
-        report = getattr(session, "_deliverable_contract_report", None)
-        if report is None:
-            report = contract_report_for_run(run, session, workspace)
+        # ALWAYS a fresh read. This used to prefer the verdict the loop stashed
+        # when it re-asked, on the reasoning that reading twice was two answers
+        # to one question. It is not: the re-ask exists so the agent can FIX the
+        # file, and between the loop's read and this one it may have done
+        # exactly that. Preferring the stash meant every run that complied with
+        # the re-ask was still recorded `failed`, with a `blocked` row and an
+        # operator alert — the one success path this feature exists to create
+        # was unreachable (hostile review 2026-09-16, C1).
+        report = contract_report_for_run(run, session, workspace)
     except Exception as exc:  # noqa: BLE001 — never block finalization
         logger.debug("deliverable shape check raised: %s", exc)
         return

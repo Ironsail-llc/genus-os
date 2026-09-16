@@ -225,23 +225,85 @@ class TestTheHonestFailure:
         assert calls == []
         assert run.status == RunStatus.COMPLETED
 
-    def test_it_reuses_the_verdict_the_loop_already_computed(self, tmp_path, mode, monkeypatch):
-        """The loop read the workspace at the moment the agent stopped. Reading
-        it again here would be a second answer to the same question."""
+    def test_it_re_reads_rather_than_trusting_the_loop(self, tmp_path, mode, monkeypatch):
+        """The loop's verdict is a statement about the moment the agent stopped.
+
+        The re-ask exists so the agent can FIX the file, so between the loop's
+        read and this one the workspace may have changed — and it is the later
+        answer that is true. Preferring the stash made every compliant run
+        record as `failed` (hostile review C1)."""
         mode("enforce")
         monkeypatch.setattr(
             "robothor.engine.tracking.log_guardrail_event", lambda **kw: None, raising=False
-        )
-        monkeypatch.setattr(
-            "robothor.engine.feature_flags.notify_guardrail_alert", lambda **kw: None
         )
         _wrong_shape(tmp_path)
         run = _run()
         session = _Session(run)
         reask_for_wrong_deliverable_shape(session, str(tmp_path))
+        (tmp_path / "results" / "rows.tsv").write_text("Track\tTitle\tSpeakers\n", encoding="utf-8")
+        record_deliverable_verdicts(run, session, str(tmp_path))
+        assert run.status == RunStatus.COMPLETED
+        assert not run.error_message
+
+
+@pytest.mark.usefixtures("mode")
+class TestComplyingWithTheReAskEndsWell:
+    """stop -> re-ask -> the agent fixes the file -> stop -> finalize.
+
+    The one success path this feature exists to create, and the only one no
+    test drove. It was unreachable: `reask_for_wrong_deliverable_shape`
+    returned early on a satisfied re-check without clearing the stash the
+    previous stop had set, and the finalizer preferred that stash — so a run
+    that did exactly what it was told still ended `failed`, with a `blocked`
+    guardrail row and an operator alert (hostile review 2026-09-16, C1).
+    """
+
+    @staticmethod
+    def _events(monkeypatch) -> list[dict]:
+        rows: list[dict] = []
         monkeypatch.setattr(
-            "robothor.engine.deliverable_contract.contract_report_for_run",
-            lambda *a, **k: pytest.fail("the finalizer re-read a verdict the loop already had"),
+            "robothor.engine.tracking.log_guardrail_event",
+            lambda **kw: rows.append(kw),
+            raising=False,
         )
+        monkeypatch.setattr(
+            "robothor.engine.feature_flags.notify_guardrail_alert",
+            lambda **kw: rows.append({"alert": kw}),
+        )
+        return rows
+
+    def test_the_compliant_run_completes(self, tmp_path, mode, monkeypatch):
+        mode("enforce")
+        rows = self._events(monkeypatch)
+        _wrong_shape(tmp_path)
+        run = _run()
+        session = _Session(run)
+
+        # First stop: the shape is wrong, the loop re-asks once.
+        assert reask_for_wrong_deliverable_shape(session, str(tmp_path)) is True
+        assert len(session.messages) == 1
+
+        # The agent complies.
+        (tmp_path / "results" / "rows.tsv").write_text("Track\tTitle\tSpeakers\n", encoding="utf-8")
+
+        # Second stop: nothing left to say, and the stash must not survive it.
+        assert reask_for_wrong_deliverable_shape(session, str(tmp_path)) is False
+        assert session._deliverable_contract_report is None, "a stale verdict outlived its facts"
+
+        record_deliverable_verdicts(run, session, str(tmp_path))
+        assert run.status == RunStatus.COMPLETED
+        assert not run.error_message
+        assert rows == [], "a compliant run must write no guardrail row and raise no alert"
+
+    def test_a_run_that_ignores_the_re_ask_still_fails(self, tmp_path, mode, monkeypatch):
+        """The other half of the same path — the fix must not make the gate
+        toothless."""
+        mode("enforce")
+        rows = self._events(monkeypatch)
+        _wrong_shape(tmp_path)
+        run = _run()
+        session = _Session(run)
+        assert reask_for_wrong_deliverable_shape(session, str(tmp_path)) is True
         record_deliverable_verdicts(run, session, str(tmp_path))
         assert run.status == RunStatus.FAILED
+        assert any(r.get("action") == "blocked" for r in rows)
