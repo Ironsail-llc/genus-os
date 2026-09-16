@@ -126,7 +126,7 @@ describe("isCanvasMessage", () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd /home/philip/robothor/app && npx pnpm@10 exec vitest run src/lib/__tests__/canvas-bridge.test.ts`
+Run: `cd $ROBOTHOR_WORKSPACE/app && npx pnpm@10 exec vitest run src/lib/__tests__/canvas-bridge.test.ts`
 Expected: FAIL (cannot resolve `../canvas-bridge`)
 
 - [ ] **Step 3: Implement**
@@ -207,7 +207,7 @@ export function isCanvasMessage(data: unknown): data is CanvasMessage {
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cd /home/philip/robothor/app && npx pnpm@10 exec vitest run src/lib/__tests__/canvas-bridge.test.ts`
+Run: `cd $ROBOTHOR_WORKSPACE/app && npx pnpm@10 exec vitest run src/lib/__tests__/canvas-bridge.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -286,7 +286,7 @@ describe("CANVAS_SHIM_SOURCE", () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd /home/philip/robothor/app && npx pnpm@10 exec vitest run src/lib/__tests__/canvas-shim.test.ts`
+Run: `cd $ROBOTHOR_WORKSPACE/app && npx pnpm@10 exec vitest run src/lib/__tests__/canvas-shim.test.ts`
 Expected: FAIL (module missing).
 
 - [ ] **Step 3: Implement** — the shim references `parent`/`self` which, inside a real iframe, are the frame globals; the test injects them via `new Function`.
@@ -334,7 +334,7 @@ Note: the shim uses `Math.random`/`setTimeout` — these run INSIDE the iframe (
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cd /home/philip/robothor/app && npx pnpm@10 exec vitest run src/lib/__tests__/canvas-shim.test.ts`
+Run: `cd $ROBOTHOR_WORKSPACE/app && npx pnpm@10 exec vitest run src/lib/__tests__/canvas-shim.test.ts`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -455,7 +455,7 @@ describe("useCanvasBridge", () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd /home/philip/robothor/app && npx pnpm@10 exec vitest run src/components/canvas/__tests__/use-canvas-bridge.test.tsx`
+Run: `cd $ROBOTHOR_WORKSPACE/app && npx pnpm@10 exec vitest run src/components/canvas/__tests__/use-canvas-bridge.test.tsx`
 Expected: FAIL (module missing).
 
 - [ ] **Step 3: Implement**
@@ -547,7 +547,7 @@ export function useCanvasBridge(iframeRef: RefObject<HTMLIFrameElement | null>) 
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cd /home/philip/robothor/app && npx pnpm@10 exec vitest run src/components/canvas/__tests__/use-canvas-bridge.test.tsx`
+Run: `cd $ROBOTHOR_WORKSPACE/app && npx pnpm@10 exec vitest run src/components/canvas/__tests__/use-canvas-bridge.test.tsx`
 Expected: PASS (all 5).
 
 - [ ] **Step 5: Commit**
@@ -596,7 +596,7 @@ describe("code-validator canvas-bridge carve-out", () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd /home/philip/robothor/app && npx pnpm@10 exec vitest run src/lib/dashboard/__tests__/code-validator.test.ts`
+Run: `cd $ROBOTHOR_WORKSPACE/app && npx pnpm@10 exec vitest run src/lib/dashboard/__tests__/code-validator.test.ts`
 Expected: FAIL on the "ALLOWS" cases (current validator blocks all `robothor.` and `postMessage`).
 
 - [ ] **Step 3: Implement** — read `code-validator.ts` first. Replace the blanket `robothor.` blocker with a negative-lookahead that blocks `robothor.` EXCEPT `read`/`propose`. Keep the `postMessage(` and `fetch(` blocks as-is (the model still may not call them; only the injected shim does, and the shim is not run through this validator).
@@ -610,7 +610,7 @@ Leave `postMessage(`, `fetch(`, `XMLHttpRequest`, storage, location, timer, eval
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cd /home/philip/robothor/app && npx pnpm@10 exec vitest run src/lib/dashboard/__tests__/code-validator.test.ts`
+Run: `cd $ROBOTHOR_WORKSPACE/app && npx pnpm@10 exec vitest run src/lib/dashboard/__tests__/code-validator.test.ts`
 Expected: PASS. Also run the FULL existing validator test file to ensure no regression of the other blocks.
 
 - [ ] **Step 5: Commit**
@@ -681,7 +681,7 @@ describe("CanvasView", () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cd /home/philip/robothor/app && npx pnpm@10 exec vitest run src/components/views/__tests__/canvas-view.test.tsx`
+Run: `cd $ROBOTHOR_WORKSPACE/app && npx pnpm@10 exec vitest run src/components/views/__tests__/canvas-view.test.tsx`
 Expected: FAIL (module missing).
 
 - [ ] **Step 3: Implement** — read `srcdoc-renderer.tsx` first. Add `forwardRef` to expose the iframe element, add the `bootstrap` prop (concatenated into the srcdoc before the model HTML), then write `CanvasView`:
@@ -749,7 +749,7 @@ Then register: `sidebar.tsx` (`ViewId += "canvas"`, navItem with a lucide icon e
 
 - [ ] **Step 4: Run to verify it passes + tsc**
 
-Run: `cd /home/philip/robothor/app && npx pnpm@10 exec vitest run src/components/views/__tests__/canvas-view.test.tsx && npx pnpm@10 exec tsc --noEmit`
+Run: `cd $ROBOTHOR_WORKSPACE/app && npx pnpm@10 exec vitest run src/components/views/__tests__/canvas-view.test.tsx && npx pnpm@10 exec tsc --noEmit`
 Expected: PASS; tsc clean.
 
 - [ ] **Step 5: Commit**
@@ -803,12 +803,12 @@ describe("canvas isolation invariants", () => {
 
 - [ ] **Step 2: Run**
 
-Run: `cd /home/philip/robothor/app && npx pnpm@10 exec vitest run src/components/canvas/__tests__/isolation.test.tsx`
+Run: `cd $ROBOTHOR_WORKSPACE/app && npx pnpm@10 exec vitest run src/components/canvas/__tests__/isolation.test.tsx`
 Expected: PASS. If the `connect-src 'none'` assertion fails because the renderer builds the CSP differently, adjust the assertion to match the renderer's real CSP string (do NOT weaken the intent — it must assert the frame cannot open a network connection).
 
 - [ ] **Step 3: Run the FULL app suite + tsc** (last task — the registration + renderer change must not break AppShell)
 
-Run: `cd /home/philip/robothor/app && npx pnpm@10 exec vitest run && npx pnpm@10 exec tsc --noEmit`
+Run: `cd $ROBOTHOR_WORKSPACE/app && npx pnpm@10 exec vitest run && npx pnpm@10 exec tsc --noEmit`
 Expected: whole app suite green; tsc clean.
 
 - [ ] **Step 4: Commit**
