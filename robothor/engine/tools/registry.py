@@ -849,8 +849,14 @@ class ToolRegistry:
         scored.sort(key=lambda x: (-x[0], -x[1], x[2]))
         return [SearchHit(name=n, description=d) for _s, _c, n, d in scored[: max(1, limit)]]
 
-    #: Longer than this and a search result stops being scannable. Chosen above
-    #: the longest disambiguating description in the registry, not below it.
+    #: Longer than this and a search result stops being scannable. Meant to sit
+    #: above the longest DISAMBIGUATING description — one carrying a
+    #: ``when_to_use`` — so search never cuts the text that decides between two
+    #: tools. It did not: ``gws_calendar_create`` stood at 411 against this 400,
+    #: making it the one tool search truncated and the only reason the fallback
+    #: below was ever reached in production. That description was trimmed, and
+    #: ``test_every_deciding_description_is_shown_whole`` now enforces the claim
+    #: this comment makes instead of restating it.
     _SEARCH_DESC_MAX = 400
 
     def _search_description(self, name: str, description: str) -> str:

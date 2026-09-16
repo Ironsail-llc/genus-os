@@ -266,18 +266,20 @@ it is persisted with the run step** — head-and-tail, with a marker in the
 middle. It is not capped on the way to the model: nothing shortens that message
 unless an agent sets `tool_offload_threshold`, which defaults to off.
 
-Handlers still fit inside it, for two reasons:
-
-* the stored row is what a **resumed** or persistent-history run reads back, so
-  a result cut in the middle is what that run is handed;
-* the step row is the **audit trail** — the run viewer, the verification pass
-  and any support bundle read it.
+Handlers still fit inside it, for two narrow reasons. Resume reads
+`agent_run_checkpoints.messages` and persistent history reads
+`chat_messages.message` — neither touches this column, and the run viewer names
+the step columns it wants without `tool_output` among them. What does read it
+back is `scripts/cleanup_benchmark_crm_debris.py`, which parses
+`tool_output->>'id'` to find the CRM rows a benchmark left behind — a row cut
+mid-JSON is debris it cannot identify, so cannot remove — and
+`bench/wildclaw/run_one.py` when grading a run.
 
 And a 3 MB email body is bad for the context window whether or not anything
-truncates it. Cutting blind lands the hole wherever the character count falls,
-which is why the stored record of every long email used to be two halves of a
-base64 blob. A handler that caps itself keeps the beginning and says
-`body_truncated`.
+truncates it on the way there. Cutting blind lands the hole wherever the
+character count falls, which is why the stored record of every long email used
+to be two halves of a base64 blob. A handler that caps itself keeps the
+beginning and says `body_truncated`.
 
 ## See also
 

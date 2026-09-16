@@ -260,6 +260,64 @@ def test_no_gws_description_is_long_enough_to_be_cut_to_its_first_sentence(
         assert len(shown) >= min(len(description), 240), (name, len(shown))
 
 
+def test_every_deciding_description_is_shown_whole(registry: ToolRegistry) -> None:
+    """`_SEARCH_DESC_MAX`'s own comment says it was "chosen above the longest
+    disambiguating description in the registry, not below it" — and it was not:
+    `gws_calendar_create` stood at 411 against a 400 cap, so the one tool whose
+    description this change exists to deliver was the one tool search cut.
+
+    A tool carrying a `when_to_use` sentence is one we decided needed
+    disambiguating. Its description is the text that does the disambiguating,
+    so search shows it whole. This test is the enforcement: an edit that pushes
+    one over fails here instead of silently losing its tail in a search hit.
+    """
+    over = {
+        name: len(schema["function"]["description"])
+        for name, schema in registry._schemas.items()
+        if schema.get("function", {}).get("when_to_use")
+        and len(schema["function"]["description"]) > ToolRegistry._SEARCH_DESC_MAX
+    }
+    assert not over, (
+        f"over the {ToolRegistry._SEARCH_DESC_MAX}-char cap: {over}. Trim the "
+        "description, or raise the cap and say why the longer hit still scans."
+    )
+
+
+def test_an_over_cap_description_still_leads_with_the_deciding_sentence(
+    registry: ToolRegistry,
+) -> None:
+    """The fallback that keeps `when_to_use` first and fills the rest of the
+    budget existed for exactly ONE real tool, by eleven characters — so the
+    test above, which removes that overshoot, would have left the branch
+    unreachable and unproven. It is a defensive path: it has to hold for
+    whatever description a future edit writes, not for one accident of length.
+    Hence a synthetic schema.
+    """
+    when = "Use this only when the thing you want is the second thing."
+    rest = "Tail sentence that must not be lost entirely. " * 20
+    description = f"{when} {rest}"
+    assert len(description) > ToolRegistry._SEARCH_DESC_MAX
+
+    registry._schemas["_fixture_tool"] = {
+        "type": "function",
+        "function": {
+            "name": "_fixture_tool",
+            "description": description,
+            "when_to_use": when,
+        },
+    }
+    try:
+        shown = registry._search_description("_fixture_tool", description)
+    finally:
+        del registry._schemas["_fixture_tool"]
+
+    assert shown.startswith(when), shown
+    assert len(shown) <= ToolRegistry._SEARCH_DESC_MAX + 1, len(shown)
+    # Not the deciding sentence alone — the budget left over carries some of
+    # the rest, which is the whole reason this branch exists.
+    assert len(shown) > len(when) + 100, shown
+
+
 def test_the_crm_mail_tools_stop_masquerading_as_gmail(
     registry: ToolRegistry, broad_agent_names: list[str]
 ) -> None:

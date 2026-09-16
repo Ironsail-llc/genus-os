@@ -11,14 +11,20 @@ from __future__ import annotations
 #: only shortening is ``tool_offload_threshold``, which defaults to 0 and is
 #: therefore off.
 #:
-#: A handler still has to fit inside it, for two reasons that are not the one
-#: originally written here:
+#: A handler still has to fit inside it — for narrower reasons than the first
+#: two corrections claimed, both of which were also wrong. Resume reads
+#: ``agent_run_checkpoints.messages`` and persistent history reads
+#: ``chat_messages.message``; neither selects this column. Nor does the run
+#: viewer: ``crm/bridge/routers/runs.py`` lists the step columns it wants and
+#: ``tool_output`` is not among them.
 #:
-#: * the stored row is what a RESUMED or persistent-history run reads back, so
-#:   a result cut in the middle is what that run is handed;
-#: * and the step row is the audit trail — the run viewer, the verification
-#:   pass and any support bundle read it — so an unreadable one is an
-#:   unreadable record of what the agent actually saw.
+#: Two things do read it back:
+#:
+#: * ``scripts/cleanup_benchmark_crm_debris.py`` parses ``tool_output->>'id'``
+#:   to find the CRM rows a benchmark left behind. A row cut mid-JSON is debris
+#:   the cleanup cannot identify, so cannot remove — the one place where
+#:   truncation does real damage today;
+#: * ``bench/wildclaw/run_one.py`` selects it per step when grading a run.
 #:
 #: Cutting blind also lands the hole wherever the character count falls:
 #: ``gws_gmail_get`` returned the raw Gmail API JSON with the body as one

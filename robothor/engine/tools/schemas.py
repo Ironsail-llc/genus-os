@@ -1347,10 +1347,10 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             "description": (
                 "Use this only to put a NEW event on the OPERATOR's calendar, which is "
                 "where it goes by default — pass calendar='own' for your own, which the "
-                "operator never sees. Emails the attendees their invitation. Returns the "
-                "event plus `calendar` (whose it is), `invitations_sent` and `htmlLink` — "
-                'report those, not just success; or {"status": "deduped"} having created '
-                "nothing, when a matching event already exists nearby."
+                "operator never sees. Emails the attendees. Returns the event plus "
+                "`calendar` (whose it is), `invitations_sent` and `htmlLink` — report "
+                'those, not just success; or {"status": "deduped"}, having created '
+                "nothing, when one already exists."
             ),
             "parameters": {
                 "type": "object",
