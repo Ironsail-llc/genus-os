@@ -359,15 +359,28 @@ def human_size(size: int) -> str:
     return f"{rendered} {unit}"
 
 
-def too_large_sentence(size: int, *, name: str = "") -> str:
+def too_large_sentence(size: int | None = None, *, name: str = "") -> str:
     """What the operator is told about a file the Bot API will not hand over.
 
     Names the real limit and offers the way round it. A refusal that says only
     "too large" makes the operator guess at a number the platform already knows.
+
+    ``size`` is the file's ACTUAL size, and ``None`` means nobody knows it. That
+    distinction is the whole point of re-review R2: the download bound fires the
+    moment the write crosses the limit, so the only number available there is
+    how far the transfer got — and passing it in made a 500 MB upload come back
+    as "is 21 MB, and Telegram only lets me download files up to 20 MB". Honest
+    about the limit, wrong about the file, on a platform whose whole theme is
+    not saying things it cannot show. When only the bound is known the sentence
+    says "is larger than 20 MB" and claims nothing more.
     """
-    which = f"“{name}” is" if name else "That file is"
+    which = f"“{name}”" if name else "That file"
+    if size is None:
+        measured = f"{which} is larger than {human_size(MAX_DOWNLOAD_BYTES)}"
+    else:
+        measured = f"{which} is {human_size(size)}"
     return (
-        f"{which} {human_size(size)}, and Telegram only lets me download files up to "
+        f"{measured}, and Telegram only lets me download files up to "
         f"{human_size(MAX_DOWNLOAD_BYTES)}. Put it somewhere I can fetch it and send me the "
         "link, or split it up."
     )

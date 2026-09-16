@@ -364,11 +364,12 @@ class TelegramAttachmentsMixin:
             return
         try:
             noted = await self._keep_attachment(str(message.chat.id), media, "")
-        except AttachmentTooLargeError as exc:
+        except AttachmentTooLargeError:
             # Voice notes are one of the kinds Telegram most often reports no
             # size for, so the declared check above sees 0 and the bound on the
-            # DOWNLOAD is what actually holds here.
-            await message.answer(attachments.too_large_sentence(exc.written, name=media.name))
+            # DOWNLOAD is what actually holds here. No size is passed: all this
+            # path knows is that the file is bigger than the limit (R2).
+            await message.answer(attachments.too_large_sentence(name=media.name))
             return
         if noted is None:
             await message.answer("🎤 Couldn't fetch the voice note from Telegram.")
@@ -409,8 +410,12 @@ class TelegramAttachmentsMixin:
 
         try:
             noted = await self._keep_attachment(chat_id, media, caption)
-        except AttachmentTooLargeError as exc:
-            await message.answer(attachments.too_large_sentence(exc.written, name=media.name))
+        except AttachmentTooLargeError:
+            # The bound fired mid-transfer, so the only thing known here is that
+            # the file is bigger than the limit — not how big. Saying "is 21 MB"
+            # for a 500 MB upload was true of the transfer and false of the file
+            # (re-review R2).
+            await message.answer(attachments.too_large_sentence(name=media.name))
             return
         if noted is None:
             await message.answer(

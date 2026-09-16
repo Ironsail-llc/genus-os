@@ -256,6 +256,19 @@ class TestSizeCeiling:
         bot._enqueue_message.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_the_sentence_never_states_a_size_it_only_half_measured(self, bot) -> None:
+        """Re-review R2. The bound fires the moment the write crosses the line,
+        so the only number it has is how far the transfer got. A huge upload was
+        reported as "is 21 MB" — true of the transfer, false of the file."""
+        arm_download(bot, b"x" * (attachments.MAX_DOWNLOAD_BYTES * 4))
+        msg = message(document=document(name="huge.bin", size=0, mime=""))
+        await bot.handle_file(msg)
+        said = msg.answer.await_args.args[0]
+        assert "is larger than 20 MB" in said
+        assert "21 MB" not in said
+        assert "80 MB" not in said
+
+    @pytest.mark.asyncio
     async def test_nothing_is_written_for_an_oversized_download(self, bot) -> None:
         arm_download(bot, b"x" * (attachments.MAX_DOWNLOAD_BYTES + 4096))
         await bot.handle_file(message(document=document(name="forwarded.bin", size=0, mime="")))

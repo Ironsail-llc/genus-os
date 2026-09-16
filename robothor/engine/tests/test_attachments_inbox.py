@@ -190,6 +190,28 @@ class TestTooLarge:
     def test_the_ceiling_is_telegrams_own(self) -> None:
         assert attachments.MAX_DOWNLOAD_BYTES == 20 * 1024 * 1024
 
+    def test_with_no_known_size_it_claims_only_the_bound(self) -> None:
+        """Re-review R2. The download bound fires mid-transfer, so the only
+        number available there is how far the transfer got. Passing it made a
+        500 MB upload come back as "is 21 MB" — true of the transfer, false of
+        the file."""
+        sentence = attachments.too_large_sentence(name="clip.mp4")
+        assert "is larger than 20 MB" in sentence
+        assert "clip.mp4" in sentence
+        assert "21 MB" not in sentence
+
+    def test_a_known_size_is_still_stated_exactly(self) -> None:
+        """The declared-size path knows the real number and should say it."""
+        assert "25 MB" in attachments.too_large_sentence(25 * 1024 * 1024, name="clip.mp4")
+
+    def test_both_forms_name_the_limit_and_offer_the_way_round(self) -> None:
+        for sentence in (
+            attachments.too_large_sentence(name="a.bin"),
+            attachments.too_large_sentence(25 * 1024 * 1024, name="a.bin"),
+        ):
+            assert "up to 20 MB" in sentence
+            assert "link" in sentence.lower()
+
 
 class TestNote:
     def _row(self, **kw):
