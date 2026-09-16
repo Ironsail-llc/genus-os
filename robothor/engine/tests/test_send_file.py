@@ -18,6 +18,7 @@ from pathlib import Path  # noqa: TC003 - used at runtime by the helpers below
 
 import pytest
 
+from robothor.engine import attachment_gate as gate
 from robothor.engine.channels.base import SendReceipt
 from robothor.engine.tools.handlers import attachments as tool
 
@@ -256,7 +257,7 @@ class TestLimits:
     async def test_a_file_over_the_document_limit_is_refused(
         self, tmp_path, sent, monkeypatch
     ) -> None:
-        monkeypatch.setattr(tool, "MAX_DOCUMENT_BYTES", 8, raising=True)
+        monkeypatch.setattr(gate, "MAX_DOCUMENT_BYTES", 8, raising=True)
         path = make_file(tmp_path, "big.bin", b"x" * 100)
         out = await tool.send_file({"path": str(path)}, Ctx(tmp_path))
         assert "error" in out

@@ -26,6 +26,19 @@ def _empty_queue():
     delivery.clear_queued_attachments()
 
 
+@pytest.fixture(autouse=True)
+def _workspace_is_the_tmp_tree(tmp_path, monkeypatch):
+    """Point the instance workspace at this test's tmp tree.
+
+    ``run.attachments`` carries bare paths with no workspace of their own, so
+    the delivery ladder falls back to the instance workspace to judge
+    containment — which on a developer's box is the REAL one. Without this the
+    tests either pass for the wrong reason or fail depending on whose machine
+    they run on, and neither is a test.
+    """
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+
+
 @pytest.fixture
 def channel(monkeypatch):
     sent: list[dict] = []
@@ -84,7 +97,9 @@ class TestTheRunCarriesThem:
         path = tmp_path / "chart.png"
         path.write_bytes(b"\x89PNG")
         run = _run()
-        delivery.queue_attachment(run.id, str(path), caption="tonight's numbers")
+        delivery.queue_attachment(
+            run.id, str(path), caption="tonight's numbers", workspace=str(tmp_path)
+        )
         await delivery.deliver(_config(), run)
         assert channel[1]["path"] == str(path)
         assert channel[1]["caption"] == "tonight's numbers"
@@ -96,7 +111,7 @@ class TestTheRunCarriesThem:
         path = tmp_path / "a.txt"
         path.write_text("x")
         run = _run()
-        delivery.queue_attachment(run.id, str(path))
+        delivery.queue_attachment(run.id, str(path), workspace=str(tmp_path))
         await delivery.deliver(_config(), run)
         channel.clear()
         await delivery.deliver(_config(), _run())
@@ -187,7 +202,7 @@ class TestSendFileDuringAScheduledRun:
         assert out.get("queued") is True
         assert out.get("sent") is not True
         queued = delivery.take_queued_attachments("run-sched")
-        assert [item[0] for item in queued] == [str(path)]
+        assert [item.path for item in queued] == [str(path)]
 
     @pytest.mark.asyncio
     async def test_the_refusals_still_apply_before_anything_is_queued(
@@ -205,3 +220,62 @@ class TestSendFileDuringAScheduledRun:
         out = await tool.send_file({"path": str(secret)}, MagicMock(workspace=str(tmp_path)))
         assert "error" in out
         assert not delivery.take_queued_attachments("run-sched")
+
+
+class TestTheLadderRunsAgainAtDelivery:
+    """Hostile review C1. The queue holds a PATH; the channel reads the bytes at
+    send time. Everything `send_file` checked ran against different bytes."""
+
+    @pytest.mark.asyncio
+    async def test_a_file_rewritten_after_queueing_is_not_delivered(
+        self, tmp_path, channel
+    ) -> None:
+        from robothor.engine import attachment_gate as gate
+
+        path = tmp_path / "report.csv"
+        path.write_bytes(b"month,total\n2026-09,12\n")
+        run = _run()
+        delivery.queue_attachment(
+            run.id, str(path), caption="the monthly numbers", digest=gate.digest_of(path)
+        )
+        path.write_bytes(b"AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n")
+
+        await delivery.deliver(_config(), run)
+
+        assert [event["kind"] for event in channel] == ["text"], (
+            "the rewritten bytes must never reach the channel"
+        )
+
+    @pytest.mark.asyncio
+    async def test_an_unchanged_queued_file_still_goes(self, tmp_path, channel) -> None:
+        from robothor.engine import attachment_gate as gate
+
+        path = tmp_path / "report.csv"
+        path.write_bytes(b"month,total\n2026-09,12\n")
+        run = _run()
+        delivery.queue_attachment(
+            run.id, str(path), digest=gate.digest_of(path), workspace=str(tmp_path)
+        )
+        await delivery.deliver(_config(), run)
+        assert [event["kind"] for event in channel] == ["text", "file"]
+
+    @pytest.mark.asyncio
+    async def test_run_attachments_go_through_the_ladder_too(self, tmp_path, channel) -> None:
+        """`run.attachments` was never checked by anything, ever."""
+        secret = tmp_path / ".env"
+        secret.write_bytes(b"TOKEN=abc")
+        await delivery.deliver(_config(), _run(attachments=[str(secret)]))
+        assert [event["kind"] for event in channel] == ["text"]
+
+    @pytest.mark.asyncio
+    async def test_a_queued_file_that_left_the_workspace_is_refused(
+        self, tmp_path, channel
+    ) -> None:
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        outside = tmp_path / "outside.txt"
+        outside.write_bytes(b"not yours")
+        run = _run()
+        delivery.queue_attachment(run.id, str(outside), workspace=str(workspace))
+        await delivery.deliver(_config(), run)
+        assert [event["kind"] for event in channel] == ["text"]

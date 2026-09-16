@@ -44,7 +44,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -63,6 +63,7 @@ __all__ = [
     "extractable",
     "format_attachment_note",
     "human_size",
+    "is_inbox_secret",
     "inbox_path",
     "inbox_root",
     "kind_for",
@@ -289,6 +290,25 @@ def holds_credentials(name: str) -> bool:
 
     raw = str(name or "").replace("\\", "/")
     return is_secret_path(raw) or is_secret_path(raw.rsplit("/", 1)[-1])
+
+
+def is_inbox_secret(path: str | os.PathLike[str]) -> bool:
+    """Is *path* the inbox copy of a file the operator sent that holds credentials?
+
+    The one predicate every reader asks. It exists because the stored name
+    cannot answer: sanitising is what destroys the evidence (``.env`` becomes
+    ``env``), so ``secret_paths`` sees nothing to object to.
+    """
+    stored = PurePath(str(path)).name
+    # Strip the `<file_unique_id>-` prefix. Telegram's uid is URL-safe base64
+    # and may contain `-`, so every split point is tried rather than the first.
+    candidates = {stored}
+    parts = stored.split("-")
+    for index in range(1, len(parts)):
+        tail = "-".join(parts[index:])
+        candidates.add(tail)
+        candidates.add(f".{tail}")
+    return any(holds_credentials(name) for name in candidates)
 
 
 #: What the agent is told in place of a secrets file's contents. The file IS

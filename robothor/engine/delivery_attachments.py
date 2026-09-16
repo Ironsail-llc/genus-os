@@ -21,6 +21,7 @@ growing the god-object one feature at a time.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -37,18 +38,47 @@ __all__ = [
     "take_queued_attachments",
 ]
 
+
+@dataclass(frozen=True)
+class QueuedAttachment:
+    """One file a run wants delivered, pinned to what was approved.
+
+    ``digest`` and ``workspace`` are the evidence: the ladder ran against THESE
+    bytes, inside THAT tree. Both are re-checked at send time, because the file
+    on disk when the channel opens it need not be the file the agent queued —
+    that is exactly the hole the hostile review walked through.
+    """
+
+    path: str
+    caption: str = ""
+    digest: str = ""
+    workspace: str = ""
+
+
 #: Keyed by run so two concurrent nightly reports cannot deliver each other's
 #: PDF, and drained on collection so a retried run never inherits the previous
 #: attempt's files.
-_queued: dict[str, list[tuple[str, str]]] = {}
+_queued: dict[str, list[QueuedAttachment]] = {}
 
 #: The most files one run may queue. A run in a loop writing charts must not be
 #: able to turn one announcement into a hundred uploads.
 MAX_QUEUED_ATTACHMENTS = 10
 
 
-def queue_attachment(run_id: str, path: str, caption: str = "") -> bool:
+def queue_attachment(
+    run_id: str,
+    path: str,
+    caption: str = "",
+    *,
+    digest: str = "",
+    workspace: str = "",
+) -> bool:
     """Park a file to be delivered with ``run_id``'s announcement.
+
+    ``digest`` is the content hash the ladder approved. It is re-checked at send
+    time and a mismatch is refused as ``changed_since_queued`` — an empty digest
+    means nothing was pinned, and the ladder still runs, it just cannot tell a
+    rewritten file from the original.
 
     Returns False when the run has already queued :data:`MAX_QUEUED_ATTACHMENTS`
     — a refusal the caller reports to the agent, rather than a silent drop.
@@ -58,11 +88,18 @@ def queue_attachment(run_id: str, path: str, caption: str = "") -> bool:
     queue = _queued.setdefault(str(run_id), [])
     if len(queue) >= MAX_QUEUED_ATTACHMENTS:
         return False
-    queue.append((str(path), str(caption or "")))
+    queue.append(
+        QueuedAttachment(
+            path=str(path),
+            caption=str(caption or ""),
+            digest=str(digest or ""),
+            workspace=str(workspace or ""),
+        )
+    )
     return True
 
 
-def take_queued_attachments(run_id: str) -> list[tuple[str, str]]:
+def take_queued_attachments(run_id: str) -> list[QueuedAttachment]:
     """Everything queued for ``run_id``, removing it from the queue."""
     return _queued.pop(str(run_id), [])
 
@@ -70,6 +107,29 @@ def take_queued_attachments(run_id: str) -> list[tuple[str, str]]:
 def clear_queued_attachments() -> None:
     """Drop every queued attachment. For tests and for a clean daemon restart."""
     _queued.clear()
+
+
+def _refuse(item: QueuedAttachment, config: AgentConfig) -> str | None:
+    """Re-run the send ladder for one queued file, or say why it may not go.
+
+    The workspace is the one the file was approved against; without one there is
+    no tree to judge containment against and the file is refused rather than
+    sent on trust.
+    """
+    from robothor.engine.attachment_gate import refuse_to_send
+
+    root = item.workspace
+    if not root:
+        try:
+            from robothor.settings.sources import workspace_path
+
+            resolved = workspace_path()
+            root = str(resolved) if resolved is not None else ""
+        except Exception:  # noqa: BLE001 - an unresolvable workspace refuses
+            root = ""
+    if not root:
+        return "no resolvable workspace to judge containment against"
+    return refuse_to_send(item.path, root, expect_digest=item.digest or None)
 
 
 async def send_attachments(config: AgentConfig, run: AgentRun, name: str, channel: Any) -> None:
@@ -87,20 +147,40 @@ async def send_attachments(config: AgentConfig, run: AgentRun, name: str, channe
     recorded here rather than allowed to escape into run finalization, where it
     would look like the run itself failed.
     """
-    pending = [(path, "") for path in (getattr(run, "attachments", None) or [])]
+    # `run.attachments` carries bare paths that NOTHING has ever checked — an
+    # agent (or a hook) can set the list directly. They go through the same
+    # ladder, unpinned, which is the only honest thing to do with a path whose
+    # provenance is unknown.
+    pending = [QueuedAttachment(path=path) for path in (getattr(run, "attachments", None) or [])]
     pending.extend(take_queued_attachments(run.id))
     if not pending:
         return
 
     target = config.delivery_to
-    for path, caption in pending[:MAX_QUEUED_ATTACHMENTS]:
+    for item in pending[:MAX_QUEUED_ATTACHMENTS]:
+        path = item.path
         if not Path(path).is_file():
             logger.warning(
                 "Attachment for %s is missing at delivery time: %s", config.id, Path(path).name
             )
             continue
+
+        # THE LADDER, AGAIN, HERE. Everything `send_file` checked ran against
+        # the bytes that were on disk when the agent called the tool; the
+        # channel opens the file now. A run that queued a benign CSV and then
+        # overwrote it with an AWS secret key shipped the key.
+        refusal = _refuse(item, config)
+        if refusal:
+            logger.error(
+                "Attachment %s for %s was refused at delivery: %s",
+                Path(path).name,
+                config.id,
+                refusal,
+            )
+            continue
+
         try:
-            receipt = await channel.send_attachment(target, path, caption)
+            receipt = await channel.send_attachment(target, path, item.caption)
         except NotImplementedError as e:
             logger.warning(
                 "Channel %s cannot deliver the file %s for %s: %s",

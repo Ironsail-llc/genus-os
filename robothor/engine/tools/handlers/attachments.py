@@ -6,29 +6,22 @@ delivery path that put a photo or a document in front of them: the only
 An agent that produced a chart, a PDF, a screenshot or a CSV had to paste it as
 text, describe it, or give up.
 
-Why the refusals are most of this file
---------------------------------------
-This tool takes a PATH and puts whatever is at it in front of a person, which
-makes it the shortest exfiltration route the platform has. A model that has been
-talked into reading a credential cannot leak it through ``read_file`` (the
-redactor catches the value) but could hand over the whole file here. So, in
-order, and all before a byte is uploaded:
+Where the refusals live
+-----------------------
+Not here. This tool takes a PATH and puts whatever is at it in front of a
+person, which makes it the shortest exfiltration route the platform has — and
+for a scheduled run it is **not the moment the bytes are sent**. The ladder
+(containment, hard links, secret paths, the inbox secret flag, size, credential
+shapes) is :func:`robothor.engine.attachment_gate.refuse_to_send`, and it runs
+here AND again in ``delivery_attachments.send_attachments`` immediately before
+the channel reads the file. See that module for why.
 
-1. **Containment.** The RESOLVED path — symlinks followed — must be inside the
-   workspace. A symlink in the workspace pointing at ``/etc/robothor`` is the
-   probe this ordering exists for.
-2. **Secret paths.** :mod:`robothor.engine.secret_paths`, the same rule
-   ``read_file`` and ``exec`` enforce, so a file is not sendable merely because
-   it is unreadable.
-3. **Credential shapes.** For files that are actually text, the export gate's
-   own scanner (:func:`robothor.templates.bundle.scan_secret_literals`). One
-   opinion about what a credential looks like, asked twice, rather than a
-   second list here that drifts from it. The refusal names the file and the
-   family, never the value.
-4. **Size.** Checked against the platform's ceiling before the read.
+What stays here is everything specific to an agent asking: resolving the run's
+own reply surface, the operator-tier ``target`` rule, the photo/document
+rendering choice, the queue for a run nobody is watching, and the audit.
 
-Then the send goes through ``Channel.send_attachment`` — the protocol slot, not
-a Telegram call — and the result is whatever that channel could prove.
+The send goes through ``Channel.send_attachment`` — the protocol slot, not a
+Telegram call — and the result is whatever that channel could prove.
 """
 
 from __future__ import annotations
@@ -37,6 +30,8 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from robothor.engine.attachment_gate import digest_of, refuse_to_send, resolve_for_send
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from robothor.engine.tools.dispatch import ToolContext
 
@@ -44,14 +39,12 @@ logger = logging.getLogger(__name__)
 
 HANDLERS: dict[str, Any] = {}
 
-#: Telegram's ceilings, mirrored here so the refusal happens before the upload
-#: rather than as a provider error the agent has to interpret. Kept in this
-#: module as well as in ``channels/telegram`` because the tool refuses and the
-#: channel enforces, and a tool that trusted the channel to refuse would have
-#: read a 2 GB file into memory first.
+#: Telegram's photo ceilings. Only the RENDERING choice lives here — whether an
+#: image goes as a photo or as a document. Everything that decides whether a
+#: file may leave the box at all is in ``robothor.engine.attachment_gate``,
+#: because the tool is not the last place that question gets asked.
 MAX_PHOTO_BYTES = 10 * 1024 * 1024
 MAX_PHOTO_DIMENSION_SUM = 10_000
-MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
 
 #: Roles that may aim a file at a chat other than the one this run came from.
 #: Everyone else sends to the conversation they are in. Redirecting a file is
@@ -59,41 +52,6 @@ MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
 #: this other chat", and the run's own surface is the one address the platform
 #: knows the operator chose.
 _REDIRECT_ROLES = frozenset({"owner", "admin", "operator"})
-
-#: Suffixes worth scanning as text for credential shapes. A PNG decoded as
-#: UTF-8 is noise, and grepping noise refuses real files at random; the scan is
-#: for text an agent could have written a secret INTO.
-_SCANNABLE = frozenset(
-    {
-        ".txt",
-        ".md",
-        ".csv",
-        ".tsv",
-        ".json",
-        ".yaml",
-        ".yml",
-        ".xml",
-        ".html",
-        ".py",
-        ".js",
-        ".ts",
-        ".sh",
-        ".toml",
-        ".ini",
-        ".cfg",
-        ".conf",
-        ".log",
-        ".sql",
-        ".rst",
-        ".tex",
-        ".env",
-        "",
-    }
-)
-
-#: Largest text file that is scanned in full. Above this the file is refused
-#: rather than sent unscanned: "too big to check" must not mean "sent anyway".
-MAX_SCAN_BYTES = 4 * 1024 * 1024
 
 
 def _workspace_root(ctx: Any) -> Path | None:
@@ -159,64 +117,6 @@ def _image_dimensions(path: Path) -> tuple[int, int] | None:
         return None
 
 
-def _saved_as_a_secret(path: Path) -> bool:
-    """Is this an inbox copy of a file that was named like a credentials file?
-
-    The inbox stores ``<file_unique_id>-<sanitised name>``, and sanitising
-    destroys what ``secret_paths`` matches on: ``.env`` becomes ``env`` and
-    ``id_rsa`` keeps only its stem. So the stored name is stripped of its uid
-    prefix and asked again, with the leading dot restored — otherwise a file the
-    operator sent could be sent back out under a name the rules no longer
-    recognise, having been refused on the way in.
-    """
-    from robothor.engine.attachments import INBOX_DIRNAME, holds_credentials
-
-    if INBOX_DIRNAME not in path.parts:
-        return False
-    stored = path.name.split("-", 1)[-1] if "-" in path.name else path.name
-    return holds_credentials(stored) or holds_credentials(f".{stored}")
-
-
-def _credential_refusal(path: Path, size: int) -> str | None:
-    """Why this file may not leave the box, or None.
-
-    Only text is scanned, and only up to :data:`MAX_SCAN_BYTES`; a text file
-    too large to check is refused rather than sent unchecked.
-    """
-    if _saved_as_a_secret(path):
-        return (
-            f"refused: {path.name} was received over a channel and is named like a "
-            "credentials file. It is kept on disk, but its contents do not leave the box."
-        )
-    if path.suffix.lower() not in _SCANNABLE:
-        return None
-    if size > MAX_SCAN_BYTES:
-        return (
-            f"refused: {path.name} is a {size // 1024 // 1024} MB text file, too large to check "
-            "for credentials before sending. Send a smaller extract of it."
-        )
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        # Not decodable as text, so the text scan does not apply to it.
-        return None
-
-    from robothor.templates.bundle import scan_secret_literals
-
-    findings = scan_secret_literals(text, path.name)
-    if not findings:
-        return None
-    # The reason, never the value: an error that helpfully echoes the credential
-    # publishes it to the transcript, which is the exposure being refused.
-    reasons = sorted({finding.reason for finding in findings})
-    lines = sorted({finding.line for finding in findings})[:5]
-    return (
-        f"refused: {path.name} contains {reasons[0]} (line "
-        f"{', '.join(str(line) for line in lines)}). Credentials must not leave the box in a "
-        "file. Remove the value or send a redacted copy."
-    )
-
-
 async def send_file(args: dict[str, Any], ctx: ToolContext | Any = None) -> dict[str, Any]:
     """Send a file to the person this run is talking to.
 
@@ -236,50 +136,18 @@ async def send_file(args: dict[str, Any], ctx: ToolContext | Any = None) -> dict
             )
         }
 
-    # Relative paths resolve against the workspace, which is also what makes
-    # `../../etc/passwd` land outside it and be refused below.
-    candidate = Path(raw_path).expanduser()
-    if not candidate.is_absolute():
-        candidate = root / candidate
-    # strict=False so a missing file is reported as missing rather than as an
-    # OSError, and symlinks are followed BEFORE containment is judged.
-    resolved = candidate.resolve(strict=False)
+    resolved, refusal = resolve_for_send(raw_path, root)
+    if resolved is None:
+        return {"error": refusal}
 
-    if root != resolved and root not in resolved.parents:
-        return {
-            "error": (
-                f"refused: {Path(raw_path).name} resolves outside the workspace. Only files "
-                "inside the workspace (including the channel inbox) can be sent."
-            )
-        }
-
-    from robothor.engine.secret_paths import is_secret_path, refusal_for
-
-    if is_secret_path(resolved):
-        return {"error": refusal_for(resolved)}
-
-    if not resolved.exists():
-        return {"error": f"no such file: {raw_path}"}
-    if not resolved.is_file():
-        return {"error": f"refused: {resolved.name} is not a file. Send one file at a time."}
-
-    size = resolved.stat().st_size
-    if size == 0:
-        return {"error": f"refused: {resolved.name} is empty — there is nothing to send."}
-    if size > MAX_DOCUMENT_BYTES:
-        from robothor.engine.attachments import human_size
-
-        return {
-            "error": (
-                f"refused: {resolved.name} is {human_size(size)}, over the "
-                f"{human_size(MAX_DOCUMENT_BYTES)} a chat attachment may be. Put it somewhere "
-                "the operator can fetch it and send the link instead."
-            )
-        }
-
-    refusal = _credential_refusal(resolved, size)
+    # The whole ladder, from the shared gate. It runs again in
+    # `delivery_attachments.send_attachments` immediately before the bytes are
+    # read, because for a scheduled run this is not the moment of sending.
+    refusal = refuse_to_send(resolved, root)
     if refusal:
         return {"error": refusal}
+
+    size = resolved.stat().st_size
 
     channel_name, target = await _originating_route(ctx)
     requested_target = str(args.get("target") or "").strip()
@@ -307,7 +175,16 @@ async def send_file(args: dict[str, Any], ctx: ToolContext | Any = None) -> dict
                 queue_attachment,
             )
 
-            if queue_attachment(run_id, str(resolved), str(args.get("caption") or "")):
+            # Pinned to the bytes the ladder just approved and to the tree it
+            # judged them in, so a file rewritten before the run ends is
+            # refused at delivery rather than sent.
+            if queue_attachment(
+                run_id,
+                str(resolved),
+                str(args.get("caption") or ""),
+                digest=digest_of(resolved),
+                workspace=str(root),
+            ):
                 _audit(
                     ctx,
                     resolved,
