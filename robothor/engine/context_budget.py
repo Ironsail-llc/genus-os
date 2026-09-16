@@ -85,11 +85,13 @@ async def _compact(
     hook_registry: Any,
 ) -> None:
     try:
-        from robothor.engine.context import estimate_tokens
-        from robothor.engine.context_fit import fit_for
+        from robothor.engine.context_fit import estimate_for, fit_for
 
         fit = fit_for(LLMClient.sizing_model(models, broken_models))
-        est_tokens = estimate_tokens(session.messages)
+        # Sized with the ceiling's own estimator, not the flat heuristic: this
+        # decides whether a conversation of CSV or base64 gets compacted at
+        # all, and `chars / 4` is 0.28x of the truth on that content.
+        est_tokens = estimate_for(session.messages, fit.model)
     except Exception as e:  # noqa: BLE001 — no budget means no enforcement either
         logger.warning("Context budget could not be computed: %s", _sanitize(e))
         return
@@ -114,11 +116,12 @@ async def _compact_and_enforce(
     failure that also skipped the ceiling is how oversized messages reached a
     server that truncates them in silence.
     """
-    from robothor.engine.context import estimate_tokens, maybe_compress
+    from robothor.engine.context import maybe_compress
+    from robothor.engine.context_fit import estimate_for
 
     threshold = fit.threshold
     try:
-        est_tokens = estimate_tokens(session.messages)
+        est_tokens = estimate_for(session.messages, fit.model)
         pre_len = len(session.messages)
         await _dispatch(
             hook_registry,

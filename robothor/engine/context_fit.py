@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from robothor.engine.context import estimate_tokens
+from robothor.engine.reasoning_replay import REASONING_FIELDS
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,98 @@ _DROPPED = "[tool result dropped to fit the {model} context window: {chars} char
 
 #: Room held back for the developer note that says what was dropped.
 _NOTE_TOKENS = 120
+
+#: Flat token cost of a tool call, mirroring ``context.estimate_tokens`` so the
+#: two estimates cannot disagree about the same message list.
+_TOOL_CALL_TOKENS = 400
+
+
+#: Characters per REAL token, by content class, measured with a model's own
+#: tokenizer (hostile review of this branch, probe p14; the table is in
+#: ``test_dense_content_estimate.py``). Both numbers sit BELOW every measured
+#: ratio in their class, so the estimate errs high:
+#:
+#:   prose 5.5, python source 4.2      -> 3.6 here
+#:   csv 2.17, base64 1.36, json 1.32, hex digests 1.13 -> 1.1 here
+#:
+#: The gap between the two classes is enormous because that is what tokenizers
+#: do: a common English word is one token, a line of hex is one token per
+#: character or so. ``chars / 4`` splits the difference and is wrong in the
+#: dangerous direction for exactly the content a large tool result is made of.
+_CHARS_PER_TOKEN_PROSE = 3.6
+_CHARS_PER_TOKEN_DENSE = 1.1
+
+#: Whitespace fraction above which content is prose or source code. Measured:
+#: prose 0.16, python 0.20; csv 0.008, hex lines 0.015, base64 and minified
+#: JSON ~0. Whitespace is the signal because it is what a tokenizer's merges
+#: are built around — content without it has no word boundaries to merge on.
+_PROSE_WHITESPACE_RATIO = 0.10
+
+#: How much of a long string is sampled to classify it. Classification must be
+#: O(1) per message: this runs before every call, on conversations that can be
+#: megabytes.
+_SAMPLE_CHARS = 4096
+
+
+def _chars_per_token(text: str) -> float:
+    """Which density class this text belongs to, from a bounded sample."""
+    if len(text) <= _SAMPLE_CHARS:
+        sample = text
+    else:
+        third = _SAMPLE_CHARS // 3
+        middle = len(text) // 2
+        sample = text[:third] + text[middle : middle + third] + text[-third:]
+    if not sample:
+        return _CHARS_PER_TOKEN_PROSE
+    whitespace = sum(1 for character in sample if character.isspace())
+    if whitespace / len(sample) >= _PROSE_WHITESPACE_RATIO:
+        return _CHARS_PER_TOKEN_PROSE
+    return _CHARS_PER_TOKEN_DENSE
+
+
+def _dense_estimate(messages: list[dict[str, Any]]) -> int:
+    """A content-aware token estimate: same shape as ``estimate_tokens``, but
+    priced per density class instead of at a flat four characters a token."""
+    total = 0.0
+    for message in messages:
+        for field in ("content", *REASONING_FIELDS):
+            value = message.get(field)
+            text = value if isinstance(value, str) else ""
+            if not text and value:
+                # Content-block lists and other shapes: fall back to the flat
+                # heuristic for that field rather than guessing at its parts.
+                total += estimate_tokens([{field: value}])
+                continue
+            if text:
+                total += len(text) / _chars_per_token(text)
+        for call in message.get("tool_calls") or []:
+            function = call.get("function", {}) if isinstance(call, dict) else {}
+            arguments = function.get("arguments") or ""
+            total += _TOOL_CALL_TOKENS + len(arguments) / _chars_per_token(arguments)
+    return int(total)
+
+
+def estimate_for(messages: list[dict[str, Any]], model: str | None = None) -> int:
+    """The token count a CEILING may be computed from.
+
+    ``estimate_tokens`` is the fleet-wide heuristic and stays exactly as it is
+    — cost accounting, dashboards and the compaction trigger all read it. This
+    is the same question asked where being wrong sends an over-window request,
+    so it answers differently in two ways:
+
+    * ``model`` is passed through, so an operator who turns on
+      ``ROBOTHOR_REAL_TOKENIZER_ENABLED`` gets an exact count on the one path
+      that needs it. None of the ceiling's call sites passed a model before, so
+      that escape hatch could not be reached from here at all.
+    * with the exact counter off, the flat ``chars / 4`` is replaced by a
+      content-aware estimate and the LARGER of the two is taken, so the old
+      number remains a floor and dense content is priced at what it costs.
+    """
+    from robothor.engine.context import real_tokenizer_enabled
+
+    if model and real_tokenizer_enabled():
+        return estimate_tokens(messages, model)
+    return max(estimate_tokens(messages), _dense_estimate(messages))
 
 
 def is_context_overflow(exc: BaseException) -> bool:
@@ -192,13 +285,13 @@ def fit_for(model: str) -> ContextFit:
 
 
 def _message_tokens(message: dict[str, Any], model: str | None = None) -> int:
-    """One message's share of the estimate, priced like ``estimate_tokens``.
+    """One message's share of the estimate, priced like :func:`estimate_for`.
 
     The per-message price and the whole-list price have to come from the same
     arithmetic, or the running budget spends tokens the total does not believe
     in.
     """
-    return estimate_tokens([message])
+    return estimate_for([message], model)
 
 
 def _last_user_index(messages: list[dict[str, Any]]) -> int:
@@ -291,11 +384,15 @@ _TAIL_CHARS = 200
 def _truncated(message: dict[str, Any], allowance: int, model: str | None = None) -> dict[str, Any]:
     """``message`` cut to roughly ``allowance`` tokens, or emptied to a marker.
 
+    The characters-per-token rate is the one this content is actually priced
+    at, so a budget of N tokens buys N tokens of base64 and N tokens of prose —
+    the flat four-characters-a-token version handed dense content three times
+    the room it had paid for.
     """
     content = message.get("content")
     if not isinstance(content, str):
         return message
-    chars = max(0, allowance * 4)
+    chars = max(0, int(allowance * _chars_per_token(content)))
     if len(content) <= chars:
         return message
     if chars <= len(_CUT) + _TAIL_CHARS:
@@ -376,7 +473,7 @@ def shrink_to_fit(messages: list[dict[str, Any]], fit: ContextFit) -> ShrinkOutc
     cloud model is unreachable. Returns the original list untouched when it
     already fits, so the common case costs one estimate.
     """
-    before = estimate_tokens(messages)
+    before = estimate_for(messages, fit.model)
     if before <= fit.hard_limit:
         return ShrinkOutcome(messages, 0, before, before, fits=True)
 
@@ -392,16 +489,16 @@ def shrink_to_fit(messages: list[dict[str, Any]], fit: ContextFit) -> ShrinkOutc
     _total, dropped = _drop_tool_results(
         working, head=head, keep=keep, budget=budget, model=fit.model
     )
-    if estimate_tokens(working) > budget:
+    if estimate_for(working, fit.model) > budget:
         working, _total, removed = _drop_tool_exchanges(
-            working, head=head, keep=keep, budget=budget
+            working, head=head, keep=keep, budget=budget, model=fit.model
         )
         dropped += removed
-    if estimate_tokens(working) > budget:
-        working = _truncate_to_budget(working, head=head, budget=budget)
+    if estimate_for(working, fit.model) > budget:
+        working = _truncate_to_budget(working, head=head, budget=budget, model=fit.model)
         dropped += 1
 
-    after = estimate_tokens(working)
+    after = estimate_for(working, fit.model)
     fits = after <= budget
     if not fits:
         # Said plainly rather than papered over. A note claiming a reduction
