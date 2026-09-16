@@ -2,10 +2,9 @@
 
 Extracted from ``run_finalizer`` 2026-09-16, by the rule that file's own header
 states: a cohesive cluster goes into its own module rather than onto a
-god-object. The cluster is one question asked twice — did this run produce the
-artifact the task named, and is it the shape the task described — plus the
-ladder that decides whether the answer is logged, alerted, or allowed to fail
-the run.
+god-object. The cluster is one question — did this run produce the artifact the
+task named, in the shape the task described — plus the ladder that decides
+whether the answer is logged, alerted, or allowed to fail the run.
 
 ``deliverable_contract`` is the pure half: it extracts the contract from task
 text and reads the workspace against it, with no database, session or flag.
