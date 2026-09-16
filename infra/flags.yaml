@@ -37,13 +37,21 @@ flags:
     soak: >
       The gate was INERT until 2026-07-13 (no agent set human_approval_tools, so
       nothing could ever escalate — zero events meant "no mechanism", not "safe").
-      Now real: main opts in for irreversible DESTRUCTION only —
-      delete_person/company/task/note, vault_delete, gws_calendar_delete.
+      Now real, but narrower than this entry used to claim, and the claim was
+      checked against the shipped templates rather than restated: the opt-in is
+      CRM-STEWARD, not main, and it is delete_person alone. main and
+      morning-briefing declare no tools_allowed and no human_approval, so they
+      hold every delete tool UNGATED — `genus doctor --category agents` reports
+      that as agents.approval_gate_not_armed. vault_delete and
+      gws_calendar_delete are named here as intent and are not covered by the
+      check; docs/TOOLS.md says so plainly.
       Deliberately narrow: the operator's standing mandate is autonomous
       operation, so sending email, calendar creation and everything else stay
       ungated. A delete cannot be undone and is rare, so one Telegram tap costs
-      nothing. Timeout (600s) = deny, fail-secure. Probe-verified: deletes
-      escalate, gws_gmail_send and search_memory stay autonomous.
+      nothing. Timeout = deny, fail-secure; the default is 300s
+      (models.py human_approval_timeout), not the 600s this entry used to say.
+      Probe-verified: deletes escalate, gws_gmail_send and search_memory stay
+      autonomous.
   - name: ROBOTHOR_SANDBOX_DEFAULT_MODE
     owner: ops
     mode: observe

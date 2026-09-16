@@ -653,7 +653,16 @@ async def _approval_gate_not_armed(ctx: DoctorContext) -> Result:
         # reads the environment at all.
         lines += [f"{line} (declared gated, but the gate is {mode!r})" for line in gated]
     if not lines:
-        return ok("every destructive grant is gated, and the approval gate is enforcing")
+        # Says what was EXAMINED, not more. The scoping above deliberately
+        # skips agents with no `tools_allowed` — `main` and `morning-briefing`
+        # among the stock templates hold all four record-deleting tools that
+        # way, with no human_approval declaration — so "every destructive grant
+        # is gated" was a reassurance nobody had earned. That is this branch's
+        # own "a check nobody reads" argument pointed the other way.
+        return ok(
+            "every destructive grant on agents that opted into human approval is gated, "
+            "and the approval gate is enforcing"
+        )
 
     shown = "; ".join(lines[:_MAX_LISTED])
     if len(lines) > _MAX_LISTED:

@@ -624,6 +624,23 @@ class TestTheApprovalGateIsArmed:
         assert result.status == "pass", result.detail
 
     @pytest.mark.asyncio
+    async def test_the_pass_does_not_claim_more_than_it_checked(
+        self, instance: Path, gate_on: None
+    ) -> None:
+        """Round 4, Important 2. An agent with no `tools_allowed` holds every
+        delete tool and is deliberately out of scope — so the PASS may not say
+        "every destructive grant is gated" while one sits right there.
+        `main` and `morning-briefing` are exactly that among the shipped
+        templates."""
+        self._gated_agent(instance)
+        _write_agent(instance, "unrestricted", {})
+
+        result = await _run("agents.approval_gate_not_armed")
+
+        assert result.status == "pass", result.detail
+        assert "opted into human approval" in result.detail, result.detail
+
+    @pytest.mark.asyncio
     async def test_it_is_quiet_when_nothing_destructive_is_granted(
         self, instance: Path, gate_off: None
     ) -> None:
