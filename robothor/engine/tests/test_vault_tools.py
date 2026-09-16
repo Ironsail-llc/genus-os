@@ -24,6 +24,7 @@ import pytest
 
 from robothor.engine.tools.dispatch import ToolContext
 from robothor.engine.tools.handlers.vault import HANDLERS
+from robothor.secrets.fingerprint import FINGERPRINT_PREFIX
 
 #: Obviously fake. Distinctive enough that a substring search over a whole
 #: result dict cannot match it by accident.
@@ -74,7 +75,7 @@ async def test_vault_get_returns_a_fingerprint_not_a_value(stored):
     result = await HANDLERS["vault_get"]({"key": "providers/github/api_key"}, _ctx())
     assert FAKE_TOKEN not in _flatten(result), "vault_get handed the model a credential"
     assert result["configured"] is True
-    assert result["fingerprint"].startswith("sha256:")
+    assert result["fingerprint"].startswith(FINGERPRINT_PREFIX)
     assert "value" not in result
 
 
@@ -223,7 +224,7 @@ async def test_a_write_answers_with_a_fingerprint_and_never_the_value(stored):
         {"key": "providers/github/api_key", "value": "ghp_FAKE3333"}, _ctx()
     )
     assert "ghp_FAKE3333" not in _flatten(result)
-    assert result["fingerprint"].startswith("sha256:")
+    assert result["fingerprint"].startswith(FINGERPRINT_PREFIX)
 
 
 @pytest.mark.asyncio

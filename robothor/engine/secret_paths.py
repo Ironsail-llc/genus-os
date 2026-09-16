@@ -43,6 +43,11 @@ _SECRET_NAMES = frozenset(
         # it, which decrypts every row the vault holds. The hyphen is why the
         # `*.key` pattern did not catch it.
         ".vault-key",
+        # Not a credential, and still not for an agent: it is the key the
+        # credential FINGERPRINTS are computed under, and reading it puts every
+        # fingerprint this instance prints back within reach of an offline
+        # dictionary comparison (robothor/secrets/fingerprint.py).
+        ".fingerprint-salt",
         ".npmrc",
         ".pypirc",
         "credentials",

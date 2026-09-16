@@ -394,9 +394,19 @@ that.
     call because its credential store is momentarily unreachable would be worse
     than no vault at all.
 3. **Nothing prints a key.** Logs, alerts, tool results, the status table and
-   `repr()` use a one-way fingerprint (`sha256:1a2b3c4d`, from
+   `repr()` use a one-way fingerprint (`b2:1a2b3c4d`, from
    `robothor.secrets.fingerprint`) rather than the last-four convention, which
    prints real key material.
+
+   It is a keyed BLAKE2b digest, and the key is a random salt this instance
+   writes to `<workspace>/.fingerprint-salt` on first use. So a fingerprint is
+   stable here — the same credential gives the same eight characters across
+   every process, for the life of the instance — and meaningless anywhere else:
+   two boxes holding the same token print different fingerprints, and a leaked
+   one cannot be checked against a guessed value by anyone who does not have
+   that file. A key compiled into the source would have left a short or
+   low-entropy secret open to an offline dictionary check by any reader of the
+   repository.
 
 ### Where the values come from
 
