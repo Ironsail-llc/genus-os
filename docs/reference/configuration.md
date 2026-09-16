@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-399 settings in 13 groups.
+400 settings in 13 groups.
 
 ## paths
 
@@ -183,6 +183,7 @@ The agent execution layer: bind address, concurrency, pacing, sandbox.
 | `ROBOTHOR_ENGINE_HOST` | str | `127.0.0.1` | `robothor-engine` | no | legacy | Address the engine's HTTP surface binds to. Loopback by default; the auth guard refuses the insecure dev mode on any other address. |
 | `ROBOTHOR_ENGINE_PORT` | int | `18800` | `robothor-engine` | no | legacy | Engine HTTP port. |
 | `ROBOTHOR_ENGINE_URL` | str | `http://127.0.0.1:18800` | `robothor-engine` | no | legacy | Base URL the dashboard's server-side client calls the engine on. |
+| `ROBOTHOR_EXECUTE_CODE_MAX_APPROVALS` | int | `1` | no | no | unreleased | How many human-approval escalations ONE `execute_code` snippet may raise. A proxied call passes the same approval gate a turn's call does -- a snippet can never bypass one -- so without a cap a loop could queue one prompt per proxied call at the operator, each holding the engine for `human_approval_timeout`. Counted as requests, not grants: a refused prompt cost the same attention. 0 refuses them all and tells the agent to call the tool from a turn instead. |
 | `ROBOTHOR_EXECUTE_CODE_MAX_CALLS` | int | `200` | no | no | unreleased | How many tools one `execute_code` snippet may call through `genus_tools` before the proxy refuses the rest. Every proxied call still passes the same admission gates a direct call does; this bounds a runaway loop, not what the code is allowed to reach. |
 | `ROBOTHOR_EXECUTE_CODE_MAX_OUTPUT` | int | `50000` | no | no | unreleased | Characters of a snippet's stdout that reach the model. Past this the output is cut with a marker saying how much was cut, and the FULL text is written to a file under the workspace whose path comes back in the result -- truncation becomes pagination rather than invisible data loss. |
 | `ROBOTHOR_EXECUTE_CODE_TIMEOUT` | int | `300` | no | no | unreleased | Wall-clock seconds one `execute_code` snippet gets. The agent may ask for less and never for more, and the run's own remaining budget still clamps it. On expiry the snippet's process group is killed, along with every descendant the engine has seen it start; a process that both leaves that group and detaches itself can still escape both, which only a delegated cgroup would close. |

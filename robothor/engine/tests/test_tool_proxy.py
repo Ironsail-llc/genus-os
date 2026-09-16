@@ -57,12 +57,13 @@ def _request(agent_config, *, allowed=frozenset({"exec", "read_file"}), readonly
     )
 
 
-def _proxy(runner, req, *, max_calls=10):
+def _proxy(runner, req, *, max_calls=10, max_approvals=1):
     return RunToolProxy(
         runner=runner,
         req=req,
         allowed=proxy_allow_set(req, runner.registry),
         max_calls=max_calls,
+        max_approvals=max_approvals,
     )
 
 
@@ -176,6 +177,60 @@ class TestTheCap:
         assert results[0] == {"ok": True}
         assert results[2]["guard"] == "execute_code_call_cap"
         assert runner.registry.execute.await_count == 2
+
+
+@pytest.mark.asyncio
+class TestTheApprovalBudget:
+    """A proxied call passes the same approval gate a turn's call does — a
+    snippet can never bypass one, which is right. But that also means a loop
+    could queue one prompt per proxied call at the operator, each holding the
+    engine for `human_approval_timeout` (300 s). The call cap bounds the
+    engine's work; this one bounds a person's attention."""
+
+    async def test_the_first_approval_gated_call_goes_through(self, runner, agent_config):
+        agent_config.human_approval_tools = ["read_*"]
+        req = _request(agent_config)
+        result = await _proxy(runner, req).call("read_file", {"path": "a"})
+        assert result == {"ok": True}
+
+    async def test_the_second_is_refused_and_says_what_to_do_instead(self, runner, agent_config):
+        agent_config.human_approval_tools = ["read_*"]
+        req = _request(agent_config)
+        proxy = _proxy(runner, req, max_approvals=1)
+        await proxy.call("read_file", {"path": "a"})
+        second = await proxy.call("read_file", {"path": "b"})
+        assert second["guard"] == "execute_code_approval_cap"
+        assert "from a turn" in second["error"]
+        assert runner.registry.execute.await_count == 1
+
+    async def test_it_counts_requests_not_grants(self, runner, agent_config):
+        """A prompt the operator refused cost the same attention as one they
+        accepted, so a snippet cannot spend the budget by being denied."""
+        guardrails = MagicMock()
+        guardrails.check_pre_execution.return_value = MagicMock(
+            allowed=False, action="block", guardrail_name="human_approval", reason="no"
+        )
+        agent_config.human_approval_tools = ["read_*"]
+        req = _request(agent_config)
+        req.guardrail_engine = guardrails
+        proxy = _proxy(runner, req, max_approvals=1)
+        await proxy.call("read_file", {"path": "a"})  # denied by the gate
+        second = await proxy.call("read_file", {"path": "b"})
+        assert second["guard"] == "execute_code_approval_cap"
+
+    async def test_a_tool_nobody_gated_is_unaffected(self, runner, agent_config):
+        agent_config.human_approval_tools = ["send_*"]
+        req = _request(agent_config)
+        proxy = _proxy(runner, req, max_approvals=0)
+        for i in range(3):
+            assert await proxy.call("read_file", {"path": str(i)}) == {"ok": True}
+
+    async def test_a_budget_of_zero_refuses_every_gated_call(self, runner, agent_config):
+        agent_config.human_approval_tools = ["read_*"]
+        req = _request(agent_config)
+        result = await _proxy(runner, req, max_approvals=0).call("read_file", {"path": "a"})
+        assert result["guard"] == "execute_code_approval_cap"
+        runner.registry.execute.assert_not_awaited()
 
 
 class TestTheAllowSet:

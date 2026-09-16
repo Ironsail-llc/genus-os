@@ -134,7 +134,7 @@ CAPS = {
     # module that would otherwise absorb every per-turn concern the runner
     # used to, one branch at a time — which is exactly how runner.py became
     # the 4,660-line god-object this file's header blames.
-    "robothor/engine/tool_turn.py": 528,
+    "robothor/engine/tool_turn.py": 549,  # +21: the snippet approval budget, read beside the call cap
     # The code-sandbox cluster, each piece capped at the size it was written
     # to. They are deliberately four small modules rather than one: the
     # POLICY (which calls may share a batch) is a table of names with no
@@ -143,13 +143,17 @@ CAPS = {
     # `code_execution.py` holding all four would be untestable in exactly
     # the place it matters most.
     "robothor/engine/parallel_tools.py": 173,
-    "robothor/engine/tool_proxy.py": 277,
+    # 277 -> 314: the approval budget. A proxied call passes the same approval
+    # gate a turn's call does, which is right and which is also how a loop
+    # could queue two hundred prompts at the operator. The check belongs where
+    # the reach is decided, not in the socket.
+    "robothor/engine/tool_proxy.py": 314,
     # 209 -> 283: the peer-session check. Not a feature, a control: the token
     # alone could not tell one run's snippet from another's, and a probe drove
     # a second run's proxy with a stolen token. Correcting a cap set hours
     # earlier in the same PR for the thing that makes the module correct is
     # not the same as bumping a long-standing one to dodge a refactor.
-    "robothor/engine/code_exec_rpc.py": 283,
+    "robothor/engine/code_exec_rpc.py": 316,  # +33: aclose cancels its handlers instead of waiting them out
     # 523 -> 388: spawning a snippet, reading its pipes without deadlocking
     # it, detecting its exit and killing its descendants is one subject and
     # the handler's admission/staging/shaping is another. The split is what

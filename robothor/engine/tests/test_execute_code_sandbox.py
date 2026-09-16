@@ -28,15 +28,18 @@ from robothor.engine.tools.handlers.code_exec import _execute_code
 class _StubProxy:
     """A proxy with no runner behind it, so the subprocess is the subject."""
 
-    def __init__(self, *, allowed=("exec", "read_file"), max_calls=10):
+    def __init__(self, *, allowed=("exec", "read_file"), max_calls=10, delay=0.0):
         self.allowed = frozenset(allowed)
         self.max_calls = max_calls
         self.calls_made = 0
+        self.delay = delay
         self.seen: list[tuple[str, dict]] = []
 
     async def call(self, name, args):
         self.calls_made += 1
         self.seen.append((name, args))
+        if self.delay:
+            await asyncio.sleep(self.delay)
         return {"echo": name, "args": args}
 
 
@@ -380,6 +383,27 @@ class TestTheBounds:
         spilled = Path(result["stdout_file"])
         assert spilled.is_file()
         assert len(spilled.read_text()) > 40_000
+
+    async def test_a_proxied_call_still_running_does_not_hold_the_tool_open(self, workspace):
+        """`Server.wait_closed()` waits for every live handler, and a handler
+        sits inside `await proxy.call(...)` until that tool returns. Measured on
+        the first cut: a snippet with `timeout=2` and one proxied call sleeping
+        12 s returned after 12.03 s — so a slow proxied tool, or one waiting on
+        a person, held `execute_code` open long past the snippet's own deadline."""
+        started = asyncio.get_running_loop().time()
+        result, _ = await _run(
+            """
+            import genus_tools
+            genus_tools.call('read_file', path='slow')
+            print('NEVER')
+            """,
+            workspace,
+            proxy=_StubProxy(delay=12.0),
+            timeout=2,
+        )
+        elapsed = asyncio.get_running_loop().time() - started
+        assert result["timed_out"] is True
+        assert elapsed < 6, f"the handler held execute_code open for {elapsed:.1f}s"
 
     async def test_a_snippet_larger_than_the_source_cap_is_refused(self, workspace):
         proxy = _StubProxy()

@@ -65,7 +65,27 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ToolTurnMixin", "ToolTurnRequest", "execute_code_call_cap"]
+__all__ = [
+    "ToolTurnMixin",
+    "ToolTurnRequest",
+    "execute_code_approval_cap",
+    "execute_code_call_cap",
+]
+
+
+def execute_code_approval_cap() -> int:
+    """How many human-approval prompts one snippet may raise. Never raises.
+
+    Separate from the call cap and far smaller, because the two bound different
+    things: the call cap bounds the engine's work, this one bounds a person's
+    attention. 0 means a snippet may raise none at all.
+    """
+    try:
+        from robothor.settings import get_settings
+
+        return max(0, int(get_settings().engine.execute_code_max_approvals))
+    except Exception:  # noqa: BLE001 - a missing config is the default, not a crash
+        return 1
 
 
 def execute_code_call_cap() -> int:
@@ -175,6 +195,7 @@ class ToolTurnMixin:
                 req=req,
                 allowed=proxy_allow_set(req, self.registry),
                 max_calls=execute_code_call_cap(),
+                max_approvals=execute_code_approval_cap(),
             )
         )
         try:

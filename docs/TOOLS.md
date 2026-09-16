@@ -379,7 +379,12 @@ code, or the channel to the engine is gone.
 
 **Bounds.** `ROBOTHOR_EXECUTE_CODE_MAX_CALLS` (default 200) caps proxied calls
 per snippet; past it `genus_tools` raises and the result says
-`tool_call_limit_reached`. `ROBOTHOR_EXECUTE_CODE_TIMEOUT` (default 300, ceiling
+`tool_call_limit_reached`. `ROBOTHOR_EXECUTE_CODE_MAX_APPROVALS` (default 1)
+caps how many of those may need a person: a proxied call passes the same
+approval gate a turn's call does — a snippet can never bypass one — so without
+this a loop could queue one prompt per call at the operator, each holding the
+engine for `human_approval_timeout`. Past the cap the call is refused with a
+sentence telling the agent to make it from a turn instead. `ROBOTHOR_EXECUTE_CODE_TIMEOUT` (default 300, ceiling
 900, and the run's own remaining budget clamps it further) caps wall clock.
 `ROBOTHOR_EXECUTE_CODE_MAX_OUTPUT` (default 50,000 characters) caps the stdout
 that reaches the model; past it the output is cut **with a marker saying how

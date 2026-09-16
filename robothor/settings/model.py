@@ -823,6 +823,19 @@ class EngineSettings(SettingsGroup):
         restart_required=False,
         since="unreleased",
     )
+    execute_code_max_approvals: int = declare(
+        1,
+        "ROBOTHOR_EXECUTE_CODE_MAX_APPROVALS",
+        "How many human-approval escalations ONE `execute_code` snippet may "
+        "raise. A proxied call passes the same approval gate a turn's call "
+        "does -- a snippet can never bypass one -- so without a cap a loop "
+        "could queue one prompt per proxied call at the operator, each holding "
+        "the engine for `human_approval_timeout`. Counted as requests, not "
+        "grants: a refused prompt cost the same attention. 0 refuses them all "
+        "and tells the agent to call the tool from a turn instead.",
+        restart_required=False,
+        since="unreleased",
+    )
     execute_code_timeout: int = declare(
         300,
         "ROBOTHOR_EXECUTE_CODE_TIMEOUT",

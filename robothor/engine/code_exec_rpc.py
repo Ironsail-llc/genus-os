@@ -101,6 +101,13 @@ class ToolRpcServer:
         #: The session id the only legitimate caller belongs to. None until
         #: :meth:`bind_to_session`, and while it is None nothing is served.
         self._session_id: int | None = None
+        #: Live connection handlers. `Server.wait_closed()` waits for every one
+        #: of them (3.12 has no `abort_clients()`), and a handler sits inside
+        #: `await proxy.call(...)` until that tool returns — so without this,
+        #: closing the socket after the snippet is dead still waits out the
+        #: proxied tool's own timeout. Measured: a snippet with `timeout=2` and
+        #: one proxied call sleeping 12 s returned after 12.03 s.
+        self._handlers: set[asyncio.Task[None]] = set()
 
     @property
     def socket_path(self) -> Path:
@@ -164,7 +171,21 @@ class ToolRpcServer:
         return ""
 
     async def aclose(self) -> None:
-        """Stop listening and remove the socket. Never raises."""
+        """Stop listening, drop live connections, remove the socket. Never raises.
+
+        The handlers are CANCELLED rather than waited for. By the time this
+        runs the snippet is already gone — it finished, timed out, or the whole
+        call was cancelled — so a handler still inside ``await proxy.call(...)``
+        is doing work for a process that no longer exists, and waiting for it
+        holds ``execute_code`` open for the proxied tool's own timeout (120 s,
+        or 300 s when that tool waits on a person).
+        """
+        for task in list(self._handlers):
+            task.cancel()
+        if self._handlers:
+            with contextlib.suppress(Exception):
+                await asyncio.gather(*self._handlers, return_exceptions=True)
+            self._handlers.clear()
         if self._server is not None:
             self._server.close()
             with contextlib.suppress(Exception):
@@ -174,6 +195,18 @@ class ToolRpcServer:
             self.socket_path.unlink()
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        # Registered so `aclose()` can cancel it. `current_task()` is this
+        # handler: `start_unix_server` runs each connection as its own task.
+        task = asyncio.current_task()
+        if task is not None:
+            self._handlers.add(task)
+        try:
+            await self._serve(reader, writer)
+        finally:
+            if task is not None:
+                self._handlers.discard(task)
+
+    async def _serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         refusal = self._peer_is_my_snippet(writer)
         if refusal:
             # Loud: the only process that should ever be here is the snippet

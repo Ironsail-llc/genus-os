@@ -37,6 +37,7 @@ the feature.
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import logging
 import uuid
 from contextvars import ContextVar, Token
@@ -158,6 +159,7 @@ class RunToolProxy:
         req: ToolTurnRequest,
         allowed: frozenset[str],
         max_calls: int,
+        max_approvals: int = 1,
         batch_id: str = "",
     ) -> None:
         self._runner = runner
@@ -169,6 +171,16 @@ class RunToolProxy:
         self.allowed = allowed
         self.max_calls = max_calls
         self.calls_made = 0
+        #: How many HUMAN-APPROVAL escalations this snippet may raise, and how
+        #: many it has. A proxied call goes through the same guardrail gate a
+        #: turn's call does, which is right — a snippet must not be able to
+        #: bypass an approval — but it also means a loop could queue
+        #: `max_calls` prompts at the operator, each blocking for
+        #: `human_approval_timeout`. Escalation is a person's attention; the
+        #: cap is on requests, not grants, because a refused prompt cost the
+        #: same attention as an accepted one.
+        self.max_approvals = max_approvals
+        self.approvals_requested = 0
         self._lock = asyncio.Lock()
         #: Every step this snippet records shares one id, so the ledger can
         #: answer "which rows belong to that one `execute_code` call" without a
@@ -186,8 +198,34 @@ class RunToolProxy:
                     ),
                     "guard": "execute_code_call_cap",
                 }
+            approval_refusal = self._approval_budget_refusal(name)
+            if approval_refusal:
+                return approval_refusal
             self.calls_made += 1
             return await self._dispatch(name, args)
+
+    def _approval_budget_refusal(self, name: str) -> dict[str, Any] | None:
+        """None unless this call would page a person once too often.
+
+        Read from the agent's own ``human_approval_tools`` patterns — the same
+        list the guardrail engine is configured from — so this answers the same
+        question the gate will, one step earlier and without spending the
+        prompt. A tool nobody asked for approval on is unaffected.
+        """
+        patterns = tuple(getattr(self._req.agent_config, "human_approval_tools", ()) or ())
+        if not any(fnmatch.fnmatch(name, pattern) for pattern in patterns):
+            return None
+        if self.approvals_requested >= self.max_approvals:
+            return {
+                "error": (
+                    f"'{name}' needs a person's approval, and this snippet has already "
+                    f"asked for {self.approvals_requested}. Call it from a turn instead, "
+                    "where the operator answers one question rather than a queue of them."
+                ),
+                "guard": "execute_code_approval_cap",
+            }
+        self.approvals_requested += 1
+        return None
 
     async def _dispatch(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         from robothor.engine.post_execution import apply_post_execution_guardrails
