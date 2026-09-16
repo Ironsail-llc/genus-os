@@ -281,6 +281,130 @@ class TestGmailGet:
         """
         assert gws_handlers._html_to_text(html).strip() == expected, label
 
+    @pytest.mark.parametrize(
+        ("label", "html", "expected"),
+        [
+            (
+                "VALID HTML5 with </head> omitted — omissible per the spec",
+                "<html><head><meta charset=utf-8><title>Invoice</title>"
+                "<body><p>Invoice INV-2026-0042 is due</p></body></html>",
+                "Invoice INV-2026-0042 is due",
+            ),
+            (
+                "</head> omitted, no title either",
+                "<html><head><meta charset=utf-8><body><p>REAL PROSE</p></body></html>",
+                "REAL PROSE",
+            ),
+            (
+                "missing </title>",
+                "<html><head><title>Invoice<body><p>REAL PROSE</p></body></html>",
+                "REAL PROSE",
+            ),
+            (
+                "XHTML self-closed <style/>",
+                "<body><style/>REAL PROSE</body>",
+                "REAL PROSE",
+            ),
+            (
+                "XHTML self-closed <script/>",
+                "<body><script/>REAL PROSE</body>",
+                "REAL PROSE",
+            ),
+            (
+                "self-closed <head/>",
+                "<html><head/><body><p>REAL PROSE</p></body></html>",
+                "REAL PROSE",
+            ),
+            (
+                "missing </style>, head closes",
+                "<html><head><style>p{color:red}</head><body><p>REAL PROSE</p></body></html>",
+                "REAL PROSE",
+            ),
+        ],
+    )
+    def test_an_unclosed_element_never_swallows_the_body(
+        self, label: str, html: str, expected: str
+    ) -> None:
+        """Round one exempted the void elements, which was ONE trigger of this
+        bug rather than the bug.
+
+        `_suppress` was a depth counter that only ever came down on a matching
+        end tag, so any suppressing element that was never explicitly closed
+        pinned it above zero for the rest of the document. `</head>` and
+        `</title>` are **omissible in HTML5** and real generators omit them;
+        others self-close `<style/>`; and mail is routinely malformed. Seven
+        more shapes, all returning `body_text: ""` — indistinguishable from a
+        blank message, which is the one failure this converter exists to
+        prevent.
+        """
+        assert gws_handlers._html_to_text(html).strip() == expected, label
+
+    def test_script_and_style_contents_are_still_not_the_email(self) -> None:
+        """The regions are removed before parsing now, so this is the assertion
+        that the removal did not become a pass-through."""
+        html = (
+            "<html><head><style>.x{background:url(evil)}</style></head>"
+            "<body><p>Hello</p><script>window.track&&track('open')</script></body></html>"
+        )
+        text = gws_handlers._html_to_text(html)
+
+        assert text.strip() == "Hello"
+        assert "background" not in text
+        assert "track" not in text
+
+    def test_an_unclosed_script_does_not_leak_its_source(self) -> None:
+        html = "<html><head><script>var secret = 1;</head><body><p>Hello</p></body></html>"
+        text = gws_handlers._html_to_text(html)
+
+        assert "Hello" in text
+        assert "secret" not in text
+
+    @pytest.mark.parametrize("seed", range(64))
+    def test_any_real_world_skeleton_with_visible_text_yields_a_body(self, seed: int) -> None:
+        """Property-style: assemble a head and a body out of the pieces real
+        mail is made of, and assert the prose always survives.
+
+        Deterministic (seeded), so a failure is reproducible by its id. The
+        combinations are exactly the ones that broke: an optional `</head>`, an
+        optional `</title>`, a self-closing style, void tags in any order.
+        """
+        import random
+
+        rng = random.Random(seed)
+        head_bits = [
+            '<meta charset="utf-8">',
+            '<meta http-equiv="Content-Type" content="text/html">',
+            '<link rel="stylesheet" href="https://cdn.example.com/m.css">',
+            "<style>p{color:red}</style>",
+            "<style>p{color:red}",
+            "<style/>",
+            "<title>Subject line</title>",
+            "<title>Subject line",
+            "<script>var x=1;</script>",
+            "<script/>",
+            '<base href="https://example.com/">',
+        ]
+        rng.shuffle(head_bits)
+        head = "".join(head_bits[: rng.randint(1, len(head_bits))])
+        close_head = rng.choice(["</head>", ""])
+        wrapper_open, wrapper_close = rng.choice(
+            [("<div>", "</div>"), ("<table><tr><td>", "</td></tr></table>"), ("", "")]
+        )
+        html = (
+            f"<!DOCTYPE html><html><head>{head}{close_head}"
+            f"<body>{wrapper_open}"
+            '<img src="https://cdn.example.com/logo.png">'
+            "<p>THE ACTUAL PROSE OF THE EMAIL</p>"
+            f"{wrapper_close}</body></html>"
+        )
+
+        text = gws_handlers._html_to_text(html)
+
+        assert "THE ACTUAL PROSE OF THE EMAIL" in text, (seed, html[:160])
+        assert len(text.strip()) > 0
+        assert "color:red" not in text
+        assert "var x=1" not in text
+
     def test_a_real_world_marketing_email_is_readable(self, fake_gws) -> None:
         """The shape the module docstring names as the reason the converter
         exists: a doctype, a head full of void tags, a table layout, inline

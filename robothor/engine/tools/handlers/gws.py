@@ -724,21 +724,34 @@ class _HtmlToText(HTMLParser):
     out of untrusted mail is an injection surface — turns block-level tags into
     newlines, and unescapes entities (``convert_charrefs`` does that for us).
 
-    **Void elements never suppress.** ``meta`` and ``link`` were in ``_DROP``,
-    and ``HTMLParser`` never fires ``handle_endtag`` for an element that has no
-    end tag — so ``_suppress`` was incremented and never decremented, and every
-    character after the tag was dropped. Practically every HTML email opens
-    with ``<meta charset>``, and marketing and invoice mail almost always
-    carries a ``<link rel="stylesheet">``, so the common case returned
-    ``body_text: ""`` — indistinguishable from a genuinely blank message, which
-    is the one failure this converter exists to prevent. The suite passed
-    because its only HTML fixture was ``<head><style>…</style></head>``: the one
-    head layout containing no void tag.
+    **Suppression is a STACK of open element names, not a depth counter.**
+
+    The counter only ever came down on a matching ``handle_endtag``, so any
+    suppressing element that was never explicitly closed pinned it above zero
+    for the rest of the document and the body came back empty. Three ways that
+    happens in ordinary mail, none of them exotic:
+
+    * ``</head>`` and ``</title>`` are **omissible in HTML5** and real mail
+      generators omit them. Valid HTML5 with no ``</head>`` returned "".
+    * a generator self-closes ``<style/>``, ``<script/>`` or ``<head/>``
+      (XHTML habits survive in mail templates).
+    * the mail is simply malformed, which is the normal case here.
+
+    The first round of this fix exempted the void elements, which was one
+    trigger of the same bug rather than the bug. A stack fixes the class: a
+    region is closed by its own end tag, by an **implicit close** — a start tag
+    that cannot legally appear inside it, which is how HTML5 says ``<body>``
+    ends an unclosed ``<head>`` — or by the end of the document, at which point
+    whatever is still open has no content left to suppress anyway.
+
+    ``body_text: ""`` with ``body_chars: 0`` and ``body_truncated: false`` is
+    indistinguishable from a genuinely blank message, so the agent reports real
+    mail as empty. That is the one failure this converter exists to prevent.
     """
 
     #: Elements with no end tag (HTML5's void elements). ``HTMLParser`` reports
     #: them through ``handle_starttag`` alone unless they are written
-    #: self-closing, so nothing here may ever touch the suppression depth.
+    #: self-closing, so none of them may ever open a region.
     _VOID = frozenset(
         {
             "area",
@@ -758,45 +771,130 @@ class _HtmlToText(HTMLParser):
         }
     )
 
-    #: Elements whose CONTENT is not the email. Only non-void tags belong here:
-    #: a void tag has no content to drop.
+    #: Elements whose CONTENT is not the email.
     _DROP = frozenset({"script", "style", "head", "title"})
+
     _BREAK = frozenset(
         {"br", "p", "div", "tr", "li", "h1", "h2", "h3", "h4", "h5", "h6", "table", "blockquote"}
     )
 
+    #: Flow content: a start tag that cannot appear inside ``head`` or ``title``,
+    #: so seeing one means the unclosed element ended. ``body`` is the canonical
+    #: case — HTML5 says an omitted ``</head>`` is implied by it — but mail
+    #: generators also drop straight into a ``<table>`` or a ``<div>``.
+    _FLOW = frozenset(
+        {
+            "body",
+            "div",
+            "p",
+            "table",
+            "tbody",
+            "thead",
+            "tr",
+            "td",
+            "th",
+            "span",
+            "a",
+            "ul",
+            "ol",
+            "li",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "h5",
+            "h6",
+            "blockquote",
+            "center",
+            "font",
+            "article",
+            "section",
+            "main",
+            "header",
+            "footer",
+        }
+    )
+
+    #: What each suppressing element may legally contain. Anything outside it
+    #: implicitly closes the element. ``script`` and ``style`` contain only
+    #: character data, so nothing closes them but their own end tag — a start
+    #: tag inside one is script text, not markup.
+    _MAY_CONTAIN: dict[str, frozenset[str]] = {
+        "head": frozenset({"title", "meta", "link", "style", "script", "base", "noscript"}),
+        "title": frozenset(),
+    }
+
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self._chunks: list[str] = []
-        self._suppress = 0
+        self._open: list[str] = []
+
+    @property
+    def _suppressed(self) -> bool:
+        return bool(self._open)
+
+    def _implicitly_close(self, tag: str) -> None:
+        """Pop any open region that ``tag`` cannot legally appear inside.
+
+        ``<body>`` after an unclosed ``<head>``, or any flow content after an
+        unclosed ``<title>``. Character-data elements (``script``, ``style``)
+        are never closed this way: their contents are text, not tags.
+        """
+        while self._open:
+            top = self._open[-1]
+            allowed = self._MAY_CONTAIN.get(top)
+            if allowed is None:
+                return  # script/style — only its own end tag closes it
+            if tag in allowed:
+                return
+            if tag in self._FLOW or tag == "body":
+                self._open.pop()
+                continue
+            return
 
     def handle_starttag(self, tag: str, attrs: Any) -> None:
+        self._implicitly_close(tag)
         if tag in self._VOID:
             # Never opens a region. `br` is also in _BREAK and still breaks.
-            if tag in self._BREAK and not self._suppress:
+            if tag in self._BREAK and not self._suppressed:
                 self._chunks.append("\n")
             return
         if tag in self._DROP:
-            self._suppress += 1
-        elif tag in self._BREAK and not self._suppress:
+            self._open.append(tag)
+            return
+        if tag in self._BREAK and not self._suppressed:
             self._chunks.append("\n")
 
     def handle_startendtag(self, tag: str, attrs: Any) -> None:
-        """``<meta … />``. Explicit, so a self-closing non-void tag — which
-        ``HTMLParser`` would otherwise route to ``handle_starttag`` alone —
-        cannot open a suppression region it will never close either."""
-        self.handle_starttag(tag, attrs)
+        """``<style/>``, ``<head/>``, ``<meta … />``.
+
+        A self-closing tag opens and closes in one token, so it must never push
+        a region. Delegating to ``handle_starttag`` — which is what the previous
+        version did, under a docstring claiming this exact property — pushed
+        ``style``/``script``/``head`` and lost the rest of the document.
+        """
+        self._implicitly_close(tag)
+        if tag in self._BREAK and not self._suppressed:
+            self._chunks.append("\n")
 
     def handle_endtag(self, tag: str) -> None:
         if tag in self._VOID:
             return
-        if tag in self._DROP and self._suppress:
-            self._suppress -= 1
-        elif tag in self._BREAK and not self._suppress:
+        if tag in self._DROP:
+            # Pop to and including this tag if it is open at all. An end tag
+            # for something never opened (`</style>` alone) is ignored.
+            if tag in self._open:
+                while self._open and self._open.pop() != tag:
+                    pass
+            return
+        if tag == "head":
+            self._open.clear()
+            return
+        if tag in self._BREAK and not self._suppressed:
             self._chunks.append("\n")
 
     def handle_data(self, data: str) -> None:
-        if not self._suppress:
+        if not self._suppressed:
             self._chunks.append(data)
 
     def text(self) -> str:
@@ -805,11 +903,53 @@ class _HtmlToText(HTMLParser):
         return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
+#: Elements whose contents ``HTMLParser`` hands over as one blob of character
+#: data rather than parsing (``CDATA_CONTENT_ELEMENTS``, plus ``title``, which
+#: behaves the same way in practice). Inside one of these the parser stops
+#: seeing tags entirely, so an element that is never closed swallows the whole
+#: rest of the document — no ``handle_starttag`` for ``<body>`` ever arrives,
+#: and no amount of bookkeeping in the handler can recover.
+#:
+#: They are therefore removed BEFORE parsing, closed or not.
+_NON_CONTENT = "script|style|title|xmp|iframe|noembed|noframes"
+
+#: A properly closed one.
+_CLOSED_REGION_RE = re.compile(rf"<({_NON_CONTENT})\b[^>]*>.*?</\1\s*>", re.IGNORECASE | re.DOTALL)
+
+#: A self-closed one: ``<style/>``. It has no contents to remove, only a tag.
+_SELF_CLOSED_RE = re.compile(rf"<(?:{_NON_CONTENT}|head)\b[^>]*/\s*>", re.IGNORECASE)
+
+#: An opener with no matching close. It runs to whatever ends the head — or to
+#: the end of the document, which is the honest reading of "the author never
+#: closed it": everything after is inside the element as far as any parser is
+#: concerned, so the only question is where a HUMAN would say it stopped.
+_UNCLOSED_REGION_RE = re.compile(
+    rf"<(?:{_NON_CONTENT})\b[^>]*>.*?(?=</head\s*>|<body\b|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _strip_non_content_regions(html: str) -> str:
+    """Remove script/style/title regions, whether or not they are closed.
+
+    This is what makes an unclosed ``<style>`` survivable. ``HTMLParser`` puts
+    those elements into character-data mode, so ``<html><head><style>p{x}</head>
+    <body><p>REAL PROSE</p>`` delivers the entire rest of the document as one
+    `handle_data` call with `style` still open, and the body comes back empty.
+    Every one of the seven triggers in the re-review is this shape or the
+    omitted-``</head>`` shape; the handler's stack fixes the second, and only a
+    pre-pass can fix the first.
+    """
+    html = _CLOSED_REGION_RE.sub(" ", html)
+    html = _SELF_CLOSED_RE.sub(" ", html)
+    return _UNCLOSED_REGION_RE.sub(" ", html)
+
+
 def _html_to_text(html: str) -> str:
     """Readable text from an HTML email body. Never raises on bad markup."""
     parser = _HtmlToText()
     try:
-        parser.feed(html)
+        parser.feed(_strip_non_content_regions(html))
         parser.close()
     except Exception as exc:  # noqa: BLE001 - malformed mail is the normal case
         logger.debug("gws: HTML body could not be parsed (%s); falling back", exc)
