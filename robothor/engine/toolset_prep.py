@@ -57,7 +57,7 @@ def deferred_toolset_note(visible: int, reachable: int) -> str:
 
 
 def principals_note() -> str:
-    """One line naming the two principals this run acts between, or "".
+    """One line naming the two principals this run acts between. Never "".
 
     The assistant is a SEPARATE Google account from the operator: its own
     address, its own calendar, its own Drive. Nothing in a run said so, and on
@@ -70,8 +70,25 @@ def principals_note() -> str:
     address from the declared ``channels.ai_email`` setting
     (``ROBOTHOR_AI_EMAIL``), the operator from ``~/.robothor/owner.yaml``. Read
     through ``get_settings`` rather than ``os.environ`` so the value has one
-    definition and appears in ``genus config``. With neither configured there is
-    nothing true to say and nothing is said.
+    definition and appears in ``genus config``.
+
+    **Always returns a sentence, even with neither configured.** It used to
+    return ``""`` there, which was wrong twice over:
+
+    * the fact this line exists to carry — the two accounts are SEPARATE — is
+      true whether or not either address is known, and a freshly installed
+      instance is exactly where the model is most likely to assume "my
+      calendar" and "the operator's calendar" name one thing. Saying nothing
+      precisely when the instance is least configured is backwards.
+    * and because ``AgentSession.start`` emits the engine-context turn only
+      when there is something to put in it, an empty note SILENTLY CHANGED THE
+      SHAPE OF THE WIRE: the turn vanished and every message index after the
+      history shifted. That is a behaviour difference between one machine and
+      another, and it is what made
+      ``test_conversation_history_passed`` pass on a configured box and fail on
+      CI with ``assert 'user' == 'developer'``.
+
+    The addresses ENRICH the sentence; they were never a precondition for it.
     """
     assistant = ""
     try:
@@ -91,9 +108,6 @@ def principals_note() -> str:
             operator_email = owner.email or ""
     except Exception:  # noqa: BLE001 - a missing identity is not a failed run
         logger.debug("owner config unavailable for the principals note", exc_info=True)
-
-    if not assistant and not operator_email:
-        return ""
 
     parts = []
     if assistant:

@@ -109,9 +109,12 @@ itinerary, created every leg on its own calendar, added him as an attendee,
 sent no invitations, and told him it was on his calendar. Every individual step
 was locally reasonable for an agent that believed there was one calendar.
 
-The engine states both identities in its context turn on every run, so an
-instruction file does not have to repeat the addresses — and must not hardcode
-them.
+The engine says this in its own context turn on **every** run, so an
+instruction file does not have to repeat it — and must not hardcode either
+address. Where both are configured the turn names them; where neither is, it
+still says the accounts are separate, because that is the part an
+unconfigured instance needs most and it is true without knowing either
+address.
 
 ## Tools
 

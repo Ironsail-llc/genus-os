@@ -157,15 +157,37 @@ class TestPrincipalsNote:
         assert "'my calendar'" in note
         assert "landed in their account" in note
 
-    def test_with_nothing_configured_it_says_nothing(
+    def test_with_nothing_configured_it_still_says_they_are_separate(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path
     ) -> None:
+        """It used to return "" here, and that was wrong twice.
+
+        The fact this line carries — the two accounts are SEPARATE — is true
+        whether or not either address is known, and a freshly installed
+        instance is exactly where the model is most likely to assume "my
+        calendar" and "the operator's calendar" name one thing.
+
+        And because `AgentSession.start` emits the engine-context turn only
+        when there is something to put in it, an empty note silently changed
+        the SHAPE OF THE WIRE: the turn vanished and every index after the
+        history shifted. `test_conversation_history_passed` passed on a
+        configured box and failed in CI with `assert 'user' == 'developer'`
+        for exactly that reason.
+        """
         from robothor.engine.toolset_prep import principals_note
 
         monkeypatch.setenv("ROBOTHOR_OWNER_CONFIG", str(tmp_path / "absent.yaml"))
         monkeypatch.delenv("ROBOTHOR_OWNER_EMAIL", raising=False)
-        monkeypatch.delenv("ROBOTHOR_AI_EMAIL", raising=False)
-        assert principals_note() == ""
+        monkeypatch.setenv("ROBOTHOR_AI_EMAIL", "")
+
+        note = principals_note()
+
+        assert note, "an unconfigured instance needs this sentence most"
+        assert "separate principal" in note
+        assert "landed in their account" in note
+        # Nothing is claimed about addresses nobody configured.
+        assert "@" not in note
+        assert "<" not in note
 
     def test_no_address_is_hardcoded(self) -> None:
         import inspect
