@@ -47,7 +47,9 @@ def _top(registry, names, query, n=5):
 
 def test_sending_an_email_finds_the_email_sender(registry, names):
     top = _top(registry, names, "send an email to a person")
-    assert any("gmail_send" in t or t == "send_email" for t in top), top
+    # No `send_email` fallback: there is no such tool, only the send-email
+    # skill, and accepting it here let a wrong answer pass as a right one.
+    assert any("gmail_send" in t for t in top), top
 
 
 def test_updating_a_crm_record_finds_a_crm_writer(registry, names):

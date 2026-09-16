@@ -65,28 +65,105 @@ did not expect to trip.
 
 ## Rollback
 
-Set `ROBOTHOR_APPROVAL_MODE=observe` (or unset both env vars to fully
-disable the gate) and restart the daemon. This immediately reverts to
-auto-approving escalations when no approver is reachable — the same
+Set `ROBOTHOR_APPROVAL_MODE=observe` and restart the daemon. This immediately
+reverts to auto-approving escalations when no approver is reachable — the same
 legacy behavior as before this feature existed.
 
-## Status 2026-07-13: the gate is INERT, not clean
+Prefer `observe` to unsetting the variables. `off` and `observe` are both
+values the Controls page offers and audits; an unset name is a gap nothing
+records.
 
-A soak audit found **zero escalations have ever occurred** — and the reason is
-not that agents behave well. No agent manifest sets `human_approval_tools`, so
-`runner.py` never calls `set_human_approval_patterns()`, `_human_approval_patterns`
-stays empty for every agent, and `_check_human_approval()` returns an empty
-result for every tool call. **Nothing can escalate, so nothing can be approved
-or denied.**
+## Both variables, or none of it
 
-Consequences:
-- `ROBOTHOR_APPROVAL_MODE=enforce` today would be a **no-op** — zero blast
-  radius, but also zero protection. Promoting it would be security theater.
-- Prerequisite 2 above ("real signal, not silence because nothing ever
-  escalates") is the binding one, and it is unmet.
+`approval_mode()` is `_enforcement_mode("ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED",
+"ROBOTHOR_APPROVAL_MODE")`, and `_enforcement_mode` returns `off` whenever the
+first is falsy **regardless of the second**. Measured:
 
-To make the gate real, decide which tools genuinely warrant a human in the
-loop (candidates: outbound email/SMS, `exec`, payments, calendar writes on
-external attendees, destructive CRM mutations), add them to the relevant
-agents' `human_approval_tools`, verify one real escalation completes the
-Telegram approve/deny round-trip, then soak 48h and promote.
+| Environment | `approval_mode()` |
+|---|---|
+| unset / unset | `off` |
+| `ROBOTHOR_APPROVAL_MODE=enforce` alone | `off` |
+| `ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED=1` | `observe` |
+| both, with `MODE=enforce` | `enforce` |
+
+The second row is the trap: the mode is the name an operator reaches for, and
+on its own it changes nothing. `genus doctor --category agents` reports it as
+`agents.approval_gate_not_armed` (`info`) whenever a manifest has declared an
+approval gate this engine will not apply.
+
+## Status 2026-09-16: the gate has its first real user
+
+Superseding the 2026-07-13 note below: `crm-steward` now declares
+`v2.guardrails: [human_approval]` and `v2.human_approval_tools:
+[delete_person]`, so the "nothing can escalate" condition no longer holds and
+promoting the mode is no longer a no-op.
+
+Both variables are set in
+`infra/systemd/robothor-engine.service.d/upgrade-rip-flags.conf` and, as of
+this change, in `helm/genus-os/values.yaml` under `engine.env`. They were
+previously in the systemd unit only — so on the Helm/ArgoCD path, which is how
+production is actually deployed, the gate was `off` and the manifest's
+declaration protected nothing.
+
+**The two differ on purpose.** The drop-in is `enforce`; the chart ships
+`observe`. Prerequisite 1 below requires a wired approver, and a Helm
+deployment cannot guarantee one — `daemon.py` initialises the permission
+manager only when a Telegram token is configured, and the chart supplies no
+token. An `enforce` default would therefore deny escalated calls on
+deployments that cannot approve them, and would skip Prerequisite 3's soak for
+every chart user.
+
+### Promoting the chart default: observe → enforce
+
+Per deployment, in this order:
+
+1. Wire an approver — a Telegram bot token reaching the engine — and confirm
+   `init_permission_manager` ran at boot.
+2. Send one real escalation through the approve/deny round-trip.
+3. Leave the mode at `observe` for 48 hours and read `agent_guardrail_events`:
+   you are looking for escalations that WOULD have been denied, and why.
+4. Only then set `engine.env.ROBOTHOR_APPROVAL_MODE: enforce` (or set the mode
+   from the Controls page, which overrides the chart value without a
+   redeploy).
+
+Until step 4, `genus doctor --category agents` reports the declared gates
+this engine is not applying, as **`agents.approval_gate_not_armed`**. That
+report is the intended state during the soak, not a failure to fix by promoting
+early — so it is an `info` check and does **not** mark the instance
+`degraded`. Measured on the 16 stock templates:
+
+| Engine posture | `destructive_tool_not_gated` (recommended) | `approval_gate_not_armed` (info) | instance |
+|---|---|---|---|
+| `ENABLED=1 MODE=enforce` (this instance's drop-in) | pass | pass | `ok` |
+| `ENABLED=1 MODE=observe` (the chart's default) | pass | fail | `ok`, one info line |
+| neither set (compose, or systemd without the drop-in) | pass | fail | `ok`, one info line |
+
+The two checks are split by who owns the fix. **`agents.approval_gate_not_armed`**
+is about this engine's posture and clears the moment you finish the promotion
+above. **`agents.destructive_tool_not_gated`** is a manifest that granted a
+record-deleting tool without asking for a human at all — no flag can gate a
+tool the manifest never named — so that one stays `recommended` and does mark
+the instance `degraded` at every posture until the manifest is fixed.
+
+### Status 2026-07-13 (historical): the gate was INERT, not clean
+
+A soak audit found **zero escalations had ever occurred** — and the reason was
+not that agents behave well. No agent manifest set `human_approval_tools`, so
+`runner.py` never called `set_human_approval_patterns()`,
+`_human_approval_patterns` stayed empty for every agent, and
+`_check_human_approval()` returned an empty result for every tool call.
+**Nothing could escalate, so nothing could be approved or denied.**
+
+That was a statement about adoption, not about the mechanism: probed directly,
+with the policy enabled and a pattern set, `delete_person` returns
+`allowed=False action='escalate'` while `list_people` stays allowed. The
+prerequisite it named — "real signal, not silence because nothing ever
+escalates" — is what `crm-steward` now supplies.
+
+Before adding the next tool to a `human_approval_tools` list (candidates:
+outbound email/SMS, `exec`, payments, calendar writes on external attendees,
+destructive CRM mutations), verify one real escalation completes the Telegram
+approve/deny round-trip, then soak 48h.
+
+Note that `human_approval_fail_open: true` on an agent defeats `enforce`
+entirely, per agent. The doctor check reports that too.

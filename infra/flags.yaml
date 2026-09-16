@@ -37,13 +37,31 @@ flags:
     soak: >
       The gate was INERT until 2026-07-13 (no agent set human_approval_tools, so
       nothing could ever escalate — zero events meant "no mechanism", not "safe").
-      Now real: main opts in for irreversible DESTRUCTION only —
-      delete_person/company/task/note, vault_delete, gws_calendar_delete.
+      Now real, but narrower than this entry used to claim, and the claim was
+      checked against the shipped templates rather than restated: the opt-in is
+      CRM-STEWARD, not main, and it is delete_person alone. main and
+      morning-briefing declare no tools_allowed and no human_approval, so they
+      hold every delete tool UNGATED. Neither doctor check reports them: both
+      scope to grants a manifest made ON PURPOSE, because "this agent is
+      unrestricted" is a different finding and counting it fires on a clean
+      install. vault_delete and
+      gws_calendar_delete are named here as intent and are not covered by the
+      check; docs/TOOLS.md says so plainly.
+      Two checks, split by owner: agents.destructive_tool_not_gated
+      (recommended) is a manifest that never asked for a human, which no flag
+      value can fix; agents.approval_gate_not_armed (info) is this engine not
+      enforcing the gates the manifests DID declare, which promoting this flag
+      is exactly what fixes. The second is info so that an instance correctly
+      sitting at observe during its soak does not report as degraded — the
+      Helm chart ships observe deliberately, because a chart cannot guarantee
+      an approver is wired and enforce with none denies every escalated call.
       Deliberately narrow: the operator's standing mandate is autonomous
       operation, so sending email, calendar creation and everything else stay
       ungated. A delete cannot be undone and is rare, so one Telegram tap costs
-      nothing. Timeout (600s) = deny, fail-secure. Probe-verified: deletes
-      escalate, gws_gmail_send and search_memory stay autonomous.
+      nothing. Timeout = deny, fail-secure; the default is 300s
+      (models.py human_approval_timeout), not the 600s this entry used to say.
+      Probe-verified: deletes escalate, gws_gmail_send and search_memory stay
+      autonomous.
   - name: ROBOTHOR_SANDBOX_DEFAULT_MODE
     owner: ops
     mode: observe
@@ -591,6 +609,31 @@ flags:
       Enforced on outbound email (gws_gmail_send, gws_gmail_reply) and
       calendar invitations (gws_calendar_create). Telegram, SMS and chat are
       NOT enforced — see docs/CRM_DATA_FABRIC.md.
+
+  - name: ROBOTHOR_CALENDAR_SEND_UPDATES
+    owner: ops
+    mode: "on"  # quoted: bare `on` is a YAML 1.1 boolean
+    soak: |
+      Not a ladder: the values are `all` (default), `externalOnly` and `none`,
+      and they say who Google emails when an agent creates or cancels an event
+      with attendees.
+
+      It ships at `all` with no soak because the state it replaces was
+      effectively `none` and nobody chose it: `gws_calendar_create` passed no
+      `sendUpdates` at all, so Google mailed nobody. On 2026-09-16 the
+      assistant planned the operator's itinerary, wrote it to `primary` — its
+      OWN calendar, not the operator's — added the operator as an attendee and
+      reported it done. No invitation went out and the operator's calendar was
+      never touched. `all` is what the tool always should have sent.
+
+      `none` is a real operator posture ("stop mailing my attendees") and the
+      reason this is a flag rather than a literal. Setting it means an event an
+      agent creates is visible only to whoever reads that calendar; the result
+      says `invitations_requested: false` so the agent reports it honestly rather
+      than claiming the attendees were told.
+
+      An unrecognised value falls back to `all` and logs. Failing closed here
+      would mean failing silent, which is the failure this flag exists to end.
 
   - name: ROBOTHOR_MANIFEST_SCHEMA_MODE
     owner: platform

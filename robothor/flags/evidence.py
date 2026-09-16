@@ -102,6 +102,18 @@ EVIDENCE_SOURCES: dict[str, EvidenceSource] = {
     "ROBOTHOR_DNC_MODE": EvidenceSource(
         "agent_guardrail_events", "guardrail_name = 'do_not_contact'"
     ),
+    # Not a ladder and not a guardrail: this names who Google emails about an
+    # event an agent created. Its evidence is therefore the calendar writes
+    # themselves — a run of them with the flag at `none` is a run of events
+    # nobody was told about, which is the thing an operator would want to see
+    # before leaving it there. `calendar_event` is written by
+    # `_record_calendar_event` after every successful insert.
+    #
+    # It needs an entry at all because `verdict()` does a bare
+    # `EVIDENCE_SOURCES[name]` and `GET /api/controls` calls it in a loop with
+    # no `try`: a governed flag with no source took the whole Controls page
+    # down with a KeyError, not just its own row.
+    "ROBOTHOR_CALENDAR_SEND_UPDATES": EvidenceSource("calendar_event", "1 = 1"),
     "ROBOTHOR_RIP_7_MODE": EvidenceSource(
         "memory_facts_audit",
         "reason = 'pre_update_drift_detected'",

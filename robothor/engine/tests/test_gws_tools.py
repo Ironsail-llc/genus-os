@@ -186,8 +186,13 @@ class TestGwsGmailSearch:
 
             result = _handle_gws_tool("gws_gmail_search", {"query": "is:unread"})
             assert "messages" in result
+            # Each hit is described, not just identified — see
+            # test_gws_gmail_shapes.py for the full contract.
+            assert result["messages"][0]["id"] == "msg1"
+            assert result["messages"][0]["thread_id"] == "t1"
 
-            cmd = mock_run.call_args[0][0]
+            # The LIST call is the first one; the metadata fetches follow it.
+            cmd = mock_run.call_args_list[0][0][0]
             assert cmd[0].endswith("gws")
             assert cmd[1:4] == ["gmail", "users", "messages"]
             params = json.loads(cmd[cmd.index("--params") + 1])
@@ -201,12 +206,14 @@ class TestGwsGmailSearch:
             "robothor.engine.tools.handlers.gws.subprocess.run", return_value=mock_result
         ) as mock_run:
             from robothor.engine.tools import _handle_gws_tool
+            from robothor.engine.tools.handlers.gws import GMAIL_SEARCH_MAX_RESULTS
 
             _handle_gws_tool("gws_gmail_search", {"query": "test", "max_results": 500})
-            params = json.loads(
-                mock_run.call_args[0][0][mock_run.call_args[0][0].index("--params") + 1]
-            )
-            assert params["maxResults"] == 100
+            cmd = mock_run.call_args_list[0][0][0]
+            params = json.loads(cmd[cmd.index("--params") + 1])
+            # Lower than the API's 100: every result now carries its headers,
+            # so a hundred of them would not survive the tool-output cap.
+            assert params["maxResults"] == GMAIL_SEARCH_MAX_RESULTS
 
 
 # ─── Gmail get ───────────────────────────────────────────────────────
@@ -241,7 +248,8 @@ class TestGwsGmailGet:
             from robothor.engine.tools import _handle_gws_tool
 
             result = _handle_gws_tool("gws_gmail_get", {"thread_id": "t1"})
-            assert result["id"] == "t1"
+            assert result["thread_id"] == "t1"
+            assert result["messages"] == []
 
             cmd = mock_run.call_args[0][0]
             assert "threads" in cmd
@@ -434,10 +442,13 @@ class TestGwsCalendarCreate:
             json_idx = cmd.index("--json")
             body = json.loads(cmd[json_idx + 1])
             assert body["summary"] == "Lunch"
-            assert body["attendees"] == [
-                {"email": "alice@example.com"},
-                {"email": "owner@example.com"},
-            ]
+            # The operator is NOT auto-added here: with no `calendar` argument
+            # the event goes to their own calendar, where they are the
+            # organiser. Adding them made Google ask them to RSVP to their own
+            # itinerary and mail them once per event. See
+            # test_gws_calendar_identity.py for both halves of this rule.
+            assert body["attendees"] == [{"email": "alice@example.com"}]
+            assert json.loads(cmd[cmd.index("--params") + 1])["calendarId"] == ("owner@example.com")
 
     def test_create_includes_meet_by_default(self):
         mock_result = MagicMock(returncode=0, stdout='{"id":"e2","summary":"Sync"}')
@@ -496,9 +507,15 @@ class TestGwsCalendarCreate:
             params = json.loads(cmd[params_idx + 1])
             assert "conferenceDataVersion" not in params
 
-    def test_create_dedupes_against_existing_matching_event(self):
-        # First subprocess.run (events list) returns one matching event;
-        # second would be insert but dedup should short-circuit before it runs.
+    def test_create_does_not_dedup_a_different_title_on_a_different_day(self):
+        """Round 3, Important 3. This test used to assert the opposite, and was
+        the clearest statement of the defect: creating "Team Weekly Leadership"
+        on 04-20 deduped against "Team Weekly" on 04-21 — a different title, a
+        different DAY, and no event created.
+
+        The title rule is now normalised equality and the start is checked on
+        both branches, so this creates.
+        """
         list_result = MagicMock(
             returncode=0,
             stdout=json.dumps(
@@ -509,6 +526,51 @@ class TestGwsCalendarCreate:
                             "summary": "Team Weekly",
                             "status": "confirmed",
                             "start": {"dateTime": "2026-04-21T14:00:00-04:00"},
+                            "attendees": [
+                                {"email": "alice@example.com"},
+                                {"email": "bob@example.com"},
+                            ],
+                            "htmlLink": "https://cal/existing123",
+                        }
+                    ]
+                }
+            ),
+        )
+
+        with (
+            patch(
+                "robothor.engine.tools.handlers.gws.subprocess.run", return_value=list_result
+            ) as mock_run,
+            patch.dict("os.environ", {"ROBOTHOR_OWNER_EMAIL": "robothor@example.com"}),
+        ):
+            from robothor.engine.tools import _handle_gws_tool
+
+            result = _handle_gws_tool(
+                "gws_calendar_create",
+                {
+                    "summary": "Team Weekly Leadership",
+                    "start": "2026-04-20T09:00:00-04:00",
+                    "end": "2026-04-20T09:30:00-04:00",
+                    "attendees": ["alice@example.com", "bob@example.com"],
+                },
+            )
+
+            assert result.get("status") != "deduped"
+            assert mock_run.call_count > 1, "it must have gone on to insert"
+
+    def test_create_dedupes_against_existing_matching_event(self):
+        # First subprocess.run (events list) returns one matching event;
+        # second would be insert but dedup should short-circuit before it runs.
+        list_result = MagicMock(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "items": [
+                        {
+                            "id": "existing123",
+                            "summary": "Team Weekly Leadership",
+                            "status": "confirmed",
+                            "start": {"dateTime": "2026-04-20T09:00:00-04:00"},
                             "attendees": [
                                 {"email": "alice@example.com"},
                                 {"email": "bob@example.com"},
@@ -545,7 +607,7 @@ class TestGwsCalendarCreate:
 
             assert result["status"] == "deduped"
             assert result["existing_event_id"] == "existing123"
-            assert result["summary"] == "Team Weekly"
+            assert result["summary"] == "Team Weekly Leadership"
             # Only one subprocess call — list — and no insert.
             assert mock_run.call_count == 1
             cmd = mock_run.call_args[0][0]

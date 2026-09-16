@@ -85,6 +85,35 @@ def get_deferred_allowed() -> frozenset[str] | None:
     return _deferred_allowed_var.get()
 
 
+# ── The agent's toolset, deferred or not ───────────────────────────────
+# Published by the runner on EVERY run, so that `tool_search` has something
+# true to answer with when the run is not deferred. It used to answer
+# "tool_search is only available on deferred runs" — 18 times in one week on
+# cron, event and sub-agent runs, to an agent that goes on calling it because
+# it worked on the last run. A search over the tools the agent DOES have,
+# ranked by the query, is an answer; a refusal is not.
+#
+# Read-only: unlike _thread_tool_whitelist it gates nothing and denies nothing.
+_agent_toolset_var: ContextVar[frozenset[str] | None] = ContextVar(
+    "_agent_toolset_var", default=None
+)
+
+
+def set_agent_toolset(names: frozenset[str]) -> Token[frozenset[str] | None]:
+    """Record this run's allowed tool names; returns a reset token."""
+    return _agent_toolset_var.set(names)
+
+
+def clear_agent_toolset(token: Token[frozenset[str] | None]) -> None:
+    """Restore the prior toolset record. Pair every set with one clear."""
+    _agent_toolset_var.reset(token)
+
+
+def get_agent_toolset() -> frozenset[str] | None:
+    """The tool names this run is allowed, or None when nothing published."""
+    return _agent_toolset_var.get()
+
+
 @dataclass(frozen=True)
 class ToolContext:
     """Context passed to every tool handler."""

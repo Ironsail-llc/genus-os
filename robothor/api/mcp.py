@@ -771,7 +771,11 @@ def get_tool_definitions() -> list[dict[str, Any]]:
         },
         {
             "name": "get_inbox",
-            "description": "Get notification inbox for an agent.",
+            "description": (
+                "Use this for the agent's own notification queue, which is not email; "
+                "for the operator's mailbox use gws_gmail_search. Returns the notifications "
+                "other agents and the engine have raised for this agent, newest first."
+            ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -888,7 +892,11 @@ def get_tool_definitions() -> list[dict[str, Any]]:
         },
         {
             "name": "get_conversation",
-            "description": "Get a single conversation by ID with contact info.",
+            "description": (
+                "Use this for one stored CRM conversation thread; for a live Gmail thread "
+                "use gws_gmail_get. Returns the CRM's ingested record of the conversation plus "
+                "the contact it belongs to — it can be stale and it is never the mailbox."
+            ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -899,7 +907,11 @@ def get_tool_definitions() -> list[dict[str, Any]]:
         },
         {
             "name": "list_messages",
-            "description": "List all messages in a conversation.",
+            "description": (
+                "Use this for the CRM's stored record of past correspondence with a contact; "
+                "for live email use gws_gmail_search. Returns every ingested message in one "
+                "CRM conversation — not a mailbox, and never an unread count."
+            ),
             "inputSchema": {
                 "type": "object",
                 "properties": {

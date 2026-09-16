@@ -15,7 +15,7 @@
 2. If zero tasks: write status file and stop
 3. For each task: `update_task(id=<task_id>, status="IN_PROGRESS")`
 4. Read the `threadId` from the task body
-5. Fetch the email thread: **Preferred**: Use `gws_gmail_get` (structured JSON, no parsing needed). Fallback: `exec: gog gmail thread get <threadId> --account {{ ai_email }} --full --json`
+5. Fetch the email thread: `gws_gmail_get(thread_id=<threadId>)` — every message in the thread with its decoded `body_text`, oldest first. On failure read the error's `hint`; there is no CLI fallback, because a shell command has none of the guards the tool has.
 6. Produce a structured analysis (see below)
 7. Write findings to `memory/response-analysis.json` keyed by threadId
 8. **Create a follow-up task for the responder:**
@@ -41,7 +41,7 @@ For each task, read the full email thread and produce three analysis sections:
 Key data points, numbers, trends, and metrics. What did the sender share? What did they ask? Extract the most important 3-5 facts from the email content.
 
 ### Relationship Context
-Who is this person? Use CRM tools (`list_people`) if available. What tone is appropriate?
+Who is this person? Look them up with `list_people`. What tone is appropriate?
 
 ### Action Items
 Deadlines, commitments, follow-ups, or expectations. What does the sender expect in response? What should {{ ai_name }} track or flag for {{ owner_name }}?

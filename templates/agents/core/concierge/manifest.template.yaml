@@ -33,8 +33,8 @@ tools_allowed:
   - resolve_task
   - list_agent_runs
   - get_agent_stats
-  - get_fleet_health
-  - detect_anomalies
+  - get_fleet_achievement_score
+  - list_agent_reviews
 
 task_protocol: true
 status_file: brain/memory/concierge-status.md
@@ -47,3 +47,7 @@ warmup:
 v2:
   error_feedback: true
   cost_budget_usd: 0.50
+
+changelog:
+  - date: "2026-09-16"
+    change: "Drop get_fleet_health and detect_anomalies from tools_allowed: neither is a registered tool. The instructions that called them now name the real ones, get_fleet_achievement_score and list_agent_reviews, which are granted in their place."

@@ -118,16 +118,25 @@ EXTERNAL_SIDE_EFFECT_TOOLS: frozenset[str] = frozenset(
         "write_file",
         "edit_file",
         "append_file",
-        # Mail.
+        # Google Workspace — the WHOLE family, not most of it. Every gws_* tool
+        # is refused under ctx.is_benchmark by its own handler as well, and this
+        # list is the second lock: it is subtracted LAST in
+        # benchmark_readonly_tools() precisely so a name cannot be re-opened by
+        # being added to a read list. Three chat tools were missing, one of
+        # which posts a real Google Chat message — a defence-in-depth comment
+        # that was false for 27% of the family. Asserted against GWS_TOOLS by
+        # test_registered_tool_names.py so it cannot drift again.
         "gws_gmail_send",
         "gws_gmail_reply",
         "gws_gmail_modify",
-        "gws_gmail_draft",
-        "send_email",
-        # Calendar.
+        "gws_gmail_search",
+        "gws_gmail_get",
         "gws_calendar_create",
-        "gws_calendar_update",
         "gws_calendar_delete",
+        "gws_calendar_list",
+        "gws_chat_send",
+        "gws_chat_list_spaces",
+        "gws_chat_list_messages",
         # Messaging / paging a human.
         "message",
         "send_message",

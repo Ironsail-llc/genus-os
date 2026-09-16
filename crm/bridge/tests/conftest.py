@@ -509,6 +509,7 @@ def engine_flag_readers() -> dict[str, tuple[object, str]]:
             ff.deliverable_contract_mode,
             "ROBOTHOR_DELIVERABLE_CONTRACT_ENABLED",
         ),
+        "ROBOTHOR_CALENDAR_SEND_UPDATES": (ff.calendar_send_updates, ""),
         "ROBOTHOR_DNC_MODE": (ff.do_not_contact_mode, ""),
         "ROBOTHOR_EXEC_ALLOWLIST_STRICT_MODE": (
             ff.exec_allowlist_mode,

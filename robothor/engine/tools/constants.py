@@ -2,6 +2,41 @@
 
 from __future__ import annotations
 
+#: How many characters of one tool's result are PERSISTED with the run step.
+#:
+#: Precisely: ``robothor.engine.tracking._truncate_json`` cuts to this, head
+#: and tail with a ``[... truncated N chars ...]`` marker in the middle, on the
+#: two paths that write the ``steps`` row. It is NOT applied to the message the
+#: model sees — that is built in ``AgentSession.record_tool_call``, where the
+#: only shortening is ``tool_offload_threshold``, which defaults to 0 and is
+#: therefore off.
+#:
+#: A handler still has to fit inside it — for narrower reasons than the first
+#: two corrections claimed, both of which were also wrong. Resume reads
+#: ``agent_run_checkpoints.messages`` and persistent history reads
+#: ``chat_messages.message``; neither selects this column. Nor does the run
+#: viewer: ``crm/bridge/routers/runs.py`` lists the step columns it wants and
+#: ``tool_output`` is not among them.
+#:
+#: Two things do read it back:
+#:
+#: * ``scripts/cleanup_benchmark_crm_debris.py`` parses ``tool_output->>'id'``
+#:   to find the CRM rows a benchmark left behind. A row cut mid-JSON is debris
+#:   the cleanup cannot identify, so cannot remove — the one place where
+#:   truncation does real damage today;
+#: * ``bench/wildclaw/run_one.py`` selects it per step when grading a run.
+#:
+#: Cutting blind also lands the hole wherever the character count falls:
+#: ``gws_gmail_get`` returned the raw Gmail API JSON with the body as one
+#: base64 string, so the stored record of every long email was two halves of a
+#: base64 blob. A handler that caps itself keeps the beginning intact and says
+#: ``body_truncated``.
+#:
+#: Defined here, in the leaf module, because both the writer (``tracking``) and
+#: the handlers that fit inside it need it, and a second copy of a number is a
+#: second number.
+MAX_TOOL_OUTPUT_CHARS = 4000
+
 # Sub-agent spawning tools
 SPAWN_TOOLS = frozenset({"spawn_agent", "spawn_agents"})
 
@@ -146,6 +181,46 @@ REPORT_TOOLS = frozenset(
 
 # Branches that agents are NEVER allowed to push to or commit on
 PROTECTED_BRANCHES = frozenset({"main", "master"})
+
+# ── Deny-list entries that name no registered tool, on purpose ─────────
+#
+# A tool name in an ALLOW table has to resolve or the table is a lie: the agent
+# is advertised a tool that does not exist, or a manifest's entry is dropped
+# after one journald warning. A name in a DENY table is different — denying
+# something that does not exist costs nothing and covers the day a plugin, an
+# adapter or a rename brings it into being. That is a real defence and it is
+# also indistinguishable from rot, which is how `gws_calendar_update`,
+# `gws_gmail_draft` and `send_email` survived in four engine tables for months
+# while an agent read them in the source and hallucinated calls to them.
+#
+# So the deliberate ones are written down HERE, once, and
+# ``test_registered_tool_names.py`` enforces both directions: a deny table may
+# only name a tool that is dispatchable or is listed below, and nothing listed
+# below may be dispatchable — the moment one of these becomes a real tool, this
+# entry has to go, and the suite says so.
+UNREGISTERED_DENY_GUARDS: frozenset[str] = frozenset(
+    {
+        # Filesystem verbs other harnesses use; this engine has write_file.
+        "append_file",
+        "create_file",
+        "edit_file",
+        # Channel sends. Delivery here is the run's delivery_mode, and the
+        # Telegram tools belong to a plugin that may or may not be installed.
+        "message",
+        "send_message",
+        "send_telegram",
+        "telegram_send",
+        # A browser sub-verb and a voice verb, neither of them a tool name.
+        "browser_navigate",
+        "speak",
+        # The vault writer is `vault_set`; `vault_put` is the name people try.
+        "vault_put",
+        # Scheduler verbs: the registered one is `register_user_cron`.
+        "create_schedule",
+        "register_cron",
+        "update_schedule",
+    }
+)
 
 # Read-only tools for plan mode — tools with no side effects.
 READONLY_TOOLS: frozenset[str] = frozenset(
@@ -308,8 +383,11 @@ CORE_TOOLS: frozenset[str] = frozenset(
         "get_task",
         "create_task",
         "search_records",
-        # Messaging back to the operator
-        "message",
+        # NOTE: no "message" here. It was listed for months and has never been
+        # a registered schema, so under deferral the advertised set was one
+        # shorter than it looked and an agent reading CORE_TOOLS in the source
+        # would believe in a tool that does not exist. Delivery back to the
+        # operator is the run's delivery_mode, not a tool.
         # Waiting / polling
         "wait_seconds",
     }

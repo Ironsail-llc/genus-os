@@ -720,7 +720,10 @@ def extract_claims(text: str | None) -> list[Claim]:
 # Tool families
 # ──────────────────────────────────────────────────────────────────────
 
-_EMAIL_SEND_TOOLS = frozenset({"gws_gmail_send", "gws_gmail_reply", "send_email"})
+# `send_email` is not a tool — it is the `send-email` skill, invoked through
+# `invoke_skill`. Naming it here made the family look complete while matching
+# nothing.
+_EMAIL_SEND_TOOLS = frozenset({"gws_gmail_send", "gws_gmail_reply"})
 _MESSAGE_SEND_TOOLS = frozenset(
     {
         "send_notification",
@@ -778,9 +781,9 @@ _MEMORY_WRITE_TOOLS = frozenset(
         "leave_breadcrumb",
     }
 )
-_CALENDAR_WRITE_TOOLS = frozenset(
-    {"gws_calendar_create", "gws_calendar_update", "gws_calendar_delete"}
-)
+# `gws_calendar_update` has never been registered: this platform creates and
+# deletes calendar events and does not update them.
+_CALENDAR_WRITE_TOOLS = frozenset({"gws_calendar_create", "gws_calendar_delete"})
 _SCHEDULE_WRITE_TOOLS = frozenset(
     {"register_user_cron", "register_cron", "create_schedule", "update_schedule"}
 )

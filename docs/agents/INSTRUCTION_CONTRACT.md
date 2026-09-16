@@ -84,6 +84,65 @@ with `vault_get` and use it" describes a tool that no longer exists, and
 describes a credential in a context window, which is the thing this contract
 exists to prevent.
 
+## Identity
+
+**The assistant is a separate principal.** It has its own Google account: its
+own email address, its own calendar, its own Drive. The operator has theirs.
+They are not the same account and nothing about the tooling makes them look
+different unless the instructions say so.
+
+So, in an instruction file:
+
+* **"my calendar", "my email", "my files" in the operator's words mean the
+  operator's.** Never the assistant's.
+* **`primary` is the assistant's own calendar.** Anything the operator is meant
+  to see goes to the operator's calendar — the calendar tools default there, and
+  reaching the assistant's own takes an explicit `calendar: "own"`.
+* **A result is only "done for the operator" when it landed in the operator's
+  account.** An event on the assistant's calendar with the operator as an
+  attendee and no invitation sent is not a scheduled meeting; it is a private
+  note the operator will never see. Report what the tool returns — for calendar
+  writes that is `calendar`, `invitations_requested` and `htmlLink` — not "done".
+
+This is not hypothetical. On 2026-09-16 an assistant planned the operator's
+itinerary, created every leg on its own calendar, added him as an attendee,
+sent no invitations, and told him it was on his calendar. Every individual step
+was locally reasonable for an agent that believed there was one calendar.
+
+The engine says this in its own context turn on **every** run, so an
+instruction file does not have to repeat it — and must not hardcode either
+address. Where both are configured the turn names them; where neither is, it
+still says the accounts are separate, because that is the part an
+unconfigured instance needs most and it is true without knowing either
+address.
+
+## Tools
+
+Name tools by their **registered names** — `gws_gmail_reply`, not "the reply
+tool", and never a CLI command when a tool exists for the job. An instruction
+that says `gog gmail send` is telling the agent to go around the
+do-not-contact check, the duplicate-reply guard, the threading and the
+benchmark gate, all of which live in the tool and none of which live in the
+shell.
+
+An instruction file **may only name tools the manifest grants**. The agent
+cannot see its own manifest: a tool it was told to use and does not have simply
+fails mid-turn, and what the model does next is find another way to the same
+end. `genus doctor --category agents` reports every mismatch
+(`agents.tools_named_but_not_granted`), in both directions — a tool named in
+prose and absent from `tools_allowed`, and a `tools_allowed` entry that
+resolves to no registered schema.
+
+If the manifest declares `heartbeat.instruction_file`, the same rule applies to
+`heartbeat_tools_allowed`: the heartbeat run has its own, usually smaller,
+toolset.
+
+**Do not describe the toolset as a fixed list.** A broad agent's tools are
+loaded on demand — the model is shown a small core and reaches the rest with
+`tool_search` then `tool_call`, and the engine tells it so each turn. Writing
+"you have these 40 tools" into an instruction file contradicts what the run
+actually hands it. See [Tools](../TOOLS.md).
+
 ## Optional Sections
 
 - **Rules** — Guardrails and constraints (e.g., "never send emails without REVIEW")
@@ -100,4 +159,4 @@ exists to prevent.
 
 ---
 
-Updated: 2026-02-28
+Updated: 2026-09-16

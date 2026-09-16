@@ -16,6 +16,7 @@ from psycopg2.extras import RealDictCursor
 from robothor.constants import DEFAULT_TENANT, SANDBOX_DENIAL_PREFIX, SANDBOX_DENIED_ERROR_TYPE
 from robothor.db.connection import get_connection, read_every_tenant_in_transaction
 from robothor.engine.analytics import GENUINE_TIMEOUT_SQL, INTERRUPTED_SQL
+from robothor.engine.tools.constants import MAX_TOOL_OUTPUT_CHARS
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -24,8 +25,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Max chars for tool output stored in steps (prevent bloat)
-MAX_TOOL_OUTPUT_CHARS = 4000
+# MAX_TOOL_OUTPUT_CHARS is re-exported from robothor.engine.tools.constants,
+# where it now lives: the handlers that have to fit their results inside it
+# cannot import this module, which reaches for psycopg2 and a live connection.
 
 
 def _truncate_json(data: Any, max_chars: int = MAX_TOOL_OUTPUT_CHARS) -> Any:

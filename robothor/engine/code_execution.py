@@ -53,6 +53,15 @@ the full traceback verbatim; the head is what helps."""
 # is fast iteration; if the model needs to shell out, it should
 # still be allowed to. The sandbox boundary is the subprocess, not
 # this whitelist.
+#
+# THESE ARE HERMES'S TOOL NAMES, NOT THIS ENGINE'S. `web_extract`,
+# `search_files`, `patch` and `terminal` are not registered here — this engine
+# spells the last two `exec` — so nothing in this set should be read as a claim
+# about what Genus can dispatch. It is also enforced by nothing: no code path
+# reads it, only `test_code_execution.py`. Kept as the contract the RPC bridge
+# will implement against, marked so that the phantom sweep in
+# `test_registered_tool_names.py` does not mistake it for a live allow-list and
+# so nobody else does either.
 SANDBOX_ALLOWED_TOOLS: frozenset[str] = frozenset(
     {
         "web_search",

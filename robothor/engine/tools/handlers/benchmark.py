@@ -37,6 +37,7 @@ from robothor.engine.tools.constants import (
     BENCHMARK_TOOLS,
     DESKTOP_TOOLS,
     GOAL_TOOLS,
+    GWS_TOOLS,
     READONLY_TOOLS,
 )
 
@@ -193,7 +194,15 @@ _BENCHMARK_EXTRA_READS: frozenset[str] = frozenset(
 #: database side effect, but nothing a graded sub-agent has any business
 #: touching. The benchmark tools are withheld so an agent under test cannot
 #: read or drive the harness grading it.
-_BENCHMARK_WITHHELD_READS: frozenset[str] = frozenset(DESKTOP_TOOLS | BENCHMARK_TOOLS)
+#:
+#: The Google family joined them on 2026-09-16. Every ``gws_*`` tool shells out
+#: to a CLI holding real Workspace credentials, so a "read-only" one reads the
+#: operator's real mailbox and calendar — and did: an agent copied the
+#: placeholder thread id ``thread_def456`` out of a benchmark prompt into a
+#: live Gmail call. A graded agent that can read the operator's mail can put
+#: the operator's mail in its answer, and the sandbox exists so that a
+#: benchmark touches nothing real in EITHER direction.
+_BENCHMARK_WITHHELD_READS: frozenset[str] = frozenset(DESKTOP_TOOLS | BENCHMARK_TOOLS | GWS_TOOLS)
 
 
 def _adapter_declared_read_only_tools() -> frozenset[str]:

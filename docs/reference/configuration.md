@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-387 settings in 13 groups.
+388 settings in 13 groups.
 
 ## paths
 
@@ -290,6 +290,7 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 | `ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Decontamination ladder position: observe reports benchmark runs and cost separately, enforce excludes them from production surfaces. |
 | `ROBOTHOR_BENCHMARK_SANDBOX_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Switch for seeded benchmark fixtures and sandboxed CRM writes, so a graded task can act instead of only reading. |
 | `ROBOTHOR_BENCHMARK_SANDBOX_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Benchmark-sandbox ladder position: observe seeds fixtures and records read-backs without grading them, enforce folds them into the score. |
+| `ROBOTHOR_CALENDAR_SEND_UPDATES` | str | `all` | `robothor-engine` | no | legacy | **governed.** Who Google emails when an agent creates or deletes an event with attendees: all, externalOnly, or none. The default sends the invitation — an event nobody was told about is not a meeting, which is how an operator came to be an attendee of a trip he never saw. |
 | `ROBOTHOR_COMPLETION_CONTRACTS_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Switch for evidence-based completion contracts: a run claiming success must show the tool trace that produced it. |
 | `ROBOTHOR_COMPLETION_CONTRACTS_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Completion-contract ladder position: observe records unevidenced claims, enforce fails the run that makes one. |
 | `ROBOTHOR_CONFIG_STRICT_MODE` | str | `observe` | `robothor-engine` | no | 1.66 | What an unknown key in the settings: block of config.yaml does. 'off' ignores it, 'observe' (default for existing installs) logs one warning naming the key and carries on, 'enforce' refuses to start. Inventoried in infra/flags.yaml but deliberately NOT governed: it is read while settings are being resolved, which happens before and without a database. |

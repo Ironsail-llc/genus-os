@@ -29,6 +29,7 @@ tools_allowed:
   - list_conversations
   - log_interaction
   - create_person
+  - create_note
   - create_task
   - list_tasks
   - list_my_tasks
@@ -36,7 +37,6 @@ tools_allowed:
   - update_task
   - append_to_block
 tools_denied:
-  - message
 bridge_endpoints:
   - "GET /health"
   - "GET /api/conversations"
@@ -90,3 +90,7 @@ tags_consumed: []
 
 v2:
   error_feedback: true
+
+changelog:
+  - date: "2026-09-16"
+    change: "Grant create_note, which the escalation step calls. Drop the tools_denied entry for `message`, which is not a registered tool."

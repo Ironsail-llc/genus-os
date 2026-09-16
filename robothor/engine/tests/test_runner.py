@@ -10,7 +10,40 @@ import pytest
 
 from robothor.engine.models import RunStatus, TriggerType
 from robothor.engine.runner import AgentRunner
+from robothor.engine.session import ENGINE_CONTEXT_ROLE
 from robothor.identity import IdentityContext
+
+
+@pytest.fixture(autouse=True)
+def explicit_principals(monkeypatch, tmp_path):
+    """Pin BOTH principals, so these tests mean one thing everywhere.
+
+    `principals_note()` reads the assistant address from settings and the
+    operator from an owner file. Constructing the runner on a configured box
+    pulls the instance's own values in, so what reached the wire — and how many
+    messages were on it — depended on the machine. The suite's own
+    `_hermetic_env` docstring says it: "A suite whose result depends on the
+    machine it runs on is not a suite; it is a coincidence."
+
+    `_hermetic_owner_config` already points the loader at an empty tmp_path.
+    This pins the other half explicitly rather than relying on its absence, so
+    a test that cares about the engine-context turn can say so.
+    """
+    import yaml
+
+    owner = tmp_path / "owner.yaml"
+    owner.write_text(
+        yaml.safe_dump(
+            {
+                "tenant_id": "fixture",
+                "first_name": "Alice",
+                "last_name": "Example",
+                "email": "alice@example.com",
+            }
+        )
+    )
+    monkeypatch.setenv("ROBOTHOR_OWNER_CONFIG", str(owner))
+    monkeypatch.setenv("ROBOTHOR_AI_EMAIL", "bot@example.com")
 
 
 @pytest.fixture
@@ -182,8 +215,73 @@ class TestAgentRunnerExecute:
         assert messages[1]["content"] == "First message"
         assert messages[2]["role"] == "assistant"
         assert messages[2]["content"] == "First reply"
-        assert messages[3]["role"] == "user"
-        assert messages[3]["content"] == "Follow-up"
+        # The engine's own context turn sits between the history and the user's
+        # words — never inside them (#547). It carries who the two principals
+        # are, and on a deferred run how to reach the rest of the toolset.
+        assert messages[3]["role"] == ENGINE_CONTEXT_ROLE
+        assert messages[4]["role"] == "user"
+        assert messages[4]["content"] == "Follow-up"
+
+    @pytest.mark.asyncio
+    async def test_an_unconfigured_instance_still_gets_the_context_turn(
+        self,
+        runner,
+        sample_agent_config,
+        mock_litellm_response,
+        monkeypatch,
+        tmp_path,
+    ):
+        """No owner file, no assistant address — the CI machine's condition.
+
+        This is the shape that broke: `principals_note()` returned "", so
+        `AgentSession.start` emitted no engine-context turn, so every index
+        after the history shifted by one and
+        `test_conversation_history_passed` failed with
+        `assert 'user' == 'developer'` on CI while passing on a configured box.
+
+        The run must complete and the turn must be there, saying the one thing
+        that is true without either address: the accounts are separate.
+        """
+        monkeypatch.setenv("ROBOTHOR_OWNER_CONFIG", str(tmp_path / "absent.yaml"))
+        monkeypatch.delenv("ROBOTHOR_OWNER_EMAIL", raising=False)
+        monkeypatch.setenv("ROBOTHOR_AI_EMAIL", "")
+
+        response = mock_litellm_response(content="Done")
+        history = [
+            {"role": "user", "content": "First message"},
+            {"role": "assistant", "content": "First reply"},
+        ]
+
+        with patch("robothor.engine.runner.create_run"):
+            with patch("robothor.engine.runner.update_run"):
+                with patch("robothor.engine.run_finalizer.create_step"):
+                    with patch(
+                        "litellm.acompletion", new_callable=AsyncMock, return_value=response
+                    ) as mock_llm:
+                        run = await runner.execute(
+                            "test-agent",
+                            "Follow-up",
+                            agent_config=sample_agent_config,
+                            conversation_history=history,
+                        )
+
+        assert run.status == RunStatus.COMPLETED
+        messages = mock_llm.call_args.kwargs["messages"]
+
+        # The SAME shape as the configured case — that is the point.
+        assert [m["role"] for m in messages] == [
+            "system",
+            "user",
+            "assistant",
+            ENGINE_CONTEXT_ROLE,
+            "user",
+        ]
+        context = messages[3]["content"]
+        assert "separate principal" in context
+        assert "landed in their account" in context
+        # And it invents nothing about principals nobody configured.
+        assert "@" not in context
+        assert messages[4]["content"] == "Follow-up"
 
     @pytest.mark.asyncio
     async def test_all_models_fail(self, runner, sample_agent_config):

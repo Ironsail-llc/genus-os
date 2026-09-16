@@ -29,7 +29,20 @@ logger = logging.getLogger(__name__)
 _SHELL_CONTROL = re.compile(r"[;|&<>\n\r`]|\$\(")
 
 # Tools that send outbound email (subject to the inbound_only policy).
-_EMAIL_SEND_TOOLS = frozenset({"gws_gmail_send", "gws_gmail_reply", "send_email", "send-email"})
+#
+# `send_email` and `send-email` used to be in here. Neither is a tool: the only
+# thing of that name is the SKILL `agents/skills/send-email`, which an agent
+# reaches with `invoke_skill(name="send-email")`. So the two entries matched no
+# tool name ever passed to this check, while the route they were meant to cover
+# — the skill — went through `invoke_skill` and past the guard untouched. The
+# skill names are checked separately, below.
+_EMAIL_SEND_TOOLS = frozenset({"gws_gmail_send", "gws_gmail_reply"})
+
+#: Skills that send mail, reached through `invoke_skill`. A skill invocation
+#: carries no `thread_id`, so under `inbound_only` there is nothing it could
+#: produce except cold outbound — it is refused outright, with the tool that
+#: CAN reply named in the refusal.
+_EMAIL_SEND_SKILLS = frozenset({"send-email", "send_email"})
 
 # Every policy name the engine implements. Used to fail loud on an unknown
 # (typo'd / renamed / not-yet-implemented) policy instead of silently allowing.
@@ -587,8 +600,17 @@ def _days_from_now(start: str) -> float | None:
         return None
     try:
         dt = datetime.fromisoformat(start)
-    except ValueError:
+    except (ValueError, TypeError):
         return None
+    if dt.tzinfo is None:
+        # A naive start is the format the calendar schema invites
+        # ("2026-10-01T09:00:00") and an all-day event is a bare date. Both
+        # subtracted against a tz-aware `now` and raised TypeError, which
+        # `check_pre_execution` does not catch for built-in policies — so the
+        # guardrail took the whole tool call down rather than declining to
+        # judge. Treating a naive time as UTC is what the Calendar API does
+        # with a start carrying no offset and no timeZone.
+        dt = dt.replace(tzinfo=UTC)
     now = datetime.now(tz=UTC)
     return (dt - now).total_seconds() / 86400.0
 
@@ -1021,6 +1043,19 @@ class GuardrailEngine:
         is not a hard guarantee — full thread-provenance validation is a
         follow-up.
         """
+        if tool_name == "invoke_skill":
+            skill = str(tool_args.get("name", "") or "").strip().lower()
+            if skill not in _EMAIL_SEND_SKILLS:
+                return GuardrailResult()
+            return GuardrailResult(
+                allowed=False,
+                action="blocked",
+                reason=(
+                    "inbound_only: the send-email skill starts a new conversation; "
+                    "reply into the existing thread with gws_gmail_reply instead"
+                ),
+                guardrail_name="inbound_only",
+            )
         if tool_name not in _EMAIL_SEND_TOOLS:
             return GuardrailResult()
         thread_id = str(tool_args.get("thread_id", "") or "").strip()

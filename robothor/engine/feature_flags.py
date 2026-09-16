@@ -458,6 +458,38 @@ def approval_mode() -> EnforcementMode:
     return _enforcement_mode("ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED", "ROBOTHOR_APPROVAL_MODE")
 
 
+def approval_gate_inputs() -> tuple[str, str]:
+    """``(enabled_raw, mode_raw)`` behind :func:`approval_mode`, as resolved.
+
+    Exists so a caller can say WHICH half is missing rather than only that the
+    gate is off — ``_enforcement_mode`` collapses both into ``"off"``, and the
+    two have very different fixes. ``genus doctor`` reports this.
+
+    Resolved through the same path the gate itself uses, NOT ``os.environ``.
+    ``test_failclosed_approval.py::TestTheGateIsReadThroughTheFlagStore`` pins
+    that: reverting this to ``os.environ`` fails three of its cases.
+
+    The two halves are NOT symmetric, and an earlier version of this docstring
+    said they were. Only ``ROBOTHOR_APPROVAL_MODE`` is declared
+    ``governed=True``; ``ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED`` is not in
+    ``GOVERNED_FLAGS``, so ``_resolve_raw`` goes straight to the environment for
+    it. Governing it too is not the one-line change it looks like — a governed
+    flag needs its declaration, an ``infra/flags.yaml`` entry,
+    ``flags.store.valid_values_for``, ``flags.evidence.EVIDENCE_SOURCES`` and
+    the bridge's ``engine_flag_readers`` row, and anything less is a dead
+    control on the Controls page.
+
+    What the asymmetry buys is still real and worth knowing: the MODE resolves
+    from the store first, so an operator on a Helm instance can de-escalate
+    from ``enforce`` to ``observe`` from the Controls page without a redeploy,
+    even though the deployed environment says ``enforce``. That is the
+    runbook's Rollback step, and it works.
+    """
+    return _resolve_raw("ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED"), _resolve_raw(
+        "ROBOTHOR_APPROVAL_MODE"
+    )
+
+
 def exec_allowlist_mode() -> EnforcementMode:
     """Rollout mode for rejecting shell-chaining metacharacters in allowlisted exec.
 
@@ -657,6 +689,39 @@ def do_not_contact_mode() -> DoNotContactMode:
     if raw not in ("", "enforce"):
         logger.warning("ROBOTHOR_DNC_MODE=%r is not 'enforce' or 'observe' — enforcing.", raw)
     return "enforce"
+
+
+#: What Google may be asked to do about attendees. Anything else is a typo.
+_VALID_SEND_UPDATES = frozenset({"all", "externalOnly", "none"})
+
+
+def calendar_send_updates() -> str:
+    """Who Google emails when an agent creates or cancels an event.
+
+    ``ROBOTHOR_CALENDAR_SEND_UPDATES`` — ``all`` (default), ``externalOnly`` or
+    ``none``. Governed, so an operator can turn invitations down from the
+    dashboard rather than by editing a box.
+
+    The default is the loud one, which is the opposite of this module's usual
+    instinct. Every other flag here fails closed because the failure mode of
+    "on" is an action nobody authorised. Here "off" IS the failure: the insert
+    carried no ``sendUpdates`` at all, Google mailed nobody, and an operator was
+    made an attendee of an itinerary he was never told about and could not see.
+    An unrecognised value therefore falls back to ``all``, loudly.
+
+    Read on every call: the store caches the DB answer briefly and reads the
+    environment live, so a change needs no deploy.
+    """
+    raw = _resolve_raw("ROBOTHOR_CALENDAR_SEND_UPDATES", "all").strip()
+    if raw in _VALID_SEND_UPDATES:
+        return raw
+    if raw:
+        logger.warning(
+            "ROBOTHOR_CALENDAR_SEND_UPDATES=%r is not one of %s — sending to all.",
+            raw,
+            sorted(_VALID_SEND_UPDATES),
+        )
+    return "all"
 
 
 def benchmark_sandbox_mode() -> EnforcementMode:

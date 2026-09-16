@@ -64,6 +64,10 @@ CHECK_MODULES = (
     "channels",
     "services",
     "manifests",
+    # Right after the manifests parse: "does this agent's prose agree with its
+    # manifest about its tools" is the next question, and the answer explains
+    # refusals an operator is otherwise reading one journald line at a time.
+    "tools",
     "identity",
     "memory",
     "secrets",

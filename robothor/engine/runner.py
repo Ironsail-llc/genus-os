@@ -107,7 +107,13 @@ from robothor.engine.stall_watchdog import (
 from robothor.engine.tool_admission import ToolAdmissionMixin  # noqa: E402
 from robothor.engine.tool_outcome import record_tool_outcome
 from robothor.engine.tools import get_registry
-from robothor.engine.toolset_prep import prepare_toolset
+from robothor.engine.toolset_prep import (
+    planner_tool_names,
+    prepare_toolset,
+    publish_toolset,
+    with_discovery_note,
+    withdraw_toolset,
+)
 from robothor.engine.tracking import create_run, update_run
 from robothor.engine.warmup_steps import record_warmup_steps
 from robothor.engine.workflow_budget import WorkflowDeadlineError, propagates_to_caller
@@ -979,6 +985,9 @@ class AgentRunner(
         tool_schemas = _prepared.tool_schemas
         tool_names = _prepared.tool_names
         system_prompt = _prepared.system_prompt
+        # Deferral is otherwise invisible from inside the turn: a short schema
+        # list and no statement that a longer one exists.
+        engine_preamble = with_discovery_note(engine_preamble, _prepared)
         watchdog.touch("adapters_loaded")
 
         watchdog.touch("tools_built")
@@ -1146,7 +1155,9 @@ class AgentRunner(
                 plan_result = None
                 plan_context = ""
                 if self._should_plan(agent_config, route):
-                    plan_result = await self._run_planner(agent_config, message, tool_names, models)
+                    plan_result = await self._run_planner(
+                        agent_config, message, planner_tool_names(_prepared), models
+                    )
                     if plan_result and plan_result.success:
                         # Planner is non-fatal end to end: a malformed plan must
                         # never abort the run over an optional context string.
@@ -1305,17 +1316,9 @@ class AgentRunner(
 
                 # Watchdog already started before setup phase (see above).
 
-                # Deferred tools (Rip 16 / G4): when this agent's toolset is
-                # deferred, tool_schemas above were reduced to core+meta. Record
-                # the agent's full allowed set so the tool_call meta-tool can
-                # reach (only) allowed tools on demand. No-op when deferral off.
-                _defer_token = None
-                if self.registry.should_defer(agent_config):
-                    from robothor.engine.tools.dispatch import set_deferred_allowed
-
-                    _defer_token = set_deferred_allowed(
-                        self.registry.deferred_whitelist(agent_config)
-                    )
+                # The deferred allow-set that gates tool_call, and the toolset
+                # tool_search reads. toolset_prep says why they are two things.
+                _toolset_tokens = publish_toolset(self.registry, agent_config, tool_names)
 
                 # Register the live session so external callers (Telegram /steer,
                 # /chat/steer, /chat/interrupt) can influence it mid-run — the
@@ -1363,11 +1366,8 @@ class AgentRunner(
                 finally:
                     with contextlib.suppress(Exception):
                         session_registry.unregister(session)
-                    if _defer_token is not None:
-                        from robothor.engine.tools.dispatch import clear_deferred_allowed
-
-                        with contextlib.suppress(Exception):
-                            clear_deferred_allowed(_defer_token)
+                    with contextlib.suppress(Exception):
+                        withdraw_toolset(_toolset_tokens)
                     watchdog.stop()
                     with contextlib.suppress(Exception):
                         _active_watchdog_var.reset(_wd_token)
