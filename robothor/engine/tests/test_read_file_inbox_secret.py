@@ -144,6 +144,49 @@ class TestExecCannotPrintIt:
         command = template.format(p=row["path"])
         assert exec_reads_secret(command) is not None, f"{command!r} was allowed"
 
+    @pytest.mark.parametrize(
+        "spelling",
+        [
+            "{d}/secret/../secret/{n}",
+            "{d}/./secret/{n}",
+            "{d}//secret//{n}",
+            "{d}/secret/../../{date}/secret/{n}",
+        ],
+    )
+    def test_no_spelling_of_the_same_file_walks_past_the_rule(self, tmp_path, spelling) -> None:
+        """M8. The rule matches a directory SEQUENCE and `PurePath` does not
+        resolve `..`, so `secret/../secret/<file>` named the same bytes and was
+        allowed — the one spelling where the inbox copy was protected LESS than
+        a `.env`, whose rule matches a basename that `..` cannot hide. The
+        reviewer's probe printed the canary through it."""
+        from robothor.engine.secret_paths import exec_reads_secret
+
+        row = saved(tmp_path, ".env", body=f"OPENAI_API_KEY={CANARY}\n".encode())
+        stored = Path(row["path"])
+        date = stored.parent.parent.name
+        command = "cat " + spelling.format(d=stored.parent.parent, n=stored.name, date=date)
+        assert exec_reads_secret(command) is not None, f"{command!r} was allowed"
+
+    @pytest.mark.asyncio
+    async def test_a_real_exec_child_cannot_bounce_through_dotdot(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """The bounce really read the bytes, so the refusal is asserted the same
+        way — a real subprocess, and the canary nowhere in the result."""
+        from robothor.engine.tools.dispatch import ToolContext
+        from robothor.engine.tools.handlers.filesystem import HANDLERS
+
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("ROBOTHOR_EXEC_ENV_MODE", "enforce")
+        stored = Path(saved(tmp_path, ".env", body=f"OPENAI_API_KEY={CANARY}\n".encode())["path"])
+
+        result = await HANDLERS["exec"](
+            {"command": f"cat {stored.parent}/../secret/{stored.name}", "timeout": 10},
+            ToolContext(agent_id="worker", workspace=str(tmp_path)),
+        )
+        assert "error" in result
+        assert CANARY not in str(result)
+
     def test_the_stored_path_is_a_secret_path(self, tmp_path) -> None:
         """The predicate underneath, so the refusal does not depend on which
         reader an agent reaches for next."""
@@ -209,6 +252,17 @@ class TestExecIsNotOtherwiseNarrowed:
         design.parent.mkdir(parents=True)
         design.write_text("the Q4 roadmap")
         assert exec_reads_secret(f"cat {design}") is None
+        assert exec_reads_secret(f"cat {design.parent}/./{design.name}") is None
+
+    def test_dotdot_out_of_the_quarantine_names_an_ordinary_file(self, tmp_path) -> None:
+        """M8's normalisation must not invent a match. A `..` that walks OUT of
+        `secret/` names the sibling the operator sent in the clear."""
+        from robothor.engine.secret_paths import exec_reads_secret
+
+        row = saved(tmp_path, "notes.txt", body=b"nothing secret here")
+        stored = Path(row["path"])
+        sibling = f"{stored.parent}/secret/../{stored.name}"
+        assert exec_reads_secret(f"cat {sibling}") is None
 
     @pytest.mark.asyncio
     async def test_a_real_exec_child_still_reads_an_ordinary_inbox_file(

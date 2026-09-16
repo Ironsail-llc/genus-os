@@ -192,8 +192,27 @@ _INBOX_SECRET = re.compile(r"(?:^|/)inbox/[^/]+/[^/]+/\d{4}-\d{2}-\d{2}/secret/[
 
 
 def is_inbox_secret_path(path: str | os.PathLike[str]) -> bool:
-    """True for the channel inbox's copy of a credentials file. Pure."""
-    return bool(_INBOX_SECRET.search(PurePath(Path(str(path)).expanduser()).as_posix()))
+    """True for the channel inbox's copy of a credentials file. Pure.
+
+    Normalised first. This rule matches a directory SEQUENCE, so unlike every
+    other rule in this module it cannot fall back on a basename: ``.env`` and
+    ``id_rsa`` survive a ``..`` in the middle of a path because ``..`` cannot
+    hide the last segment, and this one did not —
+    ``…/secret/../secret/<file>`` named the same bytes and walked straight
+    past. That is the lesson the vault work wrote into this very module for
+    ``/proc``: a denylist that matches a STRING rather than a PATH means
+    nothing, because the kernel resolves every spelling to one file.
+
+    ``normpath`` is textual — no filesystem access, no symlink resolution — so
+    the function stays pure and still answers the same for a file that does
+    not exist. It is also purely narrowing in the direction that matters: a
+    ``..`` that walks OUT of the quarantine normalises to a path outside it,
+    which is an ordinary file and stays readable.
+    """
+    import posixpath
+
+    spelled = PurePath(Path(str(path)).expanduser()).as_posix()
+    return bool(_INBOX_SECRET.search(posixpath.normpath(spelled)))
 
 
 def is_secret_path(path: str | os.PathLike[str]) -> bool:

@@ -77,6 +77,18 @@ SECRET = [
     # operator sent their credentials as `notes.md` and the quarantine outranks
     # the "examples stay readable" rule.
     "inbox/telegram/100200300/2026-09-16/secret/CQAE-11-notes.md",
+    # M8. The shape matches a directory SEQUENCE, and `PurePath` does not
+    # resolve `..` — so `secret/../secret/<file>` named the same bytes and
+    # walked past the rule. `.env` and `id_rsa` survived that spelling because
+    # their rules match a basename, which `..` cannot hide; this one did not.
+    # It is the lesson the vault branch wrote into this very module for
+    # `/proc`: a denylist that matches a string rather than a path means
+    # nothing, because the kernel resolves every spelling to one file.
+    "inbox/telegram/100200300/2026-09-16/secret/../secret/AgAC-xQ-env",
+    "inbox/telegram/100200300/2026-09-16/./secret/AgAC-xQ-env",
+    "inbox/telegram/100200300/2026-09-16//secret//AgAC-xQ-env",
+    "inbox/telegram/100200300/2026-09-16/secret/../../2026-09-16/secret/AgAC-xQ-env",
+    "/srv/app/./inbox/telegram/100200300/2026-09-16/secret/../secret/AgAC-xQ-env",
 ]
 NOT_SECRET = [
     "/srv/app/robothor/README.md",
@@ -104,6 +116,10 @@ NOT_SECRET = [
     "inbox/telegram/100200300/2026-09-16/AgAC-xQ-photo.jpg",  # not quarantined
     "inbox/telegram/100200300/latest/secret/AgAC-xQ-env",  # no date, not ours
     "secret/notes.md",
+    # M8's normalisation must not invent a match either: `..` that walks OUT of
+    # the quarantine names a different file, and that file is ordinary.
+    "inbox/telegram/100200300/2026-09-16/secret/../AgAC-xQ-photo.jpg",
+    "projects/./inbox/secret/design.md",
 ]
 
 
