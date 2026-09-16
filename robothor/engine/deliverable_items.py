@@ -145,7 +145,30 @@ class SortItem:
     evidence: str = ""
 
 
-ContractItem = PathItem | ExactSetItem | HeaderItem | JsonFieldsItem | SectionsItem | SortItem
+@dataclass(frozen=True)
+class PatternItem:
+    """A family of files the task described with a placeholder.
+
+    Re-review 2026-09-16 (R1). A spec that says "for each page, create
+    `results/scp-XXX/`" is not naming a file — `XXX` is its own stand-in for the
+    page number, and a correct run writes `scp-173/`, `scp-096/`, never
+    `scp-XXX/`. Read as a literal path it is unsatisfiable by construction, and
+    at `enforce` it failed a correct run.
+
+    The remedy is not silence: the sentence still states a real contract — this
+    directory, this extension, one file per thing — and `PatternItem` checks
+    exactly that much. `pattern` is workspace-relative with the template
+    segment replaced by `*`, so the literal parts the spec did mean (`scp-`,
+    `text.md`) still have to hold.
+    """
+
+    pattern: str
+    evidence: str = ""
+
+
+ContractItem = (
+    PathItem | PatternItem | ExactSetItem | HeaderItem | JsonFieldsItem | SectionsItem | SortItem
+)
 
 
 @dataclass(frozen=True)

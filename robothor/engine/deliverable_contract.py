@@ -78,6 +78,7 @@ from robothor.engine.deliverable_items import (
     ItemFinding,
     JsonFieldsItem,
     PathItem,
+    PatternItem,
     SectionsItem,
     SortItem,
 )
@@ -102,6 +103,7 @@ __all__ = [
     "ItemFinding",
     "JsonFieldsItem",
     "PathItem",
+    "PatternItem",
     "SectionsItem",
     "SortItem",
     "check_contract",

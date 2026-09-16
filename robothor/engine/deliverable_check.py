@@ -33,6 +33,7 @@ from robothor.engine.deliverable_items import (
     ItemFinding,
     JsonFieldsItem,
     PathItem,
+    PatternItem,
     SectionsItem,
     SortItem,
 )
@@ -217,6 +218,45 @@ def _check_path(item: PathItem, root: Path, root_resolved: Path) -> ItemFinding 
         item,
         STATUS_MISSING,
         f"`{shown}` does not exist, or is empty — the task named it as an output.",
+    )
+
+
+#: Most matches a pattern check will look at. A glob over a workspace with
+#: tens of thousands of downloaded inputs is a search, and this is a check.
+_MAX_PATTERN_MATCHES = 5_000
+
+
+def _check_pattern(item: PatternItem, root: Path, root_resolved: Path) -> ItemFinding | None:
+    """At least one real file matching the shape the task described.
+
+    Deliberately weak, and that is the point: the spec used a placeholder, so
+    the only thing it actually promised is that files of this shape exist in
+    this place. Asking for more would be inventing a requirement; asking for
+    less — the literal placeholder path — failed a correct run at `enforce`
+    (re-review 2026-09-16, R1).
+
+    Empty matches do not count, by the same rule the rest of this module holds:
+    a touched path is not a produced deliverable.
+    """
+    try:
+        for seen, match in enumerate(root.glob(item.pattern)):
+            if seen >= _MAX_PATTERN_MATCHES:
+                break
+            resolved = match.resolve()
+            try:
+                resolved.relative_to(root_resolved)
+            except ValueError:
+                continue
+            if resolved.is_file() and resolved.stat().st_size > 0:
+                return ItemFinding(item, STATUS_OK)
+    except (OSError, ValueError, IndexError):
+        return None
+    return ItemFinding(
+        item,
+        STATUS_MISSING,
+        f"nothing matches `{item.pattern}` — the task described its outputs with a "
+        "placeholder, so the names are yours to choose but the directory and the "
+        "extension are not.",
     )
 
 
@@ -482,6 +522,8 @@ def check_contract(contract: DeliverableContract, root: str | Path) -> ContractR
         finding: ItemFinding | None
         if isinstance(item, PathItem):
             finding = _check_path(item, root_path, root_resolved)
+        elif isinstance(item, PatternItem):
+            finding = _check_pattern(item, root_path, root_resolved)
         elif isinstance(item, ExactSetItem):
             finding = _check_exact_set(item, root_path, root_resolved)
         elif isinstance(item, HeaderItem):

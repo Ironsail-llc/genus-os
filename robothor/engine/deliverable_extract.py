@@ -23,6 +23,7 @@ from robothor.engine.deliverable_items import (
     HeaderItem,
     JsonFieldsItem,
     PathItem,
+    PatternItem,
     SectionsItem,
     SortItem,
 )
@@ -101,6 +102,56 @@ _ZH_CONTRACT_PATTERNS = [
     re.compile(rf"{_ZH_OUTPUT_VERB}{_ZH_GAP}{_PATH}"),
     re.compile(rf"{_ZH_OUTPUT_LABEL}{_ZH_GAP}{_PATH}"),
 ]
+
+
+#: A path segment the spec never meant literally.
+#:
+#: Three identical uppercase letters or more (`XXX`, `NNN`, `YYYY`), and the
+#: run has to BE the segment or be delimited on both sides by `-`/`_`/`.` —
+#: otherwise `AAAI` makes a real conference filename a wildcard, and every
+#: acronym with a doubled letter follows it.
+_TEMPLATE_SEGMENT_RE = re.compile(r"(?<![A-Za-z0-9])([A-Z])\1{2,}(?![A-Za-z0-9])")
+
+#: `<id>` and `{name}` never reach here — the path charset excludes them, so
+#: they produce nothing at all, which is the other acceptable answer. Kept as a
+#: named rule rather than an accident of the charset, and pinned by a test.
+_BRACKETED_PLACEHOLDER_RE = re.compile(r"[<{][^>}]{1,40}[>}]")
+
+#: `YYYY-MM-DD` is one placeholder wearing three hats: only `YYYY` trips the
+#: three-identical-letters rule, leaving `*-MM-DD`, which is a glob no date
+#: matches. A short all-caps token adjacent to a wildcard belongs to it.
+_ADJACENT_TOKEN_RE = re.compile(r"\*(?:[-_.][A-Z]{2,4})+|(?:[A-Z]{2,4}[-_.])+\*")
+
+
+def template_pattern(path: str) -> str | None:
+    """The glob a placeholder path really means, or None if it has none.
+
+    Workspace-relative and anchored on the literal parts the spec did mean:
+    ``/tmp_workspace/results/scp-XXX/text.md`` becomes ``results/scp-*/text.md``,
+    so a run that writes its own layout is still caught while no run is asked
+    for a filename the spec never meant.
+    """
+    if not path:
+        return None
+    parts = [p for p in Path(path).parts if p not in ("/", "")]
+    if not parts:
+        return None
+    templated = False
+    rendered: list[str] = []
+    for part in parts:
+        if _TEMPLATE_SEGMENT_RE.search(part) or _BRACKETED_PLACEHOLDER_RE.search(part):
+            templated = True
+            starred = _TEMPLATE_SEGMENT_RE.sub("*", _BRACKETED_PLACEHOLDER_RE.sub("*", part))
+            rendered.append(_ADJACENT_TOKEN_RE.sub("*", starred))
+        else:
+            rendered.append(part)
+    if not templated:
+        return None
+    # Drop the sandbox root the same way `_resolve_under` does, so the glob is
+    # relative to the workspace the run actually used.
+    if Path(path).is_absolute() and len(rendered) > 1:
+        rendered = rendered[1:]
+    return "/".join(rendered)
 
 
 def required_deliverables(task_text: str | None) -> list[str]:
@@ -368,11 +419,19 @@ def extract_contract(task_text: str | None) -> DeliverableContract:
     items: list[ContractItem] = []
 
     # (a) Paths — the contract this module shipped with, unchanged.
-    items.extend(
-        PathItem(path=path, evidence=_evidence(text, scrubbed.find(path)))
-        for path in required_deliverables(text)
-        if not _has_traversal(path)
-    )
+    for raw_path in required_deliverables(text):
+        if _has_traversal(raw_path):
+            continue
+        evidence = _evidence(text, scrubbed.find(raw_path))
+        # A placeholder segment is a FAMILY of files, not a filename. Reading
+        # it literally produced an item no correct run could ever satisfy —
+        # see `PatternItem` (re-review 2026-09-16, R1).
+        glob = template_pattern(raw_path)
+        items.append(
+            PatternItem(pattern=glob, evidence=evidence)
+            if glob
+            else PathItem(path=raw_path, evidence=evidence)
+        )
 
     # (b) Exact output sets. Recorded first: the directory they name is what a
     # bare filename further down the spec belongs to.
