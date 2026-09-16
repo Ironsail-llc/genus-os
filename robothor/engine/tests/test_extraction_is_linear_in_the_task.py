@@ -1,13 +1,15 @@
 """The extractor reads attacker-controlled text, so it must run in linear time.
 
 The task statement is user input. It reaches `extract_contract` unchanged, and
-until 2026-09-16 four of the regexes it runs there were quadratic in a run of
+until 2026-09-16 five of the regexes it runs there were quadratic in a run of
 spaces or tabs: CodeQL flagged `py/polynomial-redos` on `_BULLET_RE`,
-`_COLUMNS_RE`, `_HEADING_RE` and `_SORT_RE`. Measured on the code as it stood:
+`_COLUMNS_RE`, `_FENCE_RE`, `_HEADING_RE` and `_SORT_RE`. Measured on the code
+as it stood:
 
 * `_SORT_RE` on ``"sorted by `x` asc" + " " * 20_000`` — 10.1 s.
 * `_COLUMNS_RE` on ``"columns" + " " * 20_000`` — 0.42 s.
 * `_BULLET_RE` on ``"*" + "\\t" * 20_000 + "\\nx"`` — over 120 s; killed.
+* `_FENCE_RE` on ``"```" + " " * 20_000`` — 2.6 s, quadrupling per doubling.
 
 Each shares one shape: two quantifiers that can match the same character
 sitting next to each other, so a run of n whitespace characters has O(n²)
@@ -113,8 +115,9 @@ class TestTheExtractorIsLinearInItsInput:
             ("_COLUMNS_RE", "columns" + " " * REGEX_ATTACK_LEN),
             ("_HEADING_RE", "#" + " " * REGEX_ATTACK_LEN + "\n#" + " " * REGEX_ATTACK_LEN),
             ("_SORT_RE", "sorted by `x` asc" + " " * REGEX_ATTACK_LEN + ","),
+            ("_FENCE_RE", "```" + " " * REGEX_ATTACK_LEN),
         ],
-        ids=["bullet", "columns", "heading", "sort"],
+        ids=["bullet", "columns", "heading", "sort", "fence"],
     )
     def test_each_flagged_regex_survives_its_own_worst_case(self, name, payload):
         assert _finishes_within(_run_regex, (name, payload), BUDGET_SECONDS), (

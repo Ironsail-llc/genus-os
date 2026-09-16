@@ -77,7 +77,7 @@ twice the persistence cap above, so nothing this platform stores can reach it.
 The limit exists because task text is user input: the patterns are written so
 that no two quantifiers can match the same character, which makes one pass
 linear, and the cap makes that pass finite. Both halves are load-bearing.
-CodeQL found four patterns that broke the first rule (2026-09-16); one of them
+CodeQL found five patterns that broke the first rule (2026-09-16); one of them
 spent over two minutes on 20,000 tabs, which is a denial of service written in
 a task description. `test_extraction_is_linear_in_the_task.py` is the guard.
 

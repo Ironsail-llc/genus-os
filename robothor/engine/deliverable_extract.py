@@ -37,7 +37,7 @@ from robothor.engine.deliverable_suppress import is_suppressed as _is_suppressed
 #: two quantifiers can match the same character — each `\s*`/`\s+` is followed
 #: by an atom that cannot match whitespace — which makes one pass linear; and
 #: this cap makes the number of characters in that pass finite. CodeQL found
-#: four patterns that failed the first rule (`py/polynomial-redos`, 2026-09-16):
+#: five patterns that failed the first rule (`py/polynomial-redos`, 2026-09-16):
 #: one of them spent over two minutes on 20,000 tabs.
 #:
 #: 64 KB is twice the 32,768-character cap `deliverable_contract` applies when
@@ -204,8 +204,15 @@ _ANY_PATH_RE = re.compile(_PATH)
 _DIR = r"((?:/|\.{1,2}/)?(?:[\w.\-]+/)+)"
 
 #: ```lang\n…\n``` — the block, its language and where it starts.
+#:
+#: The language is one optional group rather than a possibly-empty capture
+#: between two `[ \t]*`: written that way, the two runs competed for the same
+#: spaces whenever the group matched nothing, which cost 2.6 s on a fence
+#: opener followed by 20,000 of them. A language token cannot contain
+#: whitespace, so the group is either a real token or absent, and there is
+#: exactly one way to match the run either way.
 _FENCE_RE = re.compile(
-    r"^```[ \t]*([A-Za-z0-9_+.\-]*)[ \t]*\r?\n(.*?)^```", re.MULTILINE | re.DOTALL
+    r"^```(?:[ \t]*([A-Za-z0-9_+.\-]+))?[ \t]*\r?\n(.*?)^```", re.MULTILINE | re.DOTALL
 )
 
 #: "You must create exactly the following outputs under `results/`:"
@@ -326,8 +333,12 @@ def _evidence(text: str, index: int) -> str:
 
 
 def _fences(text: str) -> list[tuple[int, str, str]]:
-    """Every fenced block as ``(start, language, body)``, in document order."""
-    return [(m.start(), m.group(1).lower(), m.group(2)) for m in _FENCE_RE.finditer(text)]
+    """Every fenced block as ``(start, language, body)``, in document order.
+
+    A fence with no language reports ``""``, as it always has: the group is
+    optional now, so it arrives as None rather than an empty string.
+    """
+    return [(m.start(), (m.group(1) or "").lower(), m.group(2)) for m in _FENCE_RE.finditer(text)]
 
 
 def _fence_after(fences: list[tuple[int, str, str]], index: int, within: int = 600) -> str | None:
