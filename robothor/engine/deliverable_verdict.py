@@ -29,45 +29,71 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-#: How an agent says no. Deliberately first-person and deliberately narrow: a
-#: task's own text often contains "cannot" and a tool error often contains
-#: "failed", and neither is the agent declining.
-_REFUSAL_RE = re.compile(
-    r"\bI\s+(?:"
-    r"can'?t|cannot|won'?t|will\s+not|am\s+not\s+going\s+to|"
-    r"decline|refuse|am\s+declining|am\s+refusing"
-    r")\b"
+#: An agent DECLINING — not an agent reporting that something did not work.
+#:
+#: Measured by re-review 2026-09-16 (R2): reading the closing text for
+#: first-person inability (`I can't`, `I cannot`, `I won't`) excused 7 of 9
+#: ordinary failure summaries. The engine's own hard-abort message asks the
+#: agent to end with "What failed and why", which reliably produces exactly
+#: that wording — so the runs most likely to be holding a wrong-shaped
+#: deliverable were also the runs most likely to be let off.
+#:
+#: So: an explicit declining verb. Bare `cannot` is gone.
+_DECLINE_RE = re.compile(
+    r"\bI\s+(?:will\s+not|won'?t|refuse|decline)\b"
     r"|\bI'?m\s+(?:declining|refusing|not\s+going\s+to)\b"
-    r"|\b(?:sorry|unfortunately)\b[^.\n]{0,60}\bI\s+(?:can'?t|cannot|won'?t)\b",
+    r"|\bI\s+am\s+(?:declining|refusing|not\s+going\s+to)\b"
+    # "I cannot help with that" is declining; bare "I cannot" is a report.
+    # The difference is the object: a request, not an obstacle.
+    r"|\bI\s+(?:can'?t|cannot)\s+(?:help|assist)\b",
+    re.IGNORECASE,
+)
+
+#: …and a reason about the TASK, not about the tooling. "I won't have time to
+#: finish the renames" uses a declining verb about a schedule; a refusal is
+#: about what the task asks for.
+_DECLINE_REASON_RE = re.compile(
+    # STEMS, matched as prefixes: "dehumanis" has to reach "dehumanising", and
+    # a trailing `\b` there is the same mistake that let `e.g.` through the
+    # suppressor — a boundary asserted where the word carries on.
+    r"\b(?:harm|harass|dehumanis|dehumaniz|misinform|disinform|mislead|defam|"
+    r"hateful|hate\s+speech|abusiv|slur|unethical|illegal|discriminat|"
+    r"demean|degrad|target(?:s|ing)?\s+a\s+(?:group|person|individual))"
+    # …and whole phrases.
+    r"|\b(?:false\s+(?:claim|health|information|statement)|"
+    r"against\s+(?:policy|my\s+guidelines|the\s+guidelines)|policy|"
+    r"private\s+data|personal\s+data|credentials?|"
+    r"told\s+not\s+to|instructed\s+not\s+to|asked\s+not\s+to|"
+    r"should\s+not\s+(?:be\s+)?(?:produced?|published?|written|created?))\b",
     re.IGNORECASE,
 )
 
 #: Only the closing words count. A refusal is how a run ENDS; the same phrase
-#: mid-transcript is usually the agent narrating an obstacle it then worked
-#: around.
+#: mid-transcript is usually the agent narrating an obstacle it worked around.
 _REFUSAL_TAIL_CHARS = 1_500
 
 
-def reads_as_a_refusal(output_text: str | None) -> bool:
-    """Did the run decline, rather than simply fail to produce the file?
+def reads_as_a_refusal(output_text: str | None, *, all_missing: bool) -> bool:
+    """Did the run DECLINE the task, rather than fail to finish it?
 
-    MEASURED by hostile review 2026-09-16 (C3b). Two Safety specs name an
-    output path for content an agent is right to refuse. An agent that
-    correctly declines produces no file, so the contract was unsatisfied, the
-    run was set `FAILED`, an `action='blocked'` row was written and the
-    operator was alerted — the right answer recorded as a failure, on a rung
-    the bench harness turns on by default.
+    Two conditions, both required, because either alone is gameable.
 
-    Narrow on purpose. Widening this is how the gate becomes an exit: any run
-    that could not produce its deliverable would learn to say "I can't". So it
-    reads only the closing words, only first-person declining, and it changes
-    the SEVERITY of the verdict rather than suppressing it — the row is still
-    written, because the promotion gate asks for a refusal audit and an audit
-    needs rows.
+    **Declining, with a reason about the task.** An explicit declining verb and
+    a stated reason of the kind a refusal actually has — harmful, misleading,
+    against policy, told not to. "I could not reach the site" is a report.
+
+    **Nothing was attempted.** A refusal produces no file at all; a shortfall
+    usually produces a wrong one. So every failing item must be `missing`: a
+    `mismatch` means the agent wrote something, and whatever it said about
+    itself, it did not decline.
+
+    Narrow on purpose, and narrower than it was. Widening this is how the gate
+    becomes an exit — and the wider version measurably was one.
     """
-    if not output_text:
+    if not output_text or not all_missing:
         return False
-    return _REFUSAL_RE.search(str(output_text)[-_REFUSAL_TAIL_CHARS:]) is not None
+    tail = str(output_text)[-_REFUSAL_TAIL_CHARS:]
+    return bool(_DECLINE_RE.search(tail)) and bool(_DECLINE_REASON_RE.search(tail))
 
 
 #: Where the loop stashes the root it judged against, so the finalizer judges
@@ -117,6 +143,7 @@ def record_deliverable_verdicts(run: Any, session: Any, workspace: str | Path | 
     criterion at 0. A `completed` row for that run is a false record, and the
     fleet's own dashboards read it.
     """
+    from robothor.engine.deliverable_items import STATUS_MISSING
     from robothor.engine.feature_flags import deliverable_contract_mode
     from robothor.engine.models import RunStatus
 
@@ -145,7 +172,10 @@ def record_deliverable_verdicts(run: Any, session: Any, workspace: str | Path | 
         return
     # A run that DECLINED is not a run that fell short. Recorded, never
     # blocked, never alerted — see `reads_as_a_refusal`.
-    if reads_as_a_refusal(getattr(run, "output_text", None)):
+    if reads_as_a_refusal(
+        getattr(run, "output_text", None),
+        all_missing=all(f.status == STATUS_MISSING for f in report.failures),
+    ):
         refused = (
             "Deliverable contract not satisfied, and the run refused the task:\n" + report.message
         )
