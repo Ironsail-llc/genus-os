@@ -715,6 +715,28 @@ class TestOneResultNeverExceedsTheCap:
         assert "hello" in out["body_text"]
 
 
+class TestAnImageOnlyEmailSaysSomething:
+    """Round 3, Minor 7: a body that is one image returned `body_text: ""` —
+    correct in that there is no text, and indistinguishable from the empty-body
+    bug that was just fixed. The `alt` attribute is the sender's own
+    description of it and was thrown away."""
+
+    def test_the_alt_text_becomes_the_body(self) -> None:
+        html = '<html><body><img src="x.png" alt="Your invoice for September"></body></html>'
+        assert "Your invoice for September" in gws_handlers._html_to_text(html)
+
+    def test_a_decorative_image_adds_nothing(self) -> None:
+        """`alt=""` is the HTML convention for "this image carries no meaning",
+        and a spacer gif per row would otherwise fill the body with noise."""
+        html = '<html><body><img src="spacer.gif" alt=""><img src="d.png"></body></html>'
+        assert gws_handlers._html_to_text(html).strip() == ""
+
+    def test_real_text_beside_an_image_is_unchanged(self) -> None:
+        html = '<html><body><img src="logo.png" alt="Acme"><p>Hello there.</p></body></html>'
+        text = gws_handlers._html_to_text(html)
+        assert "Hello there." in text
+
+
 class TestLabelsAreShedLikeEverythingElse:
     """Round 3, Important 1: `labels` was the one field `_fit_one_message`
     never touched, and no test gave a message more than ONE label — which is

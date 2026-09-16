@@ -61,6 +61,14 @@ _MENTION_RE = re.compile(
 #: make.
 _FENCE_RE = re.compile(r"^[ \t]*(```|~~~).*?^[ \t]*\1[ \t]*$", re.MULTILINE | re.DOTALL)
 
+#: An HTML comment. Markdown renders none of it, so commented-out text is the
+#: clearest possible signal that it is NOT a current instruction — and it was
+#: the one form of "ignore this" the scanner read as an instruction.
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+
+#: An unterminated one runs to the end of the file, like an unterminated fence.
+_OPEN_HTML_COMMENT_RE = re.compile(r"<!--.*\Z", re.DOTALL)
+
 #: An unterminated fence runs to the end of the file, which is what a truncated
 #: instruction file looks like.
 _OPEN_FENCE_RE = re.compile(r"^[ \t]*(?:```|~~~).*\Z", re.MULTILINE | re.DOTALL)
@@ -136,7 +144,8 @@ def mentioned_tools(text: str, registered: set[str]) -> set[str]:
     `gws_gmail_reply`, not `gws_gmail_send`" keeps the first and drops the
     second.
 
-    Fenced code blocks, URLs and filesystem paths are removed before scanning.
+    Fenced code blocks, HTML comments, URLs and filesystem paths are removed
+    before scanning.
     Everything inside a fence is an EXAMPLE — a shell transcript, another
     vendor's SDK, a JSON payload — and
     ``https://api.example.com/v1/gws_gmail_send`` and
@@ -149,6 +158,8 @@ def mentioned_tools(text: str, registered: set[str]) -> set[str]:
     """
     text = _FENCE_RE.sub(" ", text)
     text = _OPEN_FENCE_RE.sub(" ", text)
+    text = _HTML_COMMENT_RE.sub(" ", text)
+    text = _OPEN_HTML_COMMENT_RE.sub(" ", text)
     text = _URL_OR_PATH_RE.sub(" ", text)
 
     found: set[str] = set()

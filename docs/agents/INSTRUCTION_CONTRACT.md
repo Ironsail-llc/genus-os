@@ -102,7 +102,7 @@ So, in an instruction file:
   account.** An event on the assistant's calendar with the operator as an
   attendee and no invitation sent is not a scheduled meeting; it is a private
   note the operator will never see. Report what the tool returns — for calendar
-  writes that is `calendar`, `invitations_sent` and `htmlLink` — not "done".
+  writes that is `calendar`, `invitations_requested` and `htmlLink` — not "done".
 
 This is not hypothetical. On 2026-09-16 an assistant planned the operator's
 itinerary, created every leg on its own calendar, added him as an attendee,

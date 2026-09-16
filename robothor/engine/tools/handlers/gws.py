@@ -666,8 +666,17 @@ def _attendees_overlap(proposed: set[str], existing: set[str], owner_email: str)
 
 
 def _same_start(proposed: str, event: dict[str, Any]) -> bool:
-    """Do these two start at the same moment? Tolerant of format and offset."""
-    from datetime import datetime
+    """Do these two start at the same moment? Tolerant of format and offset.
+
+    A NAIVE timestamp is read as UTC, which is what the Calendar API does with
+    a start carrying no offset and no timeZone, and what
+    ``guardrails._days_from_now`` does with the same string. This compared a
+    naive side against an aware one by WALL CLOCK, so the two modules
+    disagreed about what one string meant: a proposed
+    ``2026-10-01T11:00:00+02:00`` against an existing naive ``09:00:00`` — the
+    same instant — was not a match, and a duplicate was created.
+    """
+    from datetime import UTC, datetime
 
     existing = (event.get("start") or {}).get("dateTime") or (event.get("start") or {}).get(
         "date", ""
@@ -679,8 +688,8 @@ def _same_start(proposed: str, event: dict[str, Any]) -> bool:
         b = datetime.fromisoformat(str(existing))
     except ValueError:
         return str(existing)[:16] == str(proposed)[:16]
-    if (a.tzinfo is None) != (b.tzinfo is None):
-        return a.replace(tzinfo=None) == b.replace(tzinfo=None)
+    a = a.replace(tzinfo=UTC) if a.tzinfo is None else a
+    b = b.replace(tzinfo=UTC) if b.tzinfo is None else b
     return a == b
 
 
@@ -945,12 +954,31 @@ class _HtmlToText(HTMLParser):
             # Never opens a region. `br` is also in _BREAK and still breaks.
             if tag in self._BREAK and not self._suppressed:
                 self._chunks.append("\n")
+            if tag == "img" and not self._suppressed:
+                self._emit_alt(attrs)
             return
         if tag in self._DROP:
             self._open.append(tag)
             return
         if tag in self._BREAK and not self._suppressed:
             self._chunks.append("\n")
+
+    def _emit_alt(self, attrs: Any) -> None:
+        """An image's ``alt`` text, when it has any.
+
+        A body that is one image returned an empty ``body_text`` — true, and
+        indistinguishable from the empty-body bug this parser was rewritten to
+        fix. ``alt`` is the sender's own description of the image and is the
+        only text such a mail has.
+
+        An EMPTY ``alt`` is skipped, not emitted: ``alt=""`` is the HTML
+        convention for "this image carries no meaning", and a marketing mail
+        with a spacer gif per row would otherwise fill the body with noise.
+        """
+        for name, value in attrs or ():
+            if name == "alt" and value and str(value).strip():
+                self._chunks.append(f"[image: {str(value).strip()}]")
+                return
 
     def handle_startendtag(self, tag: str, attrs: Any) -> None:
         """``<style/>``, ``<head/>``, ``<meta … />``.
@@ -2149,7 +2177,7 @@ def _calendar_create(
                 # Nothing was created and nothing was sent — said outright,
                 # because the schema tells the model to report both and the
                 # htmlLink here belongs to the EXISTING event.
-                "invitations_sent": False,
+                "invitations_requested": False,
                 # Names which rule fired. It used to claim "overlapping
                 # attendees" on the attendee-less path, where neither side had
                 # any: the same class of untruth I12 removed, in the sentence
@@ -2213,10 +2241,10 @@ def _calendar_create(
     if isinstance(cal_result, dict) and "error" not in cal_result:
         cal_result["calendar"] = _calendar_block(calendar_id, calendar_kind)
         # With no attendees Google mails nobody whatever the flag says, so
-        # `invitations_sent: true` there would be a claim about an empty set.
+        # `invitations_requested: true` there would be a claim about an empty set.
         # It means "Google was asked to send invitations", which is the only
         # thing the handler can know.
-        cal_result["invitations_sent"] = bool(attendees) and send_updates != "none"
+        cal_result["invitations_requested"] = bool(attendees) and send_updates != "none"
         cal_result["send_updates"] = send_updates
         # WHO was mailed is Google's decision, not this handler's: under
         # `externalOnly` it does not mail same-domain attendees, and the
@@ -2225,7 +2253,7 @@ def _calendar_create(
         #
         # Only `all` lets the handler name the recipients. Under any other
         # setting the key is OMITTED rather than returned empty: an empty list
-        # beside `invitations_sent: true` read as "nobody was told", which
+        # beside `invitations_requested: true` read as "nobody was told", which
         # contradicted the boolean in the same dict — and returning [] when the
         # answer is "unknown" is the same class of false precision. Absent
         # means absent.

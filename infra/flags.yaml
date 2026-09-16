@@ -611,7 +611,7 @@ flags:
       `none` is a real operator posture ("stop mailing my attendees") and the
       reason this is a flag rather than a literal. Setting it means an event an
       agent creates is visible only to whoever reads that calendar; the result
-      says `invitations_sent: false` so the agent reports it honestly rather
+      says `invitations_requested: false` so the agent reports it honestly rather
       than claiming the attendees were told.
 
       An unrecognised value falls back to `all` and logs. Failing closed here

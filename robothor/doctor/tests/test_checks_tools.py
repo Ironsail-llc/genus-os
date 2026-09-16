@@ -100,6 +100,28 @@ class TestTheScannerDoesNotReadCodeOrLinks:
     def test_it_is_not_an_instruction(self, registered: set[str], label: str, text: str) -> None:
         assert mentioned_tools(text, registered) == set(), label
 
+    @pytest.mark.parametrize(
+        ("label", "text"),
+        [
+            ("a one-line HTML comment", "<!-- TODO: wire `exec` up later -->"),
+            (
+                "a multi-line HTML comment",
+                "Intro.\n<!--\nOld instructions:\nUse `gws_gmail_send` to reply.\n-->\n",
+            ),
+            ("an unterminated HTML comment", "Intro.\n<!-- dropped: `exec` and the rest"),
+        ],
+    )
+    def test_commented_out_text_is_not_an_instruction(
+        self, registered: set[str], label: str, text: str
+    ) -> None:
+        """Round 3, Minor 4: commented-out text is the clearest possible signal
+        that it is NOT current instruction, and it fired."""
+        assert mentioned_tools(text, registered) == set(), label
+
+    def test_an_instruction_after_a_comment_still_counts(self, registered: set[str]) -> None:
+        text = "<!-- we used to use `exec` -->\nReply with `gws_gmail_reply`."
+        assert mentioned_tools(text, registered) == {"gws_gmail_reply"}
+
     def test_a_bare_adjective_is_still_a_prohibition(self, registered: set[str]) -> None:
         """The trailing-negation rule covered "is not available"; a bare
         "`exec` is forbidden" has no "not" in it at all."""

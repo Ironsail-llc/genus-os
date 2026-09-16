@@ -123,7 +123,7 @@ class TestTheItineraryFailure:
         out = _create(attendees=["bob@example.com"])
 
         assert out["calendar"] == {"kind": "operator", "id": OPERATOR_EMAIL}
-        assert out["invitations_sent"] is True
+        assert out["invitations_requested"] is True
         assert out["htmlLink"] == "https://calendar.example.com/event?eid=evt-1"
 
 
@@ -230,7 +230,7 @@ class TestTheHandlerOnlyClaimsWhatItKnows:
     def test_an_event_with_no_attendees_claims_no_invitations(self, operator, recorder) -> None:
         out = _create()
 
-        assert out["invitations_sent"] is False
+        assert out["invitations_requested"] is False
         assert "attendees_notified" not in out
 
     def test_the_operator_is_not_an_attendee_of_their_own_calendar(
@@ -266,9 +266,9 @@ class TestTheHandlerOnlyClaimsWhatItKnows:
         # Google WAS asked to notify, and does mail external attendees — so the
         # boolean stays true. But which of them it mailed is its decision, and
         # the key is OMITTED rather than returned empty: `[]` beside
-        # `invitations_sent: true` read as "nobody was told", contradicting the
+        # `invitations_requested: true` read as "nobody was told", contradicting the
         # boolean in the same dict, and [] for "unknown" is false precision.
-        assert out["invitations_sent"] is True
+        assert out["invitations_requested"] is True
         assert "attendees_notified" not in out
 
     def test_a_delete_reports_what_it_asked_for_not_who_was_told(self, operator, recorder) -> None:
@@ -366,6 +366,50 @@ class TestAttendeelessDedup:
         assert overlap(set(), {"bob@example.com"}, "alice@example.com") is False
         # The operator alone on both sides is still "no attendee signal".
         assert overlap({"alice@example.com"}, {"alice@example.com"}, "alice@example.com") is True
+
+
+class TestANaiveTimestampMeansUTCEverywhere:
+    """Round 3, Minor 1: `_days_from_now` reads a naive start as UTC (what the
+    Calendar API does with one carrying no offset and no timeZone), while
+    `_same_start` compared naive against aware by WALL CLOCK. Measured: a
+    proposed `2026-10-01T11:00:00+02:00` against an existing naive
+    `09:00:00` — the same instant — did not dedup, so a duplicate was created.
+    """
+
+    @pytest.mark.parametrize(
+        ("proposed", "existing"),
+        [
+            ("2026-10-01T11:00:00+02:00", "2026-10-01T09:00:00"),
+            ("2026-10-01T09:00:00Z", "2026-10-01T09:00:00"),
+            ("2026-10-01T09:00:00", "2026-10-01T09:00:00+00:00"),
+            ("2026-10-01T04:00:00-05:00", "2026-10-01T09:00:00"),
+        ],
+    )
+    def test_the_same_instant_matches_however_it_is_written(
+        self, proposed: str, existing: str
+    ) -> None:
+        event = {"start": {"dateTime": existing}}
+        assert gws_handlers._same_start(proposed, event) is True, (proposed, existing)
+
+    @pytest.mark.parametrize(
+        ("proposed", "existing"),
+        [
+            ("2026-10-01T10:00:00+02:00", "2026-10-01T09:00:00"),
+            ("2026-10-01T09:00:00", "2026-10-01T10:00:00"),
+        ],
+    )
+    def test_a_different_instant_still_differs(self, proposed: str, existing: str) -> None:
+        event = {"start": {"dateTime": existing}}
+        assert gws_handlers._same_start(proposed, event) is False, (proposed, existing)
+
+    def test_the_guardrail_reads_it_the_same_way(self) -> None:
+        """The two modules have to agree or the same string means two things."""
+        from robothor.engine.guardrails import _days_from_now
+
+        naive = _days_from_now("2027-01-01T00:00:00")
+        aware = _days_from_now("2027-01-01T00:00:00+00:00")
+        assert naive is not None and aware is not None
+        assert abs(naive - aware) < 1e-6
 
 
 class TestTheAttendeeBranchChecksTheStartToo:
@@ -577,7 +621,7 @@ class TestTheDncScreenCoversEveryInvitee:
         out = _create()
 
         assert "guard" not in out
-        assert out["invitations_sent"] is False
+        assert out["invitations_requested"] is False
 
     def test_the_screened_list_is_the_list_that_is_sent(self, operator, recorder) -> None:
         seen: list[tuple[str, ...]] = []
@@ -685,7 +729,7 @@ class TestSendUpdatesSetting:
         out = _create(attendees=["bob@example.com"])
 
         assert _insert(recorder)["params"]["sendUpdates"] == "none"
-        assert out["invitations_sent"] is False
+        assert out["invitations_requested"] is False
 
     def test_an_unrecognised_value_falls_back_to_all(
         self, operator, recorder, monkeypatch: pytest.MonkeyPatch

@@ -110,7 +110,7 @@ And every calendar result now carries the facts needed to report it honestly:
 ```json
 {
   "calendar": {"kind": "operator", "id": "…"},
-  "invitations_sent": true,
+  "invitations_requested": true,
   "htmlLink": "https://calendar.google.com/…"
 }
 ```
@@ -122,7 +122,7 @@ calendar" should be reading `kind` before it says so.
 `sendUpdates` (and a delete passes it too — a cancellation nobody is told about
 is not a cancellation). The value is the governed setting
 `ROBOTHOR_CALENDAR_SEND_UPDATES`, default `all`. Set it to `none` and events
-still get created, `invitations_sent` comes back `false`, and the agent should
+still get created, `invitations_requested` comes back `false`, and the agent should
 say so rather than claim the attendees were told.
 
 **This needs one thing set up outside the platform**: the operator's calendar
@@ -152,7 +152,7 @@ its answer.
 | `gws_gmail_send` | The sent message id and thread id. New conversations only. |
 | `gws_gmail_modify` | The message id and its labels after the change. Mark read/unread, archive, add or remove labels. |
 | `gws_calendar_list` | The events in a range: id, start, end, summary, location, attendees — plus `calendar`, saying whose calendar was read. Reads the **operator's** by default. |
-| `gws_calendar_create` | The created event, plus `calendar` (`operator`/`own`/`other`), `invitations_sent` and `htmlLink` — **or `{"status": "deduped"}` with nothing created**, when a matching event already exists within ±14 days. Writes to the **operator's** calendar by default, adds a Google Meet link, and emails the attendees. See [Whose calendar](#whose-calendar). |
+| `gws_calendar_create` | The created event, plus `calendar` (`operator`/`own`/`other`), `invitations_requested` and `htmlLink` — **or `{"status": "deduped"}` with nothing created**, when a matching event already exists within ±14 days. Writes to the **operator's** calendar by default, adds a Google Meet link, and emails the attendees. See [Whose calendar](#whose-calendar). |
 | `gws_calendar_delete` | Confirmation plus `calendar` and `cancellations_sent`. Deletes permanently from the **operator's** calendar by default and emails the attendees a cancellation. |
 | `gws_chat_send` | The created message's resource name. |
 | `gws_chat_list_spaces` | Each space's resource name and display name. |

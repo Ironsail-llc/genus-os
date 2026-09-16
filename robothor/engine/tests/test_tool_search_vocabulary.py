@@ -243,7 +243,7 @@ def test_the_whose_calendar_sentence_survives_search(
 
     assert "OPERATOR" in shown
     assert "calendar='own'" in shown
-    assert "invitations_sent" in shown
+    assert "invitations_requested" in shown
 
 
 def test_no_gws_description_is_long_enough_to_be_cut_to_its_first_sentence(
