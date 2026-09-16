@@ -47,7 +47,7 @@ from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 
 from robothor.constants import DEFAULT_TENANT
-from robothor.engine.chat_history import ChatHistory
+from robothor.engine.chat_history import ChatHistory, as_history
 from robothor.engine.chat_session_cache import SessionCache
 from robothor.engine.chat_store import (
     clear_plan_state_async,
@@ -200,6 +200,26 @@ class ChatSession:
     # being edited — including the Telegram ones round 1 missed, and the next
     # channel's. See robothor/engine/chat_history.py.
     history: list[dict[str, Any]] = field(default_factory=ChatHistory)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Assigning ``history`` wraps it; a plain list cannot be stored here.
+
+        Round 2 gave the container the property and then two restore paths
+        assigned straight over it — `chat._restore_sessions` at daemon startup
+        and telegram.py's own — so after every deploy every live session,
+        including the one the operator pastes tokens into, held a plain list
+        again and `/chat/history` served the raw value out of RAM.
+
+        The fix is not a third call site. A list of blessed call sites is what
+        produced that finding twice, so the type is enforced where the
+        assignment happens: any module, any path, including ones not written
+        yet. The rows already in the assigned list are redacted too — they are
+        the ones that came out of the store carrying the credential.
+        """
+        if name == "history":
+            value = as_history(value)
+        super().__setattr__(name, value)
+
     active_task: asyncio.Task[Any] | None = None
     model_override: str | None = None
     plan_mode: bool = False

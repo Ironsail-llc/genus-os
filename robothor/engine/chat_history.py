@@ -90,4 +90,11 @@ def as_history(rows: Any) -> ChatHistory:
     and lost the property for the rest of its life — the shape of bug that
     passes every test written against a fresh session.
     """
-    return rows if isinstance(rows, ChatHistory) else ChatHistory(rows or ())
+    if isinstance(rows, ChatHistory):
+        return rows
+    if rows is None:
+        return ChatHistory()
+    # Materialised before wrapping: a generator handed here would be consumed
+    # by the truthiness test and arrive empty, which is a silently emptied
+    # history rather than a loud failure.
+    return ChatHistory(list(rows))
