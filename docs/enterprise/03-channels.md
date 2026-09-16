@@ -83,8 +83,13 @@ core. Install `genus-teams`, then:
 3. `genus channel add teams --app-id <id> --tenant-id <directory-id>`, with the
    password in `ROBOTHOR_TEAMS_APP_PASSWORD`.
 4. Name `teams` in `ROBOTHOR_CHANNELS`. The channel is inert until you do.
-5. `genus channel verify teams`, and check the doctor's `teams.credentials` and
-   `teams.endpoint`.
+5. Prove it:
+
+```bash
+genus channel verify teams
+genus doctor --only genus_teams_credentials
+genus doctor --only genus_teams_endpoint
+```
 
 Every inbound request's Bot Framework token is validated — signature, issuer,
 audience, expiry, and the service URL claim — and any failure is a 401 with an
