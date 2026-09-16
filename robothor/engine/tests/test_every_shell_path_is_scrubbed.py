@@ -102,41 +102,46 @@ def _shell_calls_without_env(path: Path) -> list[str]:
         if not isinstance(node, ast.Call):
             continue
         target = node.func
-        name = ""
-        if isinstance(target, ast.Attribute):
-            name = target.attr
-            root = target.value
-            if not (isinstance(root, ast.Name) and root.id == "subprocess"):
-                continue
-        else:
+        if not isinstance(target, ast.Attribute):
             continue
-        if name not in {"run", "Popen", "check_output", "call", "check_call"}:
+        name = target.attr
+        root = target.value
+        # `subprocess.run(...)` and `asyncio.create_subprocess_exec(...)`. The
+        # second is how the MCP client starts a stdio server, which is a
+        # long-lived child holding whatever environment it was handed — and the
+        # shell=True-only guard could not see it.
+        spawner_module = (isinstance(root, ast.Name) and root.id in {"subprocess", "asyncio"}) or (
+            isinstance(root, ast.Attribute) and root.attr == "subprocess"
+        )
+        if not spawner_module:
+            continue
+        if name not in _SPAWNERS:
             continue
         kwargs = {kw.arg for kw in node.keywords if kw.arg}
-        shell = any(
-            kw.arg == "shell" and isinstance(kw.value, ast.Constant) and kw.value.value is True
-            for kw in node.keywords
-        )
-        if shell and "env" not in kwargs:
+        if "env" not in kwargs:
             found.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}")
     return found
 
 
-def test_no_shell_true_call_runs_with_the_inherited_environment():
-    """A model can compose the command at every one of these call sites, so
-    every one of them has to say what environment it hands over.
+#: The spawn calls this guard watches. ``create_subprocess_exec`` is here
+#: because the MCP client uses it to start stdio servers — long-lived children
+#: that held the engine's entire environment for the life of the engine, and
+#: which a ``shell=True``-only guard could not see.
+_SPAWNERS = frozenset(
+    {
+        "run",
+        "Popen",
+        "check_output",
+        "call",
+        "check_call",
+        "create_subprocess_exec",
+        "create_subprocess_shell",
+    }
+)
 
-    ``env=`` is the assertion, not ``build_exec_env`` by name: a call site may
-    legitimately pass a narrower environment it built another way. What is not
-    legitimate is passing nothing, which means "everything".
-    """
-    offenders: list[str] = []
-    for path in sorted(ENGINE_ROOT.rglob("*.py")):
-        relative = path.relative_to(REPO_ROOT)
-        if "tests" in relative.parts:
-            continue
-        offenders.extend(_shell_calls_without_env(path))
-    assert not offenders, (
-        "these shell-out call sites inherit the engine's whole environment — "
-        f"pass env= from robothor.engine.exec_env.build_exec_env: {offenders}"
-    )
+# The two rules that replace it are below: a narrow global one (`shell=True`
+# anywhere) and a total one over the model-facing modules. A single blanket rule
+# over every `subprocess` call in the tree flags ~74 sites, almost all of them
+# CLI verbs shelling out to `git`, `systemctl` or `ollama` on an operator's
+# behalf — short-lived, not model-driven, and wanting the operator's own
+# environment. A guard that fires 74 times gets widened until it fires zero.
