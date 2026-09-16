@@ -20,8 +20,10 @@ narrower thing.
 
 When an agent's allowed set is larger than the deferral threshold, the engine
 advertises only a small always-on core plus three meta-tools, and the rest load
-on demand. A broad agent with 98 allowed tools is shown about 18 schemas — an
-84% cut in schema tokens on every call, which is the whole point.
+on demand. A broad agent with 98 allowed tools is shown **19** schemas — the 16
+`CORE_TOOLS` that are registered, plus the three meta-tools — so it carries
+about a fifth of the schemas, and rather less than a fifth of the tokens, on
+every call.
 
 The three meta-tools:
 
@@ -38,7 +40,7 @@ denied tool is refused there, not at the registry.
 **The agent is told.** On a deferred run the engine's context turn carries one
 sentence:
 
-> `18 tools are in your toolset; 80 more are reachable: call tool_search(query) then tool_call(name, arguments)`
+> `19 tools are in your toolset; 79 more are reachable: call tool_search(query) then tool_call(name, arguments)`
 
 On a run that is not deferred it carries nothing, because there is nothing true
 to say. Before this existed, deferral was invisible from inside the turn: the
@@ -159,10 +161,12 @@ its answer.
 #### Errors
 
 A failed `gws` call returns `{"error", "hint"}`. `error` is the CLI's own
-stderr when it produced any; `hint` is always a classification — `not_found`,
-`auth`, `invalid_params`, `rate_limited`, `timeout` — because the CLI writes
-nothing to stderr for several failure classes and `gws exited with code 1` is
-not something an agent can act on.
+diagnostics when it produced any — stderr, else stdout; `hint` classifies the
+failure as `not_found`, `auth`, `invalid_params`, `rate_limited`, `timeout` or
+`not_installed`. When nothing matches, `hint` is a sentence rather than a class
+token, and it says what to check. Either way it is never a bare exit code: the
+CLI writes nothing to stderr for several failure classes, and `gws exited with
+code 1` is not something an agent can act on.
 
 `not_found` usually means the id is not real. A placeholder id copied out of a
 prompt (`thread_def456`) is the common case.
@@ -257,12 +261,23 @@ write the operator's calendar will silently do the wrong thing every time.
 
 ## Limits
 
-One tool result is capped before it reaches the model
-(`MAX_TOOL_OUTPUT_CHARS`, 4,000 characters). Past that the JSON is cut
-head-and-tail with a marker in the middle, and the hole lands wherever the
-character count falls — which is why `gws_gmail_get` returning a base64 body
-was unreadable rather than merely long. Handlers that can overflow cut
-themselves instead and say so.
+One tool result is capped at `MAX_TOOL_OUTPUT_CHARS` (4,000 characters) **when
+it is persisted with the run step** — head-and-tail, with a marker in the
+middle. It is not capped on the way to the model: nothing shortens that message
+unless an agent sets `tool_offload_threshold`, which defaults to off.
+
+Handlers still fit inside it, for two reasons:
+
+* the stored row is what a **resumed** or persistent-history run reads back, so
+  a result cut in the middle is what that run is handed;
+* the step row is the **audit trail** — the run viewer, the verification pass
+  and any support bundle read it.
+
+And a 3 MB email body is bad for the context window whether or not anything
+truncates it. Cutting blind lands the hole wherever the character count falls,
+which is why the stored record of every long email used to be two halves of a
+base64 blob. A handler that caps itself keeps the beginning and says
+`body_truncated`.
 
 ## See also
 

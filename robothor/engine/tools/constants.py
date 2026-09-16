@@ -2,20 +2,33 @@
 
 from __future__ import annotations
 
-#: How many characters of one tool's result survive to the model.
+#: How many characters of one tool's result are PERSISTED with the run step.
 #:
-#: The engine serialises a tool result to JSON and cuts it here, head and tail,
-#: with a ``[... truncated N chars ...]`` marker in the middle
-#: (``robothor.engine.tracking._truncate_json``). A handler that returns more
-#: than this does not return more information — it returns the same
-#: information with a hole in the middle, and the hole lands wherever the
-#: character count falls. ``gws_gmail_get`` returned the raw Gmail API JSON
-#: with the body as one base64 string, so the hole landed in the middle of the
-#: base64 and the agent could not read a single email.
+#: Precisely: ``robothor.engine.tracking._truncate_json`` cuts to this, head
+#: and tail with a ``[... truncated N chars ...]`` marker in the middle, on the
+#: two paths that write the ``steps`` row. It is NOT applied to the message the
+#: model sees — that is built in ``AgentSession.record_tool_call``, where the
+#: only shortening is ``tool_offload_threshold``, which defaults to 0 and is
+#: therefore off.
+#:
+#: A handler still has to fit inside it, for two reasons that are not the one
+#: originally written here:
+#:
+#: * the stored row is what a RESUMED or persistent-history run reads back, so
+#:   a result cut in the middle is what that run is handed;
+#: * and the step row is the audit trail — the run viewer, the verification
+#:   pass and any support bundle read it — so an unreadable one is an
+#:   unreadable record of what the agent actually saw.
+#:
+#: Cutting blind also lands the hole wherever the character count falls:
+#: ``gws_gmail_get`` returned the raw Gmail API JSON with the body as one
+#: base64 string, so the stored record of every long email was two halves of a
+#: base64 blob. A handler that caps itself keeps the beginning intact and says
+#: ``body_truncated``.
 #:
 #: Defined here, in the leaf module, because both the writer (``tracking``) and
-#: the handlers that have to fit inside it need it, and a second copy of a
-#: number is a second number.
+#: the handlers that fit inside it need it, and a second copy of a number is a
+#: second number.
 MAX_TOOL_OUTPUT_CHARS = 4000
 
 # Sub-agent spawning tools
