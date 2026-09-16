@@ -13,6 +13,22 @@ and connectors snap into a deterministic core.
 
 Your infrastructure. Your data. Your rules.
 
+## Install it
+
+```bash
+curl -fsSL https://ironsail-llc.github.io/genus-os/install.sh | bash -s -- --substrate compose
+```
+
+That line previews and installs nothing — a pipe has no terminal on the other
+end, so there is nowhere to confirm a plan. Read what it prints, then run it
+again with `--yes`. [Quick Start](quickstart.md) has the prerequisites, both
+substrates by hand, and what to do when the doctor is red.
+
+Deploying this for a company? **Start with the
+[Enterprise Guide](enterprise/00-overview.md)** — eight short pages from a
+compose pilot to operating a fleet: install, identity, channels, agents,
+secrets, backup and upgrade, and what to open when something is wrong.
+
 ## Why Genus OS
 
 Genus OS is a self-hosted agent operating platform for organizations that need
@@ -47,9 +63,19 @@ on-premises, in a private cloud, or in a deliberately configured air gap.
 
 ## Get Started
 
-- [Quick Start](quickstart.md) — prerequisites, both substrates, the setup wizard, and what to do when the doctor is red.
-- [Configuration](configuration.md) — environment variables and defaults.
-- [Deployment](deployment.md) — Docker Compose, systemd, or manual.
+- [Enterprise Guide](enterprise/00-overview.md) — the whole path, in eight
+  task-shaped pages, for a company running a pilot and growing it.
+- [Quick Start](quickstart.md) — prerequisites, both substrates, the setup
+  wizard, and what to do when the doctor is red.
+- [Configuration](configuration.md) — how settings resolve, and the ones worth
+  a narrative.
+- [Deployment](deployment.md) — Docker Compose, Helm, systemd, and the
+  diagnostics.
+- [CLI reference](reference/cli.md) and
+  [settings reference](reference/configuration.md) — generated from the parser
+  and the settings model, so they cannot drift.
+- [Release notes](release-notes.md) — what changed, for operators, admins and
+  agent authors.
 - [Architecture](architecture.md) — how the pieces fit together.
 - [Platform vs Instance](PLATFORM_INSTANCE.md) — the boundary that keeps your
   data out of the platform.

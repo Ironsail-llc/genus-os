@@ -9,7 +9,7 @@ present; do not treat an instance path as a shipped security control.
 
 | Path | Real Location | Purpose |
 |------|--------------|---------|
-| `brain/` | `${ROBOTHOR_WORKSPACE}/brain/` (instance data) | Optional private workspace: memory, instructions, scripts, and identity |
+| `brain/` | `${ROBOTHOR_WORKSPACE}/brain/` (instance data — absent from a clean checkout, and not a shipped control) | Optional private workspace: memory, instructions, scripts, and identity. What belongs there rather than in tracked code is `docs/PLATFORM_INSTANCE.md` |
 | `robothor/engine/` | In-repo Python package | Python Agent Engine: LLM runner, tool registry, Telegram bot, scheduler, hooks, workflow engine |
 | `app/` | In-repo Next.js application | The Helm dashboard/BFF; OIDC session boundary and read-only generated views |
 | `robothor/health/` | In-repo Python package | Garmin health data sync (every 15 min → PostgreSQL → daily memory) |
@@ -23,14 +23,17 @@ present; do not treat an instance path as a shipped security control.
 
 | Task | Read first |
 |------|-----------|
+| Deploying Genus OS for a company | `docs/enterprise/00-overview.md` — the eight-page guide: install, identity, channels, agents, secrets, backup and upgrade, operate |
 | Installing an instance | `docs/quickstart.md` — the one install path, both substrates |
+| What a release changed, and for whom | `docs/release-notes.md` (operators / admins / agent authors). `CHANGELOG.md` is the commit-level developer record |
+| Writing the release note for a change you are shipping | `changelog.d/README.md` + `docs/DOC_MAINTENANCE.md` |
 | Deploying (compose upgrade, systemd units, Helm) | `docs/deployment.md` |
 | Diagnosing an instance | `genus doctor`; `docs/deployment.md` (Diagnostics) |
 | What a setting does | `docs/configuration.md` (the tour) + `docs/reference/configuration.md` (generated, every setting) |
 | What a command does | `docs/reference/cli.md` (generated from the parser) |
 | Runbooks for the first instance only | `docs/instance/README.md` |
 | Working on vision | `robothor/vision/` + `docs/SYSTEM_ARCHITECTURE.md` (reference-appliance section) |
-| Viewing the webcam | `https://cam.${INSTANCE_DOMAIN}/webcam/` (Cloudflare Access) |
+| Viewing the webcam | The deployment's own vision route, behind whatever it puts in front of it — instance configuration, not a shipped endpoint. `robothor/vision/` + `infra/tunnel/README.md` |
 | Changing cron behavior | `docs/CRON_MAP.md` (instance-local, not shipped) + the deployment's agent manifests/scheduler configuration |
 | Understanding memory/RAG | `docs/memory-system.md` + `robothor/memory/` |
 | Sending emails or calendar | `robothor/engine/tools/handlers/gws.py` (gws native tools + gog CLI fallback) |
@@ -65,7 +68,6 @@ present; do not treat an instance path as a shipped security control.
 | Backup / restore | `docs/runbooks/SNAPSHOT_RESTORE.md` + `genus snapshot --help` |
 | Entity authority / treasury | `docs/ENTITY_KERNEL_TREASURY.md` |
 | Customer or Genus payment data | `docs/compliance/PAYMENT_DATA.md` |
-| Research notebooks (NotebookLM) | `nlm --help` (CLI) — auth: `nlm login`, check: `nlm login --check` |
 | Managing agents | `docs/AGENT_BUILDER.md` |
 | Building a new agent | `genus agent scaffold <id>` + `docs/AGENT_BUILDER.md` (section 4) |
 | Agent manifest schema | `docs/agents/schema.yaml` + `docs/AGENT_BUILDER.md` (section 4) |

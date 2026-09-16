@@ -83,6 +83,33 @@ jobs:
       - name: Check every path referenced in the docs exists
         run: python scripts/check_doc_links.py
 
+  # Release notes, not a commit list. `CHANGELOG.md` keeps answering the
+  # developer's question; this job makes the author answer the reader's, once,
+  # in the pull request that ships the change. Stdlib only and no install: the
+  # fragment tool and the link gate it borrows both run on a bare python3.
+  changelog-fragment:
+    name: Release-note fragment
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Every fragment in the tree will ship
+        run: python3 scripts/changelog_fragments.py lint
+      # A feat/fix/perf (or breaking) title ships something a reader can
+      # notice. The escape hatch is the `no-changelog` label, which is a
+      # decision somebody made, not a silence.
+      - name: This pull request says what changed, and for whom
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: >-
+          python3 scripts/changelog_fragments.py check
+          --pr "$PR_NUMBER" --title "$PR_TITLE" --labels "$PR_LABELS"
+
   lint:
     runs-on: ubuntu-latest
     steps:
