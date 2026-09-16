@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from pathlib import Path  # noqa: TC003 - used at runtime by the helper below
 
+import pytest
+
 from robothor.engine import attachment_gate as gate
 
 
@@ -70,6 +72,76 @@ class TestTheLadderIsOneFunction:
     def test_a_directory_is_refused(self, tmp_path) -> None:
         (tmp_path / "folder").mkdir()
         assert "not a file" in (gate.refuse_to_send(tmp_path / "folder", tmp_path) or "")
+
+
+class TestTheScanIsNotExtensionGated:
+    """Hostile review I2. The scan ran only for a suffix on a list, so renaming
+    was the whole attack: `tok.txt` was refused and the same bytes as `tok.png`
+    were sent. The `UnicodeDecodeError` catch is the "is this actually text?"
+    test and it is strictly better than a suffix.
+    """
+
+    GITHUB = b"GITHUB_TOKEN: ghp_0123456789abcdefghijklmnopqrstuvwxyz\n"
+    AWS = b"aws_access_key_id = AKIAIOSFODNN7EXAMPLE\n"
+    PEM = b"-----BEGIN RSA PRIVATE KEY-----\nMIIEow...\n-----END RSA PRIVATE KEY-----\n"
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "tok.txt",
+            "tok.md",
+            "tok.csv",
+            "tok.yaml",
+            "notes",
+            "token.bin",
+            "tok.png",
+            "tok.dat",
+            "tok.jpeg",
+            "tok.zip",
+            "tok.exe",
+            "tok",
+        ],
+    )
+    def test_a_github_token_is_refused_whatever_the_file_is_called(self, tmp_path, name) -> None:
+        assert gate.refuse_to_send(make(tmp_path, name, self.GITHUB), tmp_path) is not None
+
+    @pytest.mark.parametrize("name", ["aws.bin", "aws.png", "aws.txt"])
+    def test_an_aws_key_id_is_refused_whatever_the_file_is_called(self, tmp_path, name) -> None:
+        assert gate.refuse_to_send(make(tmp_path, name, self.AWS), tmp_path) is not None
+
+    @pytest.mark.parametrize("name", ["key.bin", "key.png", "key.pem.txt"])
+    def test_a_pem_private_key_is_refused_whatever_the_file_is_called(self, tmp_path, name) -> None:
+        assert gate.refuse_to_send(make(tmp_path, name, self.PEM), tmp_path) is not None
+
+    def test_a_real_binary_is_not_refused_by_the_scan(self, tmp_path) -> None:
+        """The decode is the binary test; a PNG must still be sendable."""
+        png = b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 8
+        assert gate.refuse_to_send(make(tmp_path, "chart.png", png), tmp_path) is None
+
+    def test_a_large_clean_text_file_is_not_refused(self, tmp_path) -> None:
+        body = b"month,total\n2026-09,12\n" * 20_000
+        assert gate.refuse_to_send(make(tmp_path, "report.csv", body), tmp_path) is None
+
+    def test_a_multibyte_character_split_by_the_head_read_is_still_text(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """A truncating read can cut a UTF-8 sequence in half. Treating that as
+        "binary" would silently stop scanning a real text file — the exact
+        class of bug this finding is about."""
+        token = b"ghp_0123456789abcdefghijklmnopqrstuvwxyz\n"  # 41 bytes
+        body = token + b"xx" + "€ and more text".encode()
+        # Stop the read one byte into the three-byte `€`.
+        monkeypatch.setattr(gate, "SCAN_HEAD_BYTES", len(token) + 3, raising=True)
+        assert gate.refuse_to_send(make(tmp_path, "notes.dat", body), tmp_path) is not None
+
+    def test_a_token_past_the_head_is_not_scanned_and_that_is_stated(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """An honest limit: only the head is read, so a credential buried past
+        it is not seen. Pinned so the boundary is a decision, not a surprise."""
+        monkeypatch.setattr(gate, "SCAN_HEAD_BYTES", 64, raising=True)
+        body = b"x" * 200 + b"ghp_0123456789abcdefghijklmnopqrstuvwxyz\n"
+        assert gate.refuse_to_send(make(tmp_path, "notes.txt", body), tmp_path) is None
 
 
 class TestPinnedToWhatWasApproved:

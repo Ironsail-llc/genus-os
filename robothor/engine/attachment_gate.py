@@ -118,6 +118,35 @@ def resolve_for_send(raw_path: str, root: Path) -> tuple[Path | None, str | None
     return resolved, None
 
 
+#: Longest UTF-8 sequence, so a read that stops mid-character stops at most
+#: this far into one.
+_MAX_UTF8_SEQUENCE = 4
+
+
+def _decode_head(head: bytes) -> str | None:
+    """*head* as text, or None when the bytes are genuinely not text.
+
+    The subtlety is that a TRUNCATING read can cut a multi-byte character in
+    half, and a strict decode then raises exactly as it would for a binary
+    file. Treating that as "binary" would silently stop scanning a real text
+    file whose 256 KB boundary happened to land inside a ``€`` — which is the
+    same class of bug as the suffix gate this replaced: a rule that answers
+    "not text" for the wrong reason.
+
+    So a failure within the last few bytes of a full-length read is retried
+    without them. A failure anywhere earlier is a real binary.
+    """
+    try:
+        return head.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        if len(head) == SCAN_HEAD_BYTES and exc.start >= len(head) - _MAX_UTF8_SEQUENCE:
+            try:
+                return head[: exc.start].decode("utf-8")
+            except UnicodeDecodeError:
+                return None
+        return None
+
+
 def _credential_refusal(path: Path, size: int) -> str | None:
     """Why this file's CONTENTS may not leave the box, or None.
 
@@ -135,10 +164,12 @@ def _credential_refusal(path: Path, size: int) -> str | None:
     try:
         with path.open("rb") as handle:
             head = handle.read(SCAN_HEAD_BYTES)
-        text = head.decode("utf-8")
-    except (OSError, UnicodeDecodeError):
-        # Not readable, or not text. An unreadable file is caught by the shape
-        # rungs above; a binary one has no lines for the scanner to judge.
+    except OSError:
+        # Caught by the shape rungs above; nothing to scan either way.
+        return None
+    text = _decode_head(head)
+    if text is None:
+        # Genuinely binary: no lines for the scanner to judge.
         return None
 
     from robothor.templates.bundle import scan_secret_literals
