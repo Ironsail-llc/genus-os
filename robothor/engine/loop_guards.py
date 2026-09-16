@@ -24,6 +24,7 @@ resumed run and be applied at a moment the operator never chose.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 from dataclasses import dataclass
@@ -197,32 +198,60 @@ def _spawn_hard_cap_alert(session: Any, agent_config: Any, used: int) -> None:
         logger.debug("Runaway-token alert dispatch failed", exc_info=True)
 
 
-def nudge_for_missing_deliverable(session: Any) -> bool:
-    """The agent stopped; does it still owe an artifact the task named?
+def append_engine_note(session: Any, note: str | None, workspace: str | None = None) -> None:
+    """Put an engine-context note in front of the model, or nothing if there is none.
 
-    True means "do not end this iteration" — a message has been appended and
-    the loop should continue. This is a guard in the same sense as the others
-    here: it answers whether the run may finish, and the answer is no while a
-    named deliverable is absent and the nudge budget is unspent.
+    Given a ``workspace``, a check-in becomes a COMPARISON where the task
+    stated a shape: "are you making progress" is a question an agent answers
+    yes to, and "your header is X and the task requires Y" is not — it is
+    checkable, and it is what the graders and the operator actually read.
+    Silent, and cheap, on every task that stated no shape, which is most of
+    them.
+    """
+    from robothor.engine.session import ENGINE_CONTEXT_ROLE
+
+    if not note:
+        return
+    with contextlib.suppress(Exception):
+        from robothor.engine.deliverable_contract import contract_checkin_note
+        from robothor.engine.feature_flags import deliverable_contract_mode
+
+        if deliverable_contract_mode() != "off":
+            text = str(getattr(session, "originating_message", "") or "")
+            comparison = contract_checkin_note(text, workspace)
+            if comparison:
+                note = f"{note}\n{comparison}"
+    session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": note})
+
+
+def nudge_for_missing_deliverable(session: Any, workspace: str | None = None) -> bool:
+    """The agent stopped; does it still owe a correct deliverable?
+
+    Two questions, asked in order: is the artifact the task named there at all,
+    and — if it is — is it the shape the task described. True means "do not end
+    this iteration": a message has been appended and the loop should continue.
+    This is a guard in the same sense as the others here.
 
     It has to live on this path rather than in `run_finalizer`, where the same
-    verdict already lands: the finalizer runs AFTER the loop and can record a
-    missing artifact but never prevent one. WildClawBench task_4 spent 333
-    requests and 704 seconds, reported "completed", and wrote nothing.
+    verdicts land: the finalizer runs AFTER the loop and can record a missing or
+    misshapen artifact but never prevent one. WildClawBench task_4 spent 333
+    requests and 704 seconds, reported "completed", and wrote nothing; three
+    Productivity tasks a year's engineering later reported "completed" with the
+    file present and every grader criterion at 0.
 
-    The budget is kept on the SESSION so the loop needs no counter of its own.
+    Both budgets are kept on the SESSION so the loop needs no counter of its own.
     """
     from robothor.engine.deliverable_contract import deliverable_nudge
     from robothor.engine.session import ENGINE_CONTEXT_ROLE
 
     used = int(getattr(session, "_deliverable_nudges", 0) or 0)
     nudge = deliverable_nudge(session, used)
-    if not nudge:
-        return False
-    session._deliverable_nudges = used + 1
-    session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": nudge})
-    logger.info("Deliverable nudge: the artifact the task named is absent")
-    return True
+    if nudge:
+        session._deliverable_nudges = used + 1
+        session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": nudge})
+        logger.info("Deliverable nudge: the artifact the task named is absent")
+        return True
+    return reask_for_wrong_deliverable_shape(session, workspace)
 
 
 def reask_for_wrong_deliverable_shape(session: Any, workspace: str | None = None) -> bool:
@@ -256,7 +285,8 @@ def reask_for_wrong_deliverable_shape(session: Any, workspace: str | None = None
     session._deliverable_contract_report = report
     if mode != "enforce":
         logger.warning(
-            "deliverable contract observe: run %s would be held for %s",
+            "deliverable contract %s: run %s would be held for %s",
+            mode,
             getattr(run, "id", "?"),
             report.message.replace("\n", " | "),
         )

@@ -64,9 +64,9 @@ from robothor.engine.journal_resume import maybe_prepend_journal_resume
 from robothor.engine.llm_client import LLMClient  # noqa: E402
 from robothor.engine.loop_guards import (
     GuardState,
+    append_engine_note,
     check_iteration_guards,
     nudge_for_missing_deliverable,
-    reask_for_wrong_deliverable_shape,
 )
 from robothor.engine.models import (
     AgentConfig,
@@ -1895,15 +1895,15 @@ class AgentRunner(
             # ── [DEADLINE] Tell the agent while it can still act ──
             # Rungs, wording and ladder: robothor/engine/run_pacing.py. Here is
             # the only place with the live watchdog, task text and workspace.
+            _workspace = getattr(agent_config, "workspace", "") or self.config.workspace
             _dl_note = _pacer.note_for(
                 self._active_watchdog,
                 iteration=_iteration,
                 task_text=task_text_from(session.messages),
-                workspace=getattr(agent_config, "workspace", "") or self.config.workspace,
+                workspace=_workspace,
                 run_id=session.run.id,
             )
-            if _dl_note:
-                session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": _dl_note})
+            append_engine_note(session, _dl_note)
 
             if _safety_cap > 0 and _iteration >= _safety_cap:
                 await self._force_wrapup(
@@ -1923,24 +1923,7 @@ class AgentRunner(
             _ci_note = checkin_note(
                 _iteration, _checkin_interval, _pacer.mode, run_id=session.run.id
             )
-            if _ci_note:
-                # The check-in becomes a COMPARISON where the task stated a
-                # shape. "What have you written so far" is answerable without
-                # looking; "your header is X and the task requires Y" is not.
-                # Silent — and cheap — on every task that stated none.
-                from robothor.engine.deliverable_contract import contract_checkin_note
-                from robothor.engine.feature_flags import deliverable_contract_mode
-
-                _shape_note = None
-                if deliverable_contract_mode() != "off":
-                    with contextlib.suppress(Exception):
-                        _shape_note = contract_checkin_note(
-                            task_text_from(session.messages),
-                            getattr(agent_config, "workspace", "") or self.config.workspace,
-                        )
-                if _shape_note:
-                    _ci_note = f"{_ci_note}\n{_shape_note}"
-                session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": _ci_note})
+            append_engine_note(session, _ci_note, _workspace)
 
             # ── [STATUS] Emit iteration_start lifecycle event ──
             if on_status:
@@ -2075,14 +2058,7 @@ class AgentRunner(
                     )
                     continue
 
-                if nudge_for_missing_deliverable(session):  # still owes an artifact
-                    continue
-                # The artifact may be there and be the wrong shape. One
-                # re-ask, at `enforce` only; `observe` records the verdict and
-                # lets the run end.
-                if reask_for_wrong_deliverable_shape(
-                    session, getattr(agent_config, "workspace", "") or self.config.workspace
-                ):
+                if nudge_for_missing_deliverable(session, _workspace):  # owes an artifact
                     continue
                 return
 

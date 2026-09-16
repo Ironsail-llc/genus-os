@@ -386,108 +386,12 @@ class RunFinalizationMixin:
                             "completion contract enforce set_next_action failed: %s", exc
                         )
 
-        # Deliverable contracts. The complement of the check above: that one
-        # asks whether the agent's CLAIMS are backed by trace evidence, this
-        # one asks whether the artifact the TASK named actually exists. A run
-        # can pass the first and fail the second by doing the work correctly
-        # and saving it somewhere else — measured 2026-08-26 as -0.87 of a
-        # -1.04 competitive gap in which 7 of 10 tasks were at parity.
-        from robothor.engine.feature_flags import deliverable_contract_mode
+        # Deliverable contracts: did the run produce the artifact the task
+        # named, in the shape it named? The ladder and every side effect live
+        # in `deliverable_verdict`, extracted here by this file's own rule.
+        from robothor.engine.deliverable_verdict import record_deliverable_verdicts
 
-        dc_mode = deliverable_contract_mode()
-        if dc_mode != "off":
-            try:
-                from robothor.engine.deliverable_contract import check_run_deliverables
-
-                dreport = check_run_deliverables(run, session)
-            except Exception as exc:  # noqa: BLE001 — never block finalization
-                logger.debug("deliverable contract check raised: %s", exc)
-                dreport = None
-            # None means the task named no deliverable, which is most runs.
-            # Logging a vacuous pass on every one of them would bury the real
-            # verdicts in exactly the way the alert digest already does.
-            if dreport is not None and not dreport.satisfied:
-                try:
-                    from robothor.engine.tracking import log_guardrail_event
-
-                    log_guardrail_event(
-                        run_id=run.id,
-                        guardrail_name="deliverable_contract",
-                        action="blocked" if dc_mode == "enforce" else "observed",
-                        reason=dreport.message[:500],
-                        mode=dc_mode,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    logger.debug("deliverable contract event log failed: %s", exc)
-                if dc_mode in ("alert", "enforce"):
-                    from robothor.engine.feature_flags import notify_guardrail_alert
-
-                    notify_guardrail_alert(
-                        guardrail_name="deliverable_contract",
-                        agent_id=run.agent_id,
-                        reason=dreport.message[:500],
-                        tenant_id=getattr(run, "tenant_id", "") or "",
-                    )
-
-            # And the SHAPE of what was produced, which existence cannot see.
-            # The loop has already re-asked once at `enforce` (loop_guards.
-            # reask_for_wrong_deliverable_shape) and cached its verdict on the
-            # session; re-reading the workspace here catches the runs that
-            # never reached that path.
-            self._record_deliverable_shape(run, session, dc_mode)
-
-    def _record_deliverable_shape(self, run: AgentRun, session: Any, mode: str) -> None:
-        """The shape verdict, and at `enforce` the honest failure it implies.
-
-        The loop's re-ask is the half that can change an outcome; this is the
-        half that stops a wrong-shaped run from reporting success. Measured
-        2026-09-16: three tasks reported `completed` with the file present, the
-        header wrong, and every grader criterion at 0. A `completed` row for
-        that run is a false record, and the fleet's own dashboards read it.
-        """
-        from robothor.engine.models import RunStatus
-
-        try:
-            from robothor.engine.deliverable_contract import contract_report_for_run
-
-            report = getattr(session, "_deliverable_contract_report", None)
-            if report is None:
-                report = contract_report_for_run(run, session, self.config.workspace)
-        except Exception as exc:  # noqa: BLE001 — never block finalization
-            logger.debug("deliverable shape check raised: %s", exc)
-            return
-        if report is None or report.satisfied:
-            return
-        summary = "Deliverable contract not satisfied:\n" + report.message
-        with contextlib.suppress(Exception):
-            from robothor.engine.tracking import log_guardrail_event
-
-            log_guardrail_event(
-                run_id=run.id,
-                guardrail_name="deliverable_contract",
-                action="blocked" if mode == "enforce" else "observed",
-                reason=summary[:500],
-                mode=mode,
-            )
-        if mode != "enforce":
-            logger.warning("deliverable contract observe: run %s — %s", run.id, summary[:500])
-            return
-        # Only a run that would otherwise claim success is turned over. A run
-        # that already failed keeps the error it actually hit; burying that
-        # under this verdict would lose the cause.
-        if run.status == RunStatus.COMPLETED:
-            run.status = RunStatus.FAILED
-        run.error_message = "\n".join(x for x in (run.error_message, summary) if x)[:4000]
-        logger.warning("deliverable contract enforce: run %s failed — %s", run.id, summary[:500])
-        with contextlib.suppress(Exception):
-            from robothor.engine.feature_flags import notify_guardrail_alert
-
-            notify_guardrail_alert(
-                guardrail_name="deliverable_contract",
-                agent_id=run.agent_id,
-                reason=summary[:500],
-                tenant_id=getattr(run, "tenant_id", "") or "",
-            )
+        record_deliverable_verdicts(run, session, self.config.workspace)
 
     @staticmethod
     def _check_primary_model_reached(run: AgentRun, agent_config: Any) -> None:

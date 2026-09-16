@@ -234,11 +234,17 @@ def task_text_for_run(run: object, session: object = None) -> str:
 
 
 def check_run_deliverables(run: object, session: object = None) -> DeliverableReport | None:
-    """Verdict for one run, or None when the task named no deliverable.
+    """Path-only verdict for one run, or None when the task named no deliverable.
 
     None is the common case and is deliberately distinct from "satisfied":
     the caller should log nothing at all rather than record a vacuous pass on
     every run in the fleet.
+
+    The finalizer no longer uses this — it reads the full contract, whose
+    ``PathItem`` asks the same question over the same extracted paths but
+    confined to the run's workspace, where this resolves the task's own string
+    against the whole filesystem. Kept because it is pure, importable, and the
+    in-loop nudge is still built on the same pair of functions.
     """
     required = required_deliverables(task_text_for_run(run, session))
     if not required:

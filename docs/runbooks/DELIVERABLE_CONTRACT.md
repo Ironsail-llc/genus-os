@@ -47,10 +47,10 @@ first of those the path check scored 1 and every other criterion scored 0.
 | Piece | File |
 |---|---|
 | Extraction + verdict (pure, importable) | `robothor/engine/deliverable_contract.py` |
-| Post-run verdict, guardrail event, honest failure | `robothor/engine/run_finalizer.py: _record_deliverable_shape` |
-| In-loop nudge (one per run) | `deliverable_nudge`, via `robothor/engine/loop_guards.py` |
-| In-loop shape re-ask (one per run) | `reask_for_wrong_deliverable_shape`, same file |
-| Check-in comparison | `contract_checkin_note`, injected from `robothor/engine/runner.py` |
+| Ladder, guardrail event, honest failure | `robothor/engine/deliverable_verdict.py` |
+| In-loop nudge (one per run) | `deliverable_nudge`, via `loop_guards.nudge_for_missing_deliverable` |
+| In-loop shape re-ask (one per run) | `loop_guards.reask_for_wrong_deliverable_shape` |
+| Check-in comparison | `contract_checkin_note`, via `loop_guards.append_engine_note` |
 | Task text column | `agent_runs.task_text` (migration 123) |
 | Flag reader | `robothor/engine/feature_flags.py: deliverable_contract_mode` |
 | Evidence source | `robothor/flags/evidence.py` |
@@ -111,6 +111,15 @@ any deployment where someone else can file a task, and these paths reach the
 filesystem: the path that is finally touched is always rebuilt from the trusted
 workspace root, a path containing `..` is never a deliverable, and an item that
 lands outside the workspace produces no finding at all.
+
+**One verdict, not two.** The finalizer used to run a separate path-only check
+(`check_run_deliverables`) alongside this. It asks the same question over the
+same extracted paths, but resolves the task's own string against the whole
+filesystem rather than the run's workspace — so running both reported the same
+absent file twice and disagreed about it whenever the workspace was not the
+directory the task's absolute path named. The `PathItem` is now the only place
+that question is asked at finalization. `check_run_deliverables` remains as a
+pure importable helper and still backs the in-loop path nudge.
 
 ## The ladder
 

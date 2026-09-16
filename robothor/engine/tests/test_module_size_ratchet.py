@@ -77,7 +77,13 @@ CAPS = {
     # extraction rather than a bigger number, and got one.
     "robothor/engine/telegram_handlers.py": 1082,
     "robothor/engine/telegram_plan_mode.py": 900,
-    "robothor/engine/run_finalizer.py": 1100,
+    # 1100 -> 1048: the deliverable-contract cluster (the ladder, the guardrail
+    # event, the operator alert and the honest failure) left for
+    # deliverable_verdict.py. The shape contract would otherwise have added ~55
+    # lines here; it paid for itself by taking the ~100 that were already there.
+    # The ratchet asked for an extraction rather than a bigger number, by this
+    # file's own header, and got one.
+    "robothor/engine/run_finalizer.py": 1048,
     # 937 (2026-09-13): every module the delivery path runs through was capped
     # except the one that decides delivery. It was uncapped when the
     # thin-announce fallback landed, so nothing but review stood between that

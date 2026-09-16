@@ -18,9 +18,9 @@ from __future__ import annotations
 import pytest
 
 from robothor.engine.deliverable_contract import contract_checkin_note
+from robothor.engine.deliverable_verdict import record_deliverable_verdicts
 from robothor.engine.loop_guards import reask_for_wrong_deliverable_shape
 from robothor.engine.models import AgentRun, RunStatus
-from robothor.engine.run_finalizer import RunFinalizationMixin
 
 SPEC = """\
 Save the table to `/work/results/rows.tsv`.
@@ -108,7 +108,7 @@ class TestTheReask:
             assert reask_for_wrong_deliverable_shape(session, str(tmp_path)) is False
         assert session.messages == [], "observe must not change what the model sees"
         assert session._deliverable_contract_report is not None
-        assert any("deliverable contract observe" in r.getMessage() for r in caplog.records)
+        assert any("deliverable contract observe:" in r.getMessage() for r in caplog.records)
 
     def test_enforce_re_asks_once_with_the_report(self, tmp_path, mode):
         mode("enforce")
@@ -163,16 +163,6 @@ class TestTheReask:
 # ─── The finalizer ────────────────────────────────────────────────────
 
 
-class _Config:
-    def __init__(self, workspace):
-        self.workspace = str(workspace)
-
-
-class _Finalizer(RunFinalizationMixin):
-    def __init__(self, workspace):
-        self.config = _Config(workspace)
-
-
 class TestTheHonestFailure:
     def test_enforce_refuses_to_let_the_run_claim_completion(self, tmp_path, mode, monkeypatch):
         mode("enforce")
@@ -185,7 +175,7 @@ class TestTheHonestFailure:
         _wrong_shape(tmp_path)
         run = _run()
         session = _Session(run)
-        _Finalizer(tmp_path)._record_deliverable_shape(run, session, "enforce")
+        record_deliverable_verdicts(run, session, str(tmp_path))
         assert run.status == RunStatus.FAILED
         assert "Deliverable contract not satisfied" in (run.error_message or "")
         assert "Track Title Speakers" in (run.error_message or "")
@@ -197,7 +187,7 @@ class TestTheHonestFailure:
         )
         _wrong_shape(tmp_path)
         run = _run()
-        _Finalizer(tmp_path)._record_deliverable_shape(run, _Session(run), "observe")
+        record_deliverable_verdicts(run, _Session(run), str(tmp_path))
         assert run.status == RunStatus.COMPLETED
         assert not run.error_message
 
@@ -215,7 +205,7 @@ class TestTheHonestFailure:
         run = _run()
         run.status = RunStatus.TIMEOUT
         run.error_message = "watchdog: hard timeout at 1200s"
-        _Finalizer(tmp_path)._record_deliverable_shape(run, _Session(run), "enforce")
+        record_deliverable_verdicts(run, _Session(run), str(tmp_path))
         assert run.status == RunStatus.TIMEOUT
         assert "watchdog: hard timeout" in (run.error_message or "")
 
@@ -231,7 +221,7 @@ class TestTheHonestFailure:
         )
         _right_shape(tmp_path)
         run = _run()
-        _Finalizer(tmp_path)._record_deliverable_shape(run, _Session(run), "enforce")
+        record_deliverable_verdicts(run, _Session(run), str(tmp_path))
         assert calls == []
         assert run.status == RunStatus.COMPLETED
 
@@ -253,5 +243,5 @@ class TestTheHonestFailure:
             "robothor.engine.deliverable_contract.contract_report_for_run",
             lambda *a, **k: pytest.fail("the finalizer re-read a verdict the loop already had"),
         )
-        _Finalizer(tmp_path)._record_deliverable_shape(run, session, "enforce")
+        record_deliverable_verdicts(run, session, str(tmp_path))
         assert run.status == RunStatus.FAILED
