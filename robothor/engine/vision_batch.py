@@ -46,6 +46,19 @@ What it will not do
   not cover this: ``tool_offload_threshold`` defaults to 0, and the manifest
   this change is measured on does not set it.
 
+What the deadline bounds, exactly
+---------------------------------
+It bounds when new work STARTS. Two things inside a round cannot be cancelled
+and so set the overshoot: ``asyncio.to_thread`` running Pillow (a thread
+finishes its decode whatever the loop wants — 40 copies of a 7000x7000 PNG
+pushed a 2.0 s deadline to 2.48 s) and a backend coroutine that swallows
+``CancelledError`` (``wait_for`` cancels, then *waits*; a stubborn one pushed
+2.0 s to 5.51 s, and the answers it produced after its timeout are returned,
+because an answer is an answer). Both are bounded by ONE in-flight round —
+``max_concurrency`` images — because nothing new is started past the deadline.
+That is the guarantee: deadline plus one round, not deadline exactly. It is
+pinned by ``test_analyze_image.py::TestTheWholeCallDeadline``.
+
 What containment here is, and is not
 ------------------------------------
 It is a SCOPE, not an exfiltration boundary, and the difference is worth

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -259,6 +260,111 @@ class TestOneImageFailsAlone:
         assert out["failed"] == 1
         assert "RuntimeError" in out["results"][0]["error"]
         assert out["results"][1]["answer"] == "fine"
+
+
+class TestTheWholeCallDeadline:
+    """The one mechanism between a dead backend and a tool call held open for
+    75 minutes (200 images, four at a time, a 90 s per-image timeout). It
+    shipped with no test at all — and a control nothing exercises is a control
+    that can be deleted without anybody noticing."""
+
+    @staticmethod
+    def _hung_backend(monkeypatch, sleep_for=5.0):
+        async def hangs(data: bytes, prompt: str = "", **kwargs: Any) -> str:
+            await asyncio.sleep(sleep_for)
+            return "never"
+
+        monkeypatch.setattr(vision_batch, "describe_image_bytes", hangs)
+        monkeypatch.setattr(
+            vision_batch,
+            "resolve_backend",
+            lambda: (vision_batch.Backend("local", "test-vlm"), ""),
+        )
+
+    async def test_a_hung_backend_returns_inside_the_deadline_with_partial_rows(
+        self, tmp_path, monkeypatch
+    ):
+        self._hung_backend(monkeypatch)
+        monkeypatch.setattr(vision_batch, "_per_image_timeout", lambda: 0.05)
+        monkeypatch.setattr(vision_batch, "_batch_deadline", lambda: 0.3)
+
+        started = time.monotonic()
+        out = await _analyze(tmp_path, _images(tmp_path, 60), max_concurrency=4)
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 3.0, f"the deadline did not bound the call ({elapsed:.1f}s)"
+        assert out["analyzed"] == 0
+        assert out["failed"] == 60
+        rows = (
+            out["results"]
+            if "results_file" not in out
+            else json.loads(Path(out["results_file"]).read_text())["results"]
+        )
+        assert any("timed out" in r["error"] for r in rows), "the early images were tried"
+        assert any("ran out of time" in r["error"] for r in rows), "the late ones were not"
+        assert all("error" in r for r in rows)
+
+    async def test_a_backend_that_ignores_cancellation_overshoots_by_one_round_only(
+        self, tmp_path, monkeypatch
+    ):
+        """Measured by the reviewer: a 2.0 s deadline became 5.51 s. `wait_for`
+        cancels the call and then waits for it, so a coroutine that swallows
+        CancelledError sets the overshoot, not the timeout. Bounded by ONE
+        in-flight round because nothing new starts past the deadline — which is
+        the bound the module docstring states, pinned here."""
+
+        async def stubborn(data: bytes, prompt: str = "", **kwargs: Any) -> str:
+            try:
+                await asyncio.sleep(5)
+            except asyncio.CancelledError:
+                await asyncio.sleep(0.25)  # keeps going after being told to stop
+                return "answered anyway"
+            return "never"
+
+        monkeypatch.setattr(vision_batch, "describe_image_bytes", stubborn)
+        monkeypatch.setattr(
+            vision_batch,
+            "resolve_backend",
+            lambda: (vision_batch.Backend("local", "test-vlm"), ""),
+        )
+        monkeypatch.setattr(vision_batch, "_per_image_timeout", lambda: 0.05)
+        monkeypatch.setattr(vision_batch, "_batch_deadline", lambda: 0.2)
+
+        started = time.monotonic()
+        out = await _analyze(tmp_path, _images(tmp_path, 40), max_concurrency=4)
+        elapsed = time.monotonic() - started
+
+        # One round of four images, each overshooting by 0.25 s, is the bound.
+        assert elapsed < 3.0, f"the overshoot was not bounded by one round ({elapsed:.1f}s)"
+        assert len(out["results"]) or out.get("results_total")
+
+    async def test_an_uncancellable_decode_overshoots_by_one_load_only(self, tmp_path, monkeypatch):
+        """`asyncio.to_thread` cannot be cancelled: a thread decoding a
+        7000x7000 PNG finishes whatever the deadline says. Measured by the
+        reviewer at 2.48 s against a 2.0 s deadline. Bounded by one load."""
+
+        def slow_load(path):
+            time.sleep(0.3)
+            return b"\x89PNG", "image/png"
+
+        monkeypatch.setattr(vision_batch, "_load", slow_load)
+        monkeypatch.setattr(
+            vision_batch,
+            "resolve_backend",
+            lambda: (vision_batch.Backend("local", "test-vlm"), ""),
+        )
+
+        async def instant(data: bytes, prompt: str = "", **kwargs: Any) -> str:
+            return "fine"
+
+        monkeypatch.setattr(vision_batch, "describe_image_bytes", instant)
+        monkeypatch.setattr(vision_batch, "_batch_deadline", lambda: 0.1)
+
+        started = time.monotonic()
+        await _analyze(tmp_path, _images(tmp_path, 20), max_concurrency=4)
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 2.0, f"more than one round of loads ran past the deadline ({elapsed:.1f}s)"
 
 
 class TestRefusedPaths:
