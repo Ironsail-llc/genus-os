@@ -431,13 +431,22 @@ def too_large_sentence(size: int | None = None, *, name: str = "") -> str:
     says "is larger than 20 MB" and claims nothing more.
     """
     which = f"“{name}”" if name else "That file"
+    limit = human_size(MAX_DOWNLOAD_BYTES)
     if size is None:
-        measured = f"{which} is larger than {human_size(MAX_DOWNLOAD_BYTES)}"
+        measured = f"{which} is larger than {limit}"
+    elif human_size(size) == limit:
+        # Re-review R6: a 20.1 MB file renders at the same scale as the limit
+        # once `human_size` truncates, so the sentence read "is 20 MB, and
+        # Telegram only lets me download files up to 20 MB" — the same
+        # self-contradiction M7 removed from the outbound rung, mirrored here.
+        # Say the relation instead of repeating a number that appears to
+        # disagree with itself.
+        measured = f"{which} is larger than {limit}"
     else:
         measured = f"{which} is {human_size(size)}"
     return (
         f"{measured}, and Telegram only lets me download files up to "
-        f"{human_size(MAX_DOWNLOAD_BYTES)}. Put it somewhere I can fetch it and send me the "
+        f"{limit}. Put it somewhere I can fetch it and send me the "
         "link, or split it up."
     )
 

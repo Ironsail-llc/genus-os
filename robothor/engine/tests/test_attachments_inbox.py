@@ -204,6 +204,16 @@ class TestTooLarge:
         """The declared-size path knows the real number and should say it."""
         assert "25 MB" in attachments.too_large_sentence(25 * 1024 * 1024, name="clip.mp4")
 
+    def test_a_declared_size_that_renders_as_the_limit_says_the_relation(self) -> None:
+        """Re-review R6. `human_size` truncates (M7), so a 20.1 MB file renders
+        "20 MB" and the sentence read "is 20 MB, and Telegram only lets me
+        download files up to 20 MB" — M7's self-contradiction mirrored onto the
+        inbound path."""
+        sentence = attachments.too_large_sentence(int(20.1 * 1024 * 1024), name="bigB.zip")
+        assert "is larger than 20 MB" in sentence
+        assert "is 20 MB," not in sentence
+        assert "bigB.zip" in sentence
+
     def test_both_forms_name_the_limit_and_offer_the_way_round(self) -> None:
         for sentence in (
             attachments.too_large_sentence(name="a.bin"),
