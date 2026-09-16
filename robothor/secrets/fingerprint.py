@@ -46,6 +46,7 @@ import os
 import secrets as _secrets
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -85,8 +86,20 @@ _MIN_SALT_BYTES = 16
 #: that is not private.
 _PLACEMENT_ATTEMPTS = 5
 
+#: How long a degraded process waits before looking for the salt again.
+#:
+#: Degrading has to be a STATE, not a verdict. A process that starts before the
+#: volume is mounted, or before the workspace exists, would otherwise keep
+#: fingerprinting with the published constant until somebody restarted it --
+#: while the processes beside it use the real salt, so one credential has two
+#: answers on one box. It also must not be free to check: `fingerprint` runs on
+#: the status path and in every tool result, so a degraded process looks again
+#: at most once per window, and a salted one never looks at all.
+_DEGRADED_RETRY_SECONDS = 30.0
+
 _lock = threading.Lock()
 _cached_key: bytes | None = None
+_retry_degraded_after = 0.0
 _warned_unsalted = False
 
 
@@ -208,19 +221,35 @@ def _read_or_create_salt() -> bytes:
 
 
 def _key() -> bytes:
-    """The keyed-digest key for this process, read once."""
-    global _cached_key  # noqa: PLW0603
-    if _cached_key is None:
-        with _lock:
-            if _cached_key is None:
-                _cached_key = _read_or_create_salt()
-    return _cached_key
+    """The keyed-digest key for this process.
+
+    Read once and cached -- unless the read degraded, in which case it is tried
+    again after `_DEGRADED_RETRY_SECONDS` so a transient filesystem problem
+    does not outlive itself.
+    """
+    global _cached_key, _retry_degraded_after  # noqa: PLW0603
+
+    settled = _cached_key
+    if settled is not None and settled is not _UNSALTED_FALLBACK:
+        return settled
+
+    with _lock:
+        if _cached_key is not None and _cached_key is not _UNSALTED_FALLBACK:
+            return _cached_key
+        now = time.monotonic()
+        if _cached_key is _UNSALTED_FALLBACK and now < _retry_degraded_after:
+            return _UNSALTED_FALLBACK
+        _cached_key = _read_or_create_salt()
+        if _cached_key is _UNSALTED_FALLBACK:
+            _retry_degraded_after = now + _DEGRADED_RETRY_SECONDS
+        return _cached_key
 
 
 def reset_fingerprint_key() -> None:
     """Forget the cached salt. For the suite, and after a workspace change."""
-    global _cached_key  # noqa: PLW0603
+    global _cached_key, _retry_degraded_after  # noqa: PLW0603
     _cached_key = None
+    _retry_degraded_after = 0.0
 
 
 def fingerprint(value: str) -> str:

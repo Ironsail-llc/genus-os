@@ -265,3 +265,83 @@ def test_concurrent_first_use_agrees_on_one_salt(instance):
         thread.join()
 
     assert len(set(answers)) == 1, f"processes disagreed on the fingerprint: {sorted(set(answers))}"
+
+
+# ── a degraded process finds its way back ────────────────────────────────────
+
+
+def test_a_degraded_process_picks_the_salt_up_when_it_can(tmp_path, monkeypatch):
+    """A2: degrading must be a state, not a verdict.
+
+    The first cut cached the fallback key like any other, so a process that
+    started while the volume was not mounted -- or before the directory was
+    created -- kept fingerprinting with the published constant until somebody
+    restarted it, while its neighbours used the real salt. Two live processes,
+    two answers for one credential.
+    """
+    from robothor.secrets import fingerprint as module
+
+    workspace = tmp_path / "late"
+    workspace.mkdir()
+    workspace.chmod(stat.S_IRUSR | stat.S_IXUSR)
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(workspace))
+    monkeypatch.setattr(module, "_DEGRADED_RETRY_SECONDS", 0.0)
+    module.reset_fingerprint_key()
+    module._warned_unsalted = False
+
+    try:
+        degraded = module.fingerprint(VALUE)
+
+        workspace.chmod(stat.S_IRWXU)
+        recovered = module.fingerprint(VALUE)
+        assert recovered != degraded, "the process never looked for the salt again"
+
+        # And it agrees with a process that started after the volume arrived.
+        module.reset_fingerprint_key()
+        assert module.fingerprint(VALUE) == recovered
+    finally:
+        workspace.chmod(stat.S_IRWXU)
+        module.reset_fingerprint_key()
+
+
+def test_a_salted_process_does_not_keep_looking(instance, monkeypatch):
+    """The re-attempt is for the degraded state only: a fingerprint is computed
+    on the status path and in every tool result, so the normal path must stay a
+    cached constant with no filesystem call at all."""
+    from robothor.secrets import fingerprint as module
+
+    module.fingerprint(VALUE)
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("a salted process went back to the filesystem")
+
+    monkeypatch.setattr(module, "_read_or_create_salt", refuse)
+    assert module.fingerprint(VALUE) == module.fingerprint(VALUE)
+
+
+def test_the_degraded_state_is_not_re_checked_on_every_call(tmp_path, monkeypatch):
+    """Bounded, because `fingerprint` is on hot paths: while degraded it looks
+    again at most once per retry window, not once per call."""
+    from robothor.secrets import fingerprint as module
+
+    workspace = tmp_path / "missing"
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(workspace / "nowhere" / "deeper"))
+    monkeypatch.setattr(module, "_DEGRADED_RETRY_SECONDS", 3600.0)
+    module.reset_fingerprint_key()
+    module._warned_unsalted = False
+
+    attempts = 0
+    real = module._read_or_create_salt
+
+    def counted():
+        nonlocal attempts
+        attempts += 1
+        return real()
+
+    monkeypatch.setattr(module, "_read_or_create_salt", counted)
+    try:
+        for _ in range(5):
+            module.fingerprint(VALUE)
+        assert attempts == 1, f"the filesystem was consulted {attempts} times"
+    finally:
+        module.reset_fingerprint_key()
