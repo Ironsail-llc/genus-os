@@ -44,7 +44,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from pathlib import Path, PurePath
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -309,7 +309,12 @@ def holds_credentials(name: str) -> bool:
     return is_secret_path(raw) or is_secret_path(raw.rsplit("/", 1)[-1])
 
 
-def is_inbox_secret(path: str | os.PathLike[str]) -> bool:
+def is_inbox_secret(
+    path: str | os.PathLike[str],
+    *,
+    workspace: str | Path | None = None,
+    channel: str = "telegram",
+) -> bool:
     """Is *path* the inbox copy of a file that holds credentials?
 
     Answered from the DIRECTORY, not the filename. The first version of this
@@ -325,11 +330,24 @@ def is_inbox_secret(path: str | os.PathLike[str]) -> bool:
     :data:`SECRET_SUBDIR`. A directory cannot be mis-parsed, survives a
     restart, needs no sidecar to stay in sync with the bytes, and is visible to
     an operator listing the tree.
+
+    Anchored on the instance's REAL inbox root, not on "some ``inbox`` component
+    followed by some ``secret`` one". The looser form false-positived on an
+    ordinary workspace path — re-review R3 found
+    ``<workspace>/projects/inbox/secret/design.md`` unsendable and unreadable —
+    and blunt in the safe direction is still wrong when narrowing it is this
+    cheap. ``workspace`` is accepted for a caller that already knows it
+    (``send_file`` has ``ctx.workspace``); otherwise settings answer.
     """
-    parts = PurePath(str(path)).parts
-    if INBOX_DIRNAME not in parts:
+    resolved = Path(str(path)).expanduser().resolve(strict=False)
+    root = inbox_root(workspace, channel=channel).resolve(strict=False)
+    if root != resolved and root not in resolved.parents:
         return False
-    return SECRET_SUBDIR in parts[parts.index(INBOX_DIRNAME) :]
+    # Relative to the channel root, so only the layout's own `secret/` segment
+    # counts — a chat or a day directory could never be named that (a chat id is
+    # numeric, a day is a date), but the relative form says so rather than
+    # relying on it.
+    return SECRET_SUBDIR in resolved.relative_to(root).parts
 
 
 #: What the agent is told in place of a secrets file's contents. The file IS

@@ -414,7 +414,7 @@ class TestSecretsTheOperatorSent:
             workspace=tmp_path,
         )
         assert row["secret"] is True
-        assert attachments.is_inbox_secret(row["path"]) is True, row["path"]
+        assert attachments.is_inbox_secret(row["path"], workspace=tmp_path) is True, row["path"]
 
     def test_the_verdict_is_the_directory_not_the_filename(self, tmp_path) -> None:
         row = attachments.save_attachment(
@@ -443,13 +443,53 @@ class TestSecretsTheOperatorSent:
             mime="text/plain",
             workspace=tmp_path,
         )
-        assert attachments.is_inbox_secret(row["path"]) is False
+        assert attachments.is_inbox_secret(row["path"], workspace=tmp_path) is False
         assert "original_name" not in row
 
     def test_a_path_outside_any_inbox_is_never_a_secret(self, tmp_path) -> None:
         """The predicate keys on the inbox tree, so an unrelated directory
         called `secret` elsewhere on the box does not answer for it."""
-        assert attachments.is_inbox_secret(tmp_path / "secret" / "a.txt") is False
+        assert (
+            attachments.is_inbox_secret(tmp_path / "secret" / "a.txt", workspace=tmp_path) is False
+        )
+
+    def test_a_workspace_path_that_merely_looks_like_the_inbox_is_not_one(self, tmp_path) -> None:
+        """Re-review R3. Matching "some `inbox` component followed by some
+        `secret` one" made an ordinary project directory unsendable and
+        unreadable."""
+        design = tmp_path / "projects" / "inbox" / "secret" / "design.md"
+        design.parent.mkdir(parents=True)
+        design.write_text("the Q4 roadmap")
+        assert attachments.is_inbox_secret(design, workspace=tmp_path) is False
+
+    def test_the_real_inbox_secret_directory_still_matches(self, tmp_path) -> None:
+        row = attachments.save_attachment(
+            chat_id="100200300",
+            file_id="f",
+            file_unique_id="AgAC-xQ",
+            name=".env",
+            data=b"TOKEN=abc",
+            kind="document",
+            mime="text/plain",
+            workspace=tmp_path,
+        )
+        assert attachments.is_inbox_secret(row["path"], workspace=tmp_path) is True
+
+    def test_another_instances_inbox_does_not_answer_for_this_one(self, tmp_path) -> None:
+        """Anchored on THIS workspace: a path under a different tree's inbox is
+        outside the root and is judged by containment, not by this predicate."""
+        other = tmp_path / "other-instance"
+        row = attachments.save_attachment(
+            chat_id="100200300",
+            file_id="f",
+            file_unique_id="u",
+            name=".env",
+            data=b"TOKEN=abc",
+            kind="document",
+            mime="text/plain",
+            workspace=other,
+        )
+        assert attachments.is_inbox_secret(row["path"], workspace=tmp_path / "mine") is False
 
     def test_the_note_says_kept_but_not_read_and_quotes_nothing(self) -> None:
         row = {

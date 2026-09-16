@@ -234,7 +234,10 @@ def refuse_to_send(
 
     from robothor.engine.attachments import is_inbox_secret
 
-    if is_inbox_secret(resolved):
+    # The workspace is already resolved here, so the predicate anchors on THIS
+    # instance's inbox rather than on any path that happens to contain an
+    # `inbox` component and a `secret` one (re-review R3).
+    if is_inbox_secret(resolved, workspace=root_path):
         return (
             f"refused: {resolved.name} was received over a channel and is named like a "
             "credentials file. It is kept on disk, but its contents do not leave the box."

@@ -99,3 +99,13 @@ class TestStillReadable:
         elsewhere.write_text("a project code-named secret")
         out = await read_file(elsewhere, tmp_path)
         assert out.get("content") == "a project code-named secret"
+
+    @pytest.mark.asyncio
+    async def test_a_project_path_that_looks_like_the_inbox_is_unaffected(self, tmp_path) -> None:
+        """Re-review R3: the looser `inbox` + `secret` match made
+        `<workspace>/projects/inbox/secret/design.md` unreadable."""
+        design = tmp_path / "projects" / "inbox" / "secret" / "design.md"
+        design.parent.mkdir(parents=True)
+        design.write_text("the Q4 roadmap")
+        out = await read_file(design, tmp_path)
+        assert out.get("content") == "the Q4 roadmap"

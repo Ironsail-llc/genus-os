@@ -309,7 +309,7 @@ async def _read_file(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # model's context — and nothing downstream redacts a TOOL RESULT.
         from robothor.engine.attachments import is_inbox_secret
 
-        if is_inbox_secret(path):
+        if is_inbox_secret(path, workspace=ctx.workspace or None):
             return {"error": refusal_for(path)}
         try:
             content = path.read_text()

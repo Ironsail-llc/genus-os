@@ -278,6 +278,17 @@ class TestSecrets:
         assert not sent
 
     @pytest.mark.asyncio
+    async def test_an_ordinary_project_path_that_looks_like_the_inbox_sends(
+        self, tmp_path, sent
+    ) -> None:
+        """Re-review R3: `<workspace>/projects/inbox/secret/design.md` was
+        refused because the predicate matched any `inbox` component followed by
+        any `secret` one, rather than the instance's real inbox root."""
+        design = make_file(tmp_path / "projects" / "inbox" / "secret", "design.md", b"roadmap")
+        out = await tool.send_file({"path": str(design)}, Ctx(tmp_path))
+        assert out.get("sent") is True, out
+
+    @pytest.mark.asyncio
     async def test_an_ordinary_inbox_file_still_goes(self, tmp_path, sent) -> None:
         path = make_file(
             tmp_path / "inbox" / "telegram" / "100200300" / "2026-09-15",
