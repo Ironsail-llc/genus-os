@@ -134,10 +134,16 @@ class Backend:
     URIs) or ``"local"`` (this box's Ollama VLM). Two code paths, one because
     the sandbox has no Ollama and one because the box should not have to pay a
     provider to look at its own screenshots.
+
+    ``note`` is how a fallback tells the truth. A batch that quietly answered
+    from a different model than the operator configured is a result the agent
+    cannot reason about, so the sentence rides on the backend and lands in the
+    result.
     """
 
     kind: str
     model: str
+    note: str = ""
 
 
 def _settings() -> Any:
@@ -188,35 +194,64 @@ def _batch_deadline() -> float:
 def resolve_backend() -> tuple[Backend | None, str]:
     """``(backend, refusal)`` — exactly one of the two is meaningful.
 
-    A remote model the registry says cannot accept images is never dialled,
-    however plainly it is configured: posting an image block to a text-only
-    model is the failure ``view_image`` was fixed for in #578, and doing it
-    two hundred times is that failure with a bill attached. When the operator
-    has a local VLM as well, the batch falls back to it and says so; when they
-    do not, this refuses rather than pretending.
+    The remote model must be DECLARED ``accepts_images`` in the registry. Not
+    "not declared blind" — declared able. The first version of this gate asked
+    ``!= "rejects"``, which passes every model nobody has written an entry for,
+    and a hostile review set that setting to an undeclared model and watched
+    the batch dial it: OpenRouter answered ``404 No endpoints found that
+    support image input`` per image. That is exactly the #578 failure, reached
+    two hundred times per call, on the one setting whose entire job is to name
+    a vision model.
+
+    ``view_image`` is right to keep dialling on ``unknown`` and this is right
+    not to, for a reason worth stating: there the model is whatever the fleet
+    happens to be running and one image is at stake, so the result carries a
+    note and the agent learns. Here an operator has explicitly named a model to
+    be *the vision backend*, so "we have never heard of it" is a configuration
+    mistake to report, not a risk to take 200 times.
+
+    When a local VLM is configured the batch falls back to it (the backend
+    carries a ``note`` saying so); when it is not, this refuses rather than
+    pretending.
     """
     remote = _configured_remote_model()
     local = _configured_local_model()
     if remote:
         from robothor.engine.model_registry import image_capability
 
-        if image_capability(remote) != "rejects":
+        capability = image_capability(remote)
+        if capability == "accepts":
             return Backend("remote", remote), ""
+        why = (
+            "does not accept images"
+            if capability == "rejects"
+            else "is not declared `accepts_images` in the engine's model registry"
+        )
         if not local:
             return None, (
-                f"refused: the configured remote vision model ({remote}) does not accept "
-                "images. Set ROBOTHOR_VISION_REMOTE_MODEL to a vision-capable model, or "
-                "configure a local one with ROBOTHOR_VISION_MODEL."
+                f"refused: the configured remote vision model ({remote}) {why}. Add a "
+                "registry entry declaring `accepts_images=True` for it, name a declared "
+                "model in ROBOTHOR_VISION_REMOTE_MODEL, or configure a local one with "
+                "ROBOTHOR_VISION_MODEL."
             )
-        logger.warning(
-            "remote vision model %s does not accept images; falling back to the local VLM",
-            remote,
+        logger.warning("remote vision model %s %s; falling back to the local VLM", remote, why)
+        return (
+            Backend(
+                "local",
+                local,
+                note=(
+                    f"the configured remote vision model ({remote}) {why}, so the local "
+                    f"vision model ({local}) answered instead."
+                ),
+            ),
+            "",
         )
     if local:
         return Backend("local", local), ""
     return None, (
         "refused: no vision model is configured. Set ROBOTHOR_VISION_MODEL (local, via "
-        "Ollama) or ROBOTHOR_VISION_REMOTE_MODEL (a vision-capable provider model)."
+        "Ollama) or ROBOTHOR_VISION_REMOTE_MODEL (a provider model the registry declares "
+        "`accepts_images`)."
     )
 
 
@@ -499,10 +534,17 @@ async def analyze_images(
         return {"error": "question is required — say what you want to know about each image"}
     asked = asked[:MAX_QUESTION_CHARS]
 
-    wanted_detail = (detail or "").strip().lower() or DEFAULT_DETAIL
-    note = ""
+    notes: list[str] = []
+    if len(question.strip()) > MAX_QUESTION_CHARS:
+        notes.append(
+            f"the question was cut to its first {MAX_QUESTION_CHARS} characters — the "
+            "vision model only saw that much"
+        )
+
+    requested_detail = (detail or "").strip().lower()
+    wanted_detail = requested_detail or DEFAULT_DETAIL
     if wanted_detail not in _DETAIL_CHOICES:
-        note = f"ignored detail={wanted_detail!r}; it must be one of low, high"
+        notes.append(f"ignored detail={wanted_detail!r}; it must be one of low, high")
         wanted_detail = DEFAULT_DETAIL
 
     root = _workspace_root(workspace)
@@ -517,6 +559,18 @@ async def analyze_images(
     backend, refusal = resolve_backend()
     if backend is None:
         return {"error": refusal}
+    if backend.note:
+        notes.append(backend.note)
+    if backend.kind == "local" and requested_detail:
+        # Ollama's chat API has no `detail` knob, and the schema tells the
+        # agent to ask for `high` when fine detail decides the answer. On a
+        # local-backend instance that request is a no-op, and a no-op the
+        # agent is not told about is the agent believing it looked closer.
+        notes.append(
+            f"detail={requested_detail!r} was ignored: the local vision model "
+            f"({backend.model}) renders every image the same way. Use view_image if a "
+            "detail the description misses decides the answer."
+        )
 
     concurrency = _clamp_concurrency(max_concurrency)
     semaphore = asyncio.Semaphore(concurrency)
@@ -563,6 +617,6 @@ async def analyze_images(
         # The runner adds a tool result's `cost_usd` to the run total, so an
         # out-of-band call that reported nothing would spend money invisibly.
         out["cost_usd"] = round(cost, 6)
-    if note:
-        out["note"] = note
+    if notes:
+        out["note"] = " ".join(notes)
     return out

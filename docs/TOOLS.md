@@ -239,15 +239,19 @@ tool cheap enough to call in a loop.
 | Setting | What it does |
 |---|---|
 | `ROBOTHOR_VISION_MODEL` | The local VLM, served by Ollama. The default backend. |
-| `ROBOTHOR_VISION_REMOTE_MODEL` | A provider model used instead, for a deployment with no local GPU (a container, the cloud, the benchmark sandbox). Must be declared `accepts_images` in the engine's model registry. |
+| `ROBOTHOR_VISION_REMOTE_MODEL` | A provider model used instead, for a deployment with no local GPU (a container, the cloud, the benchmark sandbox). Must be **declared** `accepts_images=True` in the engine's model registry — a model the registry has never heard of is refused, same as one it declares text-only. |
 | `ROBOTHOR_VISION_BATCH_CONCURRENCY` | Images in flight at once (default 4, ceiling 16). |
 | `ROBOTHOR_VISION_BATCH_TIMEOUT` | Seconds one image gets (default 90). |
 | `ROBOTHOR_VISION_BATCH_DEADLINE` | Seconds the whole call gets (default 600). |
 
-A remote model the registry says cannot accept images is **not** dialled: the
-batch falls back to the local model, or refuses and says so. Handing images to
-a text-only model is the failure `view_image` was fixed for — a provider 404
-one layer down and an agent that believes it looked.
+A remote model the registry does not **declare** able to accept images is
+**not** dialled — whether it declares the model text-only or has no entry for
+it at all. The batch falls back to the local model (the result's `note` says
+it did, and which model answered), or refuses and names the model and the
+registry field to set. Handing images to a model that cannot take them is the
+failure `view_image` was fixed for: a provider 404 one layer down and an agent
+that believes it looked. It is worth being strict here rather than optimistic,
+because one misconfigured setting is 200 of those 404s in a single call.
 
 ### Everything else
 

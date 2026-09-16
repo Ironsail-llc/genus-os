@@ -336,21 +336,62 @@ class TestBackendHonesty:
         assert backend is None
         assert "accept images" in refusal
 
+    def test_a_model_the_registry_has_never_heard_of_is_not_dialled(self, monkeypatch):
+        """The hostile review's I-1, and the sharpest evidence for it: probing
+        this hole sent two real calls to OpenRouter, which answered `404 No
+        endpoints found that support image input` — the #578 failure, on the
+        one setting whose whole job is to name a vision model.
+
+        `!= "rejects"` waves through every model nobody has written an entry
+        for. Declared able, or not dialled."""
+        monkeypatch.setattr(
+            vision_batch, "_configured_remote_model", lambda: "openrouter/nobody/unheard-of-v9"
+        )
+        monkeypatch.setattr(vision_batch, "_configured_local_model", lambda: "")
+        backend, refusal = vision_batch.resolve_backend()
+        assert backend is None
+        assert "openrouter/nobody/unheard-of-v9" in refusal
+        assert "accepts_images" in refusal, "the refusal must name the field to set"
+
     def test_it_falls_back_to_the_local_model_rather_than_failing(self, monkeypatch):
         monkeypatch.setattr(
             vision_batch, "_configured_remote_model", lambda: "ollama_chat/qwen3:8b"
         )
         monkeypatch.setattr(vision_batch, "_configured_local_model", lambda: "llava:7b")
         backend, refusal = vision_batch.resolve_backend()
-        assert backend == vision_batch.Backend("local", "llava:7b")
+        assert backend.kind == "local"
+        assert backend.model == "llava:7b"
         assert refusal == ""
+        assert "ollama_chat/qwen3:8b" in backend.note, "a silent fallback is a lie by omission"
+
+    def test_an_unknown_model_falls_back_to_the_local_one_and_says_why(self, monkeypatch):
+        monkeypatch.setattr(
+            vision_batch, "_configured_remote_model", lambda: "openrouter/nobody/unheard-of-v9"
+        )
+        monkeypatch.setattr(vision_batch, "_configured_local_model", lambda: "llava:7b")
+        backend, refusal = vision_batch.resolve_backend()
+        assert backend.kind == "local"
+        assert refusal == ""
+        assert "not declared" in backend.note
+
+    async def test_the_fallback_note_reaches_the_agent(self, tmp_path, monkeypatch):
+        fake = FakeVision()
+        monkeypatch.setattr(vision_batch, "describe_image_bytes", fake)
+        monkeypatch.setattr(
+            vision_batch, "_configured_remote_model", lambda: "openrouter/nobody/unheard-of-v9"
+        )
+        monkeypatch.setattr(vision_batch, "_configured_local_model", lambda: "llava:7b")
+        out = await _analyze(tmp_path, _images(tmp_path, 1))
+        assert out["backend"] == "local"
+        assert "unheard-of-v9" in out["note"]
 
     def test_a_declared_vision_model_is_used_remotely(self, monkeypatch):
         monkeypatch.setattr(
             vision_batch, "_configured_remote_model", lambda: "openrouter/z-ai/glm-5.3-flash"
         )
         backend, refusal = vision_batch.resolve_backend()
-        assert backend == vision_batch.Backend("remote", "openrouter/z-ai/glm-5.3-flash")
+        assert backend.kind == "remote"
+        assert backend.model == "openrouter/z-ai/glm-5.3-flash"
         assert refusal == ""
 
     async def test_no_vision_model_anywhere_says_so_plainly(self, tmp_path, monkeypatch):

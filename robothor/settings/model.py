@@ -653,9 +653,13 @@ class ProviderSettings(SettingsGroup):
         "Vision-capable provider model `analyze_image` sends images to, "
         "instead of the local Ollama VLM (ROBOTHOR_VISION_MODEL). Set it "
         "where there is no local vision model -- a container, a cloud "
-        "deployment, the benchmark sandbox. The model must be declared "
-        "`accepts_images` in the engine's model registry; one that is not is "
-        "refused rather than dialled, and the local model answers instead.",
+        "deployment, the benchmark sandbox. The model must be DECLARED "
+        "`accepts_images=True` in the engine's model registry -- a model the "
+        "registry declares text-only AND a model it has never heard of are "
+        "both refused rather than dialled, because a provider answers an "
+        "image block from an unsupported model with a 404 per image. When a "
+        "local vision model is configured it answers instead, and the result "
+        "says so; when it is not, the call refuses and names the model.",
         restart_required=False,
         since="unreleased",
     )
