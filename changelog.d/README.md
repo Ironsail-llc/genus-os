@@ -17,6 +17,10 @@ changelog.d/<PR>.<audience>.md
 
 A pull request may add more than one: a change can land for operators *and*
 for agent authors, and saying it twice in each reader's own words is the point.
+What to avoid is the accident — **one feature filed under two audiences across
+two pull requests**, so half of it lands under a heading its reader is not
+reading. If a feature ships over several pull requests, give the whole feature
+one audience unless you deliberately want both.
 
 ## What goes in one
 
@@ -60,5 +64,11 @@ python3 scripts/changelog_fragments.py assemble --version 1.91.0
 
 which groups every fragment by audience into a dated block at the top of
 `docs/release-notes.md`, deletes the fragments it consumed, and leaves both in
-the release commit. A version is assembled once; a release with no fragments
-writes nothing.
+the release commit. A version is assembled once; a release with no fragments —
+or with only `internal` ones — writes nothing rather than an empty heading.
+
+**This file is load-bearing.** It is what keeps `changelog.d/` on disk once the
+release has consumed every fragment in it, and the release tooling expands the
+`changelog.d` asset only for a directory that still exists. Remove this README
+and the deletions silently stop being staged, so the next release publishes
+this one's entries a second time.
