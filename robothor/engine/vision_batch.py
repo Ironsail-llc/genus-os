@@ -87,12 +87,12 @@ from pathlib import Path
 from typing import Any
 
 from robothor.engine.pooled_completion import acompletion as pooled_acompletion
+from robothor.engine.tools.constants import MAX_TOOL_OUTPUT_CHARS
 from robothor.engine.tools.handlers.images import (
     UnsupportedImageError,
     describe_image_bytes,
     prepare_image_bytes,
 )
-from robothor.engine.tracking import MAX_TOOL_OUTPUT_CHARS
 
 logger = logging.getLogger(__name__)
 
@@ -176,8 +176,8 @@ DEFAULT_MAX_TOTAL_CHARS = 3500
 #: the assistant turn's.
 _STEP_WRITER_MARGIN = 200
 
-#: Read from ``tracking`` rather than repeated as a literal: the two numbers
-#: are the same number, and a copy is a copy that drifts.
+#: Read from the step writer's own constant rather than repeated as a literal:
+#: the two numbers are the same number, and a copy is a copy that drifts.
 MAX_INLINE_CHARS = MAX_TOOL_OUTPUT_CHARS - _STEP_WRITER_MARGIN
 
 #: Where the full table goes when the result does not fit. Under the
