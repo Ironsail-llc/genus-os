@@ -231,7 +231,7 @@ class TestTheHandlerOnlyClaimsWhatItKnows:
         out = _create()
 
         assert out["invitations_sent"] is False
-        assert out["attendees_notified"] == []
+        assert "attendees_notified" not in out
 
     def test_the_operator_is_not_an_attendee_of_their_own_calendar(
         self, operator, recorder
@@ -263,8 +263,13 @@ class TestTheHandlerOnlyClaimsWhatItKnows:
         out = _create(attendees=["bob@example.com"])
 
         assert out["send_updates"] == "externalOnly"
+        # Google WAS asked to notify, and does mail external attendees — so the
+        # boolean stays true. But which of them it mailed is its decision, and
+        # the key is OMITTED rather than returned empty: `[]` beside
+        # `invitations_sent: true` read as "nobody was told", contradicting the
+        # boolean in the same dict, and [] for "unknown" is false precision.
         assert out["invitations_sent"] is True
-        assert out["attendees_notified"] == [], "who Google mailed is Google's decision"
+        assert "attendees_notified" not in out
 
     def test_a_delete_reports_what_it_asked_for_not_who_was_told(self, operator, recorder) -> None:
         """It never reads the event, so it cannot know there were attendees —

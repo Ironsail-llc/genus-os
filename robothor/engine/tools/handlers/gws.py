@@ -2103,6 +2103,11 @@ def _calendar_create(
                 dup.get("summary"),
                 existing_start,
             )
+            matched_on = (
+                "the same title and start time"
+                if not attendee_emails and not _attendee_set(dup)
+                else "a matching title and overlapping attendees"
+            )
             return {
                 "status": "deduped",
                 "calendar": _calendar_block(calendar_id, calendar_kind),
@@ -2110,10 +2115,19 @@ def _calendar_create(
                 "summary": dup.get("summary"),
                 "start": existing_start,
                 "htmlLink": dup.get("htmlLink"),
+                # Nothing was created and nothing was sent — said outright,
+                # because the schema tells the model to report both and the
+                # htmlLink here belongs to the EXISTING event.
+                "invitations_sent": False,
+                # Names which rule fired. It used to claim "overlapping
+                # attendees" on the attendee-less path, where neither side had
+                # any: the same class of untruth I12 removed, in the sentence
+                # the agent relays to the operator.
                 "reason": (
-                    "An event with a matching title and overlapping attendees "
-                    "already exists within ±14 days. Not creating a duplicate. "
-                    "Pass force=true to bypass this check."
+                    f"An event with {matched_on} already exists within ±14 days. "
+                    "NOT creating a duplicate and NOT sending any invitation; "
+                    "htmlLink points at the EXISTING event. Pass force=true to "
+                    "override."
                 ),
             }
 
@@ -2169,16 +2183,23 @@ def _calendar_create(
         cal_result["calendar"] = _calendar_block(calendar_id, calendar_kind)
         # With no attendees Google mails nobody whatever the flag says, so
         # `invitations_sent: true` there would be a claim about an empty set.
+        # It means "Google was asked to send invitations", which is the only
+        # thing the handler can know.
         cal_result["invitations_sent"] = bool(attendees) and send_updates != "none"
         cal_result["send_updates"] = send_updates
         # WHO was mailed is Google's decision, not this handler's: under
         # `externalOnly` it does not mail same-domain attendees, and the
         # operator — auto-added, always same-domain — was being reported as
-        # notified when Google had told them nothing. Only `all` lets the
-        # handler name the recipients.
-        cal_result["attendees_notified"] = (
-            [a["email"] for a in attendees] if send_updates == "all" and attendees else []
-        )
+        # notified when Google had told them nothing.
+        #
+        # Only `all` lets the handler name the recipients. Under any other
+        # setting the key is OMITTED rather than returned empty: an empty list
+        # beside `invitations_sent: true` read as "nobody was told", which
+        # contradicted the boolean in the same dict — and returning [] when the
+        # answer is "unknown" is the same class of false precision. Absent
+        # means absent.
+        if send_updates == "all" and attendees:
+            cal_result["attendees_notified"] = [a["email"] for a in attendees]
     return cal_result
 
 
