@@ -67,15 +67,18 @@ variable not take effect.
 
 from __future__ import annotations
 
-import logging
 import time
 from typing import Literal, NamedTuple
 
 from robothor.constants import DEFAULT_TENANT
 from robothor.secrets.classification import is_bootstrap
+from robothor.secrets.trace import SecretLabel
 from robothor.settings.env import process_env_get
 
-logger = logging.getLogger(__name__)
+# No logger here on purpose. Every line this module used to write now goes
+# through `robothor.secrets.trace.SecretLabel`, which holds a name and nothing
+# else — so "no value reaches a log record" is a property of what that module
+# can see, rather than of every future edit to this one remembering it.
 
 __all__ = [
     "SECRET_CACHE_MISS_TTL_SECONDS",
@@ -238,12 +241,8 @@ def _vault_read(
         _vault_retry_after = _clock() + VAULT_RETRY_SECONDS
         # The exception TYPE, never its text: a psycopg2 error carries the
         # connection string, and a connection string carries a password.
-        logger.info(
-            "secrets: vault unreadable while resolving %s (%s); treating it as unset "
-            "and not retrying for %.0fs",
-            name,
-            type(exc).__name__,
-            VAULT_RETRY_SECONDS,
+        SecretLabel(name).vault_unreadable(
+            error_class=type(exc).__name__, retry_seconds=VAULT_RETRY_SECONDS
         )
         return None, False
 
@@ -253,7 +252,7 @@ def _vault_read(
     return answer
 
 
-def _absent_or(name: str, from_vault: str | None, available: bool) -> ResolvedSecret:
+def _absent_or(label: SecretLabel, from_vault: str | None, available: bool) -> ResolvedSecret:
     """The tail of both chains: a vault row, or why there is no value.
 
     ``missing`` and ``unavailable`` stay apart here for the reason the module
@@ -262,12 +261,12 @@ def _absent_or(name: str, from_vault: str | None, available: bool) -> ResolvedSe
     overwrite the live signing key.
     """
     if from_vault is not None:
-        logger.debug("secrets: %s resolved from the vault", name)
+        label.resolved_from_vault()
         return ResolvedSecret(from_vault, "vault")
     if not available:
-        logger.debug("secrets: %s is not in the environment and the vault is unavailable", name)
+        label.unavailable()
         return ResolvedSecret(None, "unavailable")
-    logger.debug("secrets: %s is not configured in the environment or the vault", name)
+    label.missing()
     return ResolvedSecret(None, "missing")
 
 
@@ -296,6 +295,11 @@ def resolve_secret(
             not act on a five-minute-old verdict about a vault that may have
             recovered.
     """
+    # Built from the NAME, before anything is fetched. Every log line below
+    # goes through it, so the only expression that reaches a logger is a field
+    # of an object that has never seen a value — see robothor/secrets/trace.py.
+    label = SecretLabel(name)
+
     from_env = _clean(process_env_get(name, None))
 
     if is_bootstrap(name):
@@ -304,16 +308,16 @@ def resolve_secret(
         # live in the database ``ROBOTHOR_DB_PASSWORD`` opens) or that
         # rotating would lock everybody out of a running instance.
         if from_env is not None:
-            logger.debug("secrets: %s (bootstrap) resolved from the process environment", name)
+            label.resolved_from_env(bootstrap=True)
             return ResolvedSecret(from_env, "env")
         from_vault, available = _vault_read(name, vault_key, tenant_id, live=live)
-        return _absent_or(name, from_vault, available)
+        return _absent_or(label, from_vault, available)
 
     # Application credential: the vault is the store the operator and the
     # assistant manage, so a row there beats whatever the box booted with.
     from_vault, available = _vault_read(name, vault_key, tenant_id, live=live)
     if from_vault is not None:
-        logger.debug("secrets: %s resolved from the vault, ahead of the environment", name)
+        label.resolved_from_vault(ahead_of_env=True)
         return ResolvedSecret(from_vault, "vault")
 
     if from_env is not None:
@@ -322,14 +326,10 @@ def resolve_secret(
         # unreadable vault would take every channel, provider and integration
         # down with it, for credentials a root-owned file is still holding
         # good copies of.
-        logger.debug(
-            "secrets: %s resolved from the process environment (the vault %s)",
-            name,
-            "holds no row" if available else "could not be read",
-        )
+        label.fell_through_to_env(vault_answered=available)
         return ResolvedSecret(from_env, "env")
 
-    return _absent_or(name, None, available)
+    return _absent_or(label, None, available)
 
 
 def get_secret(

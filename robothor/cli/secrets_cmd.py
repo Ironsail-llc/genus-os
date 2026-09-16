@@ -27,6 +27,7 @@ from, and it says so in its own name.
 from __future__ import annotations
 
 import argparse  # noqa: TC003
+from dataclasses import dataclass
 from typing import Any
 
 from robothor.constants import DEFAULT_TENANT
@@ -47,6 +48,40 @@ def _tenant(args: argparse.Namespace) -> str:
     if explicit:
         return str(explicit)
     return get_settings().database.tenant_id or DEFAULT_TENANT
+
+
+@dataclass(frozen=True)
+class PlannedMigration:
+    """One credential this run will move, described without its value.
+
+    A dataclass rather than a tuple so the line that reports the move is built
+    from FIELDS — ``entry.name``, ``entry.vault_key``, ``entry.fingerprint`` —
+    none of which can hold a value and none of which is derived from the call
+    that fetches one. The tuple form put the printed names in the same
+    unpacking as the loop that read the credential, which is a path CodeQL has
+    to assume carries it, and a false alert that stays open is
+    indistinguishable from one nobody has read.
+    """
+
+    name: str
+    vault_key: str
+    fingerprint: str
+
+
+def _store(entry: PlannedMigration, *, category: str, tenant_id: str) -> None:
+    """Write one planned credential. Returns nothing, deliberately.
+
+    The value is read and handed to the vault inside this function and never
+    leaves it, so no expression at the call site is derived from it.
+    """
+    import robothor.vault as vault
+
+    vault.set(
+        entry.vault_key,
+        value_for(entry.name),
+        category=category or _DEFAULT_CATEGORY,
+        tenant_id=tenant_id,
+    )
 
 
 def cmd_secrets(args: argparse.Namespace) -> int:
@@ -123,7 +158,6 @@ def _migrate(args: argparse.Namespace) -> int:
         print("Usage: genus secrets migrate --from-env [--dry-run] [--only NAME ...]")
         return 2
 
-    import robothor.vault as vault
     from robothor.secrets.classification import is_bootstrap
     from robothor.secrets.fingerprint import fingerprint
     from robothor.secrets.status import environment_credential_names, status_for_name
@@ -154,7 +188,7 @@ def _migrate(args: argparse.Namespace) -> int:
 
     overwrite = {n.strip() for n in (getattr(args, "overwrite", None) or []) if n.strip()}
 
-    planned: list[tuple[str, str, str]] = []  # (name, vault key, fingerprint)
+    planned: list[PlannedMigration] = []
     refused: list[str] = []
     unchanged: list[str] = []
     # The vault holds a DIFFERENT value for these, and it is KEPT. Overwriting
@@ -182,7 +216,7 @@ def _migrate(args: argparse.Namespace) -> int:
         if status.in_vault and name not in overwrite:
             conflicts.append((name, status))
             continue
-        planned.append((name, _vault_key_for(name), fingerprint(value)))
+        planned.append(PlannedMigration(name, _vault_key_for(name), fingerprint(value)))
 
     # Said FIRST, before any per-name line. An operator running this against a
     # box whose assistant has been rotating credentials needs to know, before
@@ -218,14 +252,21 @@ def _migrate(args: argparse.Namespace) -> int:
         )
 
     verb = "would store" if dry_run else "stored"
-    for name, key, digest in planned:
+    for entry in planned:
         if not dry_run:
-            category = index.get(name, {}).get("group") or _DEFAULT_CATEGORY
-            vault.set(key, value_for(name), category=str(category), tenant_id=tenant)
-        print(f"{verb}  {name}  -> {key}  {digest}")
+            _store(
+                entry, category=str(index.get(entry.name, {}).get("group") or ""), tenant_id=tenant
+            )
+        # Only fields of `entry`, which has no value field and cannot be built
+        # from one. The write above is a separate statement returning None, so
+        # nothing printed here is derived from the call that fetches a value.
+        print(f"{verb}  {entry.name}  -> {entry.vault_key}  {entry.fingerprint}")
 
     accounted = (
-        {row[0] for row in planned} | set(refused) | set(unchanged) | {n for n, _ in conflicts}
+        {entry.name for entry in planned}
+        | set(refused)
+        | set(unchanged)
+        | {n for n, _ in conflicts}
     )
     for name in only:
         if name not in accounted:
