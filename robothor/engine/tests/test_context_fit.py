@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import pytest
 
+from robothor.engine.context import estimate_tokens
 from robothor.engine.context_fit import (
     ContextFit,
     fit_for,
@@ -182,6 +183,82 @@ class TestShrinkingToFit:
         assert outcome.dropped == 0
         assert outcome.messages == before
         assert outcome.note is None
+
+    def test_a_protected_head_of_three_big_messages_still_lands_under(self):
+        """The hole a hostile review found (probe p17), measured at 70,005
+        tokens against a 57,344 ceiling — while the note and the log both
+        claimed a reduction.
+
+        `_truncate_to_budget` capped EACH kept message at `budget * 4` chars
+        instead of sharing one running allowance, so a protected head of three
+        messages could return up to three times the budget. On a 65,536-token
+        local model that is a large system prompt plus a long pasted task, not
+        an exotic input.
+        """
+        fit = fit_for(LOCAL)
+        head = [
+            {"role": "system", "content": "s" * 120_000},  # ~30k tokens
+            {"role": "user", "content": "t" * 120_000},  # ~30k tokens
+            {"role": "assistant", "content": "a" * 40_000},  # ~10k tokens
+        ]
+        outcome = shrink_to_fit([*head, {"role": "user", "content": "So?"}], fit)
+
+        assert outcome.tokens_after <= fit.hard_limit, outcome.tokens_after
+        assert estimate_tokens(outcome.messages) <= fit.hard_limit
+
+    def test_the_note_fits_inside_the_ceiling_too(self):
+        """The caller appends the note, so the ceiling has to include it."""
+        fit = fit_for(LOCAL)
+        head = [
+            {"role": "system", "content": "s" * 120_000},
+            {"role": "user", "content": "t" * 120_000},
+            {"role": "assistant", "content": "a" * 40_000},
+        ]
+        outcome = shrink_to_fit([*head, {"role": "user", "content": "So?"}], fit)
+
+        note = [{"role": ENGINE_CONTEXT_ROLE, "content": outcome.note or ""}]
+        assert estimate_tokens(outcome.messages) + estimate_tokens(note) <= fit.hard_limit
+
+    @pytest.mark.parametrize(
+        ("window", "reserved", "tool_chars", "turns"),
+        [(2_000, 500, 4_000, 6), (1_200, 400, 8_000, 8), (4_000, 1_000, 320_000, 1)],
+    )
+    def test_every_shape_in_this_file_lands_under_its_ceiling(
+        self, window, reserved, tool_chars, turns
+    ):
+        """The assertion the review asked for, over the whole table."""
+        fit = ContextFit(
+            model=LOCAL, window=window, threshold=window // 2, reserved_output=reserved
+        )
+        outcome = shrink_to_fit(_msgs(tool_chars, turns), fit)
+        note = [{"role": ENGINE_CONTEXT_ROLE, "content": outcome.note or ""}]
+        assert estimate_tokens(outcome.messages) + estimate_tokens(note) <= fit.hard_limit
+
+    def test_it_never_claims_a_reduction_it_did_not_make(self):
+        """A note and a WARNING that assert a drop which did not happen mislead
+        whoever debugs this next — and the caller spends its one retry on it."""
+        fit = ContextFit(model=LOCAL, window=400, threshold=100, reserved_output=100)
+        outcome = shrink_to_fit(
+            [{"role": "system", "content": "s" * 400_000}, {"role": "user", "content": "?"}], fit
+        )
+
+        if outcome.tokens_after >= outcome.tokens_before:
+            assert not outcome.fits
+            assert outcome.note is None or "could not" in outcome.note
+
+    def test_a_head_larger_than_the_window_is_reported_honestly(self):
+        """If even the protected head cannot fit, say so rather than pretend."""
+        fit = ContextFit(model=LOCAL, window=300, threshold=100, reserved_output=100)
+        outcome = shrink_to_fit(
+            [
+                {"role": "system", "content": "s" * 8_000},
+                {"role": "user", "content": "u" * 8_000},
+            ],
+            fit,
+        )
+
+        # Either it genuinely fits, or it says plainly that it does not.
+        assert outcome.fits == (outcome.tokens_after <= fit.hard_limit)
 
     def test_it_says_so_in_a_developer_note(self):
         fit = ContextFit(model=LOCAL, window=1_200, threshold=300, reserved_output=400)

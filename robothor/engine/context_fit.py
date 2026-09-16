@@ -124,6 +124,11 @@ class ShrinkOutcome:
     tokens_before: int
     tokens_after: int
     note: str | None = None
+    #: Did it actually get under the ceiling? A shrink that could not — the
+    #: protected head alone larger than the budget — must not be reported as
+    #: one that did, or the caller spends its one retry on bytes the server has
+    #: already refused (hostile review, probe p17).
+    fits: bool = True
 
 
 def next_reachable_model(models: list[str], broken_models: set[str] | None = None) -> str:
@@ -186,8 +191,13 @@ def fit_for(model: str) -> ContextFit:
     return ContextFit(model=model, window=window, threshold=threshold, reserved_output=reserved)
 
 
-def _message_tokens(message: dict[str, Any]) -> int:
-    """One message's share of the estimate, priced like ``estimate_tokens``."""
+def _message_tokens(message: dict[str, Any], model: str | None = None) -> int:
+    """One message's share of the estimate, priced like ``estimate_tokens``.
+
+    The per-message price and the whole-list price have to come from the same
+    arithmetic, or the running budget spends tokens the total does not believe
+    in.
+    """
     return estimate_tokens([message])
 
 
@@ -208,7 +218,7 @@ def _drop_tool_results(
     conversation — the failure this function exists to prevent, arriving by a
     different door.
     """
-    total = sum(_message_tokens(m) for m in messages)
+    total = sum(_message_tokens(m, model) for m in messages)
     dropped = 0
     for index in range(head, len(messages)):
         if total <= budget:
@@ -222,15 +232,15 @@ def _drop_tool_results(
         replacement = _DROPPED.format(model=model, chars=len(content))
         if len(replacement) >= len(content):
             continue
-        before = _message_tokens(message)
+        before = _message_tokens(message, model)
         message["content"] = replacement
-        total += _message_tokens(message) - before
+        total += _message_tokens(message, model) - before
         dropped += 1
     return total, dropped
 
 
 def _drop_tool_exchanges(
-    messages: list[dict[str, Any]], *, head: int, keep: int, budget: int
+    messages: list[dict[str, Any]], *, head: int, keep: int, budget: int, model: str | None = None
 ) -> tuple[list[dict[str, Any]], int, int]:
     """Remove whole tool exchanges oldest-first: the call AND its results.
 
@@ -239,7 +249,7 @@ def _drop_tool_exchanges(
     content — so the pass that only rewrites content cannot reach the limit
     and would spin. Removing the pair is what makes this terminate.
     """
-    total = sum(_message_tokens(m) for m in messages)
+    total = sum(_message_tokens(m, model) for m in messages)
     doomed: set[int] = set()
     for index in range(head, len(messages)):
         if total <= budget:
@@ -257,30 +267,104 @@ def _drop_tool_exchanges(
             if j == keep:
                 continue
             doomed.add(j)
-            total -= _message_tokens(messages[j])
+            total -= _message_tokens(messages[j], model)
     if not doomed:
         return messages, total, 0
     return [m for i, m in enumerate(messages) if i not in doomed], total, len(doomed)
 
 
+#: How many times the last-resort truncation may re-measure and take more off
+#: the largest message. Small and bounded: each pass removes the whole excess,
+#: so one or two suffice, and a cap means no input shape can spin here.
+_TIGHTEN_PASSES = 8
+
+#: Slack the last-resort truncation aims under the budget, so a total that is
+#: a token or two over — a marker the allocation could not foresee, floor
+#: division in the estimate — is not reported as "could not fit".
+_TIGHTEN_SLACK = 32
+
+#: What a truncated message keeps of its tail, so the end of a spec or a
+#: question is not lost along with the middle.
+_TAIL_CHARS = 200
+
+
+def _truncated(message: dict[str, Any], allowance: int, model: str | None = None) -> dict[str, Any]:
+    """``message`` cut to roughly ``allowance`` tokens, or emptied to a marker.
+
+    """
+    content = message.get("content")
+    if not isinstance(content, str):
+        return message
+    chars = max(0, allowance * 4)
+    if len(content) <= chars:
+        return message
+    if chars <= len(_CUT) + _TAIL_CHARS:
+        return {**message, "content": _CUT}
+    head = chars - len(_CUT) - _TAIL_CHARS
+    return {**message, "content": content[:head] + _CUT + content[-_TAIL_CHARS:]}
+
+
+#: The marker a truncation leaves behind. Short, because on the path that needs
+#: it every character is competing with the operator's question.
+_CUT = "\n[…cut to fit the context window…]\n"
+
+
 def _truncate_to_budget(
-    messages: list[dict[str, Any]], *, head: int, budget: int
+    messages: list[dict[str, Any]], *, head: int, budget: int, model: str | None = None
 ) -> list[dict[str, Any]]:
-    """Last resort: keep the protected head and the final user turn, capped.
+    """Last resort: the protected head and the final user turn, inside ONE budget.
 
     Reached only when dropping every tool exchange still leaves the messages
     over the limit — a head or a single turn larger than the whole window.
     Truncating a message is lossy and obvious; sending a conversation the
     server will truncate in silence is lossy and invisible, and that is the
     failure being traded away.
+
+    The allowance is RUNNING, and that is the whole point of this rewrite. The
+    first version capped each kept message at ``budget * 4`` characters
+    independently, so a protected head of three messages could come back at
+    three times the budget — measured at 70,005 tokens against a 57,344
+    ceiling, while the note and the log both claimed a reduction (hostile
+    review, probe p17). A per-message cap is not a budget.
+
+    The question is served first: whatever else is lost, the model must be able
+    to read what it is being asked. The system prompt comes next, then the rest
+    of the head in order, each taking only what is still unspent.
     """
     keep = _last_user_index(messages)
-    kept = messages[:head] + ([messages[keep]] if keep >= head else [])
-    chars = max(200, budget * 4)
-    for message in kept:
-        content = message.get("content")
-        if isinstance(content, str) and len(content) > chars:
-            message["content"] = content[: chars // 2] + "\n[…truncated…]\n" + content[-200:]
+    kept = [dict(m) for m in messages[:head]]
+    if keep >= head:
+        kept.append(dict(messages[keep]))
+    if not kept:
+        return kept
+
+    # Last user turn first, then the head in order: priority, not position.
+    order = [len(kept) - 1, *range(len(kept) - 1)] if len(kept) > 1 else [0]
+    remaining = budget
+    for index in order:
+        cost = _message_tokens(kept[index], model)
+        if cost <= remaining:
+            remaining -= cost
+            continue
+        kept[index] = _truncated(kept[index], remaining, model)
+        remaining = max(0, remaining - _message_tokens(kept[index], model))
+
+    # Verify, then tighten. Allocation alone can still overshoot: a message cut
+    # to its whole remaining allowance leaves nothing for the marker the NEXT
+    # one keeps, and a marker is not free. Take the excess off the largest
+    # message until the total is inside the budget, or until everything left is
+    # a marker and there is genuinely nothing more to give.
+    target = max(0, budget - _TIGHTEN_SLACK)
+    for _ in range(_TIGHTEN_PASSES):
+        total = sum(_message_tokens(m, model) for m in kept)
+        if total <= target:
+            break
+        index = max(range(len(kept)), key=lambda i: _message_tokens(kept[i], model))
+        cost = _message_tokens(kept[index], model)
+        tightened = _truncated(kept[index], max(0, cost - (total - target)), model)
+        if _message_tokens(tightened, model) >= cost:
+            break
+        kept[index] = tightened
     return kept
 
 
@@ -294,7 +378,7 @@ def shrink_to_fit(messages: list[dict[str, Any]], fit: ContextFit) -> ShrinkOutc
     """
     before = estimate_tokens(messages)
     if before <= fit.hard_limit:
-        return ShrinkOutcome(messages, 0, before, before)
+        return ShrinkOutcome(messages, 0, before, before, fits=True)
 
     from robothor.engine.compaction import protected_prefix_len
 
@@ -318,6 +402,27 @@ def shrink_to_fit(messages: list[dict[str, Any]], fit: ContextFit) -> ShrinkOutc
         dropped += 1
 
     after = estimate_tokens(working)
+    fits = after <= budget
+    if not fits:
+        # Said plainly rather than papered over. A note claiming a reduction
+        # that did not happen is an evidence line that misleads whoever debugs
+        # this next, and the caller spends its one retry on the strength of it.
+        logger.error(
+            "Context shrink for %s could NOT reach the ceiling: ~%d → ~%d tokens "
+            "against a limit of %d — the protected head alone does not fit",
+            fit.model,
+            before,
+            after,
+            budget,
+        )
+        note = (
+            f"[SYSTEM] This conversation does not fit {fit.model}'s "
+            f"{fit.window}-token context window and could not be cut down to it "
+            f"(~{after} tokens against a {budget}-token budget). Expect this model "
+            "to refuse or to silently truncate."
+        )
+        return ShrinkOutcome(working, dropped, before, after, note, fits=False)
+
     note = (
         f"[SYSTEM] This conversation did not fit {fit.model}'s "
         f"{fit.window}-token context window, so {dropped} older tool result(s) and "
@@ -333,7 +438,7 @@ def shrink_to_fit(messages: list[dict[str, Any]], fit: ContextFit) -> ShrinkOutc
         budget,
         dropped,
     )
-    return ShrinkOutcome(working, dropped, before, after, note)
+    return ShrinkOutcome(working, dropped, before, after, note, fits=True)
 
 
 #: How many times ONE model may be shrunk and re-asked for a single call.
@@ -388,7 +493,18 @@ def shrink_after_overflow(messages: list[dict[str, Any]], model: str) -> bool:
         reserved_output=fit.reserved_output,
     )
     outcome = shrink_to_fit(messages, tightened)
-    if outcome.note is None:
+    # A TOKEN comparison, not "is there a note": the note was written even when
+    # the shrink could not move the total, so the caller decremented its one
+    # permitted retry and re-sent bytes the server had already refused
+    # (hostile review, probe p17).
+    if not outcome.fits or outcome.tokens_after >= outcome.tokens_before:
+        logger.warning(
+            "Context overflow on %s and nothing could be dropped (~%d → ~%d tokens) — "
+            "advancing instead of re-sending the same request",
+            model,
+            outcome.tokens_before,
+            outcome.tokens_after,
+        )
         return False
 
     from robothor.engine.session import ENGINE_CONTEXT_ROLE

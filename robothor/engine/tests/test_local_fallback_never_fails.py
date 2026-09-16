@@ -25,6 +25,7 @@ These tests are that incident, in the three places it can be stopped.
 
 from __future__ import annotations
 
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -316,6 +317,43 @@ class TestAnOverflowShrinksAndRetriesOnce:
         # Name AND action: `flags/evidence.py` keys on the name, and the action
         # is what tells a shrink apart from a policy warning in the same table.
         assert rows == [("context_overflow", "context_overflow")]
+
+    def test_the_evidence_row_carries_the_before_and_after(self, monkeypatch):
+        """A control's row has to say what it DID, or the table counts firings
+        of something that changed nothing (hostile review, probe p17)."""
+        from robothor.engine import context_fit
+
+        rows: list[dict] = []
+        monkeypatch.setattr(
+            context_fit,
+            "log_guardrail_event",
+            lambda run_id, guardrail_name, action, **kw: rows.append(kw),
+        )
+        monkeypatch.setattr(context_fit, "_current_run_id", lambda: "run-1")
+        messages = _long_conversation(30)
+
+        assert context_fit.shrink_after_overflow(messages, LOCAL) is True
+
+        reason = rows[0]["reason"]
+        before, after = (int(part) for part in re.findall(r"~(\d+)", reason))
+        assert after < before, reason
+        assert str(estimate_tokens(messages)) in reason or after <= fit_for(LOCAL).hard_limit
+
+    def test_it_refuses_to_retry_when_nothing_could_be_dropped(self, monkeypatch):
+        """The one permitted retry is never spent on the same bytes."""
+        from robothor.engine import context_fit
+
+        monkeypatch.setattr(context_fit, "_current_run_id", lambda: None)
+        # A protected head alone far larger than the window: there is nothing
+        # to drop that would make this fit.
+        messages = [
+            {"role": "system", "content": "s" * 4_000_000},
+            {"role": "user", "content": "?"},
+        ]
+        tiny = context_fit.ContextFit(model=LOCAL, window=200, threshold=50, reserved_output=100)
+        monkeypatch.setattr(context_fit, "fit_for", lambda model: tiny)
+
+        assert context_fit.shrink_after_overflow(messages, LOCAL) is False
 
     def test_the_attempt_row_says_context_overflow(self):
         """A run's own summary must not file this as a generic error_500."""
