@@ -422,6 +422,41 @@ def _send_updates() -> str:
         return "all"
 
 
+#: The only two values ``calendar`` may take.
+_CALENDAR_CHOICES = ("operator", "own")
+
+
+class _InvalidCalendar(ValueError):
+    """``calendar`` was given something that is not one of the two choices.
+
+    Anything unrecognised used to fall through to the operator branch, so
+    ``calendar="primary"`` — the single most likely wrong value a model can
+    emit, the word every Google Calendar document uses and this tool's own
+    default until the previous commit — meant the EXACT OPPOSITE of what it
+    says. An agent meaning "keep this on my own scratch calendar" wrote a real
+    event to a human's real calendar and mailed them an invitation.
+
+    An unrecognised value is an error, not a silent write to a person's
+    calendar.
+    """
+
+    def __init__(self, given: str) -> None:
+        super().__init__(given)
+        self.given = given
+
+    def as_result(self) -> dict[str, Any]:
+        return {
+            "error": (
+                f"calendar={self.given!r} is not valid. Use calendar='operator' for the "
+                "operator's own calendar (the default), or calendar='own' for YOUR "
+                "calendar, which the operator never sees. For a third, shared calendar "
+                "pass its address as calendar_id — note that 'primary' as a calendar_id "
+                "means YOUR account's calendar, not the operator's."
+            ),
+            "hint": "invalid_params",
+        }
+
+
 def _resolve_calendar(args: dict[str, Any]) -> tuple[str, str]:
     """``(calendar id, kind)`` for a calendar tool call. Kind is the honest half.
 
@@ -452,7 +487,10 @@ def _resolve_calendar(args: dict[str, Any]) -> tuple[str, str]:
             return explicit, "operator"
         return explicit, "other"
 
-    choice = str(args.get("calendar") or "operator").strip().lower()
+    raw = args.get("calendar")
+    choice = "operator" if raw is None or raw == "" else str(raw).strip().lower()
+    if choice not in _CALENDAR_CHOICES:
+        raise _InvalidCalendar(choice)
     if choice == "own":
         return "primary", "own"
     if owner_email:
@@ -516,9 +554,18 @@ def _attendees_overlap(proposed: set[str], existing: set[str], owner_email: str)
     Ignore the operator's own email on both sides (it's auto-added, not a signal).
     Match if the smaller side has at least half its attendees in the other side,
     OR absolute overlap is at least 2.
+
+    When BOTH sides are empty there is no attendee signal either way, and the
+    answer is "yes, as far as attendees are concerned" — the title and the start
+    time decide. Returning False there made dedup inert for exactly the events
+    that caused the 2026-09-16 incident: a flight, a hotel, a trip leg, none of
+    which has attendees. Only ONE side being empty is still a mismatch: an event
+    with guests and an event without are not the same event.
     """
     a = {e for e in proposed if e and e != owner_email}
     b = {e for e in existing if e and e != owner_email}
+    if not a and not b:
+        return True
     if not a or not b:
         return False
     inter = a & b
@@ -526,6 +573,25 @@ def _attendees_overlap(proposed: set[str], existing: set[str], owner_email: str)
         return True
     smaller = min(len(a), len(b))
     return smaller > 0 and (len(inter) / smaller) >= 0.5
+
+
+def _same_start(proposed: str, event: dict[str, Any]) -> bool:
+    """Do these two start at the same moment? Tolerant of format and offset."""
+    from datetime import datetime
+
+    existing = (event.get("start") or {}).get("dateTime") or (event.get("start") or {}).get(
+        "date", ""
+    )
+    if not existing or not proposed:
+        return False
+    try:
+        a = datetime.fromisoformat(proposed.replace("Z", "+00:00"))
+        b = datetime.fromisoformat(str(existing).replace("Z", "+00:00"))
+    except ValueError:
+        return str(existing)[:16] == str(proposed)[:16]
+    if (a.tzinfo is None) != (b.tzinfo is None):
+        return a.replace(tzinfo=None) == b.replace(tzinfo=None)
+    return a == b
 
 
 def _find_duplicate_event(
@@ -538,8 +604,10 @@ def _find_duplicate_event(
 ) -> dict[str, Any] | None:
     """Return an existing event dict if one in the ±window overlaps this proposal, else None.
 
-    Only dedups against events with same-or-substring summary AND attendee overlap
-    (per _attendees_overlap). Silent on any list failure — dedup is best-effort.
+    Matches on a same-or-substring summary AND either attendee overlap (per
+    ``_attendees_overlap``) or — when neither side has attendees — the same
+    start time. Silent on any list failure: dedup is best-effort, and an event
+    the operator asked for is worth more than a duplicate they did not.
     """
     import json as _json
     from datetime import datetime, timedelta
@@ -575,6 +643,14 @@ def _find_duplicate_event(
         if not _summaries_match(summary, event.get("summary", "") or ""):
             continue
         existing_attendees = _attendee_set(event)
+        if not proposed_attendees and not existing_attendees:
+            # No attendee signal on either side, so the start time is the only
+            # thing left that distinguishes two events with the same title —
+            # "Flight to Lisbon" twice in a fortnight is two flights unless
+            # they leave at the same moment.
+            if not _same_start(start, event):
+                continue
+            return event
         if not _attendees_overlap(proposed_attendees, existing_attendees, owner_email):
             continue
         return event
@@ -1493,7 +1569,10 @@ def _calendar_list(args: dict[str, Any]) -> dict[str, Any]:
     time_min = args.get("time_min", "")
     if not time_min:
         return {"error": "time_min is required"}
-    calendar_id, calendar_kind = _resolve_calendar(args)
+    try:
+        calendar_id, calendar_kind = _resolve_calendar(args)
+    except _InvalidCalendar as bad:
+        return bad.as_result()
     cal_params: dict[str, Any] = {
         "calendarId": calendar_id,
         "timeMin": time_min,
@@ -1540,7 +1619,10 @@ def _calendar_create(
     if refusal is not None:
         return refusal
 
-    calendar_id, calendar_kind = _resolve_calendar(args)
+    try:
+        calendar_id, calendar_kind = _resolve_calendar(args)
+    except _InvalidCalendar as bad:
+        return bad.as_result()
     owner_email = _resolve_owner_email()
 
     if not args.get("force"):
@@ -1589,9 +1671,18 @@ def _calendar_create(
     if args.get("location"):
         event_body["location"] = args["location"]
     attendees = [{"email": e} for e in attendee_emails]
-    if owner_email and not any(a["email"].lower() == owner_email for a in attendees):
-        attendees.append({"email": owner_email})
-    event_body["attendees"] = attendees
+    # The operator is auto-added ONLY when the event is going somewhere they
+    # would not otherwise see it. On their own calendar they are the organiser:
+    # adding them made them an attendee of their own itinerary, so Google asked
+    # them to RSVP to it and mailed them once per leg — ten emails for a
+    # ten-leg trip. That auto-add existed because the default used to be this
+    # account's `primary` calendar, where being an attendee was the only way
+    # the operator learned the event existed at all. The default is now theirs.
+    if owner_email and calendar_kind != "operator":
+        if not any(a["email"].lower() == owner_email for a in attendees):
+            attendees.append({"email": owner_email})
+    if attendees:
+        event_body["attendees"] = attendees
 
     with_meet = args.get("with_meet", True)
     if with_meet:
@@ -1628,9 +1719,17 @@ def _calendar_create(
     _record_calendar_event(result=cal_result if isinstance(cal_result, dict) else {})
     if isinstance(cal_result, dict) and "error" not in cal_result:
         cal_result["calendar"] = _calendar_block(calendar_id, calendar_kind)
+        # With no attendees Google mails nobody whatever the flag says, so
+        # `invitations_sent: true` there would be a claim about an empty set.
         cal_result["invitations_sent"] = bool(attendees) and send_updates != "none"
+        cal_result["send_updates"] = send_updates
+        # WHO was mailed is Google's decision, not this handler's: under
+        # `externalOnly` it does not mail same-domain attendees, and the
+        # operator — auto-added, always same-domain — was being reported as
+        # notified when Google had told them nothing. Only `all` lets the
+        # handler name the recipients.
         cal_result["attendees_notified"] = (
-            [a["email"] for a in attendees] if cal_result["invitations_sent"] else []
+            [a["email"] for a in attendees] if send_updates == "all" and attendees else []
         )
     return cal_result
 
@@ -1642,9 +1741,14 @@ def _calendar_delete(args: dict[str, Any]) -> dict[str, Any]:
     event_id = args.get("event_id", "")
     if not event_id:
         return {"error": "event_id is required"}
-    calendar_id, calendar_kind = _resolve_calendar(args)
-    # A cancellation nobody is told about is not a cancellation: the
-    # attendees keep the slot and turn up.
+    try:
+        calendar_id, calendar_kind = _resolve_calendar(args)
+    except _InvalidCalendar as bad:
+        return bad.as_result()
+    # A cancellation nobody is told about is not a cancellation: the attendees
+    # keep the slot and turn up. Hoisted, because the flag store caches for 5s
+    # and reading it twice let the report contradict the call it described.
+    send_updates = _send_updates()
     deleted = _run_gws(
         [
             "calendar",
@@ -1655,7 +1759,7 @@ def _calendar_delete(args: dict[str, Any]) -> dict[str, Any]:
                 {
                     "calendarId": calendar_id,
                     "eventId": event_id,
-                    "sendUpdates": _send_updates(),
+                    "sendUpdates": send_updates,
                 }
             ),
         ]
@@ -1663,7 +1767,12 @@ def _calendar_delete(args: dict[str, Any]) -> dict[str, Any]:
     if isinstance(deleted, dict) and "error" not in deleted:
         deleted["calendar"] = _calendar_block(calendar_id, calendar_kind)
         deleted["event_id"] = event_id
-        deleted["cancellations_sent"] = _send_updates() != "none"
+        # What was ASKED of Google, not a claim about who it mailed. The
+        # handler never reads the event, so it does not know whether it had
+        # attendees — and reporting `cancellations_sent: true` for an event
+        # with none is the same class of untruth as "the API said success so I
+        # said it is on your calendar", which is the defect this all began as.
+        deleted["send_updates"] = send_updates
     return deleted
 
 

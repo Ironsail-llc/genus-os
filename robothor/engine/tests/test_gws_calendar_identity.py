@@ -178,6 +178,195 @@ class TestCalendarResolution:
         assert "@" not in source or "example.com" not in source
 
 
+class TestCalendarIsValidated:
+    """`calendar` was not checked, and anything unrecognised meant "operator".
+
+    So `calendar="primary"` — the word every Google Calendar document uses, and
+    this tool's own default until the commit before this one — meant the exact
+    OPPOSITE of what it says: an agent asking to keep something on its own
+    scratch calendar wrote a real event to a human's real calendar and mailed
+    them an invitation. The schemas declared the enum; nothing enforced it.
+    """
+
+    @pytest.mark.parametrize("given", ["primary", "bogus", "OWN ", 5, ["own"]])
+    def test_an_unrecognised_value_is_refused(self, operator, given) -> None:
+        if given == "OWN ":
+            pytest.skip("whitespace and case are normalised, not refused")
+        with pytest.raises(gws_handlers._InvalidCalendar):
+            gws_handlers._resolve_calendar({"calendar": given})
+
+    def test_case_and_whitespace_are_forgiven(self, operator) -> None:
+        assert gws_handlers._resolve_calendar({"calendar": " OWN "}) == ("primary", "own")
+        assert gws_handlers._resolve_calendar({"calendar": "Operator"})[1] == "operator"
+
+    @pytest.mark.parametrize(
+        ("tool", "args"),
+        [
+            ("gws_calendar_create", {"summary": "s", "start": "a", "end": "b"}),
+            ("gws_calendar_list", {"time_min": "2026-10-01T00:00:00Z"}),
+            ("gws_calendar_delete", {"event_id": "e"}),
+        ],
+    )
+    def test_every_calendar_tool_refuses_rather_than_writing(
+        self, operator, recorder, tool: str, args: dict
+    ) -> None:
+        out = gws_handlers._handle_gws_tool(tool, {**args, "calendar": "primary"})
+
+        assert "error" in out
+        assert out["hint"] == "invalid_params"
+        assert "calendar='operator'" in out["error"]
+        assert "calendar='own'" in out["error"]
+        assert "calendar_id" in out["error"], "it must name the way to reach a third calendar"
+        assert recorder == [], "nothing may reach the CLI on a refused value"
+
+    def test_an_explicit_calendar_id_of_primary_is_still_allowed(self, operator) -> None:
+        """`calendar_id` is the explicit override and means what Google means."""
+        assert gws_handlers._resolve_calendar({"calendar_id": "primary"}) == ("primary", "own")
+
+
+class TestTheHandlerOnlyClaimsWhatItKnows:
+    """Reporting more than the handler can see is the defect this began as."""
+
+    def test_an_event_with_no_attendees_claims_no_invitations(
+        self, operator, recorder
+    ) -> None:
+        out = _create()
+
+        assert out["invitations_sent"] is False
+        assert out["attendees_notified"] == []
+
+    def test_the_operator_is_not_an_attendee_of_their_own_calendar(
+        self, operator, recorder
+    ) -> None:
+        """They are the organiser there. Adding them made Google ask them to
+        RSVP to their own itinerary and mail them once per leg — ten emails for
+        a ten-leg trip. The auto-add existed because the default used to be
+        this account's calendar, where it was the only way they saw the event."""
+        _create(attendees=["bob@example.com"])
+        body = _insert(recorder)["body"]
+
+        assert [a["email"] for a in body["attendees"]] == ["bob@example.com"]
+
+    def test_the_operator_is_still_added_on_the_assistants_own_calendar(
+        self, operator, recorder
+    ) -> None:
+        """There, being an attendee is the only way they learn it exists."""
+        _create(calendar="own", attendees=["bob@example.com"])
+        body = _insert(recorder)["body"]
+
+        assert OPERATOR_EMAIL in [a["email"] for a in body["attendees"]]
+
+    def test_external_only_does_not_claim_the_operator_was_told(
+        self, operator, recorder, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Google does not mail same-domain attendees under externalOnly, and
+        the operator is auto-added and always same-domain."""
+        monkeypatch.setenv("ROBOTHOR_CALENDAR_SEND_UPDATES", "externalOnly")
+        out = _create(attendees=["bob@example.com"])
+
+        assert out["send_updates"] == "externalOnly"
+        assert out["invitations_sent"] is True
+        assert out["attendees_notified"] == [], "who Google mailed is Google's decision"
+
+    def test_a_delete_reports_what_it_asked_for_not_who_was_told(
+        self, operator, recorder
+    ) -> None:
+        """It never reads the event, so it cannot know there were attendees —
+        `cancellations_sent: true` for an event with none is the same untruth
+        as "the API said success so I said it is on your calendar"."""
+        out = gws_handlers._handle_gws_tool("gws_calendar_delete", {"event_id": "evt-1"})
+
+        assert out["send_updates"] == "all"
+        assert "cancellations_sent" not in out
+
+    def test_the_delete_reads_the_flag_once(
+        self, operator, recorder, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Read twice across a 5s cache TTL, the report could contradict the
+        call it described."""
+        reads: list[str] = []
+        real = gws_handlers._send_updates
+
+        def counting() -> str:
+            reads.append("x")
+            return real()
+
+        monkeypatch.setattr(gws_handlers, "_send_updates", counting)
+        gws_handlers._handle_gws_tool("gws_calendar_delete", {"event_id": "evt-1"})
+        assert len(reads) == 1
+
+
+class TestAttendeelessDedup:
+    """Flights, hotels and trip legs — the 2026-09-16 shape — have no attendees.
+
+    `_attendees_overlap` returned False when either side was empty, so dedup
+    was inert for precisely the events that caused the incident, while the new
+    docstring advertised protection that did not exist for them.
+    """
+
+    def _existing(self, start: str = "2026-10-01T09:00:00Z") -> dict[str, Any]:
+        return {
+            "id": "already-there",
+            "summary": "Flight to Lisbon",
+            "start": {"dateTime": start},
+            "htmlLink": "https://calendar.example.com/e",
+        }
+
+    def test_an_identical_attendee_less_event_dedups(self, operator, recorder) -> None:
+        def run(args: list[str], timeout: int = 30) -> Any:
+            recorder.append({"argv": args})
+            if args[:3] == ["calendar", "events", "list"]:
+                return {"items": [self._existing()]}
+            return {"id": "new", "htmlLink": "x"}
+
+        gws_handlers._run_gws = run
+        out = _create()
+
+        assert out["status"] == "deduped"
+        assert out["existing_event_id"] == "already-there"
+        assert out["calendar"]["kind"] == "operator"
+        assert not any(c["argv"][:3] == ["calendar", "events", "insert"] for c in recorder)
+
+    def test_the_same_title_at_a_different_time_is_a_different_event(
+        self, operator, recorder
+    ) -> None:
+        """Two flights to the same city in a fortnight are two flights."""
+
+        def run(args: list[str], timeout: int = 30) -> Any:
+            recorder.append({"argv": args})
+            if args[:3] == ["calendar", "events", "list"]:
+                return {"items": [self._existing(start="2026-10-05T09:00:00Z")]}
+            return {"id": "new", "htmlLink": "x"}
+
+        gws_handlers._run_gws = run
+        out = _create()
+
+        assert out.get("status") != "deduped"
+        assert any(c["argv"][:3] == ["calendar", "events", "insert"] for c in recorder)
+
+    def test_an_event_with_guests_does_not_dedup_against_one_without(
+        self, operator, recorder
+    ) -> None:
+        def run(args: list[str], timeout: int = 30) -> Any:
+            recorder.append({"argv": args})
+            if args[:3] == ["calendar", "events", "list"]:
+                return {"items": [self._existing()]}
+            return {"id": "new", "htmlLink": "x"}
+
+        gws_handlers._run_gws = run
+        out = _create(attendees=["bob@example.com"])
+
+        assert out.get("status") != "deduped"
+
+    def test_the_overlap_rule_itself(self) -> None:
+        overlap = gws_handlers._attendees_overlap
+        assert overlap(set(), set(), "alice@example.com") is True
+        assert overlap({"bob@example.com"}, set(), "alice@example.com") is False
+        assert overlap(set(), {"bob@example.com"}, "alice@example.com") is False
+        # The operator alone on both sides is still "no attendee signal".
+        assert overlap({"alice@example.com"}, {"alice@example.com"}, "alice@example.com") is True
+
+
 # ── The other two calendar tools ──────────────────────────────────────
 
 
