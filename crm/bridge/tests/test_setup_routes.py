@@ -376,7 +376,7 @@ class TestDetect:
                 {
                     "id": "openrouter",
                     "configured": True,
-                    "slots": [{"position": 1, "source": "vault", "fingerprint": "sha256:ab12"}],
+                    "slots": [{"position": 1, "source": "vault", "fingerprint": "b2:ab12cd34"}],
                 }
             ],
         )
@@ -421,7 +421,9 @@ class TestDetect:
         response = await test_client.get("/api/setup/detect", headers=_auth(claim))
 
         slot = response.json()["providers"][0]["slots"][0]
-        assert slot["fingerprint"].startswith("sha256:")
+        from robothor.secrets.fingerprint import FINGERPRINT_PREFIX
+
+        assert slot["fingerprint"].startswith(FINGERPRINT_PREFIX)
         assert "api_key" not in slot
         _assert_no_secret(response.json())
 
@@ -884,7 +886,9 @@ class TestProvider:
 
         blob = json.dumps([c.kwargs for c in log_event.call_args_list], default=str)
         assert FIXTURE_API_KEY not in blob
-        assert "sha256:" in blob
+        from robothor.secrets.fingerprint import FINGERPRINT_PREFIX
+
+        assert FINGERPRINT_PREFIX in blob
 
 
 async def _noop() -> None:

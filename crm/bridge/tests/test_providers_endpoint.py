@@ -38,7 +38,7 @@ ENGINE_PROVIDERS = {
                 {
                     "position": 1,
                     "source": "vault",
-                    "fingerprint": "sha256:ab12cd34",
+                    "fingerprint": "b2:ab12cd34",
                     "state": "active",
                     "updated_at": None,
                 }
@@ -121,7 +121,7 @@ class FakeEngine:
                             {
                                 "position": n,
                                 "source": "vault",
-                                "fingerprint": f"sha256:0000000{n}",
+                                "fingerprint": f"b2:0000000{n}",
                                 "state": "active" if n == 1 else "spare",
                                 "updated_at": None,
                             }
@@ -389,7 +389,9 @@ class TestKeyWrites:
         ).json()
         assert body["configured"] is True
         assert body["position"] == 1
-        assert body["fingerprint"].startswith("sha256:")
+        from robothor.secrets.fingerprint import FINGERPRINT_PREFIX
+
+        assert body["fingerprint"].startswith(FINGERPRINT_PREFIX)
         _assert_no_secret(body)
 
     def test_an_empty_key_is_refused_before_the_vault_is_touched(

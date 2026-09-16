@@ -67,7 +67,7 @@ The instruction file MUST carry a **When handed a credential** section saying:
 >    identity_hint, error_class}`. Read the identity hint: a token that works
 >    but belongs to the wrong account is the failure a bare "ok" hides.
 > 3. **Answer with the fingerprint and the test result** — "stored as
->    `sha256:1a2b3c4d`, authenticates as `octocat`" — so they can confirm the
+>    `b2:1a2b3c4d`, authenticates as `octocat`" — so they can confirm the
 >    right credential landed.
 >
 > Never echo the value back, in any form. Never write it to a memory block, a

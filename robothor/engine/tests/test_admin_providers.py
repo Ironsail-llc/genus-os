@@ -152,8 +152,10 @@ class TestProviderListing:
         monkeypatch.setenv("OPENROUTER_API_KEY", ENV_KEY)
         body = client.get("/api/admin/providers").json()
         slot = next(p for p in body["providers"] if p["id"] == "openrouter")["slots"][0]
-        assert slot["fingerprint"].startswith("sha256:")
-        assert len(slot["fingerprint"]) == len("sha256:") + 8
+        from robothor.secrets.fingerprint import FINGERPRINT_PREFIX
+
+        assert slot["fingerprint"].startswith(FINGERPRINT_PREFIX)
+        assert len(slot["fingerprint"]) == len(FINGERPRINT_PREFIX) + 8
         assert ENV_KEY[:8] not in slot["fingerprint"]
 
     def test_a_retired_key_is_reported_as_revoked(self, client, monkeypatch) -> None:

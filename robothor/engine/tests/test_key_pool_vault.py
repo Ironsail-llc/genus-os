@@ -194,8 +194,10 @@ class TestSlotReporting:
         assert [s.position for s in slots] == [1, 2]
         assert [s.source for s in slots] == ["env", "vault"]
         for slot in slots:
-            assert slot.fingerprint.startswith("sha256:")
-            assert len(slot.fingerprint) == len("sha256:") + 8
+            from robothor.secrets.fingerprint import FINGERPRINT_PREFIX
+
+            assert slot.fingerprint.startswith(FINGERPRINT_PREFIX)
+            assert len(slot.fingerprint) == len(FINGERPRINT_PREFIX) + 8
         rendered = repr(slots)
         assert ENV_KEY not in rendered
         assert VAULT_SPARE not in rendered
