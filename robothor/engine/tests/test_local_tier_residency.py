@@ -78,6 +78,37 @@ class TestTheWindowCannotBeShrunkAlone:
         """18.9GB of a shared pool, for a model that never sees 262k tokens."""
         assert get_model_limits(LOCAL).max_input_tokens < 262_144
 
+    def test_the_threshold_is_derived_from_the_model_that_will_be_dialled(self):
+        """The half the arithmetic above cannot see, pinned HERE.
+
+        A reviewer reverted `next_reachable_model` to its old broken-only
+        semantics and every assertion in this file stayed green, because they
+        ask what `proactive_compaction_threshold(65_536)` equals — never which
+        model's 65,536 it is. That was the whole defect: the number was right
+        and it belonged to a model the run could not reach.
+
+        So: retire the cloud credential, leave `broken_models` empty exactly as
+        the chain walk does, and require the budget to follow the local tier.
+        """
+        from robothor.engine import key_pool
+        from robothor.engine.context_fit import fit_for, next_reachable_model
+
+        chain = [CLOUD, LOCAL]
+        pool = key_pool.KeyPool(["sk-test"])
+        pool.retire("sk-test", key_pool.Retirement.QUOTA_EXHAUSTED_PERIODIC)
+        shared = dict(key_pool._SHARED)
+        key_pool._SHARED["OPENROUTER_API_KEY"] = pool
+        try:
+            sized = next_reachable_model(chain, set())
+            threshold = fit_for(sized).threshold
+        finally:
+            key_pool._SHARED.clear()
+            key_pool._SHARED.update(shared)
+
+        assert sized == LOCAL, "the budget followed a model with a dead credential"
+        window = get_model_limits(LOCAL).max_input_tokens
+        assert threshold + get_output_tokens(LOCAL, threshold) <= window
+
 
 class TestLitellmActuallyForwardsThem:
     """Anti-inertness. Without this, a litellm upgrade can start dropping these

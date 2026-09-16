@@ -92,5 +92,5 @@ default sweep — it spends a real generation — and `--only` is the consent.
 ## Related
 
 * [Configuration → credential pool](../configuration.md)
-* [Paging](PAGING.md) — where the exhaustion page goes
-* [Instance doctor](INSTANCE_DOCTOR.md) — the check catalogue
+* `docs/runbooks/PAGING.md` in the repository — where the exhaustion page goes
+* `docs/runbooks/INSTANCE_DOCTOR.md` in the repository — the check catalogue

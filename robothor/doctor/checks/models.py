@@ -348,8 +348,9 @@ async def _local_fallback_ready(ctx: DoctorContext) -> Result:
     if not response.ok:
         return fail(
             f"the local fallback's server at {base} did not answer "
-            f"({response.error or f'HTTP {response.status}'}) — the fleet has nothing "
-            "left when a cloud credential is spent"
+            f"({response.error or f'HTTP {response.status}'}). Consequence: when a "
+            "cloud credential is spent this instance has nothing left to answer "
+            "with — runs fail instead of degrading."
         )
     windows = _server_windows(response.body)
 
@@ -378,7 +379,11 @@ async def _local_fallback_ready(ctx: DoctorContext) -> Result:
             continue
         healthy.append(f"{model} ({fit.window:,} ctx, compacts at {fit.threshold:,})")
     if problems:
-        return fail("; ".join(problems))
+        return fail(
+            f"{'; '.join(problems)}. Consequence: when a cloud credential is "
+            "spent this instance has nothing left to answer with — runs fail "
+            "instead of degrading."
+        )
     return ok("; ".join(healthy))
 
 
@@ -403,7 +408,7 @@ async def _local_fallback_probe(ctx: DoctorContext) -> Result:
     reach the server intact and come back as ``no user query found in
     messages``.
     """
-    from robothor.engine.context_fit import fit_for
+    from robothor.engine.context_fit import estimate_for, fit_for
     from robothor.engine.llm_client import LLMClient
 
     models = await ctx.run_blocking(_local_models)
@@ -442,8 +447,40 @@ async def _local_fallback_probe(ctx: DoctorContext) -> Result:
         messages.append({"role": "tool", "tool_call_id": f"probe-{index}", "content": filler})
     messages.append({"role": "user", "content": "In one sentence: are you still here?"})
 
+    # THE PROACTIVE HALF FIRST — the actual root-cause fix, and the half the
+    # probe could not see when it called `_call_llm` directly: the budget is
+    # supposed to notice this conversation BEFORE anything is dialled.
+    from types import SimpleNamespace
+
+    from robothor.engine.context_budget import keep_context_within_budget
+
+    session = SimpleNamespace(
+        messages=messages,
+        run_id="doctor-probe",
+        thin_previous_tool_results=lambda protect_after_index=0: 0,
+    )
     try:
-        response = await LLMClient()._call_llm(messages, [model], [], broken_models=set())
+        await keep_context_within_budget(
+            session,
+            SimpleNamespace(id="doctor", eager_tool_compression=False),
+            iteration=1,
+            models=[model],
+            broken_models=set(),
+            hook_registry=None,
+            pre_iteration_msg_idx=0,
+        )
+    except Exception as exc:  # noqa: BLE001 - the probe reports, never raises
+        return fail(f"the context budget raised {type(exc).__name__} on {model}: {exc}")
+    proactive = estimate_for(session.messages, model)
+    if proactive > fit.hard_limit:
+        return fail(
+            f"the context budget left {proactive:,} tokens against {model}'s "
+            f"{fit.hard_limit:,}-token ceiling — the proactive half did not act"
+        )
+
+    # …and then the reactive half, against the real server.
+    try:
+        response = await LLMClient()._call_llm(session.messages, [model], [], broken_models=set())
     except Exception as exc:  # noqa: BLE001 - the probe reports, never raises
         return fail(f"{model} raised {type(exc).__name__} on an oversized conversation: {exc}")
     if response is None:
@@ -451,12 +488,10 @@ async def _local_fallback_probe(ctx: DoctorContext) -> Result:
             f"{model} could not answer a conversation {_PROBE_OVERSHOOT}x its "
             f"{fit.window:,}-token window — the shrink did not save the call"
         )
-    from robothor.engine.context import estimate_tokens
-
     return ok(
-        f"{model} answered a conversation {_PROBE_OVERSHOOT}x its window; "
-        f"the engine sent ~{estimate_tokens(messages):,} tokens of a "
-        f"{fit.window:,}-token budget"
+        f"{model} answered a conversation {_PROBE_OVERSHOOT}x its window: the "
+        f"budget brought it to ~{proactive:,} tokens before the call (ceiling "
+        f"{fit.hard_limit:,}), and the answer came back"
     )
 
 
@@ -486,10 +521,14 @@ CHECKS: tuple[Check, ...] = (
         id="models.local_fallback_ready",
         title="The local fallback can hold a conversation",
         category="models",
-        # Required, and only on an instance that HAS one (it skips otherwise).
-        # The tier exists for the hours when no cloud credential works; a
-        # degraded one is discovered during exactly those hours.
-        severity="required",
+        # RECOMMENDED, deliberately. The tier exists for the hours when no
+        # cloud credential works, so a degraded one matters — but `required`
+        # takes `genus doctor` from exit 0 to exit 1 on every instance whose
+        # chain ends on Ollama the moment that server is down, and the sibling
+        # `ollama.reachable` is recommended for the same reason. An install
+        # gate or a CI job that runs the doctor must not fail because a local
+        # model is restarting; the detail below names the consequence instead.
+        severity="recommended",
         run=_local_fallback_ready,
     ),
     Check(

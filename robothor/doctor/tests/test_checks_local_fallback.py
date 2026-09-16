@@ -78,6 +78,19 @@ class TestTheReadinessCheck:
         assert result.status == "fail"
         assert "8,192" in result.detail or "8192" in result.detail
 
+    def test_a_down_local_server_does_not_fail_the_whole_doctor(self):
+        """`required` would take every instance whose chain ends on Ollama
+        from exit 0 to exit 1 the moment that server restarts — including an
+        install gate or a CI job that runs the doctor. The sibling
+        `ollama.reachable` is recommended for the same reason."""
+        check = next(c for c in model_checks.CHECKS if c.id == "models.local_fallback_ready")
+        assert check.severity == "recommended"
+
+    def test_a_failure_names_the_consequence(self, local_chain):
+        ctx = make_ctx(http_fetch=fake_http({}))
+        detail = _run("models.local_fallback_ready", ctx).detail
+        assert "nothing left to answer with" in detail
+
     def test_a_healthy_local_tier_passes(self, local_chain):
         ctx = make_ctx(http_fetch=fake_http({TAGS: _tags(("qwen3.8:27b", 262_144))}))
         result = _run("models.local_fallback_ready", ctx)
