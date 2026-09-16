@@ -317,6 +317,96 @@ def get_run_tree(run_id: str) -> dict[str, Any]:
 # ─── Steps ────────────────────────────────────────────────────────────
 
 
+#: Whether ``agent_run_steps`` has migration 125's two columns. ``None`` until
+#: an insert has told us.
+#:
+#: A deploy that runs this code against a database without 125 would otherwise
+#: lose the WHOLE step trail — LLM steps included, not merely the batched ones.
+#: The insert raises ``UndefinedColumn``, which is a ``ProgrammingError`` and so
+#: not in ``retry_sync``'s retryable set; ``flush_new_steps_sync`` catches it,
+#: falls back to per-step inserts that each raise again, logs one warning per
+#: step, and advances ``persisted_step_count`` regardless. Every run keeps
+#: running and its ``agent_runs`` row updates normally, so the only symptom is a
+#: run viewer with nothing in it.
+#:
+#: Losing observability to a migration ordering is not a trade worth making, so
+#: the writer degrades instead: one loud line naming the migration, then the
+#: pre-125 insert. `genus migrate` (or `genus doctor --only db.migrations --fix`)
+#: restores the columns and the next process picks them up.
+_batch_columns_present: bool | None = None
+
+_BATCH_COLUMNS = ("batch_id", "batch_position")
+
+_MIGRATION_HINT = (
+    "agent_run_steps is missing %s — migration 125_agent_run_step_batch has not "
+    "been applied to this database. Recording steps WITHOUT the batch columns so "
+    "the trail survives; run `genus migrate` (or `genus doctor --only "
+    "db.migrations --fix`) and restart to record which tool calls ran together."
+)
+
+
+def _missing_batch_columns(exc: BaseException) -> bool:
+    """True when this failure is 125 being absent, and not something else.
+
+    Narrow on purpose. Any other ``ProgrammingError`` — a real schema problem, a
+    permission error — must keep raising, because a writer that silently
+    degrades on every failure is a writer that cannot tell you it is broken.
+    """
+    if not isinstance(exc, Exception):
+        return False
+    text = str(exc).lower()
+    return "column" in text and any(name in text for name in _BATCH_COLUMNS)
+
+
+def _note_missing_batch_columns() -> None:
+    """Latch the degradation and say so once, at ERROR."""
+    global _batch_columns_present
+    if _batch_columns_present is False:
+        return
+    _batch_columns_present = False
+    logger.error(_MIGRATION_HINT, ", ".join(_BATCH_COLUMNS))
+
+
+def _step_columns() -> tuple[str, str]:
+    """``(column list, placeholder list)`` for the step insert."""
+    base = (
+        "id, run_id, step_number, step_type, "
+        "tool_name, tool_input, tool_output, "
+        "model, input_tokens, output_tokens, "
+        "cache_creation_tokens, cache_read_tokens, "
+        "started_at, completed_at, duration_ms, "
+        "error_message"
+    )
+    if _batch_columns_present is False:
+        return base, ", ".join(["%s"] * 16)
+    return base + ", batch_id, batch_position", ", ".join(["%s"] * 18)
+
+
+def _step_values(step: RunStep) -> tuple[Any, ...]:
+    """The row, with or without the batch columns."""
+    row: tuple[Any, ...] = (
+        step.id,
+        step.run_id,
+        step.step_number,
+        step.step_type.value if hasattr(step.step_type, "value") else step.step_type,
+        step.tool_name,
+        json.dumps(step.tool_input, default=str) if step.tool_input else None,
+        json.dumps(_truncate_json(step.tool_output), default=str) if step.tool_output else None,
+        step.model,
+        step.input_tokens,
+        step.output_tokens,
+        step.cache_creation_tokens,
+        step.cache_read_tokens,
+        step.started_at,
+        step.completed_at,
+        step.duration_ms,
+        step.error_message,
+    )
+    if _batch_columns_present is False:
+        return row
+    return (*row, step.batch_id, step.batch_position)
+
+
 def create_step(step: RunStep) -> str:
     """Insert a new run step (append-only audit trail). Returns step ID.
 
@@ -325,50 +415,28 @@ def create_step(step: RunStep) -> str:
     from robothor.engine.retry import retry_sync
 
     def _insert() -> str:
+        columns, placeholders = _step_columns()
         with get_connection() as conn:
             cur = conn.cursor()
             cur.execute(
-                """
-                INSERT INTO agent_run_steps (
-                    id, run_id, step_number, step_type,
-                    tool_name, tool_input, tool_output,
-                    model, input_tokens, output_tokens,
-                    cache_creation_tokens, cache_read_tokens,
-                    started_at, completed_at, duration_ms,
-                    error_message, batch_id, batch_position
-                ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                )
-                """,
-                (
-                    step.id,
-                    step.run_id,
-                    step.step_number,
-                    step.step_type.value if hasattr(step.step_type, "value") else step.step_type,
-                    step.tool_name,
-                    json.dumps(step.tool_input, default=str) if step.tool_input else None,
-                    json.dumps(_truncate_json(step.tool_output), default=str)
-                    if step.tool_output
-                    else None,
-                    step.model,
-                    step.input_tokens,
-                    step.output_tokens,
-                    step.cache_creation_tokens,
-                    step.cache_read_tokens,
-                    step.started_at,
-                    step.completed_at,
-                    step.duration_ms,
-                    step.error_message,
-                    step.batch_id,
-                    step.batch_position,
-                ),
+                f"INSERT INTO agent_run_steps ({columns}) VALUES ({placeholders})",  # noqa: S608
+                _step_values(step),
             )
         return step.id
+
+    def _insert_or_degrade() -> str:
+        try:
+            return _insert()
+        except Exception as exc:
+            if not _missing_batch_columns(exc):
+                raise
+            _note_missing_batch_columns()
+            return _insert()
 
     import psycopg2
 
     return retry_sync(
-        _insert,
+        _insert_or_degrade,
         max_attempts=3,
         backoff_base=0.5,
         retryable_exceptions=(psycopg2.OperationalError, psycopg2.InterfaceError, ConnectionError),
@@ -387,56 +455,33 @@ def create_steps_batch(steps: list[RunStep]) -> int:
     from robothor.engine.retry import retry_sync
 
     def _insert_batch() -> int:
-        rows = [
-            (
-                step.id,
-                step.run_id,
-                step.step_number,
-                step.step_type.value if hasattr(step.step_type, "value") else step.step_type,
-                step.tool_name,
-                json.dumps(step.tool_input, default=str) if step.tool_input else None,
-                json.dumps(_truncate_json(step.tool_output), default=str)
-                if step.tool_output
-                else None,
-                step.model,
-                step.input_tokens,
-                step.output_tokens,
-                step.cache_creation_tokens,
-                step.cache_read_tokens,
-                step.started_at,
-                step.completed_at,
-                step.duration_ms,
-                step.error_message,
-                step.batch_id,
-                step.batch_position,
-            )
-            for step in steps
-        ]
+        columns, _ = _step_columns()
+        rows = [_step_values(step) for step in steps]
         with get_connection() as conn:
             cur = conn.cursor()
             from psycopg2.extras import execute_values
 
             execute_values(
                 cur,
-                """
-                INSERT INTO agent_run_steps (
-                    id, run_id, step_number, step_type,
-                    tool_name, tool_input, tool_output,
-                    model, input_tokens, output_tokens,
-                    cache_creation_tokens, cache_read_tokens,
-                    started_at, completed_at, duration_ms,
-                    error_message, batch_id, batch_position
-                ) VALUES %s
-                ON CONFLICT (id) DO NOTHING
-                """,
+                f"INSERT INTO agent_run_steps ({columns}) "  # noqa: S608
+                "VALUES %s ON CONFLICT (id) DO NOTHING",
                 rows,
             )
             return len(rows)
 
+    def _insert_batch_or_degrade() -> int:
+        try:
+            return _insert_batch()
+        except Exception as exc:
+            if not _missing_batch_columns(exc):
+                raise
+            _note_missing_batch_columns()
+            return _insert_batch()
+
     import psycopg2
 
     return retry_sync(
-        _insert_batch,
+        _insert_batch_or_degrade,
         max_attempts=3,
         backoff_base=0.5,
         retryable_exceptions=(psycopg2.OperationalError, psycopg2.InterfaceError, ConnectionError),
