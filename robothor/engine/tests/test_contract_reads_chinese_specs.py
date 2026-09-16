@@ -103,10 +103,10 @@ class TestTheCorpusCoverageIsReal:
     def test_the_chinese_specs_are_no_longer_invisible(self):
         """The honest version of the headline number. Before this, 22 of 60
         specs produced an item and every Chinese one produced none."""
-        from pathlib import Path
+        from bench.wildclaw import corpus
 
-        tasks = Path("/home/philip/robothor-bench/WildClawBench/tasks")
-        if not tasks.is_dir():
+        tasks = corpus.tasks_dir()
+        if tasks is None:
             pytest.skip("benchmark checkout not present")
         zh_with_items = 0
         for spec in sorted(tasks.rglob("*_zh.md")):

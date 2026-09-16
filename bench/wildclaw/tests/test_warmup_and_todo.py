@@ -28,7 +28,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from bench.wildclaw import harness
+from bench.wildclaw import corpus, harness
 
 REPO = Path(__file__).resolve().parents[3]
 
@@ -100,8 +100,8 @@ class TestTheWarmupParses:
     def test_every_benchmark_task_s_prelude_parses(self):
         """The corpus, read-only, because a unit fixture is what missed this:
         the one command smoke-tested by hand was the one that already parsed."""
-        tasks = Path("/home/philip/robothor-bench/WildClawBench/tasks")
-        if not tasks.is_dir():
+        tasks = corpus.tasks_dir()
+        if tasks is None:
             pytest.skip("benchmark checkout not present")
         failures: list[str] = []
         seen = 0

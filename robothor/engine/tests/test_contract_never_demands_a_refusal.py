@@ -82,10 +82,10 @@ class TestARealRequirementStillExtracts:
         """The four specs that carried a shape item must still carry it — a
         suppressor that quietly disarmed the control would pass every unit test
         in this file and none of the ones that matter."""
-        from pathlib import Path
+        from bench.wildclaw import corpus
 
-        tasks = Path("/home/philip/robothor-bench/WildClawBench/tasks")
-        if not tasks.is_dir():
+        tasks = corpus.tasks_dir()
+        if tasks is None:
             pytest.skip("benchmark checkout not present")
         with_items = 0
         for spec in sorted(tasks.rglob("*_task_*.md")):
