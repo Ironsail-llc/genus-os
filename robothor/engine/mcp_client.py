@@ -81,10 +81,23 @@ class McpClientSession:
         self._initialized = False
 
     async def start(self) -> None:
-        """Start the MCP server subprocess."""
-        import os
+        """Start the MCP server subprocess.
 
-        env = {**os.environ, **self.config.env}
+        The child's environment is the scrubbed one plus the server's OWN
+        declared ``env``. It used to be ``{**os.environ, **config.env}`` — the
+        engine's entire environment, ~50 credentials, held for the LIFE of the
+        engine by every configured stdio server, and readable out of procfs
+        because ``PR_SET_DUMPABLE`` does not survive ``execve``.
+
+        ``config.env`` is precisely where an MCP server's own credentials go, so
+        nothing else in the engine's environment is its business.
+        """
+        from robothor.engine.exec_env import build_exec_env
+
+        env = {
+            **build_exec_env(agent_id=f"mcp:{self.config.name}", mode=None).env,
+            **self.config.env,
+        }
         self._process = await asyncio.create_subprocess_exec(
             *self.config.command,
             stdin=asyncio.subprocess.PIPE,

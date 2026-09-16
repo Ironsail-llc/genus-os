@@ -122,7 +122,7 @@ def test_every_declared_secret_the_scan_migrates_has_an_accessor_backed_reader()
 
     #: Declared names the engine does not read at all. Migrating one moves a
     #: value nothing consumes; it cannot break a reader because there is none.
-    NO_READER_IN_THE_ENGINE = {
+    no_reader_in_the_engine = {
         "ROBOTHOR_TEAMS_APP_PASSWORD",
         "ROBOTHOR_TWILIO_AUTH_TOKEN",
         "ROBOTHOR_NATS_PASSWORD",
@@ -138,7 +138,7 @@ def test_every_declared_secret_the_scan_migrates_has_an_accessor_backed_reader()
 
     unbacked = sorted(
         name
-        for name in migratable - NO_READER_IN_THE_ENGINE
+        for name in migratable - no_reader_in_the_engine
         if name in _NAMES_READ_WITHOUT_THE_ACCESSOR
     )
     assert not unbacked, (
@@ -185,16 +185,16 @@ def test_no_declared_secret_is_read_with_a_raw_environment_call():
             tree = ast.parse(path.read_text(encoding="utf-8"))
         except (OSError, SyntaxError):
             continue
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr in {"get", "__getitem__"}
-                and node.args
-                and isinstance(node.args[0], ast.Constant)
-                and node.args[0].value in watched
-            ):
-                offenders.append(f"{relative}:{node.lineno} {node.args[0].value}")
+        offenders.extend(
+            f"{relative}:{node.lineno} {node.args[0].value}"
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"get", "__getitem__"}
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value in watched
+        )
 
     assert not offenders, (
         "a declared, migratable credential is read straight from the environment, so "

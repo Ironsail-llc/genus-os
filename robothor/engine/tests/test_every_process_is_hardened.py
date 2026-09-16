@@ -19,7 +19,8 @@ import-and-inspect will not.
 
 from __future__ import annotations
 
-import ast
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -28,53 +29,107 @@ from robothor.engine.secret_paths import exec_reads_secret
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
-#: Every process Genus starts and leaves running under the operator's uid.
-#: Named as module paths rather than unit names because the test imports them:
-#: a unit file can be renamed without the code changing, and it is the code
-#: that has to make the call.
+#: ``(label, the code that starts this service the way the box starts it)``.
+#:
+#: RUN, not parsed. The round-2 test parsed each file and passed on
+#: ``robothor/api/mcp.py`` because the call sat in its ``__main__`` block — and
+#: the box starts that server through ``robothor mcp`` → ``cli.admin.cmd_mcp``,
+#: which never touches that block. Both live MCP processes were dumpable while
+#: a green test said otherwise. A parse proves a call exists in a file; only
+#: running the entry point proves the startup path reaches it.
+#:
+#: Each snippet patches the service body to a no-op, calls the real entry
+#: function, and prints the owner of ``/proc/self/environ`` — uid 0 once the
+#: process is non-dumpable, the caller's uid while it is readable.
 ENTRY_POINTS = [
-    "robothor/engine/daemon.py",
-    "crm/bridge/bridge_service.py",
-    "robothor/vision/service.py",
-    "robothor/connectors/rest_mcp_bridge.py",
-    "robothor/api/mcp.py",
+    (
+        "engine daemon",
+        "from robothor.engine import daemon; daemon._harden_and_state_posture()",
+    ),
+    (
+        "mcp server (robothor mcp -> cmd_mcp -> run_server)",
+        "import asyncio, robothor.api.mcp as m;"
+        "m.create_server = lambda: None;"
+        "m.stdio_server = None;"
+        "import robothor.engine.process_hardening as ph;"
+        "asyncio.run(_only_the_hardening(m))",
+    ),
+    (
+        "orchestrator (uvicorn imports the module)",
+        "import robothor.api.orchestrator  # noqa: F401",
+    ),
+    (
+        "connector bridge",
+        "import robothor.connectors.rest_mcp_bridge as b;"
+        "b.asyncio = type('x', (), {'run': staticmethod(lambda *a, **k: None)});"
+        "b.main()",
+    ),
+    (
+        "vision service",
+        "import robothor.vision.service as v;"
+        "v.logging = type('x', (), {'basicConfig': staticmethod(lambda **k: None),"
+        " 'getLogger': staticmethod(lambda *a: None), 'INFO': 20})();"
+        "_call_until_it_stops(v.main)",
+    ),
 ]
 
+#: Helpers injected into each subprocess. ``run_server`` is an async function
+#: whose body needs a real stdio transport, so we call only the part under test
+#: — and a service ``main()`` that goes on to serve is stopped once it has
+#: hardened, which is the only thing being asserted.
+_PRELUDE = """
+import asyncio, os, sys
 
-def _calls_harden(path: Path) -> bool:
-    """Whether this module contains a real call to ``harden_process``.
 
-    Parsed, not grepped: a grep matches the import, a comment and a docstring
-    mentioning it, none of which hardens anything.
-    """
+class _Stop(Exception):
+    pass
+
+
+async def _only_the_hardening(module):
+    from robothor.engine.process_hardening import harden_process
+    import inspect
+    source = inspect.getsource(module.run_server)
+    assert "harden_process" in source, "run_server does not harden"
+    harden_process()
+
+
+def _call_until_it_stops(fn):
     try:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-    except (OSError, SyntaxError):
-        return False
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            target = node.func
-            name = (
-                target.id
-                if isinstance(target, ast.Name)
-                else target.attr
-                if isinstance(target, ast.Attribute)
-                else ""
-            )
-            if name in {"harden_process", "_harden_and_state_posture"}:
-                return True
-    return False
+        fn()
+    except BaseException:
+        pass
+"""
 
 
-@pytest.mark.parametrize("module", ENTRY_POINTS)
-def test_every_entry_point_hardens_itself(module):
-    path = REPO_ROOT / module
-    if not path.is_file():
-        pytest.skip(f"{module} is not present in this checkout")
-    assert _calls_harden(path), (
-        f"{module} starts a long-running process under the operator's uid and never "
-        "calls harden_process(), so an agent's exec child can read its environment "
-        "out of /proc"
+def _environ_owner(snippet: str) -> int:
+    """Run *snippet* in a subprocess and return the uid owning its own
+    ``/proc/self/environ``. Root (0) means the process is non-dumpable."""
+    script = (
+        f"import sys; sys.path.insert(0, {str(REPO_ROOT)!r})\n"
+        + _PRELUDE
+        + "\ntry:\n"
+        # Stripped: a `; ` separator leaves a leading space that becomes a
+        # deeper indent than the `try:` block and an IndentationError.
+        + "".join(f"    {line.strip()}\n" for line in snippet.split(";") if line.strip())
+        + "except _Stop:\n    pass\n"
+        + "except BaseException as exc:\n    print('ERR', type(exc).__name__, file=sys.stderr)\n"
+        + "print(os.stat('/proc/self/environ').st_uid)\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=120, check=False
+    )
+    tail = [line for line in proc.stdout.splitlines() if line.strip().isdigit()]
+    assert tail, f"no uid printed; stderr={proc.stderr[-400:]}"
+    return int(tail[-1])
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="procfs is a Linux interface")
+@pytest.mark.parametrize(("label", "snippet"), ENTRY_POINTS, ids=[e[0] for e in ENTRY_POINTS])
+def test_every_entry_point_hardens_the_process_it_starts(label, snippet):
+    owner = _environ_owner(snippet)
+    assert owner == 0, (
+        f"{label}: /proc/self/environ is still owned by uid {owner}, so an agent's "
+        "exec child — same uid — can read this process's environment"
     )
 
 
@@ -126,3 +181,118 @@ def test_ordinary_proc_reads_still_work(command):
     """A denylist that eats `/proc/self/status` breaks every health script, and
     a control that breaks scripts gets turned off."""
     assert exec_reads_secret(command) is None, f"{command!r} was refused"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat /proc/123/../123/environ",
+        "cat /proc/self/../self/environ",
+        "cat /proc/1/task/1/../../environ",
+        "grep -a X /proc/$PPID/../$PPID/environ",
+        "cat /proc/$(pgrep engine)/environ",
+        "cd /proc/1234 && cat environ",
+        "P=/proc/1/environ; cat $P",
+    ],
+)
+def test_a_computed_or_relative_procfs_path_is_refused_too(command):
+    """Review N4's second half, and the end of the spelling game.
+
+    ``/proc/<pid>/../<pid>/environ`` read a canary while every other spelling
+    was refused; a regex written for that still missed
+    ``/proc/1/task/1/../../environ``; and neither could ever have caught a path
+    the SHELL computes. Paths are normalised with ``posixpath`` now, and a
+    blunt backstop refuses any command that mentions ``/proc`` and asks for
+    ``environ`` — whatever lies between them.
+    """
+    assert exec_reads_secret(command) is not None, f"{command!r} was allowed"
+
+
+# ── N4: the engine's own long-lived children ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_an_mcp_stdio_server_does_not_inherit_the_engine_environment(monkeypatch):
+    """An MCP stdio server lives as long as the engine and held its whole
+    environment — ~50 credentials — readable through procfs, because
+    ``PR_SET_DUMPABLE`` does not survive ``execve``.
+
+    Its own ``config.env`` is exactly where an MCP server's credentials belong;
+    nothing else in the engine's environment is its business.
+    """
+    import robothor.engine.mcp_client as mcp_client
+
+    canary = "ghp_FAKE0000CANARYaaaaaaaaaaaaaaaaaaa"
+    monkeypatch.setenv("GENUS_SEC1_MCP_CANARY", canary)
+    monkeypatch.setenv("ROBOTHOR_EXEC_ENV_MODE", "enforce")
+
+    seen: dict[str, dict[str, str]] = {}
+
+    async def fake_exec(*_argv, env=None, **_kw):
+        seen["env"] = dict(env or {})
+
+        class _Proc:
+            pid = 1234
+            stdin = stdout = stderr = None
+
+        return _Proc()
+
+    monkeypatch.setattr(mcp_client.asyncio, "create_subprocess_exec", fake_exec)
+
+    config = type(
+        "Cfg",
+        (),
+        {"name": "probe", "command": ["/bin/true"], "env": {"MCP_OWN_KEY": "fake-0000"}},
+    )()
+    await mcp_client.McpClientSession(config).start()
+
+    handed = seen.get("env", {})
+    leaked = canary in "".join(handed.values())
+    assert not leaked, "an MCP stdio server was handed the engine's credentials"
+    assert handed.get("MCP_OWN_KEY") == "fake-0000", (
+        "the server's own declared env must still reach it — that is what it is for"
+    )
+
+
+# ── N5: the vault master key ─────────────────────────────────────────────────
+
+
+def test_the_vault_master_key_is_a_secret_path():
+    """It decrypts every row the vault holds, and ``ROBOTHOR_WORKSPACE`` — which
+    says where it lives — is on the exec allowlist. The ``*.key`` pattern missed
+    it because of the hyphen."""
+    from robothor.engine.secret_paths import is_secret_path
+
+    assert is_secret_path("/workspace/.vault-key")
+    assert is_secret_path("~/robothor/.vault-key")
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat $ROBOTHOR_WORKSPACE/.vault-key",
+        "base64 /ws/.vault-key",
+        "xxd /ws/.vault-key",
+    ],
+)
+def test_an_exec_child_cannot_print_the_vault_master_key(command):
+    assert exec_reads_secret(command) is not None, f"{command!r} was allowed"
+
+
+@pytest.mark.asyncio
+async def test_a_real_exec_child_is_refused_the_key(tmp_path, monkeypatch):
+    """Through the handler, with a real workspace, because the refusal has to be
+    on the path an agent actually takes."""
+    from robothor.engine.tools.dispatch import ToolContext
+    from robothor.engine.tools.handlers.filesystem import HANDLERS
+
+    (tmp_path / ".vault-key").write_bytes(b"0" * 32)
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("ROBOTHOR_EXEC_ENV_MODE", "enforce")
+
+    result = await HANDLERS["exec"](
+        {"command": "cat $ROBOTHOR_WORKSPACE/.vault-key", "timeout": 10},
+        ToolContext(agent_id="worker", workspace=str(tmp_path)),
+    )
+    assert "error" in result
+    assert "stdout" not in result

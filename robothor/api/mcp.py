@@ -1598,8 +1598,20 @@ def create_server() -> Any:
 
 
 async def run_server() -> None:
-    """Run the MCP server with stdio transport."""
+    """Run the MCP server with stdio transport.
+
+    Hardened HERE rather than in the ``__main__`` block, because that block is
+    dead code on the path the box actually uses: ``robothor mcp`` goes through
+    ``cli/admin.py:cmd_mcp``, which calls this function directly. A probe found
+    both live MCP processes dumpable for exactly that reason — the round-2 test
+    parsed the file, saw the call in ``__main__``, and passed. Every way of
+    starting an MCP server ends up here.
+    """
     from mcp.server.stdio import stdio_server
+
+    from robothor.engine.process_hardening import harden_process
+
+    harden_process()
 
     server = create_server()
     async with stdio_server() as (read_stream, write_stream):
@@ -1607,11 +1619,6 @@ async def run_server() -> None:
 
 
 if __name__ == "__main__":
-    from robothor.engine.process_hardening import harden_process
-
-    # Same-uid processes share procfs: an agent's `exec` child can read this
-    # process's environment out of /proc unless it says otherwise. One call,
-    # from the one helper, in every long-running Genus process — hardening the
-    # engine alone was a statistic, not a boundary.
-    harden_process()
+    # `run_server` hardens; see its docstring for why it lives there and not
+    # here.
     asyncio.run(run_server())

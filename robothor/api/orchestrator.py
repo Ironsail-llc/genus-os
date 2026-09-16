@@ -52,11 +52,34 @@ VISION_SERVICE_URL = os.environ.get("VISION_SERVICE_URL") or _default_vision_url
 
 # ─── FastAPI App ──────────────────────────────────────────────────────
 
+
+def _harden_at_import() -> None:
+    """Make this process's /proc entries root-only, at import time.
+
+    Called at module scope because uvicorn owns the entry point: there is no
+    function of ours that runs first. Never raises — an import that dies takes
+    the service with it, and this is a mitigation, not a dependency.
+    """
+    try:
+        from robothor.engine.process_hardening import harden_process
+
+        harden_process()
+    except Exception:  # noqa: BLE001 - a hardening step must never block a boot
+        pass
+
+
 app = FastAPI(
     title="Genus OS RAG Orchestrator",
     description="Hybrid RAG pipeline with memory search, web search, reranking, and LLM generation.",
     version="1.0.0",
 )
+
+# At IMPORT, not on a startup event. uvicorn imports this module to find `app`,
+# and the process is the operator's uid from that moment — an agent's `exec`
+# child could read its environment out of /proc before any startup hook fired.
+# The orchestrator is started as `python -m uvicorn robothor.api.orchestrator:app`,
+# so there is no entry function of ours to put this in.
+_harden_at_import()
 
 app.add_middleware(
     CORSMiddleware,

@@ -36,6 +36,13 @@ _SECRET_NAMES = frozenset(
         ".s3cfg",
         ".htpasswd",
         ".vault-token",
+        # The AES master key for this instance's whole vault
+        # (robothor/vault/crypto.py: `<workspace>/.vault-key`). It was missing,
+        # and `ROBOTHOR_WORKSPACE` is on the exec allowlist — so an ungranted
+        # agent under `enforce` was told where the key was and allowed to print
+        # it, which decrypts every row the vault holds. The hyphen is why the
+        # `*.key` pattern did not catch it.
+        ".vault-key",
         ".npmrc",
         ".pypirc",
         "credentials",
@@ -108,16 +115,51 @@ _ENV_PRINTING_BUILTINS = frozenset({"set", "declare", "typeset"})
 #: nothing. ``task/<tid>/`` is the per-thread view of the same environment.
 _PROCFS_ENVIRON = re.compile(r"/proc/[^/\s]+/(?:task/[^/\s]+/)?(environ|cmdline)\b")
 
-#: Repeated separators and no-op ``.`` components, collapsed before matching.
-#: Deliberately NOT ``..``: resolving that needs to know the working directory,
-#: and a denylist that guesses at one would refuse paths that do not exist while
-#: still missing the ones that do. The value here is closing the cheap spellings.
-_REDUNDANT_PATH = re.compile(r"/(?:\./)*(?:/+(?:\./)*)*")
+#: Any ``/proc/…`` run in a command, however it is spelled. Extracted, then
+#: normalised with ``posixpath.normpath``, which resolves ``..`` and ``.`` and
+#: collapses ``//`` exactly as the kernel does.
+#:
+#: Hand-rolled collapsing was tried twice and was wrong twice. The first closed
+#: ``//`` and ``/./`` and skipped ``..`` on the grounds that resolving it needs
+#: a working directory — true of a RELATIVE path and irrelevant here, because a
+#: ``/proc/…`` path is rooted, so ``..`` means exactly one thing. A probe then
+#: read a canary through ``/proc/<pid>/../<pid>/environ`` while every other
+#: spelling was refused, and a regex written for that still missed
+#: ``/proc/1/task/1/../../environ``.
+#:
+#: The lesson is the general one: a denylist that matches a STRING rather than a
+#: PATH means nothing, because the kernel resolves every spelling to one file.
+#: So the matcher resolves them too, with the standard library rather than by
+#: hand.
+#:
+#: The character class stops at shell metacharacters so a normalisation cannot
+#: swallow the rest of a command line. ``$`` and ``{}`` stay in, because
+#: ``/proc/$PPID/environ`` and ``/proc/${pid}/environ`` are the spellings an
+#: agent actually writes.
+_PROC_PATH = re.compile(r"/proc/[^\s'\";|&()<>]*")
+
+#: And the backstop, which is where the spelling game stops.
+#:
+#: Normalisation handles every path a caller writes out. It cannot handle one
+#: the SHELL computes — ``/proc/$(pgrep engine)/environ``, a variable holding
+#: half the path, a ``cd`` and a relative read — and each round of this review
+#: found one more spelling than the last. So the final rule is blunt and
+#: complete: a command that mentions ``/proc`` and asks for ``environ`` or
+#: ``cmdline`` is refused, whatever lies between them.
+#:
+#: The cost is a false refusal for a command that merely NAMES the path (an
+#: agent writing documentation about procfs). That is a visible, recoverable
+#: annoyance; the alternative is another spelling nobody thought of. And this is
+#: defence in depth either way — ``PR_SET_DUMPABLE`` is the control that
+#: actually closes the read.
+_MENTIONS_PROC_ENVIRON = re.compile(r"/proc\b[\s\S]*?\b(?:environ|cmdline)\b")
 
 
 def _normalise_paths(command: str) -> str:
-    """Collapse ``//`` and ``/./`` so one path has one spelling to match."""
-    return _REDUNDANT_PATH.sub("/", command)
+    """Rewrite every ``/proc/…`` run in *command* to its canonical spelling."""
+    import posixpath
+
+    return _PROC_PATH.sub(lambda match: posixpath.normpath(match.group(0)), command)
 
 
 def is_secret_path(path: str | os.PathLike[str]) -> bool:
@@ -286,7 +328,7 @@ def exec_reads_secret(command: str) -> str | None:
     # ``grep -a x /proc/$PPID/environ`` hides the path in an argument, and a
     # Python one-liner names no printer at all. Matched on the whole command for
     # that reason — see _PROCFS_ENVIRON for what this is and is not worth.
-    if _PROCFS_ENVIRON.search(_normalise_paths(command)):
+    if _PROCFS_ENVIRON.search(_normalise_paths(command)) or _MENTIONS_PROC_ENVIRON.search(command):
         return (
             "refused: reading /proc/<pid>/environ or /proc/<pid>/cmdline prints another "
             "process's environment, which holds this instance's credentials. A "
