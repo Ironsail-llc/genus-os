@@ -46,8 +46,23 @@ class TestProhibitionIsNotARequirement:
             "For example, save the result to results/x.json.",
             "For instance you might write it to out/demo.csv.",
             "Some teams save this to reports/legacy.tsv; we do not.",
+            # `e.g.` carries a full stop that is not a clause break, so it has
+            # to be read before the window is trimmed — trimming at its own
+            # period is what let this one through.
+            "e.g. save the output to results/x.json",
+            "i.e. write it to out/x.csv",
+            "You could save it to results/x.json if you wanted to.",
+            "Such as writing it to results/x.json.",
         ],
-        ids=["for-example", "for-instance", "some-teams"],
+        ids=[
+            "for-example",
+            "for-instance",
+            "some-teams",
+            "eg",
+            "ie",
+            "could",
+            "such-as",
+        ],
     )
     def test_an_illustration_is_not_a_requirement(self, text):
         """The reviewer's invented-corpus false positives were both of this
@@ -66,6 +81,11 @@ class TestARealRequirementStillExtracts:
             "Never leave the directory empty; write the report to out/report.md",
             "Save the digest to results/digest.md. Do not create any other files.",
             "Please save them to:\n\n- `/tmp_workspace/results/2022.tsv`\n",
+            # `can` and `may` are deliberately NOT suppressors: this is how
+            # half of real instructions are phrased, and treating them as
+            # hypothetical would disarm the control on ordinary tasks.
+            "You can save the report to out/report.md",
+            "You may write the summary to out/summary.md",
         ],
         ids=[
             "plain",
@@ -73,6 +93,8 @@ class TestARealRequirementStillExtracts:
             "negation-before-semicolon",
             "negation-after",
             "bulleted",
+            "permissive-can",
+            "permissive-may",
         ],
     )
     def test_the_path_is_still_required(self, text):

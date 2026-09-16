@@ -127,7 +127,11 @@ _SUPPRESSOR_RE = re.compile(
     r"avoid|refrain\s+from|refuse[sd]?|declines?|"
     r"if|unless|when(?:ever)?\s+asked|instead\s+of|rather\s+than|"
     r"was\s+told\s+to|were\s+told\s+to|had\s+been\s+asked|previously\s+asked|"
-    r"for\s+example|for\s+instance|e\.?g\.?|such\s+as|some\s+teams|you\s+might"
+    # Hypothetical modals only. `can` and `may` are left out on purpose: "you
+    # can save it to X" is how half of real instructions are phrased, and
+    # suppressing those would disarm the control on ordinary tasks.
+    r"could|might|would\s+(?:be|go)|"
+    r"for\s+example|for\s+instance|such\s+as|some\s+teams"
     r")\b",
     re.IGNORECASE,
 )
@@ -137,6 +141,14 @@ _SUPPRESSOR_RE = re.compile(
 #: "Do not save the table to results/x.tsv" is not, and the only thing
 #: separating them is the full stop.
 _CLAUSE_BREAK_RE = re.compile(r"[.;:!?]\s|\n|[。；！？]")
+
+#: "e.g." / "i.e." — an illustration whose own full stop would otherwise be
+#: read as the end of the clause that introduced it.
+_ABBREVIATION_RE = re.compile(r"\b[ei]\.?\s?[ge]\.", re.IGNORECASE)
+
+#: How close the abbreviation has to sit to count. It introduces the very next
+#: clause, not the paragraph.
+_ABBREVIATION_REACH = 40
 
 #: How far back a suppressor can reach inside its own clause. Long enough for
 #: "Under no circumstances should you write the credentials to …", short
@@ -150,7 +162,13 @@ def _is_suppressed(text: str, index: int) -> bool:
     Looks back to the nearest clause boundary — never across one — within a
     bounded window.
     """
-    window = text[max(0, index - _SUPPRESSOR_REACH) : index]
+    whole = text[max(0, index - _SUPPRESSOR_REACH) : index]
+    # `e.g.` and `i.e.` carry a full stop that is not a clause break, so they
+    # have to be read BEFORE the window is trimmed — trimming at their own
+    # period is what let "e.g. save the output to results/x.json" through.
+    if _ABBREVIATION_RE.search(whole[-_ABBREVIATION_REACH:]):
+        return True
+    window = whole
     breaks = list(_CLAUSE_BREAK_RE.finditer(window))
     if breaks:
         window = window[breaks[-1].end() :]
