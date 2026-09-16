@@ -75,8 +75,21 @@ chmod 600 "$TMP_OUTPUT"
 # orders four services. So a fresh install with no bot token did not merely
 # lack a channel — it failed the boot, and took engine, bridge, app and
 # orchestrator into `dependency failed` with no Restart= that could clear it.
+#
+# 2026-09-15: OPENROUTER_API_KEY left this list for a related reason. Since
+# application credentials resolve VAULT-FIRST, this file is no longer the only
+# place a provider key can live -- an instance whose key the operator handed to
+# the assistant has it in the vault and nothing in the SOPS file, and blocking
+# the boot for that would refuse to start an instance that is correctly
+# configured. It cannot be checked here either: the vault lives in Postgres,
+# which is not up when this runs as ExecStartPre. `genus doctor` and
+# `genus secrets status` are where "is a provider key configured?" is answered,
+# because both can read both stores.
+#
+# The list is deliberately empty rather than deleted: the mechanism stays, so a
+# credential that genuinely cannot come from anywhere but this file (a future
+# bootstrap key) has somewhere to be named.
 REQUIRED_KEYS=(
-    "OPENROUTER_API_KEY"
 )
 
 # Advisory, never required: a missing spare must warn, not block a boot.
@@ -86,6 +99,9 @@ REQUIRED_KEYS=(
 # dead key is not an outage; it shipped 2026-08-25 and then ran with a single
 # key for two days, because nothing on this path ever said the slot was empty.
 ADVISORY_KEYS=(
+    # The primary provider key. Advisory rather than required since 2026-09-15:
+    # it may be in the vault instead, which this script cannot see.
+    "OPENROUTER_API_KEY"
     "OPENROUTER_API_KEY_2"
     # Without it web_search has no API provider and silently falls to scraped
     # engines that data-center IPs get blocked from (whole chain dead
@@ -110,9 +126,10 @@ done
 
 for key in "${ADVISORY_KEYS[@]}"; do
     if ! grep -q "^${key}=" "$TMP_OUTPUT"; then
-        echo "WARNING: $key is not set — this credential pool has no spare." >&2
-        echo "         One capped or revoked key will take the whole fleet down." >&2
-        echo "         Add it with: sops $SOPS_FILE" >&2
+        echo "WARNING: $key is not in $SOPS_FILE." >&2
+        echo "         It may be in the vault, which this script cannot read" >&2
+        echo "         (the vault is in Postgres, which is not up yet at boot)." >&2
+        echo "         Check with: genus secrets status" >&2
     fi
 done
 

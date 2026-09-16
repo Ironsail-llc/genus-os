@@ -8,7 +8,21 @@ and the rest was bare ``os.environ``. So "where does this instance keep that
 value?" had no single answer, and neither did the question an operator actually
 asks: why does the bridge think it is unset?
 
-The chain, in order:
+There is no longer ONE chain. Which store is asked first depends on what the
+credential is, and :mod:`robothor.secrets.classification` is where that is
+decided:
+
+* **bootstrap** credentials -- the ones that bring the instance up, including
+  the database password the vault's own rows live behind -- are resolved
+  environment first, vault second.
+* **application** credentials -- every third-party token an assistant is
+  handed, uses, proves and rotates -- are resolved VAULT first, environment
+  second. On 2026-09-15 an expired ``GH_TOKEN`` in the process environment
+  shadowed a fresh vault row the assistant had just written, and nothing short
+  of root editing the SOPS file and restarting the unit could clear it. A dead
+  environment value must never silently shadow a live vault row.
+
+The two stores, in either order:
 
 1. **the process environment** — which on systemd is
    ``/run/robothor/secrets.env`` loaded by ``EnvironmentFile=`` (written by
@@ -39,31 +53,42 @@ stale verdict passes ``live=True`` to skip the cooldown and probe the vault now.
 not, and neither is the text of an exception that may carry a connection
 string. A journal outlives the tmpfs file the credential came from.
 
-There is deliberately no cache of the vault's contents. ``vault.export_env()``
-returns EVERY secret the instance owns, so keeping it would hold every channel
-token and SMTP password in memory for the sake of one lookup —
-``engine/key_pool.py`` filters its snapshot down to provider slots for exactly
-that reason, and a general accessor has no such filter to apply. Callers that
-resolve a credential on a hot path cache the resolved value themselves
-(``tokens.signing_key()`` does).
+**What is cached, and what is not.** Rows the vault answered for, by key,
+invalidated on every write — see :data:`_vault_cache`. Nothing calls
+``export_env()`` here: it returns EVERY secret the instance owns, so using it to
+answer a question about one is a full decrypt per lookup and holds every channel
+token and SMTP password in memory for the sake of it. That matters because the
+callers are hot — ``github_api._get_token`` per request, ``build_exec_env`` once
+per grant per ``exec`` — and because before the vault went first, the
+environment short-circuited and none of this ran at all. The environment half is
+NOT cached: it is a dict lookup, and caching it would make a test that sets a
+variable not take effect.
 """
 
 from __future__ import annotations
 
-import logging
 import time
 from typing import Literal, NamedTuple
 
 from robothor.constants import DEFAULT_TENANT
+from robothor.secrets.classification import is_bootstrap
+from robothor.secrets.trace import SecretLabel
 from robothor.settings.env import process_env_get
 
-logger = logging.getLogger(__name__)
+# No logger here on purpose. Every line this module used to write now goes
+# through `robothor.secrets.trace.SecretLabel`, which holds a name and nothing
+# else — so "no value reaches a log record" is a property of what that module
+# can see, rather than of every future edit to this one remembering it.
 
 __all__ = [
+    "SECRET_CACHE_MISS_TTL_SECONDS",
+    "SECRET_CACHE_TTL_SECONDS",
     "VAULT_RETRY_SECONDS",
     "ResolvedSecret",
     "SecretSource",
     "get_secret",
+    "is_bootstrap",
+    "reset_secret_cache",
     "reset_vault_availability",
     "resolve_secret",
     "secret_source",
@@ -97,10 +122,51 @@ class ResolvedSecret(NamedTuple):
     source: SecretSource
 
 
+#: What the vault answered for a key, so a hot caller does not ask twice.
+#:
+#: Keyed by ``(tenant, vault_key or name)`` and holding ``(value, available)``
+#: — the MISS is cached too, because ``build_exec_env`` resolves an unset grant
+#: on every ``exec`` and ``_remote_enabled`` asks about a provider that may not
+#: be configured, so remembering only hits would leave the common case paying
+#: full price.
+#:
+#: Only the vault half. The environment is a dict lookup and caching it would
+#: make a test that sets a variable not take effect — a debugging afternoon for
+#: whoever hits it, bought for nothing.
+#:
+#: Two ways out, and both are needed. :func:`reset_secret_cache` is the explicit
+#: one, which ``vault_set`` and the bridge's ``POST /api/admin/secrets/reload``
+#: both reach through ``key_pool.reload_provider_keys`` — for writers that can
+#: reach this process. And a short TTL, for the writers that cannot: the CLI and
+#: the setup wizard are separate processes, and a cache with no TTL made every
+#: one of their writes invisible to a running engine until a restart.
+_vault_cache: dict[tuple[str, str], tuple[str | None, bool, float]] = {}
+
+#: How long a cached HIT is served. Short, because this process is not the only
+#: writer: ``genus vault set``, ``genus secrets migrate``, ``genus channel add``
+#: and the setup wizard are all separate processes, and on ``main`` a CLI write
+#: took effect on the engine's next read. A performance fix that costs that is
+#: a regression. Ten seconds is long enough to collapse a burst of grants on one
+#: ``exec`` and short enough that nobody debugs it.
+SECRET_CACHE_TTL_SECONDS = 10.0
+
+#: How long a cached MISS is served — shorter, deliberately. A stale hit is a
+#: correct answer briefly out of date; a stale miss is a FEATURE THAT STAYS
+#: DEAD. The operator adds ``BRAVE_API_KEY`` from the CLI, web search keeps
+#: failing, and "slow" is indistinguishable from "broken".
+SECRET_CACHE_MISS_TTL_SECONDS = 3.0
+
+
+def reset_secret_cache() -> None:
+    """Forget what the vault said. Called on every write, and by the suite."""
+    _vault_cache.clear()
+
+
 def reset_vault_availability() -> None:
     """Re-arm the vault probe. For tests, and after a deliberate reload."""
     global _vault_retry_after  # noqa: PLW0603
     _vault_retry_after = None
+    reset_secret_cache()
 
 
 def _clean(value: str | None) -> str | None:
@@ -130,6 +196,16 @@ def _vault_read(
     if not live and _vault_retry_after is not None and _clock() < _vault_retry_after:
         return None, False
 
+    cache_key = (tenant_id, vault_key or name)
+    if not live:
+        cached = _vault_cache.get(cache_key)
+        if cached is not None:
+            value, available, stored_at = cached
+            ttl = SECRET_CACHE_TTL_SECONDS if value is not None else SECRET_CACHE_MISS_TTL_SECONDS
+            if _clock() - stored_at < ttl:
+                return value, available
+            del _vault_cache[cache_key]
+
     try:
         # Lazy: importing the vault pulls in the crypto and DAL layers, and a
         # process whose credentials all come from the environment must not pay
@@ -139,29 +215,59 @@ def _vault_read(
         if vault_key is not None:
             found = vault.get(vault_key, tenant_id=tenant_id)
         else:
-            # ``vault.naming.env_name()`` is the one env<->vault mapping, and it
-            # upper-cases and replaces "/" with "_", so it has no inverse: both
-            # ``providers/x/api_key`` and ``providers/x_api/key`` export to the
-            # same name. Looking the ENVIRONMENT name up in the vault's own
-            # export therefore uses that mapping rather than inventing a second
-            # one to drift from it — the same thing ``key_pool._vault_lookup``
-            # does.
-            found = vault.export_env(tenant_id=tenant_id).get(name)
+            # One ROW at a time, by key. Never ``export_env()``.
+            #
+            # ``export_env`` decrypts every secret the instance owns, and this
+            # is a question about one. The callers are hot —
+            # ``github_api._get_token`` per request, ``build_exec_env`` once per
+            # grant per ``exec`` — so an export here is a psycopg2 connection
+            # and a full decrypt on each, and a much larger window in which
+            # every credential is in memory at once. Before the vault went
+            # first, the environment short-circuited and none of this ran.
+            #
+            # ``vault_keys_for_env_name`` is the one place the env-name→key
+            # mapping is spelled, and it ends with the literal lower-cased name
+            # — which is exactly what ``export_env`` would have matched — so
+            # searching the candidates covers everything the export did without
+            # decrypting the rest.
+            from robothor.vault.naming import vault_keys_for_env_name
+
+            found = None
+            for candidate in vault_keys_for_env_name(name):
+                found = vault.get(candidate, tenant_id=tenant_id)
+                if found is not None:
+                    break
     except Exception as exc:  # noqa: BLE001 - the vault is optional, by design
         _vault_retry_after = _clock() + VAULT_RETRY_SECONDS
         # The exception TYPE, never its text: a psycopg2 error carries the
         # connection string, and a connection string carries a password.
-        logger.info(
-            "secrets: vault unreadable while resolving %s (%s); treating it as unset "
-            "and not retrying for %.0fs",
-            name,
-            type(exc).__name__,
-            VAULT_RETRY_SECONDS,
+        SecretLabel(name).vault_unreadable(
+            error_class=type(exc).__name__, retry_seconds=VAULT_RETRY_SECONDS
         )
         return None, False
 
     _vault_retry_after = None
-    return _clean(found), True
+    answer = (_clean(found), True)
+    _vault_cache[cache_key] = (*answer, _clock())
+    return answer
+
+
+def _absent_or(label: SecretLabel, from_vault: str | None, available: bool) -> ResolvedSecret:
+    """The tail of both chains: a vault row, or why there is no value.
+
+    ``missing`` and ``unavailable`` stay apart here for the reason the module
+    docstring gives — ``tokens.signing_key()`` GENERATES a key on ``missing``
+    and its store is an upsert, so acting on a stale "nobody knows" would
+    overwrite the live signing key.
+    """
+    if from_vault is not None:
+        label.resolved_from_vault()
+        return ResolvedSecret(from_vault, "vault")
+    if not available:
+        label.unavailable()
+        return ResolvedSecret(None, "unavailable")
+    label.missing()
+    return ResolvedSecret(None, "missing")
 
 
 def resolve_secret(
@@ -189,21 +295,41 @@ def resolve_secret(
             not act on a five-minute-old verdict about a vault that may have
             recovered.
     """
-    from_env = _clean(process_env_get(name, None))
-    if from_env is not None:
-        logger.debug("secrets: %s resolved from the process environment", name)
-        return ResolvedSecret(from_env, "env")
+    # Built from the NAME, before anything is fetched. Every log line below
+    # goes through it, so the only expression that reaches a logger is a field
+    # of an object that has never seen a value — see robothor/secrets/trace.py.
+    label = SecretLabel(name)
 
+    from_env = _clean(process_env_get(name, None))
+
+    if is_bootstrap(name):
+        # Environment first, and the vault only as a fallback. These are the
+        # credentials the instance needs in order to HAVE a vault (the rows
+        # live in the database ``ROBOTHOR_DB_PASSWORD`` opens) or that
+        # rotating would lock everybody out of a running instance.
+        if from_env is not None:
+            label.resolved_from_env(bootstrap=True)
+            return ResolvedSecret(from_env, "env")
+        from_vault, available = _vault_read(name, vault_key, tenant_id, live=live)
+        return _absent_or(label, from_vault, available)
+
+    # Application credential: the vault is the store the operator and the
+    # assistant manage, so a row there beats whatever the box booted with.
     from_vault, available = _vault_read(name, vault_key, tenant_id, live=live)
     if from_vault is not None:
-        logger.debug("secrets: %s resolved from the vault", name)
+        label.resolved_from_vault(ahead_of_env=True)
         return ResolvedSecret(from_vault, "vault")
-    if not available:
-        logger.debug("secrets: %s is not in the environment and the vault is unavailable", name)
-        return ResolvedSecret(None, "unavailable")
 
-    logger.debug("secrets: %s is not configured in the environment or the vault", name)
-    return ResolvedSecret(None, "missing")
+    if from_env is not None:
+        # Either the vault holds no such row, or it could not be read at all.
+        # Both fall through to the environment: failing closed on an
+        # unreadable vault would take every channel, provider and integration
+        # down with it, for credentials a root-owned file is still holding
+        # good copies of.
+        label.fell_through_to_env(vault_answered=available)
+        return ResolvedSecret(from_env, "env")
+
+    return _absent_or(label, None, available)
 
 
 def get_secret(

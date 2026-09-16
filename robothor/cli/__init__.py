@@ -830,6 +830,45 @@ def _build_parser() -> argparse.ArgumentParser:
     vault_sub.add_parser("export-env", help="Export all secrets as KEY=VALUE")
     vault_sub.add_parser("audit", help="Audit secret usage across the codebase")
 
+    # secrets — the two stores, and how to move between them. Distinct from
+    # `vault`, which operates on rows: these answer "what does this instance
+    # hold, where, and which store wins", and neither ever prints a value.
+    secrets_parser = subparsers.add_parser(
+        "secrets", help="Where this instance keeps its credentials"
+    )
+    secrets_sub = secrets_parser.add_subparsers(dest="secrets_command")
+    secrets_status_p = secrets_sub.add_parser(
+        "status", help="Every credential: which store has it, which store wins, fingerprints"
+    )
+    secrets_status_p.add_argument("--tenant", default=None, help="Tenant id (default: this one)")
+    secrets_migrate_p = secrets_sub.add_parser(
+        "migrate", help="Move application credentials out of the environment and into the vault"
+    )
+    secrets_migrate_p.add_argument(
+        "--from-env",
+        action="store_true",
+        help="Read candidates from this process's environment (required)",
+    )
+    secrets_migrate_p.add_argument(
+        "--dry-run", action="store_true", help="List what would be stored; write nothing"
+    )
+    secrets_migrate_p.add_argument(
+        "--only", nargs="+", default=None, metavar="NAME", help="Migrate only these names"
+    )
+    secrets_migrate_p.add_argument(
+        "--overwrite",
+        nargs="+",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Replace the vault's value for these names with the environment's. "
+            "Without it a differing vault row is KEPT and reported, because the vault "
+            "wins for application credentials and a migration must never revert a "
+            "rotation. Per name, never a blanket flag."
+        ),
+    )
+    secrets_migrate_p.add_argument("--tenant", default=None, help="Tenant id (default: this one)")
+
     # skills
     skills_parser = subparsers.add_parser("skills", help="Skill library maintenance")
     skills_sub = skills_parser.add_subparsers(dest="skills_command")
@@ -1323,6 +1362,10 @@ def main(argv: list[str] | None = None) -> int:
         from robothor.cli.vault import cmd_vault
 
         return cmd_vault(args)
+    if args.command == "secrets":
+        from robothor.cli.secrets_cmd import cmd_secrets
+
+        return cmd_secrets(args)
     if args.command == "agent":
         from robothor.cli.agent import cmd_agent
 

@@ -79,14 +79,27 @@ def empty_vault(monkeypatch):
 
 
 class TestTheReaderItself:
-    def test_the_environment_wins_over_the_vault(self, vault_only, monkeypatch):
-        """An operator who exported a token meant it, and a rotation that
-        reaches the environment must not be shadowed by a stale vault row."""
+    def test_the_vault_wins_over_the_environment(self, vault_only, monkeypatch):
+        """Reversed on 2026-09-15, and the reversal is the point.
+
+        This used to assert the opposite, on the reasoning that "an operator
+        who exported a token meant it". The incident showed what that reasoning
+        misses: on a real instance nobody exports anything. The environment is
+        a snapshot of a root-owned SOPS file taken at boot, and the operator
+        (and the assistant acting for them) can write the VAULT and cannot
+        write that file or restart the unit that read it. So a stale value
+        there shadowed every rotation, permanently, with no way out that did
+        not involve root.
+
+        A Slack bot token is an application credential, so the vault wins. The
+        credentials that genuinely must come from the environment are marked
+        bootstrap in the settings model and are unaffected.
+        """
         monkeypatch.setenv(BOT_TOKEN_ENV, "xoxb-test-exported-token")
         found = slack_credentials()
 
-        assert found.bot_token == "xoxb-test-exported-token"
-        assert found.bot_source == "env"
+        assert found.bot_token == FAKE_BOT_TOKEN
+        assert found.bot_source == "vault"
         assert found.app_source == "vault"
 
     def test_the_vault_answers_when_the_environment_does_not(self, vault_only):

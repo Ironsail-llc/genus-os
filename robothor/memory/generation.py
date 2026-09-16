@@ -288,7 +288,13 @@ def _remote_enabled() -> bool:
     global _missing_key_logged
     if _provider() != "openrouter":
         return False
-    if not os.environ.get("OPENROUTER_API_KEY"):
+    # Through the accessor, so a key the operator handed the assistant (and
+    # which therefore lives in the vault) counts as configured. Reading the
+    # process environment here meant memory generation silently fell back to
+    # local ollama on an instance whose only key was a vault row.
+    from robothor.secrets import get_secret
+
+    if not get_secret("OPENROUTER_API_KEY"):
         if not _missing_key_logged:
             logger.error(
                 "%s: %s=openrouter but OPENROUTER_API_KEY is not set — "

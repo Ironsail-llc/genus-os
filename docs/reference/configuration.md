@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-384 settings in 13 groups.
+386 settings in 13 groups.
 
 ## paths
 
@@ -256,6 +256,7 @@ Who may reach the bridge and the dashboard, and how that is proven.
 
 | Variable | Type | Default | Restart | Secret | Since | Description |
 | --- | --- | --- | --- | --- | --- | --- |
+| `AUTH_SECRET` | str | _(unset)_ | `robothor-bridge`, `robothor-app` | yes | 1.91.0 | Key the dashboard's own session cookies are signed with. Read by the Next.js app rather than by Python, and declared here so that the platform classifies it: it is bootstrap (rotating it signs every session out) and it is a credential, so the exec scrubber keeps it out of every agent's shell. |
 | `CF_ACCESS_AUD` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | legacy | Cloudflare Access application audience tag that the dashboard verifies sign-in assertions against. |
 | `CF_ACCESS_TEAM_DOMAIN` | str | _(empty)_ | `robothor-bridge`, `robothor-app` | no | legacy | Cloudflare Access team domain that fronts the dashboard; with the audience, lets the bridge and dashboard treat Access as a sign-in method. |
 | `GENUS_AUTH_ENFORCE` | bool | `false` | `robothor-bridge`, `robothor-app` | no | legacy | One-way compatibility switch that turns identity checks on. It never relaxes the existing role_permissions policy. |
@@ -300,6 +301,7 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 | `ROBOTHOR_DNC_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Do-not-contact ladder position: observe logs an attempted contact of a suppressed person, enforce blocks it. |
 | `ROBOTHOR_EXEC_ALLOWLIST_STRICT_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Switch for rejecting shell-chaining metacharacters in an allowlisted exec command, so an allowlisted binary cannot carry a second one. |
 | `ROBOTHOR_EXEC_ALLOWLIST_STRICT_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Exec-allowlist ladder position: observe logs the chained command, enforce refuses it. |
+| `ROBOTHOR_EXEC_ENV_MODE` | str | `observe` | `robothor-engine` | no | 1.91.0 | What an agent's `exec` child may see of the engine's environment. enforce builds the child environment from an allowlist — the process essentials plus the non-secret platform settings — so no credential reaches an agent's shell unless that agent's own manifest grants it by name under `secrets:`. observe (the default, so an upgrade takes nothing from an agent that was using it) changes nothing and logs, per agent, the names enforce would have withheld. off disables the control. New installs are set to enforce by the init wizard. |
 | `ROBOTHOR_FEDERATION_ALLOW_INERT_RLS` | bool | `false` | `robothor-engine` | no | legacy | Let a federation link activate while row-level security is inert. A deliberate escape hatch: the gate exists because a child could otherwise reach its parent's data. |
 | `ROBOTHOR_HA_DEDUP_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Deduplicate work across engine replicas through Redis instead of in-process only. Off is the correct single-node default. |
 | `ROBOTHOR_HA_LEADER_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Elect a leader among engine replicas so scheduled work runs once. Unset means single-node, where every process is the leader. |

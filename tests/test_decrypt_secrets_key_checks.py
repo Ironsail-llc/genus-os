@@ -31,10 +31,32 @@ def _array(name: str) -> list[str]:
 
 
 def test_required_keys_has_no_duplicates():
+    """The set is empty as of 2026-09-15, and the mechanism stays.
+
+    Nothing this script can see is required any more: an application credential
+    may be in the vault, which it cannot read (Postgres is not up at
+    ``ExecStartPre``). The array is kept, and kept parseable, so a credential
+    that genuinely cannot come from anywhere but this file has somewhere to be
+    named — and so this guard is already waiting when one is.
+    """
+    text = SCRIPT.read_text()
+    assert "REQUIRED_KEYS=(" in text, "REQUIRED_KEYS not found — did the script move?"
     keys = _array("REQUIRED_KEYS")
-    assert keys, "REQUIRED_KEYS not found — did the script move?"
     dupes = {k for k in keys if keys.count(k) > 1}
     assert not dupes, f"duplicated slot(s) in REQUIRED_KEYS: {sorted(dupes)}"
+
+
+def test_no_application_credential_can_block_a_boot():
+    """The 2026-09-15 rule, as a guard.
+
+    Listing an application credential here would refuse the boot of a correctly
+    configured instance — one whose key the operator handed to the assistant,
+    and which is therefore in the vault — and take engine, bridge, app and
+    orchestrator into ``dependency failed`` with it, with no ``Restart=`` that
+    could clear it.
+    """
+    keys = _array("REQUIRED_KEYS")
+    assert keys == [], f"a credential that may come from the vault cannot gate a boot: {keys}"
 
 
 def test_the_credential_spare_is_reported_on():
@@ -119,12 +141,38 @@ def test_a_store_without_telegram_credentials_boots(tmp_path: Path):
     assert 'OPENROUTER_API_KEY="k"' in output.read_text()
 
 
-def test_a_store_without_the_provider_credential_is_refused_by_name(tmp_path: Path):
-    """The one remaining required key is what the fleet cannot run without."""
+def test_a_store_without_the_provider_credential_still_boots(tmp_path: Path):
+    """Reversed 2026-09-15, and the reversal is the point.
+
+    This asserted that a store with no ``OPENROUTER_API_KEY`` was REFUSED, on
+    the reasoning that the fleet cannot run without one. True, and no longer a
+    statement about this file: application credentials resolve vault-first, so
+    an instance whose provider key the operator handed to the assistant has it
+    in the vault and nothing here. Refusing that boot would refuse an instance
+    that is correctly configured -- and take engine, bridge, app and
+    orchestrator down with it, since this runs as ExecStartPre for a unit that
+    orders all four.
+
+    Nor can this script check the other store: the vault lives in Postgres,
+    which is not up when this runs. ``genus doctor`` and ``genus secrets
+    status`` answer "is a provider key configured?", because both can read both
+    stores.
+    """
     result, _ = _run_decrypt(tmp_path, {"SOMETHING_ELSE": "x"})
-    assert result.returncode == 1, "a store with no provider credential was accepted"
-    assert "OPENROUTER_API_KEY" in result.stderr, (
-        "the refusal must name the missing key, or the operator cannot fix it"
+    assert result.returncode == 0, (
+        "a store with no provider credential was refused, which would fail the "
+        f"boot of a vault-configured instance\n{result.stdout}{result.stderr}"
+    )
+
+
+def test_a_missing_provider_key_is_still_named(tmp_path: Path):
+    """Not required, still reported. An operator whose key is in neither store
+    needs the name, and this is the only boot-time place that can say it."""
+    result, _ = _run_decrypt(tmp_path, {"SOMETHING_ELSE": "x"})
+    assert "OPENROUTER_API_KEY" in result.stderr
+    assert "genus secrets status" in result.stderr, (
+        "the warning must say where the other store can be checked, or it reads "
+        "as a failure on an instance that is configured"
     )
 
 
@@ -133,7 +181,6 @@ def test_a_missing_spare_warns_but_still_boots(tmp_path: Path):
     result, _ = _run_decrypt(tmp_path, {"OPENROUTER_API_KEY": "k"})
     assert result.returncode == 0, result.stdout + result.stderr
     assert "OPENROUTER_API_KEY_2" in result.stderr
-    assert "no spare" in result.stderr
 
 
 def test_missing_pager_credentials_warn_by_name_but_still_boot(tmp_path: Path):

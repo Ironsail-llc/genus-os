@@ -31,9 +31,19 @@ downstream needs to know.
 
 from __future__ import annotations
 
+import json
 import re
+from typing import Any
 
-__all__ = ["PLACEHOLDER", "redact", "redact_unrecognized_arguments"]
+__all__ = [
+    "PLACEHOLDER",
+    "SECRET_TOOL_ARGUMENTS",
+    "redact",
+    "redact_assistant_turn",
+    "redact_message",
+    "redact_tool_arguments",
+    "redact_unrecognized_arguments",
+]
 
 #: What a redacted run is replaced by. Visibly a redaction rather than a
 #: mangled value, so an operator reading an error knows something was removed
@@ -79,7 +89,15 @@ _AUTH_BLOB = r"(?:[A-Za-z0-9+/_-]{16,}={0,2}|[A-Za-z0-9+/_-]{4,}={1,2})"
 #: because the prefix alone is three letters that also begin ordinary words;
 #: the word boundary in front is what keeps ``risk-weighted-average`` and
 #: ``task-management-service`` out of the match.
-_API_KEY = r"\bsk-[A-Za-z0-9_-]{16,}"
+#: Tightened 2026-09-15: the old ``[A-Za-z0-9_-]{16,}`` matched
+#: ``sk-learn-compatible-estimators``, because an English hyphenated phrase is
+#: long and made of the same characters.
+#:
+#: The discriminator is not length — it is that a key is not WORDS. The negative
+#: lookahead rejects a tail that is entirely lower-case words joined by hyphens,
+#: which every such phrase is and no issued key is: ``sk-or-v1-<hex>``,
+#: ``sk-proj-<mixed>`` and ``sk-ant-api03-<mixed>`` all carry digits or capitals.
+_API_KEY = r"\bsk-(?![a-z]+(?:-[a-z]+)*(?![\w-]))[A-Za-z0-9_-]{16,}"
 
 #: Words that mean "credential" on their own, wherever a name ends in one.
 #: A password has no shape of its own — it is whatever the provider issued — so
@@ -172,20 +190,96 @@ _ASSIGNMENT = re.compile(
 )
 
 
+#: Values that are a REFERENCE to a credential rather than one.
+#:
+#: ``SSH_KEY=~/.ssh/id_ed25519`` is a path, ``GITHUB_TOKEN=$(gh auth token)`` is
+#: a command, ``KEY=${OTHER}`` is a variable. Redacting these loses the agent
+#: information it needs later in the session and, for the command form, leaves
+#: syntactically broken text in the history — the round-2 redactor turned
+#: ``$(gh auth token)`` into ``<redacted> auth token)``.
+#:
+#: A path can still hold a secret in its NAME, which is what ``secret_paths``
+#: is for; this is only about not mangling the line.
+_VALUE_IS_A_REFERENCE = re.compile(
+    r"""^(?:
+        [~./]                 # ~/.ssh/id_ed25519, ./key, /etc/…
+        | \$[({]              # $(gh auth token), ${OTHER}
+        | \$[A-Za-z_]         # $OTHER
+        | %[A-Za-z_]           # %OTHER% on Windows
+    )""",
+    re.VERBOSE,
+)
+
+
 def _redact_assignment(match: re.Match[str]) -> str:
     name = match.group("name")
     quote = match.group("quote")
+    body = match.group("quoted") if quote else match.group("value")
+    if body and _VALUE_IS_A_REFERENCE.match(body):
+        # A pointer to the credential, not the credential.
+        return match.group(0)
     if quote:
         return f"{name}={quote}{PLACEHOLDER}{quote}"
     return f"{name}={PLACEHOLDER}"
 
 
+#: Vendor token formats, by the prefix their issuer publishes.
+#:
+#: Added 2026-09-15. Until then this module could only see a credential inside
+#: an ``NAME=value`` assignment or an ``Authorization`` header, which is right
+#: for a log line and wrong for the thing that now passes through here: a
+#: credential a PERSON typed into a chat message. The operator pastes
+#: ``ghp_…`` with no name beside it, and the message is persisted, replayed to
+#: the provider on every later turn, and exported into a fine-tuning corpus.
+#:
+#: This is a list of VENDOR formats, not of our own names — the distinction is
+#: what keeps it from being the drift defect. GitHub does not change what a PAT
+#: starts with when we add a setting.
+_VENDOR_TOKEN = (
+    # ``[A-Za-z0-9_]`` rather than ``[A-Za-z0-9]``: a real PAT carries no
+    # underscore after the prefix, but a redactor that stops at the first one
+    # leaves the tail of whatever was pasted visible, which is the
+    # ``public_key`` mistake again — redaction that neither protects nor
+    # informs. The prefix is distinctive enough to carry the wider class.
+    r"\bgh[pousr]_[A-Za-z0-9_]{16,}",
+    r"\bgithub_pat_[A-Za-z0-9_]{16,}",
+    r"\bglpat-[A-Za-z0-9_-]{16,}",
+    r"\bsk_(?:live|test)_[A-Za-z0-9_]{16,}",
+    r"\brk_live_[A-Za-z0-9]{16,}",
+    r"\bshpat_[A-Za-z0-9]{16,}",
+    r"\bdop_v1_[A-Za-z0-9]{16,}",
+    r"\bnpm_[A-Za-z0-9]{16,}",
+    r"\bhf_[A-Za-z0-9]{16,}",
+    r"\bpypi-[A-Za-z0-9_-]{16,}",
+    r"\bA(?:KIA|SIA)[A-Z0-9]{16,}",
+    r"\bAIza[A-Za-z0-9_-]{30,}",
+    r"\bya29\.[A-Za-z0-9_-]{20,}",
+    r"\bSG\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}",
+    r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----",
+)
+
+#: A URL carrying ``user:password@``. A DSN is the one credential shape that
+#: hides in a setting nobody calls secret: ``ROBOTHOR_DB_HOST`` accepts a full
+#: ``postgresql://alice:…@db/genus`` and the settings package builds a pool from
+#: it, so the name gate — which can only see the name — lets it into every
+#: agent's shell. Only the userinfo run is taken; the host and path stay
+#: readable, because an operator debugging a connection needs them.
+_URL_USERINFO = r"(?<=://)[^/@\s:]+:[^/@\s]+(?=@)"
+
 _SHAPES = (
     r"xox[abceprs]-[\w-]+",
     r"xapp-[\w-]+",
-    r"Bearer\s+\S+",
+    # ``Bearer <token>`` — with a TOKEN-shaped tail, not ``\S+``. The loose form
+    # ate the next English word, so "use Bearer authentication for the API"
+    # became "use <redacted> for the API". A real bearer token is a long opaque
+    # run; an English word after "Bearer" is prose, and mangling it costs an
+    # agent information later in the same session for no security gain.
+    r"Bearer\s+[A-Za-z0-9._~+/=-]{20,}",
     r"\b\d{5,}:[A-Za-z0-9_-]{30,}",
     _API_KEY,
+    _URL_USERINFO,
+    *_VENDOR_TOKEN,
     rf"{_AUTH_KEYWORD}(?:[ \t]+{_AUTH_BLOB})?(?:[ \t]*\r?\n{_AUTH_BLOB})+",
     rf"{_AUTH_KEYWORD}[ \t]+{_AUTH_BLOB}",
 )
@@ -264,3 +358,158 @@ def redact_unrecognized_arguments(message: str) -> str:
         return message[: match.start(2)] + scrubbed
     except Exception:  # noqa: BLE001 - pragma: no cover - printing nothing beats a token
         return PLACEHOLDER
+
+
+# ── tool arguments ───────────────────────────────────────────────────────────
+
+#: Parameters that HOLD a credential without being NAMED like one. There is
+#: exactly one shape of these — a tool whose whole job is to store a secret,
+#: where the argument is honestly called ``value`` — and the guard in
+#: ``robothor/engine/tests/test_vault_set_is_redacted.py`` reads the engine's
+#: tool schemas and fails if a new tool declares such a parameter without
+#: appearing here. That guard is what keeps this from becoming the
+#: hand-maintained list that drifts away from what it describes.
+SECRET_TOOL_ARGUMENTS: dict[str, frozenset[str]] = {
+    "vault_set": frozenset({"value"}),
+}
+
+
+def _argument_reads_as_a_credential(name: str) -> bool:
+    """Whether a parameter NAME says it holds a credential.
+
+    Reuses the assignment matcher above rather than adding a second opinion: a
+    probe of ``<name>=<innocuous value>`` is redacted exactly when the name is
+    one this module already recognises.
+    """
+    probe = f"{name}=placeholder-value-1234567890"
+    return redact(probe) != probe
+
+
+def redact_assistant_turn(message: Any) -> Any:
+    """A copy of one chat message with any credential in its tool calls taken.
+
+    The credential does not reach the engine through ``tool_input``; it reaches
+    it through the assistant's own echo. When a model calls ``vault_set``, the
+    provider's reply carries ``tool_calls[].function.arguments`` as a JSON
+    string containing the value, and that message is appended to
+    ``session.messages`` — which is re-sent to the provider on every subsequent
+    turn, copied into the LLM_CALL step under ``ROBOTHOR_RECORD_ASSISTANT_TURNS``,
+    and serialised into the ShareGPT trajectory when sampling is on.
+
+    Arguments are parsed as JSON and redacted per argument, so the tool NAME
+    and the vault KEY survive: the verification pass and the run viewer read
+    this to say what the agent did, and a turn redacted wholesale says nothing.
+    Arguments that are not JSON get the ordinary text pass.
+
+    Never mutates its input.
+    """
+    if not isinstance(message, dict):
+        return message
+    calls = message.get("tool_calls")
+    if not isinstance(calls, list) or not calls:
+        return message
+
+    cleaned_calls: list[Any] = []
+    changed = False
+    for call in calls:
+        function = call.get("function") if isinstance(call, dict) else None
+        if not isinstance(function, dict):
+            cleaned_calls.append(call)
+            continue
+        raw = function.get("arguments")
+        if not isinstance(raw, str) or not raw:
+            cleaned_calls.append(call)
+            continue
+        name = str(function.get("name", "") or "")
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError):
+            scrubbed = redact(raw)
+        else:
+            scrubbed = (
+                json.dumps(redact_tool_arguments(name, parsed))
+                if isinstance(parsed, dict)
+                else redact(raw)
+            )
+        if scrubbed == raw:
+            cleaned_calls.append(call)
+            continue
+        changed = True
+        cleaned_calls.append({**call, "function": {**function, "arguments": scrubbed}})
+
+    if not changed:
+        return message
+    return {**message, "tool_calls": cleaned_calls}
+
+
+def redact_message(message: Any) -> Any:
+    """A copy of one chat message with credentials taken out of its text too.
+
+    For the messages a PERSON wrote. The operator pastes a token into Telegram;
+    the model has to see it once, or it cannot store it — but after that turn
+    the message is appended to the session history, persisted, and replayed to
+    the provider for as long as the session lives. So the rule is: the current
+    turn may see it, nothing after may, and this is what the "after" path
+    calls.
+
+    Redacts the text, not the message. "here is the token: <redacted>" keeps an
+    operator's own history readable, which a wholesale redaction would not.
+    """
+    if not isinstance(message, dict):
+        return message
+    cleaned = redact_assistant_turn(message)
+    content = cleaned.get("content")
+    if isinstance(content, str) and content:
+        scrubbed = redact(content)
+        if scrubbed != content:
+            cleaned = {**cleaned, "content": scrubbed}
+    elif isinstance(content, list):
+        # Multimodal content: ``[{"type": "text", "text": …}, {"type":
+        # "image_url", …}]``. Only ``str`` content was handled, so a list row
+        # went through untouched — latent while no history append builds one,
+        # and `session.py` already builds this shape for the current turn and
+        # the attachments work will put it in a history.
+        parts = [
+            {**part, "text": redact(part["text"])}
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
+            else part
+            for part in content
+        ]
+        if parts != content:
+            cleaned = {**cleaned, "content": parts}
+    return cleaned
+
+
+def redact_tool_arguments(tool_name: str, arguments: Any) -> Any:
+    """A copy of ``arguments`` with any credential replaced by the placeholder.
+
+    ``session.record_tool_call`` writes tool arguments into
+    ``agent_run_steps.tool_input`` — a row that outlives the run and is read by
+    the verification pass, the guardrail engine and the run viewer. ``vault_set``
+    puts a credential in those arguments by design, so without this the one tool
+    whose job is to keep a secret would be the one tool that leaks it.
+
+    Redacts by ARGUMENT, never wholesale: the verification pass reads
+    ``tool_input`` to decide whether a run did what it claimed, and a step whose
+    every argument is ``<redacted>`` cannot be verified. The KEY a ``vault_set``
+    wrote stays readable for the same reason — an operator has to be able to see
+    which row changed.
+
+    Never mutates its input: the handler has already run by the time this is
+    called, but a redactor that edited in place would be one refactor away from
+    redacting a credential before the vault got it.
+    """
+    if not isinstance(arguments, dict):
+        return arguments
+    named = SECRET_TOOL_ARGUMENTS.get(tool_name, frozenset())
+    cleaned: dict[str, Any] = {}
+    for key, value in arguments.items():
+        if key in named or _argument_reads_as_a_credential(str(key)):
+            cleaned[key] = PLACEHOLDER
+        elif isinstance(value, str):
+            # A credential the model pasted into an ordinary argument still
+            # goes; this is the same pass every log line already gets.
+            cleaned[key] = redact(value)
+        else:
+            cleaned[key] = value
+    return cleaned

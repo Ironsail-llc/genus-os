@@ -296,6 +296,20 @@ class AgentConfig:
     tools_allowed: list[str] = field(default_factory=list)
     tools_denied: list[str] = field(default_factory=list)
 
+    # Credential tier (manifest key `v2.credentials`). "operator" lets this
+    # agent use the vault tools; empty refuses them. Deliberately NOT the
+    # `role:` field, which feeds RBAC: keying the vault gate on `role` meant
+    # the prescribed opt-in (`role: main`) denied the agent every tool, because
+    # no role_permissions row seeds `main`. Two postures, two fields.
+    credential_tier: str = ""
+
+    # Credential NAMES this agent's `exec` children may see (manifest key
+    # `secrets:`). Empty is the default and the safe one: an agent's shell
+    # gets no credential at all unless its OWN manifest names one, which is
+    # also why a spawned sub-agent inherits nothing — the grant is read from
+    # the child's manifest, not handed down. See robothor/engine/exec_env.py.
+    secret_grants: list[str] = field(default_factory=list)
+
     # Instructions
     instruction_file: str = ""
     bootstrap_files: list[str] = field(default_factory=list)

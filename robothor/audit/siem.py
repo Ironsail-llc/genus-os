@@ -21,11 +21,21 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def siem_webhook_url() -> str:
+    """The SIEM webhook, vault first.
+
+    Through the accessor for the reason in ``alerts.alert_webhook_url``: the
+    status table measures the accessor, so a reader that bypasses it makes the
+    runbook's verify step attest something it cannot see.
+    """
+    from robothor.secrets import get_secret
+
+    return get_secret("ROBOTHOR_SIEM_WEBHOOK_URL") or ""
+
+
 def siem_enabled() -> bool:
     """True if any SIEM forwarding target is configured."""
-    return bool(
-        os.environ.get("ROBOTHOR_SIEM_WEBHOOK_URL") or os.environ.get("ROBOTHOR_SIEM_SYSLOG_HOST")
-    )
+    return bool(siem_webhook_url() or os.environ.get("ROBOTHOR_SIEM_SYSLOG_HOST"))
 
 
 def forward_event(event: dict[str, Any]) -> None:
@@ -43,7 +53,7 @@ def forward_event(event: dict[str, Any]) -> None:
 
 
 def _forward_event_blocking(event: dict[str, Any]) -> None:
-    webhook = os.environ.get("ROBOTHOR_SIEM_WEBHOOK_URL")
+    webhook = siem_webhook_url()
     if webhook:
         _forward_webhook(webhook, event)
     syslog_host = os.environ.get("ROBOTHOR_SIEM_SYSLOG_HOST")

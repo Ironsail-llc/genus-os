@@ -182,8 +182,37 @@ def _resolve_path(path: str, workspace: str) -> Path:
     return p
 
 
+def _run_revert_command(command: str, *, workspace: str | None) -> subprocess.CompletedProcess[str]:
+    """Run an experiment's revert command, scrubbed.
+
+    Same reasoning as :func:`_run_metric_command`: the text comes from an
+    experiment definition an agent wrote, so it is a model-composed shell
+    command and gets the same environment an agent's ``exec`` would.
+    """
+    from robothor.engine.exec_env import build_exec_env
+
+    return subprocess.run(
+        command,
+        shell=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        cwd=workspace,
+        env=build_exec_env(agent_id="", mode=None).env,
+    )
+
+
 def _run_metric_command(command: str, workspace: str) -> str:
-    """Run a metric command and return stdout."""
+    """Run a metric command and return stdout.
+
+    Scrubbed like an agent's ``exec``: the command comes from an experiment
+    definition, which an agent writes, so it is model-composed text running a
+    shell. It used to inherit the engine's whole environment while sitting
+    entirely outside the exec ladder — invisible under ``observe``, and
+    reachable by an agent that had been denied ``exec`` on purpose.
+    """
+    from robothor.engine.exec_env import build_exec_env
+
     cwd = workspace or os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor"))
     result = subprocess.run(
         command,
@@ -192,6 +221,7 @@ def _run_metric_command(command: str, workspace: str) -> str:
         text=True,
         timeout=_METRIC_CMD_TIMEOUT,
         cwd=cwd,
+        env=build_exec_env(agent_id="", mode=None).env,
     )
     if result.returncode != 0:
         raise RuntimeError(
@@ -877,14 +907,7 @@ async def _experiment_commit(args: dict[str, Any], ctx: ToolContext) -> dict[str
         revert_cmd = config.get("revert_command")
         if revert_cmd:
             try:
-                result = subprocess.run(
-                    revert_cmd,
-                    shell=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    cwd=workspace,
-                )
+                result = _run_revert_command(revert_cmd, workspace=workspace)
                 revert_output = result.stdout.strip() or result.stderr.strip()
                 # If revert_command failed (non-zero exit or error output containing
                 # "error" / "pathspec" / "did not match"), fall back to snapshot restore.

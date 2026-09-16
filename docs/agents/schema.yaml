@@ -160,6 +160,19 @@ recommended:
   tools_denied:
     type: list[string]
     default: []
+  secrets:
+    type: list[string]
+    default: []
+    description: >
+      Credential NAMES this agent's `exec` commands may see, and nothing
+      else does. Resolved through the secrets accessor (the vault first),
+      injected into this agent's child processes only, and never inherited
+      by a sub-agent it spawns — a sub-agent's grants come from its own
+      manifest. Bootstrap credentials (the database password, the session
+      signing keys) are refused however they are named here. Grant a name
+      only where the agent's instructions actually run a command that needs
+      it; every other agent's shell sees no credential at all.
+    example: ["GITHUB_TOKEN"]
   instruction_file:
     type: string
     description: Path to .md file loaded as system prompt
@@ -628,6 +641,19 @@ optional:
         sandbox-by-default for host-trusted agents (RBAC + exec allowlist
         still apply); under ROBOTHOR_SANDBOX_DEFAULT_MODE=enforce,
         exec-holding agents without "host" get a Docker sandbox.
+    credentials:
+      type: string
+      enum: [operator, ""]
+      default: ""
+      description: >
+        Credential tier. "operator" lets this agent use the vault tools
+        (vault_get/set/test/list/delete) to keep, prove and rotate the
+        credentials the operator hands it. Empty (the default) refuses them.
+        Deliberately NOT the `role:` field: that one feeds RBAC, and setting
+        it to a value no role_permissions row seeds denies the agent every
+        tool. Grant this to the operator's own agent and its delivery agents;
+        never to a worker, because a spawned sub-agent runs under its own id
+        and reads its own manifest.
     lifecycle_hooks:
       type: list[LifecycleHook]
       description: >

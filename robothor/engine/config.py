@@ -67,6 +67,26 @@ def _default_chat_id() -> str:
     return str(_telegram().telegram_chat_id)
 
 
+def _bot_token() -> str:
+    """The Telegram bot token, vault first, environment second.
+
+    Not ``_telegram().telegram_bot_token``: the settings model resolves from
+    the environment only, and ``genus secrets status`` measures the ACCESSOR.
+    So after the runbook's migrate → verify → shrink the table reported this
+    name ``served=vault``, the doctor was green, and the next restart logged
+    "ROBOTHOR_TELEGRAM_BOT_TOKEN is empty — Telegram delivery disabled" at an
+    operator whose only channel is Telegram. A verify step that calls a name
+    safe to delete when it is not is worse than no verify step at all.
+
+    The settings value is the fallback rather than the source, so an instance
+    that sets it through ``config.yaml`` — which the accessor does not read —
+    keeps working.
+    """
+    from robothor.secrets import get_secret
+
+    return get_secret("ROBOTHOR_TELEGRAM_BOT_TOKEN") or _telegram().telegram_bot_token
+
+
 @dataclass(frozen=True)
 class EngineConfig:
     """Top-level engine configuration from environment variables."""
@@ -122,7 +142,7 @@ class EngineConfig:
     def from_env(cls) -> EngineConfig:
         workspace = Path(os.environ.get("ROBOTHOR_WORKSPACE", Path.home() / "robothor"))
         return cls(
-            bot_token=_telegram().telegram_bot_token,
+            bot_token=_bot_token(),
             default_chat_id=_default_chat_id(),
             port=int(os.environ.get("ROBOTHOR_ENGINE_PORT", "18800")),
             tenant_id=os.environ.get("ROBOTHOR_TENANT_ID", "") or _default_tenant(),
@@ -428,6 +448,28 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _tool_policy(manifest: dict[str, Any]) -> dict[str, Any]:
+    """The three manifest keys that say what an agent may reach.
+
+    One function because they are one decision -- which tools, which not, and
+    which credentials the tools' child processes may see -- and because
+    ``manifest_to_agent_config`` is on a size ratchet that (rightly) makes a
+    new field pay for itself by extraction rather than by raising the cap.
+
+    ``secrets`` is normalised here rather than trusted: a manifest is
+    hand-edited YAML, and a stray blank entry or a non-string would otherwise
+    reach :func:`robothor.engine.exec_env.build_exec_env` as a grant for the
+    empty name.
+    """
+    return {
+        "tools_allowed": manifest.get("tools_allowed", []),
+        "tools_denied": manifest.get("tools_denied", []),
+        "secret_grants": [
+            str(name).strip() for name in manifest.get("secrets", []) if str(name).strip()
+        ],
+    }
+
+
 def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
     """Convert a YAML manifest dict to an AgentConfig."""
     model = manifest.get("model", {})
@@ -581,8 +623,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         delivery_channel=delivery.get("channel", ""),
         delivery_to=delivery.get("to", "") or _default_chat_id(),
         surface_to_channel=bool(delivery.get("surface_to_channel", True)),
-        tools_allowed=manifest.get("tools_allowed", []),
-        tools_denied=manifest.get("tools_denied", []),
+        **_tool_policy(manifest),
         service_role=resolve_service_role(
             str(manifest.get("id", "")),
             manifest.get("role", manifest.get("service_role", "")),
@@ -639,6 +680,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         difficulty_class=v2.get("difficulty_class", ""),
         lifecycle_hooks=v2.get("lifecycle_hooks", []),
         sandbox=v2.get("sandbox", "local"),
+        credential_tier=str(v2.get("credentials", "") or "").strip().lower(),
         # Fleet default via env (ROBOTHOR_EAGER_TOOL_COMPRESSION); an explicit
         # manifest value — including False as opt-out — always wins. Pairs
         # with tool_offload_threshold: with offloading configured, thinning

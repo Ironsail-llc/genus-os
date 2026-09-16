@@ -287,6 +287,32 @@ def parse_accept_block(body: str | None) -> list[str]:
     ]
 
 
+def _run_acceptance_command(
+    command: str, *, cwd: object = None, timeout: int = 60
+) -> subprocess.CompletedProcess[str]:
+    """Run one acceptance command, with a scrubbed environment.
+
+    The commands come out of a TASK BODY, which an agent writes — model-composed
+    text running a shell, exactly like an agent's ``exec``, and until now the
+    only one of the three that ran with the engine's entire environment while
+    sitting outside the ladder that governs ``exec``.
+
+    Named and module-level so the suite can drive it without a task, a pool or
+    a database.
+    """
+    from robothor.engine.exec_env import build_exec_env
+
+    return subprocess.run(
+        command,
+        shell=True,
+        cwd=str(cwd) if cwd else None,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=build_exec_env(agent_id="", mode=None).env,
+    )
+
+
 def run_accept(
     commands: list[str],
     cwd: str | os.PathLike[str] | None = None,
@@ -303,14 +329,7 @@ def run_accept(
     failures: list[dict[str, object]] = []
     for cmd in commands:
         try:
-            result = subprocess.run(
-                cmd,
-                shell=True,
-                cwd=str(cwd) if cwd else None,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
+            result = _run_acceptance_command(cmd, cwd=cwd, timeout=timeout)
         except subprocess.TimeoutExpired:
             failures.append(
                 {"command": cmd, "exit_code": None, "error": f"timeout after {timeout}s"}
