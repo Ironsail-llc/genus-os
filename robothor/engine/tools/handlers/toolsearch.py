@@ -191,10 +191,31 @@ async def _tool_call(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # the last run". Say what is actually true, and suggest from the tools
         # it does have.
         searchable, _deferred = _searchable_names()
+        if not searchable:
+            # `tool_search` on this same run answers "this run published no
+            # toolset"; claiming one here asserted a set the run does not have.
+            return {
+                "error": (
+                    "tool_call is only needed on a deferred run, and this run "
+                    "published no toolset, so there is nothing to reach through."
+                )
+            }
+        if name in searchable:
+            return {
+                "error": (
+                    f"tool_call is only needed on a deferred run; {name!r} is already "
+                    "in your toolset, so call it directly."
+                )
+            }
+        # The agent usually reached tool_call BECAUSE the name was wrong —
+        # `gws_gmail_draft` is not a tool this platform registers. Telling it to
+        # "call that directly" sent it to make the same wrong call without the
+        # wrapper, and the suggestions were the only part of the answer it could
+        # use. Say the name is not reachable, and let `did_you_mean` carry it.
         return {
             "error": (
-                f"tool_call is only needed on a deferred run; this run's tools are "
-                f"already in your toolset, so call {name!r} directly."
+                f"tool_call is only needed on a deferred run, and {name!r} is not in "
+                "this run's toolset — calling it directly will not reach it either."
             ),
             "did_you_mean": _closest(name, searchable),
         }

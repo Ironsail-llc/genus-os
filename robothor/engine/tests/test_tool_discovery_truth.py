@@ -442,8 +442,8 @@ class TestToolCallOnANonDeferredRun:
     `tool_describe` on the same run did suggest.
     """
 
-    @pytest.mark.asyncio
-    async def test_it_says_why_and_suggests(self) -> None:
+    @staticmethod
+    async def _call(name: str, toolset: frozenset[str] | None) -> dict:
         from robothor.engine.tools.dispatch import (
             ToolContext,
             clear_agent_toolset,
@@ -451,18 +451,55 @@ class TestToolCallOnANonDeferredRun:
         )
         from robothor.engine.tools.handlers.toolsearch import HANDLERS
 
-        token = set_agent_toolset(frozenset({*GWS_TOOLS, "read_file"}))
+        token = set_agent_toolset(toolset if toolset is not None else frozenset())
         try:
-            out = await HANDLERS["tool_call"](
-                {"name": "gws_gmail_draft", "arguments": {}}, ToolContext()
-            )
+            return await HANDLERS["tool_call"]({"name": name, "arguments": {}}, ToolContext())
         finally:
             clear_agent_toolset(token)
 
+    @pytest.mark.asyncio
+    async def test_a_name_in_the_toolset_is_told_to_call_it_directly(self) -> None:
+        out = await self._call("gws_gmail_send", frozenset({*GWS_TOOLS, "read_file"}))
+
         assert "already in your toolset" in out["error"]
-        assert "call it directly" in out["error"] or "directly" in out["error"]
+        assert "directly" in out["error"]
+
+    @pytest.mark.asyncio
+    async def test_a_name_that_does_not_exist_is_not_offered_as_a_direct_call(
+        self,
+    ) -> None:
+        """Minor 3: the fix for I8 said "`gws_gmail_draft` is already in your
+        toolset, so call it directly" — of a tool this platform does not
+        register at all. The agent that reached tool_call BECAUSE the name was
+        wrong was sent to make the same wrong call without the wrapper.
+        """
+        out = await self._call("gws_gmail_draft", frozenset({*GWS_TOOLS, "read_file"}))
+
+        assert "already in your toolset" not in out["error"], out["error"]
+        assert "gws_gmail_draft" in out["error"]
+        assert "not in" in out["error"]
         assert out["did_you_mean"], "the run has tools; it can suggest from them"
         assert any(n.startswith("gws_gmail") for n in out["did_you_mean"]), out
+
+    @pytest.mark.asyncio
+    async def test_a_real_tool_outside_this_run_s_toolset_is_not_either(self) -> None:
+        """Existing but ungranted is the same answer: calling it directly does
+        not work, so saying so is the only useful reply."""
+        out = await self._call("exec", frozenset({*GWS_TOOLS, "read_file"}))
+
+        assert "already in your toolset" not in out["error"], out["error"]
+        assert "exec" in out["error"]
+
+    @pytest.mark.asyncio
+    async def test_no_toolset_published_claims_no_toolset(self) -> None:
+        """Minor 3: with nothing published, "this run's tools are already in
+        your toolset" asserted the existence of a set the run does not have —
+        and `tool_search` on the same run correctly says so."""
+        out = await self._call("read_file", None)
+
+        assert "already in your toolset" not in out["error"], out["error"]
+        assert "no toolset" in out["error"]
+        assert not out.get("did_you_mean"), "nothing to suggest from"
 
     @pytest.mark.asyncio
     async def test_a_deferred_run_still_refuses_a_denied_tool_by_name(self) -> None:
