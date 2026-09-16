@@ -41,6 +41,19 @@ class TestItDescribesWhatIsThere:
         assert "piece_01.png" in text
         assert "image" in text.lower(), "an agent cannot tell it should look at these"
 
+    def test_both_image_tools_are_named_with_the_rule_for_choosing(self, tmp_path):
+        """This line is the nudge an agent reads at the moment it first sees a
+        folder of images, which is exactly when the batch tool is the right
+        one. It named only `view_image` for a release after `analyze_image`
+        shipped — and an agent handed two tools and no nearby rule reaches for
+        the familiar one."""
+        for i in range(16):
+            (tmp_path / f"piece_{i:02d}.png").write_bytes(b"\x89PNG")
+        text = workspace_inventory(tmp_path)
+        assert "view_image" in text
+        assert "analyze_image" in text
+        assert "many" in text, "naming both without the rule is not a rule"
+
     def test_subdirectories_are_included(self, tmp_path):
         (tmp_path / "pieces").mkdir()
         (tmp_path / "pieces" / "a.png").write_bytes(b"\x89PNG")
