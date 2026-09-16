@@ -631,9 +631,44 @@ class _HtmlToText(HTMLParser):
     are not the email, and handing a model the contents of a ``<script>`` tag
     out of untrusted mail is an injection surface — turns block-level tags into
     newlines, and unescapes entities (``convert_charrefs`` does that for us).
+
+    **Void elements never suppress.** ``meta`` and ``link`` were in ``_DROP``,
+    and ``HTMLParser`` never fires ``handle_endtag`` for an element that has no
+    end tag — so ``_suppress`` was incremented and never decremented, and every
+    character after the tag was dropped. Practically every HTML email opens
+    with ``<meta charset>``, and marketing and invoice mail almost always
+    carries a ``<link rel="stylesheet">``, so the common case returned
+    ``body_text: ""`` — indistinguishable from a genuinely blank message, which
+    is the one failure this converter exists to prevent. The suite passed
+    because its only HTML fixture was ``<head><style>…</style></head>``: the one
+    head layout containing no void tag.
     """
 
-    _DROP = frozenset({"script", "style", "head", "title", "meta", "link"})
+    #: Elements with no end tag (HTML5's void elements). ``HTMLParser`` reports
+    #: them through ``handle_starttag`` alone unless they are written
+    #: self-closing, so nothing here may ever touch the suppression depth.
+    _VOID = frozenset(
+        {
+            "area",
+            "base",
+            "br",
+            "col",
+            "embed",
+            "hr",
+            "img",
+            "input",
+            "link",
+            "meta",
+            "param",
+            "source",
+            "track",
+            "wbr",
+        }
+    )
+
+    #: Elements whose CONTENT is not the email. Only non-void tags belong here:
+    #: a void tag has no content to drop.
+    _DROP = frozenset({"script", "style", "head", "title"})
     _BREAK = frozenset(
         {"br", "p", "div", "tr", "li", "h1", "h2", "h3", "h4", "h5", "h6", "table", "blockquote"}
     )
@@ -644,15 +679,28 @@ class _HtmlToText(HTMLParser):
         self._suppress = 0
 
     def handle_starttag(self, tag: str, attrs: Any) -> None:
+        if tag in self._VOID:
+            # Never opens a region. `br` is also in _BREAK and still breaks.
+            if tag in self._BREAK and not self._suppress:
+                self._chunks.append("\n")
+            return
         if tag in self._DROP:
             self._suppress += 1
-        elif tag in self._BREAK:
+        elif tag in self._BREAK and not self._suppress:
             self._chunks.append("\n")
 
+    def handle_startendtag(self, tag: str, attrs: Any) -> None:
+        """``<meta … />``. Explicit, so a self-closing non-void tag — which
+        ``HTMLParser`` would otherwise route to ``handle_starttag`` alone —
+        cannot open a suppression region it will never close either."""
+        self.handle_starttag(tag, attrs)
+
     def handle_endtag(self, tag: str) -> None:
+        if tag in self._VOID:
+            return
         if tag in self._DROP and self._suppress:
             self._suppress -= 1
-        elif tag in self._BREAK:
+        elif tag in self._BREAK and not self._suppress:
             self._chunks.append("\n")
 
     def handle_data(self, data: str) -> None:

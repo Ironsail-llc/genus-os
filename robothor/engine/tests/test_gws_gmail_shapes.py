@@ -226,6 +226,103 @@ class TestGmailGet:
         assert "color:red" not in body, "style contents are not the email"
         assert "£120" in body, "entities are decoded"
 
+    @pytest.mark.parametrize(
+        ("label", "html", "expected"),
+        [
+            (
+                "meta charset — the shape of practically every HTML email",
+                '<html><head><meta charset="utf-8"><title>Invoice</title></head>'
+                "<body><p>Invoice INV-2026-0042 is due</p></body></html>",
+                "Invoice INV-2026-0042 is due",
+            ),
+            (
+                "link rel=stylesheet — marketing and invoice mail",
+                '<html><head><link rel="stylesheet" href="x.css"></head>'
+                "<body><p>Hello</p></body></html>",
+                "Hello",
+            ),
+            (
+                "self-closed meta",
+                '<html><head><meta charset="utf-8"/></head><body><p>Hello</p></body></html>',
+                "Hello",
+            ),
+            (
+                "bare meta mid-document — nothing after it may be lost",
+                "<body>before<meta name=x>after</body>",
+                "beforeafter",
+            ),
+            (
+                "http-equiv, the other half of the charset convention",
+                '<html><head><meta http-equiv="Content-Type" content="text/html">'
+                "</head><body>Body text</body></html>",
+                "Body text",
+            ),
+            (
+                "img mid-sentence is a void element too",
+                "<body>see <img src=x.png> this</body>",
+                "see this",
+            ),
+            (
+                "hr does not swallow the rest of the mail",
+                "<body>above<hr>below</body>",
+                "abovebelow",
+            ),
+        ],
+    )
+    def test_a_void_element_never_swallows_the_body(
+        self, label: str, html: str, expected: str
+    ) -> None:
+        """`meta` and `link` were in the drop set, and HTMLParser never fires
+        `handle_endtag` for an element with no end tag — so suppression was
+        switched on and never off, and every HTML email opening with
+        `<meta charset>` returned `body_text: ""`. Empty, `body_chars: 0`,
+        `body_truncated: false`: indistinguishable from a genuinely blank
+        message, so the agent confidently reports "the email is empty."
+        """
+        assert gws_handlers._html_to_text(html).strip() == expected, label
+
+    def test_a_real_world_marketing_email_is_readable(self, fake_gws) -> None:
+        """The shape the module docstring names as the reason the converter
+        exists: a doctype, a head full of void tags, a table layout, inline
+        styles, a tracking pixel and a script."""
+        marketing = (
+            "<!DOCTYPE html>"
+            '<html lang="en"><head>'
+            '<meta charset="UTF-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<meta http-equiv="X-UA-Compatible" content="IE=edge">'
+            '<link rel="stylesheet" href="https://cdn.example.com/mail.css">'
+            "<title>Your October statement</title>"
+            "<style>.btn{background:#333}</style>"
+            "</head>"
+            '<body style="margin:0"><table><tr><td>'
+            '<img src="https://cdn.example.com/logo.png" alt="logo" width="120">'
+            "<h1>Your October statement is ready</h1>"
+            "<p>Hi Alice,</p>"
+            "<p>Your balance is <b>&pound;1,204.55</b>, due 31&nbsp;October.</p>"
+            "<hr>"
+            '<p><a href="https://example.com/pay">Pay now</a></p>'
+            "</td></tr></table>"
+            '<img src="https://track.example.com/o.gif" width="1" height="1">'
+            "<script>window.track&&track('open');</script>"
+            "</body></html>"
+        )
+        message = dict(HTML_ONLY_MESSAGE)
+        message["payload"] = dict(HTML_ONLY_MESSAGE["payload"])
+        message["payload"]["body"] = {"data": _b64(marketing)}
+        fake_gws.responses["gmail users messages get --params"] = message
+
+        out = _call("gws_gmail_get", {"message_id": "msg-html"})
+        body = out["body_text"]
+
+        assert out["body_chars"] > 0
+        assert "Your October statement is ready" in body
+        assert "£1,204.55" in body
+        assert "Pay now" in body
+        assert "track(" not in body, "script contents are not the email"
+        assert "background:#333" not in body, "style contents are not the email"
+        assert "<" not in body
+
     def test_attachments_are_listed_and_never_inlined(self, fake_gws) -> None:
         fake_gws.responses["gmail users messages get --params"] = MULTIPART_WITH_ATTACHMENT
         out = _call("gws_gmail_get", {"message_id": "msg-multi"})
