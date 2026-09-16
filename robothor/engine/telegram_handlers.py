@@ -939,7 +939,14 @@ class TelegramHandlersMixin:
         if media.size and media.size > attachments.MAX_DOWNLOAD_BYTES:
             await message.answer(attachments.too_large_sentence(media.size, name=media.name))
             return
-        noted = await self._keep_attachment(str(message.chat.id), media, "")
+        try:
+            noted = await self._keep_attachment(str(message.chat.id), media, "")
+        except telegram_attachments.AttachmentTooLargeError as exc:
+            # Voice notes are one of the kinds Telegram most often reports no
+            # size for, so the declared-size check above sees 0 and the bound on
+            # the DOWNLOAD is what actually holds here.
+            await message.answer(attachments.too_large_sentence(exc.written, name=media.name))
+            return
         if noted is None:
             await message.answer("🎤 Couldn't fetch the voice note from Telegram.")
             return

@@ -24,6 +24,7 @@ how much of the file it is.
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -63,6 +64,40 @@ ALBUM_WINDOW_SECONDS = 1.5
 #: were left out — a media_group_id is chosen by the sender, so an unbounded
 #: one is a way to push an arbitrarily long note into the model's context.
 MAX_ALBUM_ITEMS = 25
+
+
+class AttachmentTooLargeError(Exception):
+    """A download crossed the ceiling. Carries how far it got, for the sentence.
+
+    Its own exception rather than a return value because it is raised from
+    inside ``aiogram``'s writer callback, where there is nowhere to return to.
+    """
+
+    def __init__(self, written: int) -> None:
+        super().__init__(f"attachment exceeded {attachments.MAX_DOWNLOAD_BYTES} bytes")
+        self.written = written
+
+
+class _BoundedBuffer(io.BytesIO):
+    """A ``BytesIO`` that refuses to grow past *limit*.
+
+    aiogram writes into whatever file-like object it is handed, so the cheapest
+    place to enforce a download ceiling is the object itself. Overriding
+    ``write`` means the check happens per chunk and the process never holds
+    more than the limit plus one chunk — which is the point: the old code
+    trusted the declared size and buffered whatever arrived.
+    """
+
+    def __init__(self, limit: int) -> None:
+        super().__init__()
+        self._limit = limit
+        self._written = 0
+
+    def write(self, data: Any, /) -> int:
+        self._written += len(data)
+        if self._written > self._limit:
+            raise AttachmentTooLargeError(self._written)
+        return super().write(data)
 
 
 @dataclass(frozen=True)
@@ -169,14 +204,23 @@ class TelegramAttachmentsMixin:
 
         Raises on anything that goes wrong; the caller turns that into a
         sentence for the operator rather than a traceback.
-        """
-        from io import BytesIO
 
+        The ceiling is enforced on what ARRIVES, not on what Telegram claimed.
+        ``file_size`` is absent for some media types and for forwarded content,
+        and ``media.size`` is then 0 — which made ``size and size > MAX`` False
+        and buffered the whole thing into memory unbounded. A 25 MB payload
+        reporting no size went through with no refusal and no answer to the
+        operator.
+
+        :class:`_BoundedBuffer` raises :class:`AttachmentTooLargeError` the moment the write
+        crosses the line, so the memory cost is bounded by the limit plus one
+        chunk rather than by whatever the sender felt like uploading.
+        """
         handle = await self.bot.get_file(media.file_id)
         file_path = getattr(handle, "file_path", None)
         if not file_path:
             raise RuntimeError("Telegram returned no download path for the file")
-        buffer = BytesIO()
+        buffer = _BoundedBuffer(attachments.MAX_DOWNLOAD_BYTES)
         await self.bot.download_file(file_path, buffer)
         return buffer.getvalue()
 
@@ -191,6 +235,10 @@ class TelegramAttachmentsMixin:
         """
         try:
             raw = await self._download_media(media)
+        except AttachmentTooLargeError:
+            # Re-raised: the caller owes the operator the sentence naming the
+            # limit, which is a different answer from "the download failed".
+            raise
         except Exception as exc:  # noqa: BLE001 - reported to the operator
             logger.warning("Telegram attachment download failed (%s): %s", media.name, exc)
             return None
@@ -300,11 +348,19 @@ class TelegramAttachmentsMixin:
             )
             return
 
+        # What Telegram CLAIMS, when it claims anything: refusing here saves the
+        # download. It is not the only check — `_download_media` bounds what
+        # actually arrives — because `file_size` is absent for some media types
+        # and for forwarded content, and 0 used to mean "no ceiling at all".
         if media.size and media.size > attachments.MAX_DOWNLOAD_BYTES:
             await message.answer(attachments.too_large_sentence(media.size, name=media.name))
             return
 
-        noted = await self._keep_attachment(chat_id, media, caption)
+        try:
+            noted = await self._keep_attachment(chat_id, media, caption)
+        except AttachmentTooLargeError as exc:
+            await message.answer(attachments.too_large_sentence(exc.written, name=media.name))
+            return
         if noted is None:
             await message.answer(
                 f"I couldn't download {media.name} from Telegram, so I have nothing to work "

@@ -239,6 +239,60 @@ class TestSizeCeiling:
         assert rows
 
     @pytest.mark.asyncio
+    async def test_a_file_reporting_no_size_is_still_capped(self, bot) -> None:
+        """Hostile review I5. `file_size` is absent for some media types and
+        for forwarded content; `media.size` is then 0, `size and size > MAX`
+        is False, and the whole thing was buffered into memory with no cap. A
+        25 MB payload went through with no refusal and no answer at all."""
+        payload = b"x" * (attachments.MAX_DOWNLOAD_BYTES + 4096)
+        arm_download(bot, payload)
+        msg = message(document=document(name="forwarded.bin", size=0, mime=""))
+        await bot.handle_file(msg)
+
+        msg.answer.assert_awaited_once()
+        said = msg.answer.await_args.args[0]
+        assert "20 MB" in said
+        assert "forwarded.bin" in said
+        bot._enqueue_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_nothing_is_written_for_an_oversized_download(self, bot) -> None:
+        arm_download(bot, b"x" * (attachments.MAX_DOWNLOAD_BYTES + 4096))
+        await bot.handle_file(message(document=document(name="forwarded.bin", size=0, mime="")))
+        inbox = Path(bot.config.workspace) / "inbox"
+        assert not any(p.is_file() for p in inbox.rglob("*")) if inbox.exists() else True
+
+    @pytest.mark.asyncio
+    async def test_a_lying_declared_size_does_not_get_past_the_download_bound(self, bot) -> None:
+        """Telegram says 1 KB, 25 MB arrives. The declared number is a hint."""
+        arm_download(bot, b"x" * (attachments.MAX_DOWNLOAD_BYTES + 4096))
+        msg = message(document=document(name="liar.bin", size=1024, mime=""))
+        await bot.handle_file(msg)
+        assert "20 MB" in msg.answer.await_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_a_voice_note_with_no_declared_size_is_capped_too(self, bot) -> None:
+        arm_download(bot, b"x" * (attachments.MAX_DOWNLOAD_BYTES + 4096))
+        voice = MagicMock()
+        voice.file_id = "AwAC1"
+        voice.file_unique_id = "AgACvoice"
+        voice.file_size = None
+        voice.mime_type = "audio/ogg"
+        voice.file_name = None
+        msg = message(voice=voice)
+        with patch.dict("os.environ", {"ROBOTHOR_VOICE_NOTES_ENABLED": "1"}):
+            await bot.handle_voice(msg)
+        assert "20 MB" in msg.answer.await_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_a_file_just_under_the_ceiling_still_arrives(self, bot) -> None:
+        payload = b"x" * (attachments.MAX_DOWNLOAD_BYTES - 1)
+        arm_download(bot, payload)
+        await bot.handle_file(message(document=document(name="big.bin", size=0, mime="")))
+        _, rows = enqueued(bot)
+        assert rows[0]["size"] == len(payload)
+
+    @pytest.mark.asyncio
     async def test_the_old_five_megabyte_ceiling_is_gone(self) -> None:
         from robothor.engine import telegram_handlers
 
