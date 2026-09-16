@@ -268,18 +268,34 @@ engine:
   # actually deployed, the human-approval gate was off and a manifest declaring
   # `v2.guardrails: [human_approval]` escalated nothing.
   #
-  # BOTH are required. `_enforcement_mode` returns "off" whenever the _ENABLED
-  # var is falsy no matter what the _MODE var says, so setting the mode alone
-  # is a no-op — and the mode is the one an operator reaches for. In "observe"
-  # the verdict is computed and logged and the call still proceeds; only
-  # "enforce" denies when no approver is reachable.
+  # BOTH names are required. `_enforcement_mode` returns "off" whenever the
+  # _ENABLED var is falsy no matter what the _MODE var says, so setting the
+  # mode alone is a no-op — and the mode is the one an operator reaches for.
+  # The name is ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED; there is no
+  # ROBOTHOR_APPROVAL_ENABLED, and tests/test_flag_audit.py exists because that
+  # guess is the easy one to make.
   #
-  # The values here match the drop-in. To de-escalate, set the mode to
-  # "observe" (or "off") rather than unsetting either name, so the Controls
-  # page and the engine keep describing the same ladder.
+  # The mode ships as "observe", NOT "enforce", and deliberately differs from
+  # this instance's drop-in. `enforce` denies an escalated call when no
+  # approver is reachable, and the approver is a Telegram bot the chart cannot
+  # guarantee: `daemon.py` wires the permission manager only when a token is
+  # configured, and nothing in this chart supplies one. Shipping `enforce`
+  # would deny on deployments that structurally cannot satisfy the runbook's
+  # own prerequisite, and would skip its 48-hour observe soak for every chart
+  # user. `observe` computes and logs the verdict, and the call proceeds.
+  #
+  # PROMOTING to enforce is an operator decision, not a chart default:
+  # docs/runbooks/approval-enforce.md has the prerequisites and the soak.
+  # `genus doctor --category agents` reports any destructive grant this leaves
+  # ungated, so the gap is visible rather than silent.
+  #
+  # To de-escalate, set the mode to "observe" (or "off") rather than unsetting
+  # either name, so the Controls page and the engine keep describing the same
+  # ladder. The mode is a governed flag, so the Controls page overrides this
+  # value without a redeploy.
   env:
     ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED: "1"
-    ROBOTHOR_APPROVAL_MODE: enforce
+    ROBOTHOR_APPROVAL_MODE: observe
   resources:
     requests:
       cpu: 500m

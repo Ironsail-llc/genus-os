@@ -105,6 +105,50 @@ previously in the systemd unit only — so on the Helm/ArgoCD path, which is how
 production is actually deployed, the gate was `off` and the manifest's
 declaration protected nothing.
 
+**The two differ on purpose.** The drop-in is `enforce`; the chart ships
+`observe`. Prerequisite 1 below requires a wired approver, and a Helm
+deployment cannot guarantee one — `daemon.py` initialises the permission
+manager only when a Telegram token is configured, and the chart supplies no
+token. An `enforce` default would therefore deny escalated calls on
+deployments that cannot approve them, and would skip Prerequisite 3's soak for
+every chart user.
+
+### Promoting the chart default: observe → enforce
+
+Per deployment, in this order:
+
+1. Wire an approver — a Telegram bot token reaching the engine — and confirm
+   `init_permission_manager` ran at boot.
+2. Send one real escalation through the approve/deny round-trip.
+3. Leave the mode at `observe` for 48 hours and read `agent_guardrail_events`:
+   you are looking for escalations that WOULD have been denied, and why.
+4. Only then set `engine.env.ROBOTHOR_APPROVAL_MODE: enforce` (or set the mode
+   from the Controls page, which overrides the chart value without a
+   redeploy).
+
+Until step 4, `genus doctor --category agents` will report any destructive
+grant the gate is not arming. That report is the intended state during the
+soak, not a failure to fix by promoting early.
+
+**It will also show the instance as `degraded`.** `agents.approval_gate_not_armed`
+is a `recommended` check, and any recommended failure sets the doctor's
+instance status to `degraded` (`doctor/runner.py`); the exit code stays 0.
+Measured on the stock templates:
+
+| Engine posture | check | instance status |
+|---|---|---|
+| `ENABLED=1 MODE=enforce` (this instance's drop-in) | pass | `ok` |
+| `ENABLED=1 MODE=observe` (the chart's default) | fail | `degraded` |
+| neither set (compose, or systemd without the drop-in) | fail | `degraded` |
+
+So a correctly-configured instance mid-soak reads `degraded`, and so does every
+deployment that has not adopted either. That is a real cost of shipping
+`observe` rather than `enforce`, and it is the trade accepted here: a
+deployment that cannot approve an escalation should not be denying one. If the
+noise outweighs the signal in practice, the fix is to split the check — the
+manifest-level gap staying `recommended`, the "engine is mid-ladder" case
+dropping to `info`, which does not degrade.
+
 ### Status 2026-07-13 (historical): the gate was INERT, not clean
 
 A soak audit found **zero escalations had ever occurred** — and the reason was

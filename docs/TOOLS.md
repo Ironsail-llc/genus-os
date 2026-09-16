@@ -275,9 +275,14 @@ Two halves have to line up and nothing else brings them together:
 `_enforcement_mode` returns `off` whenever the first variable is falsy no
 matter what the mode says, so `ROBOTHOR_APPROVAL_MODE=enforce` **alone is a
 no-op** — and the mode is the name an operator reaches for. A manifest can read
-as carefully gated in review and run ungated in production. Both are set in
-the systemd drop-in and in `helm/genus-os/values.yaml` under `engine.env`;
-[the approval runbook](runbooks/approval-enforce.md) has the full matrix.
+as carefully gated in review and run ungated in production. Both are set in the systemd
+drop-in and in `helm/genus-os/values.yaml` under `engine.env` — the drop-in at
+`enforce`, the chart at `observe`, because a chart cannot guarantee an approver
+is wired and `enforce` with none denies every escalated call. Promoting the
+chart's default is an operator step with a soak in front of it;
+`docs/runbooks/approval-enforce.md` in the repo has the full matrix and the
+promotion checklist. (Not linked: that runbook is in `mkdocs.yml`'s
+`exclude_docs`, so a link here would 404 for a reader of the published site.)
 
 The three `agents.*`/`tools.*` checks are `recommended` — reported, never fatal.
 `calendar.operator_calendar_writable` is `required`: an instance that cannot
