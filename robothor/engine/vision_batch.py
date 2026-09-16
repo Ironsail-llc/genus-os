@@ -92,6 +92,7 @@ from robothor.engine.tools.handlers.images import (
     describe_image_bytes,
     prepare_image_bytes,
 )
+from robothor.engine.tracking import MAX_TOOL_OUTPUT_CHARS
 
 logger = logging.getLogger(__name__)
 
@@ -162,16 +163,28 @@ _TRUNCATION_MARK = " […truncated]"
 #: relationship, same reason, as ``session._ASSISTANT_TURN_MAX_SERIALISED``.
 DEFAULT_MAX_TOTAL_CHARS = 3500
 
+#: The hard ceiling on that budget, whatever the setting says. The step writer
+#: replaces any ``tool_output`` over ``tracking.MAX_TOOL_OUTPUT_CHARS`` with a
+#: flat head/tail string, which destroys both the per-image ledger and the
+#: ``results_file`` pointer in the run record — so a budget at or above that
+#: number is a budget that defeats the feature it configures. The margin
+#: absorbs the difference between what this module measures (the serialised
+#: result) and what the writer measures (the same string), which should be
+#: nothing, plus room for a wrapper key nobody has added yet.
+#: ``test_the_inline_result_never_exceeds_the_step_writer_cap`` pins the
+#: relationship, the way ``test_turn_cap_is_below_the_step_writer_cap`` pins
+#: the assistant turn's.
+_STEP_WRITER_MARGIN = 200
+
+#: Read from ``tracking`` rather than repeated as a literal: the two numbers
+#: are the same number, and a copy is a copy that drifts.
+MAX_INLINE_CHARS = MAX_TOOL_OUTPUT_CHARS - _STEP_WRITER_MARGIN
+
 #: Where the full table goes when the result does not fit. Under the
 #: workspace, so the agent can ``read_file`` it back; under ``.robothor/``, so
 #: it is not mistaken for a deliverable; not under ``.robothor/secret*``, which
 #: is the prefix ``secret_paths`` refuses.
 SPILL_DIRNAME = ".robothor/analyze_image"
-
-#: Characters kept back from the budget for the note that explains the spill
-#: and the two count keys beside it. Generous: a workspace path is most of it,
-#: and a budget that the explanation itself overruns is not a budget.
-_NOTE_RESERVE = 400
 
 
 @dataclass(frozen=True)
@@ -233,10 +246,19 @@ def _per_image_timeout() -> float:
 
 
 def _max_total_chars() -> int:
+    """The inline budget, clamped so a setting cannot defeat the design.
+
+    The setting's own text says the default sits *just under* 4,000, which
+    invites an operator who wants a few more inline rows to set 3,900 — at
+    which point ``tracking`` truncates the whole ``tool_output`` and the
+    per-image ledger this design protects is gone, silently. So the ceiling is
+    enforced here rather than described in a sentence somebody has to read.
+    """
     try:
-        return int(_settings().providers.vision_batch_max_chars)
+        configured = int(_settings().providers.vision_batch_max_chars)
     except Exception:  # noqa: BLE001
-        return DEFAULT_MAX_TOTAL_CHARS
+        configured = DEFAULT_MAX_TOTAL_CHARS
+    return min(configured, MAX_INLINE_CHARS)
 
 
 def _batch_deadline() -> float:
@@ -596,18 +618,35 @@ def _clamp_concurrency(requested: Any) -> int:
     return max(1, min(wanted, ceiling))
 
 
-def _spill_path(root: Path, run_id: str) -> Path:
-    """Where this call's full table goes. Numbered, so a run keeps every batch.
+#: How many batches each run has spilled, so the next file gets the next
+#: number. It was a ``glob`` of the whole directory, which paid for the
+#: directory's own growth on every spill — a stat storm at a hundred thousand
+#: files — and quietly assumed nothing was ever deleted from it: remove
+#: ``run-x-2.json`` and the next spill for that run recomputed index 3 and
+#: overwrote ``run-x-3.json``. A run lives in one process, so an in-process
+#: counter is the authority, and the existence check below covers the rest.
+_SPILL_COUNTS: dict[str, int] = {}
 
-    The index is the count of files this run already wrote rather than a
-    module-level counter: a counter is state that a restarted process loses and
-    two sessions share, and the directory already knows the answer.
-    """
+#: Beyond this many distinct runs the counter map is dropped whole rather than
+#: grown forever in a daemon that never restarts. Restarting the count is
+#: harmless: the loop below steps past a name already on disk.
+_SPILL_COUNT_MEMORY = 512
+
+
+def _spill_path(root: Path, run_id: str) -> Path:
+    """Where this call's full table goes. Numbered, so a run keeps every batch."""
     directory = root / SPILL_DIRNAME
     directory.mkdir(parents=True, exist_ok=True)
     stem = "".join(c for c in (run_id or "adhoc") if c.isalnum() or c in "-_") or "adhoc"
-    index = sum(1 for _ in directory.glob(f"{stem}-*.json")) + 1
-    return directory / f"{stem}-{index}.json"
+    if len(_SPILL_COUNTS) > _SPILL_COUNT_MEMORY:
+        _SPILL_COUNTS.clear()
+    index = _SPILL_COUNTS.get(stem, 0)
+    while True:
+        index += 1
+        candidate = directory / f"{stem}-{index}.json"
+        if not candidate.exists():
+            _SPILL_COUNTS[stem] = index
+            return candidate
 
 
 def _fit(out: dict[str, Any], rows: list[dict[str, Any]], budget: int) -> int:
@@ -750,34 +789,66 @@ async def analyze_images(
         out["cost_usd"] = round(cost, 6)
 
     budget = _max_total_chars()
-    if budget > 0 and len(json.dumps(out, default=str)) > budget:
-        notes.append(_spill(out, list(results), root=root, run_id=run_id, budget=budget))
     if notes:
         out["note"] = " ".join(notes)
+    if len(json.dumps(out, default=str)) > budget:
+        _spill(out, list(results), notes=notes, root=root, run_id=run_id, budget=budget)
     return out
+
+
+def _spill_sentence(total: int, shown: int, written: Path | None) -> str:
+    """What the agent is told about a table that went to disk.
+
+    The path is NOT repeated here: it is already in ``results_file``, and a
+    note that quotes it too spends a long workspace path twice out of a budget
+    measured in hundreds of characters.
+    """
+    if written is not None:
+        return (
+            f"{total} rows did not fit in one tool result, so the first {shown} are here "
+            f"and all {total} — each image's answer, tokens and cost — are in the file "
+            "named in results_file. If you have exec, work over that file there (jq or "
+            "python is cheaper than reading it into this conversation); otherwise read "
+            "it. Either way, do not ask about the same images again."
+        )
+    return (
+        f"{total} rows did not fit in one tool result and the full table could not be "
+        f"written to disk, so only the first {shown} are here. The totals above cover all "
+        f"{total}. Ask about the remaining images in smaller batches, or raise "
+        "ROBOTHOR_VISION_BATCH_MAX_CHARS, rather than repeating this one whole."
+    )
 
 
 def _spill(
     out: dict[str, Any],
     rows: list[dict[str, Any]],
     *,
+    notes: list[str],
     root: Path,
     run_id: str,
     budget: int,
-) -> str:
+) -> None:
     """Move the full table to a file, leave the totals and a preview. Mutates *out*.
 
-    Returns the sentence for the result's ``note``. The totals stay inline
-    whatever happens — the money and the counts are what a caller reads without
-    opening anything — and so does the path, so an agent that wants row 147
-    knows where to get it.
+    The totals stay inline whatever happens — the money and the counts are what
+    a caller reads without opening anything — and so does ``results_file``, so
+    an agent that wants row 147 knows where to get it.
+
+    The fitting is done against the REAL note. It used to probe with a
+    400-character placeholder and then join the actual notes afterwards, which
+    spends the difference straight out of the budget after the arithmetic is
+    finished: four notes together measure 1,025 characters, and a re-review
+    found the result 516 over at a budget an operator could plausibly set. A
+    control with tests certifying it that does not hold is the failure this
+    project keeps re-learning, so the probe now carries the widest note that
+    can be returned and :func:`_fit` measures the truth.
 
     If the file cannot be written (a read-only workspace, a full disk) the rows
     are trimmed anyway and the note says the rest is gone. Returning 108k
     tokens because the disk was full would end the run the budget exists to
     protect.
     """
-    header = {key: value for key, value in out.items() if key != "results"}
+    header = {key: value for key, value in out.items() if key not in ("results", "note")}
     written: Path | None = None
     try:
         written = _spill_path(root, run_id)
@@ -790,31 +861,23 @@ def _spill(
 
     if written is not None:
         header["results_file"] = str(written)
-    # Fit against the header the caller will actually return: the two count
-    # keys and a note of about this length are part of what has to fit, and a
-    # budget measured without them is a budget overspent by the note
-    # explaining the budget.
+
+    # `shown` is what the sentence says and what the sentence's length depends
+    # on. Probe with `shown = len(rows)`, the widest number it can ever be, so
+    # the note the caller actually gets is never longer than the one that was
+    # measured.
+    widest = " ".join([*notes, _spill_sentence(len(rows), len(rows), written)])
     probe = {
         **header,
         "results_shown": len(rows),
         "results_total": len(rows),
-        "note": "x" * _NOTE_RESERVE,
+        "note": widest,
     }
     shown = _fit(probe, rows, budget)
+
     out.clear()
     out.update(header)
     out["results"] = rows[:shown]
     out["results_shown"] = shown
     out["results_total"] = len(rows)
-    if written is not None:
-        return (
-            f"{len(rows)} rows did not fit in one tool result, so the first {shown} are "
-            f"here and all {len(rows)} — each image's answer, tokens and cost — are in "
-            f"{written}. Work over that file (exec with jq or python is cheaper than "
-            "reading it into this conversation); do not ask about the same images again."
-        )
-    return (
-        f"{len(rows)} rows did not fit in one tool result and the full table could not be "
-        f"written to disk, so only the first {shown} are here. The totals above cover all "
-        f"{len(rows)}. Ask about the remaining images in a smaller batch."
-    )
+    out["note"] = " ".join([*notes, _spill_sentence(len(rows), shown, written)])

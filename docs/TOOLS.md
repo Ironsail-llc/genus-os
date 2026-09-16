@@ -263,9 +263,10 @@ Work over that file with `exec` (jq, python) rather than reading it whole —
 that keeps the win. It matters for the record as well as the context: the
 engine replaces any tool output over 4,000 characters in `agent_run_steps`
 with a flat head/tail string, so the per-image `tokens`/`cost_usd` ledger
-survives in the JSON file and in the run total, not in the step row. The
-default budget sits just under that cap so the two agree; raise it and the
-step row starts being truncated instead.
+survives in the JSON file and in the run total, and the inline result is kept
+under that cap so the step row is never flattened — including when every note
+fires and the workspace path is long. That is the invariant; raising the
+setting cannot break it, because the budget is clamped below the cap.
 
 #### Configuring the backend
 
@@ -276,7 +277,7 @@ step row starts being truncated instead.
 | `ROBOTHOR_VISION_BATCH_CONCURRENCY` | Ceiling on images in flight at once (default 4, platform maximum 16). An agent's `max_concurrency` may ask for fewer, never for more. |
 | `ROBOTHOR_VISION_BATCH_TIMEOUT` | Seconds one image gets (default 90). |
 | `ROBOTHOR_VISION_BATCH_DEADLINE` | Seconds the whole call gets (default 600). |
-| `ROBOTHOR_VISION_BATCH_MAX_CHARS` | How much of the result comes back inline before the table spills to a file (default 3500 — just under the 4,000-character cap the step writer truncates at). |
+| `ROBOTHOR_VISION_BATCH_MAX_CHARS` | How much of the result comes back inline before the table spills to a file (default 3500). Clamped to 3800 — the step writer flattens a tool result over 4,000 characters, so a larger value would destroy the per-image record it exists to keep. |
 
 A remote model the registry does not **declare** able to accept images is
 **not** dialled — whether it declares the model text-only or has no entry for

@@ -699,7 +699,11 @@ class TestTheWholeResultIsBounded:
         assert out["results_total"] == 40
         assert 0 < out["results_shown"] < 40
         assert len(out["results"]) == out["results_shown"]
-        assert out["results_file"] in out["note"], "the note must say where the rest went"
+        assert "results_file" in out["note"], "the note must say where the rest went"
+        assert out["results_file"] not in out["note"], (
+            "the path is already a field; repeating it in the note spends a long "
+            "workspace path twice out of a budget measured in hundreds of characters"
+        )
 
     async def test_the_file_holds_every_row_with_its_tokens_and_cost(self, tmp_path, monkeypatch):
         """The brief's 'cost/usage recorded per image on the run'. The step
@@ -769,6 +773,85 @@ class TestTheWholeResultIsBounded:
         assert "results_file" not in out
         assert "could not be written" in out["note"]
         assert out["analyzed"] == 40
+
+
+class TestTheStepWriterCapInvariant:
+    """Re-review R-1. The whole spill design rests on one claim: what the agent
+    reads inline is also what the run record keeps. `tracking._truncate_json`
+    replaces any `tool_output` over `MAX_TOOL_OUTPUT_CHARS` with a flat
+    head/tail string, destroying the per-image ledger and the `results_file`
+    pointer — silently.
+
+    It shipped neither enforced nor tested, and survived at the default by 108
+    characters: `_fit` probed with a 400-character placeholder note while the
+    four real notes measure 1,025 together, so the difference was spent after
+    the arithmetic was done. At a budget of 3,900 — which the setting's own
+    text invites — the result came back 516 over.
+
+    This is the direct analogue of
+    `test_assistant_turn_recording.py::test_turn_cap_is_below_the_step_writer_cap`,
+    which is the pin the round-1 report cited as the model and did not build.
+    """
+
+    @staticmethod
+    def _every_note_firing(monkeypatch, tmp_path):
+        """A workspace with a 195-character path, an undeclared remote model
+        falling back to a local one, `detail` ignored, and an over-long
+        question: all four notes, on the longest paths a result can carry."""
+        deep = tmp_path
+        while len(str(deep)) < 195:
+            deep = deep / "wsdirectorysegment"
+        deep.mkdir(parents=True, exist_ok=True)
+
+        async def verbose(data: bytes, prompt: str = "", **kwargs: Any) -> str:
+            return "a long answer. " * 200
+
+        monkeypatch.setattr(vision_batch, "describe_image_bytes", verbose)
+        monkeypatch.setattr(
+            vision_batch, "_configured_remote_model", lambda: "openrouter/nobody/unheard-of-v9"
+        )
+        monkeypatch.setattr(vision_batch, "_configured_local_model", lambda: "llama3.2-vision:11b")
+        return deep
+
+    @pytest.mark.parametrize("budget", [vision_batch.DEFAULT_MAX_TOTAL_CHARS, 10_000])
+    async def test_the_inline_result_never_exceeds_the_step_writer_cap(
+        self, tmp_path, monkeypatch, budget
+    ):
+        from robothor.engine.tracking import MAX_TOOL_OUTPUT_CHARS, _truncate_json
+
+        deep = self._every_note_firing(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            vision_batch, "_max_total_chars", lambda: min(budget, vision_batch.MAX_INLINE_CHARS)
+        )
+        out = await _analyze(
+            deep, _images(deep, 200), question="q" * 5000, detail="high", max_concurrency=8
+        )
+
+        serialised = json.dumps(out, default=str)
+        assert len(serialised) <= MAX_TOOL_OUTPUT_CHARS, (
+            f"{len(serialised)} chars would be flattened by the step writer, "
+            "taking the per-image ledger and the results_file pointer with it"
+        )
+        assert _truncate_json(out) is out, "the writer would have replaced this result"
+        assert out["note"].count("ignored") >= 1, "the detail note must be in what was measured"
+        assert "results_file" in out
+        assert out["results_total"] == 200
+
+    def test_the_budget_can_never_be_set_above_the_cap(self, monkeypatch):
+        """The operator-facing half: the setting text says the default sits
+        just under the writer's cap, which invites raising it."""
+        from robothor.engine.tracking import MAX_TOOL_OUTPUT_CHARS
+
+        assert vision_batch.MAX_INLINE_CHARS < MAX_TOOL_OUTPUT_CHARS
+        for configured in (3900, 4000, 1_000_000):
+            monkeypatch.setattr(
+                vision_batch,
+                "_settings",
+                lambda c=configured: type(
+                    "S", (), {"providers": type("P", (), {"vision_batch_max_chars": c})()}
+                )(),
+            )
+            assert vision_batch._max_total_chars() == vision_batch.MAX_INLINE_CHARS
 
 
 class TestTheResultIsOffloadableLikeAnyOther:

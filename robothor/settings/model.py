@@ -690,7 +690,9 @@ class ProviderSettings(SettingsGroup):
         "<workspace>/.robothor/analyze_image/ and the result carries the path, "
         "the first rows and the totals. The default sits just under the "
         "4000-character cap the step writer truncates a tool result at, so "
-        "what the agent reads is also what the run record keeps.",
+        "what the agent reads is also what the run record keeps -- and a "
+        "larger value is clamped back to 3800 for that reason, rather than "
+        "silently flattening the run's per-image record.",
         restart_required=False,
         since="unreleased",
     )
