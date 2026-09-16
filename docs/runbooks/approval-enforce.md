@@ -87,9 +87,9 @@ first is falsy **regardless of the second**. Measured:
 | both, with `MODE=enforce` | `enforce` |
 
 The second row is the trap: the mode is the name an operator reaches for, and
-on its own it changes nothing. `genus doctor --category agents` reports this
-as `agents.approval_gate_not_armed` whenever an agent grants a destructive tool
-the running engine will not gate.
+on its own it changes nothing. `genus doctor --category agents` reports it as
+`agents.approval_gate_not_armed` (`info`) whenever a manifest has declared an
+approval gate this engine will not apply.
 
 ## Status 2026-09-16: the gate has its first real user
 
@@ -126,28 +126,24 @@ Per deployment, in this order:
    from the Controls page, which overrides the chart value without a
    redeploy).
 
-Until step 4, `genus doctor --category agents` will report any destructive
-grant the gate is not arming. That report is the intended state during the
-soak, not a failure to fix by promoting early.
+Until step 4, `genus doctor --category agents` reports the declared gates
+this engine is not applying, as **`agents.approval_gate_not_armed`**. That
+report is the intended state during the soak, not a failure to fix by promoting
+early — so it is an `info` check and does **not** mark the instance
+`degraded`. Measured on the 16 stock templates:
 
-**It will also show the instance as `degraded`.** `agents.approval_gate_not_armed`
-is a `recommended` check, and any recommended failure sets the doctor's
-instance status to `degraded` (`doctor/runner.py`); the exit code stays 0.
-Measured on the stock templates:
+| Engine posture | `destructive_tool_not_gated` (recommended) | `approval_gate_not_armed` (info) | instance |
+|---|---|---|---|
+| `ENABLED=1 MODE=enforce` (this instance's drop-in) | pass | pass | `ok` |
+| `ENABLED=1 MODE=observe` (the chart's default) | pass | fail | `ok`, one info line |
+| neither set (compose, or systemd without the drop-in) | pass | fail | `ok`, one info line |
 
-| Engine posture | check | instance status |
-|---|---|---|
-| `ENABLED=1 MODE=enforce` (this instance's drop-in) | pass | `ok` |
-| `ENABLED=1 MODE=observe` (the chart's default) | fail | `degraded` |
-| neither set (compose, or systemd without the drop-in) | fail | `degraded` |
-
-So a correctly-configured instance mid-soak reads `degraded`, and so does every
-deployment that has not adopted either. That is a real cost of shipping
-`observe` rather than `enforce`, and it is the trade accepted here: a
-deployment that cannot approve an escalation should not be denying one. If the
-noise outweighs the signal in practice, the fix is to split the check — the
-manifest-level gap staying `recommended`, the "engine is mid-ladder" case
-dropping to `info`, which does not degrade.
+The two checks are split by who owns the fix. **`agents.approval_gate_not_armed`**
+is about this engine's posture and clears the moment you finish the promotion
+above. **`agents.destructive_tool_not_gated`** is a manifest that granted a
+record-deleting tool without asking for a human at all — no flag can gate a
+tool the manifest never named — so that one stays `recommended` and does mark
+the instance `degraded` at every posture until the manifest is fixed.
 
 ### Status 2026-07-13 (historical): the gate was INERT, not clean
 

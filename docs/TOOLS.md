@@ -253,9 +253,14 @@ denial reads as a policy and is not one: the same account is reached through
 `exec`, past the do-not-contact check, the duplicate-reply guard, the threading
 and the benchmark gate.
 
-**`agents.approval_gate_not_armed`** — an agent that granted one of the four
-record-deleting CRM tools — `delete_person`, `delete_company`, `delete_note`,
-`delete_task` — and that this run will not put in front of a human.
+Human approval takes two checks, because the gap has two owners and only one
+of them is the reader's to fix.
+
+**`agents.destructive_tool_not_gated`** (`recommended`) — an agent that granted
+one of the four record-deleting CRM tools — `delete_person`, `delete_company`,
+`delete_note`, `delete_task` — without declaring it under
+`v2.human_approval_tools` alongside `v2.guardrails: [human_approval]`, or
+having exempted itself with `human_approval_fail_open: true`.
 
 **Those four and nothing else.** It does not cover `gws_gmail_send`,
 `write_file`, `exec` or `git_push`: naming those fired on 16 of the 16 stock
@@ -265,26 +270,32 @@ earlier version of this paragraph said it was. `gws_calendar_delete` and
 `vault_delete` are irreversible too and are deliberately still outside the set —
 adding them is a live question, not an oversight.
 
-Two halves have to line up and nothing else brings them together:
+No engine setting can fix this one: a tool the manifest never named cannot be
+escalated whatever the flags say.
 
-* the manifest declares BOTH `v2.guardrails: [human_approval]` and
-  `v2.human_approval_tools`, and does not set `human_approval_fail_open: true`;
-* the engine has BOTH `ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED` and
-  `ROBOTHOR_APPROVAL_MODE=enforce`.
+**`agents.approval_gate_not_armed`** (`info`) — the manifests asked for human
+approval and the ENGINE is not enforcing it, so the declared gates do not
+apply. `approval_mode()` needs BOTH `ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED` and
+`ROBOTHOR_APPROVAL_MODE=enforce`; `_enforcement_mode` returns `off` whenever
+the first is falsy no matter what the mode says, so
+`ROBOTHOR_APPROVAL_MODE=enforce` **alone is a no-op** — and the mode is the
+name an operator reaches for. A manifest can read as carefully gated in review
+and run ungated in production, which is the whole reason this check reads the
+engine's settings as well as the files.
 
-`_enforcement_mode` returns `off` whenever the first variable is falsy no
-matter what the mode says, so `ROBOTHOR_APPROVAL_MODE=enforce` **alone is a
-no-op** — and the mode is the name an operator reaches for. A manifest can read
-as carefully gated in review and run ungated in production. Both are set in the systemd
-drop-in and in `helm/genus-os/values.yaml` under `engine.env` — the drop-in at
-`enforce`, the chart at `observe`, because a chart cannot guarantee an approver
-is wired and `enforce` with none denies every escalated call. Promoting the
-chart's default is an operator step with a soak in front of it;
-`docs/runbooks/approval-enforce.md` in the repo has the full matrix and the
-promotion checklist. (Not linked: that runbook is in `mkdocs.yml`'s
-`exclude_docs`, so a link here would 404 for a reader of the published site.)
+It is `info`, so it never marks the instance `degraded`. `observe` is a
+deliberate rung on a documented ladder and the Helm chart ships it: a chart
+cannot guarantee an approver is wired, and `enforce` with none denies every
+escalated call. Reporting a correctly-configured instance mid-soak as broken is
+the same "check nobody reads" failure as above, pointed the other way. The
+result names the promotion step; `docs/runbooks/approval-enforce.md` in the
+repo has the full matrix and the checklist. (Not linked: that runbook is in
+`mkdocs.yml`'s `exclude_docs`, so a link here would 404 for a reader of the
+published site.)
 
-The three `agents.*`/`tools.*` checks are `recommended` — reported, never fatal.
+Of the `agents.*`/`tools.*` checks, three are `recommended` — reported, never
+fatal, but they do mark the instance `degraded` — and
+`agents.approval_gate_not_armed` is `info`, which does not.
 `calendar.operator_calendar_writable` is `required`: an instance that cannot
 write the operator's calendar will silently do the wrong thing every time.
 

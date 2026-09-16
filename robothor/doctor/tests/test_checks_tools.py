@@ -48,6 +48,31 @@ async def _run(check_id: str) -> object:
     return await _BY_ID[check_id].run(DoctorContext())
 
 
+@pytest.fixture
+def stock_instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The 16 SHIPPED templates, Jinja stripped, in a throwaway workspace.
+
+    Fixture agents prove the rules; these prove the rules do not fire on what
+    the platform actually ships, which is the property every one of these
+    checks has had to be corrected for at least once.
+    """
+    import re as _re
+    from pathlib import Path as _Path
+
+    workspace = tmp_path / "workspace"
+    manifests = workspace / "docs" / "agents"
+    manifests.mkdir(parents=True)
+    (workspace / "brain").mkdir()
+    repo = _Path(__file__).resolve().parents[3]
+    for manifest in sorted(repo.glob("templates/agents/*/*/manifest.template.yaml")):
+        text = _re.sub(r"\{\%.*?\%\}", "", manifest.read_text(), flags=_re.DOTALL)
+        text = _re.sub(r"\{\{\s*([A-Za-z0-9_]+)\s*\}\}", "placeholder", text)
+        (manifests / f"{manifest.parent.name}.yaml").write_text(text)
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(workspace))
+    monkeypatch.setenv("ROBOTHOR_MANIFEST_DIR", str(manifests))
+    return workspace
+
+
 # ── The mention scanner ───────────────────────────────────────────────
 
 
@@ -546,7 +571,9 @@ class TestTheStockTemplatesAreQuiet:
 
 
 class TestTheApprovalGateIsArmed:
-    """Round 3, Important 4. `human_approval` IS enforced — but only when BOTH
+    """Round 3, Important 4 / round 5: the ENGINE half, at `info`.
+
+    `human_approval` IS enforced — but only when BOTH
     `ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED` and `ROBOTHOR_APPROVAL_MODE=enforce`
     are set. Measured:
 
@@ -557,7 +584,11 @@ class TestTheApprovalGateIsArmed:
 
     A manifest can therefore declare both halves of the guardrail, read as
     gated in review, and still grant an unattended `delete_person` that nothing
-    stops. Nothing told the operator; this check does.
+    stops. Nothing told the operator; this check does — as `info`, because
+    `observe` is a deliberate rung the platform's own chart ships and marking
+    a correctly-configured instance `degraded` for it is the failure this
+    module argues against twice. The manifest gap that IS the operator's to fix
+    is `agents.destructive_tool_not_gated`, which stays `recommended`.
     """
 
     @pytest.fixture
@@ -628,17 +659,17 @@ class TestTheApprovalGateIsArmed:
         self, instance: Path, gate_on: None
     ) -> None:
         """Round 4, Important 2. An agent with no `tools_allowed` holds every
-        delete tool and is deliberately out of scope — so the PASS may not say
-        "every destructive grant is gated" while one sits right there.
+        delete tool and is deliberately out of scope — so the PASS may not
+        claim every destructive grant is gated while one sits right there.
         `main` and `morning-briefing` are exactly that among the shipped
         templates."""
         self._gated_agent(instance)
         _write_agent(instance, "unrestricted", {})
 
-        result = await _run("agents.approval_gate_not_armed")
+        result = await _run("agents.destructive_tool_not_gated")
 
         assert result.status == "pass", result.detail
-        assert "opted into human approval" in result.detail, result.detail
+        assert "on purpose" in result.detail, result.detail
 
     @pytest.mark.asyncio
     async def test_it_is_quiet_when_nothing_destructive_is_granted(
@@ -647,7 +678,7 @@ class TestTheApprovalGateIsArmed:
         """A check that fires on an instance with nothing to protect is a check
         nobody reads."""
         _write_agent(instance, "reader", {"tools_allowed": ["read_file", "list_people"]})
-        result = await _run("agents.approval_gate_not_armed")
+        result = await _run("agents.destructive_tool_not_gated")
 
         assert result.status == "pass", result.detail
 
@@ -664,7 +695,7 @@ class TestTheApprovalGateIsArmed:
             "careful",
             {"tools_allowed": ["read_file", "delete_person"], "tools_denied": ["delete_person"]},
         )
-        result = await _run("agents.approval_gate_not_armed")
+        result = await _run("agents.destructive_tool_not_gated")
 
         assert result.status == "pass", result.detail
 
@@ -679,7 +710,7 @@ class TestTheApprovalGateIsArmed:
                 "tools_denied": ["delete_*"],
             },
         )
-        result = await _run("agents.approval_gate_not_armed")
+        result = await _run("agents.destructive_tool_not_gated")
 
         assert result.status == "pass", result.detail
 
@@ -696,7 +727,7 @@ class TestTheApprovalGateIsArmed:
                 "tools_denied": ["delete_person"],
             },
         )
-        result = await _run("agents.approval_gate_not_armed")
+        result = await _run("agents.destructive_tool_not_gated")
 
         assert result.status == "fail", result.detail
         assert "delete_task" in result.detail
@@ -717,7 +748,7 @@ class TestTheApprovalGateIsArmed:
                 "v2": {"human_approval_tools": ["delete_person"]},
             },
         )
-        result = await _run("agents.approval_gate_not_armed")
+        result = await _run("agents.destructive_tool_not_gated")
 
         assert result.status == "fail", result.detail
         assert "delete_person" in result.detail
@@ -740,7 +771,7 @@ class TestTheApprovalGateIsArmed:
                 },
             },
         )
-        result = await _run("agents.approval_gate_not_armed")
+        result = await _run("agents.destructive_tool_not_gated")
 
         assert result.status == "fail", result.detail
         assert "fail_open" in result.detail
@@ -769,7 +800,7 @@ class TestTheDocsDescribeTheCoverageTheCheckHas:
         from robothor.doctor.checks.tools import _registered_names
 
         text = (_Path(__file__).resolve().parents[3] / "docs" / "TOOLS.md").read_text()
-        start = text.index("`agents.approval_gate_not_armed`")
+        start = text.index("`agents.destructive_tool_not_gated`")
         end = text.index(self._CLAIM_ENDS, start)
         return set(re.findall(r"`(\w+)`", text[start:end])) & _registered_names()
 
@@ -784,6 +815,96 @@ class TestTheDocsDescribeTheCoverageTheCheckHas:
 
         for name in ("gws_gmail_send", "write_file", "exec", "git_push"):
             assert name not in _DESTRUCTIVE_TOOLS
+
+
+class TestTheSplitKeepsACleanInstallClean:
+    """Round 5: one `recommended` check covering both halves marked an instance
+    `degraded` for a posture the platform's own Helm chart ships — a
+    correctly-configured instance mid-soak read as broken, which is the "a
+    check that fires on a clean install is a check nobody reads" failure this
+    module argues against twice.
+
+    Split by OWNER: the manifest gap is the operator's to fix whatever the
+    engine does (`recommended`, degrades); the engine sitting at `observe` is a
+    documented rung on a ladder (`info`, does not degrade).
+    """
+
+    #: The three postures a shipped deployment actually runs in.
+    POSTURES = {
+        "drop-in": {
+            "ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED": "1",
+            "ROBOTHOR_APPROVAL_MODE": "enforce",
+        },
+        "chart": {
+            "ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED": "1",
+            "ROBOTHOR_APPROVAL_MODE": "observe",
+        },
+        "compose": {},
+    }
+
+    def _posture(self, monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+        for var in ("ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED", "ROBOTHOR_APPROVAL_MODE"):
+            monkeypatch.delenv(var, raising=False)
+        for var, value in self.POSTURES[name].items():
+            monkeypatch.setenv(var, value)
+
+    def test_the_severities_are_what_the_split_is_for(self) -> None:
+        by_id = {check.id: check for check in CHECKS}
+
+        assert by_id["agents.destructive_tool_not_gated"].severity == "recommended"
+        assert by_id["agents.approval_gate_not_armed"].severity == "info", (
+            "an info failure must not mark the instance degraded — that is the "
+            "whole point of the split"
+        )
+
+    @pytest.mark.parametrize("posture", ["drop-in", "chart", "compose"])
+    @pytest.mark.asyncio
+    async def test_the_stock_templates_never_degrade_an_instance(
+        self, stock_instance: Path, monkeypatch: pytest.MonkeyPatch, posture: str
+    ) -> None:
+        """All 16 shipped templates, at every posture. `crm-steward` declares
+        the only gate, so the ENGINE check reports at `observe`/off — and that
+        must never be a degradation."""
+        self._posture(monkeypatch, posture)
+
+        gap = await _run("agents.destructive_tool_not_gated")
+        assert gap.status == "pass", gap.detail
+
+    @pytest.mark.asyncio
+    async def test_the_engine_check_is_quiet_only_when_enforcing(
+        self, stock_instance: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._posture(monkeypatch, "drop-in")
+        assert (await _run("agents.approval_gate_not_armed")).status == "pass"
+
+    @pytest.mark.parametrize("posture", ["chart", "compose"])
+    @pytest.mark.asyncio
+    async def test_the_engine_check_names_the_promotion_step(
+        self, stock_instance: Path, monkeypatch: pytest.MonkeyPatch, posture: str
+    ) -> None:
+        """An info line an operator cannot act on is noise."""
+        self._posture(monkeypatch, posture)
+
+        result = await _run("agents.approval_gate_not_armed")
+
+        assert result.status == "fail", result.detail
+        assert "crm-steward" in result.detail
+        assert "approval-enforce.md" in result.detail
+        assert "ROBOTHOR_APPROVAL_MODE=enforce" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_a_manifest_gap_still_degrades_at_every_posture(
+        self, instance: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Promoting the flag must not silence a manifest that never asked for
+        a human at all — no engine setting can gate that."""
+        _write_agent(instance, "reckless", {"tools_allowed": ["read_file", "delete_person"]})
+
+        for posture in self.POSTURES:
+            self._posture(monkeypatch, posture)
+            result = await _run("agents.destructive_tool_not_gated")
+            assert result.status == "fail", (posture, result.detail)
+            assert "delete_person" in result.detail
 
 
 # ── tools.exec_allowlist_bypasses_denied_tool ─────────────────────────

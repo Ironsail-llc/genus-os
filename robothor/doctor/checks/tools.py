@@ -631,54 +631,86 @@ def _destructive_grants(directory: Path) -> tuple[list[str], list[str]]:
     return ungated, gated
 
 
-async def _approval_gate_not_armed(ctx: DoctorContext) -> Result:
-    """A destructive grant whose approval gate this run will not apply.
+def _summarise(lines: list[str]) -> str:
+    shown = "; ".join(lines[:_MAX_LISTED])
+    if len(lines) > _MAX_LISTED:
+        shown += f"; and {len(lines) - _MAX_LISTED} more"
+    return shown
 
-    ``human_approval`` IS enforced — but only when the manifest declares both
-    halves AND the engine has both environment variables set. Nothing brings
-    those two facts together, so a manifest can read as gated in review and run
-    ungated in production: ``ROBOTHOR_APPROVAL_MODE=enforce`` alone is a no-op,
-    and the Helm path sets neither variable.
+
+async def _destructive_tool_not_gated(ctx: DoctorContext) -> Result:
+    """A record-deleting tool granted with no human in the loop declared.
+
+    The MANIFEST half, and the half whose fix is the operator's regardless of
+    how the engine is configured: no environment setting can gate a tool the
+    manifest never named in ``v2.human_approval_tools``, never paired with
+    ``v2.guardrails: [human_approval]``, or exempted with
+    ``human_approval_fail_open: true``.
+
+    Split from :func:`_approval_gate_not_armed` because the two findings have
+    different owners and different urgencies, and ``recommended`` on the pair
+    of them marked an instance ``degraded`` for a posture the platform's own
+    chart ships. This one stays ``recommended``: it is a real gap, and it does
+    not go away by promoting a flag.
     """
     directory = _manifest_dir(ctx)
     if not directory.is_dir():
         return skip(f"no manifest directory at {directory}")
     try:
-        ungated, gated = await ctx.run_blocking(_destructive_grants, directory)
+        ungated, _gated = await ctx.run_blocking(_destructive_grants, directory)
     except Exception as exc:  # noqa: BLE001 - a scan that raises is a failure
         return fail(f"cannot scan the manifests: {type(exc).__name__}")
 
-    if not ungated and not gated:
-        # Nothing to protect. A check that fires on an instance granting no
-        # destructive tool is one the operator learns to skip.
-        return ok("no agent grants a destructive tool")
+    if not ungated:
+        # Says what was EXAMINED, not more. The scoping deliberately skips
+        # agents with no `tools_allowed` — `main` and `morning-briefing` among
+        # the stock templates hold all four record-deleting tools that way — so
+        # "every destructive grant is gated" would be a reassurance nobody
+        # earned.
+        return ok("every record-deleting grant an agent made on purpose is declared gated")
+    return fail(
+        f"{len(ungated)} record-deleting grant(s) with no human in the loop: {_summarise(ungated)}"
+    )
+
+
+async def _approval_gate_not_armed(ctx: DoctorContext) -> Result:
+    """Manifests that ask for human approval, on an engine not enforcing it.
+
+    The ENGINE half. ``human_approval`` needs both manifest halves AND both
+    environment variables, and nothing else brings those two facts together: a
+    manifest can read as carefully gated in review and run ungated in
+    production, because ``ROBOTHOR_APPROVAL_MODE=enforce`` alone is a no-op.
+
+    ``info``, not ``recommended``, because ``observe`` is a deliberate rung on
+    a documented ladder and the platform's own Helm chart ships it — a chart
+    cannot guarantee an approver is wired, and ``enforce`` with none denies
+    every escalated call. Reporting a correctly-configured instance mid-soak as
+    ``degraded`` is the "a check that fires on a clean install is a check
+    nobody reads" failure this module argues against twice. The manifest gap
+    that IS the operator's to fix is
+    :func:`_destructive_tool_not_gated`, and that one still degrades.
+    """
+    directory = _manifest_dir(ctx)
+    if not directory.is_dir():
+        return skip(f"no manifest directory at {directory}")
+    try:
+        _ungated, gated = await ctx.run_blocking(_destructive_grants, directory)
+    except Exception as exc:  # noqa: BLE001 - a scan that raises is a failure
+        return fail(f"cannot scan the manifests: {type(exc).__name__}")
+
+    if not gated:
+        return ok("no agent asks for human approval on a destructive tool")
 
     mode, why = _approval_gate_state()
-    lines = list(ungated)
-    if gated and mode != "enforce":
-        # The manifests are RIGHT and the run still does not gate them. This is
-        # the half a manifest review cannot see, and the reason this check
-        # reads the environment at all.
-        lines += [f"{line} (declared gated, but the gate is {mode!r})" for line in gated]
-    if not lines:
-        # Says what was EXAMINED, not more. The scoping above deliberately
-        # skips agents with no `tools_allowed` — `main` and `morning-briefing`
-        # among the stock templates hold all four record-deleting tools that
-        # way, with no human_approval declaration — so "every destructive grant
-        # is gated" was a reassurance nobody had earned. That is this branch's
-        # own "a check nobody reads" argument pointed the other way.
-        return ok(
-            "every destructive grant on agents that opted into human approval is gated, "
-            "and the approval gate is enforcing"
-        )
-
-    shown = "; ".join(lines[:_MAX_LISTED])
-    if len(lines) > _MAX_LISTED:
-        shown += f"; and {len(lines) - _MAX_LISTED} more"
-    detail = f"{len(lines)} destructive grant(s) this run will not gate: {shown}"
-    if why:
-        detail += f". {why}"
-    return fail(detail)
+    if mode == "enforce":
+        return ok("the approval gate is enforcing, so every declared gate applies")
+    return fail(
+        f"{len(gated)} declared approval gate(s) this run will not apply: "
+        f"{_summarise(gated)}. {why}. Escalations are recorded and the call proceeds; "
+        "promote with the checklist in docs/runbooks/approval-enforce.md — wire an "
+        "approver, prove one round-trip, soak 48h, then set "
+        "ROBOTHOR_APPROVAL_MODE=enforce."
+    )
 
 
 # ── calendar.operator_calendar_writable ───────────────────────────────
@@ -810,10 +842,17 @@ CHECKS: tuple[Check, ...] = (
         run=_tools_named_but_not_granted,
     ),
     Check(
-        id="agents.approval_gate_not_armed",
-        title="Destructive grants are gated, and the approval gate is enforcing",
+        id="agents.destructive_tool_not_gated",
+        title="A record-deleting tool is granted with a human in the loop",
         category="agents",
         severity="recommended",
+        run=_destructive_tool_not_gated,
+    ),
+    Check(
+        id="agents.approval_gate_not_armed",
+        title="The engine enforces the approval gates its manifests declare",
+        category="agents",
+        severity="info",
         run=_approval_gate_not_armed,
     ),
     Check(
