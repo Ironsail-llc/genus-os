@@ -370,6 +370,65 @@ class TestSecretsTheOperatorSent:
         )
         assert Path(row["path"]).read_bytes() == b"TOKEN=abc"
 
+    @pytest.mark.parametrize(
+        "uid",
+        ["AgACaaa", "AgAC-xQ", "BQAD-77", "CXYZ-11", "-leading", "trailing-", "a-b-c-d"],
+    )
+    @pytest.mark.parametrize("name", [".env", "credentials.json", "id_ed25519"])
+    def test_a_dash_in_the_file_unique_id_cannot_defeat_the_gate(self, tmp_path, uid, name) -> None:
+        """Hostile review I1. The verdict used to be re-derived by splitting the
+        stored name on the FIRST dash — and Telegram's file_unique_id is
+        URL-safe base64, whose alphabet contains one. `BQAD-77-credentials.json`
+        was read as `77-credentials.json`, matched nothing, and an OAuth
+        client-secret JSON was sent in full."""
+        row = attachments.save_attachment(
+            chat_id="100200300",
+            file_id="f",
+            file_unique_id=uid,
+            name=name,
+            data=b"secret-value-here",
+            kind="document",
+            mime="text/plain",
+            workspace=tmp_path,
+        )
+        assert row["secret"] is True
+        assert attachments.is_inbox_secret(row["path"]) is True, row["path"]
+
+    def test_the_verdict_is_the_directory_not_the_filename(self, tmp_path) -> None:
+        row = attachments.save_attachment(
+            chat_id="100200300",
+            file_id="f",
+            file_unique_id="BQAD-77",
+            name="credentials.json",
+            data=b"{}",
+            kind="document",
+            mime="application/json",
+            workspace=tmp_path,
+        )
+        from pathlib import Path
+
+        assert Path(row["path"]).parent.name == attachments.SECRET_SUBDIR
+        assert row["original_name"] == "credentials.json"
+
+    def test_an_ordinary_file_is_not_in_the_secret_directory(self, tmp_path) -> None:
+        row = attachments.save_attachment(
+            chat_id="100200300",
+            file_id="f",
+            file_unique_id="AgAC-xQ",
+            name="notes.txt",
+            data=b"hello",
+            kind="document",
+            mime="text/plain",
+            workspace=tmp_path,
+        )
+        assert attachments.is_inbox_secret(row["path"]) is False
+        assert "original_name" not in row
+
+    def test_a_path_outside_any_inbox_is_never_a_secret(self, tmp_path) -> None:
+        """The predicate keys on the inbox tree, so an unrelated directory
+        called `secret` elsewhere on the box does not answer for it."""
+        assert attachments.is_inbox_secret(tmp_path / "secret" / "a.txt") is False
+
     def test_the_note_says_kept_but_not_read_and_quotes_nothing(self) -> None:
         row = {
             "path": "/w/inbox/telegram/100200300/2026-09-15/u-env",

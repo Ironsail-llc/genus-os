@@ -218,13 +218,39 @@ class TestSecrets:
         assert "hunter2" not in out.get("error", "")
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("uid", ["AgACaaa", "AgAC-xQ", "BQAD-77", "a-b-c-d"])
+    @pytest.mark.parametrize("name", [".env", "credentials.json", "id_ed25519"])
+    async def test_no_uid_shape_lets_a_secrets_file_back_out(
+        self, tmp_path, sent, uid, name
+    ) -> None:
+        """Hostile review I1. The gate re-derived its verdict by splitting the
+        stored name on the FIRST dash; Telegram's file_unique_id is URL-safe
+        base64. `BQAD-77-credentials.json` was read as `77-credentials.json`,
+        matched nothing, and an OAuth client-secret JSON — no token-shaped
+        literal for the content scan to catch — went out in full."""
+        from robothor.engine import attachments as inbox
+
+        row = inbox.save_attachment(
+            chat_id="100200300",
+            file_id="f",
+            file_unique_id=uid,
+            name=name,
+            data=b'{"client_secret": "plain-json-with-no-token-shape"}',
+            kind="document",
+            mime="application/json",
+            workspace=tmp_path,
+        )
+        out = await tool.send_file({"path": row["path"]}, Ctx(tmp_path))
+        assert "error" in out, f"{uid}/{name} escaped the gate"
+        assert not sent
+
+    @pytest.mark.asyncio
     async def test_an_inbox_copy_of_a_secrets_file_cannot_be_sent_back(
         self, tmp_path, sent
     ) -> None:
-        """`.env` was saved as `<uid>-env`, which `secret_paths` no longer
-        matches. Refused on the way in, refused on the way out."""
+        """The verdict is the directory, so no filename shape can dodge it."""
         path = make_file(
-            tmp_path / "inbox" / "telegram" / "100200300" / "2026-09-15",
+            tmp_path / "inbox" / "telegram" / "100200300" / "2026-09-15" / "secret",
             "AgACenv-env",
             b"TOKEN=abc",
         )

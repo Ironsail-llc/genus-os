@@ -82,6 +82,14 @@ MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024
 #: Directory under the workspace that holds everything received over a channel.
 INBOX_DIRNAME = "inbox"
 
+#: Where a file whose ORIGINAL name said "credentials" is kept, under the day's
+#: directory. The directory IS the flag: a filename cannot carry it (sanitising
+#: destroys the evidence — ``.env`` becomes ``env``) and a name that has to be
+#: parsed to be understood will eventually be parsed wrongly, which is exactly
+#: what the hostile review found. Everything in here is kept and nothing in
+#: here is read into a prompt, sent, or opened by ``read_file``.
+SECRET_SUBDIR = "secret"
+
 #: Longest a sanitised filename may be. Long enough for a real document name,
 #: short enough that ``<file_unique_id>-<name>`` stays inside the 255-byte
 #: limit every filesystem this runs on enforces.
@@ -213,11 +221,17 @@ def inbox_path(
     channel: str = "telegram",
     when: datetime | None = None,
 ) -> Path:
-    """Where one attachment belongs: ``<inbox>/<chat>/<date>/<uid>-<name>``.
+    """Where one attachment belongs: ``<inbox>/<chat>/<date>[/secret]/<uid>-<name>``.
 
     The date is the day it ARRIVED, which is what makes retention a directory
     walk rather than a database query, and the ``file_unique_id`` prefix is what
     makes two files with the same name from the same day distinct.
+
+    A file whose ORIGINAL name said "credentials" goes one level deeper, into
+    :data:`SECRET_SUBDIR`. That directory is how every later reader knows — the
+    sanitised filename cannot say it, and a name that has to be parsed to be
+    understood gets parsed wrongly: Telegram's ``file_unique_id`` is URL-safe
+    base64 and the first version of that parse split on ``-``.
 
     Every component is sanitised into a single segment before it is joined, so
     a hostile ``chat_id`` or ``name`` cannot reach outside the root. The result
@@ -232,7 +246,10 @@ def inbox_path(
     if chat_segment in ("", "-"):
         chat_segment = "unknown"
     uid = safe_name(file_unique_id, default="file")
-    candidate = root / chat_segment / day / f"{uid}-{safe_name(name)}"
+    folder = root / chat_segment / day
+    if holds_credentials(name):
+        folder = folder / SECRET_SUBDIR
+    candidate = folder / f"{uid}-{safe_name(name)}"
     resolved_root = root.resolve(strict=False)
     resolved = candidate.resolve(strict=False)
     if resolved_root not in resolved.parents:
@@ -293,22 +310,26 @@ def holds_credentials(name: str) -> bool:
 
 
 def is_inbox_secret(path: str | os.PathLike[str]) -> bool:
-    """Is *path* the inbox copy of a file the operator sent that holds credentials?
+    """Is *path* the inbox copy of a file that holds credentials?
 
-    The one predicate every reader asks. It exists because the stored name
-    cannot answer: sanitising is what destroys the evidence (``.env`` becomes
-    ``env``), so ``secret_paths`` sees nothing to object to.
+    Answered from the DIRECTORY, not the filename. The first version of this
+    stripped the ``<file_unique_id>-`` prefix by splitting on the first ``-``
+    and asked ``secret_paths`` about what was left — and Telegram's
+    ``file_unique_id`` is URL-safe base64, whose alphabet contains ``-``. When
+    the uid held one, the split cut in the wrong place: ``BQAD-77-credentials
+    .json`` was read as ``77-credentials.json``, which matches nothing, and the
+    hostile review sent an OAuth client-secret JSON in full. Roughly one uid in
+    four for a 20-character id.
+
+    So the verdict is recorded once, at save time, by putting the file in
+    :data:`SECRET_SUBDIR`. A directory cannot be mis-parsed, survives a
+    restart, needs no sidecar to stay in sync with the bytes, and is visible to
+    an operator listing the tree.
     """
-    stored = PurePath(str(path)).name
-    # Strip the `<file_unique_id>-` prefix. Telegram's uid is URL-safe base64
-    # and may contain `-`, so every split point is tried rather than the first.
-    candidates = {stored}
-    parts = stored.split("-")
-    for index in range(1, len(parts)):
-        tail = "-".join(parts[index:])
-        candidates.add(tail)
-        candidates.add(f".{tail}")
-    return any(holds_credentials(name) for name in candidates)
+    parts = PurePath(str(path)).parts
+    if INBOX_DIRNAME not in parts:
+        return False
+    return SECRET_SUBDIR in parts[parts.index(INBOX_DIRNAME) :]
 
 
 #: What the agent is told in place of a secrets file's contents. The file IS
@@ -430,6 +451,10 @@ def save_attachment(
     }
     if holds_credentials(name):
         row["secret"] = True
+        # The name Telegram gave it, carried on the row because the stored one
+        # cannot say it: `.env` sanitises to `env`. The Helm chat UI shows the
+        # operator what they actually sent; nothing derives a decision from it.
+        row["original_name"] = str(name or "")
     if width:
         row["width"] = int(width)
     if height:
