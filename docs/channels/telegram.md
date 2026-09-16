@@ -77,11 +77,16 @@ Each saved file is recorded on the stored user turn's JSONB under
 never has to tell "unknown" from "zero".
 
 A file named like a credentials file (`.env`, `credentials.json`, `id_rsa`, …)
-also carries `"secret": true`. It is still **saved** — you sent it on purpose
-and may want it moved or renamed — but nothing quotes its contents into a
-prompt and `send_file` refuses to send it back out. The verdict is taken from
-the name Telegram supplied, because sanitising it for the filesystem is exactly
-what destroys the evidence: `.env` becomes `env`.
+carries `"secret": true` and `"original_name"`, and is kept one level deeper,
+in `<date>/secret/`. It is still **saved** — you sent it on purpose and may
+want it moved or renamed — but its contents are never quoted into a prompt,
+`read_file` refuses it with the secrets-file sentence, and `send_file` refuses
+to send it back out.
+
+The verdict is taken from the name Telegram supplied and recorded as the
+DIRECTORY, because sanitising a name for the filesystem is exactly what
+destroys the evidence (`.env` becomes `env`) and a name that has to be parsed
+to be understood eventually gets parsed wrongly.
 
 ## Sending: `send_file`
 
@@ -93,10 +98,19 @@ The agent writes the file, then sends it by path. It never pastes binary or
 base64 into a message.
 
 * **`path`** must be inside the workspace — the inbox counts. The *resolved*
-  path is judged, so a symlink pointing out of the workspace is refused.
+  path is judged, so a symlink pointing out of the workspace is refused, and a
+  file with more than one name on the filesystem (a hard link, which the
+  resolver cannot follow) is refused with a note to copy it and send the copy.
 * **Refused** for anything `robothor.engine.secret_paths` calls a secrets file,
-  and for any text file carrying a credential-shaped value. The refusal names
-  the file and the kind of credential, never the value.
+  for anything in the inbox's `secret/` directory, and for any file whose first
+  256 KB decode as text and carry a credential-shaped value — whatever it is
+  called, because renaming would otherwise be the whole attack. A credential
+  buried past that first 256 KB is not seen. The refusal names the file and the
+  kind of credential, never the value.
+* **Checked twice.** The same ladder runs when the agent asks *and* again
+  immediately before the bytes are uploaded, and a file queued for a scheduled
+  run is pinned to the digest it was approved with — rewrite it in between and
+  it is refused as `changed_since_queued` rather than sent.
 * **`as: auto`** (the default) sends an image as a photo when it is under
   10 MB and its width plus height is under 10 000, and as a document
   otherwise — a document the operator can open beats an error.

@@ -300,6 +300,17 @@ async def _read_file(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         # (see robothor/engine/secret_paths.py for the live reads behind this).
         if is_secret_path(path):
             return {"error": refusal_for(path)}
+        # The same question for a file the OPERATOR sent over a channel.
+        # `secret_paths` cannot answer it: the inbox stores a sanitised name and
+        # `.env` sanitises to `env`, so the rules see nothing to object to. The
+        # verdict was taken at save time and recorded as the directory the file
+        # sits in; this is the one additive call site that consults it. Without
+        # it, `read_file` on the inbox copy put the raw credential into the
+        # model's context — and nothing downstream redacts a TOOL RESULT.
+        from robothor.engine.attachments import is_inbox_secret
+
+        if is_inbox_secret(path):
+            return {"error": refusal_for(path)}
         try:
             content = path.read_text()
             return {"content": content[:50000], "path": str(path), "chars": len(content)}

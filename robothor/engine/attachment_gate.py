@@ -18,19 +18,24 @@ The order matters and each rung earns its place:
 
 1. **Containment** — the RESOLVED path (symlinks followed) must be inside the
    workspace.
-2. **Hard links** — a second name for a file outside the workspace is a name the
-   resolver cannot see. ``ln ~/.ssh/id_rsa ~/robothor/notes.bin`` was a working
-   exfiltration of the operator's private key (review I3).
-3. **Secret paths** — :mod:`robothor.engine.secret_paths`, the same rule
-   ``read_file`` and ``exec`` enforce.
-4. **The inbox secret flag** — a credentials file the operator SENT is kept in a
+2. **Secret paths** — :mod:`robothor.engine.secret_paths`, the same rule
+   ``read_file`` and ``exec`` enforce. Before touching the filesystem, so the
+   refusal does not reveal whether the file exists.
+3. **The inbox secret flag** — a credentials file the operator SENT is kept in a
    dedicated subdirectory precisely so this question has an answer that no
    filename parsing can get wrong (review I1, I6).
-5. **Shape and size** — exists, is a file, is not empty, is under the ceiling.
-6. **Credential shapes** — every file small enough, whatever its name: the
+4. **Shape** — exists, is a file. This is the first rung that needs a ``stat``,
+   which is why the two name rules come before it.
+5. **Hard links** — a second name for a file outside the workspace is a name the
+   resolver cannot see. ``ln ~/.ssh/id_rsa ~/robothor/notes.bin`` was a working
+   exfiltration of the operator's private key (review I3).
+6. **Size** — not empty, under the ceiling.
+7. **The pin** — for a queued file, the digest it was approved with. Before the
+   content scan: if the bytes are not the approved bytes, judging the new ones
+   on their merits answers the wrong question.
+8. **Credential shapes** — every file small enough, whatever its name: the
    decode is the "is this text?" test, and it is better than a suffix list
    (review I2).
-7. **The pin** — for a queued file, the digest it was approved with.
 
 A refusal is a sentence for the agent. It names the file and the reason and
 **never the value**, because an error that helpfully echoes the credential
