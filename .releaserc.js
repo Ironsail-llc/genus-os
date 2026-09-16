@@ -35,16 +35,30 @@ if (branch === 'main') {
   }]);
 }
 
+// Two things happen in prepare. The first stamps the version into the product
+// metadata and the published installer. The second folds `changelog.d/` into
+// `docs/release-notes.md` -- the page mkdocs publishes, grouped by audience --
+// and deletes the fragments it consumed, so both halves land in the release
+// commit. Only on main: staging is built without running semantic-release, and
+// a release assembles a version exactly once.
+const prepareCmd =
+  branch === 'main'
+    ? 'scripts/update-helm-values.sh ${nextRelease.version} ${branch.name} && ' +
+      'python3 scripts/changelog_fragments.py assemble --version ${nextRelease.version}'
+    : 'scripts/update-helm-values.sh ${nextRelease.version} ${branch.name}';
+
 plugins.push(
   // Synchronize release metadata. Deployment image tags are promoted by the
   // workflow only after both release images have passed their blocking scan.
-  ['@semantic-release/exec', {
-    prepareCmd: 'scripts/update-helm-values.sh ${nextRelease.version} ${branch.name}',
-  }],
+  ['@semantic-release/exec', { prepareCmd }],
 
   ['@semantic-release/git', {
     assets: [
-      ...(branch === 'main' ? ['CHANGELOG.md'] : []),
+      // `CHANGELOG.md` is the developer record; `docs/release-notes.md` is
+      // what a reader gets. `changelog.d` is listed so the DELETIONS of the
+      // fragments prepare consumed are staged with the release commit --
+      // otherwise the next release assembles them a second time.
+      ...(branch === 'main' ? ['CHANGELOG.md', 'docs/release-notes.md', 'changelog.d'] : []),
       'package.json',
       'package-lock.json',
       'pyproject.toml',

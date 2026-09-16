@@ -166,9 +166,43 @@ block installs an instance.
 2. **Write tests** for any new functionality
 3. **Run the test suite** and ensure it passes
 4. **Update documentation** if you changed APIs or behavior
-5. **Open a PR** — the [PR template](https://github.com/Ironsail-llc/genus-os/blob/main/.github/PULL_REQUEST_TEMPLATE.md) will guide you through the checklist
+5. **Write the release note** if a reader would notice the change — see below
+6. **Open a PR** — the [PR template](https://github.com/Ironsail-llc/genus-os/blob/main/.github/PULL_REQUEST_TEMPLATE.md) will guide you through the checklist
 
 All PRs are **squash-merged** into `main` to keep history clean. Write a clear PR title — it becomes the commit message.
+
+### Release notes
+
+`CHANGELOG.md` is generated from commit messages and stays the developer
+record. It is not release notes: nobody outside this repository can tell what
+`feat(bridge): memory forget, flag audit, CSV export and logs API` changed for
+them.
+
+So a `feat:`, `fix:`, `perf:` or breaking pull request carries a fragment:
+
+```
+changelog.d/<PR-number>.<audience>.md
+```
+
+Two to four sentences, written from the reader's side, naming the page they
+should open. `<audience>` is `operators`, `admins`, `agent-authors` or
+`internal` — the format, the rules and a worked example are in
+`changelog.d/README.md`. A change that genuinely nobody would notice takes the
+`no-changelog` label instead, which is a decision somebody made rather than a
+silence.
+
+CI checks this, and the Release Preview comment on your PR shows the text it
+found. To check locally before you push:
+
+```bash
+python3 scripts/changelog_fragments.py lint
+python3 scripts/changelog_fragments.py check --pr 123 --title "feat(engine): a thing"
+```
+
+The release folds every fragment into `docs/release-notes.md`, grouped by
+audience, and deletes what it consumed. (A relative link here would break: this
+file is included verbatim into the published `docs/contributing.md`, so its
+links resolve from `docs/`, not from the repository root.)
 
 ### AI-Generated PRs
 
