@@ -73,6 +73,34 @@ The crm_task is **last**, on measured evidence: of 4,000 crm_tasks over 60 days
 on the first production instance, ZERO named an explicit output path. Reading
 it first meant a run that had a task row could never see its own prompt.
 
+### Keeping the contract in front of the model
+
+The checker can only be as good as what the model still has. Measured
+2026-09-16 across ten benchmark runs on one model: the four whose transcript
+began with a compaction summary scored a mean of **0.016**, the six that never
+compacted **0.450**. The required output header appears **zero** times in the
+worst one's entire context — the spec had been summarised away, and the agent
+invented its own columns. The competing scaffold compacts *harder* and is
+immune, on one constant: it pins the first three messages.
+
+Two defences, both general:
+
+| Defence | Where | Gated on |
+|---|---|---|
+| The first N messages are never summarised away | `compaction.protected_prefix_len`, `ROBOTHOR_COMPACTION_PROTECT_FIRST_N` (default 3) | nothing — losing the task statement is a correctness bug, not a guardrail |
+| The output contract is re-rendered verbatim after every compaction | `deliverable_contract.contract_sticky_block`, via `context._restore_output_contract` | `ROBOTHOR_DELIVERABLE_CONTRACT_MODE != off` |
+
+The protected prefix shrinks rather than ending on an assistant turn that
+called a tool: protecting the CALL while its RESULT is summarised away leaves a
+dangling `tool_call`, which several providers reject outright.
+
+The sticky block is extracted from the **pre-compaction** messages, where the
+spec certainly still is; appended last, so it is the most recent thing the model
+reads; appended once, never stacked; bounded at 2,000 characters, because it is
+re-sent on every compaction of every long run; and marked as the task's own
+words, because an agent that cannot tell an engine reminder from the task itself
+will argue with one of them.
+
 ### What is extracted
 
 Only from language that states the requirement explicitly. Nothing is inferred
