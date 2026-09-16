@@ -121,6 +121,13 @@ v2:
     - human_approval
   human_approval_tools:
     - delete_person
+  # NOTE the arithmetic before adding a second tool here: `human_approval_timeout`
+  # defaults to 300s (models.py) and this agent's schedule.timeout_seconds is
+  # 480 with `delivery: none`. One unanswered prompt therefore eats 62% of an
+  # unattended run's budget, on an agent whose own changelog records shrinking
+  # that budget after a 33% timeout rate. A delete is rare, so one prompt per
+  # run is the realistic worst case today — but two gated tools would not fit,
+  # and `human_approval_timeout: 120` is the knob if this starts costing runs.
   write_path_allowlist:
     - "brain/memory/crm-steward-status.md"
 

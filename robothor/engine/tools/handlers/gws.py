@@ -2162,9 +2162,19 @@ def _calendar_create(
                 dup.get("summary"),
                 existing_start,
             )
+            # Which rule fired, stripping the operator from both sides the
+            # way `_attendees_overlap` does. It is auto-added, not a guest —
+            # so on an attendee-less event created with `calendar="own"` the
+            # raw list is non-empty and this used to read "an overlapping guest
+            # list" for an event nobody was invited to. Round-2 Minor 2 fixed
+            # that sentence once for the explicit case; this is the same untruth
+            # reached through the auto-add.
+            owner = _operator_calendar_address()
+            proposed_guests = {e.lower() for e in attendee_emails if e.lower() != owner}
+            existing_guests = {e for e in _attendee_set(dup) if e != owner}
             matched_on = (
                 "the same title and start time"
-                if not attendee_emails and not _attendee_set(dup)
+                if not proposed_guests and not existing_guests
                 else "the same title and start time, and an overlapping guest list"
             )
             return {

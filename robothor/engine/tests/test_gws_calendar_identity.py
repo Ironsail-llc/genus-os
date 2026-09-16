@@ -368,6 +368,50 @@ class TestAttendeelessDedup:
         assert overlap({"alice@example.com"}, {"alice@example.com"}, "alice@example.com") is True
 
 
+class TestTheDedupReasonNeverInventsGuests:
+    """Round 4, Minor 5: on `calendar="own"` the operator is auto-added, so the
+    raw recipient list is non-empty for an event nobody was invited to — and
+    the deduped `reason` read "an overlapping guest list". Round-2 Minor 2
+    fixed that sentence for the explicit case; this is the same untruth reached
+    through the auto-add, in the sentence the agent relays to the operator.
+    """
+
+    def _existing(self, attendees: list[str] | None = None) -> dict[str, Any]:
+        event: dict[str, Any] = {
+            "id": "already-there",
+            "summary": "Flight to Lisbon",
+            "start": {"dateTime": "2026-10-01T09:00:00Z"},
+            "htmlLink": "https://calendar.example.com/e",
+        }
+        if attendees:
+            event["attendees"] = [{"email": a} for a in attendees]
+        return event
+
+    def _run_against(self, recorder, existing: dict[str, Any]) -> None:
+        def run(args: list[str], timeout: int = 30) -> Any:
+            recorder.append({"argv": args})
+            if args[:3] == ["calendar", "events", "list"]:
+                return {"items": [existing]}
+            return {"id": "new", "htmlLink": "x"}
+
+        gws_handlers._run_gws = run
+
+    def test_the_auto_added_operator_is_not_a_guest_list(self, operator, recorder) -> None:
+        self._run_against(recorder, self._existing())
+        out = _create(calendar="own")
+
+        assert out["status"] == "deduped"
+        assert "guest list" not in out["reason"], out["reason"]
+        assert "the same title and start time" in out["reason"]
+
+    def test_a_real_guest_list_is_still_named(self, operator, recorder) -> None:
+        self._run_against(recorder, self._existing(["bob@example.com"]))
+        out = _create(attendees=["bob@example.com"])
+
+        assert out["status"] == "deduped"
+        assert "guest list" in out["reason"], out["reason"]
+
+
 class TestANaiveTimestampMeansUTCEverywhere:
     """Round 3, Minor 1: `_days_from_now` reads a naive start as UTC (what the
     Calendar API does with one carrying no offset and no timeZone), while
