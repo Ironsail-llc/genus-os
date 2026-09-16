@@ -368,6 +368,72 @@ class TestAttendeelessDedup:
         assert overlap({"alice@example.com"}, {"alice@example.com"}, "alice@example.com") is True
 
 
+class TestTheAttendeeBranchChecksTheStartToo:
+    """Round 3, Important 3: `_same_start` was consulted ONLY on the
+    attendee-less branch. The attendee branch was
+    `_summaries_match -> _attendees_overlap -> return event`, so a recurring
+    1:1 booked a week at a time was silently not created from week two.
+
+    Measured before the fix:
+
+        same title, SEVEN DAYS later, same attendee  -> deduped=True
+        same title, 3 hours later,    same attendee  -> deduped=True
+    """
+
+    def _existing(self, summary: str, start: str) -> dict[str, Any]:
+        return {
+            "id": "already-there",
+            "summary": summary,
+            "start": {"dateTime": start},
+            "attendees": [{"email": "bob@example.com"}],
+            "htmlLink": "https://calendar.example.com/e",
+        }
+
+    def _run_against(self, recorder, existing: dict[str, Any]):
+        def run(args: list[str], timeout: int = 30) -> Any:
+            recorder.append({"argv": args})
+            if args[:3] == ["calendar", "events", "list"]:
+                return {"items": [existing]}
+            return {"id": "new", "htmlLink": "x"}
+
+        gws_handlers._run_gws = run
+
+    @pytest.mark.parametrize(
+        ("label", "existing_start"),
+        [
+            ("seven days later", "2026-09-24T09:00:00Z"),
+            ("three hours earlier", "2026-10-01T06:00:00Z"),
+            ("thirteen days later", "2026-10-14T09:00:00Z"),
+        ],
+    )
+    def test_the_same_series_at_another_time_is_created(
+        self, operator, recorder, label: str, existing_start: str
+    ) -> None:
+        self._run_against(recorder, self._existing("Weekly 1:1", existing_start))
+        out = _create(summary="Weekly 1:1", attendees=["bob@example.com"])
+
+        assert out.get("status") != "deduped", label
+        assert any(c["argv"][:3] == ["calendar", "events", "insert"] for c in recorder), label
+
+    def test_the_genuinely_duplicated_event_still_dedups(self, operator, recorder) -> None:
+        """The run-twice shape this check exists for: same title, same
+        attendees, same instant."""
+        self._run_against(recorder, self._existing("Weekly 1:1", "2026-10-01T09:00:00Z"))
+        out = _create(summary="Weekly 1:1", attendees=["bob@example.com"])
+
+        assert out["status"] == "deduped"
+        assert not any(c["argv"][:3] == ["calendar", "events", "insert"] for c in recorder)
+
+    def test_a_longer_title_at_the_same_instant_is_created(self, operator, recorder) -> None:
+        """Both halves of Important 3 at once: the title is a prefix AND the
+        start matches, and they are still two different appointments."""
+        self._run_against(recorder, self._existing("Weekly 1:1 retro", "2026-10-01T09:00:00Z"))
+        out = _create(summary="Weekly 1:1", attendees=["bob@example.com"])
+
+        assert out.get("status") != "deduped"
+        assert any(c["argv"][:3] == ["calendar", "events", "insert"] for c in recorder)
+
+
 class TestATitleIsNotASubstringTest:
     """R4: the I14 fix made a loose title matcher load-bearing.
 
@@ -392,8 +458,8 @@ class TestATitleIsNotASubstringTest:
     def test_a_shorter_title_is_not_the_same_appointment(
         self, proposed: str, existing: str
     ) -> None:
-        assert gws_handlers._summaries_match(proposed, existing, require_exact=True) is False
-        assert gws_handlers._summaries_match(proposed, existing, require_exact=False) is False
+        assert gws_handlers._summaries_match(proposed, existing) is False
+        assert gws_handlers._summaries_match(existing, proposed) is False
 
     def test_the_incident_shape_still_dedups(self) -> None:
         """Identical titles, normalised — the attendee-less case this exists for."""
@@ -402,18 +468,41 @@ class TestATitleIsNotASubstringTest:
             ("Flight to Lisbon", "flight to  lisbon!"),
             ("Hotel — Lisbon", "hotel lisbon"),
         ):
-            assert gws_handlers._summaries_match(a, b, require_exact=True) is True, (a, b)
+            assert gws_handlers._summaries_match(a, b) is True, (a, b)
 
-    def test_a_series_still_dedups_when_attendees_corroborate(self) -> None:
-        """ "Team Weekly" vs "Team Weekly Leadership" is the same series — but
-        only allowed when the attendee overlap is doing real work, and only
-        when the shorter title is long enough to identify anything."""
-        assert (
-            gws_handlers._summaries_match(
-                "Team Weekly", "Team Weekly Leadership", require_exact=False
-            )
-            is True
-        )
+    @pytest.mark.parametrize(
+        ("proposed", "existing"),
+        [
+            ("Weekly team", "Weekly team retro"),
+            ("Team Weekly", "Team Weekly Leadership"),
+            ("Quarterly planning session", "Quarterly planning session with Legal"),
+            ("Monday morning standup", "Monday morning standup — postmortem"),
+        ],
+    )
+    def test_a_longer_title_is_a_different_appointment_even_with_attendees(
+        self, proposed: str, existing: str
+    ) -> None:
+        """Round 3, Important 3. The prefix rule was the false-dedup surface:
+        with `_SUMMARY_MIN_PREFIX_CHARS = 10`, any two events within ±14 days
+        sharing a 10-character prefix and one attendee collapsed into one.
+        "Weekly team" (11 chars) swallowed "Weekly team retro".
+
+        These titles name different appointments however many attendees they
+        share. What identifies the same series occurrence is the START, which
+        the attendee branch now checks.
+        """
+        assert gws_handlers._summaries_match(proposed, existing) is False
+        assert gws_handlers._summaries_match(existing, proposed) is False
+
+    def test_only_punctuation_and_spacing_may_differ(self) -> None:
+        """Normalisation is what a prefix rule was reaching for and is enough:
+        it already removes the punctuation and collapses the whitespace."""
+        for a, b in (
+            ("Weekly 1:1", "weekly 1 1"),
+            ("Hotel — Lisbon", "hotel lisbon"),
+            ("Flight to Lisbon", "flight to  lisbon!"),
+        ):
+            assert gws_handlers._summaries_match(a, b) is True, (a, b)
 
     def test_a_different_appointment_at_the_same_instant_is_created(
         self, operator, recorder

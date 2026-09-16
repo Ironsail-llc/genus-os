@@ -587,13 +587,7 @@ def _normalize_summary(s: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", s)).strip().lower()
 
 
-#: Below this many normalised characters a title carries no identity. "Call",
-#: "1:1", "Lunch", "Sync" and "a" are all real calendar titles, and every one of
-#: them is a prefix of some longer, DIFFERENT appointment.
-_SUMMARY_MIN_PREFIX_CHARS = 10
-
-
-def _summaries_match(a: str, b: str, *, require_exact: bool) -> bool:
+def _summaries_match(a: str, b: str) -> bool:
     """Do these two titles name the same appointment?
 
     **Never a bare substring test**, which is what it was. When the
@@ -608,29 +602,24 @@ def _summaries_match(a: str, b: str, *, require_exact: bool) -> bool:
     That is the original incident's failure class — an event the operator asked
     for does not exist — reached from the other direction.
 
-    Two rules, because there are two situations:
+    **Equality after normalisation, and nothing else.** The first fix replaced
+    the bare substring test with a prefix rule gated on a 10-character minimum,
+    kept for the case where attendees corroborate. That minimum is lower than
+    real calendar titles: "Weekly team" is eleven characters and swallowed
+    "Weekly team retro"; "Quarterly planning session" swallowed the same
+    meeting "… with Legal". Any two events within a fortnight sharing a
+    10-character prefix and one attendee collapsed into one, so a recurring 1:1
+    booked a week at a time was silently not created from week two — the
+    original failure class again, through the door the first fix left open.
 
-    ``require_exact`` — **no attendee signal on either side.** Equality after
-    normalisation, nothing else. The start time is already doing the
-    discriminating, and a title is all that is left; accepting a near-match
-    there is how a real appointment gets swallowed.
-
-    otherwise — **attendees already corroborate.** A prefix relationship is
-    allowed ("Team Weekly" vs "Team Weekly Leadership" is the same series),
-    but only when the shorter title is long enough to identify anything. The
-    attendee-overlap check still has to pass afterwards, so a false match here
-    is doubly gated.
+    Normalisation is what the prefix rule was reaching for and is enough on its
+    own: it strips punctuation and collapses whitespace, so "Hotel — Lisbon"
+    and "hotel lisbon" are the same title while "Weekly team retro" is not
+    "Weekly team". What identifies the same occurrence of a series is the
+    START, which both branches of ``_find_duplicate_event`` now check.
     """
     na, nb = _normalize_summary(a), _normalize_summary(b)
-    if not na or not nb:
-        return False
-    if na == nb:
-        return True
-    if require_exact:
-        return False
-    if min(len(na), len(nb)) < _SUMMARY_MIN_PREFIX_CHARS:
-        return False
-    return na.startswith(nb) or nb.startswith(na)
+    return bool(na) and na == nb
 
 
 def _attendee_set(event_like: Any) -> set[str]:
@@ -705,10 +694,18 @@ def _find_duplicate_event(
 ) -> dict[str, Any] | None:
     """Return an existing event dict if one in the ±window overlaps this proposal, else None.
 
-    Matches on a same-or-substring summary AND either attendee overlap (per
-    ``_attendees_overlap``) or — when neither side has attendees — the same
-    start time. Silent on any list failure: dedup is best-effort, and an event
-    the operator asked for is worth more than a duplicate they did not.
+    Matches on an equal (normalised) summary AND the same start time AND, when
+    either side has attendees, an attendee overlap per ``_attendees_overlap``.
+
+    The start check used to be on the attendee-less branch only, so with
+    attendees the rule was title-plus-overlap and nothing else: "same title,
+    seven days later, same attendee" deduped, and a recurring 1:1 booked weekly
+    was not created from week two. Two events are the same event when they are
+    at the same moment; a series occurrence is distinguished by exactly the
+    field that was not being read.
+
+    Silent on any list failure: dedup is best-effort, and an event the operator
+    asked for is worth more than a duplicate they did not.
     """
     import json as _json
     from datetime import datetime, timedelta
@@ -742,21 +739,13 @@ def _find_duplicate_event(
         if event.get("status") == "cancelled":
             continue
         existing_attendees = _attendee_set(event)
-        # Whether a near-match on the title is safe depends on whether anything
-        # else is corroborating it, so the attendee sets are read first.
-        attendee_less = not proposed_attendees and not existing_attendees
-        if not _summaries_match(
-            summary, event.get("summary", "") or "", require_exact=attendee_less
-        ):
+        if not _summaries_match(summary, event.get("summary", "") or ""):
             continue
-        if attendee_less:
-            # No attendee signal on either side, so the start time is the only
-            # thing left that distinguishes two events with the same title —
-            # "Flight to Lisbon" twice in a fortnight is two flights unless
-            # they leave at the same moment.
-            if not _same_start(start, event):
-                continue
-            return event
+        # On BOTH branches. "Flight to Lisbon" twice in a fortnight is two
+        # flights unless they leave at the same moment, and "Weekly 1:1" with
+        # the same person next Tuesday is next Tuesday's 1:1.
+        if not _same_start(start, event):
+            continue
         if not _attendees_overlap(proposed_attendees, existing_attendees, owner_email):
             continue
         return event
@@ -2148,7 +2137,7 @@ def _calendar_create(
             matched_on = (
                 "the same title and start time"
                 if not attendee_emails and not _attendee_set(dup)
-                else "a matching title and overlapping attendees"
+                else "the same title and start time, and an overlapping guest list"
             )
             return {
                 "status": "deduped",

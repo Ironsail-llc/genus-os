@@ -1382,7 +1382,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                     },
                     "force": {
                         "type": "boolean",
-                        "description": "Bypass the duplicate-meeting check. By default, a pre-insert search of ±14 days for an event with the same title and overlapping attendees will short-circuit creation; set force=true only when you have verified the existing event is not the one you want to create.",
+                        "description": "Bypass the duplicate-meeting check. By default, a pre-insert search of ±14 days for an event with the same title AND the same start time (and, when either has guests, an overlapping guest list) will short-circuit creation. A different time is a different event, so a weekly series is created week by week; set force=true only when you have verified the existing event is not the one you want to create.",
                         "default": False,
                     },
                     "attendee_confirmed": {
