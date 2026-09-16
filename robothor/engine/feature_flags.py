@@ -465,11 +465,25 @@ def approval_gate_inputs() -> tuple[str, str]:
     gate is off — ``_enforcement_mode`` collapses both into ``"off"``, and the
     two have very different fixes. ``genus doctor`` reports this.
 
-    Resolved through the same path the gate itself uses, NOT ``os.environ``:
-    these are governed flags, so an operator who set the mode on the Controls
-    page has it in the flag store and nowhere in the process environment. A
-    reader that went to the environment would report "unset" for a value the
-    engine is actively using.
+    Resolved through the same path the gate itself uses, NOT ``os.environ``.
+    ``test_failclosed_approval.py::TestTheGateIsReadThroughTheFlagStore`` pins
+    that: reverting this to ``os.environ`` fails three of its cases.
+
+    The two halves are NOT symmetric, and an earlier version of this docstring
+    said they were. Only ``ROBOTHOR_APPROVAL_MODE`` is declared
+    ``governed=True``; ``ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED`` is not in
+    ``GOVERNED_FLAGS``, so ``_resolve_raw`` goes straight to the environment for
+    it. Governing it too is not the one-line change it looks like — a governed
+    flag needs its declaration, an ``infra/flags.yaml`` entry,
+    ``flags.store.valid_values_for``, ``flags.evidence.EVIDENCE_SOURCES`` and
+    the bridge's ``engine_flag_readers`` row, and anything less is a dead
+    control on the Controls page.
+
+    What the asymmetry buys is still real and worth knowing: the MODE resolves
+    from the store first, so an operator on a Helm instance can de-escalate
+    from ``enforce`` to ``observe`` from the Controls page without a redeploy,
+    even though the deployed environment says ``enforce``. That is the
+    runbook's Rollback step, and it works.
     """
     return _resolve_raw("ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED"), _resolve_raw(
         "ROBOTHOR_APPROVAL_MODE"
