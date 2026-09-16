@@ -1,3 +1,13 @@
+## [1.92.0](https://github.com/Ironsail-llc/genus-os/compare/v1.91.0...v1.92.0) (2026-09-16)
+
+### Features
+
+* **secrets:** the vault is the store the agent manages; env is bootstrap only ([#576](https://github.com/Ironsail-llc/genus-os/issues/576)) ([85e2e6b](https://github.com/Ironsail-llc/genus-os/commit/85e2e6bd1099fc1c13f7089c33d409ee4282f291))
+
+### Documentation
+
+* enterprise guide set, published operator docs, release notes by audience ([#577](https://github.com/Ironsail-llc/genus-os/issues/577)) ([0a1fcfa](https://github.com/Ironsail-llc/genus-os/commit/0a1fcfaecad55ba38fd603940c029ca071ade919)), closes [#576](https://github.com/Ironsail-llc/genus-os/issues/576)
+
 ## [1.91.0](https://github.com/Ironsail-llc/genus-os/compare/v1.90.0...v1.91.0) (2026-09-15)
 
 ### Features
