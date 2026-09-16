@@ -66,6 +66,24 @@ ALBUM_WINDOW_SECONDS = 1.5
 MAX_ALBUM_ITEMS = 25
 
 
+def _voice_notes_enabled() -> bool:
+    """Is inbound voice transcription armed on this instance?
+
+    Through the settings registry, which is where ``ROBOTHOR_VOICE_NOTES_ENABLED``
+    has been declared all along — the handler read ``os.environ`` directly, so an
+    operator who set it in ``config.yaml`` was ignored. Defaults to off if
+    settings cannot be resolved: an unreadable config must not silently turn on
+    a capability that has no provider behind it.
+    """
+    try:
+        from robothor.settings import get_settings
+
+        return bool(get_settings().channels.voice_notes_enabled)
+    except Exception:  # noqa: BLE001 - a config failure never arms a feature
+        logger.debug("settings unavailable while reading voice_notes_enabled")
+        return False
+
+
 class AttachmentTooLargeError(Exception):
     """A download crossed the ceiling. Carries how far it got, for the sentence.
 
@@ -337,18 +355,18 @@ class TelegramAttachmentsMixin:
     # whatever STT lands next needs a file to work from.
 
     async def handle_voice(self, message: Message) -> None:
-        """Keep a voice or video note; transcription is still pending a provider."""
-        import os
+        """Keep a voice or video note; transcription is still pending a provider.
 
+        The flag is read through ``get_settings().channels.voice_notes_enabled``
+        rather than from ``os.environ``. It was a raw read that MOVED here with
+        the handler, which is the cheap moment to route it through the
+        declaration that already existed (re-review R5) — and the declaration is
+        what makes ``genus config`` able to show it and an operator able to set
+        it in ``config.yaml`` rather than only in a unit file.
+        """
         if not message.from_user:
             return
-        enabled = os.environ.get("ROBOTHOR_VOICE_NOTES_ENABLED", "").strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        )
-        if not enabled:
+        if not _voice_notes_enabled():
             await message.answer(
                 "🎤 I can't process voice notes yet — please send text. "
                 "(Voice transcription will arrive once an STT provider is configured.)"

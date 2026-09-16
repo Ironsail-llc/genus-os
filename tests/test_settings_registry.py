@@ -90,12 +90,19 @@ DISCOVERY_SCRIPT = REPO_ROOT / "scripts" / "list_env_reads.py"
 #: raw: it hardcoded `llama3.2-vision:11b` and ignored the instance's declared
 #: ROBOTHOR_VISION_MODEL entirely, so the one path that described pictures every
 #: day never used the model the operator had configured.
+#: 473 -> 472: `handle_voice` read `ROBOTHOR_VOICE_NOTES_ENABLED` from
+#: `os.environ` although `ChannelSettings.voice_notes_enabled` had declared it
+#: all along, so an operator who set it in `config.yaml` was ignored and
+#: `genus config` could not show it. A pre-existing raw read that MOVED into a
+#: new module during this change, which is the cheap moment to route it through
+#: the declaration rather than carry it across untouched.
 #:
-#: Both branches lowered this number independently (482 -> 474 there, 482 -> 481
-#: here). Neither side's figure is right for the merged tree, so this is the
-#: measured count from `scripts/list_env_reads.py --count-sites` after the
-#: rebase, and both histories are kept because both removals are real.
-ENV_READ_SITE_BASELINE = 473
+#: The two 482 -> N runs above happened on branches that did not see each other
+#: (the vault work reached 474, the attachment work 480). Neither figure is
+#: right for the merged tree, so the number here is the MEASURED count from
+#: `scripts/list_env_reads.py --count-sites` after the rebase; both histories
+#: are kept because both sets of removals are real.
+ENV_READ_SITE_BASELINE = 472
 
 
 def _discovery():

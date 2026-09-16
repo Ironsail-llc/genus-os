@@ -24,6 +24,7 @@ import pytest
 from robothor.engine import attachments
 from robothor.engine.chat import _sessions
 from robothor.engine.telegram import TelegramBot
+from robothor.engine.tests.conftest import voice_notes
 
 ALICE = {
     "tenant_id": "t-alpha",
@@ -293,7 +294,7 @@ class TestSizeCeiling:
         voice.mime_type = "audio/ogg"
         voice.file_name = None
         msg = message(voice=voice)
-        with patch.dict("os.environ", {"ROBOTHOR_VOICE_NOTES_ENABLED": "1"}):
+        with voice_notes(enabled=True):
             await bot.handle_voice(msg)
         assert "20 MB" in msg.answer.await_args.args[0]
 

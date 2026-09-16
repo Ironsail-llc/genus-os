@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from robothor.engine import telegram, telegram_attachments
+from robothor.engine.tests.conftest import voice_notes
 
 
 def _message(voice=None, video_note=None):
@@ -76,18 +77,58 @@ def test_voice_handler_registered():
     assert "handle_voice" in inspect.getsource(telegram_attachments)
 
 
+class TestTheFlagComesFromSettings:
+    """Re-review R5. The handler read `os.environ` directly although
+    `ChannelSettings.voice_notes_enabled` declares the name, so an operator who
+    set it in `config.yaml` was ignored and `genus config` could not show it."""
+
+    @pytest.mark.parametrize("declared", [True, False])
+    def test_the_predicate_reads_the_declared_setting(self, monkeypatch, declared) -> None:
+        from robothor.engine import telegram_attachments as ta
+
+        fake = MagicMock()
+        fake.channels.voice_notes_enabled = declared
+        monkeypatch.setattr("robothor.settings.get_settings", lambda: fake, raising=True)
+        assert ta._voice_notes_enabled() is declared
+
+    def test_unreadable_settings_leave_it_off(self, monkeypatch) -> None:
+        """A config failure must never arm a capability with no provider."""
+        from robothor.engine import telegram_attachments as ta
+
+        def boom():
+            raise RuntimeError("config is unreadable")
+
+        monkeypatch.setattr("robothor.settings.get_settings", boom, raising=True)
+        assert ta._voice_notes_enabled() is False
+
+    def test_the_handler_no_longer_reads_the_environment(self) -> None:
+        """The CODE, not the docstring — which says "os.environ" on purpose,
+        explaining what it stopped doing."""
+        import ast
+        import textwrap
+
+        from robothor.engine import telegram_attachments as ta
+
+        tree = ast.parse(
+            textwrap.dedent(inspect.getsource(ta.TelegramAttachmentsMixin.handle_voice))
+        )
+        ast.get_docstring(tree.body[0])  # present, and deliberately excluded below
+        tree.body[0].body = tree.body[0].body[1:]  # type: ignore[attr-defined]
+        assert "environ" not in ast.unparse(tree)
+
+
 class TestDisabled:
     @pytest.mark.asyncio
     async def test_it_answers_rather_than_dropping_the_message(self, bot) -> None:
         msg = _message(voice=_voice())
-        with patch.dict("os.environ", {"ROBOTHOR_VOICE_NOTES_ENABLED": ""}):
+        with voice_notes(enabled=False):
             await bot.handle_voice(msg)
         msg.answer.assert_awaited_once()
         assert "can't process voice notes yet" in msg.answer.await_args.args[0]
 
     @pytest.mark.asyncio
     async def test_nothing_is_downloaded(self, bot) -> None:
-        with patch.dict("os.environ", {"ROBOTHOR_VOICE_NOTES_ENABLED": ""}):
+        with voice_notes(enabled=False):
             await bot.handle_voice(_message(voice=_voice()))
         bot.bot.get_file.assert_not_awaited()
 
@@ -100,7 +141,7 @@ class TestEnabled:
         from pathlib import Path
 
         msg = _message(voice=_voice())
-        with patch.dict("os.environ", {"ROBOTHOR_VOICE_NOTES_ENABLED": "1"}):
+        with voice_notes(enabled=True):
             await bot.handle_voice(msg)
         saved = list((Path(bot.config.workspace) / "inbox" / "telegram").rglob("*.ogg"))
         assert len(saved) == 1
@@ -110,7 +151,7 @@ class TestEnabled:
     @pytest.mark.asyncio
     async def test_an_unreadable_note_says_so(self, bot) -> None:
         msg = _message()  # neither voice nor video_note
-        with patch.dict("os.environ", {"ROBOTHOR_VOICE_NOTES_ENABLED": "1"}):
+        with voice_notes(enabled=True):
             await bot.handle_voice(msg)
         assert "couldn't read" in msg.answer.await_args.args[0]
 
@@ -119,7 +160,7 @@ class TestEnabled:
         from robothor.engine import attachments
 
         msg = _message(voice=_voice(size=attachments.MAX_DOWNLOAD_BYTES + 1))
-        with patch.dict("os.environ", {"ROBOTHOR_VOICE_NOTES_ENABLED": "1"}):
+        with voice_notes(enabled=True):
             await bot.handle_voice(msg)
         assert "20 MB" in msg.answer.await_args.args[0]
         bot.bot.get_file.assert_not_awaited()
