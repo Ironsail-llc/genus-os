@@ -119,6 +119,30 @@ _TABLE: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("invite someone to a meeting", "", ("gws_calendar_create",)),
     ("cancel the meeting", "gws_calendar_delete", ()),
     ("delete that appointment", "gws_calendar_delete", ()),
+    # ── Mail: the outbound intents the keyword table missed ──
+    #
+    # `draft` and `forward` appeared in no keyword list and no intent verb, so
+    # the only matching term was the shared `email` keyword and the family tie
+    # fell to rank_bias + alphabetical — putting gws_gmail_send LAST of five on
+    # two plainly outbound requests.
+    ("draft an email", "gws_gmail_send", ()),
+    ("forward this email", "gws_gmail_send", ()),
+    # "who emailed me" and "who sent me that" are among the most natural
+    # phrasings there are, and reached no mail tool at all: `_stem` was a
+    # plural singulariser, so "emailed" never became "email", and `who` was not
+    # a stopword so it won an exact name hit on the webcam tool `who_is_here`.
+    ("who emailed me", "gws_gmail_search", ()),
+    ("who sent me that", "", ("gws_gmail_search",)),
+    ("check messages", "", ("gws_gmail_search",)),
+    ("inbox zero", "", ("gws_gmail_search",)),
+    ("read email body", "gws_gmail_get", ()),
+    # ── Mail: archive is a Gmail verb, never a CRM noun ──
+    ("archive this", "gws_gmail_modify", ()),
+    ("archive that email", "gws_gmail_modify", ()),
+    # ── Calendar ──
+    ("what meetings do I have tomorrow", "gws_calendar_list", ()),
+    ("list my calendars", "gws_calendar_list", ()),
+    ("delete the event", "gws_calendar_delete", ()),
     # ── Chat ──
     ("post a message in the google chat space", "", ("gws_chat_send",)),
     ("what was said in that chat space", "", ("gws_chat_list_messages",)),
@@ -203,6 +227,39 @@ def test_the_reply_description_keeps_its_decisive_sentence(
     assert "gws_gmail_send" in hits["gws_gmail_reply"], hits["gws_gmail_reply"]
 
 
+def test_the_whose_calendar_sentence_survives_search(
+    registry: ToolRegistry, broad_agent_names: list[str]
+) -> None:
+    """`gws_calendar_create`'s description was 596 characters, over
+    `_SEARCH_DESC_MAX`, so search showed `when_to_use` alone — which said
+    nothing about whose calendar. Under deferral `tool_search` IS the agent's
+    discovery path, so the most important new fact in this change was absent
+    from the first surface it reads."""
+    hits = {
+        h["name"]: h["description"]
+        for h in registry.search_tools(broad_agent_names, "schedule a meeting", limit=5)
+    }
+    shown = hits["gws_calendar_create"]
+
+    assert "OPERATOR" in shown
+    assert "calendar='own'" in shown
+    assert "invitations_sent" in shown
+
+
+def test_no_gws_description_is_long_enough_to_be_cut_to_its_first_sentence(
+    registry: ToolRegistry,
+) -> None:
+    """A description over the cap loses everything after `when_to_use` unless
+    the fallback carries the rest — and for the calendar tools the rest is the
+    whole point."""
+    for name, schema in registry._schemas.items():
+        if not name.startswith("gws_calendar_"):
+            continue
+        description = schema["function"]["description"]
+        shown = registry._search_description(name, description)
+        assert len(shown) >= min(len(description), 240), (name, len(shown))
+
+
 def test_the_crm_mail_tools_stop_masquerading_as_gmail(
     registry: ToolRegistry, broad_agent_names: list[str]
 ) -> None:
@@ -220,6 +277,13 @@ def test_the_crm_mail_tools_stop_masquerading_as_gmail(
     }
     if "get_inbox" in hits:
         assert "gws_gmail_search" in hits["get_inbox"], hits["get_inbox"]
+
+    # "archive" is the single most common Gmail label action, and both CRM
+    # tools carried it as a keyword — so they took positions 2 and 3 for it.
+    for query in ("archive this", "archive that email"):
+        top = _top(registry, broad_agent_names, query, n=3)
+        assert "get_conversation" not in top, (query, top)
+        assert "list_messages" not in top, (query, top)
 
 
 # ── Capabilities this platform does not have ──────────────────────────
@@ -254,6 +318,42 @@ def test_every_hinted_tool_is_registered(registry: ToolRegistry) -> None:
 
     missing = sorted(set(TOOL_HINTS) - set(registry._schemas))
     assert missing == []
+
+
+def test_every_tool_name_in_an_absent_capability_note_is_registered(
+    registry: ToolRegistry,
+) -> None:
+    """These strings are handed straight to the model by `tool_search`.
+
+    One of them named `search_people`, which is a CRM DAL function and not a
+    registered tool — a brand-new phantom introduced by the change whose §5 was
+    written about phantoms, in the one file that talks directly to the agent.
+    `test_registered_tool_names.py` only scans deny tables, so nothing caught it.
+    """
+    import re
+
+    from robothor.engine.tools.keywords import ABSENT_CAPABILITIES
+
+    phantoms: dict[str, list[str]] = {}
+    for triggers, note in ABSENT_CAPABILITIES:
+        looks_like_a_tool = set(re.findall(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b", note))
+        missing = sorted(looks_like_a_tool - set(registry._schemas))
+        if missing:
+            phantoms["/".join(triggers)] = missing
+    assert phantoms == {}
+
+
+def test_an_absent_capability_note_agrees_with_the_ranking(
+    registry: ToolRegistry, broad_agent_names: list[str]
+) -> None:
+    """The note said "the task tools here are the CRM's own (list_my_tasks,
+    create_task)" while the ranking beside it put `approve_task` first — one
+    tool result contradicting itself."""
+    top = _top(registry, broad_agent_names, "my google tasks", n=3)
+    note = registry.absent_capability_note("my google tasks")
+
+    assert "list_my_tasks" in note
+    assert top[0] == "list_my_tasks", top
 
 
 def test_when_to_use_opens_the_description(registry: ToolRegistry) -> None:

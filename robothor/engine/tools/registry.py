@@ -161,6 +161,9 @@ _SEARCH_STOPWORDS = frozenset(
         "what",
         "when",
         "where",
+        "who",
+        "whom",
+        "whose",
         "can",
         # Function words that carried real weight because they appear in
         # descriptions: "do I have any new email" ranked `gws_gmail_get` on
@@ -241,24 +244,54 @@ _WORD_RE = re.compile(r"[a-z0-9]+")
 _NOT_PLURAL = ("ss", "us", "is", "as")
 
 
+def _drop_silent_e(word: str) -> str:
+    """Normalise a trailing "e" away, on EVERY word.
+
+    "scheduled" loses its "ed" to give "schedul" while "schedule" keeps its
+    "e" — so the conjugated form and the keyword would never meet. Dropping the
+    "e" from both is what makes the two sides agree: "schedule"/"scheduled" ->
+    "schedul", "archive"/"archived" -> "archiv". Short words keep it, so
+    "note"/"notes" stay "note" together.
+    """
+    return word[:-1] if len(word) > 4 and word.endswith("e") else word
+
+
+#: Verb endings this strips. "who emailed me" and "who sent me that" are among
+#: the most natural phrasings an operator uses, and a plural-only stemmer left
+#: `emailed` as `emailed` — matching nothing, so the query reached no mail tool
+#: at all.
+_VERB_SUFFIXES = ("ing", "ed")
+
+
 def _stem(word: str) -> str:
-    """A crude singulariser, applied to BOTH sides of every comparison.
+    """A crude singulariser and de-conjugator, applied to BOTH sides.
 
     "read my emails" reached no Gmail tool partly because the schemas say
     "email" and the operator said "emails"; "meetings", "attendees" and
-    "calendars" had the same problem. A real stemmer would be a dependency and
-    a source of surprises ("business" -> "busines"); this handles the only case
-    that shows up in tool vocabulary — a plural noun — and leaves everything
-    else alone. It is applied to the query, to keywords, to name words and to
-    description words, so the two sides can never disagree about a word.
+    "calendars" had the same problem, and so did "emailed" and "forwarding".
+    A real stemmer would be a dependency and a source of surprises ("business"
+    -> "busines"); this handles the two cases that show up in tool vocabulary —
+    a plural noun and a conjugated verb — and leaves everything else alone. It
+    is applied to the query, to keywords, to name words and to description
+    words, so the two sides can never disagree about a word.
     """
+    # Plural first, then the verb ending, then the silent "e" — in that order
+    # and in one pass, so the function is idempotent. Stripping the plural and
+    # returning left "meetings" -> "meeting" while "meeting" -> "meet", and the
+    # two never met.
     if len(word) > 4 and word.endswith("ies"):
-        return word[:-3] + "y"
-    if len(word) > 3 and word.endswith("es") and word[-4:-2] in ("ch", "sh", "ss", "zz"):
-        return word[:-2]
-    if len(word) > 3 and word.endswith("s") and not word.endswith(_NOT_PLURAL):
-        return word[:-1]
-    return word
+        word = word[:-3] + "y"
+    elif len(word) > 3 and word.endswith("es") and word[-4:-2] in ("ch", "sh", "ss", "zz"):
+        word = word[:-2]
+    elif len(word) > 3 and word.endswith("s") and not word.endswith(_NOT_PLURAL):
+        word = word[:-1]
+
+    for suffix in _VERB_SUFFIXES:
+        if len(word) > len(suffix) + 3 and word.endswith(suffix):
+            word = word[: -len(suffix)]
+            break
+
+    return _drop_silent_e(word)
 
 
 def _stems(text: str) -> set[str]:
@@ -310,9 +343,24 @@ _INTENT_VERBS: dict[str, frozenset[str]] = {
     "answer": frozenset({"reply"}),
     "send": frozenset({"send"}),
     "compose": frozenset({"send"}),
+    "draft": frozenset({"send"}),
+    "forward": frozenset({"send"}),
     "mark": frozenset({"modify", "update", "set"}),
     "archive": frozenset({"modify"}),
     "label": frozenset({"modify"}),
+}
+
+#: The same table, stemmed on both sides.
+#:
+#: Query terms are stemmed before they reach the ranker, so "schedule" arrives
+#: as "schedul" and a raw lookup in the table above missed it entirely —
+#: "schedule a meeting" lost its intent bonus and `gws_calendar_list` took the
+#: tie on rank_bias, which is the read tool for a plainly-a-write request. The
+#: VALUES are stemmed too, because they are compared against a tool's stemmed
+#: vocabulary ("create_task" -> {creat, task}).
+_INTENT_VERBS_STEMMED: dict[str, frozenset[str]] = {
+    _stem(verb): frozenset(_stem(target) for target in targets)
+    for verb, targets in _INTENT_VERBS.items()
 }
 
 #: Worth less than an exact name match, more than a description hit: it says
@@ -329,7 +377,7 @@ def _object_terms(terms: list[str]) -> list[str]:
     the word "read" and finished above every Gmail tool, which is the second
     of the two ways the agent was handed the wrong tool.
     """
-    return [t for t in terms if t not in _INTENT_VERBS]
+    return [t for t in terms if t not in _INTENT_VERBS_STEMMED]
 
 
 def _intent_bonus(vocabulary: set[str], terms: list[str], objects: list[str]) -> float:
@@ -349,7 +397,7 @@ def _intent_bonus(vocabulary: set[str], terms: list[str], objects: list[str]) ->
     if not vocabulary & set(objects):
         return 0.0
     for term in terms:
-        wanted = _INTENT_VERBS.get(term)
+        wanted = _INTENT_VERBS_STEMMED.get(term)
         if wanted and (vocabulary & wanted):
             return _INTENT_BONUS
     return 0.0
@@ -789,14 +837,26 @@ class ToolRegistry:
     _SEARCH_DESC_MAX = 400
 
     def _search_description(self, name: str, description: str) -> str:
-        """What one search hit shows: the whole description, or the sentence
-        that decides between this tool and its sibling."""
+        """What one search hit shows: the whole description, or as much of it as
+        fits after the sentence that decides between this tool and its sibling.
+
+        Returning ``when_to_use`` ALONE lost everything after the first
+        sentence — for ``gws_calendar_create`` at 596 characters that was the
+        whole of "whose calendar", the single most important new fact in this
+        change, absent from the one surface a deferred agent reads first. The
+        sentence still comes first, because it is the one that decides; what
+        follows is as much of the rest as the budget allows.
+        """
         if len(description) <= self._SEARCH_DESC_MAX:
             return description
         when = str(self._schemas.get(name, {}).get("function", {}).get("when_to_use", ""))
-        if when:
+        if not when:
+            return description[: self._SEARCH_DESC_MAX] + "…"
+        rest = description[len(when) :].strip() if description.startswith(when) else description
+        room = self._SEARCH_DESC_MAX - len(when) - 1
+        if room <= 0 or not rest:
             return when
-        return description[:200] + "…"
+        return f"{when} {rest[:room]}…" if len(rest) > room else f"{when} {rest}"
 
     @staticmethod
     def absent_capability_note(query: str) -> str:

@@ -110,6 +110,10 @@ TOOL_HINTS: dict[str, ToolHint] = {
             "inbox",
             "unread",
             "new",
+            "sender",
+            "sent",
+            "received",
+            "from",
             "read",
             "check",
             "search",
@@ -135,7 +139,18 @@ TOOL_HINTS: dict[str, ToolHint] = {
         when_to_use="Use this instead of gws_gmail_send for every reply to an existing thread.",
     ),
     "gws_gmail_send": ToolHint(
-        keywords=(*_MAIL, "send", "compose", "write", "outbound"),
+        keywords=(
+            *_MAIL,
+            "send",
+            "compose",
+            "write",
+            "draft",
+            "forward",
+            "outbound",
+            "cc",
+            "bcc",
+            "recipient",
+        ),
         when_to_use=(
             "Use this only to start a NEW conversation; for anything that answers an "
             "existing thread use gws_gmail_reply, which threads it correctly."
@@ -170,8 +185,9 @@ TOOL_HINTS: dict[str, ToolHint] = {
     "gws_calendar_create": ToolHint(
         keywords=(*_CALENDAR, "book", "invite", "attendee", "invitation", "arrange", "set"),
         when_to_use=(
-            "Use this only to put a NEW event on the calendar; to see what is already "
-            "there use gws_calendar_list first."
+            "Use this only to put a NEW event on the OPERATOR's calendar, which is where "
+            "it goes by default — pass calendar='own' for your own, which the operator "
+            "never sees."
         ),
     ),
     "gws_calendar_delete": ToolHint(
@@ -203,20 +219,36 @@ TOOL_HINTS: dict[str, ToolHint] = {
     # CRM's ingested record of a conversation, which can be days stale and
     # never contains an unread message. The when_to_use sentence names the
     # tool to use instead, because search returns it whole. "contact" is not
-    # among them either: "add a contact" is a CRM person, not a conversation.
+    # among them either: "add a contact" is a CRM person, not a conversation —
+    # and neither is "archive", which in operator speech is the Gmail label
+    # action and never a CRM noun. With it here, "archive that email" returned
+    # these two at positions 2 and 3, which is the masquerade this table exists
+    # to end.
     "list_messages": ToolHint(
-        keywords=("crm", "conversation", "correspondence", "history", "record", "archive"),
+        keywords=("crm", "conversation", "correspondence", "history", "record", "ingested"),
         when_to_use=(
             "Use this for the CRM's stored record of past correspondence with a contact; "
             "for live email use gws_gmail_search."
         ),
     ),
     "get_conversation": ToolHint(
-        keywords=("crm", "conversation", "transcript", "history", "record", "archive"),
+        keywords=("crm", "conversation", "transcript", "history", "record", "ingested"),
         when_to_use=(
             "Use this for one stored CRM conversation thread; for a live Gmail thread use "
             "gws_gmail_get."
         ),
+    ),
+    # ── Tasks: a family of eight that ties on the noun ──
+    #
+    # "my google tasks" put `approve_task` first — eight *_task tools tie on
+    # the `task` keyword with no intent verb to separate them, and the answer
+    # fell out alphabetically. The same entry-point rule the mail and calendar
+    # families use: the tool an agent with no task id must call first wins the
+    # tie. It also stops the absent-capability note, which names list_my_tasks,
+    # from contradicting the ranking printed beside it.
+    "list_my_tasks": ToolHint(
+        keywords=("task", "todo", "queue", "assigned", "work", "backlog"),
+        rank_bias=1.0,
     ),
     "get_inbox": ToolHint(
         keywords=("notification", "alert", "agent", "queue", "pending", "unacked"),
@@ -253,13 +285,14 @@ ABSENT_CAPABILITIES: tuple[tuple[tuple[str, ...], str], ...] = (
     (
         ("google", "task"),
         "There is no Google Tasks tool on this platform. The task tools here are the "
-        "CRM's own (list_my_tasks, create_task). Use exec with a Workspace CLI for "
-        "Google Tasks.",
+        "CRM's own — list_my_tasks to read them, create_task to add one. Use exec "
+        "with a Workspace CLI for Google Tasks.",
     ),
     (
         ("google", "contact"),
         "There is no Google Contacts tool on this platform. The contact tools here are "
-        "the CRM's own (search_people, get_person). Use exec with a Workspace CLI.",
+        "the CRM's own (list_people, get_person, create_person). Use exec with a "
+        "Workspace CLI.",
     ),
     (
         ("spreadsheet",),

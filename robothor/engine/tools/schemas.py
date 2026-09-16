@@ -1345,15 +1345,12 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         "function": {
             "name": "gws_calendar_create",
             "description": (
-                "Use this only to put a NEW event on the calendar; to see what is already "
-                "there use gws_calendar_list first. Writes to the OPERATOR's calendar by "
-                "default — pass calendar='own' for your own, which the operator never "
-                "sees. Emails the attendees their invitation. Creates an event with "
-                "title, time, attendees and optional location/description, adds a Google "
-                "Meet link by default, and returns the event plus `calendar` (whose it "
-                "is), `invitations_sent` and `htmlLink` — report those, not just success. "
-                'Returns {"status": "deduped"} WITHOUT creating anything when a '
-                "matching event already exists nearby."
+                "Use this only to put a NEW event on the OPERATOR's calendar, which is "
+                "where it goes by default — pass calendar='own' for your own, which the "
+                "operator never sees. Emails the attendees their invitation. Returns the "
+                "event plus `calendar` (whose it is), `invitations_sent` and `htmlLink` — "
+                'report those, not just success; or {"status": "deduped"} having created '
+                "nothing, when a matching event already exists nearby."
             ),
             "parameters": {
                 "type": "object",
