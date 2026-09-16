@@ -161,6 +161,23 @@ class TestContainment:
         assert not sent
 
     @pytest.mark.asyncio
+    async def test_a_hardlink_out_of_the_workspace_is_refused(self, tmp_path, sent) -> None:
+        """Hostile review I3, end to end. Resolving symlinks before judging
+        containment is right and hard links are immune to it — there is nothing
+        in the path to follow. `ln ~/.ssh/id_rsa ~/robothor/notes.bin` was a
+        working exfiltration of the operator's private key on the review box."""
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        outside = tmp_path / "outside_secret.bin"
+        outside.write_bytes(b"\x00\x01pretend this is the operator's private key")
+        link = workspace / "hard.bin"
+        link.hardlink_to(outside)
+        out = await tool.send_file({"path": str(link)}, Ctx(workspace))
+        assert "error" in out
+        assert "more than one name" in out["error"]
+        assert not sent
+
+    @pytest.mark.asyncio
     async def test_traversal_in_the_argument_is_refused(self, tmp_path, sent) -> None:
         workspace = tmp_path / "ws"
         workspace.mkdir()

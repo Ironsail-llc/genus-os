@@ -144,6 +144,56 @@ class TestTheScanIsNotExtensionGated:
         assert gate.refuse_to_send(make(tmp_path, "notes.txt", body), tmp_path) is None
 
 
+class TestHardLinks:
+    """Hostile review I3. Resolving symlinks before judging containment is
+    right, and hard links are immune to it: a hard link is a second NAME for the
+    same inode, and there is nothing in the path for the resolver to follow.
+
+    On the review box the workspace and ``~/.ssh`` share a filesystem, so
+    ``ln ~/.ssh/id_rsa ~/robothor/notes.bin`` was a working exfiltration of the
+    operator's private key — and a ``.bin`` suffix skipped the scan as well.
+    """
+
+    def test_a_hardlink_to_a_file_outside_the_workspace_is_refused(self, tmp_path) -> None:
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        outside = make(tmp_path, "outside_secret.bin", b"\x00\x01pretend this is a key")
+        link = workspace / "hard.bin"
+        link.hardlink_to(outside)
+        refusal = gate.refuse_to_send(link, workspace)
+        assert refusal is not None
+        assert "more than one name" in refusal
+
+    def test_the_refusal_says_what_to_do_instead(self, tmp_path) -> None:
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        outside = make(tmp_path, "o.bin", b"\x00\x01x")
+        link = workspace / "hard.bin"
+        link.hardlink_to(outside)
+        assert "Copy it" in (gate.refuse_to_send(link, workspace) or "")
+
+    def test_a_hardlink_that_stays_inside_is_refused_too(self, tmp_path) -> None:
+        """Blunt on purpose. Deciding that every OTHER name for an inode is
+        also inside the workspace means walking the whole tree on every send;
+        a legitimately hard-linked file can be copied instead."""
+        original = make(tmp_path, "a.txt", b"hello")
+        link = tmp_path / "b.txt"
+        link.hardlink_to(original)
+        assert gate.refuse_to_send(link, tmp_path) is not None
+
+    def test_an_ordinary_single_linked_file_still_passes(self, tmp_path) -> None:
+        assert gate.refuse_to_send(make(tmp_path, "a.txt", b"hello"), tmp_path) is None
+
+    def test_a_copy_of_the_hardlinked_file_passes(self, tmp_path) -> None:
+        """The remedy the refusal names actually works."""
+        original = make(tmp_path, "a.txt", b"hello")
+        link = tmp_path / "b.txt"
+        link.hardlink_to(original)
+        copy = tmp_path / "c.txt"
+        copy.write_bytes(link.read_bytes())
+        assert gate.refuse_to_send(copy, tmp_path) is None
+
+
 class TestPinnedToWhatWasApproved:
     def test_the_digest_of_a_file_is_stable(self, tmp_path) -> None:
         path = make(tmp_path, "a.txt", b"hello")
