@@ -363,6 +363,175 @@ class TestAttendeelessDedup:
         assert overlap({"alice@example.com"}, {"alice@example.com"}, "alice@example.com") is True
 
 
+class TestATitleIsNotASubstringTest:
+    """R4: the I14 fix made a loose title matcher load-bearing.
+
+    With both attendee sets empty the dedup falls through to title + start, and
+    the title test was a bare substring with no minimum length. Two genuinely
+    different appointments at the same instant, one title containing the other,
+    produced `status: "deduped"` and NO event — the original incident's failure
+    class reached from the other direction.
+    """
+
+    @pytest.mark.parametrize(
+        ("proposed", "existing"),
+        [
+            ("Call", "Call with the bank"),
+            ("1:1", "1:1 with Bob"),
+            ("Lunch", "Lunch with the investors"),
+            ("a", "Anything at all"),
+            ("Sync", "Syncopation"),
+            ("Standup", "Standup with the whole engineering org"),
+        ],
+    )
+    def test_a_shorter_title_is_not_the_same_appointment(
+        self, proposed: str, existing: str
+    ) -> None:
+        assert gws_handlers._summaries_match(proposed, existing, require_exact=True) is False
+        assert gws_handlers._summaries_match(proposed, existing, require_exact=False) is False
+
+    def test_the_incident_shape_still_dedups(self) -> None:
+        """Identical titles, normalised — the attendee-less case this exists for."""
+        for a, b in (
+            ("Flight to Lisbon", "Flight to Lisbon"),
+            ("Flight to Lisbon", "flight to  lisbon!"),
+            ("Hotel — Lisbon", "hotel lisbon"),
+        ):
+            assert gws_handlers._summaries_match(a, b, require_exact=True) is True, (a, b)
+
+    def test_a_series_still_dedups_when_attendees_corroborate(self) -> None:
+        """ "Team Weekly" vs "Team Weekly Leadership" is the same series — but
+        only allowed when the attendee overlap is doing real work, and only
+        when the shorter title is long enough to identify anything."""
+        assert (
+            gws_handlers._summaries_match(
+                "Team Weekly", "Team Weekly Leadership", require_exact=False
+            )
+            is True
+        )
+
+    def test_a_different_appointment_at_the_same_instant_is_created(
+        self, operator, recorder
+    ) -> None:
+        """The end-to-end shape: 'Call' must not be swallowed by 'Call with the
+        bank' sitting at the same start."""
+
+        def run(args: list[str], timeout: int = 30) -> Any:
+            recorder.append({"argv": args})
+            if args[:3] == ["calendar", "events", "list"]:
+                return {
+                    "items": [
+                        {
+                            "id": "other",
+                            "summary": "Call with the bank",
+                            "start": {"dateTime": "2026-10-01T09:00:00Z"},
+                        }
+                    ]
+                }
+            return {"id": "new", "htmlLink": "x"}
+
+        gws_handlers._run_gws = run
+        out = _create(summary="Call")
+
+        assert out.get("status") != "deduped", out
+        assert any(c["argv"][:3] == ["calendar", "events", "insert"] for c in recorder)
+
+
+class TestTheDncScreenCoversEveryInvitee:
+    """R5: the screen ran on the caller's list, and the operator was
+    auto-added afterwards — so the same address was refused through one door
+    and mailed through the other, with `sendUpdates: "all"` on the wire."""
+
+    @pytest.fixture
+    def operator_on_dnc(self, monkeypatch: pytest.MonkeyPatch):
+        refused: list[tuple[str, ...]] = []
+
+        def _refusal(tool: str, *addresses: str, **kwargs: Any):
+            hits = tuple(a for a in addresses if a and a.lower() == OPERATOR_EMAIL)
+            if hits:
+                refused.append(hits)
+                return {"error": "do_not_contact", "guard": "do_not_contact"}
+            return None
+
+        monkeypatch.setattr(gws_handlers, "_dnc_refusal", _refusal)
+        return refused
+
+    def test_an_explicitly_listed_operator_is_refused(
+        self, operator, recorder, operator_on_dnc
+    ) -> None:
+        out = _create(attendees=[OPERATOR_EMAIL])
+
+        assert out["guard"] == "do_not_contact"
+        assert recorder == [], "nothing may reach the CLI for a blocked invitation"
+
+    def test_the_auto_added_operator_is_refused_too(
+        self, operator, recorder, operator_on_dnc
+    ) -> None:
+        """The bypass: no attendees, `calendar="own"`, so the operator is added
+        by the handler after the screen used to run."""
+        out = _create(calendar="own")
+
+        assert out["guard"] == "do_not_contact", out
+        assert recorder == [], "the insert must not happen"
+        assert operator_on_dnc, "the screen must have seen the auto-added address"
+
+    def test_an_event_on_the_operators_own_calendar_adds_nobody(
+        self, operator, recorder, operator_on_dnc
+    ) -> None:
+        """They are the organiser there, so there is no invitation to screen
+        and the event is created."""
+        out = _create()
+
+        assert "guard" not in out
+        assert out["invitations_sent"] is False
+
+    def test_the_screened_list_is_the_list_that_is_sent(self, operator, recorder) -> None:
+        seen: list[tuple[str, ...]] = []
+
+        def _record(tool: str, *addresses: str, **kwargs: Any):
+            seen.append(tuple(addresses))
+            return
+
+        gws_handlers._dnc_refusal = _record
+        _create(calendar="own", attendees=["bob@example.com"])
+
+        body = _insert(recorder)["body"]
+        assert sorted(seen[0]) == sorted(a["email"] for a in body["attendees"])
+
+
+class TestAnUnusableOperatorAddressIsNotACalendarId:
+    """M8: `owner_config` coerces with `str(...)`, so a malformed owner.yaml
+    produced a truthy non-address that was handed to Google as a calendarId
+    while the result claimed `kind: "operator"` — the tool writing somewhere
+    that does not exist and saying it went to the operator."""
+
+    @pytest.mark.parametrize("bad", ["none", "12345", "not-an-address", "['a@b.com']"])
+    def test_it_degrades_to_own_rather_than_lying(
+        self, monkeypatch: pytest.MonkeyPatch, bad: str
+    ) -> None:
+        monkeypatch.setattr(gws_handlers, "_resolve_owner_email", lambda: bad)
+
+        assert gws_handlers._resolve_calendar({"calendar": "operator"}) == ("primary", "own")
+        assert gws_handlers._resolve_calendar({}) == ("primary", "own")
+
+    def test_a_real_address_is_unaffected(self, operator) -> None:
+        assert gws_handlers._resolve_calendar({"calendar": "operator"}) == (
+            OPERATOR_EMAIL,
+            "operator",
+        )
+
+    def test_an_unusable_address_is_not_auto_added_as_an_attendee(
+        self, recorder, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(gws_handlers, "_resolve_owner_email", lambda: "none")
+        monkeypatch.setattr(gws_handlers, "_dnc_refusal", lambda *a, **k: None)
+
+        _create(calendar="own", attendees=["bob@example.com"])
+        body = _insert(recorder)["body"]
+
+        assert [a["email"] for a in body["attendees"]] == ["bob@example.com"]
+
+
 # ── The other two calendar tools ──────────────────────────────────────
 
 

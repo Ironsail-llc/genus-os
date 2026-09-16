@@ -434,6 +434,40 @@ def _send_updates() -> str:
 _CALENDAR_CHOICES = ("operator", "own")
 
 
+def _operator_calendar_address() -> str:
+    """The operator's address, or ``""`` when it is not usable as a calendar id.
+
+    ``owner_config`` coerces with ``str(data.get("email", ""))``, so a malformed
+    ``owner.yaml`` produces a truthy non-address:
+
+        email: null   -> "none"        email: 12345  -> "12345"
+        email: no-at  -> "no-at"       email: [a@b]  -> "['a@b']"
+
+    Each of those was handed to Google as a ``calendarId`` while the result
+    reported ``kind: "operator"`` — the tool writing somewhere that does not
+    exist and saying it went to the operator, which is the precise lie class
+    this whole change exists to eliminate. And ``email:`` with nothing after it
+    is a shape this very branch produced four times in its own manifests.
+
+    An address with no ``@`` is not an address. Returning ``""`` takes the
+    existing, already-tested degradation: ``primary``, ``kind: "own"``, and the
+    warning the resolver already emits — honest rather than confidently wrong.
+    Full owner-config validation is the proper home for the type checking; this
+    is the guard at the point of use.
+    """
+    email = _resolve_owner_email()
+    # A FULL match, not "contains an @": `str(['a@b.com'])` contains one and is
+    # a stringified list, not an address.
+    if not _EMAIL_RE.fullmatch(email):
+        if email:
+            logger.warning(
+                "the configured operator address is not an email address "
+                "(~/.robothor/owner.yaml); treating the operator calendar as unknown"
+            )
+        return ""
+    return email
+
+
 class _InvalidCalendarError(ValueError):
     """``calendar`` was given something that is not one of the two choices.
 
@@ -487,7 +521,7 @@ def _resolve_calendar(args: dict[str, Any]) -> tuple[str, str]:
     which calendar it got, and can say so.
     """
     explicit = str(args.get("calendar_id") or "").strip()
-    owner_email = _resolve_owner_email()
+    owner_email = _operator_calendar_address()
     if explicit:
         if explicit.lower() == "primary":
             return explicit, "own"
@@ -511,6 +545,33 @@ def _resolve_calendar(args: dict[str, Any]) -> tuple[str, str]:
     return "primary", "own"
 
 
+def _recipients_for(args: dict[str, Any], calendar_kind: str) -> list[str]:
+    """Every address the insert will invite, in order, deduplicated.
+
+    The operator is auto-added ONLY when the event is going somewhere they
+    would not otherwise see it. On their own calendar they are the organiser:
+    adding them made them an attendee of their own itinerary, so Google asked
+    them to RSVP to it and mailed them once per leg — ten emails for a ten-leg
+    trip. That auto-add existed because the default used to be this account's
+    `primary` calendar, where being an attendee was the only way the operator
+    learned the event existed. The default is now theirs.
+
+    One function, because the do-not-contact screen and the insert have to
+    agree about who gets mail. They did not: the screen ran on the caller's
+    list and the auto-add happened afterwards, so an operator on the opt-out
+    list was refused as an explicit attendee and mailed as an implicit one.
+    """
+    recipients = [str(e).strip() for e in (args.get("attendees") or []) if e]
+    owner_email = _operator_calendar_address()
+    if (
+        owner_email
+        and calendar_kind != "operator"
+        and not any(e.lower() == owner_email for e in recipients)
+    ):
+        recipients.append(owner_email)
+    return recipients
+
+
 def _calendar_block(calendar_id: str, kind: str) -> dict[str, str]:
     """The ``calendar`` field every calendar result carries.
 
@@ -526,18 +587,50 @@ def _normalize_summary(s: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", s)).strip().lower()
 
 
-def _summaries_match(a: str, b: str) -> bool:
-    """True when two meeting titles likely name the same series.
+#: Below this many normalised characters a title carries no identity. "Call",
+#: "1:1", "Lunch", "Sync" and "a" are all real calendar titles, and every one of
+#: them is a prefix of some longer, DIFFERENT appointment.
+_SUMMARY_MIN_PREFIX_CHARS = 10
 
-    Either normalized string contains the other (catches "Team Weekly" vs
-    "Team Weekly Leadership"), OR normalized strings are equal.
+
+def _summaries_match(a: str, b: str, *, require_exact: bool) -> bool:
+    """Do these two titles name the same appointment?
+
+    **Never a bare substring test**, which is what it was. When the
+    attendee-less dedup branch was added, that weakness stopped being dormant:
+    two genuinely different appointments at the same instant, one title
+    containing the other, produced ``status: "deduped"`` and NO event —
+
+        create 'Call'  against existing 'Call with the bank'  -> deduped
+        create '1:1'   against existing '1:1 with Bob'        -> deduped
+        create 'a'     against existing 'Anything at all'     -> deduped
+
+    That is the original incident's failure class — an event the operator asked
+    for does not exist — reached from the other direction.
+
+    Two rules, because there are two situations:
+
+    ``require_exact`` — **no attendee signal on either side.** Equality after
+    normalisation, nothing else. The start time is already doing the
+    discriminating, and a title is all that is left; accepting a near-match
+    there is how a real appointment gets swallowed.
+
+    otherwise — **attendees already corroborate.** A prefix relationship is
+    allowed ("Team Weekly" vs "Team Weekly Leadership" is the same series),
+    but only when the shorter title is long enough to identify anything. The
+    attendee-overlap check still has to pass afterwards, so a false match here
+    is doubly gated.
     """
     na, nb = _normalize_summary(a), _normalize_summary(b)
     if not na or not nb:
         return False
     if na == nb:
         return True
-    return na in nb or nb in na
+    if require_exact:
+        return False
+    if min(len(na), len(nb)) < _SUMMARY_MIN_PREFIX_CHARS:
+        return False
+    return na.startswith(nb) or nb.startswith(na)
 
 
 def _attendee_set(event_like: Any) -> set[str]:
@@ -648,10 +741,15 @@ def _find_duplicate_event(
             continue
         if event.get("status") == "cancelled":
             continue
-        if not _summaries_match(summary, event.get("summary", "") or ""):
-            continue
         existing_attendees = _attendee_set(event)
-        if not proposed_attendees and not existing_attendees:
+        # Whether a near-match on the title is safe depends on whether anything
+        # else is corroborating it, so the attendee sets are read first.
+        attendee_less = not proposed_attendees and not existing_attendees
+        if not _summaries_match(
+            summary, event.get("summary", "") or "", require_exact=attendee_less
+        ):
+            continue
+        if attendee_less:
             # No attendee signal on either side, so the start time is the only
             # thing left that distinguishes two events with the same title —
             # "Flight to Lisbon" twice in a fortnight is two flights unless
@@ -1897,21 +1995,32 @@ def _calendar_create(
     if not summary or not start or not end:
         return {"error": "summary, start, and end are required"}
 
+    # Which calendar comes first, because who gets invited depends on it: the
+    # operator is auto-added only for a calendar that is not theirs. Nothing
+    # has reached the CLI at this point, so a bad `calendar` still refuses
+    # before any read or write.
+    try:
+        calendar_id, calendar_kind = _resolve_calendar(args)
+    except _InvalidCalendarError as bad:
+        return bad.as_result()
+    owner_email = _operator_calendar_address()
+
     # Google emails every attendee on insert and on every edit, so this is
-    # outbound mail with a different sender. Checked first, before even the
-    # dedup read, so nothing goes out for a blocked invitation.
-    attendee_emails = [e for e in (args.get("attendees") or []) if e]
+    # outbound mail with a different sender. Checked before even the dedup
+    # read, so nothing goes out for a blocked invitation.
+    #
+    # EVERY address that will receive an invitation, not just the caller's
+    # list. The operator used to be auto-added AFTER this screen, which left a
+    # live opt-out bypass: the same address refused through one door and mailed
+    # through the other with `sendUpdates: "all"` on the wire.
+    # `_recipients_for` is what the insert will actually send, computed once
+    # and used for both.
+    attendee_emails = _recipients_for(args, calendar_kind)
     refusal = _dnc_refusal(
         "gws_calendar_create", *attendee_emails, run_id=run_id, tenant_id=tenant_id
     )
     if refusal is not None:
         return refusal
-
-    try:
-        calendar_id, calendar_kind = _resolve_calendar(args)
-    except _InvalidCalendarError as bad:
-        return bad.as_result()
-    owner_email = _resolve_owner_email()
 
     if not args.get("force"):
         # Against the SAME calendar the insert will use. A duplicate check
@@ -1958,20 +2067,9 @@ def _calendar_create(
         event_body["description"] = args["description"]
     if args.get("location"):
         event_body["location"] = args["location"]
+    # Already includes the auto-added operator where one applies, and is the
+    # same list the do-not-contact screen above was run over.
     attendees = [{"email": e} for e in attendee_emails]
-    # The operator is auto-added ONLY when the event is going somewhere they
-    # would not otherwise see it. On their own calendar they are the organiser:
-    # adding them made them an attendee of their own itinerary, so Google asked
-    # them to RSVP to it and mailed them once per leg — ten emails for a
-    # ten-leg trip. That auto-add existed because the default used to be this
-    # account's `primary` calendar, where being an attendee was the only way
-    # the operator learned the event existed at all. The default is now theirs.
-    if (
-        owner_email
-        and calendar_kind != "operator"
-        and not any(a["email"].lower() == owner_email for a in attendees)
-    ):
-        attendees.append({"email": owner_email})
     if attendees:
         event_body["attendees"] = attendees
 
