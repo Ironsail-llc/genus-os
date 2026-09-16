@@ -526,6 +526,47 @@ class TestOperatorCalendarWritable:
         assert "not signed in" in result.detail
 
     @pytest.mark.asyncio
+    async def test_offline_forks_no_subprocess(
+        self, calendared: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`offline` is "do not spend money, leave the box, or start an
+        external process", and the bridge's GET /api/doctor runs offline — so
+        every poll was forking a `gws`."""
+        from robothor.engine.tools.handlers import gws as gws_handlers
+
+        def _never(*args, **kwargs):
+            raise AssertionError("an offline doctor run reached the gws CLI")
+
+        monkeypatch.setattr(gws_handlers, "_run_gws", _never)
+        result = await _BY_ID["calendar.operator_calendar_writable"].run(
+            DoctorContext(offline=True)
+        )
+
+        assert result.status == "skip"
+        assert "offline" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_a_cli_failure_reports_the_classification_not_raw_stderr(
+        self, calendared: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A doctor result reaches a terminal, a log and /api/doctor. Raw CLI
+        stderr has been observed carrying an address and a token fragment;
+        truncating it would not have made it safe."""
+        self._calendar_list(
+            monkeypatch,
+            {
+                "error": "token AKIA-SECRET for alice@example.com rejected",
+                "hint": "auth: gws is not signed in",
+            },
+        )
+        result = await _run("calendar.operator_calendar_writable")
+
+        assert result.status == "fail"
+        assert "not signed in" in result.detail
+        assert "AKIA-SECRET" not in result.detail
+        assert "alice@example.com" not in result.detail
+
+    @pytest.mark.asyncio
     async def test_an_instance_with_no_calendar_agent_skips(
         self, instance: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

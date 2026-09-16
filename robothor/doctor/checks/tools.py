@@ -411,7 +411,13 @@ def _operator_calendar_access(owner_email: str) -> tuple[str, str]:
     if not isinstance(listed, dict):
         return "", "the gws CLI returned an unexpected shape"
     if "error" in listed:
-        return "", str(listed.get("hint") or listed.get("error") or "")[:200]
+        # The HINT, never the raw stderr. `_run_gws` always classifies, and a
+        # doctor result is rendered to a terminal, a log and /api/doctor —
+        # three surfaces that should not carry a CLI's verbatim output, which
+        # has been observed holding an address and a token fragment.
+        # Truncating it would not have made it safe.
+        hint = str(listed.get("hint") or "").strip()
+        return "", hint or "the gws CLI failed and did not say why"
     for entry in listed.get("items") or []:
         if not isinstance(entry, dict):
             continue
@@ -437,6 +443,13 @@ async def _operator_calendar_writable(ctx: DoctorContext) -> Result:
     directory = _manifest_dir(ctx)
     if not directory.is_dir():
         return skip(f"no manifest directory at {directory}")
+    if ctx.offline:
+        # `offline` is documented as "do not spend money, leave the box, or
+        # start an external process", and this check forks the `gws` binary to
+        # ask Google for a calendar list. The bridge's GET /api/doctor runs
+        # offline, so without this every poll forked a subprocess. Emptying
+        # PATH does not save us: `gws_available()` probes an absolute path.
+        return skip("--offline: the calendar list was not fetched")
     if not await ctx.run_blocking(_calendar_tool_granted, directory):
         return skip("no agent on this instance is granted a calendar tool")
 
