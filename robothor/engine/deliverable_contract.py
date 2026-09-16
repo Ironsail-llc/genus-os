@@ -56,6 +56,10 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 #: Verbs that introduce an OUTPUT. "read from", "load", "open" deliberately
 #: absent: naming an input file is not promising to create it.
@@ -377,6 +381,14 @@ def deliverable_nudge(session: object, nudges_used: int = 0) -> str | None:
 #: pulling an arbitrary artifact into memory.
 _MAX_READ_BYTES = 2_000_000
 
+#: A JSON manifest is parsed WHOLE or not at all. Larger than this and the
+#: check reports nothing rather than a verdict computed on a fragment.
+_MAX_JSON_BYTES = 64_000_000
+
+#: Rows the sort check will stream before it declines to answer. A file with
+#: more rows than this is not a deliverable a reader checks by eye either.
+_MAX_STREAM_LINES = 2_000_000
+
 #: Most names a single reason will list before it summarises the rest. A wall
 #: of names is the same defect as no names at all.
 _MAX_LISTED = 10
@@ -481,6 +493,12 @@ class DeliverableContract:
 STATUS_OK = "ok"
 STATUS_MISSING = "missing"
 STATUS_MISMATCH = "mismatch"
+#: The file is there and this check could not read it whole — too large to
+#: verify. NOT a failure: "I did not check" and "it is wrong" are different
+#: sentences, and reporting the second when the first is true failed correct
+#: runs (hostile review 2026-09-16, C4). Counted with `ok` for the verdict and
+#: named in the report so the silence is visible rather than merely quiet.
+STATUS_UNCHECKED = "unchecked"
 
 
 @dataclass(frozen=True)
@@ -500,7 +518,7 @@ class ContractReport:
 
     @property
     def failures(self) -> tuple[ItemFinding, ...]:
-        return tuple(f for f in self.findings if f.status != STATUS_OK)
+        return tuple(f for f in self.findings if f.status not in (STATUS_OK, STATUS_UNCHECKED))
 
     @property
     def satisfied(self) -> bool:
@@ -570,6 +588,23 @@ _COLUMNS_RE = re.compile(
     r"\b(?:the\s+)?columns\s*(?:are|must\s+be)?\s*:\s*([^\n.]{3,200})",
     re.IGNORECASE,
 )
+
+#: "Save a JSON array" / "a JSON object" — the container named in words.
+_STATED_CONTAINER_RE = re.compile(r"\bJSON\s+(array|object)\b", re.IGNORECASE)
+
+#: How far back to look for it. The sentence that introduces the fence is
+#: normally the one immediately before the requirement.
+_CONTAINER_REACH = 300
+
+
+def _stated_container(text: str, index: int) -> str | None:
+    """The container the spec named in prose, or None if it named none."""
+    window = text[max(0, index - _CONTAINER_REACH) : index]
+    found = None
+    for match in _STATED_CONTAINER_RE.finditer(window):
+        found = match.group(1).lower()
+    return found
+
 
 #: "Each item must contain exactly these fields".
 _JSON_FIELDS_ANCHOR_RE = re.compile(
@@ -824,7 +859,13 @@ def extract_contract(task_text: str | None) -> DeliverableContract:
             JsonFieldsItem(
                 path=path,
                 fields=tuple(first.keys()),
-                container=container,
+                # The PROSE wins where it is explicit. A spec that says "Save a
+                # JSON array" and then draws one object in the fence is the
+                # brief's named adversarial case, and inferring the container
+                # from the drawing failed a correct array file for being "not a
+                # JSON object" (hostile review 2026-09-16, I1). The example is
+                # an illustration of an item; the sentence is the requirement.
+                container=_stated_container(scrubbed, match.start()) or container,
                 evidence=_evidence(text, match.start()),
             )
         )
@@ -913,12 +954,56 @@ def _listed(names: list[str] | tuple[str, ...]) -> str:
     return ", ".join(shown) + (f" and {extra} more" if extra > 0 else "")
 
 
-def _read_text(path: Path) -> str | None:
+def _read_text(path: Path, limit: int | None = None) -> str | None:
+    """The whole file, or None when it is larger than ``limit``.
+
+    Never a PREFIX. It used to return the first 2,000,000 characters and every
+    caller treated them as the file, so a valid 2.5 MB JSON manifest read as
+    "not valid JSON" and a correctly-sorted 18 MB TSV read as "not sorted",
+    with a precise row number naming a row that did not exist as described —
+    the 2 MB cut had halved a line and the fragment sorted below its
+    predecessor (hostile review 2026-09-16, C4). Under `enforce` each of those
+    failed an otherwise-correct run.
+
+    "Too large to verify" is a truthful silence; a mismatch computed on a
+    prefix is a lie, and it is the more expensive of the two.
+    """
+    limit = _MAX_READ_BYTES if limit is None else limit
     try:
+        if path.stat().st_size > limit:
+            return None
         with path.open("r", encoding="utf-8", errors="replace") as handle:
-            return handle.read(_MAX_READ_BYTES)
+            return handle.read(limit + 1) or ""
     except OSError:
         return None
+
+
+class _TooManyRowsError(Exception):
+    """More rows than the sort check will read. A silence, not a verdict."""
+
+
+def _iter_lines(path: Path, limit: int | None = None) -> Iterator[str]:
+    """Non-empty lines, one at a time, never more than ``limit`` of them.
+
+    The sort check reads rows, not a document, so it streams rather than
+    slicing — an 18 MB TSV is ordinary for these tasks and its size says
+    nothing about whether its rows ascend. Materialising the lines instead
+    cost 107 MB of resident memory on that file, and the check only ever
+    compares a row with the one before it.
+
+    Raises past the cap rather than returning what it has, because a truncated
+    read is exactly what produced the verdict this replaced.
+    """
+    limit = _MAX_STREAM_LINES if limit is None else limit
+    seen = 0
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        for raw in handle:
+            if not raw.strip():
+                continue
+            seen += 1
+            if seen > limit:
+                raise _TooManyRowsError
+            yield raw
 
 
 def _first_line(path: Path) -> str | None:
@@ -1064,6 +1149,15 @@ def _check_header(item: HeaderItem, root: Path, root_resolved: Path) -> ItemFind
     cells = [c.strip() for c in line.lstrip("﻿").rstrip("\r\n").rstrip().split(item.delimiter)]
     while cells and cells[-1] == "":
         cells.pop()
+    if not cells:
+        # The commonest failure of all, and it used to be reported as "does not
+        # use a tab between its columns" — true of an empty file, and a remedy
+        # pointing at the wrong problem.
+        return ItemFinding(
+            item,
+            STATUS_MISSING,
+            f"`{shown}` is empty; the task requires the header `{required}` and its rows.",
+        )
     if len(cells) < 2 <= len(item.columns):
         shown_delimiter = "a tab" if item.delimiter == "\t" else f"`{item.delimiter}`"
         return ItemFinding(
@@ -1099,9 +1193,15 @@ def _check_json_fields(item: JsonFieldsItem, root: Path, root_resolved: Path) ->
         if nearby:
             reason += f"; the workspace has {_listed(nearby)} instead"
         return ItemFinding(item, STATUS_MISSING, reason + ".")
-    raw = _read_text(target)
+    raw = _read_text(target, _MAX_JSON_BYTES)
+    if raw is None:
+        # Parsed whole or not at all: a 2.5 MB manifest read to 2 MB and
+        # handed to `json.loads` reported "not valid JSON" about a valid file.
+        return ItemFinding(
+            item, STATUS_UNCHECKED, f"`{shown}` is too large to verify; not checked."
+        )
     try:
-        data = json.loads(raw or "")
+        data = json.loads(raw)
     except ValueError:
         return ItemFinding(item, STATUS_MISMATCH, f"`{shown}` is not valid JSON.")
     if item.container == "array" and isinstance(data, dict):
@@ -1147,9 +1247,14 @@ def _check_sections(item: SectionsItem, root: Path, root_resolved: Path) -> Item
     if target is None:
         return None
     shown = _display(root_resolved, target)
-    text = _read_text(target) if target.is_file() else None
-    if text is None:
+    if not target.is_file():
         return ItemFinding(item, STATUS_MISSING, f"`{shown}` does not exist.")
+    text = _read_text(target)
+    if text is None:
+        # Headings past the cap would have read as missing.
+        return ItemFinding(
+            item, STATUS_UNCHECKED, f"`{shown}` is too large to verify; not checked."
+        )
     present = {_normalise_heading(m.group(2)) for m in _HEADING_RE.finditer(text)}
     missing = [h for h in item.headings if _normalise_heading(h) not in present]
     if not missing:
@@ -1176,34 +1281,42 @@ def _check_sort(
     target = _resolve_under(root, root_resolved, item.path)
     if target is None or not target.is_file():
         return None
-    text = _read_text(target)
-    if not text:
-        return None
-    lines = [line for line in text.splitlines() if line.strip()]
-    if not lines:
-        return None
-    actual = tuple(c.strip() for c in lines[0].lstrip("﻿").rstrip().split(header.delimiter))
-    if actual != header.columns:
-        return None
     try:
         indices = [header.columns.index(key) for key in item.keys]
     except ValueError:
         return None
     previous: tuple[str, ...] | None = None
-    for number, line in enumerate(lines[1:], start=1):
-        cells = line.split(header.delimiter)
-        if max(indices) >= len(cells):
-            continue
-        current = tuple(cells[i].strip() for i in indices)
-        if previous is not None and current < previous:
-            shown = _display(root_resolved, target)
-            return ItemFinding(
-                item,
-                STATUS_MISMATCH,
-                f"`{shown}` is not sorted by {_listed(item.keys)} ascending: row {number + 1} "
-                f"({_listed(current)}) comes after row {number} ({_listed(previous)}).",
-            )
-        previous = current
+    number = 0
+    try:
+        for row, line in enumerate(_iter_lines(target)):
+            if row == 0:
+                actual = tuple(
+                    c.strip() for c in line.lstrip("\ufeff").rstrip().split(header.delimiter)
+                )
+                if actual != header.columns:
+                    return None
+                continue
+            number = row
+            cells = line.rstrip("\r\n").split(header.delimiter)
+            if max(indices) >= len(cells):
+                continue
+            current = tuple(cells[i].strip() for i in indices)
+            if previous is not None and current < previous:
+                shown = _display(root_resolved, target)
+                return ItemFinding(
+                    item,
+                    STATUS_MISMATCH,
+                    f"`{shown}` is not sorted by {_listed(item.keys)} ascending: row {number + 1} "
+                    f"({_listed(current)}) comes after row {number} ({_listed(previous)}).",
+                )
+            previous = current
+    except (_TooManyRowsError, OSError):
+        # A silence, not a verdict. The 2 MB slice this replaced halved a line,
+        # and the fragment sorted below its predecessor: a correct 18 MB file
+        # was reported unsorted at a row number that did not exist as described.
+        return None
+    if number == 0:
+        return None
     return ItemFinding(item, STATUS_OK)
 
 
