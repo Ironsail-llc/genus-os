@@ -168,11 +168,10 @@ Status meanings:
   Everything else fires: a known key format anywhere in the output, and any
   literal of eight or more characters bound to a credential identifier that is
   none of the five shapes above — including single-class values longer than
-  twelve characters, which are treated as passphrases. This was narrowed on
-  2026-09-13 after 46 warnings in 24 hours on ordinary CRM task text
-  (`list_tasks`, `list_my_tasks`, `read_file`, `search_records`) reached the
-  operator as "Credential exposure flagged this run"; a warning that fires on
-  the word for a thing rather than the thing trains its reader to ignore it.
+  twelve characters, which are treated as passphrases. The exempt shapes above
+  exist because a broader rule fired on ordinary task and file-listing output —
+  on the *word* for a credential rather than a credential — and a warning that
+  cries wolf trains its reader to ignore it.
   The corpus of both halves is pinned in
   `robothor/engine/tests/test_credential_detector_false_positives.py`, and the
   rule list above is bound to the code by

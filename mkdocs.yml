@@ -84,10 +84,8 @@ exclude_docs: |
   !/reference/cli.md
   !/reference/configuration.md
   !/PLUGINS.md
-  !/AGENT_BUILDER.md
   !/CONNECTORS.md
   !/OBSERVABILITY.md
-  !/TESTING.md
   !/runbooks/SNAPSHOT_RESTORE.md
   !/compliance/SECURITY_CONTROLS.md
   !/compliance/SOC2_MAPPING.md
@@ -134,7 +132,6 @@ nav:
       - CLI: reference/cli.md
       - Settings: reference/configuration.md
   - Operating:
-      - Agent Builder: AGENT_BUILDER.md
       - Plugins: PLUGINS.md
       - Connectors: CONNECTORS.md
       - Slack channel: channels/slack.md
@@ -158,6 +155,5 @@ nav:
       - Release Notes: release-notes.md
   - Project:
       - Contributing: contributing.md
-      - Testing: TESTING.md
       - Security: security.md
       - Reading Guide: READING_GUIDE.md

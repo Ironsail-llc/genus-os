@@ -58,8 +58,9 @@ python scripts/validate_agents.py --agent reporter
 ```
 
 The manifest schema, the instruction-file contract, the model-tiering strategy
-and worked multi-agent examples are in the
-[Agent Builder reference](../AGENT_BUILDER.md).
+and worked multi-agent examples are in `docs/AGENT_BUILDER.md` in the
+repository. It is not on this site yet: it still quotes one deployment's own
+instance files as its examples.
 
 ## Schedules and run truth
 
@@ -116,8 +117,8 @@ Two properties make this safe enough to send to another company:
   `--strict` refuses unless every requirement is already satisfied.
 
 A URL install requires `--sha256`. The Helm offers the same export as a Share
-button. Bundle format and the `requires` check are in the
-[Agent Builder reference](../AGENT_BUILDER.md#8a-sharing-an-agent).
+button. The bundle format and what `requires` checks are in section 8a of
+`docs/AGENT_BUILDER.md` in the repository.
 
 ## Plugins
 
