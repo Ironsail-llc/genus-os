@@ -125,6 +125,63 @@ def test_the_exact_tokenizer_wins_when_an_operator_enables_it(monkeypatch):
     assert estimate_for([{"role": "user", "content": "x" * 40_000}], "some/model") == 4242
 
 
+async def test_a_conversation_of_dense_content_is_brought_under_the_ceiling(monkeypatch):
+    """The two halves together, on the content that defeats the estimate.
+
+    Worth pinning because of how they interact: the budget decides to compact
+    on the content-aware number, `maybe_compress` re-checks with the flat one
+    and can decline — and the deterministic ceiling then does the work anyway.
+    Summarising base64 with a model would have been a poor use of a call.
+    """
+    from types import SimpleNamespace
+
+    from robothor.engine.context_budget import keep_context_within_budget
+    from robothor.engine.context_fit import estimate_for, fit_for
+
+    local = "ollama_chat/qwen3.8:27b"
+    blob = _cases()["hex digest lines"]
+    messages = [{"role": "system", "content": "You are the main agent."}]
+    for index in range(12):
+        messages.append(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": f"c{index}",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": "{}"},
+                    }
+                ],
+            }
+        )
+        messages.append({"role": "tool", "tool_call_id": f"c{index}", "content": blob})
+    messages.append({"role": "user", "content": "What is in those files?"})
+
+    session = SimpleNamespace(
+        messages=messages,
+        run_id="dense",
+        thin_previous_tool_results=lambda protect_after_index=0: 0,
+    )
+
+    async def _no_llm_compaction(messages, models=None, threshold=None, broken_models=None):
+        return messages
+
+    monkeypatch.setattr("robothor.engine.context.maybe_compress", _no_llm_compaction)
+
+    await keep_context_within_budget(
+        session,
+        SimpleNamespace(id="main", eager_tool_compression=False),
+        iteration=3,
+        models=[local],
+        broken_models=set(),
+        hook_registry=None,
+        pre_iteration_msg_idx=0,
+    )
+
+    assert estimate_for(session.messages, local) <= fit_for(local).hard_limit
+
+
 @pytest.mark.llm
 @pytest.mark.timeout(600)
 def test_against_the_models_own_tokenizer():
