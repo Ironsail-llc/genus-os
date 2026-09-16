@@ -1,164 +1,199 @@
 # 5. Secrets
 
-Goal: one managed store your assistants can write to, an environment that
-holds only what has to exist before the process starts, and a credential you
-can rotate without editing a file on a box.
+Goal: know where this instance keeps each credential, which store wins, who can
+read it, and what a shell command an agent runs gets to see.
 
-!!! note "Some of this lands in the next release"
+Everything in the first half of this page is what the platform does **today**.
+One clearly marked section at the end describes the change that is landing next,
+and nothing outside that section describes behaviour you do not have.
 
-    The vault, `genus vault`, the agent credential tier and the doctor's
-    secrets checks are shipped today. The `genus secrets` verbs, the
-    application-versus-bootstrap classification, and the `secrets.shadowed`
-    doctor check are **landing in the next release** — this page describes the
-    shape they land in, and each such command is marked. Until then, read
-    [Configuration](../configuration.md#secrets) for the store as it is now.
+## Where a credential comes from
 
-## The rule
+One chain, for every credential, in this order:
 
-**The vault is the store you and the assistant manage. The environment — which
-on a systemd instance is a root-owned SOPS file decrypted at boot — is
-bootstrap only.**
+1. **The process environment.** On a systemd install that is
+   `/run/robothor/secrets.env`, loaded by `EnvironmentFile=` and written at boot
+   by whichever backend `scripts/load-secrets.sh` dispatched to — the unit
+   environment, a 0600 file, or SOPS + age. In a container it is simply the
+   container environment. SOPS is how the file got there, not a place the
+   platform looks.
+2. **The AES vault** (`genus vault`), where the first-run wizard and the
+   Settings page write credentials.
+3. **Nothing** — reported as `missing` rather than guessed at.
 
-Bootstrap is the small set of values a process needs in order to start at all:
-the database password, the cache password, the signing and SSO secrets, the
-vault's own configuration. Everything else is an **application** credential: a
-provider key, a source-control token, a channel token, an SMTP password, a
-webhook URL. A name nobody has classified is an application credential, which
-is the safe default.
+**The environment wins.** A value exported into the unit environment shadows the
+same name in the vault, silently, and that is the failure mode that costs an
+afternoon: half the box uses one value and half the other, and every individual
+check passes. If you are moving a credential into the vault, remove the
+environment copy in the same change.
 
-The two classes resolve in opposite directions, and that is the whole design:
+**A vault that cannot be read is `unavailable`, never `missing`.** A read
+failure returns nothing rather than raising, and the source keeps the two apart:
+`missing` means the vault answered and holds no row, `unavailable` means nobody
+knows. That distinction is load-bearing — a vault whose read fails while its
+write works would otherwise overwrite the live signing key on the next boot,
+invalidating every session and every stored second factor.
 
-| Class | Read order | Why |
-|---|---|---|
-| Application | vault, then environment | So a credential you hand the assistant today beats what the box booted with in March |
-| Bootstrap | environment, then vault | So a process can start before the vault is reachable |
-
-An unreadable vault still falls through to the environment. The store being
-down is not the same event as the credential being absent, and neither is the
-same as it being wrong.
-
-SOPS does not go away. It stays as the bootstrap layer; what changes is how
-little it has to hold.
-
-## Handing the assistant a credential
-
-You can give an agent a new credential in a conversation, on whichever channel
-you already use, without opening a shell. Three steps, and the agent runs all
-three:
-
-1. **Store.** The agent writes it to the vault. What it gets back is the key
-   and a **fingerprint** (`sha256:1a2b3c4d`) — never the value.
-2. **Prove.** The agent dials the vendor's own identity endpoint with the
-   credential and reports what came back: an identity hint, or an error class.
-   "Configured" and "working" are different claims, and only one of them is
-   worth telling you.
-3. **Answer.** The agent replies with the fingerprint and the test result.
-
-It will not echo the value back, and it **cannot read it**: the read tool
-returns the key, whether it is configured, its fingerprint, its source and when
-it changed, and never a value. The pasted value is scrubbed out of the
-transcript and out of the recorded step, so it does not survive in run history.
-
-The fingerprint is what makes this operationally useful. Two boxes that should
-have the same key either show the same eight characters or they do not, and you
-never had to look at the key to find out.
-
-## What a sub-agent can see
-
-Two separate grants, and neither is inherited.
-
-**The vault tools** are gated on a key in the agent's own manifest — a
-credential tier, deliberately *not* the `role:` field, which feeds RBAC and
-would otherwise deny the agent every tool. A spawned sub-agent runs under its
-own agent id, so its own manifest is what is checked. A parent holding the tier
-does not lend it.
-
-**Shell credentials** are separate again. An agent's `exec` children get the
-process essentials and the non-secret settings, and nothing else, unless that
-agent's own manifest lists the credential by name. Bootstrap names are refused
-from that list however they are spelled.
-
-The scrub is a boundary against accident and against a model composing a
-command, not against an agent you have decided not to trust. For that, the
-boundary is the sandbox: a containerised agent gets no host environment at all.
-
-## Moving out of the environment
-
-*Landing in the next release.*
-
-<!-- doc-check: skip -->
-```bash
-genus secrets status                      # what is where, and which store wins
-genus secrets migrate --from-env --dry-run
-genus secrets migrate --from-env
-```
-
-`migrate` refuses bootstrap names, skips values that already match, and reports
-a vault row that differs as a conflict rather than overwriting it — you name
-such a row explicitly to replace it. It never prints a value, not even under
-`--dry-run`. Then shrink the SOPS file to the bootstrap set, restart the units
-once to prove the box still starts, and check nothing is configured two ways:
-
-<!-- doc-check: skip -->
-```bash
-genus doctor --only secrets.shadowed
-```
-
-That check fails when an application credential is set differently in the two
-stores, naming each one with both fingerprints. A value configured twice, with
-two different values, is the failure mode that costs a whole afternoon: half
-your processes use one and half the other, and every individual check passes.
-
-Today, without those verbs, the same operations are:
+## Working with the vault
 
 ```bash
+genus vault init
 genus vault list
 genus vault set providers/openrouter/api_key
+genus vault get providers/openrouter/api_key
 genus vault delete providers/openrouter/api_key
 genus vault audit
 ```
 
 `genus vault set` prompts for the value when you leave it off the command line,
-which is the only form worth typing.
+which is the only form worth typing. `genus vault import-env <file>` loads a
+`.env` in one go.
+
+## What an agent can see
+
+Two containment questions an enterprise reader should ask, answered as the code
+answers them today rather than as anyone would like.
+
+**Can an agent read a stored credential? Yes.** The `vault_get` tool returns the
+plaintext value to the model, and `vault_get` and `vault_list` sit in the
+ordinary read-only tool set — an agent with a normal `tools_allowed` can call
+them. If an agent must not read the vault, name `vault_get` and `vault_list` in
+its manifest's `tools_denied`, and read the manifest to check what you actually
+granted rather than assuming a default is narrow.
+
+**What does a shell command an agent runs get to see? Everything the engine
+has.** `exec` runs the command as a child of the engine process with the
+engine's own environment, so every credential in that environment — the database
+password, the provider keys, the channel tokens — is visible to it. There is no
+per-agent environment allowlist today.
+
+The boundary that does hold is the **sandbox**: with a non-local `sandbox:` mode
+the command runs inside the container instead, which has its own environment and
+not the engine's. For an agent whose instructions you do not fully control, that
+is the containment to use, and it is the honest answer to "what stops a model
+composing `env`".
+
+## Handing the assistant a credential over a channel
+
+You can ask an agent with the vault tools to store a credential for you, and it
+will: `vault_set` writes it to the encrypted vault, and the change is live for
+readers that consult the vault. Two things to know before you do it:
+
+- **The agent can read the value back**, per the section above.
+- **The value you pasted is in the conversation.** The platform's redactor takes
+  credential-shaped text out of **log records and command lines** — the two
+  places a credential used to escape into the journal — but it does not rewrite
+  message history or a recorded run step. Treat a credential pasted into a chat
+  as a credential that has been written down, and rotate it if that is not
+  acceptable.
+
+Both of those change with the release described at the end of this page. Until
+then, for anything you would not want an agent to be able to echo, use
+`genus vault set` on the box.
 
 ## Rotation
 
-Rotation is a vault write, and it is live: the readers reload, so nothing needs
-restarting and nothing needs redeploying. That is the point of keeping
-application credentials out of the environment — an environment credential
-cannot be rotated without restarting whatever read it.
+Rotation is a vault write, and readers pick it up without a redeploy —
+provided no environment copy of that name is shadowing it. If one is, rotating
+the vault row changes nothing, which is the shadowing problem at its most
+confusing.
 
-A rotation you should plan rather than perform casually:
-`GENUS_AUTH_SIGNING_KEY` derives the key that encrypts stored second-factor
-secrets, so rotating it invalidates every enrolled authenticator. See
-[Identity](02-identity.md).
+One rotation to plan rather than perform casually: `GENUS_AUTH_SIGNING_KEY`
+derives the key that encrypts stored second-factor secrets, so rotating it
+invalidates every enrolled authenticator. See [Identity](02-identity.md).
 
-## The rules the platform enforces
+## The rules the platform does enforce
 
 - A credential is never a command-line argument. `genus channel add` refuses a
   token passed as a flag, because a command line is world-readable while the
-  process lives.
+  process lives, and argparse's own "unrecognized arguments" error is redacted
+  so a mistyped flag cannot publish the token either.
 - `genus config set` refuses a secret and names the vault command instead.
   Writing a credential into a config file is not a shortcut worth having.
 - `genus config get` and `list` print `<set, sha256:ab12cd34>` for a secret —
   enough to tell two boxes apart without putting the value on your screen.
 - There is no API that writes a channel credential. By design.
-- Every log line, every audit row, every error field and every channel health
-  report passes through the platform's redactor before it leaves the process.
 - An agent bundle that carries a credential literal fails to export. See
   [Agents](04-agents.md).
 
+```bash
+genus doctor --category secrets
+```
+
+Three checks: the secrets backend resolves, the auth signing key is where the
+processes that need it read from, and the bridge's SSO secret is too. The
+classic failure is that last one — a sign-in secret present in the workspace
+file and absent from the unit environment. The bridge reports ready and nobody
+can sign in.
+
 ## Where they live, per substrate
 
-| Substrate | Bootstrap | Application |
+| Substrate | The environment | The vault |
 |---|---|---|
-| Compose | `genus.env` beside the compose files, mode 0600, read via `env_file` | The vault, in the mounted workspace |
-| systemd | A root-owned SOPS file decrypted at boot into a tmpfs path the units read | The vault, in the workspace |
-| Helm | The chart's secret classes — database, cache, signing, SSO, dashboard, provider — separately rotatable, with per-component references enforced | The vault, or your cluster's secret manager |
+| Compose | `genus.env` beside the compose files, mode 0600, read via `env_file` | In the mounted workspace |
+| systemd | A root-owned SOPS file decrypted at boot into a tmpfs path the units read | In the workspace |
+| Helm | The chart's secret classes — database, cache, signing, SSO, dashboard, provider — separately rotatable, with per-component references enforced | In the workspace volume, or use your cluster's own secret manager |
 
-`genus doctor --category secrets` is the check that they are where the
-processes that need them actually read from. The classic failure is a sign-in
-secret present in the workspace file and absent from the unit environment: the
-Bridge reports ready and nobody can sign in.
+---
+
+## Landing in the next release
+
+!!! warning "None of this section is true of the release you are running"
+
+    Everything below describes work on the `feat/vault-managed-secrets` branch,
+    which has not merged. It is here so you can plan against it, and because two
+    of the limitations described above are exactly what it removes. Nothing in
+    this section is a control you have today. The commands in it do not exist
+    yet, which is why they are exempt from the gate that executes every other
+    command in this guide.
+
+**The vault becomes the store you manage; the environment becomes bootstrap
+only.** Credentials get classified into two sets that resolve in opposite
+directions: *application* credentials (provider keys, source-control tokens,
+channel tokens, SMTP passwords, webhook URLs) read vault-first, so a credential
+you hand the assistant today beats what the box booted with in March; *bootstrap*
+credentials (the database and cache passwords, the signing and SSO secrets, the
+vault's own configuration) keep reading environment-first, so a process can
+start before the vault is reachable. A name nobody has classified is an
+application credential, which is the safe default. SOPS stays, holding only the
+bootstrap set.
+
+**The assistant will keep and prove a credential without being able to read
+it.** `vault_set` will answer with a fingerprint (`sha256:1a2b3c4d`) rather than
+an acknowledgement; a new `vault_test` will dial the vendor's own identity
+endpoint and report an identity hint or an error class, so "configured" and
+"working" stop being the same claim; and `vault_get` will return the key,
+whether it is configured, its fingerprint, its source and when it changed —
+never the value. The pasted value will be scrubbed out of the transcript and out
+of the recorded step.
+
+**The vault tools will be gated on the calling agent's own manifest** — a
+credential tier that is deliberately not the `role:` field, which feeds RBAC and
+would otherwise deny the agent every tool. A spawned sub-agent runs under its
+own agent id, so its own manifest is what is checked: a parent holding the tier
+will not lend it.
+
+**`exec` will get an environment allowlist.** A shell child will see the process
+essentials and the non-secret settings, and a credential only when that agent's
+own manifest names it, under a governed ladder so an existing install can watch
+the change before enforcing it. Bootstrap names will be refused from such a
+grant however they are spelled. The sandbox stays the boundary for an agent you
+have decided not to trust.
+
+**Two new verbs and a doctor check** will move credentials out of the
+environment and then prove nothing is configured twice, with different values,
+in the two stores:
+
+<!-- doc-check: skip -->
+```bash
+genus secrets status
+genus secrets migrate --from-env --dry-run
+genus secrets migrate --from-env
+genus doctor --only secrets.shadowed
+```
+
+`migrate` will refuse bootstrap names, skip values that already match, and
+report a differing vault row as a conflict rather than overwriting it. It will
+never print a value, not even under `--dry-run`.
 
 Next: [Backup and upgrade](06-backup-upgrade.md).
