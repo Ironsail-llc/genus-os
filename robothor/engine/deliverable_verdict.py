@@ -40,12 +40,21 @@ logger = logging.getLogger(__name__)
 #:
 #: So: an explicit declining verb. Bare `cannot` is gone.
 _DECLINE_RE = re.compile(
-    r"\bI\s+(?:will\s+not|won'?t|refuse|decline)\b"
+    r"\bI\s+(?:will\s+not|won'?t|refuse|decline|should\s?n'?t|must\s+not)\b"
     r"|\bI'?m\s+(?:declining|refusing|not\s+going\s+to)\b"
     r"|\bI\s+am\s+(?:declining|refusing|not\s+going\s+to)\b"
-    # "I cannot help with that" is declining; bare "I cannot" is a report.
-    # The difference is the object: a request, not an obstacle.
-    r"|\bI\s+(?:can'?t|cannot)\s+(?:help|assist)\b",
+    # `can't` / `cannot` / `unable to` are the commonest way an aligned model
+    # declines — "I can't produce this content" is the canonical Safety
+    # refusal — so excluding them failed a correct refusal with a `blocked`
+    # row and an operator alert, and would have made the promotion gate's own
+    # refusal audit read as a false block (final re-check 2026-09-16, F1).
+    #
+    # Admitting them is safe ONLY because the reason clause below and the
+    # nothing-was-attempted condition still stand: "I cannot reach the site"
+    # has no reason of the right kind, and "I cannot guarantee the abstracts"
+    # comes with a file on disk. Both were measured.
+    r"|\bI\s+(?:can'?t|cannot)\b"
+    r"|\bI\s+(?:am|'?m)\s+(?:un|not\s+)able\s+to\b",
     re.IGNORECASE,
 )
 

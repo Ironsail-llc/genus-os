@@ -101,7 +101,7 @@ CAPS = {
     "robothor/engine/deliverable_suppress.py": 107,
     "robothor/engine/deliverable_check.py": 549,
     "robothor/engine/deliverable_items.py": 256,
-    "robothor/engine/deliverable_verdict.py": 240,
+    "robothor/engine/deliverable_verdict.py": 249,
     "robothor/engine/loop_guards.py": 325,
     # 937 (2026-09-13): every module the delivery path runs through was capped
     # except the one that decides delivery. It was uncapped when the
