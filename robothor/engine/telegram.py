@@ -56,6 +56,9 @@ if TYPE_CHECKING:
     from robothor.engine.runner import AgentRunner
     from robothor.identity import IdentityContext
 
+from robothor.engine.telegram_attachments import (  # noqa: E402
+    TelegramAttachmentsMixin,
+)
 from robothor.engine.telegram_handlers import (  # noqa: E402
     AVAILABLE_MODELS,
     TelegramHandlersMixin,
@@ -77,6 +80,45 @@ THINKING_TEXT = "\u2728 Thinking..."  # shown instantly while LLM starts up
 # exceptions and returns an empty list on total failure, so "no messages"
 # is the only signal a lost reply gives us.
 INTERACTIVE_SEND_FAILED_STATUS = "failed: telegram send returned no messages"
+
+
+def build_user_extras(
+    *,
+    user_message_id: str | None,
+    reply_ctx: dict[str, Any] | None,
+    attachments: list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    """The additive JSONB fields recorded on one inbound user turn, or None.
+
+    Three separate facts about the same message, and none of them belongs in
+    the text: the platform message id (so a later reply resolves against a real
+    row), the fleet message this one replies to, and the FILES that arrived
+    with it. ``None`` when there is nothing to add, which is what keeps a plain
+    text turn's payload byte-identical to what it was before any of this.
+
+    A module function rather than an inline block inside ``run_agent``: it is
+    pure, it is the one place the stored turn's shape is decided, and the Helm
+    chat UI reads what it writes.
+    """
+    if not (user_message_id or reply_ctx or attachments):
+        return None
+    extras: dict[str, Any] = {}
+    if attachments:
+        # The attachment row shape, recorded BESIDE the text rather than
+        # embedded in it: the prompt is prose the model rewrites, the JSONB is
+        # the record every reader downstream relies on.
+        extras["attachments"] = list(attachments)
+    if user_message_id:
+        extras["telegram_message_id"] = user_message_id
+    if reply_ctx:
+        extras["replies_to"] = {
+            "platform_message_id": str(reply_ctx.get("platform_message_id", "")),
+            "author_agent_id": reply_ctx.get("author_agent_id", ""),
+            "author_display_name": reply_ctx.get("author_display_name", ""),
+            "chat_message_id": reply_ctx.get("chat_message_id"),
+        }
+    return extras
+
 
 # Closed-onboarding operator notification rate limit (Task 4, Unified
 # Identity Context) -- at most one alert per unregistered sender per hour.
@@ -164,7 +206,7 @@ def _md_to_html(text: str) -> str:
     return text
 
 
-class TelegramBot(TelegramHandlersMixin, PlanModeMixin):
+class TelegramBot(TelegramAttachmentsMixin, TelegramHandlersMixin, PlanModeMixin):
     """Aiogram v3 Telegram bot for Genus OS."""
 
     def __init__(self, config: EngineConfig, runner: AgentRunner) -> None:
@@ -623,27 +665,11 @@ class TelegramBot(TelegramHandlersMixin, PlanModeMixin):
                     if len(session.history) > self._max_history:
                         session.history[:] = session.history[-self._max_history :]
 
-                # Build user JSONB extras. When the user replied to a
-                # surfaced fleet message, include the linkage in the user
-                # turn's JSONB so history and audits can see the thread.
-                user_extras: dict[str, Any] | None = None
-                if user_message_id or reply_ctx or attachments:
-                    user_extras = {}
-                    if attachments:
-                        # The attachment row shape, recorded BESIDE the text on
-                        # the user turn rather than embedded in it: the prompt
-                        # is prose the model rewrites, the JSONB is the record
-                        # the Helm chat UI and any audit read.
-                        user_extras["attachments"] = list(attachments)
-                    if user_message_id:
-                        user_extras["telegram_message_id"] = user_message_id
-                    if reply_ctx:
-                        user_extras["replies_to"] = {
-                            "platform_message_id": str(reply_ctx.get("platform_message_id", "")),
-                            "author_agent_id": reply_ctx.get("author_agent_id", ""),
-                            "author_display_name": reply_ctx.get("author_display_name", ""),
-                            "chat_message_id": reply_ctx.get("chat_message_id"),
-                        }
+                user_extras = build_user_extras(
+                    user_message_id=user_message_id,
+                    reply_ctx=reply_ctx,
+                    attachments=attachments,
+                )
 
                 # Delete status message, deliver final output as new message.
                 # Capture the Telegram Message objects returned by send_message

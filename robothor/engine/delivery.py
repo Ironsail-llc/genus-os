@@ -27,6 +27,16 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from robothor.engine.channels import SendReceipt, get_channel
+
+# Files that ride out with an announcement: their own module, re-exported here
+# because this is where callers look for anything about delivering output.
+from robothor.engine.delivery_attachments import (
+    MAX_QUEUED_ATTACHMENTS,  # noqa: F401 - re-export
+    clear_queued_attachments,  # noqa: F401 - re-export
+    queue_attachment,  # noqa: F401 - re-export
+    take_queued_attachments,  # noqa: F401 - re-export
+)
+from robothor.engine.delivery_attachments import send_attachments as _send_attachments
 from robothor.engine.models import AgentConfig, AgentRun, DeliveryMode
 from robothor.engine.thin_announce import (
     NoteSubstitution,
@@ -501,91 +511,6 @@ def _substitute_note_body(
             substitution.saved,
         )
     return substitution
-
-
-# ─── Attachments queued for a run's announcement ─────────────────────
-#
-# A tool handler has the run ID and nothing else — no reference to the AgentRun
-# object — so `send_file` during a scheduled run parks its file here and
-# `deliver()` collects it by ID. Keyed by run so two concurrent nightly reports
-# cannot deliver each other's PDF, and drained on collection so a retried run
-# never inherits the previous attempt's files.
-_queued_attachments: dict[str, list[tuple[str, str]]] = {}
-
-#: The most files one run may queue. A run in a loop writing charts must not be
-#: able to turn one announcement into a hundred uploads.
-MAX_QUEUED_ATTACHMENTS = 10
-
-
-def queue_attachment(run_id: str, path: str, caption: str = "") -> bool:
-    """Park a file to be delivered with ``run_id``'s announcement.
-
-    Returns False when the run has already queued :data:`MAX_QUEUED_ATTACHMENTS`
-    — a refusal the caller reports, rather than a silent drop.
-    """
-    if not run_id or not path:
-        return False
-    queue = _queued_attachments.setdefault(str(run_id), [])
-    if len(queue) >= MAX_QUEUED_ATTACHMENTS:
-        return False
-    queue.append((str(path), str(caption or "")))
-    return True
-
-
-def take_queued_attachments(run_id: str) -> list[tuple[str, str]]:
-    """Everything queued for ``run_id``, removing it from the queue."""
-    return _queued_attachments.pop(str(run_id), [])
-
-
-def clear_queued_attachments() -> None:
-    """Drop every queued attachment. For tests and for a clean daemon restart."""
-    _queued_attachments.clear()
-
-
-async def _send_attachments(config: AgentConfig, run: AgentRun, name: str, channel: Any) -> None:
-    """Send the files this run wants delivered with its announcement.
-
-    Never changes the run's delivery status and never raises. The report and
-    the files are separate sends: one failing is not evidence about the other,
-    and an operator holding the PDF with no covering note is better off than
-    one holding neither. A missing file is logged and skipped — the run wrote
-    a path that is no longer there, which is worth knowing and is not worth
-    failing a delivered report over.
-    """
-    from pathlib import Path
-
-    pending = [(path, "") for path in (getattr(run, "attachments", None) or [])]
-    pending.extend(take_queued_attachments(run.id))
-    if not pending:
-        return
-
-    target = config.delivery_to
-    for path, caption in pending[:MAX_QUEUED_ATTACHMENTS]:
-        if not Path(path).is_file():
-            logger.warning(
-                "Attachment for %s is missing at delivery time: %s", config.id, Path(path).name
-            )
-            continue
-        try:
-            receipt = await channel.send_attachment(target, path, caption)
-        except NotImplementedError as e:
-            logger.warning(
-                "Channel %s cannot deliver the file %s for %s: %s",
-                name,
-                Path(path).name,
-                config.id,
-                e,
-            )
-            continue
-        except Exception as e:  # noqa: BLE001 - a third-party channel is third-party code
-            logger.error("Channel %s raised sending %s for %s: %s", name, path, config.id, e)
-            continue
-        if receipt.acknowledged <= 0:
-            logger.error(
-                "Attachment %s for %s was not acknowledged — the operator did not get it",
-                Path(path).name,
-                config.id,
-            )
 
 
 async def _send_announcement(

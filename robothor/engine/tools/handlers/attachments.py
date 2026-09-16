@@ -110,20 +110,27 @@ def _workspace_root(ctx: Any) -> Path | None:
         return None
 
 
-def _originating_route(ctx: Any) -> tuple[str, str]:
+async def _originating_route(ctx: Any) -> tuple[str, str]:
     """``(channel name, target)`` for the surface this run came from.
 
     Delegates to ``ask_user``'s resolution rather than re-deriving it: that
     module already knows how every trigger writes its own reply address, and a
     second parser would send files to a chat the ask path considers wrong.
+
+    The run lookup is database-backed and synchronous, so it goes to a thread
+    for the same reason ``ask_user`` sends it to one: a tool handler that
+    blocked the engine loop on a query would stall every other chat, health
+    check and agent session for its duration.
     """
+    import asyncio
+
     from robothor.engine import tracking
     from robothor.engine.tools.handlers import ask_user
 
     run_id = str(getattr(ctx, "run_id", "") or "")
     if not run_id:
         return "", ""
-    run = tracking.get_run(run_id) or {}
+    run = await asyncio.to_thread(tracking.get_run, run_id) or {}
     trigger = str(run.get("trigger_type") or "")
     detail = str(run.get("trigger_detail") or "")
     channel_name = ask_user._CHANNEL_FOR_TRIGGER.get(trigger, "")
@@ -251,7 +258,7 @@ async def send_file(args: dict[str, Any], ctx: ToolContext | Any = None) -> dict
     if refusal:
         return {"error": refusal}
 
-    channel_name, target = _originating_route(ctx)
+    channel_name, target = await _originating_route(ctx)
     requested_target = str(args.get("target") or "").strip()
     if requested_target and requested_target != target:
         role = str(getattr(ctx, "user_role", "") or "").lower()
@@ -272,7 +279,10 @@ async def send_file(args: dict[str, Any], ctx: ToolContext | Any = None) -> dict
         # run then failed.
         run_id = str(getattr(ctx, "run_id", "") or "")
         if run_id and not requested_target:
-            from robothor.engine.delivery import MAX_QUEUED_ATTACHMENTS, queue_attachment
+            from robothor.engine.delivery_attachments import (
+                MAX_QUEUED_ATTACHMENTS,
+                queue_attachment,
+            )
 
             if queue_attachment(run_id, str(resolved), str(args.get("caption") or "")):
                 _audit(

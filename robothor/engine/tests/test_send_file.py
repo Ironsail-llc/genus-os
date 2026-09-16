@@ -33,6 +33,15 @@ class Ctx:
         self.identity = kw.get("identity")
 
 
+def _route(channel: str, target: str):
+    """A stand-in for the async run-lookup that resolves this run's surface."""
+
+    async def _resolve(ctx):
+        return channel, target
+
+    return _resolve
+
+
 @pytest.fixture
 def sent(monkeypatch):
     """Record what reaches the channel, and never reach Telegram."""
@@ -48,9 +57,7 @@ def sent(monkeypatch):
     monkeypatch.setattr(
         "robothor.engine.channels.get_channel", lambda name: FakeChannel(), raising=True
     )
-    monkeypatch.setattr(
-        tool, "_originating_route", lambda ctx: ("telegram", "100200300"), raising=True
-    )
+    monkeypatch.setattr(tool, "_originating_route", _route("telegram", "100200300"), raising=True)
     return calls
 
 
@@ -121,7 +128,7 @@ class TestSending:
             "robothor.engine.channels.get_channel", lambda name: SilentChannel(), raising=True
         )
         monkeypatch.setattr(
-            tool, "_originating_route", lambda ctx: ("telegram", "100200300"), raising=True
+            tool, "_originating_route", _route("telegram", "100200300"), raising=True
         )
         out = await tool.send_file({"path": str(make_file(tmp_path, "a.txt"))}, Ctx(tmp_path))
         assert out["sent"] is False
@@ -273,7 +280,7 @@ class TestTargets:
         """No chat to reply to and no run whose report it could ride on. A
         scheduled run takes the queueing branch instead — see
         ``test_delivery_attachments.py``."""
-        monkeypatch.setattr(tool, "_originating_route", lambda ctx: ("", ""), raising=True)
+        monkeypatch.setattr(tool, "_originating_route", _route("", ""), raising=True)
         out = await tool.send_file(
             {"path": str(make_file(tmp_path, "a.txt"))}, Ctx(tmp_path, run_id="")
         )

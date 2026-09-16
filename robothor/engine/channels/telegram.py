@@ -66,6 +66,10 @@ MAX_PHOTO_BYTES = 10 * 1024 * 1024
 MAX_PHOTO_DIMENSION_SUM = 10_000
 MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
 
+#: Telegram's caption limit. Over it the API rejects the whole send, so a long
+#: caption must be trimmed rather than allowed to cost the operator the file.
+MAX_CAPTION_CHARS = 1024
+
 
 def _aiogram_bot() -> Any | None:
     """The live aiogram ``Bot``, or None when only a send function is registered.
@@ -336,7 +340,13 @@ class TelegramChannel:
         from aiogram.types import BufferedInputFile
 
         payload = BufferedInputFile(data, filename=file_path.name)
+        # Telegram rejects a caption over 1024 characters outright, so an agent
+        # that wrote a paragraph would get no file at all rather than a long
+        # one. Trimmed with the cut marked, and the full text is in the agent's
+        # own message either way.
         text = caption or ""
+        if len(text) > MAX_CAPTION_CHARS:
+            text = text[: MAX_CAPTION_CHARS - 1].rstrip() + "…"
         try:
             if as_ == "photo":
                 sent = await bot.send_photo(chat_id=chat_id, photo=payload, caption=text)

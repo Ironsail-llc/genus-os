@@ -66,7 +66,11 @@ CAPS = {
     # interception moved to channels/telegram_ask.py, beside the binding rules
     # they apply. The ratchet only ever goes down, so the new actual is the new
     # cap — leaving it at 1300 would bank headroom this file did not earn.
-    "robothor/engine/telegram_handlers.py": 1293,
+    # 1293 -> 1123: the attachment intake (recognising, downloading, saving,
+    # describing and album-grouping an inbound file) left for
+    # telegram_attachments.py. That cluster was what the attachment work would
+    # otherwise have added ~220 lines to — it paid for itself and then some.
+    "robothor/engine/telegram_handlers.py": 1123,
     "robothor/engine/telegram_plan_mode.py": 900,
     "robothor/engine/run_finalizer.py": 1100,
     # 937 (2026-09-13): every module the delivery path runs through was capped

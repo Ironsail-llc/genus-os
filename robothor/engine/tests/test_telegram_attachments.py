@@ -295,7 +295,7 @@ class TestAlbums:
         )
         arm_download(bot, b"\xff\xd8\xff")
         monkeypatch.setattr(
-            "robothor.engine.telegram_handlers.ALBUM_WINDOW_SECONDS", 0.05, raising=True
+            "robothor.engine.telegram_attachments.ALBUM_WINDOW_SECONDS", 0.05, raising=True
         )
         for index in range(3):
             await bot.handle_file(
@@ -320,7 +320,7 @@ class TestAlbums:
         )
         arm_download(bot, b"\xff\xd8\xff")
         monkeypatch.setattr(
-            "robothor.engine.telegram_handlers.ALBUM_WINDOW_SECONDS", 0.05, raising=True
+            "robothor.engine.telegram_attachments.ALBUM_WINDOW_SECONDS", 0.05, raising=True
         )
         for index in range(10):
             await bot.handle_file(message(photo=photo(uid=f"AgACten{index}"), media_group_id="MG2"))
@@ -375,13 +375,53 @@ class TestOtherKinds:
 
 
 class TestPersistence:
+    """What the stored user turn carries. The Helm chat UI reads this next."""
+
+    def test_the_rows_go_on_the_turn_beside_the_text(self) -> None:
+        from robothor.engine.telegram import build_user_extras
+
+        rows = [{"path": "/w/inbox/telegram/100200300/2026-09-15/u-a.txt", "kind": "document"}]
+        extras = build_user_extras(user_message_id="7", reply_ctx=None, attachments=rows)
+        assert extras is not None
+        assert extras["attachments"] == rows
+        assert extras["telegram_message_id"] == "7"
+
+    def test_a_plain_text_turn_is_unchanged(self) -> None:
+        """No files, no reply, no message id — the payload must stay exactly
+        what it was before any of this existed."""
+        from robothor.engine.telegram import build_user_extras
+
+        assert build_user_extras(user_message_id=None, reply_ctx=None, attachments=None) is None
+
+    def test_attachments_do_not_displace_a_reply_linkage(self) -> None:
+        from robothor.engine.telegram import build_user_extras
+
+        extras = build_user_extras(
+            user_message_id="7",
+            reply_ctx={"platform_message_id": "42", "author_agent_id": "devops"},
+            attachments=[{"path": "/w/a.png", "kind": "image"}],
+        )
+        assert extras is not None
+        assert extras["replies_to"]["author_agent_id"] == "devops"
+        assert extras["attachments"]
+
     @pytest.mark.asyncio
-    async def test_attachments_reach_the_stored_user_turn(self, bot) -> None:
-        """The row shape the Helm chat UI will read lives on the user turn's
-        JSONB, beside the text, under ``attachments``."""
-        import inspect
+    async def test_the_drain_threads_them_from_the_handler_to_the_turn(self, bot) -> None:
+        """The production path: the handler buffers rows, the drain pops them
+        in the same synchronous stretch as the text and hands them on."""
+        real_enqueue = TelegramBot._enqueue_message
+        bot._enqueue_message = real_enqueue.__get__(bot, TelegramBot)
+        captured: dict = {}
 
-        from robothor.engine import telegram
+        async def fake_run_interactive(*a, **kw):
+            captured.update(kw)
 
-        source = inspect.getsource(telegram)
-        assert 'user_extras["attachments"]' in source
+        bot._run_interactive = fake_run_interactive
+        arm_download(bot, b"hello")
+        await bot.handle_file(message(document=document(name="a.txt", mime="text/plain")))
+        await asyncio.sleep(0.5)
+
+        rows = captured.get("attachments") or []
+        assert len(rows) == 1
+        assert rows[0]["name"] == "a.txt"
+        assert bot._attachment_buffers.get("100200300") in (None, [])

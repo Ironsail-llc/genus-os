@@ -264,6 +264,11 @@ _BENCHMARK_EXCLUDED_TOOLS: frozenset[str] = _BENCHMARK_WITHHELD_READS | frozense
         # Notifications / inbox state.
         "ack_notification",
         "send_notification",
+        # Sends a FILE to a real person over a real channel. Nothing a graded
+        # agent does should reach the operator's chat, and a harness that let
+        # one upload a file would be the 2026-09-12 fixture leak with an
+        # attachment on it.
+        "send_file",
         # Durable memory + block writes.
         "append_to_block",
         "get_accretion_ledger",
