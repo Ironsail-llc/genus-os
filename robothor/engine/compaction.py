@@ -511,7 +511,30 @@ def _is_retained_context(msg: dict[str, Any]) -> bool:
     return isinstance(content, str) and RETAINED_CONTEXT_MARKER in content
 
 
-def protected_prefix_len(messages: list[dict[str, Any]], protect_first_n: int) -> int:
+#: Fallback when the settings read fails. Compaction must never break on config.
+DEFAULT_PROTECT_FIRST_N = 3
+
+
+def _split_for_summary(
+    messages: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """The pinned head, the retained-context messages, and everything else.
+
+    Extracted from ``compact`` because the function-size ratchet asked for it:
+    the head is now a slice rather than ``messages[0]``, and the arithmetic for
+    where it ends belongs beside ``protected_prefix_len`` rather than inside a
+    276-line function.
+    """
+    head_len = protected_prefix_len(messages)
+    tail = messages[head_len:]
+    return (
+        messages[:head_len],
+        [m for m in tail if _is_retained_context(m)],
+        [m for m in tail if not _is_retained_context(m)],
+    )
+
+
+def protected_prefix_len(messages: list[dict[str, Any]], protect_first_n: int | None = None) -> int:
     """How many messages at the head compaction may never summarise away.
 
     MEASURED 2026-09-16 across ten benchmark runs on one model: the four whose
@@ -531,6 +554,13 @@ def protected_prefix_len(messages: list[dict[str, Any]], protect_first_n: int) -
     """
     if not messages:
         return 0
+    if protect_first_n is None:
+        from robothor.settings import get_settings
+
+        try:
+            protect_first_n = int(get_settings().providers.compaction_protect_first_n)
+        except Exception:  # noqa: BLE001 — compaction must never fail on config
+            protect_first_n = DEFAULT_PROTECT_FIRST_N
     n = max(1, min(int(protect_first_n or 0), len(messages)))
     while n > 1 and messages[n - 1].get("tool_calls"):
         n -= 1
@@ -808,21 +838,9 @@ async def compact(
         )
 
     # ── Pass 2: Structured fact extraction ────────────────────────────
-    # The head of the conversation is pinned, not just messages[0]. The task
-    # statement lives there, and a run that summarises it away then invents the
-    # shape of its own output — see `protected_prefix_len`.
-    from robothor.settings import get_settings
-
-    try:
-        _protect_n = int(get_settings().providers.compaction_protect_first_n)
-    except Exception:  # noqa: BLE001 — compaction must never fail on config
-        _protect_n = 3
-    head_len = protected_prefix_len(working, _protect_n)
-    head_msgs = working[:head_len]
-
-    # Separate retained context messages — they always survive
-    retained_msgs = [m for m in working[head_len:] if _is_retained_context(m)]
-    non_retained = [m for m in working[head_len:] if not _is_retained_context(m)]
+    # The pinned HEAD, not just messages[0]: the task statement lives there,
+    # and a run that summarises it away invents its own output's shape.
+    head_msgs, retained_msgs, non_retained = _split_for_summary(working)
 
     # Split into old and recent (from non-retained messages).
     # Use a safe split point that never orphans tool_call/tool_result pairs.
