@@ -90,43 +90,151 @@ def _async_return(value):
     return _fn
 
 
-class _Client:
-    """Just enough LLMClient to see what the last resort asks for."""
+class _Answer:
+    """The shape ``_call_llm`` returns on success — enough for the caller."""
 
-    def __init__(self, answer=None):
-        self.answer = answer
-        self.seen: list[list[dict]] = []
+    def __init__(self, text: str = "still here") -> None:
+        message = SimpleNamespace(content=text, tool_calls=None, reasoning_content=None)
+        self.choices = [SimpleNamespace(message=message, finish_reason="stop")]
+        self.usage = SimpleNamespace(prompt_tokens=10, completion_tokens=2)
+        self.model = LOCAL
 
-    async def _call_llm(self, messages, models, tools, broken_models=None, **kwargs):
-        self.seen.append(messages)
-        self.models = models
-        return self.answer
+
+@pytest.fixture
+def local_server(monkeypatch):
+    """The local server carries the chain's model. Nothing else is faked."""
+    monkeypatch.setattr(last_resort, "local_base_url", lambda: "http://local")
+    monkeypatch.setattr(last_resort, "list_local_models", _async_return({"qwen3.8:27b"}))
+
+
+@pytest.fixture
+def dead_local_server(monkeypatch):
+    """`/api/tags` answers nothing: the server is down or has not pulled it."""
+    monkeypatch.setattr(last_resort, "local_base_url", lambda: "http://local")
+    monkeypatch.setattr(last_resort, "list_local_models", _async_return(set()))
+
+
+@pytest.fixture
+def open_breaker(monkeypatch):
+    """The local model's breaker is open — three failures and a 600s cooldown.
+
+    THE configuration the last resort exists for, and the one its first tests
+    could not see: they drove a hand-written client whose ``_call_llm``
+    answered unconditionally, so the real admission path — ``_skip_model_reason``
+    and the breaker — was never on the route. With the breaker open the control
+    made ZERO calls while logging and telling the operator that it had tried.
+    """
+    from robothor.engine import llm_client, model_breaker
+
+    breaker = model_breaker.ModelBreaker(on_open=None)
+    for _ in range(5):
+        breaker.record_failure(LOCAL, "probe")
+    monkeypatch.setattr(llm_client, "get_model_breaker", lambda: breaker)
+    monkeypatch.setattr(model_breaker, "get_model_breaker", lambda: breaker)
+    assert breaker.is_open(LOCAL)
+    return breaker
+
+
+@pytest.fixture
+def dialled(monkeypatch):
+    """Records every request that actually reaches the provider."""
+    from unittest.mock import AsyncMock, patch
+
+    calls: list[dict] = []
+
+    async def _acompletion(**kwargs):
+        calls.append(kwargs)
+        return _Answer()
+
+    patcher = patch(
+        "robothor.engine.llm_client.litellm.acompletion", AsyncMock(side_effect=_acompletion)
+    )
+    patcher.start()
+    monkeypatch.setattr("robothor.engine.llm_client.asyncio.sleep", AsyncMock())
+    yield calls
+    patcher.stop()
+
+
+def _client():
+    from robothor.engine.llm_client import LLMClient
+
+    return LLMClient()
 
 
 class TestTheLastMinimalAttempt:
-    async def test_it_asks_the_local_model_the_short_question(self, monkeypatch):
-        monkeypatch.setattr(last_resort, "local_base_url", lambda: "http://local")
-        monkeypatch.setattr(last_resort, "list_local_models", _async_return({"qwen3.8:27b"}))
-        client = _Client(answer="an answer")
+    async def test_an_open_breaker_does_not_stop_it(self, local_server, open_breaker, dialled):
+        """It is by definition the last thing tried; a cooldown is advice."""
         session = SimpleNamespace(messages=_conversation())
 
-        result = await last_resort_attempt(client, session, [CLOUD, LOCAL])
+        result = await last_resort_attempt(_client(), session, [CLOUD, LOCAL])
 
-        assert result == "an answer"
-        assert client.models == [LOCAL]
-        assert not any(m.get("role") == "tool" for m in client.seen[0])
+        assert dialled, "the last minimal attempt never dialled the model"
+        assert dialled[0]["model"] == LOCAL
+        assert result is not None
+        assert last_resort.local_state() == "answered"
 
-    async def test_it_does_not_dial_anything_when_there_is_no_local_tier(self):
-        client = _Client()
-        result = await last_resort_attempt(client, SimpleNamespace(messages=[]), [CLOUD])
-        assert result is None and client.seen == []
+    async def test_it_asks_the_short_question(self, local_server, dialled):
+        session = SimpleNamespace(messages=_conversation())
 
-    async def test_it_never_raises(self, monkeypatch):
+        await last_resort_attempt(_client(), session, [CLOUD, LOCAL])
+
+        sent = dialled[0]["messages"]
+        assert not any(m.get("role") == "tool" for m in sent)
+        assert sent[-1]["role"] == "user"
+
+    async def test_the_breaker_still_guards_the_ordinary_path(self, open_breaker, dialled):
+        """The bypass is for the last resort only, not a fleet-wide amnesty."""
+        result = await _client()._call_llm(
+            [{"role": "user", "content": "hi"}], [LOCAL], [], broken_models=set()
+        )
+
+        assert result is None
+        assert dialled == [], "an open breaker must still skip a model on the normal path"
+
+    async def test_a_server_that_does_not_carry_it_is_not_an_attempt(
+        self, dead_local_server, dialled
+    ):
+        """ "Unreachable" and "tried and failed" have opposite remedies."""
+        result = await last_resort_attempt(_client(), SimpleNamespace(messages=[]), [LOCAL])
+
+        assert result is None
+        assert dialled == []
+        assert last_resort.local_state() == "unreachable"
+        assert "did not answer" in str(last_resort.all_models_failed_error([LOCAL], set()))
+
+    async def test_a_dialled_model_that_answers_nothing_says_so(self, local_server, monkeypatch):
+        from unittest.mock import AsyncMock, patch
+
+        monkeypatch.setattr("robothor.engine.llm_client.asyncio.sleep", AsyncMock())
+        boom = AsyncMock(side_effect=RuntimeError("the model fell over"))
+        with patch("robothor.engine.llm_client.litellm.acompletion", boom):
+            result = await last_resort_attempt(_client(), SimpleNamespace(messages=[]), [LOCAL])
+
+        assert result is None
+        assert boom.called, "the attempt has to be real for the sentence to be true"
+        assert last_resort.local_state() == "answered_none"
+
+    async def test_it_does_not_dial_anything_when_there_is_no_local_tier(self, dialled):
+        result = await last_resort_attempt(_client(), SimpleNamespace(messages=[]), [CLOUD])
+
+        assert result is None and dialled == []
+        assert last_resort.local_state() == "absent"
+
+    async def test_a_benchmark_child_does_not_queue_a_generation(
+        self, local_server, dialled, monkeypatch
+    ):
+        """A grader is waiting, not a person — and N failing cases at once
+        would queue N generations on a tier that serves a few at a time."""
+        monkeypatch.setattr("robothor.engine.run_context.in_benchmark_run", lambda: True)
+
+        result = await last_resort_attempt(_client(), SimpleNamespace(messages=[]), [LOCAL])
+
+        assert result is None and dialled == []
+
+    async def test_it_never_raises(self, local_server, monkeypatch):
         """This runs while the caller is already handling a failure."""
-        monkeypatch.setattr(last_resort, "local_base_url", lambda: "http://local")
-        monkeypatch.setattr(last_resort, "list_local_models", _async_return({"qwen3.8:27b"}))
 
-        class _Broken(_Client):
+        class _Broken:
             async def _call_llm(self, *args, **kwargs):
                 raise RuntimeError("the server died mid-sentence")
 

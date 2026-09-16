@@ -184,6 +184,19 @@ def begin_attempts() -> None:
     _attempts.set([])
 
 
+def attempts_recorded() -> int | None:
+    """How many attempts the armed sink holds, or None when none is armed.
+
+    Read-only, and deliberately NOT ``begin_attempts``: a caller that wants to
+    know whether a provider was actually dialled must not re-arm the sink its
+    caller is filling. ``last_resort`` uses it to tell "the model was called
+    and could not answer" from "the model was never called", which are the two
+    sentences an operator acts on differently.
+    """
+    sink = _attempts.get()
+    return None if sink is None else len(sink)
+
+
 def take_attempts() -> list[LLMAttempt]:
     """Claim the recorded attempts and disarm the sink."""
     recorded = _attempts.get() or []

@@ -270,6 +270,8 @@ def _skip_model_reason(
     dead_credentials: set[str],
     breaker: Any,
     pool_for: Callable[[str], KeyPool | None],
+    *,
+    ignore_breaker: bool = False,
 ) -> tuple[str | None, KeyPool | None]:
     """Why this model must not be tried on this call, plus its credential pool.
 
@@ -292,10 +294,18 @@ def _skip_model_reason(
         # anyone, and treating them as a group would let one provider's quota
         # error strand the local tier — the very outage this code exists to end.
         return "it shares a credential already proven spent", None
-    if breaker.is_open(model):
+    if breaker.is_open(model) and not ignore_breaker:
         # This model has failed repeatedly and is in cooldown. Skipping it here
         # is the point: otherwise a dead provider costs the full per-call
         # timeout on every run, forever (codex/* did exactly that for a month).
+        #
+        # `ignore_breaker` is the ONE exemption, and it is not an amnesty: the
+        # last-resort attempt (`last_resort.py`) is by definition the last
+        # thing tried, after every model in the chain has already failed. A
+        # cooldown is advice about what to try NEXT, and there is no next. Kept
+        # open for a run that dialled it: the breaker still guards the ordinary
+        # path, which is what stops a dead provider costing every run its
+        # timeout.
         return "circuit breaker open", None
     pool = pool_for(model)
     if pool is not None and pool.exhausted():
@@ -2141,6 +2151,34 @@ class LLMClient:
 
     # ─── Non-streaming call ──────────────────────────────────────────
 
+    def _admit(
+        self,
+        model: str,
+        dead_credentials: set[str],
+        breaker: Any,
+        *,
+        ignore_breaker: bool,
+    ) -> tuple[str | None, KeyPool | None, str | None]:
+        """May this model be dialled? Returns ``(skip reason, pool, env var)``.
+
+        The chain walk's admission step, extracted so the walk reads as one
+        decision per line. ``model_var`` comes back because the spent-credential
+        branch below needs the same name, and re-deriving it there is how two
+        answers to "whose key is this" get to disagree.
+        """
+        model_var = env_var_for_model(model)
+        skip, pool = _skip_model_reason(
+            model,
+            model_var,
+            dead_credentials,
+            breaker,
+            self._key_pool,
+            ignore_breaker=ignore_breaker,
+        )
+        if skip:
+            logger.info("skipping %s — %s", _sanitize(model), skip)
+        return skip, pool, model_var
+
     async def _call_llm(
         self,
         messages: list[dict[str, Any]],
@@ -2149,6 +2187,7 @@ class LLMClient:
         broken_models: set[str] | None = None,
         temperature: float = 0.3,
         timeout_override: float | None = None,
+        ignore_breaker: bool = False,
     ) -> Any:
         """Call LLM with model fallback. Returns litellm response or None.
 
@@ -2173,12 +2212,10 @@ class LLMClient:
         for position, model in enumerate(models):
             if broken_models and model in broken_models:
                 continue
-            model_var = env_var_for_model(model)
-            skip, pool = _skip_model_reason(
-                model, model_var, dead_credentials, breaker, self._key_pool
+            skip, pool, model_var = self._admit(
+                model, dead_credentials, breaker, ignore_breaker=ignore_breaker
             )
             if skip:
-                logger.info("skipping %s — %s", _sanitize(model), skip)
                 continue
             per_call_timeout = _per_call_timeout(model, timeout_override)
             # Rotating through spare credentials must not eat the transient

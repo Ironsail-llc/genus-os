@@ -69,6 +69,11 @@ class AllModelsFailedError(RuntimeError):
     """
 
 
+def local_state() -> str:
+    """What the last-resort attempt on this task found. See :data:`_local_state`."""
+    return _local_state.get()
+
+
 def _reason_for(model: str, broken_models: set[str]) -> str:
     """Why this model is out, in the vocabulary of :data:`_REASONS`."""
     from robothor.engine.key_pool import env_var_for_model, pool_if_built
@@ -237,7 +242,18 @@ async def last_resort_attempt(client: Any, session: Any, models: list[str]) -> A
     operator can read. Never raises — a failure here is the failure the caller
     is already handling.
     """
+    from robothor.engine.llm_attempts import attempts_recorded
+
     try:
+        from robothor.engine.run_context import in_benchmark_run
+
+        if in_benchmark_run():
+            # A graded child is not the operator's chat. The whole point of
+            # this attempt is that a person is waiting for a sentence; a
+            # benchmark case has a grader, and N failing cases at once would
+            # queue N generations on a tier that serves a few at a time.
+            _local_state.set("absent")
+            return None
         if not any(is_local_model(model) for model in models):
             _local_state.set("absent")
             return None
@@ -248,9 +264,29 @@ async def last_resort_attempt(client: Any, session: Any, models: list[str]) -> A
         logger.warning(
             "Every model failed — one last minimal attempt on the local tier (%s)", model
         )
+        before = attempts_recorded()
+        # `ignore_breaker`: the local model's own breaker opens after three
+        # consecutive failures and stays open for ten minutes, and the chain
+        # walk honours it — so with the server healthy and the breaker open
+        # this control made ZERO calls while logging, and telling the operator,
+        # that it had tried (hostile review of this branch, probe p15). A
+        # cooldown says what to try NEXT; here there is no next.
         response = await client._call_llm(
-            minimal_messages(session.messages), [model], [], broken_models=set()
+            minimal_messages(session.messages),
+            [model],
+            [],
+            broken_models=set(),
+            ignore_breaker=True,
         )
+        after = attempts_recorded()
+        # Derived from what HAPPENED, never from having reached this line: an
+        # attempt that was skipped and an attempt that failed are different
+        # facts with different remedies, and the operator reads the difference.
+        dialled = before is None or (after is not None and after > before)
+        if not dialled:
+            logger.warning("the local tier was not dialled at all — reporting it unreachable")
+            _local_state.set("unreachable")
+            return response
         _local_state.set("answered" if response is not None else "answered_none")
         return response
     except Exception as exc:  # noqa: BLE001
