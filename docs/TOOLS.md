@@ -253,7 +253,24 @@ denial reads as a policy and is not one: the same account is reached through
 `exec`, past the do-not-contact check, the duplicate-reply guard, the threading
 and the benchmark gate.
 
-The two `agents.*`/`tools.*` checks are `recommended` — reported, never fatal.
+**`agents.approval_gate_not_armed`** — an agent granting a destructive tool
+(`delete_person`, `gws_gmail_send`, `git_push`, …) that this run will not put
+in front of a human. Two halves have to line up and nothing else brings them
+together:
+
+* the manifest declares BOTH `v2.guardrails: [human_approval]` and
+  `v2.human_approval_tools`, and does not set `human_approval_fail_open: true`;
+* the engine has BOTH `ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED` and
+  `ROBOTHOR_APPROVAL_MODE=enforce`.
+
+`_enforcement_mode` returns `off` whenever the first variable is falsy no
+matter what the mode says, so `ROBOTHOR_APPROVAL_MODE=enforce` **alone is a
+no-op** — and the mode is the name an operator reaches for. A manifest can read
+as carefully gated in review and run ungated in production. Both are set in
+the systemd drop-in and in `helm/genus-os/values.yaml` under `engine.env`;
+[the approval runbook](runbooks/approval-enforce.md) has the full matrix.
+
+The three `agents.*`/`tools.*` checks are `recommended` — reported, never fatal.
 `calendar.operator_calendar_writable` is `required`: an instance that cannot
 write the operator's calendar will silently do the wrong thing every time.
 

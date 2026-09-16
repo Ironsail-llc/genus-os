@@ -520,6 +520,142 @@ class TestTheStockTemplatesAreQuiet:
         assert mismatches == {}
 
 
+# ── agents.approval_gate_not_armed ────────────────────────────────────
+
+
+class TestTheApprovalGateIsArmed:
+    """Round 3, Important 4. `human_approval` IS enforced — but only when BOTH
+    `ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED` and `ROBOTHOR_APPROVAL_MODE=enforce`
+    are set. Measured:
+
+        unset / unset               -> off
+        MODE=enforce ALONE          -> off      <- the trap
+        ENABLED=1 (mode defaults)   -> observe
+        ENABLED=1 MODE=enforce      -> enforce
+
+    A manifest can therefore declare both halves of the guardrail, read as
+    gated in review, and still grant an unattended `delete_person` that nothing
+    stops. Nothing told the operator; this check does.
+    """
+
+    @pytest.fixture
+    def gate_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED", raising=False)
+        monkeypatch.delenv("ROBOTHOR_APPROVAL_MODE", raising=False)
+
+    @pytest.fixture
+    def gate_on(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED", "1")
+        monkeypatch.setenv("ROBOTHOR_APPROVAL_MODE", "enforce")
+
+    @staticmethod
+    def _gated_agent(instance: Path, tool: str = "delete_person") -> None:
+        _write_agent(
+            instance,
+            "steward",
+            {
+                "tools_allowed": ["read_file", tool],
+                "v2": {"guardrails": ["human_approval"], "human_approval_tools": [tool]},
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_it_fires_when_the_gate_is_off(self, instance: Path, gate_off: None) -> None:
+        self._gated_agent(instance)
+        result = await _run("agents.approval_gate_not_armed")
+
+        assert result.status == "fail", result.detail
+        assert "delete_person" in result.detail
+        assert "ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED" in result.detail
+        assert "ROBOTHOR_APPROVAL_MODE" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_the_mode_alone_is_not_enough(
+        self, instance: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The trap this check exists for: the variable an operator is most
+        likely to set, set on its own, changes nothing."""
+        monkeypatch.delenv("ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED", raising=False)
+        monkeypatch.setenv("ROBOTHOR_APPROVAL_MODE", "enforce")
+        self._gated_agent(instance)
+
+        result = await _run("agents.approval_gate_not_armed")
+        assert result.status == "fail", result.detail
+
+    @pytest.mark.asyncio
+    async def test_observe_is_not_enough_either(
+        self, instance: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED", "1")
+        monkeypatch.setenv("ROBOTHOR_APPROVAL_MODE", "observe")
+        self._gated_agent(instance)
+
+        result = await _run("agents.approval_gate_not_armed")
+        assert result.status == "fail", result.detail
+        assert "observe" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_it_is_quiet_when_the_gate_is_armed(self, instance: Path, gate_on: None) -> None:
+        self._gated_agent(instance)
+        result = await _run("agents.approval_gate_not_armed")
+
+        assert result.status == "pass", result.detail
+
+    @pytest.mark.asyncio
+    async def test_it_is_quiet_when_nothing_destructive_is_granted(
+        self, instance: Path, gate_off: None
+    ) -> None:
+        """A check that fires on an instance with nothing to protect is a check
+        nobody reads."""
+        _write_agent(instance, "reader", {"tools_allowed": ["read_file", "list_people"]})
+        result = await _run("agents.approval_gate_not_armed")
+
+        assert result.status == "pass", result.detail
+
+    @pytest.mark.asyncio
+    async def test_a_destructive_grant_with_no_guardrail_at_all_is_reported(
+        self, instance: Path, gate_on: None
+    ) -> None:
+        """`human_approval_tools` without the policy in `v2.guardrails` is the
+        half-declaration that reads as protection and is none: the engine needs
+        both halves, so the gate being armed does nothing here."""
+        _write_agent(
+            instance,
+            "steward",
+            {
+                "tools_allowed": ["read_file", "delete_person"],
+                "v2": {"human_approval_tools": ["delete_person"]},
+            },
+        )
+        result = await _run("agents.approval_gate_not_armed")
+
+        assert result.status == "fail", result.detail
+        assert "delete_person" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_fail_open_defeats_the_gate_and_is_reported(
+        self, instance: Path, gate_on: None
+    ) -> None:
+        """`human_approval_fail_open: true` defeats `enforce` entirely — an
+        undocumented per-agent bypass."""
+        _write_agent(
+            instance,
+            "steward",
+            {
+                "tools_allowed": ["read_file", "delete_person"],
+                "v2": {
+                    "guardrails": ["human_approval"],
+                    "human_approval_tools": ["delete_person"],
+                    "human_approval_fail_open": True,
+                },
+            },
+        )
+        result = await _run("agents.approval_gate_not_armed")
+
+        assert result.status == "fail", result.detail
+        assert "fail_open" in result.detail
+
+
 # ── tools.exec_allowlist_bypasses_denied_tool ─────────────────────────
 
 

@@ -102,8 +102,22 @@ v2:
     # human. Both halves are needed: this policy, and the tool list below.
     # Verified enforced end to end, not assumed: with the policy enabled and
     # the pattern set, delete_person returns allowed=False action='escalate'
-    # while list_people stays allowed. Under ROBOTHOR_APPROVAL_MODE=enforce —
-    # production's setting — an unreachable approver fails CLOSED.
+    # while list_people stays allowed.
+    #
+    # The ENGINE needs two environment variables, not one, and an earlier
+    # version of this comment named only the second — so an operator who set
+    # what it said got an ungated delete_person. Measured:
+    #
+    #   unset / unset                                 -> off
+    #   ROBOTHOR_APPROVAL_MODE=enforce alone          -> off    <- the trap
+    #   ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED=1        -> observe
+    #   both, with MODE=enforce                       -> enforce
+    #
+    # Only in 'enforce' does an unreachable approver fail CLOSED; in 'observe'
+    # the verdict is logged and the call proceeds. Both are set in
+    # infra/systemd/robothor-engine.service.d/upgrade-rip-flags.conf and in
+    # helm/genus-os/values-*.yaml. `genus doctor --category agents` reports it
+    # when they are not (agents.approval_gate_not_armed).
     - human_approval
   human_approval_tools:
     - delete_person

@@ -27,6 +27,7 @@ carry agent ids and tool names.
 
 from __future__ import annotations
 
+import os
 import re
 from fnmatch import fnmatch
 from typing import TYPE_CHECKING, Any
@@ -499,6 +500,156 @@ async def _exec_allowlist_bypasses_denied_tool(ctx: DoctorContext) -> Result:
     return fail(f"{len(lines)} agent(s) whose exec allowlist bypasses a denied tool: {shown}")
 
 
+# ── agents.approval_gate_not_armed ────────────────────────────────────
+
+#: Tools that destroy a record outright, where "it was wrong" is not something
+#: the operator can undo from the UI.
+#:
+#: Deliberately NOT the list of tools that can do damage. `write_file`,
+#: `gws_gmail_send` and `git_push` are all more dangerous and all are ordinary
+#: grants — an early cut of this check named them and fired on 16 of the 16
+#: stock templates, which is the "a check that fires on a clean install is a
+#: check nobody reads" failure this branch already fixed once. A per-tool
+#: policy question belongs to the manifest; what this check is for is the gap
+#: between what a manifest CLAIMS to gate and what the running engine gates.
+_DESTRUCTIVE_TOOLS: frozenset[str] = frozenset(
+    {"delete_person", "delete_company", "delete_note", "delete_task"}
+)
+
+
+def _approval_gate_state() -> tuple[str, str]:
+    """``(mode, why)`` for the fail-closed human-approval gate.
+
+    Both variables are read here rather than only ``approval_mode()`` so the
+    report can say WHICH one is missing. ``_enforcement_mode`` returns ``off``
+    whenever the enabled var is falsy regardless of the mode var, so
+    ``ROBOTHOR_APPROVAL_MODE=enforce`` on its own is a no-op — and that is the
+    variable an operator reading "set the mode to enforce" will set.
+    """
+    from robothor.engine.feature_flags import approval_mode
+
+    mode = str(approval_mode())
+    if mode == "enforce":
+        return mode, ""
+    enabled = os.environ.get("ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED", "")
+    declared = os.environ.get("ROBOTHOR_APPROVAL_MODE", "")
+    if not enabled:
+        return mode, (
+            "ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED is unset, which forces the gate off "
+            f"whatever ROBOTHOR_APPROVAL_MODE says (it is {declared or 'unset'!r})"
+        )
+    return mode, (
+        f"ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED is set but ROBOTHOR_APPROVAL_MODE is "
+        f"{declared or 'unset'!r}, so the gate is in {mode!r}: the verdict is computed "
+        "and logged, and the tool call proceeds"
+    )
+
+
+def _destructive_grants(directory: Path) -> tuple[list[str], list[str]]:
+    """``(ungated, gated)`` destructive grants across this instance's manifests.
+
+    Scoped to grants the manifest has an OPINION about: a record-deleting tool
+    (:data:`_DESTRUCTIVE_TOOLS`), or any tool the manifest itself names in
+    ``v2.human_approval_tools``. An agent that grants neither is not this
+    check's business — the question "should this tool need approval?" is a
+    policy one, and a check that answers it for every agent fires on a clean
+    install and gets ignored.
+
+    **ungated** — the manifest itself does not gate them, so no environment
+    setting can. Three ways, and an operator can hold any of the three beliefs
+    while reading a manifest that looks careful: the policy is missing from
+    ``v2.guardrails``; ``v2.human_approval_tools`` does not name the tool; or
+    ``human_approval_fail_open: true`` defeats ``enforce`` outright.
+
+    **gated** — the manifest declares both halves correctly. Whether anything
+    actually escalates then depends entirely on the engine's two environment
+    variables, which is the half nothing else brings together.
+    """
+    registered = _registered_names()
+    ungated: list[str] = []
+    gated: list[str] = []
+    for manifest in _scan_manifests(directory):
+        v2 = manifest.get("v2") or {}
+        if not isinstance(v2, dict):
+            v2 = {}
+        policies = {str(p) for p in (v2.get("guardrails") or [])}
+        named = {str(t) for t in (v2.get("human_approval_tools") or [])}
+        holds = _granted(manifest, registered)
+        # Only grants this manifest made ON PURPOSE. An agent with no
+        # `tools_allowed` holds every registered tool, deletes included — that
+        # is `main` and `morning-briefing` among the stock templates, and
+        # counting them fired on a clean install with two findings the operator
+        # can do nothing useful about. "This agent is unrestricted" is a real
+        # observation and a different check's.
+        declared = {str(n) for n in (manifest.get("tools_allowed") or [])}
+        # What this manifest either destroys on purpose, or says out loud it
+        # wants gated.
+        interesting = (declared & _DESTRUCTIVE_TOOLS) | (holds & named)
+        if not interesting:
+            continue
+        agent_id = str(manifest.get("id") or manifest.get("name") or "?")
+        if "human_approval" not in policies:
+            ungated.append(
+                f"{agent_id}: {', '.join(sorted(interesting))} "
+                "(v2.guardrails does not list human_approval, so nothing escalates)"
+            )
+            continue
+        missing = sorted(interesting - named)
+        if missing:
+            ungated.append(f"{agent_id}: {', '.join(missing)} (not in human_approval_tools)")
+        covered = sorted(interesting & named)
+        if not covered:
+            continue
+        if v2.get("human_approval_fail_open"):
+            ungated.append(
+                f"{agent_id}: {', '.join(covered)} (human_approval_fail_open: true defeats enforce)"
+            )
+        else:
+            gated.append(f"{agent_id}: {', '.join(covered)}")
+    return ungated, gated
+
+
+async def _approval_gate_not_armed(ctx: DoctorContext) -> Result:
+    """A destructive grant whose approval gate this run will not apply.
+
+    ``human_approval`` IS enforced — but only when the manifest declares both
+    halves AND the engine has both environment variables set. Nothing brings
+    those two facts together, so a manifest can read as gated in review and run
+    ungated in production: ``ROBOTHOR_APPROVAL_MODE=enforce`` alone is a no-op,
+    and the Helm path sets neither variable.
+    """
+    directory = _manifest_dir(ctx)
+    if not directory.is_dir():
+        return skip(f"no manifest directory at {directory}")
+    try:
+        ungated, gated = await ctx.run_blocking(_destructive_grants, directory)
+    except Exception as exc:  # noqa: BLE001 - a scan that raises is a failure
+        return fail(f"cannot scan the manifests: {type(exc).__name__}")
+
+    if not ungated and not gated:
+        # Nothing to protect. A check that fires on an instance granting no
+        # destructive tool is one the operator learns to skip.
+        return ok("no agent grants a destructive tool")
+
+    mode, why = _approval_gate_state()
+    lines = list(ungated)
+    if gated and mode != "enforce":
+        # The manifests are RIGHT and the run still does not gate them. This is
+        # the half a manifest review cannot see, and the reason this check
+        # reads the environment at all.
+        lines += [f"{line} (declared gated, but the gate is {mode!r})" for line in gated]
+    if not lines:
+        return ok("every destructive grant is gated, and the approval gate is enforcing")
+
+    shown = "; ".join(lines[:_MAX_LISTED])
+    if len(lines) > _MAX_LISTED:
+        shown += f"; and {len(lines) - _MAX_LISTED} more"
+    detail = f"{len(lines)} destructive grant(s) this run will not gate: {shown}"
+    if why:
+        detail += f". {why}"
+    return fail(detail)
+
+
 # ── calendar.operator_calendar_writable ───────────────────────────────
 
 
@@ -626,6 +777,13 @@ CHECKS: tuple[Check, ...] = (
         category="agents",
         severity="recommended",
         run=_tools_named_but_not_granted,
+    ),
+    Check(
+        id="agents.approval_gate_not_armed",
+        title="Destructive grants are gated, and the approval gate is enforcing",
+        category="agents",
+        severity="recommended",
+        run=_approval_gate_not_armed,
     ),
     Check(
         id="tools.exec_allowlist_bypasses_denied_tool",
