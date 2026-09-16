@@ -163,3 +163,105 @@ def test_an_unwritable_workspace_still_produces_stable_fingerprints(tmp_path, mo
     finally:
         unwritable.chmod(stat.S_IRWXU)
         module.reset_fingerprint_key()
+
+
+# ── the salt file is placed atomically ───────────────────────────────────────
+
+
+def test_an_empty_salt_file_does_not_key_the_instance_with_nothing(instance):
+    """A1: the proof the reviewer ran.
+
+    A process landing in the old create-then-write window read a zero-length
+    file and keyed with `b""` for its life, so it agreed with nobody. An empty
+    file is unusable to every process, so the right answer is to repair it, not
+    to adopt it and not to degrade.
+    """
+    from robothor.secrets import fingerprint as module
+
+    salt = Path(instance) / module._SALT_FILENAME
+    salt.write_bytes(b"")
+
+    key = module._read_or_create_salt()
+
+    assert len(key) >= 16, "the instance keyed with an empty salt"
+    assert key is not module._UNSALTED_FALLBACK, "a repairable file degraded the instance"
+    assert salt.read_bytes() == key, "the repaired salt was not written back for other processes"
+
+
+def test_a_short_salt_file_is_repaired_rather_than_used(instance):
+    from robothor.secrets import fingerprint as module
+
+    salt = Path(instance) / module._SALT_FILENAME
+    salt.write_bytes(b"tooshort")
+
+    key = module._read_or_create_salt()
+
+    assert len(key) >= 16
+    assert salt.read_bytes() == key
+
+
+def test_an_existing_good_salt_is_never_replaced(instance):
+    """The loser of a race adopts the winner's salt; it does not impose its own."""
+    from robothor.secrets import fingerprint as module
+
+    existing = b"x" * 32
+    salt = Path(instance) / module._SALT_FILENAME
+    salt.write_bytes(existing)
+
+    assert module._read_or_create_salt() == existing
+    assert salt.read_bytes() == existing
+
+
+def test_the_salt_is_complete_before_it_appears_under_its_name(instance, monkeypatch):
+    """No window in which another process can see a half-written salt.
+
+    The content is written and fsynced to a temporary file in the same
+    directory, then placed under the real name in one atomic step. This test
+    watches that step: at the moment of placement the destination must not
+    exist yet and the source must already hold the whole salt.
+    """
+    import os as real_os
+
+    from robothor.secrets import fingerprint as module
+
+    salt = Path(instance) / module._SALT_FILENAME
+    observed: list[tuple[bool, int]] = []
+    real_link = real_os.link
+
+    def watched_link(source, destination, **kwargs):
+        observed.append((Path(destination).exists(), Path(source).stat().st_size))
+        return real_link(source, destination, **kwargs)
+
+    monkeypatch.setattr(module.os, "link", watched_link)
+    key = module._read_or_create_salt()
+
+    assert observed, "the salt was not placed with an atomic link"
+    destination_existed, source_size = observed[0]
+    assert not destination_existed, "the name existed before the content did"
+    assert source_size == len(key) >= 16, "the content was placed before it was complete"
+    assert salt.read_bytes() == key
+
+
+def test_concurrent_first_use_agrees_on_one_salt(instance):
+    """Eight processes starting at once is the ordinary case after a reboot."""
+    import threading
+
+    from robothor.secrets import fingerprint as module
+
+    ready = threading.Barrier(8)
+    answers: list[str] = []
+    guard = threading.Lock()
+
+    def one_process():
+        ready.wait()
+        digest = module.fingerprint(VALUE)
+        with guard:
+            answers.append(digest)
+
+    threads = [threading.Thread(target=one_process) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(set(answers)) == 1, f"processes disagreed on the fingerprint: {sorted(set(answers))}"

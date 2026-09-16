@@ -39,11 +39,12 @@ whose value depends on which code path printed it answers nothing.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import os
 import secrets as _secrets
-import stat
+import tempfile
 import threading
 from pathlib import Path
 
@@ -72,6 +73,18 @@ _SALT_FILENAME = ".fingerprint-salt"
 #: so once.
 _UNSALTED_FALLBACK = b"genus-fingerprint-unsalted"
 
+#: A salt is 32 random bytes. Anything shorter under this name was not written
+#: by this code finishing its work -- an empty file from an interrupted write,
+#: or a truncated one -- and is treated as damage rather than as a key.
+_SALT_BYTES = 32
+_MIN_SALT_BYTES = 16
+
+#: How many times to try to place a salt before giving up and degrading. More
+#: than one because a loser of the creation race must come back and read the
+#: winner's; bounded because a loop that cannot end is worse than a fingerprint
+#: that is not private.
+_PLACEMENT_ATTEMPTS = 5
+
 _lock = threading.Lock()
 _cached_key: bytes | None = None
 _warned_unsalted = False
@@ -84,45 +97,69 @@ def _workspace() -> Path:
     return Path(configured) if configured else Path.home() / "robothor"
 
 
-def _read_or_create_salt() -> bytes:
-    """This instance's fingerprint salt, creating it on first use.
+def _read_salt(path: Path) -> bytes | None:
+    """The stored salt, or ``None`` when there is nothing usable there yet.
 
-    Never raises. A fingerprint is used on the status path, in tool results and
-    in the doctor; a filesystem problem must degrade it, not take those down.
+    The length check is the whole point. The first cut re-read the file after
+    losing the creation race and returned whatever was there, which in the
+    window between ``O_CREAT`` and ``write`` was zero bytes -- so that process
+    keyed with ``b""`` for its life and agreed with no other process on the
+    box. There is no such window now, but a file left behind by an older build
+    still has to be recognised as unusable rather than adopted.
     """
+    try:
+        found = path.read_bytes()
+    except OSError:
+        return None
+    return found if len(found) >= _MIN_SALT_BYTES else None
+
+
+def _is_repairable(path: Path) -> bool:
+    """Whether what is there is readable AND too short to be a salt.
+
+    Only then may it be replaced. A file we cannot READ is a different
+    situation -- a permissions problem, another account's file -- and might
+    hold a perfectly good salt that other processes are already using, so
+    overwriting it would be the very disagreement this guards against.
+    """
+    try:
+        return len(path.read_bytes()) < _MIN_SALT_BYTES
+    except OSError:
+        return False
+
+
+def _place(path: Path, salt: bytes, *, replacing: bool) -> None:
+    """Put ``salt`` under ``path`` with no moment at which it is half-written.
+
+    Written to a temporary file in the same directory (``mkstemp`` creates it
+    0600, before anything is in it), flushed to disk, and only then given its
+    real name in one atomic step. ``os.link`` fails if the name is taken, so
+    the first writer wins and a loser adopts the winner's salt instead of
+    overwriting it -- which is what keeps every process on the box agreeing.
+
+    ``replacing`` swaps that for ``os.rename``, for the single case where the
+    file already there has been read and found unusable.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(dir=str(path.parent), prefix=_SALT_FILENAME + ".")
+    try:
+        os.write(descriptor, salt)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    try:
+        if replacing:
+            Path(temporary).rename(path)
+        else:
+            os.link(temporary, path)
+    finally:
+        with contextlib.suppress(OSError):
+            Path(temporary).unlink()
+
+
+def _degrade() -> bytes:
+    """No salt could be stored. Say so once, and keep working."""
     global _warned_unsalted  # noqa: PLW0603
-
-    path = _workspace() / _SALT_FILENAME
-    try:
-        if path.is_file():
-            found = path.read_bytes()
-            if len(found) >= 16:
-                return found
-    except OSError:
-        pass
-
-    salt = _secrets.token_bytes(32)
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # Written 0600 before anything is in it: a salt readable by another
-        # account would put this instance's fingerprints back within reach of
-        # an offline comparison.
-        descriptor = os.open(
-            path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, stat.S_IRUSR | stat.S_IWUSR
-        )
-        try:
-            os.write(descriptor, salt)
-        finally:
-            os.close(descriptor)
-        return salt
-    except FileExistsError:
-        # Another process won the race; its salt is the instance's salt.
-        try:
-            return path.read_bytes()
-        except OSError:
-            pass
-    except OSError:
-        pass
 
     if not _warned_unsalted:
         _warned_unsalted = True
@@ -133,6 +170,41 @@ def _read_or_create_salt() -> bytes:
             _SALT_FILENAME,
         )
     return _UNSALTED_FALLBACK
+
+
+def _read_or_create_salt() -> bytes:
+    """This instance's fingerprint salt, creating it on first use.
+
+    Never raises. A fingerprint is used on the status path, in tool results and
+    in the doctor; a filesystem problem must degrade it, not take those down.
+    """
+    path = _workspace() / _SALT_FILENAME
+
+    for attempt in range(_PLACEMENT_ATTEMPTS):
+        found = _read_salt(path)
+        if found is not None:
+            return found
+
+        last = attempt == _PLACEMENT_ATTEMPTS - 1
+        try:
+            # Repair, rather than degrade, on the final attempt: a short or
+            # empty salt is no good to ANY process, so replacing it makes them
+            # all agree again, while degrading leaves each one keyed
+            # differently until it restarts.
+            _place(path, _secrets.token_bytes(_SALT_BYTES), replacing=last and _is_repairable(path))
+        except FileExistsError:
+            continue  # another process won the race; read its salt next time round
+        except OSError:
+            break
+
+        # Re-read rather than trusting what we just wrote: if two processes
+        # repaired at the same moment, the file is the one answer both can
+        # agree on.
+        placed = _read_salt(path)
+        if placed is not None:
+            return placed
+
+    return _degrade()
 
 
 def _key() -> bytes:
