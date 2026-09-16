@@ -216,13 +216,33 @@ class ContractReport:
         return not self.failures
 
     @property
+    def unchecked(self) -> tuple[ItemFinding, ...]:
+        """Items this run could not verify either way.
+
+        Not failures — reporting a mismatch on a file nobody read is the lie
+        this status exists to avoid — but not silence either. `satisfied` can
+        be True while these exist, so anything that reads only `satisfied`
+        has to be able to ask.
+        """
+        return tuple(f for f in self.findings if f.status == STATUS_UNCHECKED)
+
+    @property
     def message(self) -> str:
         """One line per fault, each naming the remedy rather than the verdict.
 
         A report that says only "contract not satisfied" is the same defect as
         a status page that says only "unit FAILED": true, unactionable, ignored.
+
+        The unchecked lines ride along. A source comment used to claim the
+        status was "named in the report so the silence is visible rather than
+        merely quiet"; it was not, because this property was built from
+        `failures`, which excludes it — an intent the code did not carry
+        (re-review 2026-09-16, R3). A deliverable nobody verified is something
+        an operator must be able to see without reading the findings tuple.
         """
-        return "\n".join(f.reason for f in self.failures if f.reason)
+        lines = [f.reason for f in self.failures if f.reason]
+        lines += [f"NOT VERIFIED: {f.reason}" for f in self.unchecked if f.reason]
+        return "\n".join(lines)
 
 
 #: Most names a single reason will list before it summarises the rest. A wall

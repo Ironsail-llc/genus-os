@@ -135,7 +135,61 @@ anything an intruder.
 | `HeaderItem` | the first line and the required line compared with **whitespace collapsed on both sides**, after stripping a BOM, a CRLF and per-cell padding. A file that does not use the delimiter at all fails even so. |
 | `JsonFieldsItem` | parsed; array-vs-object checked; field names compared exactly, missing and unexpected both named. |
 | `SectionsItem` | heading **names**, normalised (case, trailing colon, `#` level ignored). The spec said do not rename them, not do not re-nest them. |
+| `PatternItem` | at least one non-empty file matching the glob. A spec that writes a placeholder (`results/scp-XXX/text.md`) promised a shape, not a filename; the literal parts still hold. |
 | `SortItem` | rows parsed and compared, but only on a file whose header already matches — otherwise the header item carries the same fault twice. |
+
+### When a check declines to answer: `unchecked`
+
+A verdict computed on part of a file is a lie, and the expensive kind — under
+`enforce` it fails a correct run. So a file the check cannot read **whole**
+produces `unchecked` rather than a mismatch:
+
+| Check | Limit | Beyond it |
+|---|---|---|
+| header | first line only (64 KB) | never declines |
+| JSON fields | **64 MB**, parsed whole | `unchecked` |
+| section headings | **2 MB** | `unchecked` — a long report is exactly the deliverable most likely to cross this |
+| sort order | **2,000,000 rows**, streamed | `unchecked` |
+| path, pattern, exact set | `stat` only | never declines |
+
+`unchecked` is **not** a failure: `satisfied` stays True and `enforce` does not
+fail the run, because not checking is not a fault of the run. It is also not
+silence, which is the trap it fell into first (re-review R3): it is named in
+`ContractReport.message` as a `NOT VERIFIED:` line, it reaches the agent at the
+mid-run check-in while the agent can still do something about it, and it writes
+its own guardrail row:
+
+```sql
+SELECT action, count(*) FROM agent_guardrail_events
+WHERE guardrail_name = 'deliverable_contract'
+GROUP BY 1;   -- blocked | observed | unchecked
+```
+
+`action='unchecked'` exists so the evidence query separates *"we looked and it
+was wrong"* from *"we could not look"*. A promotion decision read off a table
+that conflated them would be reading the wrong number.
+
+### What counts as a refusal
+
+Some tasks should not be completed, so `enforce` must not fail a run that
+correctly declines — and equally must not be escapable by a run that simply
+fell short. `deliverable_verdict.reads_as_a_refusal` requires **both**:
+
+1. an explicit declining verb (`I will not`, `I won't`, `I refuse`,
+   `I'm declining`, `I cannot help with`) **and** a reason about the task —
+   harmful, misleading, against policy, told not to. Bare "I cannot" is a
+   report about the tooling, not a refusal;
+2. that nothing was attempted — every failing item `missing`. A refusal
+   produces no file; a shortfall usually produces a wrong one.
+
+Measured before the second condition existed: **7 of 9** ordinary failure
+summaries read as refusals, because the engine's own hard-abort message asks
+the agent to end with "What failed and why". Measured after: **0 of 9**.
+
+A refusal is recorded as `observed` and never alerts — the promotion gate's
+refusal audit needs the rows. A genuine refusal phrased without any of the
+reason vocabulary is treated as a shortfall and fails; that is the safe
+direction, and it is the known limit of the recogniser.
 
 **Everything is confined to the workspace.** Task text is untrusted input in
 any deployment where someone else can file a task, and these paths reach the

@@ -493,10 +493,18 @@ def _check_sort(
                     f"({_listed(current)}) comes after row {number} ({_listed(previous)}).",
                 )
             previous = current
-    except (_TooManyRowsError, OSError):
-        # A silence, not a verdict. The 2 MB slice this replaced halved a line,
-        # and the fragment sorted below its predecessor: a correct 18 MB file
-        # was reported unsorted at a row number that did not exist as described.
+    except _TooManyRowsError:
+        # Not a verdict — but not nothing either. Returning None left no
+        # finding at all, so the one deliverable most likely to cross the cap
+        # was the one an operator could least tell had gone unread
+        # (re-review 2026-09-16, R3).
+        shown = _display(root_resolved, target)
+        return ItemFinding(
+            item,
+            STATUS_UNCHECKED,
+            f"`{shown}` has more rows than the sort check will read; sort order not checked.",
+        )
+    except OSError:
         return None
     if number == 0:
         return None

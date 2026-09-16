@@ -168,7 +168,18 @@ def record_deliverable_verdicts(run: Any, session: Any, workspace: str | Path | 
     # None means the task stated no contract, which is most runs. Logging a
     # vacuous pass on every one of them would bury the real verdicts in exactly
     # the way the alert digest already does.
-    if report is None or report.satisfied:
+    if report is None:
+        return
+    if report.satisfied:
+        # …but a deliverable nobody could verify is not a vacuous pass. It is
+        # the one case where `satisfied` is True and an operator still needs to
+        # know, and it was invisible on every surface (re-review 2026-09-16,
+        # R3). Recorded, never blocked, never alerted: "I did not check" is not
+        # a fault of the run.
+        if report.unchecked:
+            note = "Deliverable contract partly unverified:\n" + report.message
+            _log_event(run, note, "unchecked")
+            logger.warning("deliverable contract: run %s — %s", run.id, note[:500])
         return
     # A run that DECLINED is not a run that fell short. Recorded, never
     # blocked, never alerted — see `reads_as_a_refusal`.
@@ -204,10 +215,14 @@ def _log_event(run: Any, reason: str, mode: str) -> None:
     with contextlib.suppress(Exception):
         from robothor.engine.tracking import log_guardrail_event
 
+        # `unchecked` is its own action, not an `observed` breach: the evidence
+        # query an operator runs to read this control must be able to separate
+        # "we looked and it was wrong" from "we could not look".
+        action = mode if mode == "unchecked" else ("blocked" if mode == "enforce" else "observed")
         log_guardrail_event(
             run_id=run.id,
             guardrail_name="deliverable_contract",
-            action="blocked" if mode == "enforce" else "observed",
+            action=action,
             reason=reason[:500],
             mode=mode,
         )

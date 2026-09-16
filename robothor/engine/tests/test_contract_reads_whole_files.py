@@ -79,18 +79,20 @@ class TestASortedFileIsNotCalledUnsorted:
         (results / "out.tsv").write_text("Alpha\tBeta\nz\tx\na\tx\n", encoding="utf-8")
         assert _finding(TABLE_SPEC, tmp_path, SortItem).status == STATUS_MISMATCH
 
-    def test_more_rows_than_the_cap_is_a_silence_not_a_verdict(self, tmp_path, monkeypatch):
+    def test_more_rows_than_the_cap_is_unchecked_not_a_verdict(self, tmp_path, monkeypatch):
+        """Not a mismatch — and not nothing. Returning no finding at all left
+        the one deliverable most likely to cross the cap as the one an operator
+        could least tell had gone unread (re-review R3)."""
         monkeypatch.setattr("robothor.engine.deliverable_check._MAX_STREAM_LINES", 10)
         results = tmp_path / "results"
         results.mkdir()
         rows = "".join(f"a{i:06d}\tx\n" for i in range(50))
         (results / "out.tsv").write_text("Alpha\tBeta\n" + rows, encoding="utf-8")
-        sort = [
-            f
-            for f in check_contract(extract_contract(TABLE_SPEC), tmp_path).findings
-            if isinstance(f.item, SortItem)
-        ]
-        assert sort == [], "a file too long to stream must produce no sort finding"
+        report = check_contract(extract_contract(TABLE_SPEC), tmp_path)
+        sort = [f for f in report.findings if isinstance(f.item, SortItem)]
+        assert [f.status for f in sort] == [STATUS_UNCHECKED]
+        assert report.satisfied, "an unread file is not a failing run"
+        assert "NOT VERIFIED" in report.message
 
 
 class TestAValidManifestIsNotCalledInvalid:
@@ -129,7 +131,65 @@ class TestUncheckedIsNotAFailure:
         (results / "m.json").write_text(json.dumps([{"a": 1, "b": 2}] * 20), encoding="utf-8")
         report = check_contract(extract_contract(MANIFEST_SPEC), tmp_path)
         assert report.satisfied
-        assert report.message == ""
+
+    def test_but_the_silence_is_still_said_out_loud(self, tmp_path, monkeypatch):
+        """`satisfied` True and `message` empty made this invisible on every
+        operator surface, against a source comment claiming the opposite
+        (re-review R3)."""
+        monkeypatch.setattr("robothor.engine.deliverable_check._MAX_JSON_BYTES", 50)
+        results = tmp_path / "results"
+        results.mkdir()
+        (results / "m.json").write_text(json.dumps([{"a": 1, "b": 2}] * 20), encoding="utf-8")
+        report = check_contract(extract_contract(MANIFEST_SPEC), tmp_path)
+        assert len(report.unchecked) == 1
+        assert report.message.startswith("NOT VERIFIED:")
+        assert "too large to verify" in report.message
+
+    def test_the_operator_gets_a_row_of_its_own(self, tmp_path, monkeypatch):
+        """`unchecked`, not `observed`: the evidence query has to separate "we
+        looked and it was wrong" from "we could not look"."""
+        from robothor.engine.deliverable_verdict import record_deliverable_verdicts
+        from robothor.engine.models import AgentRun, RunStatus
+
+        rows: list[dict] = []
+        monkeypatch.setattr("robothor.engine.deliverable_check._MAX_JSON_BYTES", 50)
+        monkeypatch.setattr(
+            "robothor.engine.feature_flags.deliverable_contract_mode", lambda: "enforce"
+        )
+        monkeypatch.setattr(
+            "robothor.engine.tracking.log_guardrail_event",
+            lambda **kw: rows.append(kw),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "robothor.engine.feature_flags.notify_guardrail_alert",
+            lambda **kw: rows.append({"alert": kw}),
+        )
+        results = tmp_path / "results"
+        results.mkdir()
+        (results / "m.json").write_text(json.dumps([{"a": 1, "b": 2}] * 20), encoding="utf-8")
+
+        class _Session:
+            originating_message = MANIFEST_SPEC
+            messages: list[dict] = []
+
+        session = _Session()
+        session.run = run = AgentRun(agent_id="probe", status=RunStatus.COMPLETED)
+        record_deliverable_verdicts(run, session, str(tmp_path))
+        assert run.status == RunStatus.COMPLETED, "not checking is not a fault of the run"
+        assert [r.get("action") for r in rows] == ["unchecked"]
+        assert not any("alert" in r for r in rows)
+
+    def test_the_agent_is_told_while_it_can_still_act(self, tmp_path, monkeypatch):
+        from robothor.engine.deliverable_contract import contract_checkin_note
+
+        monkeypatch.setattr("robothor.engine.deliverable_check._MAX_JSON_BYTES", 50)
+        results = tmp_path / "results"
+        results.mkdir()
+        (results / "m.json").write_text(json.dumps([{"a": 1, "b": 2}] * 20), encoding="utf-8")
+        note = contract_checkin_note(MANIFEST_SPEC, tmp_path)
+        assert note is not None
+        assert "too large for the engine to verify" in note
 
 
 class TestTheContainerComesFromTheProse:

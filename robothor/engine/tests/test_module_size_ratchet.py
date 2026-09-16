@@ -92,16 +92,16 @@ CAPS = {
     # and checking share nothing but the item definitions — so it was cut
     # there, and every piece is now something the next change has to argue
     # with.
-    "robothor/engine/deliverable_contract.py": 459,
+    "robothor/engine/deliverable_contract.py": 469,
     "robothor/engine/deliverable_extract.py": 552,
     # "Is this a requirement at all?" is a different question from "what
     # shape does it require", with one entry point and no dependency on the
     # rest of the extractor — so the ratchet took it out rather than take a
     # bigger number when the suppressor grew.
     "robothor/engine/deliverable_suppress.py": 97,
-    "robothor/engine/deliverable_check.py": 541,
-    "robothor/engine/deliverable_items.py": 236,
-    "robothor/engine/deliverable_verdict.py": 225,
+    "robothor/engine/deliverable_check.py": 549,
+    "robothor/engine/deliverable_items.py": 256,
+    "robothor/engine/deliverable_verdict.py": 240,
     "robothor/engine/loop_guards.py": 325,
     # 937 (2026-09-13): every module the delivery path runs through was capped
     # except the one that decides delivery. It was uncapped when the

@@ -424,8 +424,18 @@ def contract_checkin_note(task_text: str | None, workspace: str | Path | None) -
     if not contract:
         return None
     report = check_contract(contract, workspace)
-    if report.satisfied:
+    if report.satisfied and not report.unchecked:
         return None
+    if report.satisfied:
+        # Nothing is wrong — but something could not be read, and the agent is
+        # the only party that can still do anything about it while the run is
+        # alive (re-review 2026-09-16, R3).
+        return (
+            "[SYSTEM] Deliverable check: one of this task's outputs is too large for "
+            "the engine to verify, so nothing here confirms it is right.\n"
+            + report.message
+            + "\nCheck it yourself against the task's own wording before you finish."
+        )
     return (
         "[SYSTEM] Deliverable check: the workspace does not yet match the output "
         "contract this task stated.\n"
