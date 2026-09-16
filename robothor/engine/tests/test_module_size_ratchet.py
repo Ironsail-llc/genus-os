@@ -70,7 +70,12 @@ CAPS = {
     # describing and album-grouping an inbound file) left for
     # telegram_attachments.py. That cluster was what the attachment work would
     # otherwise have added ~220 lines to — it paid for itself and then some.
-    "robothor/engine/telegram_handlers.py": 1123,
+    # 1123 -> 1082: bounding the inbound download (hostile review I5) cost this
+    # file seven lines, so `handle_voice` went to telegram_attachments.py where
+    # the rest of the intake lives — it calls media_ref, _keep_attachment and
+    # the same ceiling, so it was always that cluster. The ratchet asked for an
+    # extraction rather than a bigger number, and got one.
+    "robothor/engine/telegram_handlers.py": 1082,
     "robothor/engine/telegram_plan_mode.py": 900,
     "robothor/engine/run_finalizer.py": 1100,
     # 937 (2026-09-13): every module the delivery path runs through was capped

@@ -907,54 +907,6 @@ class TelegramHandlersMixin:
             }
             await callback.answer(msg_map.get(rc or -1, f"Apply failed (rc={rc})"), show_alert=True)
 
-    # ── Voice notes / video notes ──
-    # Previously unhandled, so they were silently dropped. Now acknowledged.
-    # Transcription is gated on ROBOTHOR_VOICE_NOTES_ENABLED (no STT provider
-    # is wired yet — Claude has no audio endpoint — so this is a placeholder).
-
-    async def handle_voice(self, message: Message) -> None:
-        """Acknowledge voice/video notes (transcription pending an STT provider)."""
-        if not message.from_user:
-            return
-        enabled = os.environ.get("ROBOTHOR_VOICE_NOTES_ENABLED", "").strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        )
-        if not enabled:
-            await message.answer(
-                "🎤 I can't process voice notes yet — please send text. "
-                "(Voice transcription will arrive once an STT provider is configured.)"
-            )
-            return
-        # Same save path as every other attachment. Transcription is still
-        # unwired, but the RECORDING is kept — an audio file the operator sent
-        # once and cannot resend is the same loss this whole change is about,
-        # and whatever STT lands next needs a file to work from.
-        media = media_ref(message)
-        if media is None:
-            await message.answer("🎤 I couldn't read that voice note.")
-            return
-        if media.size and media.size > attachments.MAX_DOWNLOAD_BYTES:
-            await message.answer(attachments.too_large_sentence(media.size, name=media.name))
-            return
-        try:
-            noted = await self._keep_attachment(str(message.chat.id), media, "")
-        except telegram_attachments.AttachmentTooLargeError as exc:
-            # Voice notes are one of the kinds Telegram most often reports no
-            # size for, so the declared-size check above sees 0 and the bound on
-            # the DOWNLOAD is what actually holds here.
-            await message.answer(attachments.too_large_sentence(exc.written, name=media.name))
-            return
-        if noted is None:
-            await message.answer("🎤 Couldn't fetch the voice note from Telegram.")
-            return
-        await message.answer(
-            "🎤 Voice received and saved — transcription isn't wired up yet, so tell me in "
-            "text what you need and I can work from the recording's file."
-        )
-
     # ── Interactive text messages ──
 
     async def handle_text(self, message: Message) -> None:
