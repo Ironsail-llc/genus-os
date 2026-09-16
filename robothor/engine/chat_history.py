@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from typing import Any, SupportsIndex
 
-__all__ = ["ChatHistory", "as_history"]
+__all__ = ["MAX_HISTORY", "ChatHistory", "append_turn", "as_history"]
 
 
 def _clean(entry: Any) -> Any:
@@ -98,3 +98,29 @@ def as_history(rows: Any) -> ChatHistory:
     # by the truthiness test and arrive empty, which is a silently emptied
     # history rather than a loud failure.
     return ChatHistory(list(rows))
+
+
+#: How many rows a session keeps. Lives here with the container it bounds; a
+#: caller that remembered to append and forgot to trim is how a session grows
+#: without bound.
+MAX_HISTORY = 40  # 20 turns (user + assistant)
+
+
+def append_turn(session: Any, *, user_message: str, assistant_text: str | None = None) -> None:
+    """Record one exchange in a session's history, and trim it.
+
+    Lives beside :class:`ChatHistory` rather than in ``chat.py`` because it is
+    the same concern — what enters a history and how much of it is kept — and
+    because ``chat.py`` is on a decomposition ratchet that (rightly) makes a new
+    behaviour pay for itself by extraction.
+
+    Redaction is the container's job now, not this function's: every mutator on
+    :class:`ChatHistory` redacts, so a caller that bypasses this helper is
+    covered anyway. What this adds is the TRIM, and one obvious place for a
+    caller to reach for.
+    """
+    session.history.append({"role": "user", "content": user_message})
+    if assistant_text:
+        session.history.append({"role": "assistant", "content": assistant_text})
+    if len(session.history) > MAX_HISTORY:
+        session.history[:] = session.history[-MAX_HISTORY:]
