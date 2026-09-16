@@ -99,16 +99,40 @@ class TestItReachesTheAgent:
     """
 
     def test_the_loop_appends_it_to_the_conversation(self):
-        from pathlib import Path
+        """Behaviour, not spelling.
 
-        # Bounded by the NEXT statement rather than a character count: a
-        # fixed window breaks the moment anything is added to the block,
-        # which is a test failing for the wrong reason.
-        src = (Path(__file__).resolve().parents[1] / "runner.py").read_text(encoding="utf-8")
-        start = src.index("_pacer.note_for(")
-        window = src[start : src.index("if _safety_cap > 0", start)]
-        assert "session.messages.append" in window
-        assert "ENGINE_CONTEXT_ROLE" in window
+        This used to grep `runner.py` for `session.messages.append` between two
+        landmarks, which asserted the shape of one expression rather than the
+        fact it stands for — and broke the moment the append moved behind
+        `loop_guards.append_engine_note`, where the runner's two note call
+        sites now share it. Drive the seam the loop actually calls instead.
+        """
+        from robothor.engine.loop_guards import append_engine_note
+        from robothor.engine.session import ENGINE_CONTEXT_ROLE
+
+        class _Session:
+            messages: list[dict] = []
+
+        session = _Session()
+        session.messages = []
+        append_engine_note(session, "[SYSTEM] About 120s left.")
+        assert session.messages == [
+            {"role": ENGINE_CONTEXT_ROLE, "content": "[SYSTEM] About 120s left."}
+        ]
+
+    def test_no_warning_puts_nothing_in_front_of_the_model(self):
+        """The loop calls this every iteration and a note is rare. An empty
+        turn appended each time would be the noise the latch exists to avoid."""
+        from robothor.engine.loop_guards import append_engine_note
+
+        class _Session:
+            messages: list[dict] = []
+
+        session = _Session()
+        session.messages = []
+        append_engine_note(session, None)
+        append_engine_note(session, "")
+        assert session.messages == []
 
     def test_it_is_latched_so_it_does_not_repeat_every_iteration(self):
         """Repeating it each turn would crowd out the work it is asking for.
