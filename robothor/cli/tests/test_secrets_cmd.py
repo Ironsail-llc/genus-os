@@ -257,3 +257,23 @@ def test_an_absent_vault_row_is_still_migrated_normally(stores, monkeypatch, cap
     monkeypatch.setenv("GITHUB_TOKEN", FAKE_ENV_TOKEN)
     _run(capsys, secrets_command="migrate", from_env=True, dry_run=False, only=None, tenant=None)
     assert FAKE_ENV_TOKEN in stores.values()
+
+
+def test_a_conflicting_name_is_not_also_reported_as_unset(stores, monkeypatch, capsys):
+    """Review N10: the tail loop checked planned/refused/unchanged and not
+    conflicts, so `--only GITHUB_TOKEN` printed both `CONFLICT GITHUB_TOKEN`
+    and `skipped GITHUB_TOKEN — not set in this environment`. Two contradictory
+    lines for one name is how an operator stops trusting the output."""
+    monkeypatch.setenv("GITHUB_TOKEN", FAKE_ENV_TOKEN)
+    stores["providers/github/api_key"] = FAKE_VAULT_TOKEN
+    _, out = _run(
+        capsys,
+        secrets_command="migrate",
+        from_env=True,
+        dry_run=False,
+        only=["GITHUB_TOKEN"],
+        tenant=None,
+        overwrite=None,
+    )
+    assert "CONFLICT GITHUB_TOKEN" in out
+    assert "not set in this environment" not in out

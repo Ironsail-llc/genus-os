@@ -136,7 +136,16 @@ def save_message(
     channel: str = "telegram",
     tenant_id: str = DEFAULT_TENANT,
 ) -> int | None:
-    """Save a single message (used for system injections). Returns the message id."""
+    """Save a single message (used for system injections). Returns the message id.
+
+    Redacted for the reason ``save_exchange`` is: this writes ``chat_messages``,
+    which outlives the session, reaches support bundles, and is read by
+    ``backfill_chat_embeddings`` — so a credential here is a credential sent to
+    an embedding model.
+    """
+    from robothor.secrets.redaction import redact
+
+    content = redact(content)
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
@@ -177,7 +186,13 @@ def save_channel_surface(
     tenant_id: str = DEFAULT_TENANT,
 ) -> int | None:
     """Persist a fleet agent's outbound message as an assistant turn in the
-    named session. Used by the channel bus: any agent that delivers to the
+    named session, with credentials redacted out of it.
+
+    A worker that echoes a credential into a message surfaced to the operator
+    lands it in ``chat_messages`` and from there in the embedding pipeline —
+    the same door as ``save_exchange``, reached by a different caller.
+
+    Used by the channel bus: any agent that delivers to the
     channel dual-writes the output into main's canonical session so main has
     full visibility on its next run.
 
@@ -187,6 +202,9 @@ def save_channel_surface(
 
     Returns the chat_messages.id for the caller to record in channel_message_map.
     """
+    from robothor.secrets.redaction import redact
+
+    content = redact(content)
     payload: dict[str, Any] = {
         "role": "assistant",
         "content": content,

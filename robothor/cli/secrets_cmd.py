@@ -224,8 +224,11 @@ def _migrate(args: argparse.Namespace) -> int:
             vault.set(key, value_for(name), category=str(category), tenant_id=tenant)
         print(f"{verb}  {name}  -> {key}  {digest}")
 
+    accounted = (
+        {row[0] for row in planned} | set(refused) | set(unchanged) | {n for n, _ in conflicts}
+    )
     for name in only:
-        if name not in {row[0] for row in planned} and name not in refused + unchanged:
+        if name not in accounted:
             print(f"skipped  {name}  — not set in this environment.")
 
     if not planned and not refused and not unchanged and not conflicts:
