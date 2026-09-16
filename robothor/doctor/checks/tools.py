@@ -596,6 +596,14 @@ def _destructive_grants(directory: Path) -> tuple[list[str], list[str]]:
         # can do nothing useful about. "This agent is unrestricted" is a real
         # observation and a different check's.
         declared = {str(n) for n in (manifest.get("tools_allowed") or [])}
+        # `tools_denied` wins, exactly as the loader applies it AFTER
+        # `tools_allowed` (`ToolRegistry._get_filtered_names`). A manifest that
+        # lists `delete_person` in both never receives it, and reporting it as
+        # an ungated destructive grant is a doctor disagreeing with the loader
+        # — the rule this module's own docstrings state twice, and the same
+        # defect as round-1 C3(a) reappearing in a new check. Globs included,
+        # since `_denied` matches with `fnmatch`.
+        declared = {n for n in declared if not _denied(manifest, n)}
         # What this manifest either destroys on purpose, or says out loud it
         # wants gated.
         interesting = (declared & _DESTRUCTIVE_TOOLS) | (holds & named)

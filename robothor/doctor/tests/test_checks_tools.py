@@ -652,6 +652,57 @@ class TestTheApprovalGateIsArmed:
         assert result.status == "pass", result.detail
 
     @pytest.mark.asyncio
+    async def test_a_denied_delete_is_not_a_grant(self, instance: Path, gate_off: None) -> None:
+        """Round 4, Important 3: the loader applies `tools_denied` AFTER
+        `tools_allowed` (`registry.py`), so a tool named in both is one the
+        engine will never hand the agent. Reporting it as an ungated
+        destructive grant is the "a doctor whose verdict differs from the
+        loader's is worse than no doctor" rule this module states twice — and
+        the same defect as round-1 C3(a), in the new check."""
+        _write_agent(
+            instance,
+            "careful",
+            {"tools_allowed": ["read_file", "delete_person"], "tools_denied": ["delete_person"]},
+        )
+        result = await _run("agents.approval_gate_not_armed")
+
+        assert result.status == "pass", result.detail
+
+    @pytest.mark.asyncio
+    async def test_a_denied_glob_is_honoured_too(self, instance: Path, gate_off: None) -> None:
+        """`tools_denied` entries are globs — `_denied` runs `fnmatch`."""
+        _write_agent(
+            instance,
+            "careful",
+            {
+                "tools_allowed": ["read_file", "delete_person", "delete_task"],
+                "tools_denied": ["delete_*"],
+            },
+        )
+        result = await _run("agents.approval_gate_not_armed")
+
+        assert result.status == "pass", result.detail
+
+    @pytest.mark.asyncio
+    async def test_denying_only_one_still_reports_the_other(
+        self, instance: Path, gate_off: None
+    ) -> None:
+        """The subtraction must be per tool, not all-or-nothing."""
+        _write_agent(
+            instance,
+            "half-careful",
+            {
+                "tools_allowed": ["read_file", "delete_person", "delete_task"],
+                "tools_denied": ["delete_person"],
+            },
+        )
+        result = await _run("agents.approval_gate_not_armed")
+
+        assert result.status == "fail", result.detail
+        assert "delete_task" in result.detail
+        assert "delete_person" not in result.detail, result.detail
+
+    @pytest.mark.asyncio
     async def test_a_destructive_grant_with_no_guardrail_at_all_is_reported(
         self, instance: Path, gate_on: None
     ) -> None:
