@@ -305,6 +305,57 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
+    schemas["send_file"] = {
+        "type": "function",
+        "function": {
+            "name": "send_file",
+            "description": (
+                "Send a file you made or were given — a chart, a PDF, a "
+                "screenshot, a CSV, an export — to the person you are talking "
+                "to. Write the file first, then send it by path; never paste "
+                "binary or base64 into a message. The file must be inside the "
+                "workspace, and anything holding credentials is refused."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Path to the file to send, inside the workspace "
+                            "(relative paths resolve against it)."
+                        ),
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": (
+                            "One line shown with the file. Say what it is and what to do with it."
+                        ),
+                    },
+                    "as": {
+                        "type": "string",
+                        "enum": ["photo", "document", "auto"],
+                        "description": (
+                            "How to show it. `auto` (the default) sends an "
+                            "image as a photo when it fits and as a document "
+                            "otherwise; `document` keeps the original file "
+                            "intact."
+                        ),
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": (
+                            "Another chat to send to. Leave this out to reply "
+                            "where the request came from — only an "
+                            "operator-tier agent may redirect a file."
+                        ),
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    }
+
     schemas["read_file"] = {
         "type": "function",
         "function": {

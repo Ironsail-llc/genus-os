@@ -43,6 +43,26 @@ class EventBusChannel:
     async def stop(self) -> None:
         return None
 
+    async def send_attachment(
+        self,
+        target: str,
+        path: str,
+        caption: str = "",
+        *,
+        as_: str = "auto",
+        **kw: Any,
+    ) -> Any:
+        """Refuse: a sink has nobody to hand a file to.
+
+        Same judgement as :meth:`ask` on this channel. The bus carries events,
+        not files, and an agent told its PDF "was delivered" to a topic nobody
+        reads would report a job done that nobody can act on.
+        """
+        raise NotImplementedError(
+            "the event_bus channel has nobody to hand a file to — it carries "
+            "events, not attachments. Record the path in the event instead."
+        )
+
     async def health(self) -> dict[str, Any]:
         try:
             from robothor.events import bus

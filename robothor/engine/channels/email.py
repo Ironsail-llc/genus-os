@@ -488,6 +488,27 @@ class EmailChannel:
         """No-op: see :meth:`start`."""
         return
 
+    async def send_attachment(
+        self,
+        target: str,
+        path: str,
+        caption: str = "",
+        *,
+        as_: str = "auto",
+        **kw: Any,
+    ) -> Any:
+        """Refuse: this channel sends text bodies, not MIME attachments.
+
+        Raising is the contract (``channels/base.py``). An email attachment is
+        a different message structure from the one this channel builds, and a
+        receipt for a send that did not happen is worse than a refusal an agent
+        can tell the operator about.
+        """
+        raise NotImplementedError(
+            "the email channel cannot attach files yet — it sends text bodies only. "
+            "Link to the file instead, or say plainly that you could not attach it."
+        )
+
     async def health(self) -> dict[str, Any]:
         """What the operator needs to see. No password, and no fragment of one.
 

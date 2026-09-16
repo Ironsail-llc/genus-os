@@ -57,6 +57,31 @@ _sending: contextvars.ContextVar[bool] = contextvars.ContextVar(
 )
 
 
+#: Telegram's own ceilings for an outbound attachment. A photo above either of
+#: these is rejected by the API, so ``auto`` sends it as a document instead —
+#: which the operator can still open, where a refusal would leave them with
+#: nothing. The document ceiling is a hard refusal: there is no smaller way to
+#: send the same file.
+MAX_PHOTO_BYTES = 10 * 1024 * 1024
+MAX_PHOTO_DIMENSION_SUM = 10_000
+MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
+
+
+def _aiogram_bot() -> Any | None:
+    """The live aiogram ``Bot``, or None when only a send function is registered.
+
+    Same route ``channels/telegram_ask`` takes, and for the same reason: the
+    registered sender is a bound method of ``TelegramBot``, so its ``__self__``
+    carries the transport. ``send_message`` can go through the function;
+    ``send_photo``/``send_document`` cannot, so a missing bot is a reported
+    failure rather than a silent one.
+    """
+    from robothor.engine.delivery import get_platform_sender
+
+    sender = get_platform_sender("telegram")
+    return getattr(getattr(sender, "__self__", None), "bot", None)
+
+
 class TelegramChannel:
     """Outbound Telegram, reachable as ``delivery.channel: telegram``."""
 
@@ -259,6 +284,73 @@ class TelegramChannel:
                 expected_chunks,
             )
         return receipt
+
+    async def send_attachment(
+        self,
+        target: str,
+        path: str,
+        caption: str = "",
+        *,
+        as_: str = "auto",
+        **kw: Any,
+    ) -> SendReceipt:
+        """Upload one file to ``target``. See :meth:`Channel.send_attachment`.
+
+        Reads the bytes once and hands them to aiogram as a ``BufferedInputFile``
+        rather than passing a path: the bot may be running in a container that
+        does not share the workspace mount, and a path it cannot open fails at
+        upload time with a message about the file rather than about the mount.
+
+        Every failure is a receipt, never an exception — the caller is a tool
+        handler reporting to an agent, and an agent that has to catch something
+        to notice non-delivery will eventually tell the operator their file is
+        on its way when it is not.
+        """
+        from pathlib import Path
+
+        chat_id = str(target or "")
+        if not chat_id:
+            logger.warning("Telegram attachment has no target chat; refusing to guess")
+            return SendReceipt(
+                acknowledged=0, expected=1, status="failed:telegram_no_chat_id", target=chat_id
+            )
+
+        bot = _aiogram_bot()
+        if bot is None:
+            logger.warning("No aiogram Bot registered; cannot upload a file")
+            return SendReceipt(
+                acknowledged=0, expected=1, status="failed:telegram_no_bot", target=chat_id
+            )
+
+        file_path = Path(path)
+        try:
+            data = file_path.read_bytes()
+        except OSError as exc:
+            return SendReceipt(
+                acknowledged=0,
+                expected=1,
+                status=f"failed:telegram_unreadable_file: {type(exc).__name__}",
+                target=chat_id,
+            )
+
+        from aiogram.types import BufferedInputFile
+
+        payload = BufferedInputFile(data, filename=file_path.name)
+        text = caption or ""
+        try:
+            if as_ == "photo":
+                sent = await bot.send_photo(chat_id=chat_id, photo=payload, caption=text)
+            else:
+                sent = await bot.send_document(chat_id=chat_id, document=payload, caption=text)
+        except Exception as exc:  # noqa: BLE001 - a failure is a receipt here
+            logger.error("Telegram attachment upload failed for %s: %s", file_path.name, exc)
+            return SendReceipt(
+                acknowledged=0,
+                expected=1,
+                status=f"failed:telegram_attachment_exception: {exc}",
+                target=chat_id,
+            )
+        return receipt_from(sent, 1, target=chat_id, body=text)
 
     async def ask(
         self,

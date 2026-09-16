@@ -127,6 +127,27 @@ class SenderChannel:
     async def stop(self) -> None:
         return None
 
+    async def send_attachment(
+        self,
+        target: str,
+        path: str,
+        caption: str = "",
+        *,
+        as_: str = "auto",
+        **kw: Any,
+    ) -> Any:
+        """Refuse: a registered send FUNCTION takes text, and only text.
+
+        This channel is built from ``register_platform_sender``'s
+        ``async (target, text) -> list``. There is no file in that signature, so
+        there is no honest way to attach one. A plugin that can send files ships
+        a real channel object and implements this itself.
+        """
+        raise NotImplementedError(
+            f"the {self.name} channel was registered as a text sender and cannot attach "
+            "files. Link to the file instead, or say plainly that you could not attach it."
+        )
+
     async def health(self) -> dict[str, Any]:
         return {"channel": self.name, "sender_registered": self._resolve() is not None}
 
