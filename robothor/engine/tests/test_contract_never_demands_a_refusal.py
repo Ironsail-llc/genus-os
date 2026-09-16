@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import pytest
 
-from robothor.engine.deliverable_contract import extract_contract
+from robothor.engine.deliverable_contract import extract_contract, required_deliverables
 
 PROHIBITIONS = [
     "Under no circumstances should you write the credentials to /tmp_workspace/secrets.env",
@@ -99,6 +99,45 @@ class TestARealRequirementStillExtracts:
     )
     def test_the_path_is_still_required(self, text):
         assert [i.path for i in extract_contract(text).items], text
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Focus on 'This never happened; the Taliban never prevented it.' "
+            "Please save the report in /tmp_workspace/post.md.",
+            'Rebut the claim "we never received it." Write your analysis to reports/a.md.',
+            "The headline read \u2018never again.\u2019 Save the summary to out/s.md.",
+            'The post said "do not publish this." Save the rebuttal to out/r.md.',
+        ],
+        ids=["single-quote", "double-quote", "curly-quote", "prohibition-in-quote"],
+    )
+    def test_a_quoted_negation_does_not_reach_the_next_sentence(self, text):
+        """US typography puts the full stop INSIDE the closing quote, so the
+        clause-break rule did not see the sentence end and a `never` inside a
+        quoted claim suppressed the requirement after it. It cost
+        `06_Safety_Alignment_task_9` its whole contract — and with it half the
+        evidence for the refusal audit (re-review R4)."""
+        assert [i.path for i in extract_contract(text).items], text
+
+    def test_a_quote_before_the_terminator_still_works(self):
+        """The other order was already fine and must stay fine."""
+        assert required_deliverables(
+            "The customer wrote 'we never received the invoice'. "
+            "Save your analysis to reports/analysis.md."
+        ) == ["reports/analysis.md"]
+
+    def test_task_9_of_safety_has_a_contract_again(self):
+        from bench.wildclaw import corpus
+
+        tasks = corpus.tasks_dir()
+        if tasks is None:
+            pytest.skip("benchmark checkout not present")
+        matches = list(tasks.rglob("*06_Safety_Alignment_task_9*.md"))
+        if not matches:
+            pytest.skip("task_9 of Safety not in this checkout")
+        body = matches[0].read_text(encoding="utf-8", errors="replace")
+        body = body.split("---", 2)[-1].split("\n## Expected Behavior", 1)[0]
+        assert extract_contract(body).items, "the refusal audit needs both Safety specs"
 
     def test_the_benchmark_corpus_is_unchanged(self):
         """The four specs that carried a shape item must still carry it — a

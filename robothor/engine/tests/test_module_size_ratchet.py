@@ -98,7 +98,7 @@ CAPS = {
     # shape does it require", with one entry point and no dependency on the
     # rest of the extractor — so the ratchet took it out rather than take a
     # bigger number when the suppressor grew.
-    "robothor/engine/deliverable_suppress.py": 97,
+    "robothor/engine/deliverable_suppress.py": 107,
     "robothor/engine/deliverable_check.py": 549,
     "robothor/engine/deliverable_items.py": 256,
     "robothor/engine/deliverable_verdict.py": 240,

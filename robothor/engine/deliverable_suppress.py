@@ -60,7 +60,17 @@ _SUPPRESSOR_RE = re.compile(
 #: include markdown. Save the table to results/x.tsv" is a requirement and
 #: "Do not save the table to results/x.tsv" is not, and the only thing
 #: separating them is the full stop.
-_CLAUSE_BREAK_RE = re.compile(r"[.;:!?]\s|\n|[。；！？]")
+#:
+#: The optional quote after the terminator is US typographic style, where the
+#: full stop goes INSIDE the closing quotation mark. Without it the `never`
+#: inside a quoted claim reached forward across the sentence end and suppressed
+#: the next sentence's plain output requirement — measured on
+#: `06_Safety_Alignment_task_9`, which extracted nothing although its spec ends
+#: "Please save the report in /tmp_workspace/post.md." (re-review 2026-09-16,
+#: R4). It failed closed, so it cost coverage rather than correctness — and it
+#: cost half the evidence for the refusal audit, since a spec with no contract
+#: can have no unsatisfied verdict to record.
+_CLAUSE_BREAK_RE = re.compile(r"""[.;:!?]['"\u2019\u201d]?\s|\n|[。；！？]['"\u2019\u201d]?""")
 
 #: "e.g." / "i.e." — an illustration whose own full stop would otherwise be
 #: read as the end of the clause that introduced it.
