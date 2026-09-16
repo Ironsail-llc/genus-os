@@ -84,6 +84,7 @@ exclude_docs: |
   !/reference/cli.md
   !/reference/configuration.md
   !/PLUGINS.md
+  !/channels/telegram.md
   !/CONNECTORS.md
   !/OBSERVABILITY.md
   !/runbooks/SNAPSHOT_RESTORE.md
@@ -133,6 +134,7 @@ nav:
       - Settings: reference/configuration.md
   - Operating:
       - Plugins: PLUGINS.md
+      - Telegram channel: channels/telegram.md
       - Connectors: CONNECTORS.md
       - Slack channel: channels/slack.md
       - Email channel: channels/email.md
