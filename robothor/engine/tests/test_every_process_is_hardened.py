@@ -69,6 +69,7 @@ ENTRY_POINTS = [
         "import robothor.vision.service as v;"
         "v.logging = type('x', (), {'basicConfig': staticmethod(lambda **k: None),"
         " 'getLogger': staticmethod(lambda *a: None), 'INFO': 20})();"
+        "v.VisionService = _stop_before_it_starts;"
         "_call_until_it_stops(v.main)",
     ),
 ]
@@ -77,6 +78,22 @@ ENTRY_POINTS = [
 #: whose body needs a real stdio transport, so we call only the part under test
 #: — and a service ``main()`` that goes on to serve is stopped once it has
 #: hardened, which is the only thing being asserted.
+#:
+#: ``_stop_before_it_starts`` is how that stop is made unconditional. The vision
+#: entry went on to ``asyncio.start_server`` on the health port and then into a
+#: detection loop that never returns. On this box the live vision service
+#: already holds that port, so the bind raised, the probe fell through and the
+#: case passed in half a second; on a runner the port is free, the server starts
+#: and pytest-timeout kills the test at 30s — which is exactly how it failed on
+#: every Python version in CI. A probe that depends on a port being taken in
+#: order to terminate is not a probe, and nothing here needs a real server to
+#: prove a call happened before one.
+#:
+#: So the boundary object is replaced and the state is read at that point: the
+#: entry has hardened, and nothing has bound, connected or loaded a model. That
+#: makes the ORDER the assertion rather than a hope — ``_environ_owner`` fails
+#: on the worst observation, so an entry that hardened only after starting its
+#: service would still be caught.
 _PRELUDE = """
 import asyncio, os, sys
 
@@ -98,12 +115,26 @@ def _call_until_it_stops(fn):
         fn()
     except BaseException:
         pass
+
+
+def _stop_before_it_starts(*_args, **_kwargs):
+    # Stands in for whatever an entry constructs AFTER it has hardened, and
+    # reads the state HERE -- see the note above `_PRELUDE`.
+    print(os.stat('/proc/self/environ').st_uid)
+    raise _Stop()
 """
 
 
 def _environ_owner(snippet: str) -> int:
     """Run *snippet* in a subprocess and return the uid owning its own
-    ``/proc/self/environ``. Root (0) means the process is non-dumpable."""
+    ``/proc/self/environ``. Root (0) means the process is non-dumpable.
+
+    The WORST observation, not the last: a snippet may look more than once --
+    the vision entry reads the state at the moment it would have constructed
+    the service, as well as at the end -- and a process that hardened late
+    would show the caller's uid at the earlier look. Taking the maximum makes
+    every look count.
+    """
     script = (
         f"import sys; sys.path.insert(0, {str(REPO_ROOT)!r})\n"
         + _PRELUDE
@@ -118,9 +149,9 @@ def _environ_owner(snippet: str) -> int:
     proc = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True, timeout=120, check=False
     )
-    tail = [line for line in proc.stdout.splitlines() if line.strip().isdigit()]
-    assert tail, f"no uid printed; stderr={proc.stderr[-400:]}"
-    return int(tail[-1])
+    seen = [int(line) for line in proc.stdout.splitlines() if line.strip().isdigit()]
+    assert seen, f"no uid printed; stderr={proc.stderr[-400:]}"
+    return max(seen)
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="procfs is a Linux interface")
