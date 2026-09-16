@@ -183,6 +183,20 @@ def _warmup_prelude(task: dict[str, Any]) -> str:
 
     Runs in the SAME container as the agent, so background services started
     here are still listening when the agent runs.
+
+    FAILS THE TASK. The benchmark's own runner raises on a warmup command that
+    exits non-zero; ours logged it and carried on, and measured 2026-09-16 that
+    meant six of ten Productivity tasks opened with `sh: 1: npm: not found` —
+    the `npm install -g agent-browser` those tasks declare — and then ran
+    without the skill the benchmark hands every harness. Six scores that were
+    not scores for this platform.
+
+    A silent `||true` is the shape this codebase keeps re-learning: the run
+    fails for an unrelated-looking reason and nothing anywhere says the thing
+    it needed was never installed. So `set -e`, a named failure on stderr, and
+    a marker on the host mount — a container that exits non-zero with nothing
+    on /out is indistinguishable from an agent crash, and the two have opposite
+    remedies.
     """
     warmup = str(task.get("warmup") or "")
     lines = [
@@ -190,7 +204,28 @@ def _warmup_prelude(task: dict[str, Any]) -> str:
         for line in warmup.splitlines()
         if line.strip() and not line.strip().startswith("#")
     ]
-    return "\n".join(lines)
+    if not lines:
+        return ""
+    # Checked per line rather than with a trap: the container's /bin/sh is
+    # dash, which has `set -e` but no `trap ... ERR`, and a `{ …; } || handler`
+    # group suspends `set -e` inside itself so only the LAST command's status
+    # would be seen. Explicit is also better here — the marker names the exact
+    # command that failed, which is the first thing an operator wants.
+    checked = "\n".join(f"{line} || _warmup_failed '{_sq(line)}'" for line in lines)
+    return (
+        "set -e\n"
+        "_warmup_failed() { "
+        'echo "WARMUP FAILED: $1" >&2; '
+        'echo "$1" > /out/warmup.failed 2>/dev/null || true; '
+        "exit 3; }\n"
+        f"{checked}\n"
+        "set +e"
+    )
+
+
+def _sq(text: str) -> str:
+    """Escape a command for embedding inside single quotes in the prelude."""
+    return text.replace("'", "'\\''")
 
 
 def _install_skills(task: dict[str, Any], repo: Path, workspace: Path) -> int:

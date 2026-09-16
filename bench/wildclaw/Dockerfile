@@ -21,6 +21,14 @@ RUN apt-get update \
         ca-certificates \
         unzip \
         jq \
+        # Six of the ten Productivity tasks declare `npm install -g
+        # agent-browser` as their warmup. Without npm the container logged
+        # `sh: 1: npm: not found`, the harness carried on, and those six ran
+        # without the skill the benchmark hands every harness — six scores
+        # that were not scores for this platform (measured 2026-09-16). The
+        # warmup now fails the task loudly; this is what stops it failing.
+        nodejs \
+        npm \
     && rm -rf /var/lib/apt/lists/*
 
 # git refuses to operate on a repository owned by another uid, which is
