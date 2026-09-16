@@ -93,12 +93,12 @@ CAPS = {
     # there, and every piece is now something the next change has to argue
     # with.
     "robothor/engine/deliverable_contract.py": 469,
-    # 552 -> 588: CodeQL's five `py/polynomial-redos` findings. Every added
+    # 552 -> 594: CodeQL's five `py/polynomial-redos` findings. Every added
     # line is the reasoning for a regex, not another extractor — the rule that
     # keeps this module linear on hostile input is worth more written down
     # than rediscovered, and splitting a file to hide a comment would be the
     # ratchet working against its own purpose.
-    "robothor/engine/deliverable_extract.py": 588,
+    "robothor/engine/deliverable_extract.py": 594,
     # "Is this a requirement at all?" is a different question from "what
     # shape does it require", with one entry point and no dependency on the
     # rest of the extractor — so the ratchet took it out rather than take a

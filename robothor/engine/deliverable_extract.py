@@ -302,7 +302,13 @@ _SORT_RE = re.compile(
 
 #: Trailing whitespace is stripped by the callers, never by a quantifier: a
 #: `(.+?)\s*$` tail is exactly the shape that costs O(n²) on a long run.
-_HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.*)$", re.MULTILINE)
+#:
+#: Neither of these ends in `$`, and that is not tidying. `.` never crosses a
+#: newline, so a trailing `$` matched every time and captured nothing extra —
+#: what it did add was a way for the match to FAIL after `(.*)`, and a failure
+#: after a greedy run is what makes the engine redivide the run it just ate.
+#: CodeQL kept reporting the heading pattern until the `$` came off.
+_HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.*)", re.MULTILINE)
 _BULLET_RE = re.compile(r"^[ \t]*[-*+][ \t]+(.*)")
 #: A bullet that is a NAME: a filename with an extension, or a directory.
 _NAME_RE = re.compile(r"\A[\w.\-]+\.[A-Za-z][\w]{0,7}\Z|\A[\w.\-]+/\Z")
