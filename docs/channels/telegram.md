@@ -52,9 +52,10 @@ is no way around it from this side: the Bot API will not hand the file over.
 
 ### Retention
 
-The daily retention sweep prunes `<workspace>/inbox/` and **nothing else**. A
-file an agent moved somewhere useful has left that tree and is never touched.
-Set `ROBOTHOR_INBOX_RETENTION_DAYS=0` to disable the prune entirely.
+The daily retention sweep prunes `<workspace>/inbox/` — every channel under it,
+including the `secret/` subdirectories — and **nothing else**. A file an agent
+moved somewhere useful has left that tree and is never touched. Set
+`ROBOTHOR_INBOX_RETENTION_DAYS=0` to disable the prune entirely.
 
 ### The attachment row
 
@@ -107,10 +108,14 @@ base64 into a message.
   resolver cannot follow) is refused with a note to copy it and send the copy.
 * **Refused** for anything `robothor.engine.secret_paths` calls a secrets file,
   for anything in the inbox's `secret/` directory, and for any file whose first
-  256 KB decode as text and carry a credential-shaped value — whatever it is
-  called, because renaming would otherwise be the whole attack. A credential
-  buried past that first 256 KB is not seen. The refusal names the file and the
-  kind of credential, never the value.
+  256 KB decode as text and carry either a credential-shaped **value** or a
+  credential-named **key** set to a literal (`client_secret`, `private_key`,
+  `api_key`, `access_token`, `password`, …) — whatever the file is called,
+  because renaming would otherwise be the whole attack. There is no size limit
+  on the scan: only the first 256 KB are read, so a 20 MB video costs the same
+  as a 2 KB note. A credential buried past that first 256 KB is not seen. A
+  `${VAR}` reference, an empty value and a disabled setting are not credentials.
+  The refusal names the file and the kind of credential, never the value.
 * **Checked twice.** The same ladder runs when the agent asks *and* again
   immediately before the bytes are uploaded, and a file queued for a scheduled
   run is pinned to the digest it was approved with — rewrite it in between and
@@ -120,9 +125,11 @@ base64 into a message.
   otherwise — a document the operator can open beats an error.
 * **`target`** is optional and only an operator-tier agent may use it. Everyone
   else replies to the chat the run came from.
-* Ceiling: 50 MB, which is Telegram's for an outbound document.
+* Ceiling: 50 MB, which is Telegram's for an outbound document. It is the only
+  size rule on the way out — a 12 MB PNG or a 20 MB video sends.
 
-Every send is written to the audit log by basename, size, kind and target.
+Every send is written to the audit log by basename, size, kind and target, and
+so is every refusal. Never the content.
 Never by content.
 
 ### Scheduled runs
