@@ -69,18 +69,18 @@ _ATTACHMENT_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "analyze_image",
+            # Kept under the 400-character cap `tool_search` shows a
+            # disambiguating description whole at: a tool carrying a
+            # `when_to_use` sentence is one that competes with a sibling, and a
+            # hit that loses its tail loses the half that decides.
             "description": (
-                "Ask one question about up to 200 images at once. Each image is "
-                "sent to a vision model separately and only the ANSWERS come "
-                "back, so this is cheap to call again and again and it does not "
-                "fill your context with pictures. Use it to sort, label, filter "
-                "or search a folder of images ('is there a person in this "
-                "photo?', 'what does the sign say?', 'which category does this "
-                "belong to?'). Use view_image instead when one picture matters "
-                "and you need to study it yourself. A big batch returns its "
-                "totals plus the first rows and writes the full table to a JSON "
-                "file whose path is in the result — work over that file rather "
-                "than asking about the same images again."
+                "Ask one question about up to 200 images at once. Each image "
+                "goes to a vision model on its own and only the ANSWERS come "
+                "back, so it is cheap to call and no picture enters your "
+                "context. Use it to sort, label, filter or search a folder of "
+                "images; use view_image for one picture you need to study "
+                "yourself. A big batch writes its table to a JSON file and "
+                "returns the path — work over that file."
             ),
             "parameters": {
                 "type": "object",

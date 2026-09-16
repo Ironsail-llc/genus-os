@@ -434,6 +434,14 @@ character count falls, which is why the stored record of every long email used
 to be two halves of a base64 blob. A handler that caps itself keeps the
 beginning and says `body_truncated`.
 
+[`analyze_image`](#vision-view_image-and-analyze_image) is the other handler
+that caps itself, and the reason its budget is 3,500 rather than a round
+number: 200 rows of answers are tens of thousands of characters, so the result
+keeps its totals and its first rows under this cap and writes the rest to a
+file. What the agent reads is therefore also what the step row keeps —
+including the per-image token and cost ledger, which a head-and-tail cut would
+destroy.
+
 ## See also
 
 * [Agents](enterprise/04-agents.md) — manifests, and what an agent is allowed

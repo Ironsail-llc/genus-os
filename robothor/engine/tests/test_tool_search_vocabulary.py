@@ -45,6 +45,10 @@ def broad_agent_names(registry: ToolRegistry) -> list[str]:
         "browser",
         "look",
         "who_is_here",
+        # The image tools ship to every agent on this fleet, and they are two
+        # tools with one vocabulary — exactly the case this table exists for.
+        "view_image",
+        "analyze_image",
         "desktop_window_list",
         "get_inbox",
         "get_conversation",
@@ -146,6 +150,17 @@ _TABLE: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     # ── Chat ──
     ("post a message in the google chat space", "", ("gws_chat_send",)),
     ("what was said in that chat space", "", ("gws_chat_list_messages",)),
+    # ── Images: the two tools that share a vocabulary ──
+    #
+    # Under deferred loading `tool_search` is how an agent reaches either, and
+    # "sort these photos" — the request the batch tool exists for — matched
+    # neither name. No `rank_bias` separates them: the verbs do.
+    ("sort these photos", "analyze_image", ()),
+    ("label the images in this folder", "analyze_image", ()),
+    ("which picture shows a receipt", "", ("analyze_image",)),
+    ("categorise these photos", "", ("analyze_image",)),
+    ("look at this screenshot", "view_image", ()),
+    ("read the chart in that image", "", ("view_image",)),
 )
 
 
