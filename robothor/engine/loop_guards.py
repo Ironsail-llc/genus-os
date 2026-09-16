@@ -223,3 +223,54 @@ def nudge_for_missing_deliverable(session: Any) -> bool:
     session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": nudge})
     logger.info("Deliverable nudge: the artifact the task named is absent")
     return True
+
+
+def reask_for_wrong_deliverable_shape(session: Any, workspace: str | None = None) -> bool:
+    """The artifact exists; is it the SHAPE the task described?
+
+    The guard above asks whether the file is there. Measured 2026-09-16, three
+    benchmark tasks scored 0 with the file there: the right path with the
+    agent's own TSV columns, the right directory left empty while the answer
+    went to a name of its own, the right document with the headings renamed.
+    An existence check cannot see any of that.
+
+    True means "do not end this iteration". Ladder-gated, unlike the guard
+    above, because this one CHANGES the run: at `enforce` it re-asks once with
+    the report; at `observe` it records the verdict in the log and lets the run
+    end; at `off` it is never computed. The budget is one for the reason the
+    nudge budget is one — an unbounded "you are not done" is a loop.
+    """
+    from robothor.engine.deliverable_contract import contract_reask_note, contract_report_for_run
+    from robothor.engine.feature_flags import deliverable_contract_mode
+    from robothor.engine.session import ENGINE_CONTEXT_ROLE
+
+    mode = deliverable_contract_mode()
+    if mode == "off":
+        return False
+    run = getattr(session, "run", None)
+    report = contract_report_for_run(run, session, workspace)
+    if report is None or report.satisfied:
+        return False
+    # Kept on the session so the run finalizer can tell a shape that was never
+    # re-asked about from one the agent was given a chance to fix.
+    session._deliverable_contract_report = report
+    if mode != "enforce":
+        logger.warning(
+            "deliverable contract observe: run %s would be held for %s",
+            getattr(run, "id", "?"),
+            report.message.replace("\n", " | "),
+        )
+        return False
+    if int(getattr(session, "_deliverable_contract_reasks", 0) or 0) >= 1:
+        return False
+    note = contract_reask_note(report)
+    if not note:
+        return False
+    session._deliverable_contract_reasks = 1
+    session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": note})
+    logger.warning(
+        "deliverable contract enforce: run %s re-asked once for %s",
+        getattr(run, "id", "?"),
+        report.message.replace("\n", " | "),
+    )
+    return True

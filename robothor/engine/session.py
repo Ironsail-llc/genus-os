@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from robothor.constants import DEFAULT_TENANT
+from robothor.engine.deliverable_contract import task_text_for_column
 from robothor.engine.models import AgentRun, RunStatus, RunStep, StepType, TriggerType
 from robothor.engine.reasoning_replay import PRODUCER_MODEL_KEY, REASONING_FIELDS
 
@@ -362,6 +363,14 @@ class AgentSession:
         # 3.4M input tokens. The deliverable contract reads its requirement
         # from this wording, so it has to survive the whole run.
         self.originating_message = user_message
+        # And persisted, because `originating_message` dies with the process.
+        # `run_finalizer` runs after the loop and a resumed run is a different
+        # session entirely, so the only copy that survives to the verdict is
+        # the one in `agent_runs`. Redacted at this door, not at each caller —
+        # an operator pastes a credential into a task and `agent_runs` outlives
+        # the session, is exported into support bundles, and is read by the
+        # Helm. Same rule and same redactor as `chat_store.save_exchange`.
+        self.run.task_text = task_text_for_column(user_message)
         self.run.tools_provided = tools_provided
         self.run.delivery_mode = delivery_mode
         self._start_time = time.monotonic()

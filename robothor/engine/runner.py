@@ -66,6 +66,7 @@ from robothor.engine.loop_guards import (
     GuardState,
     check_iteration_guards,
     nudge_for_missing_deliverable,
+    reask_for_wrong_deliverable_shape,
 )
 from robothor.engine.models import (
     AgentConfig,
@@ -1923,6 +1924,22 @@ class AgentRunner(
                 _iteration, _checkin_interval, _pacer.mode, run_id=session.run.id
             )
             if _ci_note:
+                # The check-in becomes a COMPARISON where the task stated a
+                # shape. "What have you written so far" is answerable without
+                # looking; "your header is X and the task requires Y" is not.
+                # Silent — and cheap — on every task that stated none.
+                from robothor.engine.deliverable_contract import contract_checkin_note
+                from robothor.engine.feature_flags import deliverable_contract_mode
+
+                _shape_note = None
+                if deliverable_contract_mode() != "off":
+                    with contextlib.suppress(Exception):
+                        _shape_note = contract_checkin_note(
+                            task_text_from(session.messages),
+                            getattr(agent_config, "workspace", "") or self.config.workspace,
+                        )
+                if _shape_note:
+                    _ci_note = f"{_ci_note}\n{_shape_note}"
                 session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": _ci_note})
 
             # ── [STATUS] Emit iteration_start lifecycle event ──
@@ -2059,6 +2076,13 @@ class AgentRunner(
                     continue
 
                 if nudge_for_missing_deliverable(session):  # still owes an artifact
+                    continue
+                # The artifact may be there and be the wrong shape. One
+                # re-ask, at `enforce` only; `observe` records the verdict and
+                # lets the run end.
+                if reask_for_wrong_deliverable_shape(
+                    session, getattr(agent_config, "workspace", "") or self.config.workspace
+                ):
                     continue
                 return
 

@@ -549,6 +549,11 @@ class AgentRun:
 
     system_prompt_chars: int = 0
     user_prompt_chars: int = 0
+    # The originating prompt itself (migration 123), redacted and capped at
+    # TASK_TEXT_MAX_CHARS. `user_prompt_chars` is a count, and a count cannot
+    # be read for the deliverable contract the task stated. None when the run
+    # had no user text, which makes the contract require nothing.
+    task_text: str | None = None
     tools_provided: list[str] = field(default_factory=list)
 
     output_text: str | None = None

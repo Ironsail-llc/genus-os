@@ -156,19 +156,67 @@ def check_deliverables(required: list[str]) -> DeliverableReport:
     return DeliverableReport(required=list(required), missing=missing)
 
 
+#: What `agent_runs.task_text` will hold. A task spec that states an output
+#: contract is a page or two; anything past this is pasted data, and the
+#: column is not a document store.
+TASK_TEXT_MAX_CHARS = 32_768
+
+#: Marker for the elision, matching `tracking._truncate`'s idiom.
+_ELISION = "\n\n[... truncated {count} chars ...]\n\n"
+
+
+def task_text_for_column(user_message: str | None) -> str | None:
+    """The originating prompt, as `agent_runs.task_text` should hold it.
+
+    Redacted first and truncated second, in that order and not the other: the
+    cap applied first could split a credential across the boundary and leave a
+    prefix the redactor no longer recognises.
+
+    The elision takes the MIDDLE, not the tail. A spec states its output
+    contract in an "Output Requirements" section at the end at least as often
+    as in its opening sentence, and a cap that always eats the end would drop
+    exactly the half this column exists to carry.
+    """
+    if not user_message:
+        return None
+    from robothor.secrets.redaction import redact
+
+    text = redact(str(user_message))
+    if len(text) <= TASK_TEXT_MAX_CHARS:
+        return text
+    marker = _ELISION.format(count=len(text) - TASK_TEXT_MAX_CHARS)
+    half = (TASK_TEXT_MAX_CHARS - len(marker)) // 2
+    return text[:half] + marker + text[-half:]
+
+
 def task_text_for_run(run: object, session: object = None) -> str:
     """The task wording a deliverable contract can be read from.
 
-    Prefers the originating ``crm_task`` (title + objective): a delegated task
-    is where an explicit output path is most often written down. Falls back to
-    the run's originating MESSAGE, because most runs have no crm_task at all —
-    every benchmark task included, which is precisely the population this
-    contract was built for and could not see. Returns ``""`` when neither is
-    available; the contract then requires nothing, which is the safe direction.
+    Three sources, in the order of how much each is trusted to still be there
+    when the verdict is computed:
+
+    1. ``run.task_text`` — the originating prompt, persisted at run start
+       (migration 123). The only one that survives compaction, a resumed run
+       and the finalizer, which runs after the loop has ended.
+    2. the live session's originating message, for a run in flight.
+    3. the originating ``crm_task`` (title + objective + next action).
+
+    The crm_task is last, not first, on measured evidence: of 4,000 crm_tasks
+    over 60 days on the first production instance, ZERO named an explicit
+    output path. The contracts are in prompt-borne task specs, and reading the
+    task row first meant a run WITH a task row could never see its own spec.
+
+    Returns ``""`` when none is available; the contract then requires nothing.
     """
+    persisted = str(getattr(run, "task_text", "") or "")
+    if persisted:
+        return persisted
+    live = str(getattr(session, "originating_message", "") or "")
+    if live:
+        return live
     task_id = getattr(run, "task_id", None)
     if not task_id:
-        return str(getattr(session, "originating_message", "") or "")
+        return ""
     try:
         from robothor.crm import dal
 
@@ -176,7 +224,7 @@ def task_text_for_run(run: object, session: object = None) -> str:
     except Exception:  # noqa: BLE001 — a contract check must never break a run
         return ""
     if not task:
-        return str(getattr(session, "originating_message", "") or "")
+        return ""
     return " ".join(str(task.get(k) or "") for k in ("title", "objective", "next_action")).strip()
 
 
@@ -1118,3 +1166,90 @@ def check_contract(contract: DeliverableContract, root: str | Path) -> ContractR
         if finding is not None:
             findings.append(finding)
     return ContractReport(findings=tuple(findings))
+
+
+# ─── Where it acts ────────────────────────────────────────────────────
+
+
+def contract_report_for_run(
+    run: object, session: object = None, workspace: str | Path | None = None
+) -> ContractReport | None:
+    """The shape verdict for one run, or None when the task stated no shape.
+
+    None is the common case and is deliberately distinct from "satisfied": a
+    vacuous pass recorded on every run in the fleet buries the real verdicts,
+    which is what the alert digest already does to itself.
+    """
+    if not workspace:
+        return None
+    contract = extract_contract(task_text_for_run(run, session))
+    if not contract:
+        return None
+    report = check_contract(contract, workspace)
+    return report if report.findings else None
+
+
+#: Two, because a note that quotes the whole spec back is the spec, and the
+#: agent already has that.
+_MAX_QUOTED_EVIDENCE = 2
+
+
+def _quoted_evidence(report: ContractReport) -> str:
+    seen: list[str] = []
+    for finding in report.failures:
+        evidence = getattr(finding.item, "evidence", "")
+        if evidence and evidence not in seen:
+            seen.append(evidence)
+        if len(seen) >= _MAX_QUOTED_EVIDENCE:
+            break
+    return "\n".join(f'  the task said: "{e}"' for e in seen)
+
+
+def contract_checkin_note(task_text: str | None, workspace: str | Path | None) -> str | None:
+    """The deliverable check-in, as a COMPARISON rather than a question.
+
+    "Are you making progress" is a question an agent answers yes to. What is on
+    disk, and whether its shape is the one the task stated, is checkable — and
+    it is what the graders and the operator actually read. Returns None when
+    the task stated no shape or the workspace already matches it, which is the
+    common case and has to stay silent.
+    """
+    if not workspace:
+        return None
+    contract = extract_contract(task_text)
+    if not contract:
+        return None
+    report = check_contract(contract, workspace)
+    if report.satisfied:
+        return None
+    return (
+        "[SYSTEM] Deliverable check: the workspace does not yet match the output "
+        "contract this task stated.\n"
+        + report.message
+        + "\nThese are exact requirements, not suggestions. Fix them against the "
+        "task's own wording before you finish."
+    )
+
+
+def contract_reask_note(report: ContractReport) -> str | None:
+    """One last ask, with the report, before the run is failed honestly.
+
+    Bounded at one for the reason ``MAX_DELIVERABLE_NUDGES`` is: an unbounded
+    "you are not done" is a loop, and the agent may have a reason the shape is
+    wrong that trying again will not fix. The last sentence exists because some
+    tasks SHOULD be refused — a run that is right to produce nothing must be
+    able to say so rather than be pushed into fabricating the artifact.
+    """
+    if report is None or report.satisfied:
+        return None
+    quoted = _quoted_evidence(report)
+    return (
+        "[SYSTEM] You have stopped, but the workspace does not match the output "
+        "contract this task stated:\n"
+        + report.message
+        + (f"\n{quoted}" if quoted else "")
+        + "\nCorrect this now — the exact path, the exact header, the exact fields "
+        "and the exact headings, as the task wrote them. If you cannot, or if this "
+        "is a task you should not complete, say plainly why instead: do not end as "
+        "though the deliverable is right, and do not invent content to fill it."
+    )
