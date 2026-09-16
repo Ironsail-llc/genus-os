@@ -313,7 +313,9 @@ class TestAnOverflowShrinksAndRetriesOnce:
         with patch("robothor.engine.llm_client.litellm.acompletion", acompletion):
             await LLMClient()._call_llm(_long_conversation(30), [LOCAL], [], broken_models=set())
 
-        assert rows and rows[0][0] == "context_overflow"
+        # Name AND action: `flags/evidence.py` keys on the name, and the action
+        # is what tells a shrink apart from a policy warning in the same table.
+        assert rows == [("context_overflow", "context_overflow")]
 
     def test_the_attempt_row_says_context_overflow(self):
         """A run's own summary must not file this as a generic error_500."""

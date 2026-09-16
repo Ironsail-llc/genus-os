@@ -668,6 +668,53 @@ def log_tool_event(
         logger.debug("Failed to log tool event: %s", e)
 
 
+#: Actions every instance has allowed since migration 001 (plus ``observed``
+#: from 079). An action OUTSIDE this set can be refused by the CHECK on a box
+#: that has not run the migration that added it — which is every box between a
+#: deploy and ``genus migrate``.
+_LEGACY_GUARDRAIL_ACTIONS = frozenset({"blocked", "warned", "allowed", "observed"})
+
+#: What a refused action degrades TO. Allowed since the table existed, so the
+#: row lands on any instance in any state.
+_FALLBACK_GUARDRAIL_ACTION = "warned"
+
+#: The migration that adds the newest action value, named in the one warning
+#: this module prints.
+_ACTION_MIGRATION = "124_guardrail_context_overflow"
+
+#: One line per process, not one per event: this is on the LLM path and fires
+#: as often as the control does.
+_warned_about_action_check = False
+
+
+def reset_guardrail_action_warning() -> None:
+    """Re-arm the once-per-process warning. For tests."""
+    global _warned_about_action_check
+    _warned_about_action_check = False
+
+
+#: PostgreSQL's SQLSTATE for a CHECK violation. Matched on the CODE rather
+#: than on ``psycopg2.errors.CheckViolation``, because the code is the part of
+#: this that is standardised: it survives a driver swap, a wrapped exception
+#: and a pooler, and it needs no second import of a package whose error classes
+#: ship no type stubs.
+_CHECK_VIOLATION_SQLSTATE = "23514"
+
+
+def _insert_guardrail_event(row: tuple[Any, ...]) -> None:
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO agent_guardrail_events (
+                run_id, step_number, guardrail_name, action, tool_name, reason, mode
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            row,
+        )
+
+
 def log_guardrail_event(
     run_id: str,
     guardrail_name: str,
@@ -680,31 +727,55 @@ def log_guardrail_event(
 ) -> None:
     """Record a guardrail decision in ``agent_guardrail_events`` (best-effort).
 
-    ``action`` is one of ``blocked`` | ``warned`` | ``allowed`` | ``observed``.
-    The ``observed`` value records a SHADOW decision produced in observe mode —
-    the guardrail *would* have acted but the enforcement flag let it through —
-    so the operator can inspect impact (via the health dashboard) before
-    promoting a flag to ``enforce``. ``mode`` records the enforcement mode
-    (off/observe/alert/enforce) that produced the event.
+    ``action`` is ``blocked`` | ``warned`` | ``allowed`` | ``observed`` |
+    ``context_overflow``. ``observed`` records a SHADOW decision produced in
+    observe mode — the guardrail *would* have acted but the enforcement flag
+    let it through — so the operator can inspect impact (via the health
+    dashboard) before promoting a flag to ``enforce``. ``context_overflow``
+    (migration 124) records the engine SHRINKING a conversation that did not
+    fit the model it was about to be sent to. ``mode`` records the enforcement
+    mode (off/observe/alert/enforce) that produced the event.
 
     The table existed since migration 014 and is read by ``health.py`` but was
     never written until this writer. Logging is best-effort: a DB failure here
     must never break the agent run.
+
+    One failure is NOT swallowed quietly: an action the instance's CHECK does
+    not know yet. Between a deploy and ``genus migrate`` the row would simply
+    vanish, and an evidence table that reports zero firings is how this project
+    has repeatedly shipped a control that does nothing. The row is re-written
+    as ``warned`` — the guardrail NAME is what the evidence queries key on, and
+    it is unchanged — and the operator is told once which migration to run.
     """
+    row = (run_id, step_number, guardrail_name, action, tool_name, reason, mode)
     try:
-        with get_connection() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                INSERT INTO agent_guardrail_events (
-                    run_id, step_number, guardrail_name, action, tool_name, reason, mode
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """,
-                (run_id, step_number, guardrail_name, action, tool_name, reason, mode),
-            )
+        _insert_guardrail_event(row)
+        return
     except Exception as e:
-        logger.debug("Failed to log guardrail event: %s", e)
+        refused = getattr(e, "pgcode", None) == _CHECK_VIOLATION_SQLSTATE
+        if not refused or action in _LEGACY_GUARDRAIL_ACTIONS:
+            logger.debug("Failed to log guardrail event: %s", e)
+            return
+    _degrade_guardrail_action(row, action)
+
+
+def _degrade_guardrail_action(row: tuple[Any, ...], action: str) -> None:
+    """Re-write the refused row with an action every instance accepts."""
+    global _warned_about_action_check
+    if not _warned_about_action_check:
+        _warned_about_action_check = True
+        logger.warning(
+            "agent_guardrail_events does not accept action %r on this instance — "
+            "recording it as %r instead. Run `genus migrate` to apply %s, or the "
+            "evidence table will under-report this control.",
+            action,
+            _FALLBACK_GUARDRAIL_ACTION,
+            _ACTION_MIGRATION,
+        )
+    try:
+        _insert_guardrail_event((*row[:3], _FALLBACK_GUARDRAIL_ACTION, *row[4:]))
+    except Exception as e:  # noqa: BLE001 — telemetry never breaks a run
+        logger.debug("Failed to log degraded guardrail event: %s", e)
 
 
 def get_tool_stats(hours: int = 24) -> list[dict[str, Any]]:

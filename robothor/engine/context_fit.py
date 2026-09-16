@@ -397,15 +397,16 @@ def shrink_after_overflow(messages: list[dict[str, Any]], model: str) -> bool:
     run_id = _current_run_id()
     if run_id:
         # Not an error row and not a model failure: the engine ACTED, and the
-        # evidence table is where a control proves it is not inert. Filed as
-        # `warned` because that is a value the table's CHECK constraint accepts
-        # on every instance already deployed — the guardrail NAME is what the
-        # doctor and `flags/evidence.py` key on.
+        # evidence table is where a control proves it is not inert. Its own
+        # action value (migration 124) rather than a borrowed `warned`, because
+        # this is not a warning about a policy — it is a record that the engine
+        # rewrote a request. An instance that has not migrated yet degrades to
+        # `warned` and says so once, in `tracking.log_guardrail_event`.
         try:
             log_guardrail_event(
                 run_id,
                 "context_overflow",
-                "warned",
+                "context_overflow",
                 reason=f"{model}: ~{outcome.tokens_before} -> ~{outcome.tokens_after} tokens",
                 mode="enforce",
             )

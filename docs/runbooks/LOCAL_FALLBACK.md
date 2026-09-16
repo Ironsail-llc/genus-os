@@ -39,6 +39,15 @@ The engine now keeps the assembled messages under the model's window, so
 neither happens. The second one is the incident; the first is the one nobody
 would ever have noticed.
 
+### After deploying this
+
+Run `genus migrate` on the instance **and on any benchmark pod**. Migration
+`124_guardrail_context_overflow` adds `context_overflow` to the
+`agent_guardrail_events` action CHECK, which is where the new control records
+that it acted. Until it is applied the engine writes those rows as `warned`
+instead and logs one line naming the migration — the row is never dropped, but
+the evidence table under-reports the control until you run it.
+
 ## What the operator sees
 
 * A **critical page** the moment the last credential for a provider is retired,
