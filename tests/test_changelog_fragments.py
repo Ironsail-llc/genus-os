@@ -486,3 +486,135 @@ def test_the_release_notes_page_is_published() -> None:
     mkdocs = (REPO_ROOT / "mkdocs.yml").read_text(encoding="utf-8")
     assert "!/release-notes.md" in mkdocs, "the page the release writes must be on the site"
     assert "release-notes.md" in mkdocs.split("nav:", 1)[1]
+
+
+# --------------------------------------------------------------------------
+# What the release publishes is what the preview promised
+# --------------------------------------------------------------------------
+
+TWO_PARAGRAPHS = (
+    "You can now pick a retention policy for snapshots.\n"
+    "\n"
+    "The floor and the age filter compose, so nothing old is deleted while the "
+    "floor still needs it. See [Deployment](deployment.md) for the schedule.\n"
+)
+
+WITH_A_LIST = (
+    "You can now pick a retention policy for snapshots. The two knobs are:\n"
+    "\n"
+    "- `--keep`, the floor\n"
+    "- `--older-than-days`, the age filter\n"
+    "\n"
+    "See [Deployment](deployment.md) for the schedule.\n"
+)
+
+
+def test_assemble_keeps_a_fragments_paragraphs(tool, repo) -> None:
+    _write(repo, "42.operators.md", TWO_PARAGRAPHS)
+    tool.assemble(repo, version="1.91.0", date="2026-09-15")
+    assert "You can now pick a retention policy for snapshots.\n\nThe floor" in _notes(repo)
+
+
+def test_assemble_keeps_a_fragments_list(tool, repo) -> None:
+    _write(repo, "42.operators.md", WITH_A_LIST)
+    tool.assemble(repo, version="1.91.0", date="2026-09-15")
+    text = _notes(repo)
+    assert "\n- `--keep`, the floor\n" in text
+    assert "knobs are: - `--keep`" not in text, "a list must not be flattened into a line"
+
+
+@pytest.mark.parametrize("body", [GOOD, TWO_PARAGRAPHS, WITH_A_LIST])
+def test_preview_shows_exactly_what_assemble_will_publish(tool, repo, body) -> None:
+    """The sticky comment says "this is what the next release will say"."""
+    _write(repo, "42.operators.md", body)
+    quoted = tool.preview(repo, pr=42, title="feat(helm): x", labels=[])
+    entry = tool.render_entry(tool.fragments(repo)[0]).splitlines()
+    unquoted = [
+        line[2:] if line.startswith("> ") else ""
+        for line in quoted.splitlines()
+        if line.startswith(">")
+    ]
+    assert unquoted == entry, (
+        f"preview and assemble disagree:\n  preview={unquoted!r}\n  publish={entry!r}"
+    )
+
+    # ...and that entry is literally what the version block carries.
+    published = tool.render_block(tool.fragments(repo), version="1.91.0", date="2026-09-15")
+    assert tool.render_entry(tool.fragments(repo)[0]).rstrip("\n") in published
+
+
+def test_preview_quotes_every_line_so_a_heredoc_cannot_be_broken(tool, repo) -> None:
+    """The workflow pipes this into the step-output file through two heredocs.
+
+    A fragment is author-controlled text. A bare delimiter line would close
+    the outer heredoc and let everything after it be read as further output
+    keys; a workflow expression must reach the comment as literal text. The
+    "> " prefix on every line is what prevents the first, so it is pinned here
+    rather than left to be tidied away by someone who thinks it is cosmetic.
+    """
+    marker = "EO" + "F"
+    body = (
+        "You can now set the delimiter yourself.\n"
+        f"{marker}\n"
+        f"body<<{marker}\n"
+        "pwned=1\n"
+        "${{ secrets.GITHUB_TOKEN }}\n"
+        "\n"
+        "See [Deployment](deployment.md) for the rest.\n"
+    )
+    _write(repo, "42.operators.md", body)
+    quoted = tool.preview(repo, pr=42, title="feat(helm): x", labels=[])
+
+    for line in quoted.splitlines():
+        assert line.strip() not in (marker, f"FRAGMENT_{marker}"), (
+            f"an unquoted heredoc delimiter reaches the step-output file: {line!r}"
+        )
+    assert "> ${{ secrets.GITHUB_TOKEN }}" in quoted, "must survive as literal text"
+    assert f"> {marker}" in quoted
+
+
+# --------------------------------------------------------------------------
+# A release whose only fragments are internal
+# --------------------------------------------------------------------------
+
+
+def test_assemble_writes_no_block_when_every_fragment_is_internal(tool, repo) -> None:
+    _write(repo, "42.internal.md", "The runner was split into ten modules. No reader change.")
+    before = _notes(repo)
+    assert tool.assemble(repo, version="2.0.0", date="2026-10-01") is None
+    assert _notes(repo) == before
+    assert "## 2.0.0" not in _notes(repo)
+
+
+def test_an_internal_only_release_still_consumes_its_fragments(tool, repo) -> None:
+    path = _write(repo, "42.internal.md", "The runner was split into ten. No reader change.")
+    tool.assemble(repo, version="2.0.0", date="2026-10-01")
+    assert not path.exists(), "the release consumed them; they must not ride to the next one"
+
+
+# --------------------------------------------------------------------------
+# A fragment may only send a reader to a page the site publishes
+# --------------------------------------------------------------------------
+
+_MKDOCS = "exclude_docs: |\n  /*\n  !/quickstart.md\n"
+
+
+def test_lint_rejects_a_link_to_a_page_the_site_does_not_publish(tool, repo) -> None:
+    (repo / "mkdocs.yml").write_text(_MKDOCS, encoding="utf-8")
+    _write(
+        repo,
+        "42.operators.md",
+        "You can now do the thing. See [Agent Builder](AGENT_BUILDER.md) for how.",
+    )
+    findings = tool.lint(repo, known=frozenset({"docs/AGENT_BUILDER.md", "docs/quickstart.md"}))
+    assert findings and "publish" in str(findings[0])
+
+
+def test_lint_accepts_a_link_to_a_published_page(tool, repo) -> None:
+    (repo / "mkdocs.yml").write_text(_MKDOCS, encoding="utf-8")
+    _write(
+        repo,
+        "42.operators.md",
+        "You can now do the thing. See [Quick Start](quickstart.md) for how.",
+    )
+    assert tool.lint(repo, known=frozenset({"docs/quickstart.md"})) == []

@@ -272,7 +272,63 @@ def _check_links(text: str, known: frozenset[str]) -> list[str]:
     ]
 
 
-def lint_fragment(path: Path, known: frozenset[str] | None) -> list[Finding]:
+def published_pages(repo_root: Path) -> frozenset[str] | None:
+    """The pages `mkdocs.yml` actually publishes, or None if there is no config.
+
+    Parsed line by line rather than through a YAML loader: `mkdocs.yml` carries
+    custom tags, this has to run on a bare `python3` with nothing installed,
+    and `tests/test_docs_site.py` reads the same allowlist the same way.
+    """
+    config = repo_root / "mkdocs.yml"
+    if not config.is_file():
+        return None
+    pages: set[str] = set()
+    inside = False
+    for line in config.read_text(encoding="utf-8").splitlines():
+        if line.startswith("exclude_docs:"):
+            inside = True
+            continue
+        if not inside:
+            continue
+        if line.strip() and not line.startswith((" ", "\t")):
+            break
+        entry = line.strip()
+        if entry.startswith("!"):
+            pages.add(entry.lstrip("!/"))
+    return frozenset(pages)
+
+
+def _unpublished_links(text: str, published: frozenset[str]) -> list[str]:
+    """Link targets that resolve to a page the site does not serve.
+
+    A fragment is published inside `docs/release-notes.md`, so a link to a page
+    held out of `exclude_docs` renders as a dead href on the public site.
+    mkdocs reports that at INFO and `--strict` does not fail on it, so nothing
+    else in the pipeline catches it -- and the pages most likely to be linked
+    are exactly the ones held back for carrying one deployment's data.
+    """
+    problems: list[str] = []
+    for target in _link_targets(text):
+        cleaned = target.strip().strip("<>")
+        if not cleaned or cleaned.startswith(("http://", "https://", "mailto:", "#", "/")):
+            continue
+        page = cleaned.split("#", 1)[0].split("?", 1)[0]
+        if not page or page.startswith("../"):
+            problems.append(f"link '{target}' leaves the published docs tree")
+            continue
+        if page not in published:
+            problems.append(
+                f"link '{page}' is not a page the site publishes -- "
+                f"the reader would follow it to a 404 (mkdocs.yml exclude_docs)"
+            )
+    return problems
+
+
+def lint_fragment(
+    path: Path,
+    known: frozenset[str] | None,
+    published: frozenset[str] | None = None,
+) -> list[Finding]:
     """Every reason this one file is not ready to ship."""
     name = path.name
     findings: list[Finding] = []
@@ -323,6 +379,9 @@ def lint_fragment(path: Path, known: frozenset[str] | None) -> list[Finding]:
     if known is not None:
         findings.extend(Finding(name, reason) for reason in _check_links(text, known))
 
+    if published is not None:
+        findings.extend(Finding(name, reason) for reason in _unpublished_links(text, published))
+
     if audience != "internal" and not _link_targets(text):
         findings.append(
             Finding(name, "names no doc page to read -- link the page the reader should open")
@@ -345,8 +404,9 @@ def lint(repo_root: Path, known: object = _UNSET) -> list[Finding]:
         resolved = known  # type: ignore[assignment]
 
     findings: list[Finding] = []
+    published = published_pages(repo_root)
     for path in fragment_files(repo_root):
-        findings.extend(lint_fragment(path, resolved))
+        findings.extend(lint_fragment(path, resolved, published))
     return findings
 
 
@@ -364,11 +424,12 @@ def check(
 ) -> list[str]:
     """What this pull request must fix before it can merge."""
     mine = [fragment for fragment in fragments(repo_root) if fragment.pr == pr]
+    published = published_pages(repo_root)
     problems = [
         str(finding)
         for path in fragment_files(repo_root)
         if path.name.startswith(f"{pr}.")
-        for finding in lint_fragment(path, known)
+        for finding in lint_fragment(path, known, published)
     ]
 
     if mine or not requires_fragment(title, labels):
@@ -387,22 +448,62 @@ def check(
 # ---------------------------------------------------------------------------
 
 
+def render_entry(fragment: Fragment) -> str:
+    """One fragment exactly as the release notes will carry it.
+
+    The body is reproduced **verbatim**, paragraphs and lists intact. An
+    earlier version flattened it with `" ".join(text.split())`, which turned a
+    two-item list into one run-on line -- and `preview` did not flatten, so the
+    sticky comment promised the author something the release would not print.
+    One function now answers for both, which is the only way those two can
+    stay equal.
+
+    The pull-request reference rides at the end of a one-paragraph note, where
+    it reads as part of the sentence. Anything with a blank line or a list in
+    it gets the reference as its own paragraph instead: after a bullet,
+    markdown's lazy continuation would otherwise swallow it into the last item.
+    """
+    body = fragment.text.strip("\n")
+    reference = f"([#{fragment.pr}]({PULL_URL.format(pr=fragment.pr)}))"
+    if _is_one_paragraph(body):
+        return f"{body} {reference}\n"
+    return f"{body}\n\n{reference}\n"
+
+
+def _is_one_paragraph(body: str) -> bool:
+    """True for prose with no blank line and no block-level markdown in it."""
+    if "\n\n" in body:
+        return False
+    return not any(
+        line.lstrip().startswith(("-", "*", "+", ">", "#", "|")) or _is_numbered(line)
+        for line in body.splitlines()
+    )
+
+
+def _is_numbered(line: str) -> bool:
+    head = line.lstrip().split(".", 1)[0]
+    return head.isdigit() and line.lstrip().startswith(f"{head}. ")
+
+
+def published_audiences(items: list[Fragment]) -> list[str]:
+    """The audiences in `items` that this page has a section for, in order."""
+    return [
+        audience
+        for audience in AUDIENCES
+        if audience in SECTION_TITLES and any(fragment.audience == audience for fragment in items)
+    ]
+
+
 def render_block(items: list[Fragment], version: str, date: str) -> str:
     """One dated version block, grouped by audience."""
     lines = [f"## {version} — {date}", ""]
-    for audience in AUDIENCES:
-        title = SECTION_TITLES.get(audience)
-        if title is None:
-            continue
-        chosen = [fragment for fragment in items if fragment.audience == audience]
-        if not chosen:
-            continue
-        lines.append(f"### {title}")
+    for audience in published_audiences(items):
+        lines.append(f"### {SECTION_TITLES[audience]}")
         lines.append("")
-        for fragment in chosen:
-            body = " ".join(fragment.text.split())
-            link = PULL_URL.format(pr=fragment.pr)
-            lines.append(f"{body} ([#{fragment.pr}]({link}))")
+        for fragment in items:
+            if fragment.audience != audience:
+                continue
+            lines.extend(render_entry(fragment).rstrip("\n").split("\n"))
             lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
@@ -425,9 +526,10 @@ def assemble(
 ) -> str | None:
     """Fold every fragment into `docs/release-notes.md`; return the new block.
 
-    Returns `None` and writes nothing when there is nothing to assemble, so a
-    release with no reader-facing change is not a release that appends an
-    empty heading, and a re-run is a no-op rather than a duplicate.
+    Returns `None` and writes nothing when there is nothing to PUBLISH -- no
+    fragments at all, or only `internal` ones -- so a release nobody can notice
+    does not append a bare heading, and a re-run is a no-op rather than a
+    duplicate.
     """
     items = fragments(repo_root)
     stray = [
@@ -448,6 +550,18 @@ def assemble(
             "cannot assemble, these fragments do not lint:\n"
             + "\n".join(f"  {finding}" for finding in findings)
         )
+
+    # `internal` is the audience for "a release nobody can notice", and it has
+    # no section on this page. A release whose every fragment is internal must
+    # therefore write NO block -- the first version of this returned early only
+    # on an empty directory, so such a release published a bare heading with
+    # nothing under it. The fragments are still consumed: they belong to this
+    # release, and carrying them forward would attribute them to the next one.
+    if not published_audiences(items):
+        if delete:
+            for fragment in items:
+                fragment.path.unlink()
+        return None
 
     notes_path = repo_root / RELEASE_NOTES
     page = notes_path.read_text(encoding="utf-8") if notes_path.exists() else "# Release notes\n"
@@ -480,7 +594,17 @@ def preview(repo_root: Path, pr: int, title: str, labels: list[str]) -> str:
             heading = SECTION_TITLES.get(fragment.audience, "Internal (recorded, not published)")
             lines.append(f"_{heading}_")
             lines.append("")
-            lines.extend(f"> {line}" for line in fragment.text.splitlines())
+            # `render_entry`, not the raw file: the comment's whole claim is
+            # that this is what will be published, so it must be produced by
+            # the same function that publishes it. Every line is quoted --
+            # including the blank ones, as a bare `>` -- because the workflow
+            # pipes this through two heredocs and a fragment is
+            # author-controlled text. An unquoted line that happens to be a
+            # delimiter would end the heredoc and let the rest of the fragment
+            # be read as further step outputs.
+            lines.extend(
+                f"> {line}" if line else ">" for line in render_entry(fragment).splitlines()
+            )
             lines.append("")
         return "\n".join(lines).rstrip() + "\n"
 
