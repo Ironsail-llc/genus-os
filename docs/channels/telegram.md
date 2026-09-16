@@ -13,6 +13,7 @@ Every document, photo, video, audio file, voice note and sticker that arrives is
 
 ```
 <workspace>/inbox/telegram/<chat_id>/<YYYY-MM-DD>/<file_unique_id>-<safe-name>
+<workspace>/inbox/telegram/<chat_id>/<YYYY-MM-DD>/secret/<file_unique_id>-<safe-name>
 ```
 
 * The date is the day it arrived, which is what makes retention a directory
@@ -23,6 +24,9 @@ Every document, photo, video, audio file, voice note and sticker that arrives is
   `../../.ssh/id_rsa` lands as `…/<uid>-id_rsa` and nothing outside the inbox
   is reachable.
 * Files are `0600`. An inbound file is the operator's, not the box's.
+* The second path is for a file whose **original** name said "credentials" —
+  see below. The directory is the flag, because a sanitised filename cannot
+  carry it.
 
 The agent's turn carries the caption **verbatim and first** — it is the
 instruction — then one entry per attachment naming its path, kind and size,
