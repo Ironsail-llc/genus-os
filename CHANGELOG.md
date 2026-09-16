@@ -1,3 +1,9 @@
+## [1.94.0](https://github.com/Ironsail-llc/genus-os/compare/v1.93.0...v1.94.0) (2026-09-16)
+
+### Features
+
+* **tools:** gmail, calendar and tool search that tell the truth ([#579](https://github.com/Ironsail-llc/genus-os/issues/579)) ([58b2f67](https://github.com/Ironsail-llc/genus-os/commit/58b2f673af2c946ca58ed92cc773b45647c3bc41))
+
 ## [1.93.0](https://github.com/Ironsail-llc/genus-os/compare/v1.92.0...v1.93.0) (2026-09-16)
 
 ### Features
