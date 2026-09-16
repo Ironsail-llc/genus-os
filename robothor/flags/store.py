@@ -58,6 +58,15 @@ def __getattr__(name: str) -> Any:
 
 
 _MODE_VALUES: tuple[str, ...] = ("off", "observe", "alert", "enforce")
+
+#: ``ROBOTHOR_CALENDAR_SEND_UPDATES`` is the one governed flag that is not a
+#: ladder at all: it names Google's ``sendUpdates`` audience directly. Without
+#: an entry here it fell through to the four-rung ladder, so the one posture it
+#: exists for — ``none``, "stop mailing my attendees" — was a 422 from Controls
+#: while ``off`` was accepted, stored, and then silently read back as ``all`` by
+#: the engine. An operator seeing a value saved and not honoured is exactly what
+#: this function's docstring says must not happen.
+_CALENDAR_SEND_UPDATES_VALUES: tuple[str, ...] = ("all", "externalOnly", "none")
 _RIP_13_VALUES: tuple[str, ...] = ("observe", "enforce")
 _HONESTY_SUITE_VALUES: tuple[str, ...] = ("off", "observe", "enforce")
 
@@ -98,6 +107,8 @@ def valid_values_for(name: str) -> tuple[str, ...]:
     a grader (``feature_flags.honesty_suite_mode``) and
     ``ROBOTHOR_PER_USER_SESSIONS`` decides which session a caller lands on
     (``feature_flags.per_user_sessions_mode``).
+    ``ROBOTHOR_CALENDAR_SEND_UPDATES`` is not a ladder: its values are Google's
+    own ``sendUpdates`` audiences (``all``/``externalOnly``/``none``).
     Every other ``*_MODE`` flag accepts the full ladder: ``off``/``observe``/``alert``/``enforce``.
 
     Both the bridge's write-path validation (422 on an out-of-range value) and
@@ -111,6 +122,8 @@ def valid_values_for(name: str) -> tuple[str, ...]:
         return _RIP_13_VALUES
     if name in _THREE_RUNG_MODE_FLAGS:
         return _HONESTY_SUITE_VALUES
+    if name == "ROBOTHOR_CALENDAR_SEND_UPDATES":
+        return _CALENDAR_SEND_UPDATES_VALUES
     return _MODE_VALUES
 
 

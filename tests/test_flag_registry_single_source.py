@@ -16,7 +16,9 @@ is to declare it, and these tests hold the three lists to each other.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
@@ -174,3 +176,62 @@ def test_importing_the_store_does_not_load_pydantic() -> None:
         check=True,
     )
     assert result.stdout.strip() == "False"
+
+
+# ── Governing a flag is four edits, not one ───────────────────────────
+#
+# ROBOTHOR_CALENDAR_SEND_UPDATES was declared `governed=True`, inventoried in
+# infra/flags.yaml, and added to the expected-governed set above — and that was
+# where it stopped. It reached neither `valid_values_for` nor `EVIDENCE_SOURCES`,
+# so on a live instance `GET /api/controls` raised KeyError and returned 500
+# (the whole page, not one row), while `PATCH` with the flag's one real posture,
+# "none", was a 422 and the meaningless "off" was accepted and stored.
+#
+# The declaration is what makes a flag governed; these two tables are what make
+# it operable. A flag with the first and not the second is the "armed but aimed
+# at nothing" shape this repo keeps rediscovering, so it is asserted rather than
+# remembered.
+
+
+def test_every_governed_flag_has_an_evidence_source() -> None:
+    """``verdict()`` does a bare ``EVIDENCE_SOURCES[name]`` and the Controls
+    router calls it in an untried loop, so a missing key is a dead page."""
+    from robothor.flags.evidence import EVIDENCE_SOURCES
+
+    missing = sorted(_derived() - set(EVIDENCE_SOURCES))
+    assert missing == [], (
+        "a governed flag with no evidence source takes GET /api/controls down "
+        "with a KeyError — add it to robothor/flags/evidence.py"
+    )
+
+
+def test_every_governed_flag_offers_values() -> None:
+    """``valid_values_for`` has a fall-through, so a flag it was never taught
+    about is offered the four-rung ladder rather than refused."""
+    from robothor.flags.store import valid_values_for
+
+    empty = sorted(name for name in _derived() if not valid_values_for(name))
+    assert empty == []
+
+
+def test_a_flags_offered_values_are_the_ones_its_engine_reader_honours() -> None:
+    """What Controls offers has to be what the engine accepts.
+
+    The failure this pins is not hypothetical: ``off`` was offerable and
+    storable for a flag whose reader maps it to ``all``, so an operator could
+    turn invitations off, see it saved, and watch every invitation go out.
+    """
+    from robothor.engine.feature_flags import calendar_send_updates
+    from robothor.flags import store
+
+    values = store.valid_values_for("ROBOTHOR_CALENDAR_SEND_UPDATES")
+    assert values == ("all", "externalOnly", "none")
+
+    for value in values:
+        with (
+            mock.patch.dict(os.environ, {"ROBOTHOR_CALENDAR_SEND_UPDATES": value}, clear=False),
+            mock.patch.object(store, "resolve", return_value=None),
+        ):
+            assert calendar_send_updates() == value, (
+                f"Controls offers {value!r} but the engine does not honour it"
+            )
