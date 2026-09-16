@@ -6,7 +6,7 @@ import asyncio
 import logging
 import math
 import re
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, TypedDict
 
 from robothor.engine.spawn_cancel import tool_deadline
 from robothor.engine.tools.constants import (
@@ -403,6 +403,23 @@ def _intent_bonus(vocabulary: set[str], terms: list[str], objects: list[str]) ->
     return 0.0
 
 
+class SearchHit(TypedDict, total=False):
+    """One ``tool_search`` result.
+
+    A TypedDict rather than ``dict[str, str]`` because the handler adds
+    ``in_toolset``, a bool — which made `mypy robothor/` red on this branch
+    while green on main, and the commit that introduced the line rewrote it
+    without noticing. Declaring the shape is what stops the next field from
+    doing the same silently.
+    """
+
+    name: str
+    description: str
+    #: Set by the ``tool_search`` handler, per hit: is this tool already
+    #: advertised to the model this turn, or does it need ``tool_call``?
+    in_toolset: bool
+
+
 class _Candidate(NamedTuple):
     """One tool as the ranker sees it."""
 
@@ -780,7 +797,7 @@ class ToolRegistry:
         """
         return frozenset(self._get_filtered_names(config)) | TOOLSEARCH_TOOLS
 
-    def search_tools(self, names: Any, query: str, limit: int = 10) -> list[dict[str, str]]:
+    def search_tools(self, names: Any, query: str, limit: int = 10) -> list[SearchHit]:
         """Rank a set of tool names against a free-text query.
 
         Returns ``[{"name", "description"}]`` for the top matches. Used by the
@@ -830,7 +847,7 @@ class ToolRegistry:
                     )
                 )
         scored.sort(key=lambda x: (-x[0], -x[1], x[2]))
-        return [{"name": n, "description": d} for _s, _c, n, d in scored[: max(1, limit)]]
+        return [SearchHit(name=n, description=d) for _s, _c, n, d in scored[: max(1, limit)]]
 
     #: Longer than this and a search result stops being scannable. Chosen above
     #: the longest disambiguating description in the registry, not below it.

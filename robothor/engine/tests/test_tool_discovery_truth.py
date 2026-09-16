@@ -392,6 +392,46 @@ class TestInToolsetIsPerHit:
         assert "tool_describe" in out["hint"]
 
 
+class TestTheSearchHitShapeIsDeclared:
+    """`search_tools` was annotated `-> list[dict[str, str]]` and the handler
+    assigned a bool into a hit, so `mypy robothor/` — the CI gate — was red on
+    this branch and green on main. The commit that added the line was named for
+    the module it broke and rewrote that exact line without fixing it."""
+
+    def test_the_hit_type_declares_in_toolset(self) -> None:
+        import typing
+
+        from robothor.engine.tools.registry import SearchHit
+
+        # `from __future__ import annotations` makes the raw __annotations__
+        # ForwardRefs, so resolve them the way a type checker does.
+        hints = typing.get_type_hints(SearchHit)
+        assert hints["in_toolset"] is bool
+        assert hints["name"] is str
+        assert hints["description"] is str
+
+    def test_a_hit_carries_the_three_fields_at_runtime(self) -> None:
+        import asyncio
+
+        from robothor.engine.tools.dispatch import (
+            ToolContext,
+            clear_agent_toolset,
+            set_agent_toolset,
+        )
+        from robothor.engine.tools.handlers.toolsearch import HANDLERS
+
+        token = set_agent_toolset(frozenset({"read_file", "gws_gmail_search"}))
+        try:
+            out = asyncio.run(HANDLERS["tool_search"]({"query": "check my email"}, ToolContext()))
+        finally:
+            clear_agent_toolset(token)
+
+        hit = out["results"][0]
+        assert isinstance(hit["name"], str)
+        assert isinstance(hit["description"], str)
+        assert isinstance(hit["in_toolset"], bool)
+
+
 class TestToolCallOnANonDeferredRun:
     """I8: `_allowed_names()` is [] there, so `did_you_mean` was empty and the
     reason given was wrong.
