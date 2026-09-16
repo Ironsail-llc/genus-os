@@ -1228,6 +1228,82 @@ def _quoted_evidence(report: ContractReport) -> str:
     return "\n".join(f'  the task said: "{e}"' for e in seen)
 
 
+#: The marker the sticky block carries, so the engine can tell whether a
+#: conversation already has one rather than stacking a second.
+STICKY_MARKER = "[TASK OUTPUT CONTRACT]"
+
+#: Ceiling on the sticky block. It is re-sent on every compaction of every long
+#: run: a block that grows with the task would be a second context problem,
+#: solved by the thing that was meant to fix the first one.
+STICKY_BLOCK_MAX_CHARS = 2_000
+
+
+def _sticky_line(item: ContractItem) -> str:
+    """One item of the contract, in the task's own terms."""
+    if isinstance(item, PathItem):
+        return f"- write `{item.path}` (it must exist and not be empty)"
+    if isinstance(item, ExactSetItem):
+        rule = "exactly these and nothing else" if item.forbid_extra else "at least these"
+        return f"- `{item.directory}` must contain {rule}: {_listed(item.names)}"
+    if isinstance(item, HeaderItem):
+        delimiter = "tab" if item.delimiter == "\t" else f"`{item.delimiter}`"
+        return f"- `{item.path}` first row, {delimiter}-separated, exactly: `{item.required_text}`"
+    if isinstance(item, JsonFieldsItem):
+        return (
+            f"- `{item.path}` is a JSON {item.container}; each object carries exactly "
+            f"{_listed(item.fields)}"
+        )
+    if isinstance(item, SectionsItem):
+        return f"- `{item.path}` section headings, not to be renamed: {_listed(item.headings)}"
+    if isinstance(item, SortItem):
+        return f"- `{item.path}` rows sorted ascending by {_listed(item.keys)}"
+    return ""  # pragma: no cover — the union is closed
+
+
+def contract_sticky_block(task_text: str | None) -> str | None:
+    """The output contract, rendered small enough to re-send after every compaction.
+
+    MEASURED 2026-09-16: four benchmark runs whose transcript began with a
+    compaction summary scored a mean of 0.016 against 0.450 for the six that
+    never compacted. The required header string appears zero times in the worst
+    one's whole context — the spec had been summarised away, and the agent then
+    invented its own columns.
+
+    ``protected_prefix_len`` is the structural half of the fix and this is the
+    restorative half: even on a run that has compacted twice, the exact path,
+    header, fields and headings are still in front of the model. It is the
+    task's OWN words, and says so — an agent that cannot tell an engine
+    reminder from the task itself will argue with one of them.
+
+    Returns None whenever the task stated no contract, which is most tasks.
+    """
+    contract = extract_contract(task_text)
+    if not contract:
+        return None
+    lines = [_sticky_line(item) for item in contract.items]
+    body = "\n".join(line for line in lines if line)
+    if not body:
+        return None
+    header = (
+        f"{STICKY_MARKER} These are the TASK's own requirements for its output, "
+        "repeated here because earlier turns may have been summarised away. They "
+        "are exact. Check the workspace against them before you finish.\n"
+    )
+    block = header + body
+    if len(block) <= STICKY_BLOCK_MAX_CHARS:
+        return block
+    kept: list[str] = []
+    budget = STICKY_BLOCK_MAX_CHARS - len(header) - 40
+    for line in lines:
+        if not line:
+            continue
+        if budget - len(line) - 1 < 0:
+            break
+        kept.append(line)
+        budget -= len(line) + 1
+    return header + "\n".join(kept) + f"\n- (+{len(lines) - len(kept)} further requirements)"
+
+
 def contract_checkin_note(task_text: str | None, workspace: str | Path | None) -> str | None:
     """The deliverable check-in, as a COMPARISON rather than a question.
 

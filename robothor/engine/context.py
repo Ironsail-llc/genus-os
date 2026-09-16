@@ -210,7 +210,7 @@ async def maybe_compress(
         broken_models=broken_models,
     )
 
-    compressed = result.messages
+    compressed = _restore_output_contract(messages, result.messages)
     logger.info(
         "Compaction complete: %d → %d messages, ~%d → ~%d tokens, "
         "%d facts extracted, %d passes used",
@@ -231,6 +231,43 @@ async def maybe_compress(
             logger.debug("Post-compress hook failed: %s", e)
 
     return compressed
+
+
+def _restore_output_contract(
+    before: list[dict[str, Any]], after: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Put the task's output requirements back in front of the model.
+
+    ``compaction.protected_prefix_len`` keeps the task statement itself; this is
+    the belt to that brace, and it earns its place because the statement is not
+    always in the protected head — a resumed run, a long history, a task
+    restated mid-conversation. The contract is small, exact, and extracted from
+    the PRE-compaction messages, where the spec certainly still is.
+
+    Appended last, so it is the most recent thing the model reads, and only
+    once: a conversation that already carries the marker gets nothing.
+
+    Flag-gated on the deliverable contract's own ladder. Failure here is never
+    allowed to cost a run its compaction — the messages come back unchanged.
+    """
+    try:
+        from robothor.engine.deliverable_contract import STICKY_MARKER, contract_sticky_block
+        from robothor.engine.deliverables import task_text_from
+        from robothor.engine.feature_flags import deliverable_contract_mode
+        from robothor.engine.session import ENGINE_CONTEXT_ROLE
+
+        if deliverable_contract_mode() == "off":
+            return after
+        if any(STICKY_MARKER in str(m.get("content", "")) for m in after):
+            return after
+        block = contract_sticky_block(task_text_from(before))
+        if not block:
+            return after
+        logger.info("Compaction: re-stating the task's output contract (%d chars)", len(block))
+        return [*after, {"role": ENGINE_CONTEXT_ROLE, "content": block}]
+    except Exception as exc:  # noqa: BLE001 — compaction must not fail on this
+        logger.debug("output-contract restore skipped: %s", exc)
+        return after
 
 
 def get_context_stats(messages: list[dict[str, Any]]) -> dict[str, Any]:
