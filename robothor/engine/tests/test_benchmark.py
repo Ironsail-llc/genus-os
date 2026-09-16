@@ -1119,6 +1119,11 @@ class TestBenchmarkSandbox:
             "gws_gmail_modify",
             "gws_calendar_create",
             "gws_calendar_delete",
+            # Reads too, since 2026-09-16: every gws_* tool shells out to a CLI
+            # holding real Workspace credentials, so a graded agent that can
+            # "just read" reads the operator's real mailbox — and did, from a
+            # placeholder thread id copied out of a benchmark prompt.
+            "gws_gmail_search",
             "log_interaction",
             "create_person",
             "create_message",
@@ -1129,7 +1134,7 @@ class TestBenchmarkSandbox:
         assert not leaked, f"benchmark sandbox leaks tools: {sorted(leaked)}"
 
         # Safe read-only tools must NOT be denied.
-        safe_used = {"read_file", "search_memory", "gws_gmail_search", "todo_write"}
+        safe_used = {"read_file", "search_memory", "todo_write"}
         wrongly_denied = safe_used & denied
         assert not wrongly_denied, f"benchmark sandbox over-denies: {sorted(wrongly_denied)}"
 
@@ -1139,7 +1144,9 @@ class TestBenchmarkSandbox:
         # Sanity: it covers the basics.
         assert "read_file" in benchmark_readonly_tools()
         assert "search_memory" in benchmark_readonly_tools()
-        assert "gws_gmail_search" in benchmark_readonly_tools()
+        # And it covers no gws_* tool: a benchmark never reaches the real
+        # Google account, in either direction.
+        assert not any(t.startswith("gws_") for t in benchmark_readonly_tools())
         assert "exec" not in benchmark_readonly_tools()
         assert "invoke_skill" not in benchmark_readonly_tools()
         assert "create_task" not in benchmark_readonly_tools()

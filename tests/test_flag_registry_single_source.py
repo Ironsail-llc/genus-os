@@ -62,6 +62,13 @@ HISTORICAL_GOVERNED_FLAGS: frozenset[str] = frozenset(
         # a run's `exec` can be refused mid-task, and an operator watching a
         # sweep needs to move that from Controls, not from /etc plus a restart.
         "ROBOTHOR_STEP_EFFICIENCY_MODE",
+        # Added 2026-09-16 after the assistant wrote the operator's itinerary to
+        # its OWN calendar and told him it was on his. Not a ladder — the values
+        # are all/externalOnly/none — but governed, because "stop emailing my
+        # attendees" is a posture an operator must be able to take from Controls
+        # rather than by editing a box, and because the state it replaces was an
+        # effective `none` that nobody chose and nobody could see.
+        "ROBOTHOR_CALENDAR_SEND_UPDATES",
     }
 )
 

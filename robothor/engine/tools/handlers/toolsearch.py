@@ -21,7 +21,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from robothor.engine.tools.constants import TOOLSEARCH_TOOLS
-from robothor.engine.tools.dispatch import get_deferred_allowed
+from robothor.engine.tools.dispatch import get_agent_toolset, get_deferred_allowed
 
 if TYPE_CHECKING:
     from robothor.engine.tools.dispatch import ToolContext
@@ -38,6 +38,41 @@ def _allowed_names() -> list[str]:
     return sorted(n for n in allowed if n not in TOOLSEARCH_TOOLS)
 
 
+def _searchable_names() -> tuple[list[str], bool]:
+    """``(names, deferred)`` — what this run may search, and which set it is.
+
+    On a deferred run that is the allow-set the agent reaches through
+    ``tool_call``. On any other run it is the agent's own advertised toolset,
+    which the runner publishes for exactly this reason: ``tool_search`` used to
+    answer "only available on deferred runs" and teach the agent nothing about
+    what it does have. Searching the tools it already holds is a smaller answer
+    but a true one, and the agent stops guessing.
+    """
+    deferred = _allowed_names()
+    if deferred:
+        return deferred, True
+    toolset = get_agent_toolset()
+    if not toolset:
+        return [], False
+    return sorted(n for n in toolset if n not in TOOLSEARCH_TOOLS), False
+
+
+def _closest(name: str, candidates: list[str], limit: int = 3) -> list[str]:
+    """The nearest allowed names to one the agent got wrong.
+
+    A model that has read instruction text naming ``gws_gmail_draft`` or
+    ``gws_calendar_update`` — neither of which this platform registers — gets
+    "unknown tool" and no way forward. Ranked by the same scorer the search
+    uses, on the wrong name read as a query, so "gws_gmail_draft" reaches the
+    Gmail family rather than whatever sorts nearest alphabetically.
+    """
+    from robothor.engine.tools.registry import get_registry
+
+    query = name.replace("_", " ")
+    hits = get_registry().search_tools(candidates, query, limit=limit)
+    return [hit["name"] for hit in hits if hit["name"] != name][:limit]
+
+
 async def _tool_search(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.engine.tools.registry import get_registry
 
@@ -49,18 +84,38 @@ async def _tool_search(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
     except (TypeError, ValueError):
         limit = 10
 
-    names = _allowed_names()
+    names, deferred = _searchable_names()
+    registry = get_registry()
+    note = registry.absent_capability_note(query)
+
     if not names:
-        return {
-            "error": "tool_search is only available on deferred runs",
+        # Not an error: a run that published no toolset is a harness detail,
+        # and there is nothing the agent can do about it either way.
+        out: dict[str, Any] = {
             "results": [],
+            "count": 0,
+            "hint": "this run published no toolset, so there is nothing to search",
         }
-    results = get_registry().search_tools(names, query, limit=limit)
-    return {
+        if note:
+            out["note"] = note
+        return out
+
+    results = registry.search_tools(names, query, limit=limit)
+    for hit in results:
+        hit["in_toolset"] = not deferred
+    out = {
         "results": results,
         "count": len(results),
-        "hint": "Use tool_describe(name=...) for the full schema, then tool_call(name=..., arguments=...).",
+        "hint": (
+            "Use tool_describe(name=...) for the full schema, then "
+            "tool_call(name=..., arguments=...)."
+            if deferred
+            else "These are already in your toolset — call them directly, not via tool_call."
+        ),
     }
+    if note:
+        out["note"] = note
+    return out
 
 
 async def _tool_describe(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -71,11 +126,18 @@ async def _tool_describe(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         return {"error": "name is required"}
     if name in TOOLSEARCH_TOOLS:
         return {"error": f"{name} is a meta-tool and cannot be described/called"}
-    if name not in _allowed_names():
-        return {"error": f"tool '{name}' is not in your allow-list"}
+    candidates, _deferred = _searchable_names()
+    if name not in candidates:
+        return {
+            "error": f"tool '{name}' is not in your allow-list",
+            "did_you_mean": _closest(name, candidates),
+        }
     schema = get_registry().get_schema(name)
     if not schema:
-        return {"error": f"unknown tool: {name}"}
+        return {
+            "error": f"unknown tool: {name}",
+            "did_you_mean": _closest(name, candidates),
+        }
     fn = schema.get("function", {})
     return {
         "name": name,
@@ -95,7 +157,12 @@ async def _tool_call(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if name not in _allowed_names():
         # Defense in depth: deferral shrinks the advertised schema list, so the
         # agent's tools_denied / allow-list is enforced HERE for indirect calls.
-        return {"error": f"tool '{name}' is not in your allow-list"}
+        # The suggestion is computed from the SAME set the check just refused,
+        # so it can never name a tool the agent may not call.
+        return {
+            "error": f"tool '{name}' is not in your allow-list",
+            "did_you_mean": _closest(name, _allowed_names()),
+        }
     tool_args = args.get("arguments", {})
     if not isinstance(tool_args, dict):
         return {"error": "arguments must be an object"}

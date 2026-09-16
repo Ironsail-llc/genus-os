@@ -3,20 +3,55 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import os
 import re
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
+from html import unescape as _unescape
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from robothor.engine.tools.constants import MAX_TOOL_OUTPUT_CHARS
+
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
     from robothor.engine.tools.dispatch import ToolContext
 
 logger = logging.getLogger(__name__)
+
+# ── What has to fit in a tool result ──────────────────────────────────
+#
+# `MAX_TOOL_OUTPUT_CHARS` is the engine's cap on one tool result: past it the
+# JSON is cut head-and-tail with a marker in the middle. These three numbers
+# are derived from it rather than picked, so raising the cap raises them.
+
+#: Room for the headers, labels, snippet and JSON punctuation around a body.
+_GMAIL_ENVELOPE_CHARS = 1500
+
+#: Default cap on ONE message's decoded body. A body longer than this is cut
+#: here, by the handler, which can say `body_truncated` and keep the beginning
+#: intact — rather than by the engine, which cuts blind and lands its hole
+#: wherever the character count falls.
+GMAIL_BODY_MAX_CHARS = MAX_TOOL_OUTPUT_CHARS - _GMAIL_ENVELOPE_CHARS
+
+#: The floor a per-message budget never goes below in a long thread, so that
+#: "the messages in order" does not degrade into a list of empty strings.
+GMAIL_THREAD_MIN_BODY_CHARS = 300
+
+#: How many messages one search describes, however many the query matched.
+#: Each result carries its headers now, so a hundred of them would be a
+#: hundred results with a hole in the middle. Fewer, whole, beats more, cut.
+GMAIL_SEARCH_MAX_RESULTS = 25
+
+#: Metadata fetches issued at once when describing a search's results. The CLI
+#: spawns a process per call; this is a small enough number to be polite to
+#: Google and large enough that ten results do not cost ten round trips.
+GMAIL_METADATA_CONCURRENCY = 5
 
 
 def _resolve_robothor_email() -> str:
@@ -362,6 +397,76 @@ def _resolve_owner_email() -> str:
     return os.environ.get("ROBOTHOR_OWNER_EMAIL", "").strip().lower()
 
 
+def _send_updates() -> str:
+    """Who Google emails about an event this agent touched.
+
+    Delegates to the governed flag
+    (``robothor.engine.feature_flags.calendar_send_updates``) rather than
+    reading the environment here, so "stop emailing my attendees" is an
+    operator control on the dashboard instead of a private edit on a box.
+    """
+    from robothor.engine.feature_flags import calendar_send_updates
+
+    try:
+        return calendar_send_updates()
+    except Exception:  # noqa: BLE001 - a flag problem must not lose the invitation
+        logger.debug("calendar_send_updates unreadable; sending to all", exc_info=True)
+        return "all"
+
+
+def _resolve_calendar(args: dict[str, Any]) -> tuple[str, str]:
+    """``(calendar id, kind)`` for a calendar tool call. Kind is the honest half.
+
+    THE defect of 2026-09-16: ``calendar_id`` defaulted to ``"primary"``, and
+    ``primary`` is the calendar of whichever account the ``gws`` CLI is signed
+    in as — the ASSISTANT's own Google account, not the operator's. An itinerary
+    was planned, inserted, and reported as "on your calendar". It was on the
+    bot's. The operator was added as an attendee, which made the event look
+    right in the API response, and no invitation was sent, so nothing ever
+    reached him.
+
+    So the default is the OPERATOR's calendar, and reaching the assistant's own
+    requires saying ``calendar="own"`` out loud. A tool whose default quietly
+    does the wrong thing is worse than one that refuses.
+
+    The operator's address comes from ``owner.yaml`` through
+    ``robothor.owner_config`` — never a literal, which would be instance data in
+    platform code. With no owner configured there is no operator calendar to
+    write to, so it degrades to ``primary`` and SAYS ``own``: the caller is told
+    which calendar it got, and can say so.
+    """
+    explicit = str(args.get("calendar_id") or "").strip()
+    owner_email = _resolve_owner_email()
+    if explicit:
+        if explicit.lower() == "primary":
+            return explicit, "own"
+        if owner_email and explicit.lower() == owner_email:
+            return explicit, "operator"
+        return explicit, "other"
+
+    choice = str(args.get("calendar") or "operator").strip().lower()
+    if choice == "own":
+        return "primary", "own"
+    if owner_email:
+        return owner_email, "operator"
+    logger.warning(
+        "calendar=%r requested but no operator identity is configured "
+        "(~/.robothor/owner.yaml); falling back to this account's own calendar",
+        choice,
+    )
+    return "primary", "own"
+
+
+def _calendar_block(calendar_id: str, kind: str) -> dict[str, str]:
+    """The ``calendar`` field every calendar result carries.
+
+    The assistant reported "it's on your calendar" because the API said the
+    insert succeeded, and nothing in the result said whose calendar that was.
+    Now it does, in every answer, so a truthful report is the easy one.
+    """
+    return {"kind": kind, "id": calendar_id}
+
+
 def _normalize_summary(s: str) -> str:
     """Lowercase, collapse whitespace, strip punctuation for loose title matching."""
     return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", s)).strip().lower()
@@ -508,6 +613,364 @@ def run_gws(args: list[str], timeout: int = 30) -> dict[str, Any]:
     return _run_gws(args, timeout)
 
 
+# ── Turning a Gmail API message into something an agent can read ──────
+#
+# The Gmail API returns a MIME tree with every body base64url-encoded, which is
+# the correct wire format and an unreadable tool result. Everything below
+# converts one of those into flat fields, once, in the handler — the place that
+# knows the cap it has to fit inside.
+
+
+class _HtmlToText(HTMLParser):
+    """The smallest HTML-to-text converter that does not lie.
+
+    Stdlib only, on purpose: an HTML-only email is a routine thing (an invoice,
+    a calendar invite, anything sent by a marketing system) and pulling a
+    parser dependency into the engine for it would be a supply-chain decision
+    made by a mail format. It drops ``script`` and ``style`` contents — those
+    are not the email, and handing a model the contents of a ``<script>`` tag
+    out of untrusted mail is an injection surface — turns block-level tags into
+    newlines, and unescapes entities (``convert_charrefs`` does that for us).
+    """
+
+    _DROP = frozenset({"script", "style", "head", "title", "meta", "link"})
+    _BREAK = frozenset(
+        {"br", "p", "div", "tr", "li", "h1", "h2", "h3", "h4", "h5", "h6", "table", "blockquote"}
+    )
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._chunks: list[str] = []
+        self._suppress = 0
+
+    def handle_starttag(self, tag: str, attrs: Any) -> None:
+        if tag in self._DROP:
+            self._suppress += 1
+        elif tag in self._BREAK:
+            self._chunks.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in self._DROP and self._suppress:
+            self._suppress -= 1
+        elif tag in self._BREAK:
+            self._chunks.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if not self._suppress:
+            self._chunks.append(data)
+
+    def text(self) -> str:
+        joined = "".join(self._chunks).replace("\xa0", " ")
+        lines = [re.sub(r"[ \t]+", " ", line).strip() for line in joined.splitlines()]
+        return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
+def _html_to_text(html: str) -> str:
+    """Readable text from an HTML email body. Never raises on bad markup."""
+    parser = _HtmlToText()
+    try:
+        parser.feed(html)
+        parser.close()
+    except Exception as exc:  # noqa: BLE001 - malformed mail is the normal case
+        logger.debug("gws: HTML body could not be parsed (%s); falling back", exc)
+        return re.sub(r"<[^>]+>", " ", html).strip()
+    return parser.text()
+
+
+def _decode_b64(data: str) -> str:
+    """Decode one base64url MIME part. Never raises: a body that will not
+    decode is still a message with headers worth returning."""
+    if not data:
+        return ""
+    try:
+        padded = data + "=" * (-len(data) % 4)
+        raw = base64.urlsafe_b64decode(padded.encode("ascii"))
+    except Exception as exc:  # noqa: BLE001 - a mangled part is not a crash
+        logger.debug("gws: body part would not base64-decode (%s)", exc)
+        return ""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("latin-1", errors="replace")
+
+
+def _walk_parts(payload: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    """Every MIME part of a message, depth first, the payload itself included."""
+    yield payload
+    for part in payload.get("parts") or ():
+        if isinstance(part, dict):
+            yield from _walk_parts(part)
+
+
+def _extract_body(payload: dict[str, Any]) -> str:
+    """The message's text: ``text/plain`` if it has one, else its HTML as text.
+
+    Preferring plain text is not an aesthetic choice — the HTML alternative of
+    the same message is the same words wrapped in three times the characters,
+    and the budget is 2,500 of them.
+    """
+    plain: list[str] = []
+    html: list[str] = []
+    for part in _walk_parts(payload):
+        if part.get("filename"):
+            continue  # an attachment, not the message
+        mime = str(part.get("mimeType", ""))
+        data = str((part.get("body") or {}).get("data", ""))
+        if not data:
+            continue
+        if mime.startswith("text/plain"):
+            plain.append(_decode_b64(data))
+        elif mime.startswith("text/html"):
+            html.append(_decode_b64(data))
+    if plain:
+        return "\n".join(t for t in plain if t).strip()
+    if html:
+        return _html_to_text("\n".join(html))
+    return ""
+
+
+def _extract_attachments(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Attachments by name, type and size. Never their bytes: one PDF would be
+    the whole result, and the agent has `analyze_pdf` for the contents."""
+    found: list[dict[str, Any]] = []
+    for part in _walk_parts(payload):
+        filename = str(part.get("filename") or "")
+        if not filename:
+            continue
+        body = part.get("body") or {}
+        found.append(
+            {
+                "filename": filename,
+                "mime_type": str(part.get("mimeType", "")),
+                "size_bytes": int(body.get("size") or 0),
+            }
+        )
+    return found
+
+
+def _header_map(payload: dict[str, Any]) -> dict[str, str]:
+    """Headers keyed lowercase. A message with no headers at all is a real
+    shape the API returns, and it must not take the tool down."""
+    out: dict[str, str] = {}
+    for header in payload.get("headers") or ():
+        if isinstance(header, dict) and "name" in header:
+            out[str(header["name"]).lower()] = str(header.get("value", ""))
+    return out
+
+
+def _shape_envelope(message: dict[str, Any]) -> dict[str, Any]:
+    """The described-but-unread form: who, when, about what, and its labels."""
+    payload = message.get("payload") or {}
+    headers = _header_map(payload)
+    return {
+        "id": str(message.get("id", "")),
+        "thread_id": str(message.get("threadId", "")),
+        "date": headers.get("date", ""),
+        "from": headers.get("from", ""),
+        "to": headers.get("to", ""),
+        "subject": headers.get("subject", ""),
+        "snippet": _unescape(str(message.get("snippet", ""))),
+        "labels": [str(label) for label in (message.get("labelIds") or [])],
+    }
+
+
+def _shape_message(message: dict[str, Any], *, max_chars: int) -> dict[str, Any]:
+    """One message, whole: envelope, cc, message-id, decoded body, attachments."""
+    payload = message.get("payload") or {}
+    headers = _header_map(payload)
+    shaped = _shape_envelope(message)
+    shaped["cc"] = headers.get("cc", "")
+    shaped["message_id"] = headers.get("message-id", "")
+
+    body = _extract_body(payload)
+    shaped["body_chars"] = len(body)
+    if max_chars >= 0 and len(body) > max_chars:
+        shaped["body_text"] = body[:max_chars]
+        shaped["body_truncated"] = True
+    else:
+        shaped["body_text"] = body
+        shaped["body_truncated"] = False
+
+    attachments = _extract_attachments(payload)
+    if attachments:
+        shaped["attachments"] = attachments
+    return shaped
+
+
+# ── gws_gmail_search / gws_gmail_get ──────────────────────────────────
+
+
+def _fetch_message(message_id: str, fmt: str) -> dict[str, Any]:
+    """One raw message from the CLI, by id."""
+    import json as _json
+
+    params = {"userId": "me", "id": message_id, "format": fmt}
+    result = _run_gws(["gmail", "users", "messages", "get", "--params", _json.dumps(params)])
+    return result if isinstance(result, dict) else {"error": str(result)[:200]}
+
+
+def _fits(payload: dict[str, Any]) -> bool:
+    """Would this result survive the engine's tool-output cap intact?"""
+    import json as _json
+
+    return len(_json.dumps(payload, default=str)) <= MAX_TOOL_OUTPUT_CHARS
+
+
+def _gmail_search(args: dict[str, Any]) -> dict[str, Any]:
+    """Search the mailbox and DESCRIBE what was found.
+
+    The old version returned the Gmail API's ``{"messages": [{"id", "threadId"}]}``
+    and nothing else, so every search had to be followed by a `gws_gmail_get`
+    per id just to learn who a message was from. Production shows the loop it
+    produced: five overlapping searches inside one minute, none of which told
+    the agent anything it could answer with.
+
+    One metadata call per id, a few at a time, is the cost of that. It is paid
+    once per search instead of once per id per turn.
+    """
+    import json as _json
+
+    query = str(args.get("query", ""))
+    try:
+        requested = int(args.get("max_results", 10))
+    except (TypeError, ValueError):
+        requested = 10
+    max_results = max(1, min(requested, GMAIL_SEARCH_MAX_RESULTS))
+
+    params = {"userId": "me", "q": query, "maxResults": max_results}
+    listed = _run_gws(["gmail", "users", "messages", "list", "--params", _json.dumps(params)])
+    if not isinstance(listed, dict):
+        return {"error": "gws returned an unexpected shape for a message list"}
+    if "error" in listed:
+        return listed
+
+    stubs = [m for m in (listed.get("messages") or []) if isinstance(m, dict)][:max_results]
+    if not stubs:
+        return {"query": query, "count": 0, "messages": [], "truncated": False}
+
+    ids = [str(m.get("id", "")) for m in stubs]
+    with ThreadPoolExecutor(max_workers=GMAIL_METADATA_CONCURRENCY) as pool:
+        raw = list(pool.map(lambda i: _fetch_message(i, "metadata"), ids))
+
+    described: list[dict[str, Any]] = []
+    for stub, message in zip(stubs, raw, strict=False):
+        if "error" in message:
+            described.append(
+                {
+                    "id": str(stub.get("id", "")),
+                    "thread_id": str(stub.get("threadId", "")),
+                    "error": str(message.get("error", ""))[:200],
+                    "hint": str(message.get("hint", "")),
+                }
+            )
+            continue
+        envelope = _shape_envelope(message)
+        # The ids we asked with are authoritative: a metadata response that
+        # omits them still describes the message we listed.
+        if not envelope["id"]:
+            envelope["id"] = str(stub.get("id", ""))
+        if not envelope["thread_id"]:
+            envelope["thread_id"] = str(stub.get("threadId", ""))
+        described.append(envelope)
+
+    # Drop from the END until the whole result fits, rather than letting the
+    # engine cut the last entry in half. Fewer, whole beats more, holed.
+    total = len(described)
+    out: dict[str, Any] = {
+        "query": query,
+        "count": total,
+        "messages": described,
+        "truncated": False,
+    }
+    while described and not _fits(out):
+        described.pop()
+        out["messages"] = described
+        out["count"] = len(described)
+        out["truncated"] = True
+    if out["truncated"]:
+        out["note"] = (
+            f"{total - len(described)} more match(es) omitted to fit the tool-output "
+            "limit; narrow the query or lower max_results."
+        )
+    return out
+
+
+def _gmail_get(args: dict[str, Any]) -> dict[str, Any]:
+    """Read one message, or a whole thread, as text.
+
+    ``format`` stays for compatibility with instructions already written
+    against it: ``metadata`` and ``minimal`` return the envelope only, and the
+    default ``full`` decodes the body.
+    """
+    import json as _json
+
+    message_id = str(args.get("message_id", "") or "")
+    thread_id = str(args.get("thread_id", "") or "")
+    fmt = str(args.get("format", "full") or "full")
+    with_body = fmt == "full"
+    try:
+        max_chars = int(args.get("max_chars", GMAIL_BODY_MAX_CHARS))
+    except (TypeError, ValueError):
+        max_chars = GMAIL_BODY_MAX_CHARS
+    max_chars = max(0, max_chars)
+
+    if not message_id and not thread_id:
+        return {
+            "error": "Either message_id or thread_id is required",
+            "hint": "invalid_params: get the id from gws_gmail_search",
+        }
+
+    if thread_id:
+        params = {"userId": "me", "id": thread_id, "format": "full" if with_body else "metadata"}
+        raw = _run_gws(["gmail", "users", "threads", "get", "--params", _json.dumps(params)])
+        if not isinstance(raw, dict):
+            return {"error": "gws returned an unexpected shape for a thread"}
+        if "error" in raw:
+            return raw
+        messages = [m for m in (raw.get("messages") or []) if isinstance(m, dict)]
+        # Every message in the thread shares one budget: a thread of ten must
+        # not be ten full bodies, nine of which the cap would eat.
+        per_message = (
+            max(GMAIL_THREAD_MIN_BODY_CHARS, max_chars // max(1, len(messages))) if with_body else 0
+        )
+        shaped = [
+            _shape_message(m, max_chars=per_message) if with_body else _shape_envelope(m)
+            for m in messages
+        ]
+        out: dict[str, Any] = {
+            "thread_id": thread_id or str(raw.get("id", "")),
+            "count": len(shaped),
+            "messages": shaped,
+        }
+        # Oldest first, newest last — the order the API returns and the order a
+        # conversation reads in. Trim the OLDEST when it does not fit: the
+        # newest message is the one that was asked about.
+        while len(shaped) > 1 and not _fits(out):
+            shaped.pop(0)
+            out["messages"] = shaped
+            out["count"] = len(shaped)
+            out["truncated"] = True
+        return out
+
+    params = {"userId": "me", "id": message_id, "format": "full" if with_body else "metadata"}
+    raw = _run_gws(["gmail", "users", "messages", "get", "--params", _json.dumps(params)])
+    if not isinstance(raw, dict):
+        return {"error": "gws returned an unexpected shape for a message"}
+    if "error" in raw:
+        return raw
+    if not with_body:
+        return _shape_envelope(raw)
+    message = _shape_message(raw, max_chars=max_chars)
+    # A single pathological body (a 3 MB newsletter) can still overflow once
+    # the envelope is counted; tighten until it fits rather than hand the
+    # engine something it will cut in the middle of a word.
+    budget = max_chars
+    while budget > GMAIL_THREAD_MIN_BODY_CHARS and not _fits(message):
+        budget //= 2
+        message = _shape_message(raw, max_chars=budget)
+    return message
+
+
 def _resolve_gws_binary() -> str:
     """Resolve the actual gws binary, bypassing the Node.js wrapper.
 
@@ -544,8 +1007,58 @@ def _resolve_gws_binary() -> str:
     return _GWS_BINARY
 
 
+#: The exit-code/text patterns that say WHY a gws call failed, in the order
+#: they are tried. `gws` writes nothing to stderr for several failure classes,
+#: so the only thing the agent was told was "gws exited with code 1" — three
+#: times in one week, once because an agent had copied the placeholder thread
+#: id out of a benchmark prompt and put it in a real Gmail call. A reason it
+#: can act on is the difference between retrying with a real id and retrying
+#: with the same fake one.
+_GWS_ERROR_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (
+        ("404", "not found", "notfound", "does not exist"),
+        "not_found: the id does not exist in this mailbox",
+    ),
+    (
+        (
+            "401",
+            "403",
+            "unauthorized",
+            "unauthenticated",
+            "credential",
+            "token",
+            "sign in",
+            "signed in",
+            "login",
+            "permission",
+        ),
+        "auth: gws is not signed in",
+    ),
+    (
+        ("400", "invalid", "malformed", "bad request", "unrecognized", "required"),
+        "invalid_params",
+    ),
+    (("429", "rate limit", "quota"), "rate_limited: Google is throttling this account"),
+)
+
+#: What to say when nothing matched. Never a bare exit code.
+_GWS_UNCLASSIFIED_HINT = (
+    "gws failed and said nothing; the arguments may be malformed, or the CLI "
+    "may not be signed in. Check `gws auth status` on the host."
+)
+
+
+def _classify_gws_failure(returncode: int, stdout: str, stderr: str) -> str:
+    """A reason for a failed gws call, from whatever text it produced."""
+    haystack = f"{stderr}\n{stdout}".lower()
+    for needles, hint in _GWS_ERROR_HINTS:
+        if any(needle in haystack for needle in needles):
+            return hint
+    return _GWS_UNCLASSIFIED_HINT
+
+
 def _run_gws(args: list[str], timeout: int = 30) -> dict[str, Any]:
-    """Run a gws CLI command, return parsed JSON or error dict."""
+    """Run a gws CLI command, return parsed JSON or ``{"error", "hint"}``."""
     import json as _json
 
     try:
@@ -566,20 +1079,30 @@ def _run_gws(args: list[str], timeout: int = 30) -> dict[str, Any]:
             cwd=work_dir,
         )
         if proc.returncode != 0:
+            stderr = (proc.stderr or "").strip()
+            stdout = (proc.stdout or "").strip()
+            hint = _classify_gws_failure(proc.returncode, stdout, stderr)
             return {
-                "error": proc.stderr.strip()[:1000] or f"gws exited with code {proc.returncode}"
+                "error": stderr[:1000] or hint,
+                "hint": hint,
             }
         try:
             result: dict[str, Any] = _json.loads(proc.stdout)
             return result
         except _json.JSONDecodeError:
-            return {"output": proc.stdout[:4000]}
+            return {"output": proc.stdout[:MAX_TOOL_OUTPUT_CHARS]}
     except subprocess.TimeoutExpired:
-        return {"error": f"gws command timed out after {timeout}s"}
+        return {
+            "error": f"gws command timed out after {timeout}s",
+            "hint": "timeout: Google or the CLI did not answer; retry once, then report it",
+        }
     except FileNotFoundError:
-        return {"error": "gws CLI not found — install with: npm install -g @googleworkspace/cli"}
+        return {
+            "error": "gws CLI not found — install with: npm install -g @googleworkspace/cli",
+            "hint": "not_installed: this host has no gws binary",
+        }
     except Exception as e:
-        return {"error": f"gws failed: {e}"}
+        return {"error": f"gws failed: {e}", "hint": _GWS_UNCLASSIFIED_HINT}
 
 
 # ── do-not-contact guard ─────────────────────────────────────────────────────
@@ -822,6 +1345,194 @@ def _log_dnc_block(
         logger.error("could not record do_not_contact guardrail event: %s", exc)
 
 
+# ── gws_calendar_* ────────────────────────────────────────────────────
+#
+# Split out of `_handle_gws_tool`, which was a 473-line if/elif chain. These
+# three share one question — WHOSE calendar — and for a year the answer they
+# gave was "the assistant's own", silently. See `_resolve_calendar`.
+
+
+def _calendar_list(args: dict[str, Any]) -> dict[str, Any]:
+    """Read a calendar. Says whose in the result — see `_resolve_calendar`."""
+    import json as _json
+
+    time_min = args.get("time_min", "")
+    if not time_min:
+        return {"error": "time_min is required"}
+    calendar_id, calendar_kind = _resolve_calendar(args)
+    cal_params: dict[str, Any] = {
+        "calendarId": calendar_id,
+        "timeMin": time_min,
+        "singleEvents": True,
+        "orderBy": "startTime",
+        "maxResults": min(args.get("max_results", 20), 250),
+    }
+    time_max = args.get("time_max")
+    if time_max:
+        cal_params["timeMax"] = time_max
+    listed = _run_gws(["calendar", "events", "list", "--params", _json.dumps(cal_params)])
+    if isinstance(listed, dict) and "error" not in listed:
+        # "Nothing on your calendar today" is a different sentence from
+        # "nothing on MY calendar today", and the agent could not tell them
+        # apart. Now every read says which one it read.
+        listed["calendar"] = _calendar_block(calendar_id, calendar_kind)
+    return listed
+
+
+def _calendar_create(
+    args: dict[str, Any], *, run_id: str = "", tenant_id: str | None = None
+) -> dict[str, Any]:
+    """Put an event on a calendar and tell the attendees.
+
+    Defaults to the OPERATOR's calendar and passes ``sendUpdates``: the two
+    things whose absence let an itinerary be created on the assistant's own
+    calendar, with the operator as an attendee, and nobody told.
+    """
+    import json as _json
+
+    summary = args.get("summary", "")
+    start = args.get("start", "")
+    end = args.get("end", "")
+    if not summary or not start or not end:
+        return {"error": "summary, start, and end are required"}
+
+    # Google emails every attendee on insert and on every edit, so this is
+    # outbound mail with a different sender. Checked first, before even the
+    # dedup read, so nothing goes out for a blocked invitation.
+    attendee_emails = [e for e in (args.get("attendees") or []) if e]
+    refusal = _dnc_refusal(
+        "gws_calendar_create", *attendee_emails, run_id=run_id, tenant_id=tenant_id
+    )
+    if refusal is not None:
+        return refusal
+
+    calendar_id, calendar_kind = _resolve_calendar(args)
+    owner_email = _resolve_owner_email()
+
+    if not args.get("force"):
+        # Against the SAME calendar the insert will use. A duplicate check
+        # pointed at the assistant's calendar while the event goes to the
+        # operator's finds nothing and then creates the duplicate.
+        dup = _find_duplicate_event(
+            summary=summary,
+            start=start,
+            attendees=attendee_emails,
+            calendar_id=calendar_id,
+            owner_email=owner_email,
+        )
+        if dup is not None:
+            existing_start = (dup.get("start") or {}).get("dateTime") or (
+                dup.get("start") or {}
+            ).get("date", "")
+            logger.warning(
+                "gws_calendar_create deduped against existing event %s "
+                "(summary=%r start=%s) — use force=true to override",
+                dup.get("id"),
+                dup.get("summary"),
+                existing_start,
+            )
+            return {
+                "status": "deduped",
+                "calendar": _calendar_block(calendar_id, calendar_kind),
+                "existing_event_id": dup.get("id"),
+                "summary": dup.get("summary"),
+                "start": existing_start,
+                "htmlLink": dup.get("htmlLink"),
+                "reason": (
+                    "An event with a matching title and overlapping attendees "
+                    "already exists within ±14 days. Not creating a duplicate. "
+                    "Pass force=true to bypass this check."
+                ),
+            }
+
+    event_body: dict[str, Any] = {
+        "summary": summary,
+        "start": {"dateTime": start},
+        "end": {"dateTime": end},
+    }
+    if args.get("description"):
+        event_body["description"] = args["description"]
+    if args.get("location"):
+        event_body["location"] = args["location"]
+    attendees = [{"email": e} for e in attendee_emails]
+    if owner_email and not any(a["email"].lower() == owner_email for a in attendees):
+        attendees.append({"email": owner_email})
+    event_body["attendees"] = attendees
+
+    with_meet = args.get("with_meet", True)
+    if with_meet:
+        request_id = f"robothor-{summary[:20]}-{start[:10]}".replace(" ", "-")
+        event_body["conferenceData"] = {
+            "createRequest": {
+                "requestId": request_id,
+                "conferenceSolutionKey": {"type": "hangoutsMeet"},
+            }
+        }
+
+    cal_params: dict[str, Any] = {"calendarId": calendar_id}
+    if with_meet:
+        cal_params["conferenceDataVersion"] = 1
+    # Without this Google mails nobody. An event on a calendar the attendee
+    # does not read, with no invitation, is an event that did not happen as
+    # far as the attendee is concerned — which is exactly what the operator
+    # experienced on 2026-09-16.
+    send_updates = _send_updates() if attendees else "none"
+    if attendees:
+        cal_params["sendUpdates"] = send_updates
+
+    cal_result = _run_gws(
+        [
+            "calendar",
+            "events",
+            "insert",
+            "--params",
+            _json.dumps(cal_params),
+            "--json",
+            _json.dumps(event_body),
+        ]
+    )
+    _record_calendar_event(result=cal_result if isinstance(cal_result, dict) else {})
+    if isinstance(cal_result, dict) and "error" not in cal_result:
+        cal_result["calendar"] = _calendar_block(calendar_id, calendar_kind)
+        cal_result["invitations_sent"] = bool(attendees) and send_updates != "none"
+        cal_result["attendees_notified"] = (
+            [a["email"] for a in attendees] if cal_result["invitations_sent"] else []
+        )
+    return cal_result
+
+
+def _calendar_delete(args: dict[str, Any]) -> dict[str, Any]:
+    """Remove an event and email the attendees a cancellation."""
+    import json as _json
+
+    event_id = args.get("event_id", "")
+    if not event_id:
+        return {"error": "event_id is required"}
+    calendar_id, calendar_kind = _resolve_calendar(args)
+    # A cancellation nobody is told about is not a cancellation: the
+    # attendees keep the slot and turn up.
+    deleted = _run_gws(
+        [
+            "calendar",
+            "events",
+            "delete",
+            "--params",
+            _json.dumps(
+                {
+                    "calendarId": calendar_id,
+                    "eventId": event_id,
+                    "sendUpdates": _send_updates(),
+                }
+            ),
+        ]
+    )
+    if isinstance(deleted, dict) and "error" not in deleted:
+        deleted["calendar"] = _calendar_block(calendar_id, calendar_kind)
+        deleted["event_id"] = event_id
+        deleted["cancellations_sent"] = _send_updates() != "none"
+    return deleted
+
+
 def _handle_gws_tool(
     name: str, args: dict[str, Any], *, run_id: str = "", tenant_id: str | None = None
 ) -> dict[str, Any]:
@@ -829,23 +1540,10 @@ def _handle_gws_tool(
     import json as _json
 
     if name == "gws_gmail_search":
-        query = args.get("query", "")
-        max_results = min(args.get("max_results", 10), 100)
-        params = {"userId": "me", "q": query, "maxResults": max_results}
-        return _run_gws(["gmail", "users", "messages", "list", "--params", _json.dumps(params)])
+        return _gmail_search(args)
 
     if name == "gws_gmail_get":
-        message_id = args.get("message_id", "")
-        thread_id = args.get("thread_id", "")
-        fmt = args.get("format", "full")
-
-        if thread_id:
-            params = {"userId": "me", "id": thread_id, "format": fmt}
-            return _run_gws(["gmail", "users", "threads", "get", "--params", _json.dumps(params)])
-        if message_id:
-            params = {"userId": "me", "id": message_id, "format": fmt}
-            return _run_gws(["gmail", "users", "messages", "get", "--params", _json.dumps(params)])
-        return {"error": "Either message_id or thread_id is required"}
+        return _gmail_get(args)
 
     if name == "gws_gmail_reply":
         import base64
@@ -1127,127 +1825,13 @@ def _handle_gws_tool(
         )
 
     if name == "gws_calendar_list":
-        time_min = args.get("time_min", "")
-        if not time_min:
-            return {"error": "time_min is required"}
-        cal_params: dict[str, Any] = {
-            "calendarId": args.get("calendar_id", "primary"),
-            "timeMin": time_min,
-            "singleEvents": True,
-            "orderBy": "startTime",
-            "maxResults": min(args.get("max_results", 20), 250),
-        }
-        time_max = args.get("time_max")
-        if time_max:
-            cal_params["timeMax"] = time_max
-        return _run_gws(["calendar", "events", "list", "--params", _json.dumps(cal_params)])
+        return _calendar_list(args)
 
     if name == "gws_calendar_create":
-        summary = args.get("summary", "")
-        start = args.get("start", "")
-        end = args.get("end", "")
-        if not summary or not start or not end:
-            return {"error": "summary, start, and end are required"}
-
-        # Google emails every attendee on insert and on every edit, so this is
-        # outbound mail with a different sender. Checked first, before even the
-        # dedup read, so nothing goes out for a blocked invitation.
-        attendee_emails = [e for e in (args.get("attendees") or []) if e]
-        refusal = _dnc_refusal(name, *attendee_emails, run_id=run_id, tenant_id=tenant_id)
-        if refusal is not None:
-            return refusal
-
-        calendar_id = args.get("calendar_id", "primary")
-        owner_email = _resolve_owner_email()
-
-        if not args.get("force"):
-            dup = _find_duplicate_event(
-                summary=summary,
-                start=start,
-                attendees=attendee_emails,
-                calendar_id=calendar_id,
-                owner_email=owner_email,
-            )
-            if dup is not None:
-                existing_start = (dup.get("start") or {}).get("dateTime") or (
-                    dup.get("start") or {}
-                ).get("date", "")
-                logger.warning(
-                    "gws_calendar_create deduped against existing event %s "
-                    "(summary=%r start=%s) — use force=true to override",
-                    dup.get("id"),
-                    dup.get("summary"),
-                    existing_start,
-                )
-                return {
-                    "status": "deduped",
-                    "existing_event_id": dup.get("id"),
-                    "summary": dup.get("summary"),
-                    "start": existing_start,
-                    "htmlLink": dup.get("htmlLink"),
-                    "reason": (
-                        "An event with a matching title and overlapping attendees "
-                        "already exists within ±14 days. Not creating a duplicate. "
-                        "Pass force=true to bypass this check."
-                    ),
-                }
-
-        event_body: dict[str, Any] = {
-            "summary": summary,
-            "start": {"dateTime": start},
-            "end": {"dateTime": end},
-        }
-        if args.get("description"):
-            event_body["description"] = args["description"]
-        if args.get("location"):
-            event_body["location"] = args["location"]
-        attendees = [{"email": e} for e in attendee_emails]
-        if owner_email and not any(a["email"].lower() == owner_email for a in attendees):
-            attendees.append({"email": owner_email})
-        event_body["attendees"] = attendees
-
-        with_meet = args.get("with_meet", True)
-        if with_meet:
-            request_id = f"robothor-{summary[:20]}-{start[:10]}".replace(" ", "-")
-            event_body["conferenceData"] = {
-                "createRequest": {
-                    "requestId": request_id,
-                    "conferenceSolutionKey": {"type": "hangoutsMeet"},
-                }
-            }
-
-        cal_params = {"calendarId": calendar_id}
-        if with_meet:
-            cal_params["conferenceDataVersion"] = 1
-
-        cal_result = _run_gws(
-            [
-                "calendar",
-                "events",
-                "insert",
-                "--params",
-                _json.dumps(cal_params),
-                "--json",
-                _json.dumps(event_body),
-            ]
-        )
-        _record_calendar_event(result=cal_result if isinstance(cal_result, dict) else {})
-        return cal_result
+        return _calendar_create(args, run_id=run_id, tenant_id=tenant_id)
 
     if name == "gws_calendar_delete":
-        event_id = args.get("event_id", "")
-        if not event_id:
-            return {"error": "event_id is required"}
-        calendar_id = args.get("calendar_id", "primary")
-        return _run_gws(
-            [
-                "calendar",
-                "events",
-                "delete",
-                "--params",
-                _json.dumps({"calendarId": calendar_id, "eventId": event_id}),
-            ]
-        )
+        return _calendar_delete(args)
 
     if name == "gws_chat_send":
         space = args.get("space", "")
@@ -1298,12 +1882,10 @@ def _handle_gws_tool(
     return {"error": f"Unknown gws tool: {name}"}
 
 
-# Mutating gws tools — refused when ctx.is_benchmark. These shell out to
-# the `gws` CLI, which uses real Workspace credentials and would otherwise
-# bypass the in-runner allow-list guard (the CLI is opaque to the runner).
-# Reads (gws_gmail_search / gws_gmail_get / gws_calendar_list / chat reads)
-# are intentionally allowed in benchmark mode — they let benchmark prompts
-# inspect real state without mutating it.
+# Mutating gws tools. Kept as its own set because the guardrail engine and the
+# benchmark deny-list both ask "does this tool change anything at Google", and
+# the answer differs from "may a benchmark call it" — which is now no, for
+# every gws tool.
 _GWS_MUTATING_TOOLS: frozenset[str] = frozenset(
     {
         "gws_gmail_reply",
@@ -1316,15 +1898,33 @@ _GWS_MUTATING_TOOLS: frozenset[str] = frozenset(
 )
 
 
+def _benchmark_refusal(tool_name: str) -> dict[str, Any]:
+    """Every gws tool is refused under ``ctx.is_benchmark`` — reads included.
+
+    These shell out to the `gws` CLI, which carries real Workspace credentials
+    and is opaque to the runner's allow-list guard. Reads used to be allowed
+    through on the reasoning that inspecting state is harmless; it is not. A
+    benchmark prompt that says "reply to thread thread_def456" produced a real
+    Gmail lookup against the operator's real mailbox on this instance, and a
+    graded run that can read the operator's mail is a graded run that can put
+    the operator's mail in its answer. A benchmark must not touch the real
+    account at all, in either direction.
+    """
+    return {
+        "error": (
+            f"Tool '{tool_name}' is disabled in benchmark mode — a benchmark never "
+            "touches the real Google account, not even to read."
+        ),
+        "guard": "is_benchmark",
+    }
+
+
 # Register all GWS tools as async handlers that delegate to sync _handle_gws_tool
 async def _gws_handler(
     args: dict[str, Any], ctx: ToolContext, *, tool_name: str = ""
 ) -> dict[str, Any]:
-    if ctx.is_benchmark and tool_name in _GWS_MUTATING_TOOLS:
-        return {
-            "error": f"Tool '{tool_name}' is disabled in benchmark mode.",
-            "guard": "is_benchmark",
-        }
+    if ctx.is_benchmark:
+        return _benchmark_refusal(tool_name)
     return await asyncio.to_thread(
         _handle_gws_tool, tool_name, args, run_id=ctx.run_id, tenant_id=ctx.tenant_id
     )
@@ -1346,11 +1946,8 @@ for _tool_name in (
 
     def _make_handler(tn: str) -> Callable[..., Any]:
         async def handler(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-            if ctx.is_benchmark and tn in _GWS_MUTATING_TOOLS:
-                return {
-                    "error": f"Tool '{tn}' is disabled in benchmark mode.",
-                    "guard": "is_benchmark",
-                }
+            if ctx.is_benchmark:
+                return _benchmark_refusal(tn)
             return await asyncio.to_thread(
                 _handle_gws_tool, tn, args, run_id=ctx.run_id, tenant_id=ctx.tenant_id
             )

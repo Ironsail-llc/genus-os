@@ -1,7 +1,7 @@
 ---
 name: Email Responder
 version: "2026-03-09"
-description: Composes and sends email replies via gog gmail
+description: Composes and sends email replies with the native Gmail tools
 format: robothor-native/v1
 department: email
 ---

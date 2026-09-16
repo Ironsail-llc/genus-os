@@ -119,10 +119,16 @@ class TestMetaToolHandlers:
         clear_deferred_allowed(token)
 
     @pytest.mark.asyncio
-    async def test_search_requires_deferred_run(self):
-        # No allow-set installed → tool_search refuses.
+    async def test_search_with_no_published_toolset_is_empty_not_an_error(self):
+        """It used to answer "tool_search is only available on deferred runs" —
+        58 errors in a week, 18 of them this case, to an agent that went on
+        calling it because it worked on the last run. With no toolset published
+        there is nothing to search, and saying so is not an error the agent can
+        do anything about. A non-deferred run that HAS published one gets its
+        own tools back: see test_tool_discovery_truth.py."""
         out = await toolsearch._tool_search({"query": "email"}, ToolContext())
-        assert "error" in out
+        assert "error" not in out
+        assert out["results"] == []
 
     @pytest.mark.asyncio
     async def test_search_returns_results(self, deferred_ctx):

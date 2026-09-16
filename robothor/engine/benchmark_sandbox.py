@@ -118,16 +118,17 @@ EXTERNAL_SIDE_EFFECT_TOOLS: frozenset[str] = frozenset(
         "write_file",
         "edit_file",
         "append_file",
-        # Mail.
+        # Mail. Every gws_* tool is refused under ctx.is_benchmark by its own
+        # handler as well (reads included) — this list is the second lock.
         "gws_gmail_send",
         "gws_gmail_reply",
         "gws_gmail_modify",
-        "gws_gmail_draft",
-        "send_email",
+        "gws_gmail_search",
+        "gws_gmail_get",
         # Calendar.
         "gws_calendar_create",
-        "gws_calendar_update",
         "gws_calendar_delete",
+        "gws_calendar_list",
         # Messaging / paging a human.
         "message",
         "send_message",

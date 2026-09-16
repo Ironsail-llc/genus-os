@@ -6,7 +6,7 @@ import asyncio
 import logging
 import math
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from robothor.engine.spawn_cancel import tool_deadline
 from robothor.engine.tools.constants import (
@@ -52,7 +52,55 @@ def builtin_schemas() -> dict[str, Any]:
             },
         }
     schemas.update(get_engine_schemas())
+    _stamp_hints(schemas)
     return schemas
+
+
+#: Registry-only keys stamped onto a schema's ``function`` block by
+#: :func:`_stamp_hints`. They drive :meth:`ToolRegistry.search_tools`; they are
+#: NOT part of the OpenAI function-schema contract, so :func:`wire_schema`
+#: removes them again before anything is advertised to a model.
+_HINT_KEYS = ("keywords", "when_to_use", "rank_bias")
+
+
+def _stamp_hints(schemas: dict[str, Any]) -> None:
+    """Attach each tool's search vocabulary to its schema, in place.
+
+    Done here rather than in ``get_engine_schemas`` because the CRM/memory half
+    of the registry comes from ``robothor.api.mcp`` and needs the same
+    treatment: ``get_inbox`` (the agent's notification queue) and
+    ``list_messages`` (ingested CRM correspondence) were ranking for mail
+    queries beside the Gmail tools with nothing in either schema to tell them
+    apart.
+    """
+    from robothor.engine.tools.keywords import TOOL_HINTS
+
+    for name, hint in TOOL_HINTS.items():
+        fn = schemas.get(name, {}).get("function")
+        if not isinstance(fn, dict):
+            continue
+        if hint.keywords:
+            fn["keywords"] = list(hint.keywords)
+        if hint.when_to_use:
+            fn["when_to_use"] = hint.when_to_use
+        if hint.rank_bias:
+            fn["rank_bias"] = hint.rank_bias
+
+
+def wire_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """A schema with the registry-only hint keys removed, safe to send.
+
+    Copy-on-write: a schema carrying no hints is returned as-is, so the common
+    path allocates nothing. A provider that validates its request body rejects
+    an unknown key inside ``function`` outright, which would take the whole
+    turn down rather than degrade a ranking.
+    """
+    fn = schema.get("function")
+    if not isinstance(fn, dict) or not any(k in fn for k in _HINT_KEYS):
+        return schema
+    stripped = dict(schema)
+    stripped["function"] = {k: v for k, v in fn.items() if k not in _HINT_KEYS}
+    return stripped
 
 
 def builtin_schema_names() -> set[str]:
@@ -114,6 +162,73 @@ _SEARCH_STOPWORDS = frozenset(
         "when",
         "where",
         "can",
+        # Function words that carried real weight because they appear in
+        # descriptions: "do I have any new email" ranked `gws_gmail_get` on
+        # "have" ("when you already HAVE a message id"), and "email alice
+        # about the invoice" spent a third of its signal on "about".
+        "about",
+        "have",
+        "has",
+        "had",
+        "was",
+        "were",
+        "been",
+        "being",
+        "will",
+        "would",
+        "could",
+        "should",
+        "must",
+        "might",
+        "there",
+        "here",
+        "they",
+        "them",
+        "their",
+        "she",
+        "her",
+        "hers",
+        "his",
+        "him",
+        "our",
+        "ours",
+        "these",
+        "those",
+        "then",
+        "than",
+        "because",
+        "while",
+        "but",
+        "not",
+        "all",
+        "other",
+        "such",
+        "own",
+        "same",
+        "very",
+        "too",
+        "also",
+        "just",
+        "still",
+        "again",
+        "out",
+        "over",
+        "off",
+        "per",
+        "via",
+        "yet",
+        "ever",
+        "never",
+        "done",
+        "say",
+        "said",
+        "says",
+        "tell",
+        "told",
+        "want",
+        "need",
+        "know",
+        "think",
     }
 )
 
@@ -122,13 +237,41 @@ _MIN_TERM_LENGTH = 3
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
 
+#: Words whose trailing "s" is part of the word, not a plural.
+_NOT_PLURAL = ("ss", "us", "is", "as")
+
+
+def _stem(word: str) -> str:
+    """A crude singulariser, applied to BOTH sides of every comparison.
+
+    "read my emails" reached no Gmail tool partly because the schemas say
+    "email" and the operator said "emails"; "meetings", "attendees" and
+    "calendars" had the same problem. A real stemmer would be a dependency and
+    a source of surprises ("business" -> "busines"); this handles the only case
+    that shows up in tool vocabulary — a plural noun — and leaves everything
+    else alone. It is applied to the query, to keywords, to name words and to
+    description words, so the two sides can never disagree about a word.
+    """
+    if len(word) > 4 and word.endswith("ies"):
+        return word[:-3] + "y"
+    if len(word) > 3 and word.endswith("es") and word[-4:-2] in ("ch", "sh", "ss", "zz"):
+        return word[:-2]
+    if len(word) > 3 and word.endswith("s") and not word.endswith(_NOT_PLURAL):
+        return word[:-1]
+    return word
+
+
+def _stems(text: str) -> set[str]:
+    """The stemmed word set of a piece of text."""
+    return {_stem(w) for w in _WORD_RE.findall(text.lower())}
+
 
 def _query_terms(query: str) -> list[str]:
-    """Content words from a free-text query, deduplicated, order preserved."""
+    """Content words from a free-text query, stemmed, deduplicated, in order."""
     seen: dict[str, None] = {}
     for word in _WORD_RE.findall(query.lower()):
         if len(word) >= _MIN_TERM_LENGTH and word not in _SEARCH_STOPWORDS:
-            seen.setdefault(word, None)
+            seen.setdefault(_stem(word), None)
     return list(seen)
 
 
@@ -154,6 +297,22 @@ _INTENT_VERBS: dict[str, frozenset[str]] = {
     "remove": frozenset({"delete", "remove", "drop"}),
     "drop": frozenset({"delete", "remove"}),
     "execute": frozenset({"exec", "run"}),
+    # Mail and calendar verbs. "schedule a meeting", "book a call" and "cancel
+    # the meeting" returned nothing or the wrong half of the calendar family:
+    # every calendar tool shares the noun, and only the verb says which.
+    "schedule": frozenset({"create", "add", "book"}),
+    "book": frozenset({"create", "add"}),
+    "arrange": frozenset({"create", "add"}),
+    "invite": frozenset({"create", "add"}),
+    "cancel": frozenset({"delete", "remove", "cancel"}),
+    "reply": frozenset({"reply"}),
+    "respond": frozenset({"reply"}),
+    "answer": frozenset({"reply"}),
+    "send": frozenset({"send"}),
+    "compose": frozenset({"send"}),
+    "mark": frozenset({"modify", "update", "set"}),
+    "archive": frozenset({"modify"}),
+    "label": frozenset({"modify"}),
 }
 
 #: Worth less than an exact name match, more than a description hit: it says
@@ -161,16 +320,51 @@ _INTENT_VERBS: dict[str, frozenset[str]] = {
 _INTENT_BONUS = 4.0
 
 
-def _intent_bonus(name_words: set[str], terms: list[str]) -> float:
-    """Reward a tool whose verb matches what the query asked to DO."""
+def _object_terms(terms: list[str]) -> list[str]:
+    """The query's terms that name a THING rather than an action.
+
+    "read my emails" is a verb the whole registry answers to and a noun only
+    three tools answer to. The verb half was the only half the intent bonus
+    looked at, so `read_file` and `memory_block_read` collected four points for
+    the word "read" and finished above every Gmail tool, which is the second
+    of the two ways the agent was handed the wrong tool.
+    """
+    return [t for t in terms if t not in _INTENT_VERBS]
+
+
+def _intent_bonus(vocabulary: set[str], terms: list[str], objects: list[str]) -> float:
+    """Reward a tool whose verb matches what the query asked to DO.
+
+    Only when the tool's own vocabulary — its name words, its keywords, the
+    words of its description — mentions at least one of the things the query
+    named. A tool that has nothing to do with email does not get four points
+    for the word "read"; a tool that has nothing to do with a meeting does not
+    get four points for "cancel".
+    """
+    if not objects:
+        # A query that is only a verb names nothing to disambiguate between.
+        # "what is on my schedule" is not a request to create something, and
+        # crediting every `create_*` tool for the verb is how it became one.
+        return 0.0
+    if not vocabulary & set(objects):
+        return 0.0
     for term in terms:
         wanted = _INTENT_VERBS.get(term)
-        if wanted and (name_words & wanted):
+        if wanted and (vocabulary & wanted):
             return _INTENT_BONUS
     return 0.0
 
 
-def _term_weights(terms: list[str], corpus: list[tuple[str, str]]) -> dict[str, float]:
+class _Candidate(NamedTuple):
+    """One tool as the ranker sees it."""
+
+    name: str
+    description: str
+    keywords: tuple[str, ...]
+    bias: float = 0.0
+
+
+def _term_weights(terms: list[str], corpus: list[_Candidate]) -> dict[str, float]:
     """Inverse document frequency over the candidate tools.
 
     "run" appears in classify_run_failure, get_agent_run, list_agent_runs and
@@ -182,28 +376,50 @@ def _term_weights(terms: list[str], corpus: list[tuple[str, str]]) -> dict[str, 
     total = max(1, len(corpus))
     weights: dict[str, float] = {}
     for term in terms:
-        df = sum(1 for name, desc in corpus if term in name.lower() or term in desc.lower())
+        df = 0
+        for candidate in corpus:
+            haystack = (
+                _stems(candidate.name)
+                | _stems(candidate.description)
+                | {_stem(k) for k in candidate.keywords}
+            )
+            if term in haystack or term in candidate.name.lower():
+                df += 1
         weights[term] = math.log(1 + total / (1 + df))
     return weights
 
 
 def _score_tool(
-    name: str, description: str, terms: list[str], weights: dict[str, float] | None = None
-) -> float:
+    name: str,
+    description: str,
+    terms: list[str],
+    weights: dict[str, float] | None = None,
+    keywords: tuple[str, ...] = (),
+    bias: float = 0.0,
+) -> tuple[float, int]:
     """Rank one tool against the query's content words.
 
-    The name is worth far more than the description: a tool is named for what
-    it does, while descriptions vary in length by a factor of five and a long
-    one should not win on volume. Each term is counted ONCE per field for the
-    same reason — repetition is a property of the prose, not of relevance.
+    Returns ``(score, keyword coverage)``. The name is worth far more than the
+    description: a tool is named for what it does, while descriptions vary in
+    length by a factor of five and a long one should not win on volume. Each
+    term is counted ONCE per field for the same reason — repetition is a
+    property of the prose, not of relevance.
+
+    A keyword hit counts as much as a hit on the tool's own name. That is the
+    whole point of the vocabulary table: ``gws_gmail_search`` is not named
+    "email" and never will be, and "email" is the word the operator uses. The
+    coverage count rides along because it decides ties — three tools scored
+    7.28 for "check my email" and the answer fell out alphabetically, which is
+    how ``browser`` came first.
     """
-    name_words = set(_WORD_RE.findall(name.lower()))
-    desc_words = set(_WORD_RE.findall(description.lower()))
+    name_words = {_stem(w) for w in _WORD_RE.findall(name.lower())}
+    desc_words = _stems(description)
+    keyword_set = {_stem(k) for k in keywords}
     score = 0.0
     for term in terms:
         w = (weights or {}).get(term, 1.0)
-        if term in name_words:
-            score += 6.0 * w  # exact word in the tool's own name
+        if term in name_words or term in keyword_set:
+            score += 6.0 * w  # exact word in the tool's own name or vocabulary
         elif term in name.lower():
             score += 3.0 * w  # substring, e.g. "mail" in gws_gmail_send
         if term in desc_words:
@@ -212,8 +428,19 @@ def _score_tool(
             score += 0.5 * w
     # A tie between a tool matching two terms and one matching one is decided
     # by coverage, not by which happened to sort first.
-    matched = sum(1 for t in terms if t in name_words or t in desc_words or t in name.lower())
-    return score + matched * 0.25 + _intent_bonus(name_words, terms)
+    matched = sum(
+        1
+        for t in terms
+        if t in name_words or t in desc_words or t in keyword_set or t in name.lower()
+    )
+    covered = sum(1 for t in terms if t in keyword_set)
+    vocabulary = name_words | desc_words | keyword_set
+    total = score + matched * 0.25 + _intent_bonus(vocabulary, terms, _object_terms(terms))
+    # The family entry-point nudge, and only for a tool that matched at all:
+    # a bias must never float an unrelated tool into the results.
+    if score > 0:
+        total += bias
+    return total, covered
 
 
 class ToolRegistry:
@@ -476,8 +703,8 @@ class ToolRegistry:
                 if in_core and n in self._schemas and n not in seen:
                     seen.add(n)
                     advertised.append(n)
-            return [self._schemas[n] for n in advertised]
-        return [self._schemas[n] for n in names]
+            return [wire_schema(self._schemas[n]) for n in advertised]
+        return [wire_schema(self._schemas[n]) for n in names]
 
     def should_defer(self, config: AgentConfig) -> bool:
         """True iff this agent's toolset should be deferred (Rip 16 / G4).
@@ -511,20 +738,77 @@ class ToolRegistry:
         Returns ``[{"name", "description"}]`` for the top matches. Used by the
         tool_search meta-tool, which passes the agent's allow-set (the runner's
         _deferred_allowed set) so search is scoped to what the agent may run.
+
+        The description comes back WHOLE unless it is very long. It used to be
+        cut at 200 characters, which is 48 characters short of the end of
+        ``gws_gmail_reply``'s — so the sentence the cut removed was "Use this
+        instead of gws_gmail_send for all replies", the one fact that decides
+        between the two tools the search returns together.
         """
         terms = _query_terms(query)
-        corpus = [
-            (n, str(self._schemas.get(n, {}).get("function", {}).get("description", "")))
-            for n in names
-        ]
+        corpus: list[_Candidate] = []
+        for n in names:
+            fn = self._schemas.get(n, {}).get("function", {})
+            corpus.append(
+                _Candidate(
+                    name=n,
+                    description=str(fn.get("description", "")),
+                    keywords=tuple(str(k) for k in fn.get("keywords", ())),
+                    bias=float(fn.get("rank_bias", 0.0) or 0.0),
+                )
+            )
         weights = _term_weights(terms, corpus) if terms else {}
-        scored: list[tuple[float, str, str]] = []
-        for n, desc in corpus:
-            score = _score_tool(n, desc, terms, weights) if terms else 0.0
+        scored: list[tuple[float, int, str, str]] = []
+        for candidate in corpus:
+            score, covered = (
+                _score_tool(
+                    candidate.name,
+                    candidate.description,
+                    terms,
+                    weights,
+                    candidate.keywords,
+                    candidate.bias,
+                )
+                if terms
+                else (0.0, 0)
+            )
             if score > 0 or not terms:
-                scored.append((score, n, desc[:200]))
-        scored.sort(key=lambda x: (-x[0], x[1]))
-        return [{"name": n, "description": d} for _s, n, d in scored[: max(1, limit)]]
+                scored.append(
+                    (
+                        score,
+                        covered,
+                        candidate.name,
+                        self._search_description(candidate.name, candidate.description),
+                    )
+                )
+        scored.sort(key=lambda x: (-x[0], -x[1], x[2]))
+        return [{"name": n, "description": d} for _s, _c, n, d in scored[: max(1, limit)]]
+
+    #: Longer than this and a search result stops being scannable. Chosen above
+    #: the longest disambiguating description in the registry, not below it.
+    _SEARCH_DESC_MAX = 400
+
+    def _search_description(self, name: str, description: str) -> str:
+        """What one search hit shows: the whole description, or the sentence
+        that decides between this tool and its sibling."""
+        if len(description) <= self._SEARCH_DESC_MAX:
+            return description
+        when = str(self._schemas.get(name, {}).get("function", {}).get("when_to_use", ""))
+        if when:
+            return when
+        return description[:200] + "…"
+
+    @staticmethod
+    def absent_capability_note(query: str) -> str:
+        """A sentence naming a capability this platform does not have, or ``""``.
+
+        A search for Drive, Docs, Sheets, Google Tasks or Contacts has no right
+        answer here, and the ranker will always produce SOMETHING — the agent
+        then calls it. Saying "there is no such tool" is the answer.
+        """
+        from robothor.engine.tools.keywords import absent_capability_note
+
+        return absent_capability_note(query)
 
     def get_schema(self, name: str) -> dict[str, Any] | None:
         """Return the full OpenAI-function schema for one tool, or None."""
@@ -556,7 +840,7 @@ class ToolRegistry:
         self._refresh_plugin_schemas_if_stale()
         full_names = set(self.get_tool_names(config))
         readonly_names = sorted(full_names & self._readonly_names())
-        return [self._schemas[n] for n in readonly_names if n in self._schemas]
+        return [wire_schema(self._schemas[n]) for n in readonly_names if n in self._schemas]
 
     def get_readonly_tool_names(self, config: AgentConfig) -> list[str]:
         """Return read-only tool names for plan mode."""

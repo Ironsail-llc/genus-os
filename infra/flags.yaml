@@ -592,6 +592,31 @@ flags:
       calendar invitations (gws_calendar_create). Telegram, SMS and chat are
       NOT enforced — see docs/CRM_DATA_FABRIC.md.
 
+  - name: ROBOTHOR_CALENDAR_SEND_UPDATES
+    owner: ops
+    mode: "on"  # quoted: bare `on` is a YAML 1.1 boolean
+    soak: |
+      Not a ladder: the values are `all` (default), `externalOnly` and `none`,
+      and they say who Google emails when an agent creates or cancels an event
+      with attendees.
+
+      It ships at `all` with no soak because the state it replaces was
+      effectively `none` and nobody chose it: `gws_calendar_create` passed no
+      `sendUpdates` at all, so Google mailed nobody. On 2026-09-16 the
+      assistant planned the operator's itinerary, wrote it to `primary` — its
+      OWN calendar, not the operator's — added the operator as an attendee and
+      reported it done. No invitation went out and the operator's calendar was
+      never touched. `all` is what the tool always should have sent.
+
+      `none` is a real operator posture ("stop mailing my attendees") and the
+      reason this is a flag rather than a literal. Setting it means an event an
+      agent creates is visible only to whoever reads that calendar; the result
+      says `invitations_sent: false` so the agent reports it honestly rather
+      than claiming the attendees were told.
+
+      An unrecognised value falls back to `all` and logs. Failing closed here
+      would mean failing silent, which is the failure this flag exists to end.
+
   - name: ROBOTHOR_MANIFEST_SCHEMA_MODE
     owner: platform
     mode: observe

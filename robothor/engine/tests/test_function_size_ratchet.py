@@ -65,14 +65,14 @@ KNOWN_LARGE: dict[str, int] = {
     # The cap follows the function down; leaving it at 775 would bank two lines
     # this method did not earn.
     "runner.py::_run_loop": 773,
-    # +12: run/tenant threaded onto the signature, and the do-not-contact
-    # refusal at the head of both outbound-mail branches. The check itself
-    # lives in _dnc_refusal; only the two call sites are in here.
-    # 465 -> 473: gws_calendar_create is the third outbound-mail branch —
-    # Google invites every attendee by email — so it gets the same call site.
-    # Five irreducible lines (normalise the list, call, branch, return) plus
-    # three of comment; the guard itself is still in _dnc_refusal.
-    "tools/handlers/gws.py::_handle_gws_tool": 473,
+    # 473 -> 346. The Gmail and Calendar branches left for functions of their
+    # own (_gmail_search/_gmail_get, _calendar_list/_calendar_create/
+    # _calendar_delete) when each of them grew a real body: decoding a MIME
+    # tree, and answering "whose calendar is this". What is left here is the
+    # dispatch chain plus the chat branches. The do-not-contact call sites
+    # went with the branches that make outbound mail; the guard itself was
+    # always in _dnc_refusal.
+    "tools/handlers/gws.py::_handle_gws_tool": 350,
     # -14: fleet capacity init extracted to _init_fleet_capacity;
     # -26: structlog wiring extracted to _configure_structured_logging, which
     # is what made room for the startup provider-secrets load rather than

@@ -4,6 +4,6 @@
   "version": "2026-03-09",
   "format": "robothor-native/v1",
   "department": "email",
-  "description": "Composes and sends email replies via gog gmail",
+  "description": "Composes and sends email replies with the native Gmail tools",
   "tags": []
 }

@@ -1,6 +1,6 @@
 id: email-responder
 name: Email Responder
-description: Composes and sends email replies via gog gmail
+description: Composes and sends email replies with the native Gmail tools
 version: "{{ version }}"
 department: email
 
@@ -20,7 +20,9 @@ delivery:
   mode: {{ delivery_mode }}
 
 tools_allowed:
-  - exec
+  # No `exec`. Every job in the instructions has a tool: read_file/write_file
+  # for the status file, gws_gmail_* for the mailbox. A shell beside them is a
+  # second route to the same mailbox with none of the guards.
   - read_file
   - write_file
   - search_memory
@@ -39,9 +41,10 @@ tools_allowed:
   - append_to_block
   - gws_gmail_search
   - gws_gmail_get
+  - gws_gmail_reply
   - gws_gmail_send
-tools_denied:
-  - message
+# tools_denied is deliberately empty: a denial here that the exec_allowlist
+# below then re-opened through a CLI would be decoration, not policy.
 bridge_endpoints:
   - "GET /health"
   - "POST /log-interaction"
@@ -93,15 +96,13 @@ tags_consumed: [email, reply-needed]
 v2:
   error_feedback: true
   guardrails:
-    - exec_allowlist
     - write_path_restrict
-  exec_allowlist:
-    - "^gog gmail (thread|send|search)"
-    - "^gws gmail"
   write_path_allowlist:
     - "brain/memory/response-status.md"
 
 changelog:
+  - date: "2026-09-16"
+    change: "Grant gws_gmail_reply. Drop `exec` and its Google-CLI allowlist — the gog fallback in the instructions was a second route to the mailbox with none of the tool's guards. Drop the tools_denied entry for `message`, which is not a registered tool."
   - date: "2026-03-09"
     change: "Upgrade to GLM-5 for reliable tool-calling (Qwen 3.5 mishandled gws tool schemas)"
   - date: "2026-03-09"

@@ -186,8 +186,13 @@ class TestGwsGmailSearch:
 
             result = _handle_gws_tool("gws_gmail_search", {"query": "is:unread"})
             assert "messages" in result
+            # Each hit is described, not just identified — see
+            # test_gws_gmail_shapes.py for the full contract.
+            assert result["messages"][0]["id"] == "msg1"
+            assert result["messages"][0]["thread_id"] == "t1"
 
-            cmd = mock_run.call_args[0][0]
+            # The LIST call is the first one; the metadata fetches follow it.
+            cmd = mock_run.call_args_list[0][0][0]
             assert cmd[0].endswith("gws")
             assert cmd[1:4] == ["gmail", "users", "messages"]
             params = json.loads(cmd[cmd.index("--params") + 1])
@@ -201,12 +206,14 @@ class TestGwsGmailSearch:
             "robothor.engine.tools.handlers.gws.subprocess.run", return_value=mock_result
         ) as mock_run:
             from robothor.engine.tools import _handle_gws_tool
+            from robothor.engine.tools.handlers.gws import GMAIL_SEARCH_MAX_RESULTS
 
             _handle_gws_tool("gws_gmail_search", {"query": "test", "max_results": 500})
-            params = json.loads(
-                mock_run.call_args[0][0][mock_run.call_args[0][0].index("--params") + 1]
-            )
-            assert params["maxResults"] == 100
+            cmd = mock_run.call_args_list[0][0][0]
+            params = json.loads(cmd[cmd.index("--params") + 1])
+            # Lower than the API's 100: every result now carries its headers,
+            # so a hundred of them would not survive the tool-output cap.
+            assert params["maxResults"] == GMAIL_SEARCH_MAX_RESULTS
 
 
 # ─── Gmail get ───────────────────────────────────────────────────────
@@ -241,7 +248,8 @@ class TestGwsGmailGet:
             from robothor.engine.tools import _handle_gws_tool
 
             result = _handle_gws_tool("gws_gmail_get", {"thread_id": "t1"})
-            assert result["id"] == "t1"
+            assert result["thread_id"] == "t1"
+            assert result["messages"] == []
 
             cmd = mock_run.call_args[0][0]
             assert "threads" in cmd

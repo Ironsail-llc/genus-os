@@ -10,6 +10,7 @@ import pytest
 
 from robothor.engine.models import RunStatus, TriggerType
 from robothor.engine.runner import AgentRunner
+from robothor.engine.session import ENGINE_CONTEXT_ROLE
 from robothor.identity import IdentityContext
 
 
@@ -182,8 +183,12 @@ class TestAgentRunnerExecute:
         assert messages[1]["content"] == "First message"
         assert messages[2]["role"] == "assistant"
         assert messages[2]["content"] == "First reply"
-        assert messages[3]["role"] == "user"
-        assert messages[3]["content"] == "Follow-up"
+        # The engine's own context turn sits between the history and the user's
+        # words — never inside them (#547). It carries who the two principals
+        # are, and on a deferred run how to reach the rest of the toolset.
+        assert messages[3]["role"] == ENGINE_CONTEXT_ROLE
+        assert messages[4]["role"] == "user"
+        assert messages[4]["content"] == "Follow-up"
 
     @pytest.mark.asyncio
     async def test_all_models_fail(self, runner, sample_agent_config):

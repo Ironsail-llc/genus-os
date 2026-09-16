@@ -1418,6 +1418,15 @@ class FlagSettings(SettingsGroup):
         "Admission ladder position: observe logs refusals, enforce applies them.",
         governed=True,
     )
+    calendar_send_updates: str = declare(
+        "all",
+        "ROBOTHOR_CALENDAR_SEND_UPDATES",
+        "Who Google emails when an agent creates or deletes an event with "
+        "attendees: all, externalOnly, or none. The default sends the "
+        "invitation — an event nobody was told about is not a meeting, which "
+        "is how an operator came to be an attendee of a trip he never saw.",
+        governed=True,
+    )
     curator_apply: bool = declare(
         False,
         "ROBOTHOR_CURATOR_APPLY",

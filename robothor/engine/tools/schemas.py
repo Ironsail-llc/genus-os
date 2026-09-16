@@ -1147,14 +1147,22 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         "type": "function",
         "function": {
             "name": "gws_gmail_search",
-            "description": "Search Gmail messages. Returns message IDs and thread IDs matching the query.",
+            "description": (
+                "Use this first for any question about live email — it is the only tool "
+                "that finds messages in the real mailbox. Returns one entry per matching "
+                "message with id, thread_id, date, from, to, subject, snippet and labels, "
+                "already readable, so you usually do not need gws_gmail_get as well."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Gmail search query"},
+                    "query": {
+                        "type": "string",
+                        "description": "Gmail search query, e.g. 'is:unread newer_than:2d' or 'from:alice@example.com'",
+                    },
                     "max_results": {
                         "type": "integer",
-                        "description": "Maximum messages to return (default 10, max 100)",
+                        "description": "Maximum messages to return (default 10, max 25). Each one is fully described, so ask for fewer.",
                         "default": 10,
                     },
                 },
@@ -1166,7 +1174,14 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         "type": "function",
         "function": {
             "name": "gws_gmail_get",
-            "description": "Get a Gmail message or thread by ID. Returns headers, snippet, labels, and body.",
+            "description": (
+                "Use this when you already have a message or thread id and need the text "
+                "of the email itself. Returns headers (from/to/cc/date/subject/"
+                "message_id), labels, snippet and the DECODED body_text — plain text, "
+                "never base64 — with attachments listed by filename, size and type and "
+                "never inlined. Given a thread_id it returns every message in the thread, "
+                "oldest first."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1177,9 +1192,13 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                     },
                     "format": {
                         "type": "string",
-                        "description": "Response format: 'full', 'metadata', 'minimal'",
+                        "description": "'full' (default) decodes the body; 'metadata' and 'minimal' return headers and snippet only",
                         "default": "full",
                         "enum": ["full", "metadata", "minimal"],
+                    },
+                    "max_chars": {
+                        "type": "integer",
+                        "description": "Cap on decoded body characters per message. Defaults to a value that fits the engine's tool-output limit; a cut body says body_truncated: true and body_chars.",
                     },
                 },
             },
@@ -1190,10 +1209,10 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         "function": {
             "name": "gws_gmail_reply",
             "description": (
-                "Reply to an existing email thread. Automatically threads correctly "
-                "(sets In-Reply-To/References headers and threadId), includes all "
-                "original recipients (reply-all), and prevents duplicate replies. "
-                "Use this instead of gws_gmail_send for all replies."
+                "Use this instead of gws_gmail_send for every reply to an existing "
+                "thread. It threads correctly (In-Reply-To/References headers and "
+                "threadId), replies to all the original recipients, and refuses to send "
+                "twice on the same thread. Returns the sent message id and thread id."
             ),
             "parameters": {
                 "type": "object",
@@ -1220,8 +1239,9 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         "function": {
             "name": "gws_gmail_send",
             "description": (
-                "Send a NEW email (not a reply). For replies to existing threads, "
-                "use gws_gmail_reply instead — it handles threading automatically."
+                "Use this only to start a NEW conversation; for anything that answers "
+                "an existing thread use gws_gmail_reply, which threads it correctly. "
+                "Returns the sent message id and thread id."
             ),
             "parameters": {
                 "type": "object",
@@ -1257,7 +1277,11 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         "type": "function",
         "function": {
             "name": "gws_gmail_modify",
-            "description": "Modify Gmail message labels (mark read/unread, archive, add/remove labels).",
+            "description": (
+                "Use this to change an email's state — mark read or unread, archive, add "
+                "or remove labels — never to read or send one. Returns the message id and "
+                "its labels after the change."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1281,7 +1305,13 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         "type": "function",
         "function": {
             "name": "gws_calendar_list",
-            "description": "List calendar events in a date range.",
+            "description": (
+                "Use this to READ the calendar — what is on it today, when someone is "
+                "free, or to find the event id another calendar tool needs. Reads the "
+                "OPERATOR's calendar by default; pass calendar='own' for your own. "
+                "Returns the events in the range with id, start, end, summary, location "
+                "and attendees, plus `calendar` saying whose calendar was read."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1295,10 +1325,15 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                         "description": "Maximum events to return (default 20)",
                         "default": 20,
                     },
+                    "calendar": {
+                        "type": "string",
+                        "description": "Whose calendar: 'operator' (the operator's own calendar — the default, and what 'my calendar' means when the operator says it) or 'own' (YOUR calendar, the assistant's account). Anything the operator attends belongs on the operator's calendar; 'primary' is your own and they will never see it.",
+                        "default": "operator",
+                        "enum": ["operator", "own"],
+                    },
                     "calendar_id": {
                         "type": "string",
-                        "description": "Calendar ID (default 'primary')",
-                        "default": "primary",
+                        "description": "An explicit calendar id, overriding `calendar`. 'primary' is your own account's calendar, not the operator's — pass a shared calendar's address here only when you mean a third calendar.",
                     },
                 },
                 "required": ["time_min"],
@@ -1309,7 +1344,17 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         "type": "function",
         "function": {
             "name": "gws_calendar_create",
-            "description": "Create a calendar event with title, time, attendees, and optional location/description.",
+            "description": (
+                "Use this only to put a NEW event on the calendar; to see what is already "
+                "there use gws_calendar_list first. Writes to the OPERATOR's calendar by "
+                "default — pass calendar='own' for your own, which the operator never "
+                "sees. Emails the attendees their invitation. Creates an event with "
+                "title, time, attendees and optional location/description, adds a Google "
+                "Meet link by default, and returns the event plus `calendar` (whose it "
+                "is), `invitations_sent` and `htmlLink` — report those, not just success. "
+                'Returns {"status": "deduped"} WITHOUT creating anything when a '
+                "matching event already exists nearby."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1323,10 +1368,15 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                         "items": {"type": "string"},
                         "description": "List of attendee email addresses",
                     },
+                    "calendar": {
+                        "type": "string",
+                        "description": "Whose calendar: 'operator' (the operator's own calendar — the default, and what 'my calendar' means when the operator says it) or 'own' (YOUR calendar, the assistant's account). Anything the operator attends belongs on the operator's calendar; 'primary' is your own and they will never see it.",
+                        "default": "operator",
+                        "enum": ["operator", "own"],
+                    },
                     "calendar_id": {
                         "type": "string",
-                        "description": "Calendar ID (default 'primary')",
-                        "default": "primary",
+                        "description": "An explicit calendar id, overriding `calendar`. 'primary' is your own account's calendar, not the operator's — pass a shared calendar's address here only when you mean a third calendar.",
                     },
                     "with_meet": {
                         "type": "boolean",
@@ -1352,15 +1402,25 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         "type": "function",
         "function": {
             "name": "gws_calendar_delete",
-            "description": "Delete a calendar event by its event ID.",
+            "description": (
+                "Use this to cancel or remove an event you already have the id for; find "
+                "the id with gws_calendar_list. Acts on the OPERATOR's calendar by "
+                "default; pass calendar='own' for your own. Deletes permanently and "
+                "emails the attendees a cancellation."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "event_id": {"type": "string", "description": "Calendar event ID to delete"},
+                    "calendar": {
+                        "type": "string",
+                        "description": "Whose calendar: 'operator' (the operator's own calendar — the default, and what 'my calendar' means when the operator says it) or 'own' (YOUR calendar, the assistant's account). Anything the operator attends belongs on the operator's calendar; 'primary' is your own and they will never see it.",
+                        "default": "operator",
+                        "enum": ["operator", "own"],
+                    },
                     "calendar_id": {
                         "type": "string",
-                        "description": "Calendar ID (default 'primary')",
-                        "default": "primary",
+                        "description": "An explicit calendar id, overriding `calendar`. 'primary' is your own account's calendar, not the operator's — pass a shared calendar's address here only when you mean a third calendar.",
                     },
                 },
                 "required": ["event_id"],
@@ -1371,7 +1431,10 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         "type": "function",
         "function": {
             "name": "gws_chat_send",
-            "description": "Send a message to a Google Chat space.",
+            "description": (
+                "Use this for Google Chat spaces only — it is not email and not the "
+                "operator's own channel. Returns the created message's resource name."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1386,7 +1449,11 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         "type": "function",
         "function": {
             "name": "gws_chat_list_spaces",
-            "description": "List Google Chat spaces the authenticated user is a member of.",
+            "description": (
+                "List the Google Chat spaces the signed-in account belongs to. Returns "
+                "each space's resource name and display name — the resource name is what "
+                "gws_chat_send and gws_chat_list_messages need."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1403,7 +1470,10 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         "type": "function",
         "function": {
             "name": "gws_chat_list_messages",
-            "description": "List messages in a Google Chat space. Use for reading conversation thread context.",
+            "description": (
+                "Read the recent messages in one Google Chat space. Returns each "
+                "message's sender, time and text, newest last."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {

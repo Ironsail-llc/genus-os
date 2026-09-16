@@ -659,6 +659,39 @@ def do_not_contact_mode() -> DoNotContactMode:
     return "enforce"
 
 
+#: What Google may be asked to do about attendees. Anything else is a typo.
+_VALID_SEND_UPDATES = frozenset({"all", "externalOnly", "none"})
+
+
+def calendar_send_updates() -> str:
+    """Who Google emails when an agent creates or cancels an event.
+
+    ``ROBOTHOR_CALENDAR_SEND_UPDATES`` — ``all`` (default), ``externalOnly`` or
+    ``none``. Governed, so an operator can turn invitations down from the
+    dashboard rather than by editing a box.
+
+    The default is the loud one, which is the opposite of this module's usual
+    instinct. Every other flag here fails closed because the failure mode of
+    "on" is an action nobody authorised. Here "off" IS the failure: the insert
+    carried no ``sendUpdates`` at all, Google mailed nobody, and an operator was
+    made an attendee of an itinerary he was never told about and could not see.
+    An unrecognised value therefore falls back to ``all``, loudly.
+
+    Read on every call: the store caches the DB answer briefly and reads the
+    environment live, so a change needs no deploy.
+    """
+    raw = _resolve_raw("ROBOTHOR_CALENDAR_SEND_UPDATES", "all").strip()
+    if raw in _VALID_SEND_UPDATES:
+        return raw
+    if raw:
+        logger.warning(
+            "ROBOTHOR_CALENDAR_SEND_UPDATES=%r is not one of %s — sending to all.",
+            raw,
+            sorted(_VALID_SEND_UPDATES),
+        )
+    return "all"
+
+
 def benchmark_sandbox_mode() -> EnforcementMode:
     """Rollout mode for seeded benchmark fixtures + sandbox CRM writes.
 
