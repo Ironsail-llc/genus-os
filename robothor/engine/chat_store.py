@@ -54,6 +54,40 @@ def upsert_session(
         return int(row["id"])
 
 
+def _redact_captions(extras: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A copy of *extras* with every attachment caption scrubbed.
+
+    An attachment's ``caption`` is the operator's own words — the same class as
+    the message body, and subject to the same rule. Without this, a credential
+    pasted as a photo caption was written to ``chat_messages.message``
+    unredacted while the identical text in the body was scrubbed, which is the
+    cross-branch gap the hostile review flagged.
+
+    Copies rather than edits in place: the caller still holds those dicts (the
+    intake logs them, the album buffer keeps them), and a persistence function
+    that reached back into them would be changing data it does not own.
+
+    Nothing else in the row is touched. Paths, sizes and Telegram ids are the
+    record every reader downstream relies on, and a redactor let loose on them
+    could eat the feature while protecting nothing.
+    """
+    if not extras:
+        return extras
+    rows = extras.get("attachments")
+    if not isinstance(rows, list):
+        return extras
+
+    from robothor.secrets.redaction import redact
+
+    cleaned = []
+    for row in rows:
+        if isinstance(row, dict) and isinstance(row.get("caption"), str) and row["caption"]:
+            cleaned.append({**row, "caption": redact(row["caption"])})
+        else:
+            cleaned.append(row)
+    return {**extras, "attachments": cleaned}
+
+
 def build_user_extras(
     *,
     user_message_id: str | None = None,
@@ -127,6 +161,13 @@ def save_exchange(
 
     user_content = redact(user_content)
     assistant_content = redact(assistant_content)
+    # The extras carry one more piece of OPERATOR text: an attachment's caption.
+    # Everything else in there is machine-made — paths, sizes, Telegram ids —
+    # and running a redactor over the lot would risk eating the record the Helm
+    # chat UI reads while protecting nothing. Same door, same rule, narrowest
+    # possible reach.
+    user_extras = _redact_captions(user_extras)
+    assistant_extras = _redact_captions(assistant_extras)
 
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
