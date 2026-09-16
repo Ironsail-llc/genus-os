@@ -109,7 +109,7 @@ def clear_queued_attachments() -> None:
     _queued.clear()
 
 
-def _refuse(item: QueuedAttachment, config: AgentConfig) -> str | None:
+def _refuse(item: QueuedAttachment) -> str | None:
     """Re-run the send ladder for one queued file, or say why it may not go.
 
     The workspace is the one the file was approved against; without one there is
@@ -169,7 +169,7 @@ async def send_attachments(config: AgentConfig, run: AgentRun, name: str, channe
         # the bytes that were on disk when the agent called the tool; the
         # channel opens the file now. A run that queued a benign CSV and then
         # overwrote it with an AWS secret key shipped the key.
-        refusal = _refuse(item, config)
+        refusal = _refuse(item)
         if refusal:
             logger.error(
                 "Attachment %s for %s was refused at delivery: %s",
