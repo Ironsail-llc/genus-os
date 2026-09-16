@@ -294,7 +294,12 @@ class TestTheWholeCallDeadline:
         out = await _analyze(tmp_path, _images(tmp_path, 60), max_concurrency=4)
         elapsed = time.monotonic() - started
 
-        assert elapsed < 3.0, f"the deadline did not bound the call ({elapsed:.1f}s)"
+        # Stated bound: the 0.3 s deadline plus one round of 0.05 s timeouts =
+        # 0.35 s. Measured 0.30-0.42 s. The assertion sits at ~2.5x the bound —
+        # loose enough for a busy CI box, tight enough that a regression to the
+        # two seconds the old `< 3.0` allowed is caught. A control exercised
+        # with an order of magnitude of slack is barely exercised.
+        assert elapsed < 0.9, f"the deadline did not bound the call ({elapsed:.2f}s)"
         assert out["analyzed"] == 0
         assert out["failed"] == 60
         rows = (
@@ -336,8 +341,9 @@ class TestTheWholeCallDeadline:
         out = await _analyze(tmp_path, _images(tmp_path, 40), max_concurrency=4)
         elapsed = time.monotonic() - started
 
-        # One round of four images, each overshooting by 0.25 s, is the bound.
-        assert elapsed < 3.0, f"the overshoot was not bounded by one round ({elapsed:.1f}s)"
+        # Stated bound: the 0.2 s deadline plus one stubborn round of 0.25 s =
+        # 0.45 s. Measured 0.31 s. Two rounds would be 0.7 s and fail.
+        assert elapsed < 1.0, f"the overshoot was not bounded by one round ({elapsed:.2f}s)"
         assert len(out["results"]) or out.get("results_total")
 
     async def test_an_uncancellable_decode_overshoots_by_one_load_only(self, tmp_path, monkeypatch):
@@ -366,7 +372,9 @@ class TestTheWholeCallDeadline:
         await _analyze(tmp_path, _images(tmp_path, 20), max_concurrency=4)
         elapsed = time.monotonic() - started
 
-        assert elapsed < 2.0, f"more than one round of loads ran past the deadline ({elapsed:.1f}s)"
+        # Stated bound: the 0.1 s deadline plus one uncancellable 0.3 s load =
+        # 0.4 s. Measured 0.30 s. A second round of loads would be 0.7 s.
+        assert elapsed < 1.0, f"more than one round of loads ran past the deadline ({elapsed:.2f}s)"
 
 
 class TestRefusedPaths:
