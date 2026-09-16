@@ -68,7 +68,18 @@ _OUTPUT_VERB = r"(?:save|write|store|export|output|put|place|dump|emit)"
 #: A concrete local path: at least one path-ish character and a real
 #: extension. Bare extensions (".tsv") and URLs are excluded by construction
 #: -- the negative lookbehind keeps us off "://host/results/x.tsv".
-_PATH = r"(?<![\w:/.])((?:/|\.{1,2}/)?(?:[\w.\-]+/)*[\w.\-]+\.[A-Za-z][\w]{0,7})"
+#:
+#: Deliberately ASCII, not ``\w``. Python's ``\w`` matches CJK, so
+#: "result.json格式规范" came back as one path named `result.json格式规范` and
+#: "结果result.json" as `结果result.json` — the sibling module
+#: ``deliverables.py`` already carries this exact lesson in its own docstring
+#: ("Deliberately ASCII, not `\w`: Python's `\w` matches CJK, which would glue
+#: a path to the sentence around it") and it was not carried across (hostile
+#: review 2026-09-16, I2).
+_PATH = (
+    r"(?<![A-Za-z0-9_:/.])"
+    r"((?:/|\.{1,2}/)?(?:[A-Za-z0-9_.\-]+/)*[A-Za-z0-9_.\-]+\.[A-Za-z][A-Za-z0-9]{0,7})"
+)
 
 #: What may sit between the preposition and the path. Real prompts do not put
 #: them adjacent: WildClawBench task_4 writes
@@ -92,6 +103,41 @@ _CONTRACT_PATTERNS = [
     # "save as X", "output as X"
     re.compile(rf"{_OUTPUT_VERB}\b[^.\n]{{0,30}}?\bas\b{_GAP}{_PATH}", re.IGNORECASE),
 ]
+
+#: The same contract, stated in Chinese. 37 of the 60 benchmark specs write
+#: their output requirements in CJK and the extractor was blind to all of them
+#: — a silent skip rather than a false positive, so safe, but it meant the
+#: "60 specs, 0 wrong" sweep was really "23 specs" (hostile review 2026-09-16,
+#: I2).
+#:
+#: Deliberately minimal, and held to the same conservatism as the English
+#: anchors: an explicit output VERB (保存 save / 写入 write / 输出 output /
+#: 存储 store) pointed at a concrete path, or the "output file path:" label
+#: these specs use as a heading. Chinese has no space-delimited words, so
+#: there is no `\b` to lean on — the anchor sits immediately against the path
+#: gap instead, which is how these specs are actually written.
+_ZH_OUTPUT_VERB = "(?:保存|写入|输出|存储|存入|导出)"
+
+#: "输出文件路径：/tmp_workspace/results/result.json" — a labelled declaration
+#: rather than a sentence, and the commonest shape in this corpus.
+_ZH_OUTPUT_LABEL = "(?:输出文件路径|输出路径|结果文件|输出文件)"
+
+#: What may sit between a Chinese anchor and the path: a full-width or ASCII
+#: colon, whitespace, a bullet, a backtick. No preposition — Chinese puts the
+#: target after the verb directly, or after 到/至.
+_ZH_GAP = r"(?:到|至)?[ \t]*[：:]?[ \t]*(?:\r?\n[ \t]*)*(?:[-*+][ \t]+)?`?"
+
+_ZH_CONTRACT_PATTERNS = [
+    re.compile(rf"{_ZH_OUTPUT_VERB}{_ZH_GAP}{_PATH}"),
+    re.compile(rf"{_ZH_OUTPUT_LABEL}{_ZH_GAP}{_PATH}"),
+]
+
+#: Chinese prohibition and hypothetical markers, the counterpart of
+#: ``_SUPPRESSOR_RE``. Without these the zh anchors would reintroduce exactly
+#: the C3a defect in a second language.
+_ZH_SUPPRESSOR_RE = re.compile(
+    "(?:不要|不得|禁止|请勿|切勿|不能|无需|不需要|如果|若|假如|例如|比如|示例|之前.{0,8}要求)"
+)
 
 #: Anything inside one of these is a URL, not a local deliverable.
 _URL_RE = re.compile(r"\b[a-z][a-z0-9+.\-]*://\S+", re.IGNORECASE)
@@ -124,7 +170,7 @@ _SUPPRESSOR_RE = re.compile(
 #: include markdown. Save the table to results/x.tsv" is a requirement and
 #: "Do not save the table to results/x.tsv" is not, and the only thing
 #: separating them is the full stop.
-_CLAUSE_BREAK_RE = re.compile(r"[.;:!?]\s|\n")
+_CLAUSE_BREAK_RE = re.compile(r"[.;:!?]\s|\n|[。；！？]")
 
 #: How far back a suppressor can reach inside its own clause. Long enough for
 #: "Under no circumstances should you write the credentials to …", short
@@ -142,7 +188,9 @@ def _is_suppressed(text: str, index: int) -> bool:
     breaks = list(_CLAUSE_BREAK_RE.finditer(window))
     if breaks:
         window = window[breaks[-1].end() :]
-    return _SUPPRESSOR_RE.search(window) is not None
+    if _SUPPRESSOR_RE.search(window) is not None:
+        return True
+    return _ZH_SUPPRESSOR_RE.search(window) is not None
 
 
 def required_deliverables(task_text: str | None) -> list[str]:
@@ -159,7 +207,7 @@ def required_deliverables(task_text: str | None) -> list[str]:
     scrubbed = _URL_RE.sub(lambda m: " " * len(m.group(0)), task_text)
 
     found: list[str] = []
-    for pattern in _CONTRACT_PATTERNS:
+    for pattern in (*_CONTRACT_PATTERNS, *_ZH_CONTRACT_PATTERNS):
         for match in pattern.finditer(scrubbed):
             path = match.group(1)
             # The verb, not the path: "Do not save X to P" puts the negation
