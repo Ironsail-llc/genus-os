@@ -55,9 +55,14 @@ SECTION_TITLES = {
     "agent-authors": "For agent authors",
 }
 
-#: Conventional-commit types that ship something a reader can notice. Mirrors
-#: the release rules in `.releaserc.js`; a breaking `!` title counts whatever
-#: its type.
+#: Conventional-commit types that ship something a reader can notice, plus any
+#: breaking `!` title whatever its type.
+#:
+#: This is deliberately NARROWER than the set that cuts a release.
+#: `.releaserc.js` also bumps on `refactor`, `style` and `docs(README)`, so
+#: those ship a version with no fragment required -- a version bump is not the
+#: same event as a change a reader can see, and demanding a note for every
+#: `refactor:` is how a gate gets labelled around instead of used.
 RELEASING_TYPES = frozenset({"feat", "fix", "perf"})
 
 #: The label that says "this one genuinely changes nothing for any reader".
@@ -435,11 +440,25 @@ def check(
     if mine or not requires_fragment(title, labels):
         return problems
 
+    # A fragment filed under the wrong pull-request number is invisible: it
+    # lints, it assembles, and it is published linked to somebody else's pull
+    # request forever. The one moment it is cheap to notice is here, when the
+    # number under test has nothing -- so name what else is sitting in the
+    # directory rather than leaving the author to re-read their own filename.
+    others = sorted({fragment.pr for fragment in fragments(repo_root)} - {pr})
+    hint = (
+        ""
+        if not others
+        else " This tree also carries fragments for "
+        + ", ".join(f"#{number}" for number in others)
+        + " -- if one of those is yours, the number in its filename is wrong."
+    )
+
     return [
         *problems,
         f"'{title.strip()}' ships a change, but there is no release-note fragment for it. "
         f"Add {FRAGMENT_DIR}/{pr}.<audience>.md -- audience one of "
-        f"{', '.join(AUDIENCES)} -- or label the pull request `{OPT_OUT_LABEL}`.",
+        f"{', '.join(AUDIENCES)} -- or label the pull request `{OPT_OUT_LABEL}`.{hint}",
     ]
 
 
@@ -698,7 +717,10 @@ def main(argv: list[str] | None = None) -> int:
             print(str(error))
             return 1
         if block is None:
-            print(f"changelog_fragments: no fragments; {RELEASE_NOTES} unchanged.")
+            print(
+                f"changelog_fragments: nothing to publish for {args.version}; "
+                f"{RELEASE_NOTES} unchanged."
+            )
             return 0
         print(f"changelog_fragments: {RELEASE_NOTES} now opens with {args.version}.")
         return 0

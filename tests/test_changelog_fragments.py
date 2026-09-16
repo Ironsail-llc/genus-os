@@ -117,6 +117,18 @@ def test_check_does_not_accept_another_prs_fragment(tool, repo) -> None:
     assert tool.check(repo, pr=42, title="fix: y", labels=[]) != []
 
 
+def test_check_names_the_other_prs_fragments_so_a_typod_number_is_visible(tool, repo) -> None:
+    """A fragment under the wrong number lints, assembles, and misattributes."""
+    _write(repo, "41.operators.md")
+    problems = tool.check(repo, pr=42, title="fix: y", labels=[])
+    assert "#41" in problems[0]
+
+
+def test_check_says_nothing_about_other_prs_when_there_are_none(tool, repo) -> None:
+    problems = tool.check(repo, pr=42, title="fix: y", labels=[])
+    assert "also carries" not in problems[0]
+
+
 def test_check_reports_a_bad_fragment_even_when_one_exists(tool, repo) -> None:
     _write(repo, "42.everyone.md")
     problems = tool.check(repo, pr=42, title="feat: x", labels=[])
@@ -469,8 +481,21 @@ def test_ci_runs_check_and_lint_on_every_pull_request() -> None:
 
 def test_the_sticky_comment_shows_the_fragment() -> None:
     workflow = PREVIEW_WORKFLOW.read_text(encoding="utf-8")
-    assert "changelog_fragments.py preview" in workflow
+    assert "changelog_fragments.py --repo-root" in workflow
+    assert " preview" in workflow
     assert "actions/checkout@" in workflow, "preview needs the tree to read the fragment"
+
+
+def test_the_preview_job_does_not_execute_the_pull_requests_own_code() -> None:
+    """It holds `pull-requests: write`, so the tool comes from the base commit."""
+    workflow = PREVIEW_WORKFLOW.read_text(encoding="utf-8")
+    assert "pull_request_target" not in workflow, "never the escalating trigger"
+    assert "ref: ${{ github.event.pull_request.base.sha }}" in workflow
+    assert workflow.count("persist-credentials: false") == 2
+    # The fragments -- the only thing `preview` reads -- come from the head,
+    # into their own directory, which `--repo-root` points at.
+    assert "path: pr" in workflow
+    assert '--repo-root "$PWD/pr"' in workflow
 
 
 def test_the_release_assembles_and_commits_both_halves() -> None:
