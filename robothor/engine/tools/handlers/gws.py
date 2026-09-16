@@ -456,7 +456,7 @@ def _operator_calendar_address() -> str:
     is the guard at the point of use.
     """
     email = _resolve_owner_email()
-    # A FULL match, not "contains an @": `str(['a@b.com'])` contains one and is
+    # A FULL match, not "contains an @": `str(['a@example.com'])` contains one and is
     # a stringified list, not an address.
     if not _EMAIL_RE.fullmatch(email):
         if email:

@@ -510,7 +510,7 @@ class TestAnUnusableOperatorAddressIsNotACalendarId:
     while the result claimed `kind: "operator"` — the tool writing somewhere
     that does not exist and saying it went to the operator."""
 
-    @pytest.mark.parametrize("bad", ["none", "12345", "not-an-address", "['a@b.com']"])
+    @pytest.mark.parametrize("bad", ["none", "12345", "not-an-address", "['a@example.com']"])
     def test_it_degrades_to_own_rather_than_lying(
         self, monkeypatch: pytest.MonkeyPatch, bad: str
     ) -> None:

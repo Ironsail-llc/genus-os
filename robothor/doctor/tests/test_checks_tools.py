@@ -86,7 +86,7 @@ class TestTheScannerDoesNotReadCodeOrLinks:
             ("a URL", "See https://api.example.com/v1/gws_gmail_send?x=1 for details."),
             ("a log path", "Logs land in /var/lib/gws_gmail_send/out.log"),
             ("a windows path", r"Check C:\logs\gws_gmail_send\out.txt"),
-            ("a bash fence", "Example:\n```bash\ngws_gmail_send --to a@b.com\n```\n"),
+            ("a bash fence", "Example:\n```bash\ngws_gmail_send --to user@example.com\n```\n"),
             (
                 "another vendor's SDK in a python fence",
                 "```python\nclient.read_file('x')\nsdk.web_search(q)\n```\n",
