@@ -121,10 +121,47 @@ def _workspace(ctx: DoctorContext) -> Path:
     return EngineConfig.from_env().workspace
 
 
+def _adapter_names() -> set[str]:
+    """Tool names the instance's MCP adapters serve, from their manifests.
+
+    The registry learns these by CONNECTING to each adapter and listing its
+    tools, which a doctor check must not do — it would spawn stdio binaries and
+    dial remote servers to answer a config question. The bundle contract makes
+    the offline answer authoritative anyway: ``tools_allowed`` in the adapter
+    YAML is the ONLY set the registry will register, and anything else the
+    server offers is refused as drift.
+
+    An adapter declaring no ``tools_allowed`` is the legacy allow-all shape and
+    contributes nothing here: its names are whatever its server says today, and
+    inventing a vocabulary for it would be guessing.
+    """
+    try:
+        from pathlib import Path as _Path
+
+        from robothor.engine.adapters import load_adapters
+        from robothor.settings import get_settings
+
+        # Through settings rather than the module-level ``ADAPTER_DIR``, which
+        # is resolved once at import: a doctor run after an operator points
+        # ROBOTHOR_ADAPTER_DIR somewhere new would otherwise scan the old one.
+        configured = str(get_settings().paths.adapter_dir or "").strip()
+        directory = _Path(configured).expanduser() if configured else None
+        return {str(name) for adapter in load_adapters(directory) for name in adapter.tools_allowed}
+    except Exception:  # noqa: BLE001 - an unreadable adapter dir is not a doctor failure
+        return set()
+
+
 def _registered_names() -> set[str]:
+    """Every tool name this instance can actually resolve.
+
+    Built-ins AND adapter routes. Judging ``tools_allowed`` against the
+    built-ins alone reported every MCP-adapter tool an instance grants as
+    "resolves to nothing" — a permanent red on any instance with an adapter,
+    which is how an operator learns to ignore a check.
+    """
     from robothor.engine.tools.registry import builtin_schema_names
 
-    return builtin_schema_names()
+    return builtin_schema_names() | _adapter_names()
 
 
 def mentioned_tools(text: str, registered: set[str]) -> set[str]:
@@ -256,7 +293,7 @@ def _granted(manifest: dict[str, Any], registered: set[str]) -> set[str]:
     allowed = manifest.get("tools_allowed")
     if not allowed:
         # Every registered tool, minus the same filters.
-        return registered - stripped
+        return _with_meta_tools(registered - stripped)
 
     granted = {str(n) for n in allowed}
     for block_key, list_key in (
@@ -268,7 +305,31 @@ def _granted(manifest: dict[str, Any], registered: set[str]) -> set[str]:
             granted |= {str(n) for n in block[list_key]}
     # GOAL_TOOLS are appended unconditionally by the registry filter.
     granted |= set(GOAL_TOOLS) & registered
-    return granted - stripped
+    return _with_meta_tools(granted - stripped)
+
+
+def _with_meta_tools(filtered: set[str]) -> set[str]:
+    """*filtered*, plus the meta-tools when this agent's set would be deferred.
+
+    ``_get_filtered_names`` strips ``tool_search``/``tool_describe``/
+    ``tool_call`` and ``build_for_agent`` INJECTS them again for a deferred
+    agent — they are never in a ``tools_allowed`` list and never can be. The
+    check modelled the strip and not the injection, so every broad agent whose
+    instructions explain how to find a deferred tool was reported as naming
+    three tools its manifest omits. On the live instance that was the check's
+    largest single source of noise, and the manifests were right.
+
+    The deferral test is the registry's own (``should_defer``): the flag, and
+    the advertised-tool count against the threshold. An agent below the
+    threshold does NOT get them, and an instruction telling it to call one is
+    the genuine finding this check exists for.
+    """
+    from robothor.engine.feature_flags import deferred_tools_enabled, deferred_tools_threshold
+    from robothor.engine.tools.constants import TOOLSEARCH_TOOLS
+
+    if deferred_tools_enabled() and len(filtered) > deferred_tools_threshold():
+        return filtered | set(TOOLSEARCH_TOOLS)
+    return filtered
 
 
 def _denied(manifest: dict[str, Any], name: str) -> bool:
