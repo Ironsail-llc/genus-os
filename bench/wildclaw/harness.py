@@ -324,6 +324,17 @@ def _container_command(
         "ROBOTHOR_VISION_REMOTE_MODEL": os.environ.get(
             "ROBOTHOR_VISION_REMOTE_MODEL", BENCH_VISION_MODEL
         ),
+        # Same idiom again, for the control this sweep exists to measure.
+        # Three Productivity tasks scored 0 against a competitor's 86 / 91 / 49
+        # purely on output shape (2026-09-16), and the harness was running
+        # with the deliverable contract off — so the measurement could not have
+        # shown the fix working even once it existed.
+        "ROBOTHOR_DELIVERABLE_CONTRACT_ENABLED": os.environ.get(
+            "ROBOTHOR_DELIVERABLE_CONTRACT_ENABLED", "1"
+        ),
+        "ROBOTHOR_DELIVERABLE_CONTRACT_MODE": os.environ.get(
+            "ROBOTHOR_DELIVERABLE_CONTRACT_MODE", "enforce"
+        ),
         # Genus resolves its skills directory from this, so the task's skills
         # land somewhere the loader actually reads.
         "ROBOTHOR_WORKSPACE": CONTAINER_WORKSPACE,

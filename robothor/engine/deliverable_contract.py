@@ -26,23 +26,28 @@ Design constraints, learned the hard way:
 * **Existence is not enough.** An empty file at the right path is a touched
   path, not a produced deliverable.
 
-MEASURED SCOPE, and why the flag stays off (2026-08-27). Probed against
-production: of **4,000 crm_tasks from the last 60 days, ZERO name an
-explicit output path**. Wiring this to ``crm_tasks`` and promoting the flag
-would therefore ship a control that can never fire — a guard on an empty
-table, which this instance has now done six times
-(``feedback-probe-dont-trust-silence``). It stays ``off`` until it has a
-source of task text that actually carries contracts.
+MEASURED SCOPE (2026-08-27). Probed against production: of **4,000 crm_tasks
+from the last 60 days, ZERO name an explicit output path**. Wiring this to
+``crm_tasks`` alone would have shipped a control that can never fire — a
+guard on an empty table, which this instance has now done six times
+(``feedback-probe-dont-trust-silence``). Where contracts DO exist is
+prompt-borne task specs.
 
-Where contracts DO exist is prompt-borne task specs — the benchmark harness
-states "save them to /tmp_workspace/results/2022.tsv" — and a run's prompt
-is not persisted (``AgentRun`` keeps ``user_prompt_chars``, a count, not the
-text). Closing that is the follow-on: give the finalizer a task-text source
-that includes the originating prompt, then probe again before promoting.
+THE SOURCE, closed 2026-09-16 (migration 123). A run's prompt used not to be
+persisted at all — ``AgentRun`` kept ``user_prompt_chars``, a count, not the
+text — so at finalization the control had nothing to read. ``agent_runs``
+now carries ``task_text``: the originating prompt, redacted through the same
+door as chat history and capped, written at session start. See
+``task_text_for_column`` and ``task_text_for_run``.
 
-The module is deliberately usable without the finalizer: ``required_deliverables``
-and ``check_deliverables`` are pure and importable by any caller that already
-holds the task wording.
+THE SHAPE, added the same day. See the "Shape contracts" section below: a
+path-only contract cannot see a file written to the right place with the
+wrong columns, the wrong fields or renamed headings, which is how three
+benchmark tasks scored 0 while a competitor scored 86 / 91 / 49.
+
+The module is deliberately usable without the finalizer: ``required_deliverables``,
+``check_deliverables``, ``extract_contract`` and ``check_contract`` are pure
+and importable by any caller that already holds the task wording.
 """
 
 from __future__ import annotations

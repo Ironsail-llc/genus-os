@@ -205,7 +205,7 @@ fails if one is re-dated without a reason.
 | `ROBOTHOR_COMPLETION_CONTRACTS_MODE` | enforce | done 2026-07-14 — 3 events, evidence gap fixed |
 | `ROBOTHOR_RIP_7_MODE` | enforce | done 2026-07-13 — the only positively PROVEN mechanism |
 | `ROBOTHOR_ADMISSION_MODE` | enforce | **enforcing since 2026-08-27**; recorded in `flags.yaml` 2026-09-02. 52 `execution_mode_admission` rows 08-28..30 prove it fires. 14 are `critical:` — a pool reservation defect, fixed separately, NOT a reason to drop back to observe |
-| `ROBOTHOR_DELIVERABLE_CONTRACT_MODE` | observe → alert (2026-09-30) | new entry 2026-09-02; 1 observed row. `docs/runbooks/DELIVERABLE_CONTRACT.md` |
+| `ROBOTHOR_DELIVERABLE_CONTRACT_MODE` | observe → alert (2026-09-30) | new entry 2026-09-02; 1 observed row. 2026-09-16: now checks the output SHAPE and `enforce` re-asks once then fails the run — re-probe, the pre-migration-123 rows had no task text. Gates now include a refusal audit. `docs/runbooks/DELIVERABLE_CONTRACT.md` |
 | `ROBOTHOR_SANDBOX_DEFAULT_MODE` | observe (2026-09-16) | BLOCKER: settle the six exec-holding manifests first — 4 declare `sandbox: host`, checked before the mode |
 | `ROBOTHOR_RIP_13_MODE` | observe (2026-09-20) | BLOCKER: 0 evidence rows ever; nothing writes `rip_13_symbolic_memory`. Wire evidence or set it off with a reason |
 | `ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE` | observe (2026-09-20) | BLOCKER: the observe reporter has produced 0 rows; probe one before flipping (analytics-only) |

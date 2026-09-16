@@ -172,11 +172,21 @@ flags:
       misdelivered artifact, not a capability deficit, is most of the gap.
       (robothor/engine/feature_flags.py: deliverable_contract_mode)
 
+      2026-09-16: it now checks the SHAPE, not only the path. Three
+      Productivity tasks of the public benchmark scored 0 against a
+      competitor's 86 / 91 / 49 with the file present and the shape wrong —
+      our own TSV columns, our own manifest path, our own section headings.
+      Extraction grew typed items (exact output set, header, JSON field set,
+      section headings, sort order), each read only from explicit spec
+      language. Migration 123 added agent_runs.task_text so the verdict has a
+      source at finalization at all.
+
       Ladder: observe logs the verdict, alert tells the operator, enforce
-      records it as a guardrail block. Evidence lands in
-      agent_guardrail_events under guardrail_name = 'deliverable_contract'
-      (robothor/flags/evidence.py; written by
-      robothor/engine/run_finalizer.py).
+      turns the deliverable check-in into a comparison, re-asks the model ONCE
+      with the report, and then fails the run rather than letting it report
+      completed. Evidence lands in agent_guardrail_events under
+      guardrail_name = 'deliverable_contract' (robothor/flags/evidence.py;
+      written by robothor/engine/run_finalizer.py).
 
       This entry did not exist until 2026-09-02, and neither did the runbook.
       The flag was set ONLY in /etc/robothor/robothor.env — flag_audit.py's
@@ -207,7 +217,15 @@ flags:
       -0.87-shaped failure reproduced in production data, not only in the
       benchmark that found it. Before enforce, additionally: >= 7 days at
       alert with no operator-reported false block, since enforce is the rung
-      that stops a run from closing its task.
+      that stops a run from closing its task, AND a refusal audit — at least
+      one task the agent was right to decline, run at enforce, confirming the
+      re-ask did not push it into producing the artifact anyway. That hazard
+      is real (safety tasks name output paths) and it is invisible in a
+      false-positive count.
+
+      NOTE on re-probing: rows written before migration 123 came from runs
+      whose prompt was never persisted, so an observe window that starts
+      before it is not evidence about the current control.
       Runbook: docs/runbooks/DELIVERABLE_CONTRACT.md
 
       BLOCKER: exactly one observed row exists and the note says not to

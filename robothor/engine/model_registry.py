@@ -270,6 +270,27 @@ _MODEL_REGISTRY: dict[str, ModelLimits] = {
         supports_thinking=True,
         ttft_hint_ms=2700,
     ),
+    # GLM 5.2 via OpenRouter — registered 2026-09-16. It is the model the
+    # WildClaw sweeps run on, and it was NOT here: the run log carried
+    # "Unknown model … using conservative 128K fallback" 655 times in one
+    # sweep, which means every context decision that sweep made was sized for
+    # a model with an eighth of this one's window.
+    # Context 1,048,576; top provider (DeepInfra) max_completion_tokens
+    # 163,840; $0.4875/M input, $1.56/M output at that provider — other routes
+    # run to $1.40/$4.40, so cost here is a floor, not a ceiling. Text in,
+    # text out: no image support.
+    # Source: https://openrouter.ai/z-ai/glm-5.2 (endpoints:
+    # https://openrouter.ai/api/v1/models/z-ai/glm-5.2/endpoints), 2026-09-16.
+    # ttft_hint_ms carried over from glm-5, not measured on this instance.
+    "openrouter/z-ai/glm-5.2": ModelLimits(
+        max_input_tokens=1_048_576,
+        max_output_tokens=163_840,
+        default_output_tokens=16_384,
+        input_cost_per_token=0.000_000_487_5,  # $0.4875/M
+        output_cost_per_token=0.000_001_56,  # $1.560/M
+        supports_thinking=True,
+        ttft_hint_ms=4000,
+    ),
     # GLM 5.3 Flash via OpenRouter — registered 2026-09-11.
     # max_input_tokens is the TOP PROVIDER's 1,048,576, not the catalog's
     # advertised 1,310,720: the engine sizes context from this number and the

@@ -31,6 +31,15 @@ How and where to write results. MUST specify:
 - Format: one-line summary + ISO 8601 timestamp
 - Example: `All clear. No new items. — 2026-03-01T14:00:00Z`
 
+**Deliverables are exact.** When a task names an output path, a header, a field
+set or section headings, those are the contract and not a suggestion — check
+the workspace against them before you say you are done. Measured 2026-09-16:
+three tasks scored 0 against a competitor's 86 / 91 / 49 purely because the
+research was right and the shape was not (our own TSV columns, our own path,
+our own headings). The engine checks this too — see
+[Deliverable contract](../runbooks/DELIVERABLE_CONTRACT.md) — but an agent that
+has to be told is an agent that has already spent the run.
+
 ## Required Behaviors (conditional)
 
 ### If `task_protocol: true` in manifest
