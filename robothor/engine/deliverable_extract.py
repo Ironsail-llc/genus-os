@@ -29,6 +29,21 @@ from robothor.engine.deliverable_items import (
 )
 from robothor.engine.deliverable_suppress import is_suppressed as _is_suppressed
 
+#: How much of the task statement is read at all.
+#:
+#: The text here is user input, so the cost of reading it has to be bounded by
+#: something this module chooses rather than by something the author of the
+#: task chooses. Two things bound it. Every pattern below is written so that no
+#: two quantifiers can match the same character — each `\s*`/`\s+` is followed
+#: by an atom that cannot match whitespace — which makes one pass linear; and
+#: this cap makes the number of characters in that pass finite. CodeQL found
+#: four patterns that failed the first rule (`py/polynomial-redos`, 2026-09-16):
+#: one of them spent over two minutes on 20,000 tabs.
+#:
+#: 64 KB is twice the 32,768-character cap `deliverable_contract` applies when
+#: it persists the task, so no task text this platform stores can reach it.
+MAX_SCAN_CHARS = 64 * 1024
+
 #: Anything inside one of these is a URL, not a local deliverable.
 _URL_RE = re.compile(r"\b[a-z][a-z0-9+.\-]*://\S+", re.IGNORECASE)
 
@@ -231,7 +246,7 @@ _HEADER_ANCHOR_RE = re.compile(
 #: word has to open the clause and end in a colon, or every sentence about a
 #: table matches.
 _COLUMNS_RE = re.compile(
-    r"\b(?:the\s+)?columns\s*(?:are|must\s+be)?\s*:\s*([^\n.]{3,200})",
+    r"\b(?:the\s+)?columns\s*(?::|(?:are|must\s+be)\s*:)\s*([^\s.][^\n.]{2,199})",
     re.IGNORECASE,
 )
 
@@ -267,14 +282,21 @@ _SECTIONS_ANCHOR_RE = re.compile(
 
 #: "sorted by `X` ascending, then by `Y` ascending". Bounded repetition: this
 #: runs over untrusted task text and must not backtrack.
+#: A sort key: words joined by single spaces, never opening or closing on one.
+#: The old form was `[\w ]{1,40}?`, which could match the very spaces the `\s+`
+#: after it also matched — see the note above `MAX_SCAN_CHARS`.
+_KEY = r"`?(\w{1,40}(?: \w{1,40}){0,4})`?"
+
 _SORT_RE = re.compile(
-    r"\bsorted\s+by\s+`?([\w ]{1,40}?)`?\s+(?:ascending|asc)\b"
-    r"(?:\s*,?\s*(?:and\s+)?then\s+(?:by\s+)?`?([\w ]{1,40}?)`?\s+(?:ascending|asc)\b)?",
+    rf"\bsorted\s+by\s+{_KEY}\s+(?:ascending|asc)\b"
+    rf"(?:(?:\s*,)?\s*(?:and\s+)?then\s+(?:by\s+)?{_KEY}\s+(?:ascending|asc)\b)?",
     re.IGNORECASE,
 )
 
-_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
-_BULLET_RE = re.compile(r"^[ \t]*[-*+][ \t]+(.+?)[ \t]*$")
+#: Trailing whitespace is stripped by the callers, never by a quantifier: a
+#: `(.+?)\s*$` tail is exactly the shape that costs O(n²) on a long run.
+_HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.*)$", re.MULTILINE)
+_BULLET_RE = re.compile(r"^[ \t]*[-*+][ \t]+(.*)")
 #: A bullet that is a NAME: a filename with an extension, or a directory.
 _NAME_RE = re.compile(r"\A[\w.\-]+\.[A-Za-z][\w]{0,7}\Z|\A[\w.\-]+/\Z")
 
@@ -410,10 +432,13 @@ def extract_contract(task_text: str | None) -> DeliverableContract:
     this control speaks only where the task was unambiguous. Every extractor
     needs an explicit anchor phrase; none infers a requirement from an example,
     a mention or a read instruction.
+
+    Only the first `MAX_SCAN_CHARS` are read, so the cost of this call is
+    bounded whatever the task says.
     """
     if not task_text:
         return DeliverableContract()
-    text = str(task_text)
+    text = str(task_text)[:MAX_SCAN_CHARS]
     scrubbed = _scrub_urls(text)
     fences = _fences(scrubbed)
     items: list[ContractItem] = []
