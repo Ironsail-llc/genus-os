@@ -1176,9 +1176,9 @@ class ChannelSettings(SettingsGroup):
     inbox_retention_days: int = declare(
         30,
         "ROBOTHOR_INBOX_RETENTION_DAYS",
-        "How long a file received over a channel is kept in "
-        "<workspace>/inbox/<channel>/ before the daily prune deletes it. The "
-        "prune walks that tree and nothing else, so a file an agent moved "
+        "How long a file received over a channel is kept in <workspace>/inbox/ "
+        "before the daily prune deletes it. The prune walks that tree -- every "
+        "channel under it -- and nothing else, so a file an agent moved "
         "somewhere useful is never touched. 0 disables the prune entirely "
         "rather than deleting everything -- 'keep for zero days' is far more "
         "likely to be a misconfiguration than an instruction.",

@@ -356,9 +356,16 @@ def refuse_to_send(
     if size > MAX_DOCUMENT_BYTES:
         from robothor.engine.attachments import human_size
 
+        limit = human_size(MAX_DOCUMENT_BYTES)
+        # Round-1 M7: a file one byte over renders at the same scale as the
+        # limit, and "big.bin is 50 MB, over the 50 MB a chat attachment may be"
+        # invites the operator to check the arithmetic rather than the file.
+        # When the two render alike, say so in words instead of repeating a
+        # number that appears to contradict itself.
+        measured = human_size(size)
+        over = f"just over the {limit}" if measured == limit else f"{measured}, over the {limit}"
         return (
-            f"refused: {resolved.name} is {human_size(size)}, over the "
-            f"{human_size(MAX_DOCUMENT_BYTES)} a chat attachment may be. Put it somewhere "
+            f"refused: {resolved.name} is {over} a chat attachment may be. Put it somewhere "
             "the operator can fetch it and send the link instead."
         )
 

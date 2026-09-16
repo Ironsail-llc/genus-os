@@ -259,6 +259,37 @@ def inbox_path(
     return candidate
 
 
+#: The first bytes of every image format ``view_image`` can decode. Consulted
+#: when a file claims to be an image, because a claim is not evidence: round-1
+#: M5 found a text file named ``notes.png`` with ``mime: image/png`` filed as an
+#: image, so the agent was told to ``view_image`` something that answers "could
+#: not read as an image", and a real PNG named ``.dat`` was filed as a document
+#: and never offered to be looked at.
+_IMAGE_MAGIC: tuple[bytes, ...] = (
+    b"\x89PNG\r\n\x1a\n",  # PNG
+    b"\xff\xd8\xff",  # JPEG
+    b"GIF87a",
+    b"GIF89a",
+    b"BM",  # BMP
+    b"II*\x00",  # TIFF little-endian
+    b"MM\x00*",  # TIFF big-endian
+)
+
+
+def looks_like_an_image(data: bytes) -> bool:
+    """Do these bytes actually start an image? Magic numbers, not a MIME claim.
+
+    WEBP and the ISO-BMFF family (HEIC, AVIF) carry their marker a few bytes in,
+    so they are checked by container rather than by prefix.
+    """
+    head = bytes(data[:32])
+    if head.startswith(_IMAGE_MAGIC):
+        return True
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return True
+    return head[4:8] == b"ftyp" and head[8:12] in (b"heic", b"heix", b"avif", b"mif1")
+
+
 def kind_for(mime: str, name: str = "") -> str:
     """The coarse family a file belongs to: what the agent needs to decide.
 
@@ -373,7 +404,14 @@ def human_size(size: int) -> str:
     # A whole number keeps no decimal: the refusal sentence says "20 MB",
     # which is the number Telegram's own documentation states, and "20.0 MB"
     # reads like a measurement rather than a limit.
-    rendered = f"{value:.1f}".removesuffix(".0")
+    #
+    # Rounding is toward zero for the same reason. Round-1 M7: a 50.001 MB file
+    # rendered as "50 MB" and the sentence read "big.bin is 50 MB, over the
+    # 50 MB a chat attachment may be", which invites the operator to check the
+    # arithmetic instead of the file. Truncating makes an over-limit size render
+    # strictly larger than the limit it is being compared against.
+    truncated = int(value * 10) / 10
+    rendered = f"{truncated:.1f}".removesuffix(".0")
     return f"{rendered} {unit}"
 
 
@@ -598,7 +636,7 @@ def prune_inbox(
     *,
     retention_days: int | None = None,
     workspace: str | Path | None = None,
-    channel: str = "telegram",
+    channel: str | None = None,
     now: datetime | None = None,
 ) -> int:
     """Delete inbox files older than the retention window. Returns the count.
@@ -607,6 +645,14 @@ def prune_inbox(
     useful has left this tree and is not the prune's business — which is the
     difference between retention and deleting the operator's work.
 
+    ``channel`` prunes one channel's subtree; ``None`` — the default, and what
+    the daily sweep passes — prunes ``<workspace>/inbox/`` entire. Round-1 M2:
+    the default used to be ``"telegram"``, so a file under ``inbox/slack/``
+    would have survived forever while both ``docs/channels/telegram.md`` and
+    ``ROBOTHOR_INBOX_RETENTION_DAYS``'s own help text promised the whole tree.
+    Harmless while nothing else writes an inbox, and wrong the day something
+    does.
+
     ``retention_days <= 0`` disables the prune entirely rather than deleting
     everything, because "keep for zero days" is far more likely to be a
     misconfiguration than an instruction.
@@ -614,7 +660,11 @@ def prune_inbox(
     days = retention_days if retention_days is not None else configured_retention_days()
     if days is None or int(days) <= 0:
         return 0
-    root = inbox_root(workspace, channel=channel)
+    root = (
+        inbox_root(workspace, channel=channel)
+        if channel is not None
+        else _workspace_root(workspace) / INBOX_DIRNAME
+    )
     if not root.is_dir():
         return 0
     cutoff = ((now or datetime.now(UTC)) - timedelta(days=int(days))).timestamp()

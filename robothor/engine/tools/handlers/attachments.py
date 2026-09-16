@@ -117,6 +117,37 @@ def _image_dimensions(path: Path) -> tuple[int, int] | None:
         return None
 
 
+def _audit_refusal(ctx: Any, name: str, reason: str) -> None:
+    """Record that a file was NOT sent, and why. Never raises, never quotes.
+
+    Round-1 M1: only sends and queues were audited, so an agent repeatedly
+    trying to `send_file ~/.ssh/id_rsa` left no trace anywhere — and the ladder
+    refuses more often now than it did then, which makes the silence worse
+    rather than better. The basename and the refusal SENTENCE are recorded; the
+    sentence is written never to contain a credential, which is the same
+    property that lets it be shown to the agent.
+    """
+    try:
+        from robothor.audit.logger import log_event
+
+        log_event(
+            event_type="agent.file_refused",
+            action="send_file",
+            category="agent",
+            actor=str(getattr(ctx, "agent_id", "") or "unknown"),
+            user_id=str(getattr(ctx, "user_id", "") or ""),
+            details={
+                "file": name,
+                "reason": reason[:300],
+                "tenant_id": str(getattr(ctx, "tenant_id", "") or ""),
+                "run_id": str(getattr(ctx, "run_id", "") or ""),
+            },
+            status="denied",
+        )
+    except Exception:  # noqa: BLE001 - bookkeeping never breaks a refusal
+        logger.debug("send_file refusal audit failed", exc_info=True)
+
+
 async def send_file(args: dict[str, Any], ctx: ToolContext | Any = None) -> dict[str, Any]:
     """Send a file to the person this run is talking to.
 
@@ -138,6 +169,7 @@ async def send_file(args: dict[str, Any], ctx: ToolContext | Any = None) -> dict
 
     resolved, refusal = resolve_for_send(raw_path, root)
     if resolved is None:
+        _audit_refusal(ctx, Path(raw_path).name, refusal or "")
         return {"error": refusal}
 
     # The whole ladder, from the shared gate. It runs again in
@@ -145,6 +177,7 @@ async def send_file(args: dict[str, Any], ctx: ToolContext | Any = None) -> dict
     # read, because for a scheduled run this is not the moment of sending.
     refusal = refuse_to_send(resolved, root)
     if refusal:
+        _audit_refusal(ctx, resolved.name, refusal)
         return {"error": refusal}
 
     size = resolved.stat().st_size

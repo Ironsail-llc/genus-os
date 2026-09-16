@@ -329,6 +329,74 @@ class TestPrune:
     def test_a_missing_inbox_is_not_an_error(self, tmp_path) -> None:
         assert attachments.prune_inbox(retention_days=30, workspace=tmp_path / "nope") == 0
 
+    def test_it_prunes_every_channel_by_default(self, tmp_path) -> None:
+        """Round-1 M2. The default was `channel="telegram"`, so a file under
+        `inbox/slack/` survived forever while both the docs and the setting's
+        own help text promised `<workspace>/inbox/`."""
+        from pathlib import Path
+
+        old = datetime.now(UTC) - timedelta(days=40)
+        paths = [
+            Path(
+                attachments.save_attachment(
+                    chat_id="100200300",
+                    file_id="f",
+                    file_unique_id=f"u{channel}",
+                    name="a.txt",
+                    data=b"x",
+                    kind="document",
+                    mime="text/plain",
+                    workspace=tmp_path,
+                    channel=channel,
+                    when=old,
+                )["path"]
+            )
+            for channel in ("telegram", "slack", "webchat")
+        ]
+        assert attachments.prune_inbox(retention_days=30, workspace=tmp_path) == 3
+        assert not any(path.exists() for path in paths)
+
+    def test_naming_a_channel_still_prunes_only_that_one(self, tmp_path) -> None:
+        from pathlib import Path
+
+        old = datetime.now(UTC) - timedelta(days=40)
+        kept = Path(
+            attachments.save_attachment(
+                chat_id="100200300",
+                file_id="f",
+                file_unique_id="uslack",
+                name="a.txt",
+                data=b"x",
+                kind="document",
+                mime="text/plain",
+                workspace=tmp_path,
+                channel="slack",
+                when=old,
+            )["path"]
+        )
+        attachments.save_attachment(
+            chat_id="100200300",
+            file_id="f",
+            file_unique_id="utg",
+            name="a.txt",
+            data=b"x",
+            kind="document",
+            mime="text/plain",
+            workspace=tmp_path,
+            channel="telegram",
+            when=old,
+        )
+        assert (
+            attachments.prune_inbox(retention_days=30, workspace=tmp_path, channel="telegram") == 1
+        )
+        assert kept.exists()
+
+    def test_nothing_above_the_inbox_is_touched_by_the_wider_sweep(self, tmp_path) -> None:
+        outside = tmp_path / "keepme.txt"
+        outside.write_text("mine")
+        attachments.prune_inbox(retention_days=30, workspace=tmp_path)
+        assert outside.exists()
+
 
 class TestSecretsTheOperatorSent:
     """Sanitising a filename destroys what ``secret_paths`` matches on.
@@ -507,6 +575,51 @@ class TestSecretsTheOperatorSent:
         assert "kept, but not read" in note
         assert "TOKEN=abc" not in note, "an extract must never survive the secret verdict"
         assert row["path"] in note, "the operator can still be told where it went"
+
+
+class TestLooksLikeAnImage:
+    """Round-1 M5: the MIME type and the name are claims, not evidence."""
+
+    @pytest.mark.parametrize(
+        "magic",
+        [
+            b"\x89PNG\r\n\x1a\n",
+            b"\xff\xd8\xff\xe0",
+            b"GIF89a",
+            b"BM\x00\x00",
+            b"II*\x00",
+            b"MM\x00*",
+            b"RIFF\x00\x00\x00\x00WEBP",
+            b"\x00\x00\x00\x18ftypavif",
+            b"\x00\x00\x00\x18ftypheic",
+        ],
+    )
+    def test_real_image_bytes_are_recognised(self, magic) -> None:
+        assert attachments.looks_like_an_image(magic + b"\x00" * 64) is True
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            b"a plain text file that happens to be called notes.png",
+            b"%PDF-1.7",
+            b"PK\x03\x04",
+            b"\x00\x00\x00\x18ftypmp42",
+            b"",
+        ],
+    )
+    def test_everything_else_is_not(self, body) -> None:
+        assert attachments.looks_like_an_image(body) is False
+
+
+class TestHumanSize:
+    def test_a_size_never_reads_as_the_limit_it_exceeds(self) -> None:
+        """Round-1 M7. Rounding up made a 50.001 MB file render "50 MB", so the
+        refusal read "is 50 MB, over the 50 MB a chat attachment may be"."""
+        assert attachments.human_size(50 * 1024 * 1024 + 200_000) == "50.1 MB"
+
+    def test_an_exact_limit_reads_as_a_whole_number(self) -> None:
+        assert attachments.human_size(50 * 1024 * 1024) == "50 MB"
+        assert attachments.human_size(20 * 1024 * 1024) == "20 MB"
 
 
 class TestKindForMessageParts:

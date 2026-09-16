@@ -577,6 +577,70 @@ class TestALateAlbumMember:
         assert on_disk - told == set(), "saved but never mentioned to the agent"
 
 
+class TestTheKindComesFromTheBytes:
+    """Round-1 M5. The MIME type and the name are claims, not evidence, and the
+    note changes its advice on the answer: an image entry says "call view_image
+    on this path", which is useless for a text file called `notes.png` and
+    missing for a real PNG called `.dat`."""
+
+    @pytest.mark.asyncio
+    async def test_a_text_file_claiming_to_be_a_png_is_filed_as_a_document(self, bot) -> None:
+        arm_download(bot, b"just some notes, not a picture at all")
+        await bot.handle_file(
+            message(document=document(name="notes.png", mime="image/png", uid="AgAClie"))
+        )
+        text, rows = enqueued(bot)
+        assert rows[0]["kind"] == "document"
+        assert "view_image" not in text, "it cannot honour that advice"
+
+    @pytest.mark.asyncio
+    async def test_a_real_png_called_dat_is_filed_as_an_image(self, bot, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "robothor.engine.tools.handlers.images.describe_image_bytes",
+            AsyncMock(return_value="a chart"),
+        )
+        arm_download(bot, b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+        await bot.handle_file(
+            message(
+                document=document(name="export.dat", mime="application/octet-stream", uid="AgACdat")
+            )
+        )
+        text, rows = enqueued(bot)
+        assert rows[0]["kind"] == "image"
+        assert "view_image" in text
+
+    @pytest.mark.asyncio
+    async def test_an_honest_photo_is_unaffected(self, bot, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "robothor.engine.tools.handlers.images.describe_image_bytes",
+            AsyncMock(return_value="a cat"),
+        )
+        arm_download(bot, b"\xff\xd8\xff" + b"\x00" * 32)
+        await bot.handle_file(message(photo=photo()))
+        _, rows = enqueued(bot)
+        assert rows[0]["kind"] == "image"
+
+
+class TestAFailedSaveIsAnswered:
+    @pytest.mark.asyncio
+    async def test_the_operator_is_told_rather_than_left_in_silence(self, bot, monkeypatch) -> None:
+        """Round-1 M3. Only the DOWNLOAD was guarded, so a ValueError from the
+        containment assertion or an OSError from a full disk escaped into
+        aiogram's dispatcher and the operator got no reply at all."""
+        arm_download(bot, b"hello")
+        monkeypatch.setattr(
+            "robothor.engine.attachments.save_attachment",
+            MagicMock(side_effect=OSError("no space left on device")),
+            raising=True,
+        )
+        msg = message(document=document(name="a.txt", mime="text/plain"))
+        await bot.handle_file(msg)
+
+        msg.answer.assert_awaited_once()
+        assert "couldn't download" in msg.answer.await_args.args[0].lower()
+        bot._enqueue_message.assert_not_awaited()
+
+
 class TestOtherKinds:
     @pytest.mark.asyncio
     async def test_a_sticker_is_kept_as_an_image(self, bot, monkeypatch) -> None:
@@ -584,7 +648,11 @@ class TestOtherKinds:
             "robothor.engine.tools.handlers.images.describe_image_bytes",
             AsyncMock(return_value="a sticker of a duck"),
         )
-        arm_download(bot, b"RIFFwebp")
+        # A real WEBP header: `RIFF`, four size bytes, then `WEBP`. The old
+        # fixture said `RIFFwebp`, which is not a WEBP and not anything else —
+        # once the kind is decided from the BYTES (M5), a sticker whose bytes
+        # are not an image is correctly filed as a document.
+        arm_download(bot, b"RIFF\x24\x00\x00\x00WEBPVP8 " + b"\x00" * 16)
         sticker = MagicMock()
         sticker.file_id = "CAAC1"
         sticker.file_unique_id = "AgACstick"

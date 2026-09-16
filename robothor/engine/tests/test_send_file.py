@@ -394,6 +394,80 @@ class TestAudit:
         assert str(path.parent) not in blob, "the basename, never the whole path"
 
 
+class TestRefusalsAreAudited:
+    """Round-1 M1. Only sends and queues left a trace, so an agent repeatedly
+    trying `send_file ~/.ssh/id_rsa` was invisible — and the ladder refuses more
+    often now than when that was written."""
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_writes_a_denied_audit_row(self, tmp_path, sent, monkeypatch) -> None:
+        events: list[dict] = []
+        monkeypatch.setattr(
+            "robothor.audit.logger.log_event", lambda **kw: events.append(kw), raising=True
+        )
+        path = make_file(tmp_path, ".env", b"TOKEN=abc")
+        out = await tool.send_file({"path": str(path)}, Ctx(tmp_path))
+
+        assert "error" in out
+        assert events, "a refusal is an event"
+        assert events[0]["status"] == "denied"
+        assert events[0]["action"] == "send_file"
+        assert events[0]["details"]["file"] == ".env"
+        assert "TOKEN=abc" not in repr(events[0])
+
+    @pytest.mark.asyncio
+    async def test_a_containment_refusal_is_audited_too(self, tmp_path, sent, monkeypatch) -> None:
+        events: list[dict] = []
+        monkeypatch.setattr(
+            "robothor.audit.logger.log_event", lambda **kw: events.append(kw), raising=True
+        )
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        await tool.send_file({"path": "../../../../etc/passwd"}, Ctx(workspace))
+        assert [e["status"] for e in events] == ["denied"]
+
+    @pytest.mark.asyncio
+    async def test_a_successful_send_is_not_audited_as_denied(
+        self, tmp_path, sent, monkeypatch
+    ) -> None:
+        events: list[dict] = []
+        monkeypatch.setattr(
+            "robothor.audit.logger.log_event", lambda **kw: events.append(kw), raising=True
+        )
+        await tool.send_file({"path": str(make_file(tmp_path, "a.txt"))}, Ctx(tmp_path))
+        assert [e["status"] for e in events] == ["ok"]
+
+
+class TestTheOverLimitSentence:
+    @pytest.mark.asyncio
+    async def test_a_file_one_byte_over_does_not_read_as_the_limit(
+        self, tmp_path, sent, monkeypatch
+    ) -> None:
+        """Round-1 M7: "big.bin is 50 MB, over the 50 MB a chat attachment may
+        be" invites the operator to check the arithmetic, not the file."""
+        limit = 1024 * 1024
+        monkeypatch.setattr(gate, "MAX_DOCUMENT_BYTES", limit, raising=True)
+        # Over the limit, but not by enough to render at a different scale —
+        # which is the only case where the old sentence contradicted itself.
+        out = await tool.send_file(
+            {"path": str(make_file(tmp_path, "big.bin", b"x" * (limit + 1000)))}, Ctx(tmp_path)
+        )
+        assert "error" in out
+        assert "is 1 MB, over the 1 MB" not in out["error"]
+        assert "just over the 1 MB" in out["error"]
+
+    @pytest.mark.asyncio
+    async def test_a_clearly_larger_file_still_states_its_size(
+        self, tmp_path, sent, monkeypatch
+    ) -> None:
+        limit = 1024 * 1024
+        monkeypatch.setattr(gate, "MAX_DOCUMENT_BYTES", limit, raising=True)
+        out = await tool.send_file(
+            {"path": str(make_file(tmp_path, "big.bin", b"x" * (limit * 3)))}, Ctx(tmp_path)
+        )
+        assert "is 3 MB, over the 1 MB" in out["error"]
+
+
 class TestSchema:
     def test_the_tool_is_registered_and_described(self) -> None:
         from robothor.engine.tools.dispatch import builtin_handlers

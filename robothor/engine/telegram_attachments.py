@@ -26,7 +26,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -202,6 +202,30 @@ def media_ref(message: Any) -> MediaRef | None:
     return None
 
 
+def _kind_from_the_bytes(media: MediaRef, raw: bytes) -> MediaRef:
+    """Correct ``kind`` against what actually arrived. Round-1 M5.
+
+    ``kind`` comes from the MIME type Telegram reported and the name the sender
+    chose, and neither is evidence. A text file called ``notes.png`` with
+    ``mime: image/png`` was filed as an image, so the agent was told to
+    ``view_image`` something that answers "could not read as an image"; a real
+    PNG called ``.dat`` was filed as a document and never offered to be looked
+    at. Both are cosmetic until an agent acts on the note, which is the whole
+    point of the note.
+
+    Only the image/document boundary is corrected — that is the one the note
+    changes its advice on. A video or audio claim is left alone: there is no
+    cheap prefix test for the long tail of container formats, and getting it
+    wrong there costs nothing an agent acts on.
+    """
+    actually_an_image = attachments.looks_like_an_image(raw)
+    if media.kind == "image" and not actually_an_image:
+        return replace(media, kind="document")
+    if media.kind == "document" and actually_an_image:
+        return replace(media, kind="image")
+    return media
+
+
 class TelegramAttachmentsMixin:
     """The intake, as ``TelegramBot`` methods. See the module docstring.
 
@@ -261,19 +285,29 @@ class TelegramAttachmentsMixin:
             logger.warning("Telegram attachment download failed (%s): %s", media.name, exc)
             return None
 
-        row = attachments.save_attachment(
-            chat_id=chat_id,
-            file_id=media.file_id,
-            file_unique_id=media.file_unique_id,
-            name=media.name,
-            data=raw,
-            kind=media.kind,
-            mime=media.mime,
-            width=media.width,
-            height=media.height,
-            caption=caption,
-            workspace=self._attachment_workspace(),
-        )
+        media = _kind_from_the_bytes(media, raw)
+
+        try:
+            row = attachments.save_attachment(
+                chat_id=chat_id,
+                file_id=media.file_id,
+                file_unique_id=media.file_unique_id,
+                name=media.name,
+                data=raw,
+                kind=media.kind,
+                mime=media.mime,
+                width=media.width,
+                height=media.height,
+                caption=caption,
+                workspace=self._attachment_workspace(),
+            )
+        except Exception as exc:  # noqa: BLE001 - reported to the operator
+            # Round-1 M3: only the DOWNLOAD was guarded, so a ValueError from
+            # the containment assertion or an OSError from a full disk escaped
+            # into aiogram's dispatcher and the operator got no reply at all.
+            # The one thing worse than losing the file is losing it silently.
+            logger.warning("Could not save the attachment %s: %s", media.name, exc)
+            return None
         noted = attachments.NotedAttachment(row=row)
         await self._enrich_attachment(noted, raw, media, chat_id)
         return noted
