@@ -265,7 +265,15 @@ class TestSecrets:
     async def test_an_inbox_copy_of_a_secrets_file_cannot_be_sent_back(
         self, tmp_path, sent
     ) -> None:
-        """The verdict is the directory, so no filename shape can dodge it."""
+        """The verdict is the directory, so no filename shape can dodge it.
+
+        The wording moved once the exec half of the same finding landed: the
+        quarantine directory is now a `secret_paths` shape, so the file trips
+        the ordinary secrets-file rung first and the agent is told the same
+        sentence `read_file` and `exec` tell it. One rule, one wording — which
+        is the point; what is asserted here is the refusal and the silence
+        about the contents, not which rung produced it.
+        """
         path = make_file(
             tmp_path / "inbox" / "telegram" / "100200300" / "2026-09-15" / "secret",
             "AgACenv-env",
@@ -273,7 +281,7 @@ class TestSecrets:
         )
         out = await tool.send_file({"path": str(path)}, Ctx(tmp_path))
         assert "error" in out
-        assert "credentials file" in out["error"]
+        assert "secrets file" in out["error"]
         assert "abc" not in out["error"]
         assert not sent
 
