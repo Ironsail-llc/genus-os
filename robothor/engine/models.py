@@ -455,10 +455,27 @@ class AgentConfig:
     human_approval_tools: list[str] = field(
         default_factory=list
     )  # tool name patterns requiring approval
-    human_approval_timeout: int = 300  # auto-approve after N seconds if no response
-    # When no approval channel exists (cron/workflow/degraded boot), approval-gated
-    # tools fail CLOSED (block) by default. Set True only for agents that must run
-    # fully unattended and accept auto-approval in that case.
+    # DENY after N seconds with no answer — not auto-approve, which is what
+    # this said. `permission_escalation.py` sets `request.approved = False` on
+    # `TimeoutError` and returns it, and
+    # `test_timeout_with_no_operator_response_denies` has pinned that all along.
+    # The two comments in this block used to contradict each other, and the
+    # other one described the SAFE behaviour as the default when it is not.
+    human_approval_timeout: int = 300
+    # Whether an agent proceeds when no approval channel is reachable
+    # (cron/workflow/degraded boot).
+    #
+    # False here is NOT "fails closed by default": with the engine's approval
+    # gate off — which is the default, and was the Helm path's state until the
+    # chart started setting both variables — an approval-gated tool is simply
+    # ALLOWED. `fail_closed_on_missing_manager()` returns False unless BOTH
+    # `ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED` and `ROBOTHOR_APPROVAL_MODE=enforce`
+    # are set, and `test_failclosed_approval.py::test_off_auto_approves` pins
+    # exactly that.
+    #
+    # Setting this True defeats `enforce` for this agent even when the gate IS
+    # armed, so it is the one per-agent bypass of the whole mechanism.
+    # `genus doctor --category agents` reports it.
     human_approval_fail_open: bool = False
 
     # ── Config validation ──
