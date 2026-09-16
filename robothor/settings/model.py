@@ -692,7 +692,9 @@ class ProviderSettings(SettingsGroup):
         "4000-character cap the step writer truncates a tool result at, so "
         "what the agent reads is also what the run record keeps -- and a "
         "larger value is clamped back to 3800 for that reason, rather than "
-        "silently flattening the run's per-image record.",
+        "silently flattening the run's per-image record. 0 or less means the "
+        "default; there is no way to turn the bound off, because the result it "
+        "bounds reached 108,000 tokens in one message before it existed.",
         restart_required=False,
         since="unreleased",
     )

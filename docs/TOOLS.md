@@ -277,7 +277,7 @@ setting cannot break it, because the budget is clamped below the cap.
 | `ROBOTHOR_VISION_BATCH_CONCURRENCY` | Ceiling on images in flight at once (default 4, platform maximum 16). An agent's `max_concurrency` may ask for fewer, never for more. |
 | `ROBOTHOR_VISION_BATCH_TIMEOUT` | Seconds one image gets (default 90). |
 | `ROBOTHOR_VISION_BATCH_DEADLINE` | Seconds the whole call gets (default 600). |
-| `ROBOTHOR_VISION_BATCH_MAX_CHARS` | How much of the result comes back inline before the table spills to a file (default 3500). Clamped to 3800 — the step writer flattens a tool result over 4,000 characters, so a larger value would destroy the per-image record it exists to keep. |
+| `ROBOTHOR_VISION_BATCH_MAX_CHARS` | How much of the result comes back inline before the table spills to a file (default 3500). Clamped to 3800 — the step writer flattens a tool result over 4,000 characters, so a larger value would destroy the per-image record it exists to keep. 0 or less means the default; the bound cannot be turned off. |
 
 A remote model the registry does not **declare** able to accept images is
 **not** dialled — whether it declares the model text-only or has no entry for

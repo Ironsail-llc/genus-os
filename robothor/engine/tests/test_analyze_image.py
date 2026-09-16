@@ -853,6 +853,30 @@ class TestTheStepWriterCapInvariant:
             )
             assert vision_batch._max_total_chars() == vision_batch.MAX_INLINE_CHARS
 
+    @pytest.mark.parametrize("configured", [0, -1])
+    def test_a_non_positive_budget_is_the_default_not_unbounded(self, monkeypatch, configured):
+        """R-2: `if budget > 0` made 0 mean 'no bound at all' — 62,656
+        characters inline, no spill file. An operator setting 0 to mean 'always
+        spill' got the exact opposite, and nothing said so."""
+        monkeypatch.setattr(
+            vision_batch,
+            "_settings",
+            lambda: type(
+                "S", (), {"providers": type("P", (), {"vision_batch_max_chars": configured})()}
+            )(),
+        )
+        assert vision_batch._max_total_chars() == vision_batch.DEFAULT_MAX_TOTAL_CHARS
+
+    async def test_a_zero_budget_still_spills(self, tmp_path, local_backend, monkeypatch):
+        monkeypatch.setattr(
+            vision_batch,
+            "_settings",
+            lambda: type("S", (), {"providers": type("P", (), {"vision_batch_max_chars": 0})()})(),
+        )
+        out = await _analyze(tmp_path, _images(tmp_path, 60))
+        assert len(json.dumps(out, default=str)) <= vision_batch.DEFAULT_MAX_TOTAL_CHARS
+        assert out["results_file"]
+
 
 class TestTheResultIsOffloadableLikeAnyOther:
     def test_a_large_batch_result_offloads_instead_of_filling_the_context(self, tmp_path):

@@ -248,15 +248,25 @@ def _per_image_timeout() -> float:
 def _max_total_chars() -> int:
     """The inline budget, clamped so a setting cannot defeat the design.
 
-    The setting's own text says the default sits *just under* 4,000, which
-    invites an operator who wants a few more inline rows to set 3,900 — at
-    which point ``tracking`` truncates the whole ``tool_output`` and the
-    per-image ledger this design protects is gone, silently. So the ceiling is
-    enforced here rather than described in a sentence somebody has to read.
+    Two ways it could, both found by re-review:
+
+    * **0 or a negative number.** The guard used to be ``if budget > 0``, so
+      zero turned the bound OFF and returned the 62,656-character result the
+      whole spill exists to prevent — the opposite of what an operator setting
+      0 to mean "always spill" would expect. Non-positive means "the default",
+      the same reading :func:`_clamp_concurrency` gives a non-positive request.
+    * **A number above the step writer's cap.** The setting's own text says the
+      default sits *just under* 4,000, which invites an operator who wants a
+      few more inline rows to set 3,900 — at which point ``tracking``
+      truncates the whole ``tool_output`` and the per-image ledger this design
+      protects is gone, silently. So the ceiling is enforced here rather than
+      described in a sentence somebody has to read.
     """
     try:
         configured = int(_settings().providers.vision_batch_max_chars)
     except Exception:  # noqa: BLE001
+        configured = DEFAULT_MAX_TOTAL_CHARS
+    if configured <= 0:
         configured = DEFAULT_MAX_TOTAL_CHARS
     return min(configured, MAX_INLINE_CHARS)
 
