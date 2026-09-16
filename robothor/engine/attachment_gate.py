@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,67 @@ MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
 #: bytes; a text file with a misleading suffix does not. There is no suffix list
 #: any more — renaming ``tok.txt`` to ``tok.png`` was the whole attack.
 SCAN_HEAD_BYTES = 256 * 1024
+
+#: Key names that mean "the value beside me is a credential", for the structured
+#: shapes a credentials FILE takes. ``scan_secret_literals`` already has a rule
+#: like this for YAML mappings, but only for keys it recognises in a bundle
+#: manifest; a Google OAuth ``client_secret`` is an opaque short string with no
+#: literal shape at all, so the reviewer copied ``credentials.json`` out of the
+#: inbox's ``secret/`` directory — which is where the flag lives — and sent it.
+#:
+#: Whole words only, and the value must be a non-empty string. That is what
+#: keeps ``max_tokens``, ``token_path`` and ``password_changed_at`` out: this
+#: file's own gate exists to be kept switched on, and a rule that refuses every
+#: config scaffold is a rule somebody turns off.
+_CREDENTIAL_KEYS = (
+    "client_secret",
+    "client-secret",
+    "clientsecret",
+    "private_key",
+    "private-key",
+    "privatekey",
+    "api_key",
+    "api-key",
+    "apikey",
+    "access_token",
+    "access-token",
+    "accesstoken",
+    "refresh_token",
+    "refresh-token",
+    "refreshtoken",
+    "secret_key",
+    "secret-key",
+    "secretkey",
+    "password",
+    "passwd",
+    "passphrase",
+    "secret",
+    "token",
+)
+
+#: ``"client_secret": "abc123"`` (JSON) or ``client_secret: abc123`` (YAML), the
+#: key matched as a WHOLE word and the value an actual secret-shaped string.
+#: Anchored per line, so prose mentioning a token is not a finding.
+#:
+#: Every exclusion here is a real config file that must stay sendable: a
+#: ``${VAR}`` reference is the correct way to name a credential, an empty value
+#: is a template, ``null``/``true``/``false`` is a disabled setting, and a bare
+#: number is ``max_tokens: 4096``.
+_CREDENTIAL_KEY_LINE = re.compile(
+    r"""(?ix)
+    (?:^|[\s,{\[])                              # line start or structural boundary
+    ["']?(?:"""
+    + "|".join(_CREDENTIAL_KEYS)
+    + r""")["']?    # the key, whole word
+    \s*[:=]\s*                                  # JSON or YAML assignment
+    ["']?                                       # optional opening quote
+    (?!\$\{)                                    # not a ${VAR} reference
+    (?!["']\s*[,}\]]|\s*$)                      # not an empty value
+    (?!(?:null|nil|none|true|false|~)[\s,}\]"']*$)   # not a disabled setting
+    (?![\d.]+[\s,}\]"']*$)                      # not a bare number
+    [^\s"',}\]]{3,}                             # something value-shaped
+    """
+)
 
 #: The token a refusal carries when the file is not the one that was approved.
 #: Matched by callers and by tests, so the wording above it can change.
@@ -149,6 +211,19 @@ def _decode_head(head: bytes) -> str | None:
         return None
 
 
+def _credential_key_line(text: str) -> int | None:
+    """The 1-based line where a credential-named key is set to a literal, or None.
+
+    The line number only — never the key, never the value. A refusal that quotes
+    what it found publishes it to the transcript, which is the exposure being
+    refused.
+    """
+    for number, line in enumerate(text.splitlines(), start=1):
+        if _CREDENTIAL_KEY_LINE.search(line):
+            return number
+    return None
+
+
 def _credential_refusal(path: Path) -> str | None:
     """Why this file's CONTENTS may not leave the box, or None.
 
@@ -187,7 +262,17 @@ def _credential_refusal(path: Path) -> str | None:
 
     findings = scan_secret_literals(text, path.name)
     if not findings:
-        return None
+        # The export gate's scanner looks for credential-shaped VALUES. A
+        # credentials file often has none — an OAuth `client_secret` is a short
+        # opaque string — so the KEY is the evidence there.
+        keyed = _credential_key_line(text)
+        if keyed is None:
+            return None
+        return (
+            f"refused: {path.name} line {keyed} sets a credential-named field to a literal "
+            "value. Credentials must not leave the box in a file. Remove the value, use a "
+            "${VAR} reference, or send a redacted copy."
+        )
     reasons = sorted({finding.reason for finding in findings})
     lines = sorted({finding.line for finding in findings})[:5]
     return (

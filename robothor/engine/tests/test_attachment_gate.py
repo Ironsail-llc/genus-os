@@ -170,6 +170,98 @@ class TestTheScanIsNotExtensionGated:
         assert gate.refuse_to_send(make(tmp_path, "notes.txt", body), tmp_path) is None
 
 
+class TestCredentialKeyNames:
+    """A credentials file has no token-shaped literal in it.
+
+    Re-review, the exec-exposure section. `cp <secret>/BQAD-77-credentials.json
+    c.json` moves the bytes out of the `secret/` directory — and the directory
+    IS the flag — so the content scan becomes the only thing left. A Google
+    OAuth client secret is just a short opaque string, which
+    `scan_secret_literals` has no pattern for, and the file went out in full.
+
+    The other half of that exposure (teaching `secret_paths` the inbox layout so
+    `exec` cannot `cat` the original) is deliberately NOT here: that module
+    belongs to `feat/vault-managed-secrets` until #576 merges.
+    """
+
+    def test_the_reviewers_client_secret_is_refused(self, tmp_path) -> None:
+        path = make(tmp_path, "c.json", b'{"client_secret":"abc123"}')
+        refusal = gate.refuse_to_send(path, tmp_path)
+        assert refusal is not None
+        assert "abc123" not in refusal, "the refusal must never quote the value"
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "client_secret",
+            "private_key",
+            "api_key",
+            "apiKey",
+            "access_token",
+            "refresh_token",
+            "password",
+            "secret",
+            "token",
+            "CLIENT_SECRET",
+        ],
+    )
+    def test_each_credential_key_name_is_refused_in_json(self, tmp_path, key) -> None:
+        path = make(tmp_path, "c.json", f'{{"{key}": "opaque-value-here"}}'.encode())
+        assert gate.refuse_to_send(path, tmp_path) is not None, key
+
+    @pytest.mark.parametrize(
+        "key", ["client_secret", "private_key", "api_key", "access_token", "password"]
+    )
+    def test_each_credential_key_name_is_refused_in_yaml(self, tmp_path, key) -> None:
+        path = make(tmp_path, "c.yaml", f"{key}: opaque-value-here\n".encode())
+        assert gate.refuse_to_send(path, tmp_path) is not None, key
+
+    def test_a_nested_google_oauth_file_is_refused(self, tmp_path) -> None:
+        body = (
+            b'{"installed": {"client_id": "1234.apps.googleusercontent.com",\n'
+            b'  "project_id": "my-project",\n'
+            b'  "client_secret": "GOCSPX-abcdefghijklmnop"}}\n'
+        )
+        assert gate.refuse_to_send(make(tmp_path, "c.json", body), tmp_path) is not None
+
+    def test_an_empty_value_is_not_a_credential(self, tmp_path) -> None:
+        """A template or an example is not a secret — refusing it would make
+        every scaffold unsendable, which is how a gate gets turned off."""
+        for body in (b'{"client_secret": ""}', b"password:\n", b'{"token": null}'):
+            path = make(tmp_path, "tpl.json", body)
+            assert gate.refuse_to_send(path, tmp_path) is None, body
+
+    def test_a_placeholder_reference_is_not_a_credential(self, tmp_path) -> None:
+        path = make(tmp_path, "cfg.yaml", b"api_key: ${BILLING_API_KEY}\n")
+        assert gate.refuse_to_send(path, tmp_path) is None
+
+    def test_an_ordinary_word_ending_in_token_is_not_a_credential(self, tmp_path) -> None:
+        """`max_tokens` and `token_path` are a count and a filename;
+        `bundle.py` already argues this and the key rule must agree with it.
+
+        (`tokenizer: gpt2` is deliberately not here: the SHARED scanner already
+        refuses it, which is a pre-existing conservative call in
+        `templates/bundle.py` and not this module's to relax.)
+        """
+        for body in (
+            b'{"max_tokens": 4096}',
+            b'{"token_path": "/etc/app/token"}',
+            b"max_tokens: 4096\n",
+        ):
+            path = make(tmp_path, "cfg.json", body)
+            assert gate.refuse_to_send(path, tmp_path) is None, body
+
+    def test_a_disabled_setting_is_not_a_credential(self, tmp_path) -> None:
+        for body in (b'{"token": null}', b"password: false\n", b"api_key: ~\n"):
+            path = make(tmp_path, "cfg.json", body)
+            assert gate.refuse_to_send(path, tmp_path) is None, body
+
+    def test_a_csv_column_called_password_is_not_a_credential(self, tmp_path) -> None:
+        """The rule is `key: value`, not the word appearing anywhere."""
+        body = b"name,password_changed_at\nAlice,2026-01-02\nBob,2026-03-04\n"
+        assert gate.refuse_to_send(make(tmp_path, "rows.csv", body), tmp_path) is None
+
+
 class TestHardLinks:
     """Hostile review I3. Resolving symlinks before judging containment is
     right, and hard links are immune to it: a hard link is a second NAME for the
