@@ -197,8 +197,9 @@ every call costs a turn, the image tokens stay in the conversation for the
 rest of the run, and an agent that has learned looking is expensive stops
 looking. Measured on 2026-09-16: on a task that hands an agent a folder of
 photographs to categorise, a competing harness called its out-of-band vision
-tool 100 times and scored 0.99; this engine called `view_image` four times and
-scored 0.28.
+tool 100 times and scored 0.992 on the task; this engine called `view_image`
+four times and scored 0.424, classifying at 0.28 accuracy where five classes
+make 0.20 random — it was guessing from filenames.
 
 `analyze_image` is the out-of-band form. Each image goes to a vision model on
 its own, concurrently, and only the text answer returns — so the hundredth
@@ -227,7 +228,14 @@ Answers arrive in the order the paths were given. A row carries `answer` or
 **Refusals.** A path resolving outside the workspace (symlinks followed
 first), a credentials file, a missing file, something that is not an image,
 and anything over 32 MB are each refused as that image's `error`, without a
-model ever being called.
+model ever being called. A refused row reports the same resolved path an
+answered row does, so an agent can line its request up against the results.
+
+**Plan mode.** `analyze_image` counts as read-only — it changes nothing on the
+box or anywhere else — so an agent in plan mode may call it. On a remote
+backend that is real money spent while planning; `ROBOTHOR_VISION_BATCH_MAX_CHARS`
+and the concurrency ceiling bound the call, not the spend. Deny the tool for
+an agent where that is not wanted.
 
 **Cost.** Per-image tokens and cost are reported where the backend gives them,
 and the call's total `cost_usd` is added to the run's spend like any other

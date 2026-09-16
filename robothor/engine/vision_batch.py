@@ -1,10 +1,12 @@
 """One question, many pictures, answered out of band.
 
 Measured 2026-09-16. On the WildClawBench Productivity task that hands an
-agent a folder of photographs and asks it to categorise them, the competing
-harness called its own vision tool a hundred times and scored 0.99; this
-engine called ``view_image`` four times and scored 0.28 — near random on that
-task's scale.
+agent a hundred photographs and asks it to categorise them, the competing
+harness called its own vision tool a hundred times and scored **0.992**; this
+engine called ``view_image`` four times and scored **0.424**. The sub-metric
+is the one that says why: classification accuracy 0.99 against 0.28, where
+five classes make 0.20 the score for guessing. It was guessing — from
+filenames.
 
 The difference is not the model, it is where the picture goes. ``view_image``
 puts the image into the PRIMARY model's context (see
@@ -327,43 +329,59 @@ def _workspace_root(workspace: str) -> Path | None:
         return None
 
 
-def _resolve_one(raw: str, root: Path) -> tuple[Path | None, str]:
-    """``(path, refusal)`` for one requested image. No backend call on refusal.
+def _resolve_one(raw: str, root: Path) -> tuple[Path | None, str, str]:
+    """``(path, refusal, path as reported)`` for one requested image.
 
-    Order matters and mirrors ``attachment_gate.resolve_for_send``: containment
-    on the RESOLVED path (so a symlink out of the tree is caught), then the
-    secret-path name rule BEFORE any stat (so a refusal does not reveal whether
-    the file exists), then shape, then size.
+    No backend call on a refusal. Order matters and mirrors
+    ``attachment_gate.resolve_for_send``: containment on the RESOLVED path (so
+    a symlink out of the tree is caught), then the secret-path name rule BEFORE
+    any stat (so a refusal does not reveal whether the file exists), then
+    shape, then size.
+
+    The third element exists because a refused row used to report the path as
+    the agent spelled it while an answered row reported the resolved one, so an
+    agent zipping its request to the results by path string got a mismatch on
+    exactly the rows it needed to retry. Every row that got as far as resolving
+    now reports the resolved path; a blank one has nothing to resolve.
     """
     text = str(raw or "").strip()
     if not text:
-        return None, "path is required"
+        return None, "path is required", str(raw)
 
     candidate = Path(text).expanduser()
     if not candidate.is_absolute():
         candidate = root / candidate
     resolved = candidate.resolve(strict=False)
+    shown = str(resolved)
     if root != resolved and root not in resolved.parents:
-        return None, (
-            f"refused: {Path(text).name} resolves outside the workspace. Only images "
-            "inside the workspace can be analyzed."
+        return (
+            None,
+            (
+                f"refused: {Path(text).name} resolves outside the workspace. Only images "
+                "inside the workspace can be analyzed."
+            ),
+            shown,
         )
 
     from robothor.engine.secret_paths import is_secret_path, refusal_for
 
     if is_secret_path(resolved):
-        return None, refusal_for(resolved)
+        return None, refusal_for(resolved), shown
 
     if not resolved.is_file():
-        return None, f"no such file: {text}"
+        return None, f"no such file: {text}", shown
 
     size = resolved.stat().st_size
     if size > MAX_IMAGE_BYTES:
-        return None, (
-            f"refused: {resolved.name} is too large to analyze "
-            f"({size // (1024 * 1024)} MB; the limit is {MAX_IMAGE_BYTES // (1024 * 1024)} MB)."
+        return (
+            None,
+            (
+                f"refused: {resolved.name} is too large to analyze ({size // (1024 * 1024)} MB; "
+                f"the limit is {MAX_IMAGE_BYTES // (1024 * 1024)} MB)."
+            ),
+            shown,
         )
-    return resolved, ""
+    return resolved, "", shown
 
 
 def _load(path: Path) -> tuple[bytes, str]:
@@ -454,23 +472,31 @@ _SYSTEM_PROMPT = (
 
 async def _answer_one(
     backend: Backend, data: bytes, mime: str, question: str, detail: str, timeout: float
-) -> tuple[str, int, float]:
-    """``(answer, tokens, cost)`` from whichever backend is configured."""
+) -> tuple[str, int, float, bool]:
+    """``(answer, tokens, cost, was cut)`` from whichever backend is configured."""
     if backend.kind == "remote":
         answer, tokens, cost = await _remote_answer(backend, data, mime, question, detail, timeout)
-        return _cap(answer), tokens, cost
+        capped, cut = _cap(answer)
+        return capped, tokens, cost, cut
     answer = (await describe_image_bytes(data, question, timeout=timeout)).strip()
     if not answer:
         raise RuntimeError("the vision model returned nothing")
     # The local VLM reports no usage and costs nothing: it is this box's GPU.
-    return _cap(answer), 0, 0.0
+    capped, cut = _cap(answer)
+    return capped, 0, 0.0, cut
 
 
-def _cap(answer: str) -> str:
-    """One answer, bounded. Marked when it was cut, never silently."""
+def _cap(answer: str) -> tuple[str, bool]:
+    """One answer, bounded, and whether it was cut.
+
+    The marker inside the string is for a reader; the flag is for a caller. An
+    agent transcribing text off a hundred images needs to know WHICH rows it
+    only half has, and asking it to substring-match a marker to find out is how
+    a truncation goes unnoticed.
+    """
     if len(answer) <= MAX_ANSWER_CHARS:
-        return answer
-    return answer[:MAX_ANSWER_CHARS].rstrip() + _TRUNCATION_MARK
+        return answer, False
+    return answer[:MAX_ANSWER_CHARS].rstrip() + _TRUNCATION_MARK, True
 
 
 async def _analyze_one(
@@ -485,9 +511,9 @@ async def _analyze_one(
 ) -> dict[str, Any]:
     """One image's row of the result. Never raises — a row always comes back."""
     started = time.monotonic()
-    resolved, refusal = _resolve_one(raw, root)
+    resolved, refusal, shown = _resolve_one(raw, root)
     if resolved is None:
-        return {"path": str(raw), "error": refusal, "ms": 0}
+        return {"path": shown, "error": refusal, "ms": 0}
 
     async with semaphore:
         remaining = deadline - time.monotonic()
@@ -517,7 +543,7 @@ async def _analyze_one(
             }
 
         try:
-            answer, tokens, cost = await asyncio.wait_for(
+            answer, tokens, cost, was_cut = await asyncio.wait_for(
                 _answer_one(backend, data, mime, question, detail, timeout),
                 timeout=timeout,
             )
@@ -545,6 +571,8 @@ async def _analyze_one(
         row["tokens"] = tokens
     if cost:
         row["cost_usd"] = round(cost, 6)
+    if was_cut:
+        row["truncated"] = True
     return row
 
 

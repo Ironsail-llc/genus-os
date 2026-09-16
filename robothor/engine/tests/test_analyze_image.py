@@ -3,8 +3,10 @@
 Measured 2026-09-16 (reports/P4-HERMES-analysis.md, difference #4). On the
 WildClawBench Productivity task that hands an agent a folder of photographs
 and asks it to categorise them, the competing harness called its own vision
-tool ONE HUNDRED times and scored 0.99. This engine called `view_image` four
-times and scored 0.28 — near random.
+tool ONE HUNDRED times and scored 0.992. This engine called `view_image` four
+times and scored 0.424 — classifying at 0.28 accuracy where five classes make
+0.20 the score for guessing, which is what it was doing: guessing from
+filenames.
 
 The gap is not the model. `view_image` puts the picture into the PRIMARY
 model's context: every call costs a turn, the image tokens stay in the
@@ -440,9 +442,53 @@ class TestTheAnswersStayBounded:
             lambda: (vision_batch.Backend("local", "test-vlm"), ""),
         )
         out = await _analyze(tmp_path, _images(tmp_path, 1))
-        answer = out["results"][0]["answer"]
+        row = out["results"][0]
+        answer = row["answer"]
         assert len(answer) <= vision_batch.MAX_ANSWER_CHARS + len(vision_batch._TRUNCATION_MARK)
         assert answer.endswith(vision_batch._TRUNCATION_MARK), "a cut answer must say it was cut"
+        assert row["truncated"] is True, "a caller must not have to substring-match to find out"
+
+    async def test_an_uncut_answer_carries_no_flag(self, tmp_path, local_backend):
+        out = await _analyze(tmp_path, _images(tmp_path, 1))
+        assert "truncated" not in out["results"][0]
+
+
+class TestSayingWhatWasIgnored:
+    """Minors M-1 and M-6 of the hostile review: two knobs the agent may set
+    that the tool quietly did not honour. An ignored request the caller is not
+    told about is a caller that believes it looked closer."""
+
+    async def test_detail_on_the_local_backend_says_it_was_ignored(self, tmp_path, local_backend):
+        out = await _analyze(tmp_path, _images(tmp_path, 1), detail="high")
+        assert "detail" in out["note"]
+        assert "ignored" in out["note"]
+
+    async def test_no_such_note_when_the_agent_asked_for_nothing(self, tmp_path, local_backend):
+        out = await _analyze(tmp_path, _images(tmp_path, 1))
+        assert "note" not in out
+
+    async def test_a_cut_question_says_so(self, tmp_path, local_backend):
+        out = await _analyze(tmp_path, _images(tmp_path, 1), question="q" * 5000)
+        assert "cut" in out["note"]
+        assert len(out["question"]) == vision_batch.MAX_QUESTION_CHARS
+
+
+class TestOneRowShapeForEveryRow:
+    async def test_a_refused_row_reports_the_same_path_form_as_an_answered_one(
+        self, tmp_path, local_backend
+    ):
+        """M-3. An agent zipping its paths to the results by string got a
+        mismatch on exactly the rows it needed to retry."""
+        good = _images(tmp_path, 1)[0]
+        sub = tmp_path / "nested"
+        sub.mkdir()
+        _png(sub / "missing_sibling.png")
+        relative_missing = "nested/../nope.png"
+
+        out = await _analyze(tmp_path, [good, relative_missing])
+        answered, refused = out["results"]
+        assert answered["path"] == good
+        assert refused["path"] == str(tmp_path / "nope.png"), "resolved, like the answered row"
 
 
 class TestArgumentGuards:
