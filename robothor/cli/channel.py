@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import argparse  # noqa: TC003 - argparse.Namespace is used at runtime in signatures
 import asyncio
-import hashlib
 import inspect
 import json
 import logging
@@ -37,6 +36,7 @@ from typing import Any
 
 from robothor.engine.channels.base import UNCONFIGURED_STEP
 from robothor.engine.channels.slack_credentials import environment_token
+from robothor.secrets.fingerprint import fingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -112,16 +112,6 @@ def _workspace() -> Path:
     from robothor.settings.sources import workspace_path
 
     return workspace_path() or Path("robothor")
-
-
-def _fingerprint(value: str) -> str:
-    """Enough to tell two credentials apart, and nothing of either.
-
-    A prefix of the value itself would be worse than useless: Slack tokens
-    share their first two segments, so ``xoxb-1234…`` identifies the workspace
-    while proving nothing about which token this is.
-    """
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
 
 
 def _vault_set(key: str, value: str) -> None:
@@ -458,7 +448,7 @@ def _cmd_add(args: argparse.Namespace) -> int:
                 if written:
                     _err(f"{len(written)} credential(s) above WERE stored; the rest were not.")
                 return 1
-            written.append(f"  vault  {key}  (sha256:{_fingerprint(value)})")
+            written.append(f"  vault  {key}  ({fingerprint(value)})")
     else:
         try:
             path = _write_env_file(
@@ -474,8 +464,7 @@ def _cmd_add(args: argparse.Namespace) -> int:
             _err("Nothing was stored. Fix the permissions on that directory and try again.")
             return 1
         written.extend(
-            f"  file   {env}  (sha256:{_fingerprint(value)})"
-            for value, _field, env in resolved.values()
+            f"  file   {env}  ({fingerprint(value)})" for value, _field, env in resolved.values()
         )
         written.append(f"  in     {path} (mode 600)")
 

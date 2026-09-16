@@ -84,7 +84,7 @@ reporting a value for something nothing reads.
   disturbing your comments, and the reply is either `applied` or
   `restart required: robothor-engine`.
 
-A secret is never printed. `get` and `list` show `<set, sha256:ab12cd34>` —
+A secret is never printed. `get` and `list` show `<set, b2:ab12cd34>` —
 enough to tell two boxes apart without putting the value on your screen.
 
 ### From the Helm, without a shell
@@ -94,7 +94,7 @@ declarations `genus config list` prints — one collapsible section per group,
 with a filter over names and descriptions — and saves a section's changed
 fields in one all-or-nothing write. It obeys the same three routing rules as
 `set`, because it calls the same code: a secret is shown as
-`configured · sha256:ab12cd34` with no box to type in, a field the box's
+`configured · b2:ab12cd34` with no box to type in, a field the box's
 environment supplies is read-only with the sentence explaining why a write
 would apply to nothing, and a governed flag carries a link to the page that
 says what it is actually doing. **Settings › Flags** is that page: every
@@ -527,7 +527,7 @@ else can ask one anything:
 | `POST /api/channels/{name}/verify` | Runs the channel's own `verify()` and returns each step. A channel that declares none gets `steps: []` and `verify_available: false` — never a fabricated pass; one that hangs or raises gets `configured: null` and an `error_class`, because a pass nobody observed is not a pass. Aimed with an optional `{"target": "..."}`, and it may really send a message. |
 
 Neither route writes a credential, and neither returns one: a token, a chat id
-or anything else secret-shaped in a health report comes back as a `sha256:`
+or anything else secret-shaped in a health report comes back as a `b2:`
 fingerprint. **Adding a channel's token is still `genus channel add` on the
 box** (and `genus init --telegram-token` for Telegram) — there is no API that
 writes channel credentials, by design.

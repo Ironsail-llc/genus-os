@@ -25,6 +25,7 @@ from typing import Any
 import pytest
 
 from robothor.cli.channel import cmd_channel
+from robothor.secrets.fingerprint import FINGERPRINT_PREFIX
 
 #: Visibly fake, and distinctive enough that searching output for it means
 #: something. Any real token here would be a credential in the repository.
@@ -657,7 +658,35 @@ class TestAddEmail:
         assert FAKE_SMTP_PASSWORD not in captured.out
         assert FAKE_SMTP_PASSWORD not in captured.err
         assert FAKE_SMTP_PASSWORD not in caplog.text
-        assert "sha256:" in captured.out, "no fingerprint, so two credentials look alike"
+        assert FINGERPRINT_PREFIX in captured.out, "no fingerprint, so two credentials look alike"
+
+    def test_the_printed_fingerprint_is_the_one_every_other_surface_prints(
+        self, vault, smtp_exported, capsys
+    ):
+        """This CLI had its own unkeyed SHA-256 of the credential.
+
+        Two problems, one line. It is the weakness CodeQL flagged in the shared
+        function -- a bare digest of a short secret is a dictionary check away
+        from the value -- and it is a SECOND fingerprint for one credential, so
+        the digest `genus channel add` printed could never be compared with the
+        one the status table, the vault tools or the Helm print. A fingerprint
+        whose value depends on which code path printed it answers nothing.
+        """
+        from robothor.secrets.fingerprint import fingerprint
+
+        cmd_channel(_email_add_args())
+
+        assert fingerprint(FAKE_SMTP_PASSWORD) in capsys.readouterr().out
+
+    def test_the_cli_does_not_compute_a_digest_of_its_own(self):
+        """A property, not a promise: the module has no hashing in it at all."""
+        import inspect
+
+        from robothor.cli import channel
+
+        body = inspect.getsource(channel)
+        assert "sha256" not in body, "a second fingerprint for the same credential"
+        assert "hashlib" not in body
 
     def test_add_email_falls_back_to_the_instance_env_file(self, tmp_path, smtp_exported):
         """The common install has no master key; a vault-only add fails there."""

@@ -23,6 +23,7 @@ from typing import Any
 import pytest
 
 from robothor.cli.channel import cmd_channel
+from robothor.secrets.fingerprint import FINGERPRINT_PREFIX
 
 #: Visibly fake. A real client secret here would be a credential in the repo.
 FAKE_APP_PASSWORD = "not-a-real-teams-client-secret-0000"
@@ -118,7 +119,7 @@ class TestTheThreeValuesLandWhereTheyBelong:
         assert FAKE_APP_PASSWORD not in captured.out
         assert FAKE_APP_PASSWORD not in captured.err
         assert FAKE_APP_PASSWORD not in caplog.text
-        assert "sha256:" in captured.out
+        assert FINGERPRINT_PREFIX in captured.out
 
     def test_the_secret_on_a_command_line_is_refused_and_nothing_is_stored(self, vault, capsys):
         assert cmd_channel(_teams_add_args(app_password=FAKE_APP_PASSWORD)) == 2

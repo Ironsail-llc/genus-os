@@ -37,10 +37,10 @@ No value of a secret is returned by anything here except
 from __future__ import annotations
 
 import difflib
-import hashlib
 from functools import lru_cache
 from typing import Any
 
+from robothor.secrets.fingerprint import fingerprint
 from robothor.settings import provenance
 from robothor.settings.config_file import write_settings
 from robothor.settings.provenance import (
@@ -63,7 +63,6 @@ __all__ = [
     "coerce",
     "db_rows",
     "db_value",
-    "digest",
     "display",
     "env_override",
     "mask",
@@ -167,14 +166,19 @@ def units_for(row: dict[str, Any]) -> tuple[str, ...]:
 # ── showing a value without showing a credential ─────────────────────────────
 
 
-def digest(value: str) -> str:
-    """A short, stable fingerprint of a secret — never the secret."""
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:8]
-
-
 def mask(value: Any) -> str:
+    """``<set, b2:1a2b3c4d>`` or ``<unset>`` — never the value.
+
+    The digest comes from :mod:`robothor.secrets.fingerprint`, the one this
+    instance prints everywhere else. This module used to compute its own
+    unkeyed SHA-256, which was wrong twice over: a bare digest of a short
+    credential is a dictionary check away from the value, and a second
+    fingerprint for one credential cannot be compared with the first, so the
+    Helm's Settings page and ``genus vault get`` described the same row in two
+    incomparable ways.
+    """
     text = "" if value is None else str(value)
-    return f"<set, sha256:{digest(text)}>" if text else "<unset>"
+    return f"<set, {fingerprint(text)}>" if text else "<unset>"
 
 
 def display(row: dict[str, Any], value: Any) -> str:
@@ -194,7 +198,7 @@ def secret_status(row: dict[str, Any]) -> dict[str, Any]:
     text = "" if value is None else str(value)
     return {
         "configured": bool(text),
-        "fingerprint": f"sha256:{digest(text)}" if text else None,
+        "fingerprint": fingerprint(text) if text else None,
     }
 
 
