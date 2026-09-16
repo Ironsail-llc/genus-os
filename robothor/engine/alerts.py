@@ -262,11 +262,23 @@ async def _write_notification(
         return False
 
 
+def alert_webhook_url() -> str:
+    """The alert webhook, vault first.
+
+    Through the accessor because ``genus secrets status`` can only measure the
+    accessor: it reported ``served=vault`` for this name while this reader
+    looked only at the environment, so the runbook's verify step attested that
+    the SOPS copy was safe to delete and the next restart would have lost
+    alerting — the channel an operator learns everything else through.
+    """
+    from robothor.secrets import get_secret
+
+    return get_secret("ROBOTHOR_ALERT_WEBHOOK_URL") or ""
+
+
 async def _send_webhook(level: str, title: str, body: str, metadata: dict[str, Any] | None) -> bool:
     """Send alert via webhook (extensibility point for PagerDuty, Slack, etc.)."""
-    import os
-
-    webhook_url = os.environ.get("ROBOTHOR_ALERT_WEBHOOK_URL")
+    webhook_url = alert_webhook_url()
     if not webhook_url:
         logger.debug("No ROBOTHOR_ALERT_WEBHOOK_URL configured, skipping webhook alert")
         return False

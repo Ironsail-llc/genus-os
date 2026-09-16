@@ -79,6 +79,25 @@ genus doctor --only secrets.shadowed
 touch, before any per-name line — because on a box whose assistant has been
 rotating credentials, that number is the one that matters.
 
+### What the verify step can and cannot tell you
+
+`genus secrets status` and `secrets.shadowed` measure the **accessor**
+(`robothor.secrets.resolve_secret`). They say `served=vault` when the accessor
+would serve the vault's copy — which is the right answer for every reader that
+goes through the accessor, and says nothing at all about one that does not.
+
+Every credential the platform reads now goes through the accessor, and a guard
+test (`test_readers_use_the_accessor.py`) fails the build if a declared,
+migratable credential is read straight from the environment again. That guard is
+what makes this verify step honest; it exists because three readers — the
+Telegram bot token, the alert webhook and the SIEM webhook — did not, so the
+table reported them safe to remove and the next restart would have taken
+Telegram down on an operator whose only channel is Telegram.
+
+If you are running an older engine than this branch, do **not** shrink
+`ROBOTHOR_TELEGRAM_BOT_TOKEN`, `ROBOTHOR_ALERT_WEBHOOK_URL` or
+`ROBOTHOR_SIEM_WEBHOOK_URL` whatever the table says.
+
 `migrate` refuses bootstrap names outright, so step 3 cannot move something the
 box needs in order to start.
 
