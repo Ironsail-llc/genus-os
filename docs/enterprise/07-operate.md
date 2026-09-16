@@ -84,7 +84,17 @@ Every guardrail worth having goes up the same ladder:
 |---|---|---|
 | `off` | Nothing | — |
 | `observe` | Evaluates and records; changes no outcome | The evidence table has rows, and you have read what it would have done |
+| `alert` | Records **and** pages, still without blocking | You believe the page is one an operator should act on |
 | `enforce` | Acts | — |
+
+**The rungs are per flag, and the Flags page is where you read them, not this
+table.** Four rungs is the default shape; a few controls have three (no
+`alert`, because they block nothing there would be anything to page about) and
+a couple have two (`ROBOTHOR_DNC_MODE` is a compliance opt-out, so it has no
+`off` at all). Setting a rung a flag does not honour is worse than being
+refused — you would see it stored and get different behaviour — which is why
+the platform keeps one list, `valid_values_for` in `robothor/flags/store.py`,
+and the page renders that rather than a table someone typed.
 
 Two rules learned the expensive way, and they are why this page exists:
 
