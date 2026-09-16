@@ -1,3 +1,9 @@
+## [1.95.0](https://github.com/Ironsail-llc/genus-os/compare/v1.94.0...v1.95.0) (2026-09-16)
+
+### Features
+
+* **tools:** analyze_image answers one question about many images ([#581](https://github.com/Ironsail-llc/genus-os/issues/581)) ([9c280c0](https://github.com/Ironsail-llc/genus-os/commit/9c280c03cf1ce4de44cf094f72053c49d7a31d5e))
+
 ## [1.94.0](https://github.com/Ironsail-llc/genus-os/compare/v1.93.0...v1.94.0) (2026-09-16)
 
 ### Features
