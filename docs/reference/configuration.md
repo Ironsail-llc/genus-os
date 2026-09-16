@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-388 settings in 13 groups.
+392 settings in 13 groups.
 
 ## paths
 
@@ -155,6 +155,10 @@ Cloud model routing, budgets and the failure controls around them.
 | `ROBOTHOR_RLM_MAX_TIMEOUT` | int | `240` | `robothor-engine` | no | legacy | Wall-clock seconds a single recursive language model call may take. |
 | `ROBOTHOR_RLM_ROOT_MODEL` | str | `openrouter/anthropic/claude-sonnet-4.6` | `robothor-engine` | no | legacy | Model the recursive language model tool runs its root call on. |
 | `ROBOTHOR_RLM_SUB_MODEL` | str | `openrouter/anthropic/claude-haiku-4.5` | `robothor-engine` | no | legacy | Model the recursive language model tool runs child calls on. |
+| `ROBOTHOR_VISION_BATCH_CONCURRENCY` | int | `4` | no | no | unreleased | Vision calls `analyze_image` keeps in flight at once. Four is what a single local VLM on one GPU serves without queueing into its own timeout; a remote backend takes more, per call, up to 16. |
+| `ROBOTHOR_VISION_BATCH_DEADLINE` | float | `600.0` | no | no | unreleased | Seconds one whole `analyze_image` call gets. Images not reached by then come back as errors rather than answers. Without it a backend that hangs for EVERY image would hold a single tool call open for the per-image timeout times 200 divided by the concurrency. |
+| `ROBOTHOR_VISION_BATCH_TIMEOUT` | float | `90.0` | no | no | unreleased | Seconds one image gets inside an `analyze_image` batch before it is marked timed out. The batch keeps going -- a slow image fails alone. |
+| `ROBOTHOR_VISION_REMOTE_MODEL` | str | _(empty)_ | no | no | unreleased | Vision-capable provider model `analyze_image` sends images to, instead of the local Ollama VLM (ROBOTHOR_VISION_MODEL). Set it where there is no local vision model -- a container, a cloud deployment, the benchmark sandbox. The model must be declared `accepts_images` in the engine's model registry; one that is not is refused rather than dialled, and the local model answers instead. |
 
 ## engine
 

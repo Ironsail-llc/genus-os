@@ -257,6 +257,65 @@ TOOL_HINTS: dict[str, ToolHint] = {
             "operator's mailbox use gws_gmail_search."
         ),
     ),
+    # ── Images: one picture, or a folder of them ──────────────────────
+    #
+    # Two tools that necessarily share a vocabulary, and the reason this table
+    # exists: under deferred loading `tool_search` is how the agent reaches
+    # either, and "sort these photos" matched neither name. No `rank_bias` on
+    # either, because the vocabularies already separate — "sort", "label",
+    # "categorise", "many" and "each" reach only the batch tool, while "look",
+    # "read", "chart" and "diagram" reach only the single one. A bias here
+    # would distort a query the keywords already answer.
+    "view_image": ToolHint(
+        keywords=(
+            "image",
+            "picture",
+            "photo",
+            "screenshot",
+            "chart",
+            "diagram",
+            "graph",
+            "figure",
+            "scan",
+            "look",
+            "see",
+            "view",
+            "show",
+            "read",
+            "visual",
+            "png",
+            "jpg",
+            "jpeg",
+        ),
+        when_to_use="Look at ONE image file — a photo, screenshot, chart, diagram or scan.",
+    ),
+    "analyze_image": ToolHint(
+        keywords=(
+            "image",
+            "picture",
+            "photo",
+            "screenshot",
+            "sort",
+            "label",
+            "categorise",
+            "categorize",
+            "classify",
+            "filter",
+            "search",
+            "folder",
+            "batch",
+            "many",
+            "each",
+            "which",
+            "caption",
+            "describe",
+            "visual",
+            "png",
+            "jpg",
+            "jpeg",
+        ),
+        when_to_use="Ask one question about up to 200 images at once.",
+    ),
 }
 
 

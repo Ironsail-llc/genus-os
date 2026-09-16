@@ -182,6 +182,73 @@ command.
 `send_email` is not a tool either — it is the `send-email` **skill**, invoked
 with `invoke_skill(name="send-email")`.
 
+### Vision: `view_image` and `analyze_image`
+
+Two tools, one rule:
+
+| You want to… | Call | What comes back |
+|---|---|---|
+| Study **one** picture — read a chart, find the bug in a screenshot, describe a photo | `view_image` | The picture itself, in the agent's own context |
+| Ask the **same question of many** pictures — sort, label, filter, search a folder | `analyze_image` | One text answer per image; no picture enters the context |
+
+**Why the split.** `view_image` puts the image in front of the agent's own
+model. That is the right thing for one image and the wrong thing for fifty:
+every call costs a turn, the image tokens stay in the conversation for the
+rest of the run, and an agent that has learned looking is expensive stops
+looking. Measured on 2026-09-16: on a task that hands an agent a folder of
+photographs to categorise, a competing harness called its out-of-band vision
+tool 100 times and scored 0.99; this engine called `view_image` four times and
+scored 0.28.
+
+`analyze_image` is the out-of-band form. Each image goes to a vision model on
+its own, concurrently, and only the text answer returns — so the hundredth
+call costs the same as the first.
+
+```jsonc
+// call
+{"paths": ["photos/a.jpg", "photos/b.jpg"],   // 1-200, inside the workspace
+ "question": "Is there a person in this photo? Answer yes or no.",
+ "detail": "low",                              // or "high" for small text
+ "max_concurrency": 4}                         // 1-16
+
+// result
+{"question": "...", "model": "…", "backend": "remote", "analyzed": 2, "failed": 0,
+ "results": [{"path": "…/a.jpg", "answer": "yes", "model": "…", "ms": 812,
+              "tokens": 612, "cost_usd": 0.000123},
+             {"path": "…/b.jpg", "error": "the vision model timed out after 90s on this image",
+              "ms": 90004}],
+ "summary": "2 of 2 images answered by … in 3.1s (4 at a time)",
+ "tokens": 1224, "cost_usd": 0.000246}
+```
+
+Answers arrive in the order the paths were given. A row carries `answer` or
+`error`, never both — one image that fails does not cost you the batch.
+
+**Refusals.** A path resolving outside the workspace (symlinks followed
+first), a credentials file, a missing file, something that is not an image,
+and anything over 32 MB are each refused as that image's `error`, without a
+model ever being called.
+
+**Cost.** Per-image tokens and cost are reported where the backend gives them,
+and the call's total `cost_usd` is added to the run's spend like any other
+tool cost. `detail: "low"` is the default deliberately: it is what makes the
+tool cheap enough to call in a loop.
+
+#### Configuring the backend
+
+| Setting | What it does |
+|---|---|
+| `ROBOTHOR_VISION_MODEL` | The local VLM, served by Ollama. The default backend. |
+| `ROBOTHOR_VISION_REMOTE_MODEL` | A provider model used instead, for a deployment with no local GPU (a container, the cloud, the benchmark sandbox). Must be declared `accepts_images` in the engine's model registry. |
+| `ROBOTHOR_VISION_BATCH_CONCURRENCY` | Images in flight at once (default 4, ceiling 16). |
+| `ROBOTHOR_VISION_BATCH_TIMEOUT` | Seconds one image gets (default 90). |
+| `ROBOTHOR_VISION_BATCH_DEADLINE` | Seconds the whole call gets (default 600). |
+
+A remote model the registry says cannot accept images is **not** dialled: the
+batch falls back to the local model, or refuses and says so. Handing images to
+a text-only model is the failure `view_image` was fixed for — a provider 404
+one layer down and an agent that believes it looked.
+
 ### Everything else
 
 The full registry is large and changes with the release; `tool_search` over the
@@ -196,7 +263,7 @@ agent's own allow-set is the authoritative answer. The families:
 | Notifications | `get_inbox`, `ack_notification`, `send_notification` |
 | Skills | `list_skills`, `invoke_skill` |
 | Sub-agents | `spawn_agent`, `spawn_agents` (only with `can_spawn_agents`) |
-| Vision | `look`, `who_is_here` (a real camera) |
+| Vision | `view_image`, `analyze_image` (image files — see above); `look`, `who_is_here` (a real camera) |
 | Desktop | `desktop_*` (a real screen) |
 
 ---

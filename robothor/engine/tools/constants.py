@@ -228,8 +228,11 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         # File/system
         "read_file",
         "list_directory",
-        # Looking at an image reads a file and mutates nothing.
+        # Looking at an image reads a file and mutates nothing. Asking a
+        # vision model about a batch of them spends tokens, which is a cost
+        # and not a side effect: nothing on this box or anywhere else changes.
         "view_image",
+        "analyze_image",
         # Web
         "web_fetch",
         "web_search",

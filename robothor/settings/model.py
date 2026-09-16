@@ -647,6 +647,45 @@ class ProviderSettings(SettingsGroup):
         "Fleet default for compressing tool results as soon as they land "
         "rather than at the next compaction. A manifest setting wins over it.",
     )
+    vision_remote_model: str = declare(
+        "",
+        "ROBOTHOR_VISION_REMOTE_MODEL",
+        "Vision-capable provider model `analyze_image` sends images to, "
+        "instead of the local Ollama VLM (ROBOTHOR_VISION_MODEL). Set it "
+        "where there is no local vision model -- a container, a cloud "
+        "deployment, the benchmark sandbox. The model must be declared "
+        "`accepts_images` in the engine's model registry; one that is not is "
+        "refused rather than dialled, and the local model answers instead.",
+        restart_required=False,
+        since="unreleased",
+    )
+    vision_batch_concurrency: int = declare(
+        4,
+        "ROBOTHOR_VISION_BATCH_CONCURRENCY",
+        "Vision calls `analyze_image` keeps in flight at once. Four is what a "
+        "single local VLM on one GPU serves without queueing into its own "
+        "timeout; a remote backend takes more, per call, up to 16.",
+        restart_required=False,
+        since="unreleased",
+    )
+    vision_batch_timeout: float = declare(
+        90.0,
+        "ROBOTHOR_VISION_BATCH_TIMEOUT",
+        "Seconds one image gets inside an `analyze_image` batch before it is "
+        "marked timed out. The batch keeps going -- a slow image fails alone.",
+        restart_required=False,
+        since="unreleased",
+    )
+    vision_batch_deadline: float = declare(
+        600.0,
+        "ROBOTHOR_VISION_BATCH_DEADLINE",
+        "Seconds one whole `analyze_image` call gets. Images not reached by "
+        "then come back as errors rather than answers. Without it a backend "
+        "that hangs for EVERY image would hold a single tool call open for "
+        "the per-image timeout times 200 divided by the concurrency.",
+        restart_required=False,
+        since="unreleased",
+    )
     rlm_root_model: str = declare(
         "openrouter/anthropic/claude-sonnet-4.6",
         "ROBOTHOR_RLM_ROOT_MODEL",

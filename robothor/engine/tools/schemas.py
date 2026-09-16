@@ -45,10 +45,13 @@ _ATTACHMENT_SCHEMAS: dict[str, dict[str, Any]] = {
         "function": {
             "name": "view_image",
             "description": (
-                "Look at an image file — a photo, screenshot, chart, diagram or "
+                "Look at ONE image file — a photo, screenshot, chart, diagram or "
                 "scan. The picture itself is placed in front of you, so read it "
                 "directly rather than writing code to inspect its pixels. Use "
-                "this whenever a task depends on what an image SHOWS."
+                "this whenever a task depends on what an image SHOWS. For many "
+                "images, or the same question asked of each one, use "
+                "analyze_image instead — it answers without filling your context "
+                "with pictures."
             ),
             "parameters": {
                 "type": "object",
@@ -59,6 +62,60 @@ _ATTACHMENT_SCHEMAS: dict[str, dict[str, Any]] = {
                     },
                 },
                 "required": ["path"],
+            },
+        },
+    },
+    "analyze_image": {
+        "type": "function",
+        "function": {
+            "name": "analyze_image",
+            "description": (
+                "Ask one question about up to 200 images at once. Each image is "
+                "sent to a vision model separately and only the ANSWERS come "
+                "back, so this is cheap to call again and again and it does not "
+                "fill your context with pictures. Use it to sort, label, filter "
+                "or search a folder of images ('is there a person in this "
+                "photo?', 'what does the sign say?', 'which category does this "
+                "belong to?'). Use view_image instead when one picture matters "
+                "and you need to study it yourself."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Image paths, 1-200, inside the workspace. Answers come "
+                            "back in this order."
+                        ),
+                    },
+                    "question": {
+                        "type": "string",
+                        "description": (
+                            "The one question asked of every image. Be specific and ask "
+                            "for the shortest useful answer — a label, a yes/no, the text "
+                            "that is visible."
+                        ),
+                    },
+                    "detail": {
+                        "type": "string",
+                        "enum": ["low", "high"],
+                        "description": (
+                            "How closely the image is rendered for the model. Default "
+                            "low, which is cheap and enough to recognise a scene or an "
+                            "object; ask for high when small text or fine detail decides "
+                            "the answer."
+                        ),
+                    },
+                    "max_concurrency": {
+                        "type": "integer",
+                        "description": (
+                            "How many images are analysed at once (default 4, maximum 16)."
+                        ),
+                    },
+                },
+                "required": ["paths", "question"],
             },
         },
     },
