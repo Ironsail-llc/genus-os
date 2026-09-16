@@ -805,6 +805,13 @@ async def run(config: ConnectorConfig | None = None) -> None:
 
 
 def main() -> None:
+    from robothor.engine.process_hardening import harden_process
+
+    # Same-uid processes share procfs: an agent's `exec` child can read this
+    # process's environment out of /proc unless it says otherwise. One call,
+    # from the one helper, in every long-running Genus process — hardening the
+    # engine alone was a statistic, not a boundary.
+    harden_process()
     asyncio.run(run())
 
 

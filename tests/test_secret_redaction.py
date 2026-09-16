@@ -412,3 +412,64 @@ class TestItIsSafeOnTheFailurePathItLivesOn:
         for odd in ("%s %d {}", "\\x00binary\\xff", "a" * 100_000, "🔑 xoxb-emoji-adjacent"):
             assert isinstance(redact(odd), str)
             assert isinstance(redact_unrecognized_arguments(odd), str)
+
+
+# ── N9: what redaction must NOT eat ──────────────────────────────────────────
+#
+# Every entry below is a real sentence an agent or an operator writes, which the
+# redactor mangled. None of them loses a credential; each loses information the
+# agent may need later in the same session — and a history that quietly rewrites
+# the operator's own words is its own kind of failure.
+
+
+@pytest.mark.parametrize(
+    ("text", "why"),
+    [
+        (
+            "use Bearer authentication for the API",
+            "`Bearer\\s+\\S+` ate the next English word",
+        ),
+        (
+            "the Bearer token goes in the header",
+            "same shape, and this is how an agent explains itself",
+        ),
+        (
+            "sk-learn-compatible-estimators",
+            "`sk-` is a real prefix and also the start of an ordinary hyphenated word",
+        ),
+        (
+            "SSH_KEY=~/.ssh/id_ed25519",
+            "a PATH to a key is not a key; the agent needs the path",
+        ),
+        (
+            "GITHUB_TOKEN=$(gh auth token)",
+            "a command substitution is a command, and redacting half of it leaves "
+            "syntactically broken text in the history",
+        ),
+        (
+            "OPENAI_API_KEY=${OPENROUTER_API_KEY}",
+            "a variable reference is not a value",
+        ),
+        (
+            "TOKEN_PATH=/etc/robothor/token",
+            "a path again",
+        ),
+    ],
+)
+def test_redaction_leaves_legitimate_text_alone(text, why):
+    assert redact(text) == text, f"{why}: {redact(text)!r}"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Authorization: Bearer ghp_FAKE0000aaaaaaaaaaaaaaaaaaaaaaaa",
+        "Bearer eyJhbGciOiJIUzI1NiJ9.aaaaaaaaaaaaaaa.bbbbbbbbbbbbbbb",
+        "Bearer sk-FAKE0000aaaaaaaaaaaaaaaaaaaa",
+        "OPENAI_API_KEY=sk-FAKE0000aaaaaaaaaaaaaaaaaaaa",
+        "ghp_FAKE0000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ],
+)
+def test_the_real_shapes_are_still_taken(text):
+    """The tightening must not buy its precision with a miss."""
+    assert redact(text) != text, f"a credential survived: {text[:20]}…"

@@ -68,7 +68,22 @@ DISCOVERY_SCRIPT = REPO_ROOT / "scripts" / "list_env_reads.py"
 #: outbound channel read the secrets accessor, so one box answered "is Slack
 #: configured?" three different ways and the inbound bot silently never started
 #: on any install whose tokens were in the vault.
-ENV_READ_SITE_BASELINE = 482
+#: 482 -> 478: the four remaining direct credential readers -- `github_api`,
+#: `jira`, `memory/generation` and `cli/codex` -- go through
+#: `robothor.secrets.get_secret`. Not tidying: the process environment is a
+#: snapshot of a root-owned file taken at boot, so an expired GITHUB_TOKEN in
+#: it shadowed the replacement the assistant had written into the vault, and
+#: memory generation fell back to local ollama on an instance whose only
+#: OpenRouter key was a vault row. A reader that goes through the accessor gets
+#: the value the operator actually configured.
+#: 478 -> 474: the Telegram bot token, the alert webhook, the SIEM webhook and
+#: the guardrail pager's token now resolve through `robothor.secrets`. Not
+#: tidying: `genus secrets status` measures the ACCESSOR, so a declared
+#: credential read straight from the environment was reported `served=vault`
+#: after a migration while its reader saw nothing — and the SOPS runbook then
+#: told the operator that copy was safe to delete. The next restart would have
+#: disabled Telegram on an operator whose only channel is Telegram.
+ENV_READ_SITE_BASELINE = 474
 
 
 def _discovery():

@@ -36,6 +36,18 @@ _SECRET_NAMES = frozenset(
         ".s3cfg",
         ".htpasswd",
         ".vault-token",
+        # The AES master key for this instance's whole vault
+        # (robothor/vault/crypto.py: `<workspace>/.vault-key`). It was missing,
+        # and `ROBOTHOR_WORKSPACE` is on the exec allowlist — so an ungranted
+        # agent under `enforce` was told where the key was and allowed to print
+        # it, which decrypts every row the vault holds. The hyphen is why the
+        # `*.key` pattern did not catch it.
+        ".vault-key",
+        # Not a credential, and still not for an agent: it is the key the
+        # credential FINGERPRINTS are computed under, and reading it puts every
+        # fingerprint this instance prints back within reach of an offline
+        # dictionary comparison (robothor/secrets/fingerprint.py).
+        ".fingerprint-salt",
         ".npmrc",
         ".pypirc",
         "credentials",
@@ -73,7 +85,86 @@ _DOC_SUFFIXES = (".example", ".sample", ".template", ".md", ".txt", ".rst")
 #: deliberately NOT here: they hold operational state too (alert and SLO
 #: JSON, logs), and a replay of a week of real commands showed those reads
 #: were the only false refusals. Their credential files are caught by name.
-_SECRET_DIRS = frozenset({".ssh", ".aws", ".gnupg", ".kube", ".docker"})
+#:
+#: ``gcloud`` joined 2026-09-15 with the exec scrub, and ``.config/gh`` is
+#: handled by :data:`_SECRET_DIR_PAIRS` below: once ``GH_TOKEN`` stops being
+#: inherited, ``gh`` falls back to its own login file, so reading that file
+#: became the way to obtain the operator's personal credential instead.
+_SECRET_DIRS = frozenset({".ssh", ".aws", ".gnupg", ".kube", ".docker", "gcloud"})
+
+#: Directory names that are only a secrets directory under a particular parent.
+#: ``gh`` alone is far too common a path component to deny outright; ``.config/gh``
+#: is unambiguous.
+_SECRET_DIR_PAIRS = frozenset({(".config", "gh"), (".config", "gcloud")})
+
+#: Shell builtins that print the environment of the shell running them — which
+#: for an ``exec`` command is a child of the engine. Refused only in their
+#: printing form: ``set`` and ``declare``/``typeset`` print everything with no
+#: arguments or with ``-p``, while ``set -euo pipefail`` and ``declare -i n=3``
+#: are ordinary script lines. A denylist that ate ``set -e`` would break every
+#: agent script, and a control that breaks scripts gets turned off.
+_ENV_PRINTING_BUILTINS = frozenset({"set", "declare", "typeset"})
+
+#: ``/proc/<pid>/environ`` — the way around the exec scrub that involves no file
+#: on disk. A process may read another same-uid process's environment, and
+#: ``subprocess.run(shell=True)`` makes the ENGINE the parent of every ``exec``
+#: shell, so ``$PPID`` is the process holding the decrypted secrets file.
+#:
+#: This is a denylist and is worth what a denylist is worth: it raises the cost,
+#: it does not close the hole. What closes it is ``PR_SET_DUMPABLE`` in
+#: :mod:`robothor.engine.process_hardening`; what removes it is the SOPS shrink,
+#: after which the engine's environment holds only bootstrap credentials.
+#: Matched against a NORMALISED command, never the raw one. The literal form
+#: missed ``/proc/<pid>//environ`` — the kernel resolves both to the same file,
+#: and a path denylist that matches the string rather than the path means
+#: nothing. ``task/<tid>/`` is the per-thread view of the same environment.
+_PROCFS_ENVIRON = re.compile(r"/proc/[^/\s]+/(?:task/[^/\s]+/)?(environ|cmdline)\b")
+
+#: Any ``/proc/…`` run in a command, however it is spelled. Extracted, then
+#: normalised with ``posixpath.normpath``, which resolves ``..`` and ``.`` and
+#: collapses ``//`` exactly as the kernel does.
+#:
+#: Hand-rolled collapsing was tried twice and was wrong twice. The first closed
+#: ``//`` and ``/./`` and skipped ``..`` on the grounds that resolving it needs
+#: a working directory — true of a RELATIVE path and irrelevant here, because a
+#: ``/proc/…`` path is rooted, so ``..`` means exactly one thing. A probe then
+#: read a canary through ``/proc/<pid>/../<pid>/environ`` while every other
+#: spelling was refused, and a regex written for that still missed
+#: ``/proc/1/task/1/../../environ``.
+#:
+#: The lesson is the general one: a denylist that matches a STRING rather than a
+#: PATH means nothing, because the kernel resolves every spelling to one file.
+#: So the matcher resolves them too, with the standard library rather than by
+#: hand.
+#:
+#: The character class stops at shell metacharacters so a normalisation cannot
+#: swallow the rest of a command line. ``$`` and ``{}`` stay in, because
+#: ``/proc/$PPID/environ`` and ``/proc/${pid}/environ`` are the spellings an
+#: agent actually writes.
+_PROC_PATH = re.compile(r"/proc/[^\s'\";|&()<>]*")
+
+#: And the backstop, which is where the spelling game stops.
+#:
+#: Normalisation handles every path a caller writes out. It cannot handle one
+#: the SHELL computes — ``/proc/$(pgrep engine)/environ``, a variable holding
+#: half the path, a ``cd`` and a relative read — and each round of this review
+#: found one more spelling than the last. So the final rule is blunt and
+#: complete: a command that mentions ``/proc`` and asks for ``environ`` or
+#: ``cmdline`` is refused, whatever lies between them.
+#:
+#: The cost is a false refusal for a command that merely NAMES the path (an
+#: agent writing documentation about procfs). That is a visible, recoverable
+#: annoyance; the alternative is another spelling nobody thought of. And this is
+#: defence in depth either way — ``PR_SET_DUMPABLE`` is the control that
+#: actually closes the read.
+_MENTIONS_PROC_ENVIRON = re.compile(r"/proc\b[\s\S]*?\b(?:environ|cmdline)\b")
+
+
+def _normalise_paths(command: str) -> str:
+    """Rewrite every ``/proc/…`` run in *command* to its canonical spelling."""
+    import posixpath
+
+    return _PROC_PATH.sub(lambda match: posixpath.normpath(match.group(0)), command)
 
 
 def is_secret_path(path: str | os.PathLike[str]) -> bool:
@@ -91,6 +182,8 @@ def is_secret_path(path: str | os.PathLike[str]) -> bool:
 
     parts = [part.lower() for part in p.parts]
     if any(part in _SECRET_DIRS for part in parts):
+        return True
+    if any(pair in _SECRET_DIR_PAIRS for pair in zip(parts, parts[1:], strict=False)):
         return True
     # A dot-directory the platform reserves for instance secrets: .robothor/secrets*
     for i, part in enumerate(parts[:-1]):
@@ -235,6 +328,19 @@ def exec_reads_secret(command: str) -> str | None:
     Allowed: sourcing the file, testing for it, listing its directory,
     counting its lines — anything that uses it without printing it.
     """
+    # Before the per-segment walk: a procfs environment read has no command word
+    # of its own to catch. ``tr '\0' '\n' < /proc/self/environ`` is a redirect,
+    # ``grep -a x /proc/$PPID/environ`` hides the path in an argument, and a
+    # Python one-liner names no printer at all. Matched on the whole command for
+    # that reason — see _PROCFS_ENVIRON for what this is and is not worth.
+    if _PROCFS_ENVIRON.search(_normalise_paths(command)) or _MENTIONS_PROC_ENVIRON.search(command):
+        return (
+            "refused: reading /proc/<pid>/environ or /proc/<pid>/cmdline prints another "
+            "process's environment, which holds this instance's credentials. A "
+            "credential your agent needs is granted by name in its manifest's "
+            "`secrets:` list."
+        )
+
     for tokens in _segments(command):
         word, args = _command_word(tokens)
         if word is None:
@@ -243,6 +349,7 @@ def exec_reads_secret(command: str) -> str | None:
             word == "printenv"
             or (word == "env" and not args)
             or (word == "export" and args == ["-p"])
+            or (word in _ENV_PRINTING_BUILTINS and (not args or args == ["-p"]))
         ):
             return f"refused: `{word}` prints the process environment, which holds credentials"
         if word in _PRINTERS:

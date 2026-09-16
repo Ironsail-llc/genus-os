@@ -74,6 +74,20 @@ def save_exchange(
     Returns the inserted chat_messages ids (order: [user_id, assistant_id])
     so the async caller can schedule embedding without re-querying.
     """
+    # Redacted at the door, not at each caller.
+    #
+    # `chat_messages` outlives the session, is exported into support bundles,
+    # and is read by `backfill_chat_embeddings` — which sends the text to an
+    # embedding model. The operator pastes a credential into Telegram; without
+    # this it lands in all three. Round 1 fixed the webchat call site and
+    # missed telegram.py, telegram_plan_mode.py, ide.py and
+    # channels/webchat.py, which is what a per-caller fix buys you: a list, and
+    # the entry that gets forgotten is the one that matters.
+    from robothor.secrets.redaction import redact
+
+    user_content = redact(user_content)
+    assistant_content = redact(assistant_content)
+
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
@@ -122,7 +136,16 @@ def save_message(
     channel: str = "telegram",
     tenant_id: str = DEFAULT_TENANT,
 ) -> int | None:
-    """Save a single message (used for system injections). Returns the message id."""
+    """Save a single message (used for system injections). Returns the message id.
+
+    Redacted for the reason ``save_exchange`` is: this writes ``chat_messages``,
+    which outlives the session, reaches support bundles, and is read by
+    ``backfill_chat_embeddings`` — so a credential here is a credential sent to
+    an embedding model.
+    """
+    from robothor.secrets.redaction import redact
+
+    content = redact(content)
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
@@ -163,7 +186,13 @@ def save_channel_surface(
     tenant_id: str = DEFAULT_TENANT,
 ) -> int | None:
     """Persist a fleet agent's outbound message as an assistant turn in the
-    named session. Used by the channel bus: any agent that delivers to the
+    named session, with credentials redacted out of it.
+
+    A worker that echoes a credential into a message surfaced to the operator
+    lands it in ``chat_messages`` and from there in the embedding pipeline —
+    the same door as ``save_exchange``, reached by a different caller.
+
+    Used by the channel bus: any agent that delivers to the
     channel dual-writes the output into main's canonical session so main has
     full visibility on its next run.
 
@@ -173,6 +202,9 @@ def save_channel_surface(
 
     Returns the chat_messages.id for the caller to record in channel_message_map.
     """
+    from robothor.secrets.redaction import redact
+
+    content = redact(content)
     payload: dict[str, Any] = {
         "role": "assistant",
         "content": content,

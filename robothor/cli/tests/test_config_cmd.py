@@ -26,6 +26,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from pathlib import Path
 
 from robothor.cli.config_cmd import cmd_config
+from robothor.secrets.fingerprint import FINGERPRINT_PREFIX
 
 
 @pytest.fixture(autouse=True)
@@ -96,7 +97,7 @@ def test_get_never_prints_a_secret(monkeypatch, capsys) -> None:
     assert cmd_config(_args(config_command="get", name="ROBOTHOR_DB_PASSWORD")) == 0
     out = capsys.readouterr().out
     assert "hunter2-the-real-one" not in out
-    assert "sha256:" in out
+    assert FINGERPRINT_PREFIX in out
     assert "set" in out
 
 
@@ -403,3 +404,49 @@ def test_set_does_not_mistake_a_hash_in_a_value_for_a_comment(tmp_path) -> None:
 
     document = yaml.safe_load(_config_path(tmp_path).read_text())
     assert document["settings"]["channels"]["ai_name"] == "Ada"
+
+
+class TestOneFingerprintForOneCredential:
+    """``genus config get`` and the Helm's Settings page print a fingerprint so
+    two boxes can be compared by eye. They had their own SHA-256 of the value,
+    which made it a SECOND fingerprint for a credential that the status table,
+    the vault tools and ``genus channel add`` already print a different digest
+    for -- and an unkeyed one, which is the weakness CodeQL flagged in the
+    shared function. Four surfaces, one digest, or the comparison means nothing.
+    """
+
+    VALUE = "ghp_FAKE0000aaaaaaaaaaaaaaaaaaaaaaaa"
+
+    def test_the_masked_value_carries_the_shared_fingerprint(self):
+        from robothor.secrets.fingerprint import fingerprint
+        from robothor.settings.operator import mask
+
+        assert mask(self.VALUE) == f"<set, {fingerprint(self.VALUE)}>"
+
+    def test_an_unset_value_is_still_unset(self):
+        from robothor.settings.operator import mask
+
+        assert mask("") == "<unset>"
+        assert mask(None) == "<unset>"
+
+    def test_the_settings_api_reports_the_same_fingerprint(self, monkeypatch):
+        from robothor.secrets.fingerprint import fingerprint
+        from robothor.settings import operator
+
+        row = {"secret": True, "name": "GITHUB_TOKEN"}
+        held = {"value": self.VALUE}
+        monkeypatch.setattr(operator, "resolve", lambda _row: (held["value"], "env", ""))
+
+        assert operator.secret_status(row)["fingerprint"] == fingerprint(self.VALUE)
+        held["value"] = ""
+        assert operator.secret_status(row)["fingerprint"] is None
+
+    def test_the_settings_module_computes_no_digest_of_its_own(self):
+        """A property rather than a promise: nothing in the module hashes."""
+        import inspect
+
+        from robothor.settings import operator
+
+        body = inspect.getsource(operator)
+        assert "sha256" not in body, "a second fingerprint for the same credential"
+        assert "hashlib" not in body

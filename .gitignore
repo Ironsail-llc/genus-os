@@ -189,6 +189,11 @@ brain/memory_system/locks/
 # Vault master key
 .vault-key
 
+# Per-instance credential-fingerprint salt: the key the fingerprints printed
+# in logs, tool results and the Helm are computed under. Committing it would
+# put them back within reach of an offline comparison by any reader.
+.fingerprint-salt
+
 # Dev session history
 brain/.aider.chat.history.md
 

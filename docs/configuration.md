@@ -84,7 +84,7 @@ reporting a value for something nothing reads.
   disturbing your comments, and the reply is either `applied` or
   `restart required: robothor-engine`.
 
-A secret is never printed. `get` and `list` show `<set, sha256:ab12cd34>` —
+A secret is never printed. `get` and `list` show `<set, b2:ab12cd34>` —
 enough to tell two boxes apart without putting the value on your screen.
 
 ### From the Helm, without a shell
@@ -94,7 +94,7 @@ declarations `genus config list` prints — one collapsible section per group,
 with a filter over names and descriptions — and saves a section's changed
 fields in one all-or-nothing write. It obeys the same three routing rules as
 `set`, because it calls the same code: a secret is shown as
-`configured · sha256:ab12cd34` with no box to type in, a field the box's
+`configured · b2:ab12cd34` with no box to type in, a field the box's
 environment supplies is read-only with the sentence explaining why a write
 would apply to nothing, and a governed flag carries a link to the page that
 says what it is actually doing. **Settings › Flags** is that page: every
@@ -198,28 +198,215 @@ handful of files, each with one job:
 
 ## Secrets
 
-Three rules, and the platform enforces all three rather than documenting them:
+### The rule: a value you hand the assistant wins over what the box booted with
+
+The vault is the store you and the assistant manage. The environment — which on
+a systemd instance is `/run/robothor/secrets.env`, decrypted at boot from a
+root-owned SOPS file — is **bootstrap only**.
+
+**Why.** On 2026-09-15 the operator handed the assistant a GitHub token over
+Telegram and expected it to be kept, used and rotated by the assistant. It
+could not be. The assistant could write the vault, but the accessor read the
+environment first, so the expired `GH_TOKEN` the box had booted with shadowed
+the fresh vault row — and clearing it needed root to edit the SOPS file and
+restart the unit, which the assistant cannot do and must never need to. A dead
+environment value must never silently shadow a live vault row.
+
+So precedence depends on **what the credential is**:
+
+| Class | Which store wins | What is in it |
+|-------|------------------|---------------|
+| **Application** | **vault**, then environment | Every third-party token: provider keys, `GITHUB_TOKEN`, channel tokens, SMTP passwords, webhook URLs. The credentials an assistant is handed, uses, proves and rotates. |
+| **Bootstrap** | **environment**, then vault | `ROBOTHOR_DB_PASSWORD` (the vault's own rows live in that database), the test DSNs, `ROBOTHOR_REDIS_PASSWORD`, `GENUS_AUTH_SIGNING_KEY`, `AUTH_SECRET`, `GENUS_BRIDGE_SSO_SECRET`, `ROBOTHOR_INTENT_HMAC_SECRET`, the NATS transport, and `ROBOTHOR_VAULT_*` / `SOPS_*`. |
+
+A name nobody declared is an **application** credential — the safe default,
+because the tokens this rule exists for are exactly the ones the platform has
+never heard of.
+
+The set is a marker on the settings declaration itself (`declare(...,
+secret=True, bootstrap=True)`), never a list maintained beside it. `genus
+secrets status` prints the whole table, and `robothor.secrets.classification`
+is where the rule lives.
+
+**An unreadable vault still falls through to the environment.** Failing closed
+would take every channel, provider and integration down with a vault outage,
+for credentials a root-owned file is still holding good copies of.
+
+### Handing the assistant a credential
+
+Paste the token to your main agent. It will:
+
+1. `vault_set` the credential — encrypted, and redacted out of the stored step
+   and the transcript, so it does not survive in `agent_run_steps.tool_input`.
+2. `vault_test` it — which dials the vendor's identity endpoint and answers
+   `{ok, identity_hint, error_class}`. The identity hint is the vendor's own
+   name for the account (a GitHub login, a Slack team), which is what catches a
+   token that works but belongs to the wrong account.
+3. Answer you with the fingerprint and the test result.
+
+It will not echo the value back, and it will not write it to a memory block, a
+note or a file. It also **cannot read it**: `vault_get` returns
+`{key, configured, fingerprint, source, updated_at}` and never a value — the
+same write-only shape the Helm Secrets page uses.
+
+The write takes effect immediately. No restart, and nothing for you to do.
+
+**Writes from elsewhere.** A running process caches what the vault answered, per
+key, for ten seconds (three for a "not configured" answer, because a feature
+that stays dead reads as broken rather than slow). So a credential you store
+with `genus vault set`, `genus secrets migrate` or the setup wizard lands within
+that window on every running process.
+
+Those commands also POST `/api/admin/secrets/reload` so it lands instantly — but
+only where the engine accepts an unauthenticated control call, which a
+production instance does not: `/api/admin/*` requires the `engine:control`
+scope, and the CLI holds no token. On such an instance the command says so, and
+the ten seconds applies. Saving from the Helm's Settings page applies a change
+immediately, because the browser session has the scope.
+
+The vault tools are **operator-tier**. An operator grants the tier explicitly:
+
+```yaml
+id: main
+v2:
+  credentials: operator
+```
+
+Everything else is refused, including any sub-agent one of them spawns — a
+spawned child runs under its own agent id, so its own manifest is what is
+checked.
+
+This is deliberately **not** the `role:` field. `role:` feeds RBAC, and setting
+it to a value no `role_permissions` row seeds (`main`, `operator`) denies that
+agent *every* tool under `ROBOTHOR_RBAC_MODE=enforce`. Two postures, two
+fields; `ROBOTHOR_DEFAULT_SERVICE_ROLE` cannot grant the credential tier either.
+
+**Spawning is not a way around it, but it is a way to reach it.** The tier is
+read from the manifest of whichever agent is running, so a spawned sub-agent is
+refused — that is the point. But an agent that holds `spawn` can spawn *an agent
+that has the tier*, which then acts with it. That is the design: `spawn` is
+delegation, and delegating to your operator agent is a normal thing to do. If it
+is not what you want, take `spawn` out of that agent's `tools_allowed`, or
+`tools_denied: [spawn]`. Grant the tier to as few agents as possible for the
+same reason you would limit any other privileged role.
+
+### What a sub-agent sees
+
+Nothing *inherited*, unless its own manifest says so. An agent's `exec` commands used to
+inherit the engine's whole process environment — all ~50 credentials. The child
+environment is now built from an allowlist: the process essentials (`PATH`,
+`HOME`, `LANG`, `LC_*`, `TERM`, `TZ`, `TMPDIR`, `ROBOTHOR_WORKSPACE`,
+`ROBOTHOR_AGENT_ID`) plus the `ROBOTHOR_*`/`GENUS_*` settings the model marks
+non-secret.
+
+An agent that genuinely needs a credential names it in its own manifest:
+
+```yaml
+id: devops
+secrets:
+  - GITHUB_TOKEN
+```
+
+Those names, and only those, are resolved through the accessor (vault first) and
+injected into that agent's children. **Grants are never inherited** — a
+sub-agent gets what its own manifest names, which is usually nothing. Bootstrap
+names are refused however a manifest spells them, and a grant that resolves from
+neither store becomes a note in the tool result rather than a silent absence.
+
+**`gh` in particular.** With neither `GH_TOKEN` nor `GITHUB_TOKEN` in the child
+environment, `gh` falls back to its own login file — so the agent acts as
+whoever ran `gh auth login`, not as the instance. Grant `GITHUB_TOKEN` if you
+want the instance's identity instead.
+
+`ROBOTHOR_EXEC_ENV_MODE` is the ladder: `off` disables the scrub, `observe` (the
+default for an existing install) changes nothing and logs per agent exactly what
+`enforce` would withhold, `enforce` applies it. Read the observe lines, grant
+what your agents actually need, then promote. New installs start at `enforce`.
+Grants apply on every rung, so promoting is never what first gives an agent a
+credential.
+
+#### What the scrub is not
+
+It removes **ambient inheritance**. It is not a process boundary, and it is
+worth knowing exactly where the line is:
+
+- The credentials are still in the **engine's own** environment. On Linux,
+  `/proc/<pid>/environ` of a dumpable process is readable by any process of the
+  same uid — and an `exec` child is one, with the engine as its parent. Genus
+  sets `PR_SET_DUMPABLE=0` at startup so those entries become root-only, and
+  `secret_paths` refuses `/proc/*/environ`, `set` and `declare -p`; the first is
+  a real kernel boundary, the second is a denylist.
+- **The remedy is to stop holding them there.** Run the migration and shrink the
+  SOPS file (below): once the engine's environment carries only bootstrap
+  credentials, that is all procfs can leak.
+- **The boundary for an agent you do not trust is the sandbox.** `sandbox: docker`
+  gives the container no host environment at all — which is also why a `secrets:`
+  grant does not reach a sandboxed agent, and the tool result says so.
+
+#### `gh` and other HOME-based logins
+
+Taking `GH_TOKEN` out of the child does not make `gh` fail — it makes it fall
+back to `~/.config/gh/hosts.yml`, so an ungranted agent would run as whoever ran
+`gh auth login`. That is usually the operator personally, which is a *wider*
+identity than the instance's token, not a narrower one.
+
+So under `enforce` Genus points `GH_CONFIG_DIR` at an empty per-run directory
+unless the agent is granted `GITHUB_TOKEN`: an ungranted agent's `gh` is logged
+out, and a granted one acts as the instance. Reading the login files directly
+(`gh auth token`, `cat ~/.config/gh/hosts.yml`, `~/.config/gcloud`) is refused
+by `secret_paths`. Grant `GITHUB_TOKEN` to the agents that genuinely need
+GitHub.
+
+### Moving out of the environment
+
+```bash
+genus secrets status                      # what is where, and which store wins
+genus secrets migrate --from-env --dry-run
+genus secrets migrate --from-env
+```
+
+`migrate` copies every application credential the process environment holds into
+the vault, refuses bootstrap names, and prints names and fingerprints only.
+Afterwards, delete the migrated entries from the secrets file: until you do,
+`genus doctor`'s `secrets.shadowed` check reports them, because a stale copy in
+either store is a credential somebody will eventually read and a rotation
+somebody will think they performed.
+
+SOPS stays — as the bootstrap layer. See
+[the SOPS runbook](runbooks/SOPS_BOOTSTRAP.md) for shrinking the file to just
+that.
+
+### The rules the platform enforces
 
 1. **A credential never goes in `config.yaml`.** `genus config set` refuses a
    setting declared secret and names `genus vault set` instead.
 2. **Read one through the accessor, not `os.environ`.**
 
     ```python
-    from robothor.secrets import get_secret, secret_source
+    from robothor.secrets import get_secret, resolve_secret
 
-    get_secret("OPENROUTER_API_KEY")      # value, or None
-    secret_source("OPENROUTER_API_KEY")   # "env" | "vault" | "missing" | "unavailable"
+    get_secret("OPENROUTER_API_KEY")       # value, or None
+    resolve_secret("OPENROUTER_API_KEY")   # (value, "env"|"vault"|"missing"|"unavailable")
     ```
 
-    It walks the process environment (whatever the backend put there) and then
-    the encrypted vault, and treats an unreadable vault as "not configured"
-    rather than raising. An instance whose vault has no master key resolves from
-    the environment only and says so once at INFO — an engine that could not
-    make an LLM call because its credential store is empty would be worse than
-    no vault at all.
-3. **Nothing prints a key.** Logs, alerts and `repr()` use a one-way
-   fingerprint (`key-1a2b3c4d`) rather than the last-four convention, which
+    The accessor applies the precedence above, and treats an unreadable vault as
+    "not configured" rather than raising — an engine that could not make an LLM
+    call because its credential store is momentarily unreachable would be worse
+    than no vault at all.
+3. **Nothing prints a key.** Logs, alerts, tool results, the status table and
+   `repr()` use a one-way fingerprint (`b2:1a2b3c4d`, from
+   `robothor.secrets.fingerprint`) rather than the last-four convention, which
    prints real key material.
+
+   It is a keyed BLAKE2b digest, and the key is a random salt this instance
+   writes to `<workspace>/.fingerprint-salt` on first use. So a fingerprint is
+   stable here — the same credential gives the same eight characters across
+   every process, for the life of the instance — and meaningless anywhere else:
+   two boxes holding the same token print different fingerprints, and a leaked
+   one cannot be checked against a guessed value by anyone who does not have
+   that file. A key compiled into the source would have left a short or
+   low-entropy secret open to an offline dictionary check by any reader of the
+   repository.
 
 ### Where the values come from
 
@@ -234,7 +421,16 @@ are in [Deployment § Secrets backends](deployment.md#secrets-backends).
 Five providers can hold credentials: `openrouter`, `anthropic`, `openai`,
 `gemini`, `deepseek`. Each resolves **vault-first, then environment**, slot by
 slot — a key written from the Settings page or the setup wizard wins the slot
-it was written to, while a spare left in the shell keeps working.
+it was written to, while a spare left in the shell keeps working. (Provider
+slots have always worked this way; since 2026-09-15 every other application
+credential does too.)
+
+`vault.naming.vault_keys_for_env_name` is the one place the environment name
+and the vault key are related in that direction: `OPENROUTER_API_KEY` finds
+`providers/openrouter/api_key`, and a name with no richer spelling finds its own
+lower-cased form. Both the accessor's search and `genus secrets migrate`'s
+choice of where to write go through it, so a row the migration writes is a row
+a reader finds.
 
 | Slot | Vault key | Environment variable |
 |------|-----------|----------------------|
@@ -331,7 +527,7 @@ else can ask one anything:
 | `POST /api/channels/{name}/verify` | Runs the channel's own `verify()` and returns each step. A channel that declares none gets `steps: []` and `verify_available: false` — never a fabricated pass; one that hangs or raises gets `configured: null` and an `error_class`, because a pass nobody observed is not a pass. Aimed with an optional `{"target": "..."}`, and it may really send a message. |
 
 Neither route writes a credential, and neither returns one: a token, a chat id
-or anything else secret-shaped in a health report comes back as a `sha256:`
+or anything else secret-shaped in a health report comes back as a `b2:`
 fingerprint. **Adding a channel's token is still `genus channel add` on the
 box** (and `genus init --telegram-token` for Telegram) — there is no API that
 writes channel credentials, by design.

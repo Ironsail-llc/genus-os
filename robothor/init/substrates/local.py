@@ -199,6 +199,15 @@ class LocalSignInStep(BaseStep):
         # re-asserting this would turn password sign-in back on for an operator
         # who deliberately turned it off.
         values.setdefault("GENUS_LOCAL_LOGIN", self.LOCAL_LOGIN)
+        # A NEW install starts at `enforce`: no agent's shell command sees a
+        # credential unless that agent's own manifest grants the name. The
+        # platform default is `observe`, because promoting it under an existing
+        # fleet would take away credentials agents were quietly using before
+        # their operator had seen what would be lost -- but a fresh instance has
+        # no such history, and starting it permissive means the operator has to
+        # remember to come back. setdefault, so a re-run never re-asserts it
+        # over an operator who deliberately stepped back down.
+        values.setdefault("ROBOTHOR_EXEC_ENV_MODE", "enforce")
 
         header = [
             "# Written by `genus init`. Mode 0600 — it holds this instance's",

@@ -375,12 +375,20 @@ def _audit_tool_call(
     """Record a tool invocation in the audit log (non-blocking, never raises)."""
     try:
         from robothor.audit.logger import log_event
+        from robothor.secrets.redaction import redact
 
         details: dict[str, Any] = {"tenant_id": tenant_id}
         if user_id:
             details["user_id"] = user_id
         if error:
-            details["error"] = error[:500]
+            # Redacted, defence in depth. An audit row outlives the run and is
+            # exported wholesale into a support bundle, and this `error` is
+            # sometimes the text of an exception somebody else raised — the
+            # shape `robothor/secrets/redaction.py` exists for, where a
+            # credential arrives from outside and the process is not holding
+            # anything to compare it against. The arguments were never here;
+            # this closes the one field that could carry a value.
+            details["error"] = redact(error)[:500]
         log_event(
             event_type="agent.tool_call",
             action=tool_name,

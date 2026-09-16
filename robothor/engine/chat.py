@@ -47,6 +47,8 @@ from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 
 from robothor.constants import DEFAULT_TENANT
+from robothor.engine.chat_history import MAX_HISTORY as _MAX_HISTORY
+from robothor.engine.chat_history import ChatHistory, append_turn, as_history
 from robothor.engine.chat_session_cache import SessionCache
 from robothor.engine.chat_store import (
     clear_plan_state_async,
@@ -68,7 +70,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-MAX_HISTORY = 40  # 20 turns (user + assistant)
+#: Re-exported from ``chat_history``, which owns it now: the cap and the
+#: container it bounds are one concern, and several modules import it from here.
+MAX_HISTORY = _MAX_HISTORY
 SSE_KEEPALIVE_INTERVAL = 15.0  # seconds between keepalive comments
 
 # Module-level references injected by init_chat()
@@ -194,7 +198,31 @@ router = APIRouter(prefix="/chat", dependencies=[Depends(_require_chat_auth)])
 class ChatSession:
     """Per-session chat state."""
 
-    history: list[dict[str, Any]] = field(default_factory=list)
+    # A ChatHistory, not a list: it redacts every row on the way in, so every
+    # `session.history.append(...)` anywhere in the engine is covered without
+    # being edited — including the Telegram ones round 1 missed, and the next
+    # channel's. See robothor/engine/chat_history.py.
+    history: list[dict[str, Any]] = field(default_factory=ChatHistory)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Assigning ``history`` wraps it; a plain list cannot be stored here.
+
+        Round 2 gave the container the property and then two restore paths
+        assigned straight over it — `chat._restore_sessions` at daemon startup
+        and telegram.py's own — so after every deploy every live session,
+        including the one the operator pastes tokens into, held a plain list
+        again and `/chat/history` served the raw value out of RAM.
+
+        The fix is not a third call site. A list of blessed call sites is what
+        produced that finding twice, so the type is enforced where the
+        assignment happens: any module, any path, including ones not written
+        yet. The rows already in the assigned list are redacted too — they are
+        the ones that came out of the store carrying the credential.
+        """
+        if name == "history":
+            value = as_history(value)
+        super().__setattr__(name, value)
+
     active_task: asyncio.Task[Any] | None = None
     model_override: str | None = None
     plan_mode: bool = False
@@ -372,21 +400,14 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
             )
 
             # Always record user message in session history
-            session.history.append({"role": "user", "content": message})
-            if run.output_text:
-                session.history.append({"role": "assistant", "content": run.output_text})
-            elif run.error_message:
-                # Record error so the next run knows what failed
-                session.history.append(
-                    {
-                        "role": "assistant",
-                        "content": f"[Run failed: {run.error_message}]",
-                    }
-                )
-
-            # Trim history (in-place slice for safety under concurrency)
-            if len(session.history) > MAX_HISTORY:
-                session.history[:] = session.history[-MAX_HISTORY:]
+            append_turn(
+                session,
+                user_message=message,
+                assistant_text=(
+                    run.output_text
+                    or (f"[Run failed: {run.error_message}]" if run.error_message else None)
+                ),
+            )
 
             # Persist to DB (fire-and-forget)
             if run.output_text and _config:
@@ -440,12 +461,10 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
         except Exception as e:
             logger.error("Chat agent error: %s", e, exc_info=True)
             # Record the failed attempt so next run has context
-            session.history.append({"role": "user", "content": message})
-            session.history.append(
-                {
-                    "role": "assistant",
-                    "content": f"[Internal error — run failed: {e}]",
-                }
+            append_turn(
+                session,
+                user_message=message,
+                assistant_text=f"[Internal error — run failed: {e}]",
             )
             if len(session.history) > MAX_HISTORY:
                 session.history[:] = session.history[-MAX_HISTORY:]
@@ -513,7 +532,11 @@ async def chat_inject(request: Request) -> JSONResponse:
 
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
-    session.history.append({"role": "system", "content": message})
+    # Operator-supplied text, so it gets the same pass `append_turn` gives a
+    # user turn: this row is persisted and replayed for the life of the session.
+    from robothor.secrets.redaction import redact as _redact_text
+
+    session.history.append({"role": "system", "content": _redact_text(message)})
 
     # Persist to DB (fire-and-forget)
     if _config:
@@ -737,11 +760,7 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
             plan_text = _extract_plan_text(run.output_text or "")
 
             # Accumulate history so revisions have full context
-            session.history.append({"role": "user", "content": message})
-            if run.output_text:
-                session.history.append({"role": "assistant", "content": run.output_text})
-            if len(session.history) > MAX_HISTORY:
-                session.history[:] = session.history[-MAX_HISTORY:]
+            append_turn(session, user_message=message, assistant_text=run.output_text)
             if run.output_text and _config:
                 asyncio.create_task(
                     save_exchange_async(
@@ -926,20 +945,18 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                 plan.execution_run_id = run.id
 
                 # Merge into history
-                session.history.append(
-                    {"role": "user", "content": f"[Deep plan executed] {plan.original_message}"}
+                append_turn(
+                    session,
+                    user_message=f"[Deep plan executed] {plan.original_message}",
+                    assistant_text=(
+                        run.output_text
+                        or (
+                            f"[Deep reasoning failed: {run.error_message}]"
+                            if run.error_message
+                            else None
+                        )
+                    ),
                 )
-                if run.output_text:
-                    session.history.append({"role": "assistant", "content": run.output_text})
-                elif run.error_message:
-                    session.history.append(
-                        {
-                            "role": "assistant",
-                            "content": f"[Deep reasoning failed: {run.error_message}]",
-                        }
-                    )
-                if len(session.history) > MAX_HISTORY:
-                    session.history[:] = session.history[-MAX_HISTORY:]
 
                 # Persist to DB
                 if run.output_text and _config:
@@ -1048,17 +1065,18 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                 plan.execution_run_id = run.id
 
                 # Merge execution result back into session history for continuity
-                session.history.append(
-                    {"role": "user", "content": f"[Plan executed] {plan.original_message}"}
+                append_turn(
+                    session,
+                    user_message=f"[Plan executed] {plan.original_message}",
+                    assistant_text=(
+                        run.output_text
+                        or (
+                            f"[Execution failed: {run.error_message}]"
+                            if run.error_message
+                            else None
+                        )
+                    ),
                 )
-                if run.output_text:
-                    session.history.append({"role": "assistant", "content": run.output_text})
-                elif run.error_message:
-                    session.history.append(
-                        {"role": "assistant", "content": f"[Execution failed: {run.error_message}]"}
-                    )
-                if len(session.history) > MAX_HISTORY:
-                    session.history[:] = session.history[-MAX_HISTORY:]
 
                 # Persist to DB
                 if run.output_text and _config:
@@ -1155,10 +1173,14 @@ async def plan_reject(request: Request) -> JSONResponse:
 
     # Inject rejection feedback into session so agent can learn
     if feedback:
+        from robothor.secrets.redaction import redact as _redact_text
+
         session.history.append(
             {
                 "role": "system",
-                "content": f"[PLAN REJECTED] The previous plan was rejected. Feedback: {feedback}",
+                "content": _redact_text(
+                    f"[PLAN REJECTED] The previous plan was rejected. Feedback: {feedback}"
+                ),
             }
         )
 
@@ -1266,11 +1288,7 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
             revised_plan_text = _extract_plan_text(run.output_text or "")
 
             # Update history
-            session.history.append({"role": "user", "content": feedback})
-            if run.output_text:
-                session.history.append({"role": "assistant", "content": run.output_text})
-            if len(session.history) > MAX_HISTORY:
-                session.history[:] = session.history[-MAX_HISTORY:]
+            append_turn(session, user_message=feedback, assistant_text=run.output_text)
 
             if revised_plan_text:
                 plan.plan_text = revised_plan_text
@@ -1462,15 +1480,14 @@ async def deep_start(request: Request) -> StreamingResponse | JSONResponse:
                 )
 
             # Record in session history for continuity
-            session.history.append({"role": "user", "content": f"/deep {query}"})
-            if deep.response:
-                session.history.append({"role": "assistant", "content": deep.response})
-            elif deep.error:
-                session.history.append(
-                    {"role": "assistant", "content": f"[Deep reasoning failed: {deep.error}]"}
-                )
-            if len(session.history) > MAX_HISTORY:
-                session.history[:] = session.history[-MAX_HISTORY:]
+            append_turn(
+                session,
+                user_message=f"/deep {query}",
+                assistant_text=(
+                    deep.response
+                    or (f"[Deep reasoning failed: {deep.error}]" if deep.error else None)
+                ),
+            )
 
             # Persist to DB
             if run.output_text and _config:

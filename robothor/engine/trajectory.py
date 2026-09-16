@@ -56,8 +56,14 @@ def _to_sharegpt(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
     are emitted with ``from='tool'``. Multi-modal / list-typed
     ``content`` is flattened to a string so the JSONL stays uniform.
     """
+    from robothor.secrets.redaction import redact_message
+
     out: list[dict[str, str]] = []
-    for msg in messages:
+    for raw in messages:
+        # A trajectory is written to disk as a fine-tuning corpus and outlives
+        # every other copy of the conversation, so it gets the same pass the
+        # transcript gets rather than trusting that it was already applied.
+        msg = redact_message(raw)
         role = str(msg.get("role", "") or "")
         speaker = _ROLE_TO_SHAREGPT_FROM.get(role, role or "unknown")
         content = msg.get("content")

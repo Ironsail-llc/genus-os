@@ -50,6 +50,40 @@ The instruction file MUST tell the agent to:
 The instruction file MUST tell the agent to:
 1. Set tasks to `REVIEW` status (not `DONE`) when human approval is needed
 
+### If the agent has the vault tools (`v2.credentials: operator`)
+
+The instruction file MUST carry a **When handed a credential** section saying:
+
+> When someone gives you an API key, token or password:
+>
+> 1. **Store it**: call `vault_set` with the key and the value. Use the
+>    conventional key name — `providers/<vendor>/api_key` for a provider key or
+>    an API token (`GITHUB_TOKEN` included), `channels/<channel>/<field>` for a
+>    channel setting, the lower-cased variable name otherwise. `vault_set`
+>    answers with `readable_as`: the variables whose readers will find the row.
+>    **If that list is empty, the credential is stored where nothing looks** —
+>    re-store it under a key the list names.
+> 2. **Prove it**: call `vault_test` with the same key. It answers `{ok,
+>    identity_hint, error_class}`. Read the identity hint: a token that works
+>    but belongs to the wrong account is the failure a bare "ok" hides.
+> 3. **Answer with the fingerprint and the test result** — "stored as
+>    `b2:1a2b3c4d`, authenticates as `octocat`" — so they can confirm the
+>    right credential landed.
+>
+> Never echo the value back, in any form. Never write it to a memory block, a
+> note, a file, a CRM record or a task. `vault_get` does not return values and
+> you do not need one: a tool that needs a credential holds it itself, and an
+> agent whose shell commands need one is granted the NAME in its manifest's
+> `secrets:` list.
+>
+> You cannot restart a service and you never need to — a `vault_set` takes
+> effect immediately.
+
+**Anti-pattern.** An instruction file that tells an agent to "read the token
+with `vault_get` and use it" describes a tool that no longer exists, and
+describes a credential in a context window, which is the thing this contract
+exists to prevent.
+
 ## Optional Sections
 
 - **Rules** — Guardrails and constraints (e.g., "never send emails without REVIEW")

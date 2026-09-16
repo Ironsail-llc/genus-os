@@ -245,7 +245,6 @@ def test_a_governed_flag_reports_its_database_row(controls_client_as_operator, m
 def test_a_secret_is_reported_as_configured_and_a_fingerprint_only(
     controls_client_as_operator, clean_env, monkeypatch
 ):
-    import hashlib
 
     monkeypatch.setenv(SECRET, "super-secret-token-value")
     from robothor.settings import reset_settings
@@ -253,8 +252,11 @@ def test_a_secret_is_reported_as_configured_and_a_fingerprint_only(
     reset_settings()
     entry = controls_client_as_operator.get(SETTINGS).json()["values"][SECRET]
     assert entry["value"]["configured"] is True
-    expected = hashlib.sha256(b"super-secret-token-value").hexdigest()[:8]
-    assert entry["value"]["fingerprint"] == f"sha256:{expected}"
+    # The shared fingerprint, not a digest this test computes its own way: the
+    # point of the field is that two surfaces print the SAME eight characters.
+    from robothor.secrets.fingerprint import fingerprint
+
+    assert entry["value"]["fingerprint"] == fingerprint("super-secret-token-value")
     assert entry["editable"] is False
 
 

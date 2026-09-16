@@ -20,7 +20,7 @@ commands route by that metadata instead of asking the operator to know:
 ``schema``    the JSON Schema, for tooling.
 
 A secret is never printed by any of them. ``get`` and ``list`` show
-``<set, sha256:ab12cd34>`` — enough to compare two boxes without putting a
+``<set, b2:ab12cd34>`` — enough to compare two boxes without putting a
 credential in a terminal, a screenshot or a scrollback buffer.
 """
 
@@ -57,7 +57,6 @@ _resolve = operator.resolve
 _units_for = operator.units_for
 _agree = operator.agree
 _mask = operator.mask
-_digest = operator.digest
 _display = operator.display
 _db_rows = operator.db_rows
 _db_value = operator.db_value

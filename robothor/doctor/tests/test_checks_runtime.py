@@ -177,7 +177,9 @@ def test_the_provider_keys_pass_line_never_carries_key_material(monkeypatch) -> 
     rows = _run(model_checks.CHECKS, "provider.keys", make_ctx())
     assert rows[0].status == "pass"
     assert FAKE_API_KEY not in rows[0].detail
-    assert rows[0].detail.count("sha256:") == 2
+    from robothor.secrets.fingerprint import FINGERPRINT_PREFIX
+
+    assert rows[0].detail.count(FINGERPRINT_PREFIX) == 2
 
 
 def test_provider_keys_fails_with_nothing_configured(monkeypatch) -> None:

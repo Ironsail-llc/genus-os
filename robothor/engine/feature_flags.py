@@ -716,6 +716,19 @@ def injection_scan_mode() -> EnforcementMode:
     return _enforcement_mode("ROBOTHOR_INJECTION_SCAN_ENABLED", "ROBOTHOR_INJECTION_SCAN_MODE")
 
 
+def _pager_token() -> str:
+    """The Telegram bot token this pager dials with, vault first.
+
+    Through the accessor because the status table measures the accessor: this
+    read looked only at the environment, so after the documented migrate →
+    verify → shrink the guardrail pager would have gone silent while `genus
+    secrets status` reported the token served from the vault.
+    """
+    from robothor.secrets import get_secret
+
+    return get_secret("ROBOTHOR_TELEGRAM_BOT_TOKEN") or ""
+
+
 def _post_telegram(text: str) -> bool:
     """Deliver to the operator's actual channel. Best-effort, never raises.
 
@@ -737,7 +750,7 @@ def _post_telegram(text: str) -> bool:
     import urllib.parse
     import urllib.request
 
-    token = os.environ.get("ROBOTHOR_TELEGRAM_BOT_TOKEN", "")
+    token = _pager_token()
     chat_id = os.environ.get("ROBOTHOR_TELEGRAM_CHAT_ID", "")
     if not token or not chat_id:
         return False

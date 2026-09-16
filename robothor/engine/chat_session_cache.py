@@ -94,7 +94,13 @@ class SessionCache:
             return session
         history = data.get("history") if data else None
         if history:
-            session.history = list(history)
+            # Wrapped, not `list(...)`: a rehydrated session that came back as a
+            # plain list would lose the redaction for the rest of its life — the
+            # shape of bug that passes every test written against a fresh
+            # session.
+            from robothor.engine.chat_history import as_history
+
+            session.history = as_history(history)
         model = data.get("model_override") if data else None
         if model:
             session.model_override = model

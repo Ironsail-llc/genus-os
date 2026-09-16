@@ -1051,6 +1051,27 @@ async def _start_channels(runner: Any, config: Any, tasks: list[asyncio.Task[Any
     return slack_bot
 
 
+def _harden_and_state_posture() -> None:
+    """Apply the process-level defences, then say what this process's are.
+
+    Two statements of the same kind, so they live together. ``harden_process``
+    makes this process's ``/proc`` entries root-only — an ``exec`` child is a
+    same-uid process with the engine as its parent, and could otherwise read
+    ``/proc/$PPID/environ`` straight back out; ``log_security_posture`` prints
+    the guardrail rungs, because the flags come from systemd ``Environment=``
+    lines on one unit and a second daemon running this code inherits none of
+    them, which happened here for four days silently.
+
+    Extracted rather than inlined because ``main`` is on a size ratchet, and
+    the rule in that file is that a new step pays for itself.
+    """
+    from robothor.engine.feature_flags import log_security_posture
+    from robothor.engine.process_hardening import harden_process
+
+    harden_process()
+    log_security_posture()
+
+
 async def main() -> int:
     """Start all engine subsystems. Returns the process exit code."""
     # Reject unsafe production authentication before touching the database,
@@ -1066,9 +1087,7 @@ async def main() -> int:
     # come from systemd Environment= lines on a single unit, so a second
     # daemon running this same code inherits none of them — which is exactly
     # what happened here for four days, silently.
-    from robothor.engine.feature_flags import log_security_posture
-
-    log_security_posture()
+    _harden_and_state_posture()
 
     # A tenant env conflict silently discards every default-tenant write in this
     # process (RLS refuses the row, the caller gets None). Say so at boot rather
