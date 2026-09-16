@@ -468,7 +468,13 @@ class TelegramAttachmentsMixin:
         if pending is None:
             pending = {"items": [], "caption": "", "user_info": user_info, "message": message}
             self._album_buffers[key] = pending
-            self._album_tasks[key] = asyncio.create_task(self._flush_album(chat_id, group_id))
+            # ADD, never replace. A late member starting a second window over a
+            # flush that is still routing used to overwrite the slot, and the
+            # first task then survived `stop()` and delivered its turn into a
+            # closed session (re-review R4).
+            self._album_tasks.setdefault(key, set()).add(
+                asyncio.create_task(self._flush_album(chat_id, group_id))
+            )
         if len(pending["items"]) < MAX_ALBUM_ITEMS:
             pending["items"].append(noted)
         else:
@@ -520,10 +526,15 @@ class TelegramAttachmentsMixin:
         except Exception:
             logger.exception("Telegram album %s could not be delivered", group_id)
         finally:
-            # Identity, not the key. A buffer under this key now belongs to the
-            # NEXT album — this flush already took its own at the top.
-            if self._album_tasks.get(key) is mine:
-                self._album_tasks.pop(key, None)
+            # Remove only THIS task. The buffer is not touched at all — this
+            # flush took its own copy at the top, so anything under the key now
+            # belongs to a later album — and the set keeps every other in-flight
+            # task so `stop()` can still cancel them.
+            live = self._album_tasks.get(key)
+            if live is not None:
+                live.discard(mine)
+                if not live:
+                    self._album_tasks.pop(key, None)
 
     async def _route_attachment_turn(
         self,

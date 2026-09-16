@@ -248,7 +248,12 @@ class TelegramBot(TelegramAttachmentsMixin, TelegramHandlersMixin, PlanModeMixin
         # one at a time an album became N runs, N-1 of them captionless.
         # Keyed (chat_id, media_group_id) — two chats can album at once.
         self._album_buffers: dict[tuple[str, str], dict[str, Any]] = {}
-        self._album_tasks: dict[tuple[str, str], asyncio.Task[Any]] = {}
+        # A SET per key, not one slot. A late member arriving while the previous
+        # flush is still routing starts a second timer under the same key, and a
+        # single slot lost the first one — `stop()` then cancelled one of two
+        # live tasks and the orphan went on to deliver its turn afterwards
+        # (re-review R4). Every in-flight task is held until it removes itself.
+        self._album_tasks: dict[tuple[str, str], set[asyncio.Task[Any]]] = {}
 
         # Per-message resolved sender identity, captured once in the handler
         # (where message.from_user.id is available) and popped alongside the
@@ -1981,9 +1986,12 @@ class TelegramBot(TelegramAttachmentsMixin, TelegramHandlersMixin, PlanModeMixin
         self._attachment_buffers.clear()
         # An album timer outliving the bot would fire into a closed session.
         # The files themselves are already on disk, so nothing is lost by
-        # dropping the composed turn.
-        for album_task in self._album_tasks.values():
-            album_task.cancel()
+        # dropping the composed turn. EVERY task under a key is cancelled, not
+        # the newest: two can be live at once while a late member starts a
+        # second window over a flush that is still routing.
+        for album_tasks in self._album_tasks.values():
+            for album_task in album_tasks:
+                album_task.cancel()
         self._album_tasks.clear()
         self._album_buffers.clear()
         for task in self._active_tasks.values():

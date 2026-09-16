@@ -469,12 +469,13 @@ class TestALateAlbumMember:
 
         # The late member arrives while the first flush is still routing.
         await bot.handle_file(message(photo=photo(uid="D99"), media_group_id="GX"))
-        late_task = bot._album_tasks[key]
+        live_before = set(bot._album_tasks[key])
+        assert len(live_before) == 2, "both flushes are in flight; stop() must reach both"
 
         gate.set()
         await asyncio.sleep(0.05)
         assert bot._album_buffers.get(key) is not None, "the old flush destroyed it"
-        assert bot._album_tasks.get(key) is late_task, "stop() could no longer cancel it"
+        assert set(bot._album_tasks.get(key) or ()) <= live_before, "a task went missing"
 
         await asyncio.sleep(0.25)
         assert [name for turn in routed for name in turn] == [
@@ -482,7 +483,62 @@ class TestALateAlbumMember:
             "D02-photo.jpg",
             "D99-photo.jpg",
         ]
-        assert late_task.done()
+        assert all(task.done() for task in live_before)
+        assert key not in bot._album_tasks, "finished tasks must not leak"
+
+    @pytest.mark.asyncio
+    async def test_stop_cancels_every_live_task_for_a_key(self, bot, monkeypatch) -> None:
+        """Re-review R4. A late member starting a second window over a flush
+        that was still routing OVERWROTE `_album_tasks[key]`, so `stop()`
+        cancelled one of two live tasks and the orphan went on to deliver its
+        turn into a closed session."""
+        import robothor.engine.telegram_attachments as ta
+
+        monkeypatch.setattr(ta, "ALBUM_WINDOW_SECONDS", 0.05, raising=True)
+        gate = asyncio.Event()
+        routed: list[str] = []
+
+        async def slow_route(chat_id, note, rows, user_info, message):
+            await gate.wait()
+            routed.append("turn")
+
+        bot._route_attachment_turn = slow_route
+        monkeypatch.setattr(
+            "robothor.engine.tools.handlers.images.describe_image_bytes",
+            AsyncMock(return_value="a photo"),
+        )
+        arm_download(bot, b"\xff\xd8\xff")
+
+        await bot.handle_file(message(photo=photo(uid="S01"), media_group_id="GS"))
+        await asyncio.sleep(0.15)  # the first flush is now blocked in the route
+        await bot.handle_file(message(photo=photo(uid="S99"), media_group_id="GS"))
+
+        key = ("100200300", "GS")
+        live = set(bot._album_tasks[key])
+        assert len(live) == 2, "both flushes are in flight under this key"
+
+        await bot.stop()
+        gate.set()
+        await asyncio.sleep(0.3)
+
+        assert all(task.cancelled() or task.done() for task in live)
+        assert not routed, "a cancelled flush must not deliver into a closed session"
+
+    @pytest.mark.asyncio
+    async def test_a_finished_flush_removes_only_itself(self, bot, monkeypatch) -> None:
+        """The bookkeeping must not leak: once every task under a key is done,
+        the key goes too."""
+        import robothor.engine.telegram_attachments as ta
+
+        monkeypatch.setattr(ta, "ALBUM_WINDOW_SECONDS", 0.05, raising=True)
+        monkeypatch.setattr(
+            "robothor.engine.tools.handlers.images.describe_image_bytes",
+            AsyncMock(return_value="a photo"),
+        )
+        arm_download(bot, b"\xff\xd8\xff")
+        await bot.handle_file(message(photo=photo(uid="T01"), media_group_id="GT"))
+        await asyncio.sleep(0.3)
+        assert ("100200300", "GT") not in bot._album_tasks
 
     @pytest.mark.asyncio
     async def test_every_saved_file_is_named_in_some_turn(self, bot, monkeypatch, tmp_path) -> None:
