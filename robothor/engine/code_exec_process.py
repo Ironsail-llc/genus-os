@@ -166,11 +166,16 @@ def kill_descendants(census: DescendantCensus, pgid: int) -> int:
     again. The process group goes last and catches whatever the census could
     not see.
 
-    What this does NOT guarantee, and the result text says so: a process that
-    left the group AND detached itself from the snippet in the window between
-    the last sample and the kill is reachable by neither path. Closing that
-    needs a cgroup the engine can kill as a unit, which needs ``Delegate=yes``
-    on the unit — an operator change, not a code one.
+    What this does NOT guarantee, and every place that describes it now says
+    so: **a snippet can force an escape deliberately, not merely win a race.**
+    ``subprocess.Popen(..., start_new_session=True)`` puts the child outside the
+    process group, and ``os._exit`` skips the ``finally`` in which the snippet
+    would have reaped it — so the boot reaper never runs and the census, which
+    samples on a tick, has nothing to have seen. Measured: one survivor, every
+    time. Nothing here can close it, because both halves of the defence depend
+    on something the snippet controls (its own exit path) or on catching it in
+    time. The closure is a cgroup the engine can kill as a unit, which needs
+    ``Delegate=yes`` on the engine's unit — an operator change, not a code one.
     """
     census.sample()
     killed = 0

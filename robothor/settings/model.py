@@ -842,9 +842,13 @@ class EngineSettings(SettingsGroup):
         "Wall-clock seconds one `execute_code` snippet gets. The agent may ask "
         "for less and never for more, and the run's own remaining budget still "
         "clamps it. On expiry the snippet's process group is killed, along with "
-        "every descendant the engine has seen it start; a process that both "
-        "leaves that group and detaches itself can still escape both, which "
-        "only a delegated cgroup would close.",
+        "every descendant the engine has seen it start. A snippet can DEFEAT "
+        "both deliberately -- a child started in its own session, then "
+        "`os._exit` to skip the snippet's own cleanup -- so this is a budget "
+        "for honest work, not a containment boundary for hostile code. Only a "
+        "delegated cgroup (`Delegate=yes` on the engine's unit) would close "
+        "that; until then, grant `execute_code` to agents you would grant "
+        "`exec`.",
         restart_required=False,
         since="unreleased",
     )

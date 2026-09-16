@@ -1,7 +1,7 @@
 """A database one migration behind must not cost the whole step trail.
 
 Migration 125 adds `agent_run_steps.batch_id` / `batch_position`. The writer
-names them unconditionally, so against a database that has not taken 124 the
+names them unconditionally, so against a database that has not taken 125 the
 INSERT raises `UndefinedColumn` — a `ProgrammingError`, not in `retry_sync`'s
 retryable set. `flush_new_steps_sync` catches it, falls back to per-step inserts
 that each raise again, logs one warning per step, and advances

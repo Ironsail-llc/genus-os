@@ -100,10 +100,17 @@ def _reap():
     """Kill what this snippet started, from here, where the chain is intact.
 
     The ENGINE also kills — the process group, plus the descendants its census
-    saw — and that is what catches a timeout, a cancellation, or a snippet that
-    skipped this by calling os._exit. But the engine can only sample, and a
-    snippet that spawns fifteen detached children and exits does both inside
-    one sampling tick: measured, 15 of 15 survived. Here there is no race.
+    saw — and that is what catches a timeout or a cancellation. But the engine
+    can only sample, and a snippet that spawns fifteen detached children and
+    exits does both inside one sampling tick: measured, 15 of 15 survived. Here
+    there is no race.
+
+    Which is also the limit: a snippet that calls os._exit never reaches this
+    `finally`, and a child it started in its own session is outside the group
+    the engine kills. Those two together are a deliberate, reproducible escape,
+    and nothing on this side can prevent them — the snippet owns its own exit
+    path. That is stated in the tool's docs and in its timeout message rather
+    than papered over.
     """
     import signal
     for pid in reversed(_descendants()):

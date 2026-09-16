@@ -93,10 +93,11 @@ def shape(
     if result.timed_out:
         shaped["error"] = (
             "The snippet ran out of time. Its process group and every descendant "
-            "the engine could still see were killed; a process that both left the "
-            "group and detached itself may have survived. Ask for more with the "
-            f"`timeout` parameter (up to {MAX_TIMEOUT_SECONDS}s), or do less per "
-            "snippet."
+            "the engine could still see were killed. A child started with "
+            "`start_new_session=True` whose parent then called `os._exit` is not "
+            "reached by either, so do not background work you need stopped. Ask "
+            f"for more with the `timeout` parameter (up to {MAX_TIMEOUT_SECONDS}s), "
+            "or do less per snippet."
         )
     if server.calls_served >= server.max_calls:
         shaped["tool_call_limit_reached"] = True

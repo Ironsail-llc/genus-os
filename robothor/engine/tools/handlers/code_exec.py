@@ -34,11 +34,13 @@ A subprocess, from the workspace, with:
   way out whether the snippet finished, timed out or was cancelled. The census
   is taken WHILE the snippet runs, because on the ordinary exit path its
   children have already reparented by the time we kill. What survives: a
-  process that both leaves the group (`setsid`) and detaches itself in the
-  window between the last sample and the kill. Closing that needs a cgroup the
-  engine can kill as a unit, which needs `Delegate=yes` on the unit — an
-  operator change, not a code one, and the docs say so rather than promising
-  what this cannot do.
+  child started with `start_new_session=True` whose parent then calls
+  `os._exit`, which skips the reaper's `finally` and leaves the census nothing
+  to have sampled. That is a snippet FORCING the escape, not winning a race,
+  and it is reproducible. Closing it needs a cgroup the engine can kill as a
+  unit, which needs `Delegate=yes` on the unit — an operator change, not a code
+  one, and every place that describes this says so rather than promising what
+  it cannot do.
 
 What it can reach
 -----------------

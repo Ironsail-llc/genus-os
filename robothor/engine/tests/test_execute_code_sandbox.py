@@ -48,6 +48,13 @@ def workspace(tmp_path) -> Path:
     return tmp_path
 
 
+def _timeout_setting_help() -> str:
+    """The declared help for ROBOTHOR_EXECUTE_CODE_TIMEOUT, from the registry."""
+    from robothor.settings.model import EngineSettings
+
+    return str(EngineSettings.model_fields["execute_code_timeout"].description or "")
+
+
 def _alive(pid: int) -> bool:
     """Is this pid still there? `signal 0` asks without sending anything."""
     try:
@@ -406,15 +413,74 @@ class TestTheBounds:
         _reap(pid)
         assert not survived
 
+    async def test_a_snippet_can_force_the_escape_deliberately(self, workspace):
+        """The limit, pinned as a FACT rather than described as a risk.
+
+        `start_new_session=True` puts the child outside the process group, and
+        `os._exit` skips the `finally` in which the snippet would have reaped
+        it — so the boot reaper never runs and the engine's census, which
+        samples on a tick, has nothing to have seen. This is not a race a
+        snippet might win; it is a thing a snippet can decide to do, and it
+        works every time. The test exists so that nobody later writes a
+        containment sentence this cannot back.
+        """
+        marker = workspace / "forced.pid"
+        await _run(
+            f"""
+            import os, subprocess
+            p = subprocess.Popen(['sleep', '120'], start_new_session=True)
+            open({str(marker)!r}, 'w').write(str(p.pid))
+            os._exit(0)
+            """,
+            workspace,
+        )
+        await asyncio.sleep(0.5)
+        pid = int(marker.read_text())
+        survived = _alive(pid)
+        _reap(pid)
+        assert survived, (
+            "a snippet could no longer force an escape — if that is a real "
+            "improvement, say so in docs/TOOLS.md, the timeout message and "
+            "ROBOTHOR_EXECUTE_CODE_TIMEOUT's help before deleting this test"
+        )
+
     async def test_the_result_says_what_was_and_was_not_killed(self, workspace):
         """The first cut promised "nothing it backgrounded survived" while 16
-        of 16 did. A sentence the control cannot back is worse than no
-        sentence."""
+        of 16 did; the second said "may have survived", which reads as a race
+        when it is something the snippet can choose. A sentence the control
+        cannot back is worse than no sentence."""
         result, _ = await _run("import time; time.sleep(30)", workspace, timeout=1)
         message = result["error"]
         assert "process group and every descendant" in message
-        assert "may have survived" in message
+        assert "start_new_session=True" in message
+        assert "os._exit" in message
         assert "nothing it backgrounded survived" not in message
+        assert "may have survived" not in message
+
+    async def test_every_place_that_describes_the_kill_says_the_same_thing(self):
+        """Five texts, one claim. They drifted apart once already — the docs
+        and the setting help promised containment the code never had — so the
+        agreement is asserted rather than maintained by hand."""
+        from robothor.engine import code_exec_process, code_exec_result
+        from robothor.engine.sandbox_runtime import boot_template
+        from robothor.engine.tools.handlers import code_exec
+
+        texts = {
+            "result": code_exec_result.shape.__doc__ or "",
+            "timeout message": (code_exec_result.__doc__ or ""),
+            "kill": code_exec_process.kill_descendants.__doc__ or "",
+            "handler": code_exec.__doc__ or "",
+            "boot reaper": boot_template.BOOT_TEMPLATE,
+            "setting": _timeout_setting_help(),
+            "docs": (Path(__file__).resolve().parents[3] / "docs" / "TOOLS.md").read_text(),
+        }
+        for name in ("kill", "handler", "setting", "docs", "boot reaper"):
+            body = texts[name]
+            assert "os._exit" in body, f"{name} does not name how the escape is forced"
+        for name in ("setting", "docs"):
+            assert "not a containment boundary" in texts[name], (
+                f"{name} still reads as a containment promise"
+            )
 
     async def test_oversized_stdout_is_cut_with_a_marker_and_spilled_to_a_file(
         self, workspace, monkeypatch
