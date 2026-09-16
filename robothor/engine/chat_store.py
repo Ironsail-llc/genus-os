@@ -54,6 +54,46 @@ def upsert_session(
         return int(row["id"])
 
 
+def build_user_extras(
+    *,
+    user_message_id: str | None = None,
+    reply_ctx: dict[str, Any] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    """The additive JSONB fields recorded on one inbound user turn, or None.
+
+    Three separate facts about the same message, and none of them belongs in
+    the text: the platform message id (so a later reply resolves against a real
+    row), the fleet message this one replies to, and the FILES that arrived with
+    it. ``None`` when there is nothing to add, which is what keeps a plain text
+    turn's payload byte-identical to what it was before any of this.
+
+    Here rather than in ``engine/telegram.py``, where it started: it is pure, it
+    decides the shape of ``chat_messages.message``, and this module is the one
+    that writes that column. (The decomposition ratchet asked for the move —
+    ``telegram.py`` was two lines over its cap — and this is where it belonged
+    anyway. A second inbound channel would otherwise have grown its own copy.)
+    """
+    if not (user_message_id or reply_ctx or attachments):
+        return None
+    extras: dict[str, Any] = {}
+    if attachments:
+        # The attachment row shape, recorded BESIDE the text rather than
+        # embedded in it: the prompt is prose the model rewrites, the JSONB is
+        # the record every reader downstream relies on.
+        extras["attachments"] = list(attachments)
+    if user_message_id:
+        extras["telegram_message_id"] = user_message_id
+    if reply_ctx:
+        extras["replies_to"] = {
+            "platform_message_id": str(reply_ctx.get("platform_message_id", "")),
+            "author_agent_id": reply_ctx.get("author_agent_id", ""),
+            "author_display_name": reply_ctx.get("author_display_name", ""),
+            "chat_message_id": reply_ctx.get("chat_message_id"),
+        }
+    return extras
+
+
 def save_exchange(
     session_key: str,
     user_content: str,

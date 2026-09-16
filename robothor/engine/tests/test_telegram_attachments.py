@@ -695,7 +695,7 @@ class TestPersistence:
     """What the stored user turn carries. The Helm chat UI reads this next."""
 
     def test_the_rows_go_on_the_turn_beside_the_text(self) -> None:
-        from robothor.engine.telegram import build_user_extras
+        from robothor.engine.chat_store import build_user_extras
 
         rows = [{"path": "/w/inbox/telegram/100200300/2026-09-15/u-a.txt", "kind": "document"}]
         extras = build_user_extras(user_message_id="7", reply_ctx=None, attachments=rows)
@@ -706,12 +706,12 @@ class TestPersistence:
     def test_a_plain_text_turn_is_unchanged(self) -> None:
         """No files, no reply, no message id — the payload must stay exactly
         what it was before any of this existed."""
-        from robothor.engine.telegram import build_user_extras
+        from robothor.engine.chat_store import build_user_extras
 
         assert build_user_extras(user_message_id=None, reply_ctx=None, attachments=None) is None
 
     def test_attachments_do_not_displace_a_reply_linkage(self) -> None:
-        from robothor.engine.telegram import build_user_extras
+        from robothor.engine.chat_store import build_user_extras
 
         extras = build_user_extras(
             user_message_id="7",
