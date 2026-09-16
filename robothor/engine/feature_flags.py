@@ -458,6 +458,24 @@ def approval_mode() -> EnforcementMode:
     return _enforcement_mode("ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED", "ROBOTHOR_APPROVAL_MODE")
 
 
+def approval_gate_inputs() -> tuple[str, str]:
+    """``(enabled_raw, mode_raw)`` behind :func:`approval_mode`, as resolved.
+
+    Exists so a caller can say WHICH half is missing rather than only that the
+    gate is off — ``_enforcement_mode`` collapses both into ``"off"``, and the
+    two have very different fixes. ``genus doctor`` reports this.
+
+    Resolved through the same path the gate itself uses, NOT ``os.environ``:
+    these are governed flags, so an operator who set the mode on the Controls
+    page has it in the flag store and nowhere in the process environment. A
+    reader that went to the environment would report "unset" for a value the
+    engine is actively using.
+    """
+    return _resolve_raw("ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED"), _resolve_raw(
+        "ROBOTHOR_APPROVAL_MODE"
+    )
+
+
 def exec_allowlist_mode() -> EnforcementMode:
     """Rollout mode for rejecting shell-chaining metacharacters in allowlisted exec.
 

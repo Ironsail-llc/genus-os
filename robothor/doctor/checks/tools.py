@@ -27,7 +27,6 @@ carry agent ids and tool names.
 
 from __future__ import annotations
 
-import os
 import re
 from fnmatch import fnmatch
 from typing import TYPE_CHECKING, Any
@@ -531,19 +530,23 @@ _DESTRUCTIVE_TOOLS: frozenset[str] = frozenset(
 def _approval_gate_state() -> tuple[str, str]:
     """``(mode, why)`` for the fail-closed human-approval gate.
 
-    Both variables are read here rather than only ``approval_mode()`` so the
-    report can say WHICH one is missing. ``_enforcement_mode`` returns ``off``
+    Both variables are read rather than only ``approval_mode()`` so the report
+    can say WHICH one is missing. ``_enforcement_mode`` returns ``off``
     whenever the enabled var is falsy regardless of the mode var, so
     ``ROBOTHOR_APPROVAL_MODE=enforce`` on its own is a no-op — and that is the
     variable an operator reading "set the mode to enforce" will set.
+
+    Through ``approval_gate_inputs()``, not ``os.environ``: these are governed
+    flags, so a value set on the Controls page lives in the flag store and not
+    in this process's environment, and a doctor that disagreed with the engine
+    about what is set would be worse than no doctor.
     """
-    from robothor.engine.feature_flags import approval_mode
+    from robothor.engine.feature_flags import approval_gate_inputs, approval_mode
 
     mode = str(approval_mode())
     if mode == "enforce":
         return mode, ""
-    enabled = os.environ.get("ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED", "")
-    declared = os.environ.get("ROBOTHOR_APPROVAL_MODE", "")
+    enabled, declared = approval_gate_inputs()
     if not enabled:
         return mode, (
             "ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED is unset, which forces the gate off "
