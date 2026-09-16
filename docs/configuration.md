@@ -255,9 +255,14 @@ The write takes effect immediately. No restart, and nothing for you to do.
 key, for ten seconds (three for a "not configured" answer, because a feature
 that stays dead reads as broken rather than slow). So a credential you store
 with `genus vault set`, `genus secrets migrate` or the setup wizard lands within
-that window on every running process — and immediately, because those commands
-also POST `/api/admin/secrets/reload` to a local engine when one answers. If
-none does, they say so and tell you how long the wait is.
+that window on every running process.
+
+Those commands also POST `/api/admin/secrets/reload` so it lands instantly — but
+only where the engine accepts an unauthenticated control call, which a
+production instance does not: `/api/admin/*` requires the `engine:control`
+scope, and the CLI holds no token. On such an instance the command says so, and
+the ten seconds applies. Saving from the Helm's Settings page applies a change
+immediately, because the browser session has the scope.
 
 The vault tools are **operator-tier**. An operator grants the tier explicitly:
 

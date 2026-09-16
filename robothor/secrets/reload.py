@@ -62,6 +62,18 @@ def notify_engine(*, quiet: bool = False) -> bool:
             _say_it_will_land_anyway()
         return False
 
+    if response.status_code in (401, 403):
+        # The production posture. `/api/admin/*` requires the `engine:control`
+        # scope and this request carries no bearer, so on any instance with
+        # auth enforced the answer is 401 — and the round-2 message said "no
+        # running engine answered" while one was running and answering. Minting
+        # a control token here would put a signing key in a CLI that does not
+        # otherwise need one; saying the true thing costs nothing.
+        logger.debug("secrets: the engine requires authentication for a reload")
+        if not quiet:
+            _say_the_engine_refused_us()
+        return False
+
     if response.status_code >= 400:
         logger.debug("secrets: the engine refused the reload (%s)", response.status_code)
         if not quiet:
@@ -71,6 +83,18 @@ def notify_engine(*, quiet: bool = False) -> bool:
     if not quiet:
         print("The running engine has re-read its credentials; the change is live now.")
     return True
+
+
+def _say_the_engine_refused_us() -> None:
+    """The honest version of a 401, which is the normal answer in production."""
+    from robothor.secrets import SECRET_CACHE_TTL_SECONDS
+
+    print(
+        "(An engine is running but requires authentication for a reload, and this "
+        f"command does not hold a control token — the change takes effect within "
+        f"{SECRET_CACHE_TTL_SECONDS:.0f}s anyway. Save from the Helm's Settings page "
+        "to apply it instantly.)"
+    )
 
 
 def _say_it_will_land_anyway() -> None:

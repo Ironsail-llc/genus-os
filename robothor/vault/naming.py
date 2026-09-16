@@ -159,6 +159,23 @@ def _vendor(raw: str) -> str:
     return _VENDOR_ALIASES.get(raw.lower(), raw.lower())
 
 
+def _canonical_env_name(name: str) -> str:
+    """The primary name this one is an alias of, or itself.
+
+    Read from the settings registry, which is where aliases are declared, so
+    this cannot drift from them.
+    """
+    try:
+        from robothor.settings.registry import field_index
+
+        record = field_index().get(name.strip().upper())
+    except Exception:  # noqa: BLE001 - naming must work without the settings model
+        return name
+    if record is None:
+        return name
+    return str(record.get("env") or name)
+
+
 def vault_keys_for_env_name(name: str) -> tuple[str, ...]:
     """Every vault key that may hold the value of environment variable ``name``.
 
@@ -174,6 +191,13 @@ def vault_keys_for_env_name(name: str) -> tuple[str, ...]:
     cleaned = name.strip()
     if not cleaned:
         return ()
+    # An ALIAS resolves to the name it is an alias OF, before anything else.
+    # ``TELEGRAM_BOT_TOKEN`` is the declared alias of
+    # ``ROBOTHOR_TELEGRAM_BOT_TOKEN``; without this it missed the channel rule
+    # (no ``ROBOTHOR_`` prefix), matched ``<VENDOR>_TOKEN``, and canonicalised
+    # to ``providers/telegram_bot/api_key`` — a provider row for a channel
+    # token, which is R2 again through the alias spelling.
+    cleaned = _canonical_env_name(cleaned)
     upper = cleaned.upper()
     candidates: list[str] = []
 

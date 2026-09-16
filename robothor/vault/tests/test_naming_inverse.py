@@ -157,3 +157,32 @@ def test_a_real_vendor_token_still_gets_its_provider_row():
     """The channel rule must not eat the shape C4 was about."""
     assert vault_keys_for_env_name("GITHUB_TOKEN")[0] == "providers/github/api_key"
     assert vault_keys_for_env_name("JIRA_API_TOKEN")[0] == "providers/jira/api_key"
+
+
+# ── N11: an alias is not its own credential ──────────────────────────────────
+
+
+def test_a_declared_alias_canonicalises_like_the_name_it_aliases():
+    """Review N11. ``TELEGRAM_BOT_TOKEN`` is the declared alias of
+    ``ROBOTHOR_TELEGRAM_BOT_TOKEN``. Without alias resolution it missed the
+    channel rule (no ``ROBOTHOR_`` prefix), matched ``<VENDOR>_TOKEN``, and
+    canonicalised to ``providers/telegram_bot/api_key`` — a provider row for a
+    channel token, which is R2 again through the alias spelling. A box that set
+    the alias would have had it migrated where no channel reader looks.
+    """
+    assert vault_keys_for_env_name("TELEGRAM_BOT_TOKEN") == vault_keys_for_env_name(
+        "ROBOTHOR_TELEGRAM_BOT_TOKEN"
+    )
+    assert vault_keys_for_env_name("TELEGRAM_BOT_TOKEN")[0] == "channels/telegram/bot_token"
+
+
+def test_alias_resolution_does_not_disturb_a_name_that_is_not_an_alias():
+    """The resolution looks a name up in the settings registry and falls back to
+    the name itself, so a name nobody declared must map exactly as before."""
+    assert vault_keys_for_env_name("GITHUB_TOKEN")[0] == "providers/github/api_key"
+    # A vendor token shape the platform has never heard of still gets its
+    # provider row — the alias step must not swallow the general rule.
+    assert vault_keys_for_env_name("SOME_UNDECLARED_TOKEN")[0] == (
+        "providers/some_undeclared/api_key"
+    )
+    assert "some_undeclared_token" in vault_keys_for_env_name("SOME_UNDECLARED_TOKEN")

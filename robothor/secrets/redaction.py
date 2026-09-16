@@ -89,7 +89,15 @@ _AUTH_BLOB = r"(?:[A-Za-z0-9+/_-]{16,}={0,2}|[A-Za-z0-9+/_-]{4,}={1,2})"
 #: because the prefix alone is three letters that also begin ordinary words;
 #: the word boundary in front is what keeps ``risk-weighted-average`` and
 #: ``task-management-service`` out of the match.
-_API_KEY = r"\bsk-[A-Za-z0-9_-]{16,}"
+#: Tightened 2026-09-15: the old ``[A-Za-z0-9_-]{16,}`` matched
+#: ``sk-learn-compatible-estimators``, because an English hyphenated phrase is
+#: long and made of the same characters.
+#:
+#: The discriminator is not length — it is that a key is not WORDS. The negative
+#: lookahead rejects a tail that is entirely lower-case words joined by hyphens,
+#: which every such phrase is and no issued key is: ``sk-or-v1-<hex>``,
+#: ``sk-proj-<mixed>`` and ``sk-ant-api03-<mixed>`` all carry digits or capitals.
+_API_KEY = r"\bsk-(?![a-z]+(?:-[a-z]+)*(?![\w-]))[A-Za-z0-9_-]{16,}"
 
 #: Words that mean "credential" on their own, wherever a name ends in one.
 #: A password has no shape of its own — it is whatever the provider issued — so
@@ -182,9 +190,34 @@ _ASSIGNMENT = re.compile(
 )
 
 
+#: Values that are a REFERENCE to a credential rather than one.
+#:
+#: ``SSH_KEY=~/.ssh/id_ed25519`` is a path, ``GITHUB_TOKEN=$(gh auth token)`` is
+#: a command, ``KEY=${OTHER}`` is a variable. Redacting these loses the agent
+#: information it needs later in the session and, for the command form, leaves
+#: syntactically broken text in the history — the round-2 redactor turned
+#: ``$(gh auth token)`` into ``<redacted> auth token)``.
+#:
+#: A path can still hold a secret in its NAME, which is what ``secret_paths``
+#: is for; this is only about not mangling the line.
+_VALUE_IS_A_REFERENCE = re.compile(
+    r"""^(?:
+        [~./]                 # ~/.ssh/id_ed25519, ./key, /etc/…
+        | \$[({]              # $(gh auth token), ${OTHER}
+        | \$[A-Za-z_]         # $OTHER
+        | %[A-Za-z_]           # %OTHER% on Windows
+    )""",
+    re.VERBOSE,
+)
+
+
 def _redact_assignment(match: re.Match[str]) -> str:
     name = match.group("name")
     quote = match.group("quote")
+    body = match.group("quoted") if quote else match.group("value")
+    if body and _VALUE_IS_A_REFERENCE.match(body):
+        # A pointer to the credential, not the credential.
+        return match.group(0)
     if quote:
         return f"{name}={quote}{PLACEHOLDER}{quote}"
     return f"{name}={PLACEHOLDER}"
@@ -237,7 +270,12 @@ _URL_USERINFO = r"(?<=://)[^/@\s:]+:[^/@\s]+(?=@)"
 _SHAPES = (
     r"xox[abceprs]-[\w-]+",
     r"xapp-[\w-]+",
-    r"Bearer\s+\S+",
+    # ``Bearer <token>`` — with a TOKEN-shaped tail, not ``\S+``. The loose form
+    # ate the next English word, so "use Bearer authentication for the API"
+    # became "use <redacted> for the API". A real bearer token is a long opaque
+    # run; an English word after "Bearer" is prose, and mangling it costs an
+    # agent information later in the same session for no security gain.
+    r"Bearer\s+[A-Za-z0-9._~+/=-]{20,}",
     r"\b\d{5,}:[A-Za-z0-9_-]{30,}",
     _API_KEY,
     _URL_USERINFO,
@@ -425,6 +463,20 @@ def redact_message(message: Any) -> Any:
         scrubbed = redact(content)
         if scrubbed != content:
             cleaned = {**cleaned, "content": scrubbed}
+    elif isinstance(content, list):
+        # Multimodal content: ``[{"type": "text", "text": …}, {"type":
+        # "image_url", …}]``. Only ``str`` content was handled, so a list row
+        # went through untouched — latent while no history append builds one,
+        # and `session.py` already builds this shape for the current turn and
+        # the attachments work will put it in a history.
+        parts = [
+            {**part, "text": redact(part["text"])}
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
+            else part
+            for part in content
+        ]
+        if parts != content:
+            cleaned = {**cleaned, "content": parts}
     return cleaned
 
 
