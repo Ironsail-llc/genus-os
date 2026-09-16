@@ -260,6 +260,88 @@ def test_no_gws_description_is_long_enough_to_be_cut_to_its_first_sentence(
         assert len(shown) >= min(len(description), 240), (name, len(shown))
 
 
+@pytest.mark.parametrize(
+    ("conjugated", "base"),
+    [
+        ("cancelled", "cancel"),
+        ("cancelling", "cancel"),
+        ("labelled", "label"),
+        ("shipped", "ship"),
+        ("planned", "plan"),
+        ("referred", "refer"),
+    ],
+)
+def test_a_doubled_consonant_meets_its_base_form(conjugated: str, base: str) -> None:
+    """Minor 13: English doubles the final consonant before `-ed`/`-ing`, and
+    the stemmer stripped the suffix while leaving the double — so `cancelled`
+    became `cancell` and never met `cancel`."""
+    from robothor.engine.tools.registry import _stem
+
+    assert _stem(conjugated) == _stem(base), (conjugated, _stem(conjugated), _stem(base))
+
+
+@pytest.mark.parametrize(
+    ("a", "b"),
+    [
+        ("addressed", "address"),
+        ("processed", "process"),
+        ("passed", "pass"),
+        ("called", "call"),
+        ("settings", "setting"),
+    ],
+)
+def test_collapsing_does_not_pull_real_words_apart(a: str, b: str) -> None:
+    """The collapse is applied to EVERY word, the same way `_drop_silent_e` is,
+    so the two sides cannot disagree about one — including the words where the
+    double is not a suffix artefact at all (`address`, `pass`)."""
+    from robothor.engine.tools.registry import _stem
+
+    assert _stem(a) == _stem(b), (a, _stem(a), b, _stem(b))
+
+
+def test_a_conjugated_intent_verb_still_earns_its_bonus(registry: ToolRegistry) -> None:
+    """The observable half of Minor 13. "cancel the meeting" earned the intent
+    bonus that picks `gws_calendar_delete` out of a family that all shares the
+    noun; "cancelled the meeting" earned zero, and `cancell` was counted as a
+    NOUN on top, polluting the object set the bonus is gated on."""
+    from robothor.engine.tools.registry import (
+        _intent_bonus,
+        _object_terms,
+        _query_terms,
+        _stems,
+    )
+
+    fn = registry._schemas["gws_calendar_delete"]["function"]
+    vocabulary = _stems(fn["name"]) | _stems(fn["description"])
+    for keyword in fn.get("keywords", []):
+        vocabulary |= _stems(keyword)
+
+    scores = {}
+    for query in ("cancel the meeting", "cancelled the meeting", "cancelling the meeting"):
+        terms = _query_terms(query)
+        scores[query] = _intent_bonus(vocabulary, terms, _object_terms(terms))
+
+    assert len(set(scores.values())) == 1, scores
+    assert all(v > 0 for v in scores.values()), scores
+
+
+def test_the_stemmer_does_not_promise_idempotence(registry: ToolRegistry) -> None:
+    """`_stem`'s docstring said the one-pass order made it idempotent. It does
+    not: the `break` after the first verb suffix leaves a second one in place,
+    so `proceedings` -> `proceed` while `proceed` -> `proc`.
+
+    Nothing stems already-stemmed text — every caller starts from raw words —
+    so this is a documentation defect, not a live one. The test pins the
+    property that IS relied on (both sides transformed identically from raw
+    text) and records the counterexample so the false claim cannot come back.
+    """
+    from robothor.engine.tools.registry import _stem
+
+    assert _stem("proceedings") != _stem(_stem("proceedings"))
+    assert _stem("scheduled") == _stem("schedule")
+    assert _stem("meetings") == _stem("meeting")
+
+
 def test_every_deciding_description_is_shown_whole(registry: ToolRegistry) -> None:
     """`_SEARCH_DESC_MAX`'s own comment says it was "chosen above the longest
     disambiguating description in the registry, not below it" — and it was not:

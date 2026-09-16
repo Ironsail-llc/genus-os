@@ -402,6 +402,28 @@ class TestTheCheckDoesNotFabricate:
         assert "gws_gmail_send" in result.detail
 
 
+def _yaml_list(raw: str, key: str) -> set[str]:
+    """The items of one top-level YAML list, read off a Jinja template.
+
+    Line-based because a `manifest.template.yaml` is not valid YAML until the
+    wizard has rendered it — `{{ agent_id }}` is not a scalar. Handles the
+    inline empty form (`key: []`) as well as the block form.
+    """
+    items: set[str] = set()
+    collecting = False
+    for line in raw.splitlines():
+        if line.startswith(f"{key}:"):
+            collecting = line.split(":", 1)[1].strip() in ("", "|", ">")
+            continue
+        if not collecting:
+            continue
+        if line.startswith("  - "):
+            items.add(line[4:].strip())
+        elif line.strip() and not line.startswith("  #") and not line.startswith(" "):
+            collecting = False
+    return items
+
+
 class TestTheStockTemplatesAreQuiet:
     """A check that fires on a clean install is a check nobody reads.
 
@@ -414,39 +436,57 @@ class TestTheStockTemplatesAreQuiet:
     """
 
     def test_no_shared_bootstrap_template_names_a_tool(self) -> None:
+        """Minor 14: this named three files and skipped any that was missing,
+        so it covered three of the eight the installer actually scaffolds and
+        would have passed silently on all eight if `templates/` moved.
+
+        `BRAIN_SCAFFOLD_FILES` is the installer's own manifest of what lands in
+        `brain/`, which is what an agent's `bootstrap_files` points at. Deriving
+        the list from it means a file added to the scaffold is covered the day
+        it is added, and a missing one FAILS rather than passing vacuously —
+        `robothor/tests/test_template_resolution.py` already guarantees every
+        source name resolves, so absence here is a broken checkout, not a case
+        to tolerate.
+        """
         from pathlib import Path
 
         from robothor.engine.tools.registry import builtin_schema_names
+        from robothor.setup import BRAIN_SCAFFOLD_FILES
 
         registered = builtin_schema_names()
         repo = Path(__file__).resolve().parents[3]
         offenders = {}
-        for name in ("AGENTS.md", "TOOLS.md", "SOUL.md"):
-            path = repo / "templates" / name
-            if not path.is_file():
-                continue
+        for source in sorted(BRAIN_SCAFFOLD_FILES):
+            path = repo / "templates" / source
+            assert path.is_file(), f"{source} is in the scaffold manifest but not on disk"
             named = mentioned_tools(path.read_text(), registered)
             if named:
-                offenders[name] = sorted(named)
+                offenders[source] = sorted(named)
         assert offenders == {}, (
             "a bootstrap file is loaded into every agent that lists it, so a tool "
-            "named here is named for agents that do not have it"
+            f"named here is named for agents that do not have it: {offenders}"
         )
 
     def test_every_stock_template_grants_what_its_instructions_name(self) -> None:
-        """Rendered crudely — Jinja out, tools_allowed read off the file — which
-        is enough to compare the two lists this check compares."""
+        """Rendered crudely — Jinja out, the lists read off the file — which is
+        enough to compare the two lists this check compares.
+
+        Minor 14: the shared text was a hardcoded `AGENTS.md + TOOLS.md` glued
+        onto EVERY agent. That is wrong in both directions — an agent declaring
+        `bootstrap_files: []` was charged with text it never loads, and one
+        declaring any other file had it ignored. Each manifest's own
+        `bootstrap_files` decides, which is what the engine does.
+        """
         from pathlib import Path
 
         from robothor.engine.tools.registry import builtin_schema_names
+        from robothor.setup import BRAIN_SCAFFOLD_FILES
 
         registered = builtin_schema_names()
         repo = Path(__file__).resolve().parents[3]
-        shared = ""
-        for name in ("AGENTS.md", "TOOLS.md"):
-            path = repo / "templates" / name
-            if path.is_file():
-                shared += path.read_text()
+        # {destination under brain/: source in templates/}, the installer's map
+        # read backwards, so `brain/TOOLS.md` in a manifest finds its template.
+        source_of = {dest: src for src, dest in BRAIN_SCAFFOLD_FILES.items()}
 
         mismatches = {}
         seen = 0
@@ -456,22 +496,18 @@ class TestTheStockTemplatesAreQuiet:
                 continue
             seen += 1
             raw = manifest.read_text()
-            granted, collecting = set(), False
-            for line in raw.splitlines():
-                if line.startswith("tools_allowed:"):
-                    collecting = bool(line.split(":", 1)[1].strip() in ("", "|", ">"))
-                    continue
-                if collecting:
-                    if line.startswith("  - "):
-                        granted.add(line[4:].strip())
-                        continue
-                    if line.startswith("  #"):
-                        continue
-                    if line.strip() and not line.startswith(" "):
-                        collecting = False
+            granted = _yaml_list(raw, "tools_allowed")
             if not granted:
                 continue  # absent/empty tools_allowed grants everything
-            named = mentioned_tools(instructions.read_text() + shared, registered)
+
+            text = instructions.read_text()
+            for declared in _yaml_list(raw, "bootstrap_files"):
+                source = source_of.get(declared.removeprefix("brain/"))
+                path = repo / "templates" / source if source else None
+                if path and path.is_file():
+                    text += path.read_text()
+
+            named = mentioned_tools(text, registered)
             missing = sorted(named - granted)
             unresolved = sorted(n for n in granted if n not in registered)
             if missing or unresolved:

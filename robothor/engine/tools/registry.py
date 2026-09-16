@@ -256,6 +256,31 @@ def _drop_silent_e(word: str) -> str:
     return word[:-1] if len(word) > 4 and word.endswith("e") else word
 
 
+#: A final consonant doubled before a suffix. English doubles it on a stressed
+#: final syllable — cancel/cancelled, ship/shipped, refer/referred — and
+#: stripping the suffix leaves the double behind, so `cancelled` became
+#: `cancell` and never met `cancel`, the intent verb that picks
+#: `gws_calendar_delete` out of a family that all shares the noun.
+#:
+#: Only the consonants English actually doubles that way. `s` is the important
+#: exclusion: `address`, `process` and `pass` end in a double that is part of
+#: the word, and `addressed` -> `address` is already correct.
+_DOUBLED_RE = re.compile(r"(?<=[a-z])([bdfglmnprt])\1$")
+
+
+def _collapse_doubled(word: str) -> str:
+    """Normalise a doubled final consonant away, on EVERY word.
+
+    Applied to every word rather than only to a word a suffix was stripped
+    from, for the same reason :func:`_drop_silent_e` is: the two sides have to
+    receive the SAME transformation or they cannot meet. `cancel` keeps its
+    single `l` and `cancelled` loses one, so both arrive at `cancel`; `call`
+    and `called` both arrive at `cal`, which is a word neither of them is and
+    exactly what a crude stemmer is for.
+    """
+    return _DOUBLED_RE.sub(r"\1", word) if len(word) > 3 else word
+
+
 #: Verb endings this strips. "who emailed me" and "who sent me that" are among
 #: the most natural phrasings an operator uses, and a plural-only stemmer left
 #: `emailed` as `emailed` — matching nothing, so the query reached no mail tool
@@ -274,11 +299,20 @@ def _stem(word: str) -> str:
     a plural noun and a conjugated verb — and leaves everything else alone. It
     is applied to the query, to keywords, to name words and to description
     words, so the two sides can never disagree about a word.
+
+    It is NOT idempotent, and does not need to be; see the comment below.
     """
-    # Plural first, then the verb ending, then the silent "e" — in that order
-    # and in one pass, so the function is idempotent. Stripping the plural and
+    # Plural first, then the verb ending, then the endings that are normalised
+    # on every word — in that order and in ONE pass. Stripping the plural and
     # returning left "meetings" -> "meeting" while "meeting" -> "meet", and the
     # two never met.
+    #
+    # One pass is not the same as idempotent, and the docstring above used to
+    # claim it was: the `break` below leaves a second verb suffix in place, so
+    # "proceedings" -> "proceed" while "proceed" -> "proc". No caller stems
+    # already-stemmed text — every one starts from raw words — so the property
+    # that matters is that both sides get the same transformation, which one
+    # pass does give. `test_the_stemmer_does_not_promise_idempotence` pins it.
     if len(word) > 4 and word.endswith("ies"):
         word = word[:-3] + "y"
     elif len(word) > 3 and word.endswith("es") and word[-4:-2] in ("ch", "sh", "ss", "zz"):
@@ -291,7 +325,7 @@ def _stem(word: str) -> str:
             word = word[: -len(suffix)]
             break
 
-    return _drop_silent_e(word)
+    return _collapse_doubled(_drop_silent_e(word))
 
 
 def _stems(text: str) -> set[str]:
