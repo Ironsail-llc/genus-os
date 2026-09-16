@@ -29,7 +29,8 @@ import re
 
 import pytest
 
-from robothor.engine.deliverable_contract import _PATH, extract_contract, required_deliverables
+from robothor.engine.deliverable_contract import extract_contract, required_deliverables
+from robothor.engine.deliverable_extract import _PATH
 
 
 class TestThePathPatternIsAscii:

@@ -139,7 +139,7 @@ Cloud model routing, budgets and the failure controls around them.
 | Variable | Type | Default | Restart | Secret | Since | Description |
 | --- | --- | --- | --- | --- | --- | --- |
 | `OPENROUTER_API_BASE` | str | _(empty)_ | no | no | unreleased | OpenAI-compatible endpoint every `openrouter/*` model is dialled at, instead of https://openrouter.ai/api/v1. Point it at a corporate gateway, a recording proxy, or the acceptance gate's mock server. Declared here so the knob is documented and inventoried, but litellm reads the ENVIRONMENT VARIABLE itself -- setting this key in config.yaml alone changes nothing. |
-| `ROBOTHOR_COMPACTION_PROTECT_FIRST_N` | int | `3` | no | no | legacy | How many messages at the head of a conversation compaction may never summarise away. The statement of the task lives there, and a run that loses it invents the shape of its own output. |
+| `ROBOTHOR_COMPACTION_PROTECT_FIRST_N` | int | `3` | no | no | unreleased | How many messages at the head of a conversation compaction may never summarise away. The statement of the task lives there, and a run that loses it invents the shape of its own output. |
 | `ROBOTHOR_COMPACTION_TRIGGER_TOKENS` | int | `80000` | no | no | legacy | Absolute prompt-token budget above which a run compacts its context. |
 | `ROBOTHOR_DEFERRED_TOOLS_THRESHOLD` | int | `40` | no | no | legacy | Number of tools above which schemas are deferred behind tool search rather than sent in full on every request. |
 | `ROBOTHOR_EAGER_TOOL_COMPRESSION` | bool | `false` | `robothor-engine` | no | legacy | Fleet default for compressing tool results as soon as they land rather than at the next compaction. A manifest setting wins over it. |

@@ -80,7 +80,7 @@ class TestASortedFileIsNotCalledUnsorted:
         assert _finding(TABLE_SPEC, tmp_path, SortItem).status == STATUS_MISMATCH
 
     def test_more_rows_than_the_cap_is_a_silence_not_a_verdict(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("robothor.engine.deliverable_contract._MAX_STREAM_LINES", 10)
+        monkeypatch.setattr("robothor.engine.deliverable_check._MAX_STREAM_LINES", 10)
         results = tmp_path / "results"
         results.mkdir()
         rows = "".join(f"a{i:06d}\tx\n" for i in range(50))
@@ -104,7 +104,7 @@ class TestAValidManifestIsNotCalledInvalid:
         assert _finding(MANIFEST_SPEC, tmp_path, JsonFieldsItem).status == STATUS_OK
 
     def test_beyond_the_hard_limit_it_declines_rather_than_lies(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("robothor.engine.deliverable_contract._MAX_JSON_BYTES", 50)
+        monkeypatch.setattr("robothor.engine.deliverable_check._MAX_JSON_BYTES", 50)
         results = tmp_path / "results"
         results.mkdir()
         (results / "m.json").write_text(json.dumps([{"a": 1, "b": 2}] * 20), encoding="utf-8")
@@ -123,7 +123,7 @@ class TestUncheckedIsNotAFailure:
     def test_the_report_is_satisfied_when_the_only_fault_is_a_silence(self, tmp_path, monkeypatch):
         """`enforce` fails a run on `failures`. A check that declined to read a
         file must not be counted among them."""
-        monkeypatch.setattr("robothor.engine.deliverable_contract._MAX_JSON_BYTES", 50)
+        monkeypatch.setattr("robothor.engine.deliverable_check._MAX_JSON_BYTES", 50)
         results = tmp_path / "results"
         results.mkdir()
         (results / "m.json").write_text(json.dumps([{"a": 1, "b": 2}] * 20), encoding="utf-8")

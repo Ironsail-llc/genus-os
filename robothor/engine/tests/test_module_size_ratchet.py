@@ -84,6 +84,20 @@ CAPS = {
     # The ratchet asked for an extraction rather than a bigger number, by this
     # file's own header, and got one.
     "robothor/engine/run_finalizer.py": 1048,
+    # The deliverable-contract cluster, capped at the size it was split to.
+    # Hostile review 2026-09-16 (I6): `deliverable_contract.py` had reached
+    # 1,354 lines and none of the three new modules was listed here, so "the
+    # ratchet passed" said nothing about the code this branch had added. The
+    # seam was already drawn by the file's own section comments — extraction
+    # and checking share nothing but the item definitions — so it was cut
+    # there, and every piece is now something the next change has to argue
+    # with.
+    "robothor/engine/deliverable_contract.py": 457,
+    "robothor/engine/deliverable_extract.py": 549,
+    "robothor/engine/deliverable_check.py": 499,
+    "robothor/engine/deliverable_items.py": 213,
+    "robothor/engine/deliverable_verdict.py": 195,
+    "robothor/engine/loop_guards.py": 325,
     # 937 (2026-09-13): every module the delivery path runs through was capped
     # except the one that decides delivery. It was uncapped when the
     # thin-announce fallback landed, so nothing but review stood between that

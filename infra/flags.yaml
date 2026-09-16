@@ -186,7 +186,7 @@ flags:
       with the report, and then fails the run rather than letting it report
       completed. Evidence lands in agent_guardrail_events under
       guardrail_name = 'deliverable_contract' (robothor/flags/evidence.py;
-      written by robothor/engine/run_finalizer.py).
+      written by robothor/engine/deliverable_verdict.py).
 
       This entry did not exist until 2026-09-02, and neither did the runbook.
       The flag was set ONLY in /etc/robothor/robothor.env — flag_audit.py's

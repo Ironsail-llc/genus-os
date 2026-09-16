@@ -629,6 +629,7 @@ class ProviderSettings(SettingsGroup):
         "summarise away. The statement of the task lives there, and a run that "
         "loses it invents the shape of its own output.",
         restart_required=False,
+        since="unreleased",
     )
     compaction_trigger_tokens: int = declare(
         80000,

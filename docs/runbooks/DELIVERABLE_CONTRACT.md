@@ -46,7 +46,10 @@ first of those the path check scored 1 and every other criterion scored 0.
 
 | Piece | File |
 |---|---|
-| Extraction + verdict (pure, importable) | `robothor/engine/deliverable_contract.py` |
+| Item types, statuses, the report | `robothor/engine/deliverable_items.py` |
+| Extraction from task text (pure) | `robothor/engine/deliverable_extract.py` |
+| Checking the workspace (pure, confined) | `robothor/engine/deliverable_check.py` |
+| Façade, task text, the notes it writes | `robothor/engine/deliverable_contract.py` |
 | Ladder, guardrail event, honest failure | `robothor/engine/deliverable_verdict.py` |
 | In-loop nudge (one per run) | `deliverable_nudge`, via `loop_guards.nudge_for_missing_deliverable` |
 | In-loop shape re-ask (one per run) | `loop_guards.reask_for_wrong_deliverable_shape` |
@@ -180,6 +183,27 @@ into a fabricated artifact, so the re-ask says in as many words that a task the
 agent should not complete may be refused with a plain explanation, and that it
 must not invent content to fill the file. This is the sharpest known hazard of
 the `enforce` rung; the promotion gates below ask for it to be audited.
+
+### One caveat on the relaxed error budget
+
+`HARD_ABORT_TOTAL_ERRORS` now forgives one error per successful tool call
+(`ERRORS_FORGIVEN_PER_SUCCESS`), which is what stops a run that recovers from a
+hostile network being killed at 341 seconds of a 1,200-second budget. Be plain
+about what that costs: a run that **alternates** failure and success forever is
+never hard-aborted, and `THRESHOLD_STOP` (five *consecutive* errors) never fires
+on it either. Such a run is then bounded only by the wall-clock watchdog and the
+iteration safety cap. Both do end it, so it terminates — but the error budget no
+longer contributes a bound, and that is a control being loosened rather than
+tightened.
+
+### What the extractor can read
+
+English anchors, and a minimal Chinese set (`保存` / `写入` / `输出` / `存储`,
+and the labelled `输出文件路径`). 34 of the 60 specs in the reference corpus
+produce at least one item; before the Chinese anchors it was 22, and every
+Chinese spec was a silent skip. A spec in any other language is invisible to
+this control — silently, which is the safe direction, but do not read the sweep
+numbers as coverage.
 
 ## Reading the evidence
 
