@@ -179,6 +179,32 @@ async def test_a_failing_hook_does_not_stop_the_compaction():
 # ── It must never take the run down ───────────────────────────────────
 
 
+async def test_the_ceiling_is_enforced_even_when_compaction_fails():
+    """The run that needs the ceiling most is the one where no model answers.
+
+    Compaction summarises WITH a model. On 2026-09-16 every cloud model was
+    unreachable, so the summariser would have walked the same dead chain — and
+    a compaction failure that also skipped the ceiling is how oversized
+    messages reach a server that truncates them in silence.
+    """
+    enforced = []
+    session = _session([{"role": "user", "content": "x" * 2_000_000}])
+
+    with (
+        patch(
+            "robothor.engine.context.maybe_compress",
+            new=AsyncMock(side_effect=RuntimeError("no model could summarise")),
+        ),
+        patch(
+            "robothor.engine.context_budget.enforce_hard_limit",
+            side_effect=lambda s, fit: enforced.append(fit.model) or True,
+        ),
+    ):
+        await _run(session, _config(), models=["ollama_chat/qwen3.8:27b"])
+
+    assert enforced, "compaction failed and the ceiling was never applied"
+
+
 async def test_a_compaction_failure_is_swallowed():
     """Losing compaction costs money. Losing the run costs the work."""
     session = _session()

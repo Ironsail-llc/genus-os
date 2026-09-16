@@ -54,6 +54,11 @@ OUTCOME_TIMEOUT: Final = "timeout"
 #: the stall watchdog, or an operator. Not a provider failure, but the tokens
 #: and the wall clock were spent all the same.
 OUTCOME_CANCELLED: Final = "cancelled"
+#: The conversation did not fit the model's window. Its own outcome because
+#: the providers dress it as a 500 (Ollama) or a 400 (OpenAI), so a run that
+#: died of length looked, in every row it left behind, like a provider outage
+#: — and was retried like one, five times, against bytes that could not fit.
+OUTCOME_CONTEXT_OVERFLOW: Final = "context_overflow"
 OUTCOME_ERROR: Final = "error"
 
 REASONING_ONLY_NUDGE: Final = (
@@ -242,6 +247,13 @@ def classify_error(error: BaseException) -> str:
         return OUTCOME_CANCELLED
     if isinstance(error, TimeoutError):
         return OUTCOME_TIMEOUT
+    # Before the status: an overflow arrives WITH one (500 from Ollama, 400
+    # from OpenAI), so reading the status first files it as a provider fault
+    # and the row that would have named the real cause never exists.
+    from robothor.engine.context_fit import is_context_overflow
+
+    if is_context_overflow(error):
+        return OUTCOME_CONTEXT_OVERFLOW
     status = getattr(error, "status_code", None)
     return f"{OUTCOME_ERROR}_{status}" if status else OUTCOME_ERROR
 

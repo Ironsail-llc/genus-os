@@ -51,7 +51,17 @@ class TestTheEngineDeclaresResidency:
 
 class TestTheWindowCannotBeShrunkAlone:
     """The test that stops someone reclaiming GPU memory and causing silent
-    truncation months later."""
+    truncation months later.
+
+    NECESSARY, AND NOT SUFFICIENT — learned on 2026-09-16. Every assertion
+    below passed while a production run overflowed this exact model, because
+    they check the arithmetic of a threshold without asking WHICH MODEL the
+    threshold was computed from. It was computed from the primary the run
+    could not reach. The behavioural half — a long conversation on the local
+    tier is brought under the window before the call — lives in
+    ``test_local_fallback_never_fails.py``; a change here that cannot also
+    satisfy that file has not fixed anything.
+    """
 
     @pytest.mark.parametrize("model", [LOCAL, "ollama_chat/qwen3:8b"])
     def test_compaction_fires_before_the_window_overflows(self, model):

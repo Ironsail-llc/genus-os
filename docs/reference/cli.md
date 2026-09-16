@@ -723,7 +723,7 @@ Usage: `genus vault audit`
 
 Where this instance keeps its credentials.
 
-Usage: `genus secrets {status,migrate}`
+Usage: `genus secrets {status,reload,migrate}`
 
 ### `genus secrets status`
 
@@ -734,6 +734,12 @@ Usage: `genus secrets status [--tenant TENANT]`
 | Flag | Takes | Default | Description |
 | --- | --- | --- | --- |
 | `--tenant` | `TENANT` | — | Tenant id (default: this one) |
+
+### `genus secrets reload`
+
+Make the running engine re-read credentials and put retired keys back in rotation (run this after a top-up or a raised cap).
+
+Usage: `genus secrets reload`
 
 ### `genus secrets migrate`
 

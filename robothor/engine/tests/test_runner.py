@@ -301,7 +301,14 @@ class TestAgentRunnerExecute:
                         )
 
         assert run.status == RunStatus.FAILED
-        assert "All models failed" in (run.error_message or "")
+        # What the operator READS. `error_message` is rendered into their chat,
+        # and "All models failed to respond" is what they read on 2026-09-16:
+        # true, and no help whatsoever. It now names each model and says
+        # whether there was a local fallback to fall back TO.
+        message = run.error_message or ""
+        assert "All models failed to respond" not in message
+        assert "openrouter/test/model" in message
+        assert "no local fallback" in message
 
     @pytest.mark.asyncio
     async def test_timeout(self, runner, sample_agent_config, mock_litellm_response):
@@ -965,7 +972,14 @@ class TestBrokenModelTracking:
                         )
 
         assert run.status == RunStatus.FAILED
-        assert "All models failed" in (run.error_message or "")
+        # What the operator READS. `error_message` is rendered into their chat,
+        # and "All models failed to respond" is what they read on 2026-09-16:
+        # true, and no help whatsoever. It now names each model and says
+        # whether there was a local fallback to fall back TO.
+        message = run.error_message or ""
+        assert "All models failed to respond" not in message
+        assert "model-a" in message and "failed earlier in this run" in message
+        assert "no local fallback" in message
         # Should only try each model once — NOT 10 iterations x 2 models = 20
         assert call_count == 2
 

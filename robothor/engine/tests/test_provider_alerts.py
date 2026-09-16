@@ -70,6 +70,27 @@ def test_a_periodic_cap_explains_that_a_top_up_will_not_fix_it(monkeypatch):
     assert "window" in body.lower() or "top-up" in body.lower() or "top up" in body.lower()
 
 
+def test_the_page_names_the_exact_recovery(monkeypatch):
+    """2026-09-16: the operator raised the cap and nothing changed, because the
+    engine holds a retired key for its own cooldown and this page did not say
+    what clears it."""
+    sent = _capture(monkeypatch)
+    pa.alert_provider_exhausted(
+        "OPENROUTER_API_KEY", Retirement.QUOTA_EXHAUSTED_PERIODIC, pool_size=1
+    )
+    _level, _title, body = sent[0]
+    assert "genus secrets reload" in body
+    assert "6h" in body, "the reset window is the fact that makes the reload urgent"
+
+
+def test_a_revoked_key_is_told_a_different_remedy(monkeypatch):
+    sent = _capture(monkeypatch)
+    pa.alert_provider_exhausted("OPENROUTER_API_KEY", Retirement.AUTH_FAILED, pool_size=1)
+    _level, _title, body = sent[0]
+    assert "genus secrets reload" in body
+    assert "top up" not in body.lower(), "a rejected key is not a spending problem"
+
+
 def test_nothing_is_sent_from_a_test_session(monkeypatch):
     sent: list = []
     monkeypatch.setattr(pa, "_deliver", lambda *a: sent.append(a))

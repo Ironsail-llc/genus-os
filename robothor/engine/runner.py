@@ -56,6 +56,7 @@ from robothor.engine.error_actions import apply_error_recovery
 from robothor.engine.finalization_budget import FinalizationBudget  # noqa: E402
 from robothor.engine.injection_screen import screen_run_prompt
 from robothor.engine.journal_resume import maybe_prepend_journal_resume
+from robothor.engine.last_resort import all_models_failed
 
 # LLM dispatch/cost/streaming + the request-timeout constants now live in
 # llm_client.LLMClient (Phase A / Slice 1). AgentRunner delegates to an
@@ -2019,8 +2020,7 @@ class AgentRunner(
             )
 
             if response is None:
-                session.record_error("All models failed")
-                raise RuntimeError("All models failed to respond")
+                raise all_models_failed(session, models, broken_models)
 
             if not response.choices:
                 session.record_error("LLM returned empty choices")

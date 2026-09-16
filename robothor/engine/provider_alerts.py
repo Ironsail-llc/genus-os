@@ -96,6 +96,32 @@ _REASON_TEXT: dict[Retirement, str] = {
 }
 
 
+def _recovery(reason: Retirement) -> str:
+    """The two sentences an operator acts on, including the LOCAL reset window.
+
+    Added after 2026-09-16, when the operator raised the cap at the provider
+    and nothing changed. The engine had retired the key for its own cooldown
+    and had no idea the limit had moved; the only cure short of restarting the
+    daemon was a secrets reload, and the page that woke him did not mention it.
+    A page that names a consequence but not the remedy is still homework.
+    """
+    from robothor.engine.key_pool import cooldown_for
+
+    if reason is Retirement.AUTH_FAILED:
+        return (
+            "Recovery: store a valid credential (`genus vault set` or the Helm's "
+            "Providers page), then run `genus secrets reload`. A rejected key is "
+            "not retried for the life of this process, so nothing clears on its own."
+        )
+    window = cooldown_for(reason) / 3600
+    return (
+        f"Recovery: top up or raise the limit at the provider, then run "
+        f"`genus secrets reload` — the engine holds this credential out for "
+        f"{window:.0f}h and will NOT notice a raised cap on its own. The reload "
+        f"puts it straight back in rotation and needs no restart."
+    )
+
+
 def alert_provider_exhausted(var: str, reason: Retirement, *, pool_size: int) -> None:
     """Page: every credential for one provider is out of rotation.
 
@@ -125,7 +151,8 @@ def alert_provider_exhausted(var: str, reason: Retirement, *, pool_size: int) ->
             f"Consequence: every agent whose chain ends on this provider is now "
             f"falling back to the local tier, which serves a small number of "
             f"concurrent requests. Expect fleet-wide stalls and run timeouts "
-            f"until a working credential is available."
+            f"until a working credential is available.\n\n"
+            f"{_recovery(reason)}"
         )
         _deliver("critical", title, body)
     except Exception as exc:  # noqa: BLE001 — an alert must never break dispatch

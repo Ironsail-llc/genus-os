@@ -163,9 +163,13 @@ def select(
     "0 failed" and exit 0, and a CI gate built on it would be permanently
     green.
     """
-    selected = list(checks)
+    # An opt-in check is a positive control that costs real time or real money
+    # (``models.local_fallback_probe`` pushes a conversation through a model).
+    # It is not part of "how is this box", so it never joins a default run or a
+    # category sweep — only ``--only`` reaches it, and naming it is the consent.
+    selected = [check for check in checks if not check.opt_in]
     if only is not None:
-        selected = [check for check in selected if check.id == only]
+        selected = [check for check in checks if check.id == only]
         if not selected:
             raise CheckSelectionError(
                 f"no check with id {only!r}; run 'genus doctor --json' to list them"

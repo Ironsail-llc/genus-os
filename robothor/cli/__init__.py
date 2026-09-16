@@ -841,6 +841,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "status", help="Every credential: which store has it, which store wins, fingerprints"
     )
     secrets_status_p.add_argument("--tenant", default=None, help="Tenant id (default: this one)")
+    secrets_sub.add_parser(
+        "reload",
+        help=(
+            "Make the running engine re-read credentials and put retired keys "
+            "back in rotation (run this after a top-up or a raised cap)"
+        ),
+    )
     secrets_migrate_p = secrets_sub.add_parser(
         "migrate", help="Move application credentials out of the environment and into the vault"
     )
