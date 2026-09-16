@@ -30,6 +30,8 @@ concurrently off to one side, and returns text. What is pinned here:
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -490,6 +492,96 @@ class TestTheRemoteBackend:
         await _analyze(tmp_path, _images(tmp_path, 1), detail="high")
         block = next(b for b in seen[0]["messages"][-1]["content"] if b["type"] == "image_url")
         assert block["image_url"]["detail"] == "high"
+
+
+class TestTheWholeResultIsBounded:
+    """Hostile review I-2. The per-answer cap bounds ONE answer; 200 of them
+    serialise to ~40,000 characters of short yes/no rows (~10k tokens) and
+    ~432,000 of long ones (~108k). The tool's own claim is "does not fill your
+    context", and the session's offloading does not save it: the threshold is
+    0 by default and the manifest this is measured on does not set it."""
+
+    async def test_a_big_batch_returns_totals_and_a_file_not_the_table(
+        self, tmp_path, local_backend, monkeypatch
+    ):
+        monkeypatch.setattr(vision_batch, "_max_total_chars", lambda: 900)
+        out = await _analyze(tmp_path, _images(tmp_path, 40))
+
+        assert len(json.dumps(out, default=str)) <= 900
+        assert out["analyzed"] == 40, "the totals cover every image, not the preview"
+        assert out["results_total"] == 40
+        assert 0 < out["results_shown"] < 40
+        assert len(out["results"]) == out["results_shown"]
+        assert out["results_file"] in out["note"], "the note must say where the rest went"
+
+    async def test_the_file_holds_every_row_with_its_tokens_and_cost(self, tmp_path, monkeypatch):
+        """The brief's 'cost/usage recorded per image on the run'. The step
+        writer replaces any tool_output over 4000 chars with a flat head/tail
+        string, so for a batch big enough to need this tool the per-image
+        ledger survives ONLY here."""
+
+        async def fake_acompletion(**kwargs: Any) -> Any:
+            return TestTheRemoteBackend()._fake_response()
+
+        monkeypatch.setattr(vision_batch, "pooled_acompletion", fake_acompletion)
+        monkeypatch.setattr(
+            vision_batch,
+            "resolve_backend",
+            lambda: (vision_batch.Backend("remote", "openrouter/z-ai/glm-5.3-flash"), ""),
+        )
+        monkeypatch.setattr(vision_batch, "_max_total_chars", lambda: 900)
+        out = await _analyze(tmp_path, _images(tmp_path, 30))
+
+        spilled = json.loads(Path(out["results_file"]).read_text())
+        assert len(spilled["results"]) == 30
+        assert all(r["tokens"] == 812 for r in spilled["results"])
+        assert all(r["cost_usd"] > 0 for r in spilled["results"])
+        assert spilled["cost_usd"] == out["cost_usd"], "the totals must agree"
+
+    async def test_the_file_lands_in_the_workspace_where_read_file_can_reach_it(
+        self, tmp_path, local_backend, monkeypatch
+    ):
+        monkeypatch.setattr(vision_batch, "_max_total_chars", lambda: 900)
+        out = await _analyze(tmp_path, _images(tmp_path, 30))
+        written = Path(out["results_file"])
+        assert written.is_file()
+        assert tmp_path in written.parents
+        assert written.parent.name == "analyze_image"
+        from robothor.engine.secret_paths import is_secret_path
+
+        assert not is_secret_path(written), "the agent must be allowed to read it back"
+
+    async def test_two_batches_in_one_run_do_not_overwrite_each_other(
+        self, tmp_path, local_backend, monkeypatch
+    ):
+        monkeypatch.setattr(vision_batch, "_max_total_chars", lambda: 900)
+        first = await _analyze(tmp_path, _images(tmp_path, 30))
+        second = await _analyze(tmp_path, _images(tmp_path, 30))
+        assert first["results_file"] != second["results_file"]
+        assert Path(first["results_file"]).is_file()
+
+    async def test_a_small_batch_keeps_every_row_inline(self, tmp_path, local_backend):
+        out = await _analyze(tmp_path, _images(tmp_path, 3))
+        assert len(out["results"]) == 3
+        assert "results_file" not in out
+        assert "results_shown" not in out
+
+    async def test_an_unwritable_workspace_still_returns_a_bounded_result(
+        self, tmp_path, local_backend, monkeypatch
+    ):
+        """Returning 108k tokens because the disk was full would end the run
+        the budget exists to protect."""
+
+        def no_disk(root, run_id):
+            raise OSError("read-only file system")
+
+        monkeypatch.setattr(vision_batch, "_spill_path", no_disk)
+        monkeypatch.setattr(vision_batch, "_max_total_chars", lambda: 900)
+        out = await _analyze(tmp_path, _images(tmp_path, 40))
+        assert len(json.dumps(out, default=str)) <= 900
+        assert "results_file" not in out
+        assert "could not be written" in out["note"]
+        assert out["analyzed"] == 40
 
 
 class TestTheResultIsOffloadableLikeAnyOther:

@@ -680,6 +680,18 @@ class ProviderSettings(SettingsGroup):
         restart_required=False,
         since="unreleased",
     )
+    vision_batch_max_chars: int = declare(
+        3500,
+        "ROBOTHOR_VISION_BATCH_MAX_CHARS",
+        "How much of an `analyze_image` result comes back inline. Past it the "
+        "full per-image table is written to a JSON file under "
+        "<workspace>/.robothor/analyze_image/ and the result carries the path, "
+        "the first rows and the totals. The default sits just under the "
+        "4000-character cap the step writer truncates a tool result at, so "
+        "what the agent reads is also what the run record keeps.",
+        restart_required=False,
+        since="unreleased",
+    )
     vision_batch_deadline: float = declare(
         600.0,
         "ROBOTHOR_VISION_BATCH_DEADLINE",

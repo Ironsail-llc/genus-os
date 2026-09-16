@@ -77,7 +77,10 @@ _ATTACHMENT_SCHEMAS: dict[str, dict[str, Any]] = {
                 "or search a folder of images ('is there a person in this "
                 "photo?', 'what does the sign say?', 'which category does this "
                 "belong to?'). Use view_image instead when one picture matters "
-                "and you need to study it yourself."
+                "and you need to study it yourself. A big batch returns its "
+                "totals plus the first rows and writes the full table to a JSON "
+                "file whose path is in the result — work over that file rather "
+                "than asking about the same images again."
             ),
             "parameters": {
                 "type": "object",

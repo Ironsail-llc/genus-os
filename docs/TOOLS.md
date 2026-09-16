@@ -232,7 +232,32 @@ model ever being called.
 **Cost.** Per-image tokens and cost are reported where the backend gives them,
 and the call's total `cost_usd` is added to the run's spend like any other
 tool cost. `detail: "low"` is the default deliberately: it is what makes the
-tool cheap enough to call in a loop.
+tool cheap enough to call in a loop. On the local (Ollama) backend `detail` is
+ignored and the result says so — the API has no such knob.
+
+**Big batches spill to a file.** Two hundred rows are ~40,000 characters of
+short answers and ~432,000 of long ones, which would put back in the context
+what the tool exists to keep out of it. Past
+`ROBOTHOR_VISION_BATCH_MAX_CHARS` the result keeps its totals, its counts and
+its first rows, and the **whole** table goes to
+`<workspace>/.robothor/analyze_image/<run>-<n>.json`:
+
+```jsonc
+{"question": "…", "model": "…", "analyzed": 198, "failed": 2,
+ "results": [ /* the first rows that fit */ ],
+ "results_shown": 12, "results_total": 200,
+ "results_file": "/…/.robothor/analyze_image/<run>-1.json",
+ "tokens": 121600, "cost_usd": 0.0243,
+ "note": "200 rows did not fit … work over that file …"}
+```
+
+Work over that file with `exec` (jq, python) rather than reading it whole —
+that keeps the win. It matters for the record as well as the context: the
+engine replaces any tool output over 4,000 characters in `agent_run_steps`
+with a flat head/tail string, so the per-image `tokens`/`cost_usd` ledger
+survives in the JSON file and in the run total, not in the step row. The
+default budget sits just under that cap so the two agree; raise it and the
+step row starts being truncated instead.
 
 #### Configuring the backend
 
@@ -243,6 +268,7 @@ tool cheap enough to call in a loop.
 | `ROBOTHOR_VISION_BATCH_CONCURRENCY` | Images in flight at once (default 4, ceiling 16). |
 | `ROBOTHOR_VISION_BATCH_TIMEOUT` | Seconds one image gets (default 90). |
 | `ROBOTHOR_VISION_BATCH_DEADLINE` | Seconds the whole call gets (default 600). |
+| `ROBOTHOR_VISION_BATCH_MAX_CHARS` | How much of the result comes back inline before the table spills to a file (default 3500 — just under the 4,000-character cap the step writer truncates at). |
 
 A remote model the registry does not **declare** able to accept images is
 **not** dialled — whether it declares the model text-only or has no entry for

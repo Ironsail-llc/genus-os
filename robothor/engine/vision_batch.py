@@ -39,6 +39,12 @@ What it will not do
   hour inside a single tool call.
 * **Decode a 50 MB file to find out it was too big.** The size ceiling is a
   ``stat``, before Pillow is handed anything.
+* **Fill the context it exists to keep empty.** Two hundred rows serialise to
+  ~40,000 characters of short answers and ~432,000 of long ones (measured).
+  Past a budget the totals and the first rows come back inline and the whole
+  table goes to a file under the workspace. The session's own offloading does
+  not cover this: ``tool_offload_threshold`` defaults to 0, and the manifest
+  this change is measured on does not set it.
 
 What containment here is, and is not
 ------------------------------------
@@ -58,6 +64,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -125,6 +132,29 @@ MAX_ANSWER_TOKENS = 1024
 MAX_ANSWER_CHARS = 2000
 _TRUNCATION_MARK = " […truncated]"
 
+#: And the bound on the WHOLE result, which the per-answer cap does not give:
+#: 200 short yes/no rows serialise to ~40,000 characters (~10k tokens) and 200
+#: capped ones to ~432,000 (~108k tokens), measured. A tool whose stated
+#: purpose is "does not fill your context" cannot put 108k tokens in it.
+#:
+#: The default is deliberately just under ``tracking.MAX_TOOL_OUTPUT_CHARS``
+#: (4000), where the step writer replaces an oversized ``tool_output``
+#: wholesale with a flat head/tail string: above that cap the per-image
+#: ``tokens``/``cost_usd`` rows stop being a record of anything. Same
+#: relationship, same reason, as ``session._ASSISTANT_TURN_MAX_SERIALISED``.
+DEFAULT_MAX_TOTAL_CHARS = 3500
+
+#: Where the full table goes when the result does not fit. Under the
+#: workspace, so the agent can ``read_file`` it back; under ``.robothor/``, so
+#: it is not mistaken for a deliverable; not under ``.robothor/secret*``, which
+#: is the prefix ``secret_paths`` refuses.
+SPILL_DIRNAME = ".robothor/analyze_image"
+
+#: Characters kept back from the budget for the note that explains the spill
+#: and the two count keys beside it. Generous: a workspace path is most of it,
+#: and a budget that the explanation itself overruns is not a budget.
+_NOTE_RESERVE = 400
+
 
 @dataclass(frozen=True)
 class Backend:
@@ -182,6 +212,13 @@ def _per_image_timeout() -> float:
         return float(_settings().providers.vision_batch_timeout)
     except Exception:  # noqa: BLE001
         return DEFAULT_TIMEOUT_SECONDS
+
+
+def _max_total_chars() -> int:
+    try:
+        return int(_settings().providers.vision_batch_max_chars)
+    except Exception:  # noqa: BLE001
+        return DEFAULT_MAX_TOTAL_CHARS
 
 
 def _batch_deadline() -> float:
@@ -505,6 +542,40 @@ def _clamp_concurrency(requested: Any) -> int:
     return max(1, min(wanted, MAX_CONCURRENCY))
 
 
+def _spill_path(root: Path, run_id: str) -> Path:
+    """Where this call's full table goes. Numbered, so a run keeps every batch.
+
+    The index is the count of files this run already wrote rather than a
+    module-level counter: a counter is state that a restarted process loses and
+    two sessions share, and the directory already knows the answer.
+    """
+    directory = root / SPILL_DIRNAME
+    directory.mkdir(parents=True, exist_ok=True)
+    stem = "".join(c for c in (run_id or "adhoc") if c.isalnum() or c in "-_") or "adhoc"
+    index = sum(1 for _ in directory.glob(f"{stem}-*.json")) + 1
+    return directory / f"{stem}-{index}.json"
+
+
+def _fit(out: dict[str, Any], rows: list[dict[str, Any]], budget: int) -> int:
+    """How many of *rows* fit in *budget* once the rest of *out* is counted.
+
+    Measured on the serialised form, because the serialised form is what the
+    session puts in the context and what the step writer measures against its
+    own cap. Binary search rather than a row-by-row walk: 200 rows is 8
+    ``json.dumps`` calls instead of 200.
+    """
+    probe = dict(out)
+    low, high = 0, len(rows)
+    while low < high:
+        middle = (low + high + 1) // 2
+        probe["results"] = rows[:middle]
+        if len(json.dumps(probe, default=str)) <= budget:
+            low = middle
+        else:
+            high = middle - 1
+    return low
+
+
 async def analyze_images(
     *,
     paths: Any,
@@ -512,12 +583,18 @@ async def analyze_images(
     detail: str = "",
     max_concurrency: Any = None,
     workspace: str = "",
+    run_id: str = "",
 ) -> dict[str, Any]:
     """Answer *question* about every path in *paths*. Never returns a picture.
 
     The return shape is the contract the tool schema advertises: ``results`` in
     the order the paths were given, one row each, carrying either ``answer`` or
     ``error`` and never both.
+
+    A result too big for the budget keeps its totals and its first rows inline
+    and writes the whole table to a file whose path it returns — see
+    :data:`DEFAULT_MAX_TOTAL_CHARS` for why that is not left to the session's
+    offloading.
     """
     if not isinstance(paths, (list, tuple)) or not paths:
         return {"error": f"paths is required: a list of 1–{MAX_PATHS} image paths"}
@@ -617,6 +694,73 @@ async def analyze_images(
         # The runner adds a tool result's `cost_usd` to the run total, so an
         # out-of-band call that reported nothing would spend money invisibly.
         out["cost_usd"] = round(cost, 6)
+
+    budget = _max_total_chars()
+    if budget > 0 and len(json.dumps(out, default=str)) > budget:
+        notes.append(_spill(out, list(results), root=root, run_id=run_id, budget=budget))
     if notes:
         out["note"] = " ".join(notes)
     return out
+
+
+def _spill(
+    out: dict[str, Any],
+    rows: list[dict[str, Any]],
+    *,
+    root: Path,
+    run_id: str,
+    budget: int,
+) -> str:
+    """Move the full table to a file, leave the totals and a preview. Mutates *out*.
+
+    Returns the sentence for the result's ``note``. The totals stay inline
+    whatever happens — the money and the counts are what a caller reads without
+    opening anything — and so does the path, so an agent that wants row 147
+    knows where to get it.
+
+    If the file cannot be written (a read-only workspace, a full disk) the rows
+    are trimmed anyway and the note says the rest is gone. Returning 108k
+    tokens because the disk was full would end the run the budget exists to
+    protect.
+    """
+    header = {key: value for key, value in out.items() if key != "results"}
+    written: Path | None = None
+    try:
+        written = _spill_path(root, run_id)
+        written.write_text(
+            json.dumps({**header, "results": rows}, default=str, indent=1), encoding="utf-8"
+        )
+    except Exception as exc:  # noqa: BLE001 - a failed spill still has to return a result
+        logger.warning("could not write the analyze_image table: %s", exc)
+        written = None
+
+    if written is not None:
+        header["results_file"] = str(written)
+    # Fit against the header the caller will actually return: the two count
+    # keys and a note of about this length are part of what has to fit, and a
+    # budget measured without them is a budget overspent by the note
+    # explaining the budget.
+    probe = {
+        **header,
+        "results_shown": len(rows),
+        "results_total": len(rows),
+        "note": "x" * _NOTE_RESERVE,
+    }
+    shown = _fit(probe, rows, budget)
+    out.clear()
+    out.update(header)
+    out["results"] = rows[:shown]
+    out["results_shown"] = shown
+    out["results_total"] = len(rows)
+    if written is not None:
+        return (
+            f"{len(rows)} rows did not fit in one tool result, so the first {shown} are "
+            f"here and all {len(rows)} — each image's answer, tokens and cost — are in "
+            f"{written}. Work over that file (exec with jq or python is cheaper than "
+            "reading it into this conversation); do not ask about the same images again."
+        )
+    return (
+        f"{len(rows)} rows did not fit in one tool result and the full table could not be "
+        f"written to disk, so only the first {shown} are here. The totals above cover all "
+        f"{len(rows)}. Ask about the remaining images in a smaller batch."
+    )
