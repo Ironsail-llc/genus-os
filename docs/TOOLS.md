@@ -253,10 +253,19 @@ denial reads as a policy and is not one: the same account is reached through
 `exec`, past the do-not-contact check, the duplicate-reply guard, the threading
 and the benchmark gate.
 
-**`agents.approval_gate_not_armed`** — an agent granting a destructive tool
-(`delete_person`, `gws_gmail_send`, `git_push`, …) that this run will not put
-in front of a human. Two halves have to line up and nothing else brings them
-together:
+**`agents.approval_gate_not_armed`** — an agent that granted one of the four
+record-deleting CRM tools — `delete_person`, `delete_company`, `delete_note`,
+`delete_task` — and that this run will not put in front of a human.
+
+**Those four and nothing else.** It does not cover `gws_gmail_send`,
+`write_file`, `exec` or `git_push`: naming those fired on 16 of the 16 stock
+templates, because they are ordinary grants, and a check that fires on a clean
+install is a check nobody reads. Outbound mail is NOT gated by this, and an
+earlier version of this paragraph said it was. `gws_calendar_delete` and
+`vault_delete` are irreversible too and are deliberately still outside the set —
+adding them is a live question, not an oversight.
+
+Two halves have to line up and nothing else brings them together:
 
 * the manifest declares BOTH `v2.guardrails: [human_approval]` and
   `v2.human_approval_tools`, and does not set `human_approval_fail_open: true`;

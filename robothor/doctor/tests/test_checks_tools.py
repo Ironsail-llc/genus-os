@@ -678,6 +678,46 @@ class TestTheApprovalGateIsArmed:
         assert "fail_open" in result.detail
 
 
+class TestTheDocsDescribeTheCoverageTheCheckHas:
+    """Round 4, Important 1: `docs/TOOLS.md` advertised `gws_gmail_send` and
+    `git_push` as covered. They are deliberately NOT — naming them fired on 16
+    of 16 stock templates. An operator reading that believed outbound mail was
+    gated.
+
+    This class of defect (a doc promising a property the code does not have)
+    has now been corrected three times on this branch, so it gets a test rather
+    than a fourth correction.
+    """
+
+    #: The doc sentence that ENDS the coverage claim. Everything before it is
+    #: what the check covers; everything after names tools it deliberately does
+    #: not, so a test that read the whole section could not tell the two apart.
+    _CLAIM_ENDS = "**Those four and nothing else.**"
+
+    def _documented(self) -> set[str]:
+        import re
+        from pathlib import Path as _Path
+
+        from robothor.doctor.checks.tools import _registered_names
+
+        text = (_Path(__file__).resolve().parents[3] / "docs" / "TOOLS.md").read_text()
+        start = text.index("`agents.approval_gate_not_armed`")
+        end = text.index(self._CLAIM_ENDS, start)
+        return set(re.findall(r"`(\w+)`", text[start:end])) & _registered_names()
+
+    def test_the_doc_names_exactly_what_the_check_covers(self) -> None:
+        from robothor.doctor.checks.tools import _DESTRUCTIVE_TOOLS
+
+        assert self._documented() == set(_DESTRUCTIVE_TOOLS)
+
+    def test_an_ordinary_grant_is_not_reported(self) -> None:
+        """The other half of the claim: these are not covered, on purpose."""
+        from robothor.doctor.checks.tools import _DESTRUCTIVE_TOOLS
+
+        for name in ("gws_gmail_send", "write_file", "exec", "git_push"):
+            assert name not in _DESTRUCTIVE_TOOLS
+
+
 # ── tools.exec_allowlist_bypasses_denied_tool ─────────────────────────
 
 
