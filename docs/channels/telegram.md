@@ -113,9 +113,15 @@ base64 into a message.
   `api_key`, `access_token`, `password`, …) — whatever the file is called,
   because renaming would otherwise be the whole attack. There is no size limit
   on the scan: only the first 256 KB are read, so a 20 MB video costs the same
-  as a 2 KB note. A credential buried past that first 256 KB is not seen. A
-  `${VAR}` reference, an empty value and a disabled setting are not credentials.
-  The refusal names the file and the kind of credential, never the value.
+  as a 2 KB note. A credential buried past that first 256 KB is not seen. The
+  refusal names the file and the kind of credential, never the value.
+* **Not refused**, so that scaffolds, examples and documentation stay sendable:
+  a comment line; and a credential-named field whose value is a `${VAR}`
+  reference, empty, `null`/`~`/a boolean, a bare number, a setting word such as
+  `disabled`, a redaction such as `REDACTED`, `changeme` or
+  `YOUR_API_KEY_HERE`, or a YAML tag such as `!vault`. Prose that merely
+  contains "token:" is a sentence, not an assignment. A file that mixes
+  placeholders with one real secret is still refused.
 * **Checked twice.** The same ladder runs when the agent asks *and* again
   immediately before the bytes are uploaded, and a file queued for a scheduled
   run is pinned to the digest it was approved with — rewrite it in between and
