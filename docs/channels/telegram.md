@@ -85,10 +85,22 @@ A file named like a credentials file (`.env`, `credentials.json`, `id_rsa`, …)
 carries `"secret": true` and `"original_name"`, and is kept one level deeper,
 in `<date>/secret/`. It is still **saved** — you sent it on purpose and may
 want it moved or renamed — but its contents are never quoted into a prompt, and
-every way an agent could read it is closed: `read_file` and `send_file` refuse
-it, and so does `exec` — `cat`, `head`, `grep` and `python3 -c` on that path all
-come back with the same secrets-file sentence. One rule, one wording, whichever
-tool the agent reached for.
+three things refuse it: `read_file`, `send_file`, and the printing commands
+`exec` knows about — `cat`, `head`, `grep`, `python3 -c` and the rest of that
+list — which all come back with the same secrets-file sentence. One rule, one
+wording, whichever tool the agent reached for.
+
+**Two of those are boundaries and one is a speed bump, and it is worth knowing
+which.** `read_file` and `send_file` refuse the file itself, however it is
+spelled; so does the content scan that runs on whatever `send_file` is about to
+hand the channel, which is what catches a copy. The `exec` refusal is a
+denylist over command words, and a denylist over a shell is a cost, not a wall:
+an agent that `cd`s into the directory and reads a relative name, or copies the
+file somewhere else first, or reads it through a redirect rather than an
+argument, is not stopped. That is deliberate — the value of the `exec` rung is
+that an agent reaching for `cat` is told the rule and stops, not that a
+determined one cannot get the bytes. **The bytes are on your disk because you
+sent them; if you did not mean to, move or delete the file.**
 
 The verdict is taken from the name Telegram supplied and recorded as the
 DIRECTORY, because sanitising a name for the filesystem is exactly what
@@ -97,10 +109,13 @@ to be understood eventually gets parsed wrongly. The `secret/` directory under
 a dated inbox folder is a recognised secrets location in its own right, so a
 tool that learns about secrets files at all learns about this one too.
 
-`cp` is not refused, here or for a `.env` on disk — the refusals cover the
-commands that **print**. A copy is caught at the other end instead: `send_file`
-scans what it is about to hand the channel and refuses a file whose contents
-are credential-shaped.
+`cp` is not refused, here or for a `.env` on disk — the `exec` rung covers the
+commands that **print**, and copying is not printing. That is the gap the
+paragraph above describes, and the boundary that closes it is at the other end:
+`send_file` scans what it is about to hand the channel and refuses a file whose
+contents are credential-shaped, wherever that file was copied from — within the
+first 256 KB it reads, which is spelled out under [Sending](#sending-send_file)
+below.
 
 ## Sending: `send_file`
 
