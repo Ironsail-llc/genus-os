@@ -239,8 +239,13 @@ sudo systemctl enable --now robothor-engine robothor-bridge robothor-app
   cannot rewrite what runs as root) and the `tmpfiles.d` fragments that create
   `/run/robothor`.
 
-It only ever installs `robothor-*` units — never anything instance-local — and
-it restarts nothing. `sudo systemctl daemon-reload` is yours to run.
+It only ever installs `robothor-*` units — never anything instance-local. By
+default it restarts nothing and prints the follow-up as **one** command:
+`daemon-reload`, then a single `systemctl restart` naming the secrets unit and
+every service that `Requires=` it. `--restart` runs exactly that. Do not split
+it into a secrets restart followed by a services restart — the second restart
+supersedes the first one's start jobs and kills their `ExecStartPre`, which
+pages (`docs/runbooks/PAGING.md`, "A deploy restarts each unit once").
 
 `scripts/instance_doctor.sh` answers the other direction: what is installed on
 this box that no template describes. `genus doctor --only host.unit_drift` wraps

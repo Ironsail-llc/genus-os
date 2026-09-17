@@ -2569,6 +2569,12 @@ class OpsSettings(SettingsGroup):
         "Single-file restart request the handler still honours, from before "
         "requests became one file per unit.",
     )
+    restart_lock: str = declare(
+        "/run/lock/robothor-restart.lock",
+        "ROBOTHOR_RESTART_LOCK",
+        "Lock the restart handler and `install-units.sh --restart` both take, "
+        "so neither can supersede the other's restart transaction.",
+    )
 
     # --- alert delivery ---------------------------------------------------
     alert_state_dir: str = declare(

@@ -101,3 +101,25 @@ async def test_clean_return_stops_polling_loop():
     await bot.start_polling()
 
     assert bot.dp.start_polling.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_the_daemon_owns_sigterm_not_aiogram():
+    """aiogram installs a SIGTERM handler when polling starts and never
+    removes it, so whichever of the two ran last owns the process's stop
+    signal — and outside a live polling window aiogram's handler only sets a
+    dispatcher event nobody is waiting on, which is SIGTERM doing nothing.
+
+    The daemon installs one handler for the whole process lifetime
+    (daemon._install_shutdown_signals). Polling must not take it away.
+    """
+    bot = _make_bot()
+    bot.dp.start_polling = AsyncMock(return_value=None)
+
+    await bot.start_polling()
+
+    kwargs = bot.dp.start_polling.await_args.kwargs
+    assert kwargs.get("handle_signals") is False, (
+        "aiogram replaced the daemon's SIGTERM handler with one that is deaf "
+        "between polling attempts"
+    )
