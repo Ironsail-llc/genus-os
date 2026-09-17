@@ -65,7 +65,15 @@ fail() { log "ERROR: $*"; exit 1; }
 # does a real readdir and a real write. robothor-basebackup.service runs the
 # same probe as ExecCondition= so the unit skips rather than failing; this copy
 # keeps the guarantee for a hand-run.
-MOUNT="${DEST%%/robothor/*}"
+# Probe the directory the backup is WRITTEN UNDER, not the mount root: this
+# unit runs as postgres, which can write its own subtree but not the root of
+# the mount. Probing the root as that user refused every weekly run from
+# 2026-09-06 to 2026-09-17 with "cannot create a file" while the ExecCondition=
+# (which probes the right directory) passed — a base backup silently missing
+# for 18 days. The mount is still checked: backup-volume-check.sh refuses a
+# path that is not on a separate mount, and a wedged volume is unwritable
+# everywhere on it.
+PROBE_DIR="${DEST%/*}"
 SCRIPT_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 VOLUME_CHECK="${ROBOTHOR_VOLUME_CHECK:-$SCRIPT_DIR/backup-volume-check.sh}"
 # Last-good markers: a freshness guard needs to know when this last WORKED,
@@ -73,8 +81,8 @@ VOLUME_CHECK="${ROBOTHOR_VOLUME_CHECK:-$SCRIPT_DIR/backup-volume-check.sh}"
 # shellcheck source=scripts/backup-state.sh
 source "$SCRIPT_DIR/backup-state.sh"
 [[ -x "$VOLUME_CHECK" ]] || fail "volume probe not found at $VOLUME_CHECK"
-"$VOLUME_CHECK" --rw "$MOUNT" \
-    || fail "$MOUNT is not a usable backup volume — refusing to write a base backup that would go nowhere"
+"$VOLUME_CHECK" --rw "$PROBE_DIR" \
+    || fail "$PROBE_DIR is not a usable backup volume — refusing to write a base backup that would go nowhere"
 
 mkdir -p "$DEST"
 OUT="$DEST/base-$STAMP"
