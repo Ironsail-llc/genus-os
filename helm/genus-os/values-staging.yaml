@@ -7,7 +7,7 @@
 # released `vX.Y.Z` on PR close / unlabel.
 
 global:
-  imageTag: "v1.99.2"
+  imageTag: "v1.99.3"
   environment: staging
   authEnforce: true
   deployedFromPR: ""
