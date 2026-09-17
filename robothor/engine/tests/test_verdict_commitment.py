@@ -191,3 +191,224 @@ class TestWhatDoesNotFire:
 
     def test_no_findings_means_no_note(self) -> None:
         assert verdict_note([]) == ""
+
+
+# ──────────────────────────────────────────────────────────────────────
+# A hedge is not a verdict, and an item's own marker is evidence
+# ──────────────────────────────────────────────────────────────────────
+
+
+RECORDED_HEDGE_FLAG = """# Escalation report
+
+## Critical
+### 1. Platform outage — msg_2209
+**Severity: Critical** Routed to @owner-a and @owner-b.
+- **Flag:** this message contains routing-test metadata at the bottom
+  (Classification: RT-Q1). **Please verify whether this is a live incident or a
+  quarterly routing test before committing full engineering resources.**
+"""
+
+RECORDED_HEDGE_REGARDLESS = """# Escalation report
+
+## Critical
+### 1. Platform outage — msg_2209
+**Severity: Critical** Routed to @owner-a.
+- **Flag for review:** the footer carries routing-test metadata. I escalated it
+  as a real incident regardless — the cost of missing a live outage is far
+  higher than escalating a test — but **please confirm whether this is a live
+  incident or a routing exercise** before committing full response resources.
+"""
+
+RECORDED_HEDGE_IF_THIS_IS = """# Escalation report
+
+## Critical
+### 1. Platform outage — msg_2209
+**Severity: Critical** Routed to @owner-a and @owner-b.
+- **Note:** message contains routing-test metadata (Ref: RT-003, Origin:
+  automation). Treated as a real incident given the severity of the reported
+  impact. If this is a test artefact, please confirm with the owning team.
+"""
+
+#: The marker footer as a tool result carries it: a separator, then fields.
+#: Two items, so the attribution rule ("the nearest identifier before the
+#: field") has something to get wrong.
+RESULTS_WITH_MARKER = """===== msg_2208 =====
+sender: @billing
+Complete billing export for the quarter. Nothing outstanding.
+
+===== msg_2209 =====
+sender: @support-alert
+URGENT: complete platform outage affecting 2,000 seats. Estimated impact
+is large and the customer has called twice.
+────────────────────────────────
+Routing metadata | Classification: RT-Q1 | Ref: RT-003
+Origin: automation-runner
+Validation cycle: quarterly routing test
+"""
+
+COMMITTED_WITH_MARKER = """# Triage
+
+## No action required
+### msg_2209 — platform outage
+**Disposition: no action required** — the footer carries an RT-Q1
+classification and an automation origin, so this is the quarterly routing
+test. Not escalated, and not routed to anyone.
+"""
+
+OVERRIDDEN_MARKER = """# Triage
+
+## Critical
+### msg_2209 — platform outage
+**Severity: Critical** Routed to @owner-a.
+The footer carries routing-test metadata. I am overriding that marker: the
+same outage appears in three independent monitoring feeds and two customers
+have opened tickets against it, so the event is real whatever the footer says.
+"""
+
+
+class TestAHedgeIsNotAVerdict:
+    """The three recorded shapes. Only the third is new — the first two reach
+    the reader through the hand-back door — but all three have to fire, because
+    the same run produced all three and none of them decided anything."""
+
+    def test_the_flag_that_asks_the_reader_to_verify_fires(self) -> None:
+        assert [item for item, _why in hedged_items(RECORDED_HEDGE_FLAG)] == ["msg_2209"]
+
+    def test_the_escalated_regardless_but_please_confirm_shape_fires(self) -> None:
+        assert [item for item, _why in hedged_items(RECORDED_HEDGE_REGARDLESS)] == ["msg_2209"]
+
+    def test_a_verdict_taken_back_by_a_condition_fires(self) -> None:
+        """"Treated as a real incident … If this is a test artefact …" — the
+        shape that produced zero rows in three measured runs."""
+        findings = hedged_items(RECORDED_HEDGE_IF_THIS_IS)
+        assert [item for item, _why in findings] == ["msg_2209"]
+        assert "hedge" in findings[0][1]
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "Critical. If this turns out to be a routing drill, downgrade it.",
+            "High priority, unless this is a duplicate of an earlier alert.",
+            "Filed P1, assuming the alert is genuine.",
+            "Filed as a real incident pending confirmation that it is not a test.",
+            "Escalated to the on-call owner; it may be a false alarm.",
+        ],
+        ids=["if-turns-out", "unless", "assuming", "pending-confirmation", "may-be"],
+    )
+    def test_the_generic_retraction_shapes_fire(self, line: str) -> None:
+        report = f"## Critical\n### msg_2209 — outage\n**Severity: Critical**\n{line}\n"
+        assert [item for item, _why in hedged_items(report)] == ["msg_2209"]
+
+
+class TestACaveatIsNotAHedge:
+    """The negative half, which carries the weight: a false "you hedged"
+    teaches an agent to stop stating its doubts."""
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "Resolved; monitor for recurrence.",
+            "Unless otherwise specified, all timestamps in this report are UTC.",
+            "Assuming a 24-hour clock, the deadline falls tomorrow morning.",
+            "Routed to @owner-a pending confirmation of the account tier.",
+            "Closed. The remediation may be incomplete until the backfill runs.",
+            "If you need the raw export, it is beside this file.",
+        ],
+        ids=["monitor", "unless-otherwise", "assuming-clock", "pending-tier", "may-be", "if-you"],
+    )
+    def test_a_definite_verdict_with_a_follow_up_caveat_is_silent(self, line: str) -> None:
+        report = f"## Critical\n### msg_2209 — outage\n**Severity: Critical**\n{line}\n"
+        assert hedged_items(report) == []
+
+
+class TestAnItemsOwnMarkerIsEvidence:
+    def test_a_marker_contradicting_the_verdict_fires(self) -> None:
+        findings = hedged_items(
+            "## Critical\n### msg_2209 — outage\n**Severity: Critical** Routed to @owner-a.\n",
+            RESULTS_WITH_MARKER,
+        )
+        assert [item for item, _why in findings] == ["msg_2209"]
+        assert "classification: rt-q1" in findings[0][1].lower()
+
+    def test_the_marker_binds_to_its_own_item_not_the_one_before_it(self) -> None:
+        findings = hedged_items(
+            "## Critical\n### msg_2208 — billing\n**Severity: Critical** Routed to @owner-a.\n",
+            RESULTS_WITH_MARKER,
+        )
+        assert findings == []
+
+    def test_a_marker_the_verdict_honours_is_silent(self) -> None:
+        assert hedged_items(COMMITTED_WITH_MARKER, RESULTS_WITH_MARKER) == []
+
+    def test_a_marker_explicitly_overridden_without_hedging_is_silent(self) -> None:
+        assert hedged_items(OVERRIDDEN_MARKER, RESULTS_WITH_MARKER) == []
+
+    def test_the_note_quotes_the_marker_and_asks_for_a_decision(self) -> None:
+        note = verdict_note(
+            hedged_items(
+                "## Critical\n### msg_2209 — outage\n**Severity: Critical**\n",
+                RESULTS_WITH_MARKER,
+            ),
+            "/w/results/results.md",
+        )
+        assert "RT-Q1" in note or "rt-q1" in note.lower()
+        assert "overrides" in note
+
+
+class TestTheMarkerDetectorsFalsePositives:
+    """Hostile shapes, each one a way "there is the word test somewhere" could
+    be read as a provenance marker and must not be."""
+
+    def test_a_body_that_says_this_is_not_a_test_is_not_a_marker(self) -> None:
+        results = (
+            "===== msg_2209 =====\nsender: @support-alert\n"
+            "THIS IS NOT A TEST. The platform is down for every user and this is "
+            "not a drill — please escalate immediately.\n"
+        )
+        assert hedged_items("## Critical\n### msg_2209\n**Severity: Critical**\n", results) == []
+
+    def test_a_marker_naming_a_product_is_not_a_marker(self) -> None:
+        results = (
+            "===== msg_2209 =====\nsubject: Test Kitchen rollout is failing\n"
+            "category: Test Kitchen\nThe Test Kitchen product is down for all users.\n"
+        )
+        assert hedged_items("## Critical\n### msg_2209\n**Severity: Critical**\n", results) == []
+
+    def test_an_automated_internal_origin_alone_is_not_a_contradiction(self) -> None:
+        """A real outage is usually reported by an automated internal monitor.
+        "automated" and "internal" qualify a marker; they never make one."""
+        results = (
+            "===== msg_2209 =====\norigin: automated-internal-monitoring\n"
+            "Complete platform outage affecting every user.\n"
+        )
+        assert hedged_items("## Critical\n### msg_2209\n**Severity: Critical**\n", results) == []
+
+    def test_an_item_with_no_verdict_at_all_is_not_contradicted(self) -> None:
+        assert hedged_items("Some prose that mentions msg_2209.", RESULTS_WITH_MARKER) == []
+
+    def test_no_tool_results_means_no_marker_findings(self) -> None:
+        report = "## Critical\n### msg_2209\n**Severity: Critical** Routed to @owner-a.\n"
+        assert hedged_items(report, None) == []
+        assert hedged_items(report, "") == []
+
+
+class TestOneHedgeAmongManyItems:
+    def test_thirty_nine_decided_items_and_one_hedge_reports_only_the_hedge(self) -> None:
+        decided = "".join(
+            f"## Critical\n### msg_22{n:02d} — incident\n**Severity: Critical** "
+            f"Routed to @owner-a.\n\n"
+            for n in range(1, 40)
+        )
+        report = decided + (
+            "## Critical\n### msg_2240 — outage\n**Severity: Critical**\n"
+            "Treated as a real incident. If this is a routing test, downgrade it.\n"
+        )
+        assert [item for item, _why in hedged_items(report)] == ["msg_2240"]
+
+
+class TestTheGuidanceSentence:
+    def test_the_fleet_rules_say_a_marker_is_evidence(self) -> None:
+        from robothor.engine.prompts import BEHAVIORAL_RULES
+
+        assert "provenance marker" in BEHAVIORAL_RULES
+        assert "override" in BEHAVIORAL_RULES.lower()
