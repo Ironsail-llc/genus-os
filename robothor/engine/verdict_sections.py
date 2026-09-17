@@ -27,6 +27,9 @@ one:
   verdicts, a contradiction the report never made, invented by the repair
   itself (review of the first cut). The verdict has to be the whole heading,
   give or take filler like *Issues* or a count;
+* and only ONE label. ``## Critical / High priority items`` is an index of two
+  categories, not a decision about the items under it, and reading it as a
+  scope filed every one of them under two verdicts;
 * only the NEAREST one. A `## Low` section under a `# Critical …` title
   resolves to *low*, not to both;
 * not at all when the block states its own verdict, so ``### 3. … — upgraded
@@ -92,14 +95,18 @@ def _scope_line(heading: str) -> str:
     """
     text = re.sub(r"^\d+[.)]\s*", "", re.sub(r"^#{1,6}\s*", "", heading).strip())
     labels = [match.group(0) for pattern in VERDICTS.values() if (match := pattern.search(text))]
-    if not labels:
+    # Exactly one. `## Critical / High priority items` assigned two verdicts to
+    # every item filed under it, which is the "appears under 2 verdicts"
+    # finding this rule exists not to invent (review, round 3). A heading that
+    # names two categories is an index of them, not a decision about anything.
+    if len(labels) != 1:
         return ""
     remainder = text
     for pattern in VERDICTS.values():
         remainder = pattern.sub(" ", remainder)
     if any(word not in _FILLER for word in _WORD.findall(remainder.lower())):
         return ""
-    return "# " + " ".join(labels)
+    return f"# {labels[0]}"
 
 
 def blocks(text: str) -> list[str]:

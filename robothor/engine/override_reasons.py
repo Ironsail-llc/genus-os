@@ -21,6 +21,16 @@ A reason is a CLAIM ABOUT EVIDENCE, and the two halves are the whole design:
   quotation counts only through its attribution — *because it "seemed wrong"*
   quotes nothing but the writer.
 
+What this module enforces is DISCLOSURE, not soundness and not polarity. It
+asks whether the report named an external reason, never whether the reason is
+a good one, and it cannot tell "the dashboard showed the service down" from
+"the dashboard showed the service healthy" — evidence cited *against* the
+override exempts as readily as evidence for it. That is deliberate. Judging
+the argument would put this control in the business of second-guessing a
+decision the operator can now see and weigh; judging its absence keeps it to
+the one thing a detector can be right about, which is that a reader was left
+with nothing to weigh at all.
+
 Where it may be said is as much of the rule as what it says:
 
 * AFTER the override phrase. A reason found before it is usually the marker
@@ -51,7 +61,7 @@ _SENTENCE_END = re.compile(r"[.!?](?=\s|$)")
 #: A blank line ends the reach outright.
 _PARAGRAPH = re.compile(r"\n[ \t]*\n")
 
-#: Something a reader could go and look at. Deliberately NOT here: `report`,
+#: A source a reader could go and look at. Deliberately NOT here: `report`,
 #: `record`, `system`, `team`, `user` and their relatives. Each of those names
 #: the writer's own side of the page rather than a source outside it, and each
 #: of them turned a sentence that named nothing into an exemption.
@@ -60,21 +70,46 @@ _SOURCE = re.compile(
     r"call|calls|log|logs|dashboard|dashboards|alert|alerts|monitor|monitors|monitoring|"
     r"telemetry|metric|metrics|status\s+page|feed|feeds|screenshot|screenshots|"
     r"customer|customers|client|clients|sender|caller|on-call|engineer|responder|"
-    r"invoice|contract|transcript|recording)\b"
-    r"|@[A-Za-z0-9][A-Za-z0-9._-]{1,30}"
+    r"invoice|contract|transcript|recording)\b",
+    re.IGNORECASE,
+)
+
+#: A referent concrete enough to find: a handle, an address, a time, a date, a
+#: link, an item id. A source with one of these attached has been pointed at,
+#: whatever the verb does — "three monitors are red at 14:02" names its
+#: evidence as plainly as "three monitors confirmed it".
+_REFERENT = re.compile(
+    r"@[A-Za-z0-9][A-Za-z0-9._-]{1,30}"
     r"|[A-Za-z0-9._%+-]{1,40}@[A-Za-z0-9.-]{1,40}\.[A-Za-z]{2,}"
     r"|\b\d{1,2}:\d{2}\b|\b\d{4}-\d{2}-\d{2}\b|https?://\S{3,}"
     r"|\b[a-z][a-z0-9]{1,12}_\d{2,}\b|(?<![-/])\b[A-Z]{2,6}-\d{1,6}\b",
     re.IGNORECASE,
 )
 
-#: …and what that source has to be doing. A source that merely appears in the
-#: sentence is a noun; a source that confirmed, showed, paged or opened
-#: something is evidence.
+#: …or a count of them. "40 messages", "three monitors", "two tickets": a
+#: quantity is a claim about how much there is to look at.
+_QUANTITY = re.compile(
+    r"\b(?:\d{1,6}|one|two|three|four|five|six|seven|eight|nine|ten|"
+    r"several|dozens?|hundreds?|thousands?)\b",
+    re.IGNORECASE,
+)
+
+#: …and what a source may be DOING. Round 3 took only the strong reporting
+#: verbs and so read "three monitors are red at 14:02" and "the incident
+#: channel has 40 messages about it" as naming nothing, which is ordinary
+#: English for naming something (review, round 3). Eventive and possessive
+#: forms are here too; the bare copula is not — "the report is about a genuine
+#: customer impact" is the sentence this whole module exists to catch, and
+#: `is` alone cannot be what separates them. A copular claim reaches the
+#: exemption through its referent or its count instead.
 _CORROBORATION = re.compile(
     r"\b(?:confirm\w*|corroborat\w*|verif\w+|validat\w+|attest\w*|witness\w*|observ\w+|"
-    r"reported|reports|shows?|showed|appears?|appeared|opened|raised|paged|phoned|"
-    r"called|said|says|wrote|logged|recorded|matched|matches|traced|reproduced)\b",
+    # `reported`, never the bare `report` or `reports`: "the report is about a
+    # genuine customer impact" is a noun phrase, and reading it as a verb
+    # exempted the sentence that names nothing (round 4, caught by its own test).
+    r"reported|shows?|showed|showing|appears?|appeared|opened|raised|fired|"
+    r"escalated|emailed|messaged|paged|phoned|called|replied|posted|said|says|wrote|"
+    r"logged|recorded|matched|matches|traced|reproduced|has|have|had)\b",
     re.IGNORECASE,
 )
 
@@ -89,13 +124,25 @@ def _reach(chunk: str, start: int) -> str:
     return window[: ends[1]] if len(ends) > 1 else window
 
 
+def _near(spans: list[int], others: list[int], reach: int = PAIR_REACH) -> bool:
+    """True when something in one list sits within ``reach`` of the other."""
+    return any(abs(one - other) <= reach for one in spans for other in others)
+
+
 def names_a_reason(chunk: str, start: int) -> bool:
-    """True when what follows ``start`` names evidence that outranks a marker."""
+    """True when what follows ``start`` names evidence that outranks a marker.
+
+    Either the source is doing something, or it has been pointed at: a handle,
+    a time, a link, an id, or a count of them. A referent or a verb with no
+    source is not a reason, and neither is a source with neither.
+    """
     window = _reach(chunk, start)
     sources = [match.start() for match in _SOURCE.finditer(window)]
     if not sources:
         return False
-    return any(
-        any(abs(source - act.start()) <= PAIR_REACH for source in sources)
-        for act in _CORROBORATION.finditer(window)
+    referents = [match.start() for match in _REFERENT.finditer(window)]
+    return (
+        _near(sources, [match.start() for match in _CORROBORATION.finditer(window)])
+        or _near(sources, referents)
+        or _near(sources, [match.start() for match in _QUANTITY.finditer(window)], 40)
     )

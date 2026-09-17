@@ -1366,3 +1366,173 @@ class TestTheInfoLineNamesEveryDeliverableItRead:
         assert "results/results.md" in lines[0]
         assert "results/second.md" in lines[0]
         assert rows == []
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Round 4 — precision, in both directions
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestAVerdictTokenInsideACompoundIsNotAVerdict:
+    """`## High-level findings` was a *high* scope: the token matched inside a
+    hyphenated adjective and everything around it was filler. A verdict word
+    welded to another word is part of that word."""
+
+    def _per_item(self, report: str) -> dict[str, set[str]]:
+        from robothor.engine.verdict_sections import blocks
+        from robothor.engine.verdict_shapes import item_ids, verdicts_in
+
+        per_item: dict[str, set[str]] = {}
+        for block in blocks(report):
+            found = verdicts_in(block)
+            for item in item_ids(block):
+                per_item.setdefault(item, set()).update(found)
+        return per_item
+
+    def test_a_high_level_section_does_not_file_its_items_as_high(self) -> None:
+        report = (
+            "# Weekly report\n\n"
+            "## High-level findings\n\n"
+            "- msg_2001 is a cosmetic typo in the footer.\n\n"
+            "## Low\n\n"
+            "### 1. msg_2001 — cosmetic typo\n"
+            "- Routed to @owner-a.\n"
+        )
+        assert self._per_item(report)["msg_2001"] == {"low"}
+        assert hedged_items(report) == []
+
+    @pytest.mark.parametrize(
+        "heading",
+        [
+            "## High-level findings",
+            "## High-level items",
+            "## High-level",
+            "## High-level overview",
+        ],
+        ids=["findings", "items", "bare", "overview"],
+    )
+    def test_no_hyphenated_compound_is_a_scope(self, heading: str) -> None:
+        report = f"# Weekly report\n\n{heading}\n\n### 1. A note\n- **Message ID:** msg_2002\n"
+        assert self._per_item(report)["msg_2002"] == set()
+
+    def test_the_plain_word_is_still_a_verdict(self) -> None:
+        """The guard on the same change: `## High` is a section, and a bolded
+        `Severity: High` is still a verdict."""
+        report = "# Weekly report\n\n## High\n\n### 1. A note\n- **Message ID:** msg_2003\n"
+        assert self._per_item(report)["msg_2003"] == {"high"}
+        bolded = "# Weekly report\n\n### 1. A note\n- **Severity: High** msg_2004 is down.\n"
+        assert self._per_item(bolded)["msg_2004"] == {"high"}
+
+
+class TestAHeadingThatNamesTwoVerdictsIsNoScope:
+    """A scope assigns ONE verdict. `## Critical / High priority items` assigned
+    two, and every item under it came back "appears under 2 verdicts" — the
+    finding the section rule exists not to invent."""
+
+    def _per_item(self, report: str) -> dict[str, set[str]]:
+        from robothor.engine.verdict_sections import blocks
+        from robothor.engine.verdict_shapes import item_ids, verdicts_in
+
+        per_item: dict[str, set[str]] = {}
+        for block in blocks(report):
+            found = verdicts_in(block)
+            for item in item_ids(block):
+                per_item.setdefault(item, set()).update(found)
+        return per_item
+
+    @pytest.mark.parametrize(
+        "heading",
+        ["## Critical / High priority items", "## Critical and High"],
+        ids=["slash", "and"],
+    )
+    def test_a_two_verdict_heading_assigns_nothing(self, heading: str) -> None:
+        report = f"# Triage\n\n{heading}\n\n### 1. Outage\n- **Message ID:** msg_2005\n"
+        assert self._per_item(report)["msg_2005"] == set()
+        assert hedged_items(report) == []
+
+
+class TestTheReasonVocabularyReachesOrdinaryEnglish:
+    """Round 3 required a corroboration verb from a short list, which read
+    "three monitors are red at 14:02" as naming nothing. A source with a
+    concrete referent — a time, a handle, a count — is evidence however the
+    sentence conjugates it; a source with nothing attached still is not."""
+
+    SECTION = (
+        "# Triage\n\n## Critical\n\n### 1. Platform outage\n"
+        "- **Message ID:** msg_2209\n"
+        "- **Note:** {note}\n"
+    )
+
+    def _findings(self, note: str) -> list[tuple[str, str]]:
+        return hedged_items(self.SECTION.format(note=note), RESULTS_WITH_MARKER)
+
+    @pytest.mark.parametrize(
+        "note",
+        [
+            "The metadata was disregarded since the customer emailed to say their "
+            "checkout was down.",
+            "The metadata was disregarded because three monitors are red at 14:02.",
+            "The metadata was disregarded because the alert fired on the production "
+            "dashboard at 14:02.",
+            "The metadata was disregarded because the on-call engineer escalated it at 14:02.",
+            "The metadata was disregarded because the incident channel has 40 messages about it.",
+            "The metadata was disregarded because the sender is a paying customer "
+            "and the outage is in the logs at 14:02.",
+        ],
+        ids=["emailed", "monitors-red", "alert-fired", "engineer-escalated", "channel-40", "logs"],
+    )
+    def test_an_ordinary_sentence_that_names_evidence_is_silent(self, note: str) -> None:
+        assert self._findings(note) == []
+
+    @pytest.mark.parametrize(
+        "note",
+        [
+            "The metadata was disregarded because reasons.",
+            "The metadata was disregarded per policy.",
+            "The metadata was disregarded because the report is about a genuine customer impact.",
+            "The metadata was disregarded since the system requires escalation.",
+            "The metadata was disregarded given users matter more than metadata.",
+            "The metadata was disregarded because the team decided to escalate anyway.",
+            'The metadata was disregarded because it "seemed wrong".',
+            "The metadata was disregarded for this message.",
+            "The metadata was disregarded and the item was routed to @owner-a.",
+        ],
+        ids=[
+            "because-reasons",
+            "per-policy",
+            "customer-impact",
+            "the-system",
+            "users-matter",
+            "the-team",
+            "seemed-wrong",
+            "for-this-message",
+            "routed-to",
+        ],
+    )
+    def test_a_sentence_that_names_nothing_still_fires(self, note: str) -> None:
+        assert [item for item, _why in self._findings(note)] == ["msg_2209"]
+
+    def test_the_measured_caveat_still_fires(self) -> None:
+        assert [item for item, _why in hedged_items(MEASURED_REPORT, MEASURED_RESULTS)] == [
+            "msg_2209"
+        ]
+
+
+class TestTheClassifierEnforcesDisclosureNotSoundness:
+    def test_evidence_cited_against_the_override_exempts_too(self) -> None:
+        """Stated outright in `override_reasons`, and true by design: this
+        classifier asks whether a reason was DISCLOSED, never whether it is a
+        good one. A reader can weigh a named reason; nobody can weigh a
+        sentence that names none."""
+        from robothor.engine import override_reasons
+
+        assert "disclosure" in override_reasons.__doc__.lower()
+        note = (
+            "- **Note:** The metadata was disregarded, although the monitoring "
+            "dashboard showed the service healthy at 14:02."
+        )
+        report = (
+            "# Triage\n\n## Critical\n\n### 1. Platform outage\n"
+            f"- **Message ID:** msg_2209\n{note}\n"
+        )
+        assert hedged_items(report, RESULTS_WITH_MARKER) == []

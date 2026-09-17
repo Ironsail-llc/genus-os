@@ -211,6 +211,8 @@ that IS a label, and the rule is deliberately narrow in both directions
 | Rule | Why |
 |---|---|
 | The verdict must BE the heading — the text with the verdict phrase removed is nothing but filler (a count, an enumerator, or a word like *Issues*, *Items*, *Priority*) | `## Critical`, `## Critical Issues (3)` and `## No action required` are sections. `# Critical Incident Review — Week 38` and `# P1 escalation log` are titles: inheriting from those filed every item in the report under that severity as well as its own, so an item named again under `## Next steps` came back "under two verdicts" — a contradiction the report never made |
+| The heading must name **exactly one** verdict | `## Critical / High priority items` is an index of two categories, not a decision about the items beneath it, and reading it as a scope filed every one of them under both |
+| A verdict word welded into a **compound** is not a verdict: the vocabulary is fenced against hyphens rather than by `\b` | A hyphen is a word boundary, so `## High-level findings` was a *high* section and filed every item under it a second time. `non-critical`, `lower-priority` and `high-touch` are the same mistake waiting |
 | Only the **nearest** such heading | A `## Low` section inside a `# Critical …` report resolves to *low*, not to both |
 | Not at all when the block states its **own** verdict | `### 3. … — upgraded to Critical` under `## High` is one decision, and reading it as two would invent a disagreement |
 | The section reaches the block as the **label**, never as the heading's own words | Prepending the heading verbatim would feed its every word — a marker field, an identifier, an override phrase — to every other detector for every item in the section |
@@ -262,7 +264,8 @@ claim and never for the reason. What counts now (`override_reasons`):
 | Rule | Why |
 |---|---|
 | A **source** a reader could go and look at: a message, ticket, email, thread, channel, call, log, dashboard, alert, monitor, feed, screenshot, customer, sender, an `@handle` or address, a time (`14:02`), a date, a link, an item id | *"disregarded for this message"* and *"disregarded in this report"* are the same sentence one preposition later, so a noun on its own cannot be the reason |
-| …**doing something**, within 90 characters: confirmed, corroborated, verified, showed, appeared, opened, raised, paged, phoned, called, said, logged, matched | *"because the report is about a genuine customer impact"*, *"since the system requires escalation"* and *"because the team decided to escalate anyway"* name nothing at all. `report`, `record`, `system`, `team` and `user` are deliberately not sources: they are the writer's own side of the page |
+| …either **doing something**, within 90 characters — confirmed, corroborated, verified, showed, appeared, fired, escalated, emailed, opened, raised, paged, phoned, called, replied, posted, said, logged, matched, *has* / *have* | *"because the report is about a genuine customer impact"*, *"since the system requires escalation"* and *"because the team decided to escalate anyway"* name nothing at all. `report`, `record`, `system`, `team` and `user` are deliberately not sources: they are the writer's own side of the page. The bare copula is not a verb here either, for the same reason — `is` alone cannot be what separates those sentences from a real one |
+| …or **pointed at**: a concrete referent within 90 characters (a handle, an address, a time, a date, a link, an item id) or a count within 40 (*40 messages*, *three monitors*) | *"because three monitors are red at 14:02"* and *"because the incident channel has 40 messages about it"* name their evidence as plainly as *"three monitors confirmed it"*, and requiring a reporting verb read all of them as naming nothing |
 | A quotation counts only through its **attribution** | *because it "seemed wrong"* quotes the writer |
 | The reason comes **after** the override phrase, in that sentence or the next one, stopping at a blank line | A reason found earlier is usually the marker being described — *"contained trailing test-harness metadata … was disregarded"* would otherwise talk its way out of the finding it is. Forward, it has to reach the next sentence or bullet, because stating the override and then explaining it is the ordinary way to write one |
 
@@ -270,6 +273,15 @@ claim and never for the reason. What counts now (`override_reasons`):
 and *"the metadata was disregarded — the on-call engineer paged at 14:02 and
 three monitors were red"* are both silent. *"The metadata was disregarded for
 routing. Flagged for your awareness."* is a finding.
+
+What this check enforces is **disclosure, not soundness and not polarity**. It
+asks whether a reason was named, never whether it is a good one, and it cannot
+tell *"the dashboard showed the service down"* from *"the dashboard showed the
+service healthy"* — evidence cited against the override exempts as readily as
+evidence for it. That is deliberate: judging the argument would put the control
+in the business of second-guessing a decision the operator can now see, while
+judging its absence keeps it to the one thing a detector can be right about,
+which is that the reader was left with nothing to weigh at all.
 
 #### The rule the model is given
 

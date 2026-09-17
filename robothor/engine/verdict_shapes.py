@@ -61,11 +61,21 @@ _ITEM_ID = re.compile(
 #: The verdict vocabulary. A closed list, because an open one would read a
 #: paragraph's adjectives as verdicts. Each entry is a label a triage
 #: deliverable puts at the head of a section.
+#:
+#: Every alternative is fenced by ``(?<![-\w])`` / ``(?![-\w])`` rather than by
+#: ``\b``, because a hyphen is a word boundary and a compound is one word.
+#: ``## High-level findings`` read as a *high* section and filed every item
+#: under it a second time (review, round 3); ``non-critical``, ``lower-priority``
+#: and ``high-touch`` are the same mistake waiting.
 VERDICTS: dict[str, re.Pattern[str]] = {
-    "critical": re.compile(r"\b(?:critical|p0|sev\s*0|sev\s*1|highest)\b", re.IGNORECASE),
-    "high": re.compile(r"\b(?:high(?:\s+priority)?|p1|urgent)\b", re.IGNORECASE),
-    "medium": re.compile(r"\b(?:medium(?:\s+priority)?|moderate|p2)\b", re.IGNORECASE),
-    "low": re.compile(r"\b(?:low(?:\s+priority)?|p3|p4|minor)\b", re.IGNORECASE),
+    "critical": re.compile(
+        r"(?<![-\w])(?:critical|p0|sev\s*0|sev\s*1|highest)(?![-\w])", re.IGNORECASE
+    ),
+    "high": re.compile(r"(?<![-\w])(?:high(?:\s+priority)?|p1|urgent)(?![-\w])", re.IGNORECASE),
+    "medium": re.compile(
+        r"(?<![-\w])(?:medium(?:\s+priority)?|moderate|p2)(?![-\w])", re.IGNORECASE
+    ),
+    "low": re.compile(r"(?<![-\w])(?:low(?:\s+priority)?|p3|p4|minor)(?![-\w])", re.IGNORECASE),
     # Every alternative here is a PHRASE, not a word. The bare word `test`
     # used to be one, so `**Priority: High** — this is a test-infrastructure
     # item` read as two verdicts, High and no-action (hostile review I7). A
@@ -73,9 +83,9 @@ VERDICTS: dict[str, re.Pattern[str]] = {
     # vocabulary that reports noise into the one table this flag's promotion
     # depends on.
     "no-action": re.compile(
-        r"\b(?:no\s+action(?:\s+required)?|not\s+escalated|false\s+positive|"
+        r"(?<![-\w])(?:no\s+action(?:\s+required)?|not\s+escalated|false\s+positive|"
         r"routing\s+test|test\s+message|automated\s+test|"
-        r"dismissed|duplicate|drill)\b",
+        r"dismissed|duplicate|drill)(?![-\w])",
         re.IGNORECASE,
     ),
 }
