@@ -151,7 +151,9 @@ CAPS = {
     # other is a matcher whose whole safety property ("equality, never a
     # prefix") has to be readable in one screen. A cap set at the post-
     # extraction size is the only one that makes the extraction a one-way door.
-    "robothor/engine/vision_batch.py": 1276,
+    # 1276 -> 1275: dropping the sample top-up loop (review I3). The cap
+    # follows the file DOWN, or the next change banks a line it did not earn.
+    "robothor/engine/vision_batch.py": 1275,
     # 248 -> 351: the reply parser. Review finding I1 measured three ordinary
     # model formatting habits — both markers on one line, a JSON object, a
     # parenthetical gloss — each turning a whole batch into `error` rows at

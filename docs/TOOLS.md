@@ -311,14 +311,16 @@ its first rows, and the **whole** table goes to
  "note": "200 rows did not fit … work over that file …"}
 ```
 
-**`sample` is the spot-check, free.** Up to five rows chosen to span the
-**distinct** answers rather than to be the first five — the first five rows of
-a folder being sorted are five looks at the same label — so one glance tells
-you whether the batch decided sensibly, without a `read_file` round. It appears
-only when the table spills (a small batch already has every row inline) and it
-competes for the same characters as everything else: it yields a row at a time
-rather than leave you with a preview and no `results` at all, and the `note`
-mentions it only when there is one.
+**`sample` is the spot-check, free.** **One row per distinct answer**, up to
+five — never two rows carrying the same label, and never simply the first five,
+because the first five rows of a folder being sorted are five looks at the same
+label. So a two-label sort samples two rows, and one glance tells you whether
+the batch decided sensibly without a `read_file` round. It appears only when the
+table spills (a small batch already has every row inline) and it competes for
+the same characters as everything else: it yields a row at a time rather than
+leave you with a preview and no `results` at all, and the `note` mentions it
+only when there is one. Padding it out to five with duplicates would buy a
+fourth look at one decision by taking away rows you actually read.
 
 Work over that file with `exec` (jq, python) rather than reading it whole —
 that keeps the win. It matters for the record as well as the context: the

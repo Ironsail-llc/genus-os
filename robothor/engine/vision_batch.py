@@ -982,7 +982,7 @@ def _sample_row(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _pick_sample(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
-    """Up to *limit* answered rows spanning the DISTINCT answers.
+    """One row per DISTINCT answer, up to *limit*. Never a duplicate.
 
     Not the first N. An agent sorting a folder gets its rows in the order it
     passed the paths, which for a folder listing is alphabetical, which for a
@@ -990,6 +990,13 @@ def _pick_sample(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]
     are five looks at the same decision. Spanning the distinct answers is what
     makes one glance worth the characters it costs, and it is the cheap version
     of the competing harness's "let me verify a few more images to confirm".
+
+    It stops at the distinct answers rather than topping up to *limit*. The
+    padding was measured: a 60-row two-label sort spent 3 of its 5 sample rows
+    on copies of a label already there and returned 6 rows under ``results``
+    (now 9). Those characters come out of the ``results`` allowance, because
+    the sample is measured in the same ``_fit`` probe — so the padding bought a
+    fourth look at one decision by taking away rows the agent actually reads.
     """
     by_answer: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -999,15 +1006,7 @@ def _pick_sample(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]
         by_answer.setdefault(label[:MAX_CHOICE_CHARS], row)
         if len(by_answer) >= limit:
             break
-    picked = list(by_answer.values())
-    taken = {id(row) for row in picked}
-    for row in rows:
-        if len(picked) >= limit:
-            break
-        if id(row) not in taken and _is_answered(row):
-            picked.append(row)
-            taken.add(id(row))
-    return [_sample_row(row) for row in picked]
+    return [_sample_row(row) for row in by_answer.values()]
 
 
 def _fit(out: dict[str, Any], rows: list[dict[str, Any]], budget: int) -> int:

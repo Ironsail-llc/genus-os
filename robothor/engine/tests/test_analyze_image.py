@@ -1571,3 +1571,81 @@ class TestTheParserMeetsTheModelWhereItWrites:
             "restating the contract a model has already ignored is the least likely "
             "thing to change its mind; showing the exact bytes is the most"
         )
+
+
+class TestTheSampleNeverPadsItself:
+    """Hostile review I3. After collecting one row per distinct answer the
+    sample topped itself up to five with ANY answered row — i.e. more copies of
+    a label already in it. Measured: a 60-row two-label sort spent 3 of its 5
+    sample rows on duplicates and returned 6 rows under `results`; a 200-row
+    one-label batch spent 4 and returned 4.
+
+    Those duplicates come straight out of the `results` allowance, because the
+    sample is measured inside the same `_fit` probe. `_spill`'s own docstring
+    says that is the wrong trade — "a spot-check is worth more than the fourth
+    copy of one label, and nothing at all under `results` is worth less than
+    either" — and both it and `docs/TOOLS.md` tell the reader the sample SPANS
+    the distinct answers, which after the top-up it did not.
+    """
+
+    @staticmethod
+    def _labelled(monkeypatch, labels):
+        """A backend that answers `labels[i]` for the i-th image, in order."""
+        served: list[str] = []
+
+        async def by_position(data: bytes, prompt: str = "", **kwargs: Any) -> str:
+            served.append("x")
+            label = labels[(len(served) - 1) % len(labels)]
+            return f"ANSWER: {label}\nWHY: what the pixels show in this one"
+
+        monkeypatch.setattr(vision_batch, "describe_image_bytes", by_position)
+        monkeypatch.setattr(
+            vision_batch,
+            "resolve_backend",
+            lambda: (vision_batch.Backend("local", "test-vlm"), ""),
+        )
+
+    async def _spilled(self, tmp_path, monkeypatch, labels, count=60):
+        """At the DEFAULT budget, which is where the review measured it and
+        the only number an operator actually runs.
+
+        Always offers at least two choices — one is refused at the boundary,
+        and a batch that USES only one of the labels on offer is the case that
+        matters here anyway.
+        """
+        self._labelled(monkeypatch, labels)
+        offered = sorted(set(labels) | {"a-label-the-backend-never-picks"})
+        return await _analyze(
+            tmp_path, _images(tmp_path, count), choices=offered, max_concurrency=1
+        )
+
+    @pytest.mark.parametrize("labels", [["chart"], ["chart", "photo"], ["a", "b", "c"]])
+    async def test_the_sample_is_exactly_the_distinct_answers(self, tmp_path, monkeypatch, labels):
+        out = await self._spilled(tmp_path, monkeypatch, labels)
+        seen = [row["choice"] for row in out["sample"]]
+        assert sorted(seen) == sorted(set(labels)), "one row per answer, and no more"
+        assert len(seen) == len(set(seen)), "a duplicate label is a wasted spot-check"
+
+    async def test_more_answers_than_the_cap_are_still_capped(self, tmp_path, monkeypatch):
+        labels = [f"label-{n}" for n in range(8)]
+        out = await self._spilled(tmp_path, monkeypatch, labels)
+        assert len(out["sample"]) == vision_batch.MAX_SAMPLE_ROWS
+        seen = [row["choice"] for row in out["sample"]]
+        assert len(seen) == len(set(seen))
+
+    async def test_dropping_the_padding_hands_rows_back_to_results(self, tmp_path, monkeypatch):
+        """The whole point: the characters the duplicates were spending are
+        `results` rows, which is what the agent actually reads."""
+        out = await self._spilled(tmp_path, monkeypatch, ["chart", "photo"])
+        assert len(out["sample"]) == 2
+        assert out["results_shown"] >= 8, (
+            f"only {out['results_shown']} rows inline — the sample is still eating them"
+        )
+
+    async def test_a_free_text_batch_samples_distinct_answers_too(self, tmp_path, monkeypatch):
+        """Without `choices` every answer tends to differ, so the cap is what
+        bounds it — but two identical answers must still not both appear."""
+        self._labelled(monkeypatch, ["a cat", "a cat", "a dog"])
+        out = await _analyze(tmp_path, _images(tmp_path, 60), max_concurrency=1)
+        seen = [row["answer"] for row in out["sample"]]
+        assert len(seen) == len(set(seen)) == 2
