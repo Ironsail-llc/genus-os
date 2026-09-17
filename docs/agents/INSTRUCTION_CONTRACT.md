@@ -163,6 +163,29 @@ loaded on demand — the model is shown a small core and reaches the rest with
 "you have these 40 tools" into an instruction file contradicts what the run
 actually hands it. See [Tools](../TOOLS.md).
 
+## Observations
+
+Two sentences an instruction file should carry, and that the engine now backs
+with its own controls:
+
+**A tool result that says it was truncated is not a complete observation.**
+`exec` cuts at ~4,000 characters and writes the whole stream to the path in
+`stdout_path`; read the rest before you rely on it. An answer written over a
+decapitated listing looks exactly like a correct one, which is why this is
+worth stating rather than assuming.
+
+**After you change something, read the source again before you write your
+answer.** Sending a message, creating a record or POSTing to an endpoint can
+make the other side produce something new, and a response you did not inspect
+may have carried it. What you knew about that source before you acted is out of
+date.
+
+Where a task asks for a decision per item — triage, routing, severity — the
+artefact should carry **one verdict per item**, with the contradicting evidence
+folded into that verdict as its reason. "Critical, but please verify whether
+this is a test" is an escalation with a footnote, not a decision, and the reader
+you handed it to is the person the artefact was written for.
+
 ## Optional Sections
 
 - **Rules** — Guardrails and constraints (e.g., "never send emails without REVIEW")

@@ -863,6 +863,19 @@ class EngineSettings(SettingsGroup):
         restart_required=False,
         since="unreleased",
     )
+    exec_spill_max_bytes: int = declare(
+        8_388_608,
+        "ROBOTHOR_EXEC_SPILL_MAX_BYTES",
+        "Largest `exec` spill file, in bytes (default 8 MiB). A command whose "
+        "output is bigger has its spill cut at this size with a marker saying "
+        "so, and the result says how much the file holds. Before the spill "
+        "existed nothing from a command reached the disk at all, so a single "
+        "`exec` under the 900-second ceiling could otherwise fill the "
+        "workspace. A spill is also refused outright when writing it would "
+        "leave the filesystem with less than 64 MiB free.",
+        restart_required=False,
+        since="unreleased",
+    )
     max_spawn_batch: int = declare(
         10,
         "ROBOTHOR_MAX_SPAWN_BATCH",
@@ -1853,6 +1866,36 @@ class FlagSettings(SettingsGroup):
         "WARNING, 'enforce' adds pace notes at 50/80/95%, the repeat-call "
         "guard, tool timeouts bounded by the run's remaining budget, and a "
         "progress check-in every 25 iterations.",
+        governed=True,
+    )
+    truncation_ledger_mode: str = declare(
+        "observe",
+        "ROBOTHOR_TRUNCATION_LEDGER_MODE",
+        "Ledger of tool results the run saw only part of: 'off' keeps none, "
+        "'observe' (default) keeps it, logs the unresolved entries at WARNING "
+        "and writes a guardrail row at the end, 'enforce' also quotes each "
+        "unresolved entry to the model once and holds a finishing run for one "
+        "more ask before it completes saying what it never read.",
+        governed=True,
+    )
+    act_observe_mode: str = declare(
+        "observe",
+        "ROBOTHOR_ACT_OBSERVE_MODE",
+        "The act-then-observe rule: a call that changed something at the other "
+        "end invalidates what the run knew about that source. 'observe' "
+        "(default) logs what would have been said, 'enforce' tells the agent "
+        "once at a deliverable check-in, 'off' says nothing. Blocks nothing on "
+        "any rung.",
+        governed=True,
+    )
+    verdict_commitment_mode: str = declare(
+        "observe",
+        "ROBOTHOR_VERDICT_COMMITMENT_MODE",
+        "One verdict per item where the task asked the agent to classify, "
+        "triage, route or prioritise: 'observe' (default) logs an item filed "
+        "under two verdicts or handed back to the reader, 'enforce' re-asks "
+        "once, 'off' checks nothing. The only ladder here that touches model "
+        "judgement, so it stays on observe until it has been probed.",
         governed=True,
     )
     judge_enabled: bool = declare(

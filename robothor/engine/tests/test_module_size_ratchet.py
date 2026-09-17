@@ -38,6 +38,12 @@ CAPS = {
     # arrived with were hoisted to the module header (run_budget was already
     # imported there, so they bought nothing) — which paid back four of the
     # five lines this would otherwise have cost.
+    # 2545 -> 2539: a concurrent session lifted injection screening and journal
+    # resume out of execute(); the deliverable guard's call site added the rest.
+    # Its 25 lines of logic went to loop_guards.py, so what remains here is a
+    # comment, a lazy import and a two-line branch. (These four lines sat above
+    # telegram.py's entry until 2026-09-17, where they read as a chain ending at
+    # 2545 against a cap of 2000 — they were always about this file.)
     # 2515 -> 2522: Stage 5 propagates the CRM task id onto the run at INSERT
     # time, so sub-agent runs stop landing with task_id NULL (0 of 44,611 rows
     # had one). Seven lines: a four-line note and a two-line branch inside
@@ -66,12 +72,10 @@ CAPS = {
     # what paid for teaching the resolver about self-timed tools, instead of
     # raising this number for it.
     "robothor/engine/runner.py": 2224,
-    # 2545: a concurrent session ratcheted this to 2539 by lifting injection
-    # screening and journal resume out of execute(); the deliverable guard's call
-    # site adds the rest. Its 25 lines of logic went to loop_guards.py, so what
-    # remains here is a comment, a lazy import and a two-line branch.
-    # Lowered 3850 -> 3150 after the plan-mode cluster left (phase 3).
-    # Lowered again after phase 3b (_setup_handlers closures -> methods).
+    # 3850 -> 3150 after the plan-mode cluster left (phase 3), then again after
+    # phase 3b (_setup_handlers closures -> methods), and 3150 -> 2000 as the
+    # handler and attachment clusters left for telegram_handlers.py and
+    # telegram_attachments.py. The cap follows the file down.
     "robothor/engine/telegram.py": 2000,
     # 1300 -> 1293: the `ask:` callback body and the `handle_text` ask
     # interception moved to channels/telegram_ask.py, beside the binding rules
@@ -94,7 +98,13 @@ CAPS = {
     # lines here; it paid for itself by taking the ~100 that were already there.
     # The ratchet asked for an extraction rather than a bigger number, by this
     # file's own header, and got one.
-    "robothor/engine/run_finalizer.py": 992,  # -69: dead copy of the tool-timeout tables
+    # 992 -> 1001: one more irreducible call site, the `chat.py` case. What a
+    # run never finished READING is a different question from whether its
+    # artefact is right — a run can write exactly the named file in exactly the
+    # named shape over a strictly smaller set of facts than the task gave it —
+    # and the whole ladder for it lives in observation_ledger.py. Nine lines is
+    # the comment, the import and the call; there is nothing here to extract.
+    "robothor/engine/run_finalizer.py": 1001,
     # The deliverable-contract cluster, capped at the size it was split to.
     # Hostile review 2026-09-16 (I6): `deliverable_contract.py` had reached
     # 1,354 lines and none of the three new modules was listed here, so "the
@@ -103,7 +113,14 @@ CAPS = {
     # and checking share nothing but the item definitions — so it was cut
     # there, and every piece is now something the next change has to argue
     # with.
-    "robothor/engine/deliverable_contract.py": 469,
+    # 469 -> 486: a contract stated only inside a loaded SKILL was invisible
+    # here, because this accessor reads the prompt. Measured — one benchmark
+    # task's output path is in its skill body, so prompt-only extraction
+    # returned an empty contract for exactly the run that had been handed one.
+    # The remembering went to skill_contract.py; what is here is the accessor
+    # split into `_prompt_text` plus a two-line join, so all three consumers
+    # keep reading one source and cannot disagree about what the task asked.
+    "robothor/engine/deliverable_contract.py": 486,
     # 552 -> 594: CodeQL's five `py/polynomial-redos` findings. Every added
     # line is the reasoning for a regex, not another extractor — the rule that
     # keeps this module linear on hostile input is worth more written down
@@ -118,7 +135,15 @@ CAPS = {
     "robothor/engine/deliverable_check.py": 549,
     "robothor/engine/deliverable_items.py": 256,
     "robothor/engine/deliverable_verdict.py": 249,
-    "robothor/engine/loop_guards.py": 325,
+    # 325 -> 368: the third and fourth questions asked of a run that wants to
+    # stop — did it finish reading what it was shown, and where the task asked
+    # for a decision per item, did its artefact contain one — plus the fifth,
+    # the act->observe nudge, which has no other delivery path on a run short
+    # enough to cross no check-in. Every body is in its own module
+    # (observation_notes.py, verdict_commitment.py); what this file gains is the
+    # chaining and its `contextlib.suppress`, which is the job this file exists
+    # for. A guard that raises here takes the runner's main loop with it.
+    "robothor/engine/loop_guards.py": 368,
     # 937 (2026-09-13): every module the delivery path runs through was capped
     # except the one that decides delivery. It was uncapped when the
     # thin-announce fallback landed, so nothing but review stood between that
@@ -147,13 +172,19 @@ CAPS = {
     # gate a turn's call does, which is right and which is also how a loop
     # could queue two hundred prompts at the operator. The check belongs where
     # the reach is decided, not in the socket.
-    "robothor/engine/tool_proxy.py": 314,
+    # 314 -> 322: the per-call response ledger. A proxied call's response is
+    # EVIDENCE, not a receipt — the measured run printed each send's `status`
+    # and threw away the three follow-up messages that rode back in those same
+    # responses. Eight lines, and the evidence extraction itself is in
+    # act_observe.py rather than here.
+    "robothor/engine/tool_proxy.py": 322,
     # 209 -> 283: the peer-session check. Not a feature, a control: the token
     # alone could not tell one run's snippet from another's, and a probe drove
     # a second run's proxy with a stolen token. Correcting a cap set hours
     # earlier in the same PR for the thing that makes the module correct is
     # not the same as bumping a long-standing one to dodge a refactor.
-    "robothor/engine/code_exec_rpc.py": 316,  # +33: aclose cancels its handlers instead of waiting them out
+    # 283 -> 316: aclose cancels its handlers instead of waiting them out.
+    "robothor/engine/code_exec_rpc.py": 316,
     # 523 -> 388: spawning a snippet, reading its pipes without deadlocking
     # it, detecting its exit and killing its descendants is one subject and
     # the handler's admission/staging/shaping is another. The split is what
@@ -174,8 +205,82 @@ CAPS = {
     # sandbox_runtime/boot_template.py, beside the client it loads. Ninety
     # lines of code that runs somewhere else was the shape `genus_tools.py`
     # was deliberately not written in; the reaper it grew made that obvious.
-    "robothor/engine/tools/handlers/code_exec.py": 281,
+    # 281 -> 297: the count of proxied responses this snippet never printed.
+    # The computation is in act_observe.py; this is the bracket that says which
+    # of the turn's proxied calls belong to THIS snippet, plus the call.
+    "robothor/engine/tools/handlers/code_exec.py": 297,
     "robothor/engine/code_exec_result.py": 103,
+    # The observation cluster (2026-09-16), each piece capped at the size it was
+    # written to and each one a separate question, for the reason the code-
+    # sandbox cluster above is four modules: what the model SEES of a command's
+    # output and where the rest goes (`exec_spill`); how a call is CLASSIFIED as
+    # a read or a change (`act_observe`, a table of names and two regexes, no
+    # runtime behind it); what one RUN has not finished reading
+    # (`observation_ledger`); and whether a classification artefact actually
+    # classified (`verdict_commitment`, the only one touching judgement, which
+    # is why it is reachable and testable without a session). One
+    # `observations.py` holding all four would be untestable in the place it
+    # matters most — and `exec_spill` in particular has to be importable by the
+    # repeat guard and the no-progress detector, neither of which may drag a
+    # ladder or a session in with it.
+    # 275 -> 427 across one review round, in three steps that are one subject:
+    # what this module PROMISES about the file it writes.
+    #   * the read-back check resolves a real path instead of matching a
+    #     substring — appending `# .robothor/exec/a__b` to a command used to
+    #     switch off the repeat-call guard AND the no-progress detector for the
+    #     rest of the run (I3), and qualifying now takes a token outside a
+    #     comment, the filename this module writes, the right directory, and a
+    #     file that exists;
+    #   * a size ceiling and a free-space check — a 50 MB command wrote a
+    #     50,000,000-byte file under the workspace (I6), and before this branch
+    #     nothing from a command reached the disk at all, so the ceiling is new
+    #     surface this change is responsible for;
+    #   * `<stream>_shown_chars`, so the ledger and the marker cannot report two
+    #     different numbers for one cut (I8).
+    "robothor/engine/exec_spill.py": 427,
+    # 232 -> 347: classification by tool KIND and TARGET. The first cut asked
+    # only "does this call name something with a slash in it", so every
+    # `write_file` to an absolute path — which is every WildClaw deliverable —
+    # read as a remote state change and the note fired on essentially every run
+    # (hostile review I1). The added lines are four tables and the reasoning for
+    # each, including the split between a strong HTTP write VERB and the weak
+    # `--data` flag: requiring a literal host made `requests.post(url, json=m)`
+    # classify as `neither`, blind to the shape the control exists for. A
+    # target-only rule would miss every CRM write, which names no host at all.
+    "robothor/engine/act_observe.py": 347,
+    # 469 -> 505 -> 285 -> 385 across one review round. The middle number is
+    # the one that matters: at 505 the DELIVERY half left for
+    # observation_notes.py, because "what happened" and "what the run is told
+    # about it, and when" are different questions and only the second is allowed
+    # to change a run — which is exactly where both of that round's substantive
+    # findings landed. The ratchet asked for an extraction rather than a bigger
+    # number when the act->observe stop path needed somewhere to live, and got
+    # one. What grew back to 385 is resolution that answers the question it
+    # claims to: asked on every call rather than only inside the READ branch (a
+    # `cat` of the spill classifies as `neither`), the read-back a resolved
+    # path, a re-run compared on the TARGET with the query stripped, a call that
+    # observed nothing no longer counting, entries keyed by `(step, stream)`,
+    # and the run able to say which workspaces its spills went to. I4, I5, M2.
+    "robothor/engine/observation_ledger.py": 385,
+    # The delivery half, capped at what it was split to plus the second hold and
+    # the stop-path nudge. `enforce`'s honest completion used to be appended
+    # after the runner had already returned, so it reached the transcript and
+    # nothing else (C1); the reasoning for why a False there is inert is written
+    # here, where the next reader will need it.
+    "robothor/engine/observation_notes.py": 334,
+    # 265 -> 322: the guardrail row this control writes at finalization on
+    # `observe` as well as `enforce`. Without it `flags/evidence.py` would
+    # report the one ladder whose promotion depends on watching the evidence as
+    # permanently inert, which is the failure this repo has recorded twice.
+    # 322 -> 370: three false positives the hostile review found, and the
+    # reasoning for each. The bare word `test` in a label read as a verdict,
+    # `per \w+` opened the gate on "as per the runbook", and a hand-back about
+    # the WORK read as a refusal to decide. This is the one control here that
+    # touches judgement; a false positive teaches an agent to stop stating its
+    # doubts, which is worse than the defect, so the vocabulary is phrases and
+    # the reasoning for each narrowing is written down rather than rediscovered.
+    "robothor/engine/verdict_commitment.py": 370,
+    "robothor/engine/skill_contract.py": 73,
     "robothor/engine/code_exec_guards.py": 116,
     # 122 -> 129: the same disclosure, said where the reaper is, because this
     # is the `finally` that `os._exit` skips and a reader here is the one who

@@ -230,6 +230,16 @@ def append_engine_note(session: Any, note: str | None, workspace: str | Path | N
             comparison = contract_checkin_note(text, workspace)
             if comparison:
                 note = f"{note}\n{comparison}"
+    with contextlib.suppress(Exception):
+        # What the run has not finished reading, and what it changed without
+        # looking again. Rides on the note that is already going out rather
+        # than becoming a fourth interruption of its own — and each entry is
+        # quoted at most once, so this cannot turn into nagging.
+        from robothor.engine.observation_notes import observation_notes
+
+        observations = observation_notes(session)
+        if observations:
+            note = f"{note}\n{observations}"
     session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": note})
 
 
@@ -260,7 +270,40 @@ def nudge_for_missing_deliverable(session: Any, workspace: str | Path | None = N
         session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": nudge})
         logger.info("Deliverable nudge: the artifact the task named is absent")
         return True
-    return reask_for_wrong_deliverable_shape(session, workspace)
+    if reask_for_wrong_deliverable_shape(session, workspace):
+        return True
+    # Third question, after "is it there" and "is it the right shape": was it
+    # written over everything the run was actually shown. A run that never read
+    # the tail of its own listing can satisfy both of the first two and still be
+    # answering about a smaller world than the one the task put in front of it.
+    # Suppressed the way `append_engine_note` above suppresses its own extras:
+    # these run inside the runner's main loop, and a pacing aid that can raise
+    # there takes the run with it (hostile review M6). A control that cannot
+    # fire is a worse outcome than a run that ends unaided, but a control that
+    # ends the run is worse than both.
+    with contextlib.suppress(Exception):
+        from robothor.engine.observation_notes import unread_observation_hold
+
+        if unread_observation_hold(session):
+            return True
+    # And the other half of the same question: did it change something at the
+    # other end and never look again. Delivered HERE rather than only at a
+    # check-in, because the check-in cadence is every 25 iterations and the run
+    # this exists for made 21 requests — the moment it tried to stop is the one
+    # moment it was certain to reach.
+    with contextlib.suppress(Exception):
+        from robothor.engine.observation_notes import unobserved_change_nudge
+
+        if unobserved_change_nudge(session):
+            return True
+    # Fourth and last: where the task asked for a decision per item, does the
+    # artefact contain one. Its own flag, because it is the only question here
+    # that is about judgement rather than about information.
+    with contextlib.suppress(Exception):
+        from robothor.engine.verdict_commitment import hold_for_hedged_verdicts
+
+        return bool(hold_for_hedged_verdicts(session, workspace))
+    return False
 
 
 def reask_for_wrong_deliverable_shape(session: Any, workspace: str | Path | None = None) -> bool:

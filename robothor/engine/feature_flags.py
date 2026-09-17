@@ -67,6 +67,14 @@ _VALID_HONESTY_SUITE_MODES = frozenset(("off", "observe", "enforce"))
 StepEfficiencyMode = Literal["off", "observe", "enforce"]
 _VALID_STEP_EFFICIENCY_MODES = frozenset(("off", "observe", "enforce"))
 
+# The three observation controls. Same three rungs, same reason as the two
+# above — none of them blocks an operator-visible action, so none has an
+# "alert" rung — and all three default to `observe`, which on this ladder means
+# "log what enforce would have done and change nothing about the run". See
+# truncation_ledger_mode(), act_observe_mode(), verdict_commitment_mode().
+ObservationMode = Literal["off", "observe", "enforce"]
+_VALID_OBSERVATION_MODES = frozenset(("off", "observe", "enforce"))
+
 # The do-not-contact opt-out has TWO rungs, not four. There is no "off": a
 # legal opt-out that can be switched off entirely is not a control. There is no
 # "alert" either — "observe" already notifies through the guardrail-event row
@@ -648,6 +656,83 @@ def step_efficiency_mode() -> StepEfficiencyMode:
     if raw in _VALID_STEP_EFFICIENCY_MODES:
         return raw  # type: ignore[return-value]
     return "observe"
+
+
+def _observation_mode(name: str) -> ObservationMode:
+    """One rung of the three observation ladders, resolved the usual way.
+
+    Shared rather than copied three times, and — the part that matters for the
+    env-read ratchet — the read inside ``_resolve_raw`` takes a VARIABLE, so
+    three new flags add no new ``os.environ`` call site.
+    """
+    if _disabled_all():
+        return "off"
+    raw = _resolve_raw(name, "observe").strip().lower()
+    if raw in _VALID_OBSERVATION_MODES:
+        return raw  # type: ignore[return-value]
+    return "observe"
+
+
+def truncation_ledger_mode() -> ObservationMode:
+    """Rollout mode for the run's ledger of unfinished observations.
+
+    A tool result that says it was cut is a known unknown. `exec_spill` keeps
+    the text; this decides what happens when the run reaches the end without
+    having read it back.
+
+    The measurement: on the worst-scoring Social task one listing call was cut
+    at 4,000 of 12,431 characters, the `total` field that would have exposed
+    the cut sat in the discarded tail, and the agent reported over 12 of 20
+    records — scoring full marks on every item inside the window and zero on
+    every item past it.
+
+    - ``off``: no ledger.
+    - ``observe`` (default): the ledger is kept, the unresolved entries are
+      logged at WARNING with the run id, and a guardrail row is written at the
+      end. The model is told nothing and the run ends exactly as it would have.
+    - ``enforce``: each unresolved entry is quoted to the model once at a
+      check-in, and a run that tries to finish with one outstanding is held for
+      exactly ONE more ask before completing with a sentence naming what it
+      never read.
+
+    ``alert`` is deliberately absent: an unread observation is a quality
+    problem, not something to wake an operator for.
+    """
+    return _observation_mode("ROBOTHOR_TRUNCATION_LEDGER_MODE")
+
+
+def act_observe_mode() -> ObservationMode:
+    """Rollout mode for the act→observe rule.
+
+    A call that changed something at the other end invalidates what the run
+    knew about that source. Measured on the same sweep: an agent made nineteen
+    state-changing calls, printed only each one's `status`, never re-read the
+    inbox it had just changed, and wrote a report the grader scored 1.0 for
+    quality and 0.0 for accuracy.
+
+    ``observe`` (default) logs what would have been said; ``enforce`` says it,
+    once per run, at a deliverable check-in. Nothing is ever blocked by it —
+    "look again" is advice, and an agent that has genuinely finished must be
+    able to finish.
+    """
+    return _observation_mode("ROBOTHOR_ACT_OBSERVE_MODE")
+
+
+def verdict_commitment_mode() -> ObservationMode:
+    """Rollout mode for one-verdict-per-item in a classification deliverable.
+
+    The only one of the three that touches model JUDGEMENT, which is why it has
+    its own flag and why it stays at ``observe`` on the fleet until it has been
+    probed with a real double-verdict artefact rather than a log line it prints
+    itself. Measured case: the agent found a planted QA marker on a message,
+    filed it as Critical #1 with two named owners anyway, and appended "please
+    verify whether this is a live incident". The rubric was binary and a
+    top-of-report P0 is an escalation whatever the footnote says.
+
+    ``observe`` logs the finding; ``enforce`` re-asks once, and only when the
+    task asked the agent to classify, triage, route or prioritise.
+    """
+    return _observation_mode("ROBOTHOR_VERDICT_COMMITMENT_MODE")
 
 
 def do_not_contact_mode() -> DoNotContactMode:

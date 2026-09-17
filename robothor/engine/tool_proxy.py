@@ -186,6 +186,11 @@ class RunToolProxy:
         #: answer "which rows belong to that one `execute_code` call" without a
         #: column of its own. `batch_position` counts within it.
         self._batch_id = batch_id or str(uuid.uuid4())
+        #: ``(tool name, evidence strings)`` per proxied call, so the handler
+        #: can say how many responses the snippet never showed itself. Evidence
+        #: strings, not payloads: the payload is already on the step row, and a
+        #: second copy of two hundred responses in RAM is not a diagnostic.
+        self.responses: list[tuple[str, tuple[str, ...]]] = []
 
     async def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         """One proxied tool call, through every gate a turn's call passes."""
@@ -307,6 +312,9 @@ class RunToolProxy:
             batch_position=position,
             append_message=False,
         )
+        from robothor.engine.act_observe import response_evidence
+
+        self.responses.append((name, response_evidence(result)))
         # The snippet working is progress, even though no turn happened: a run
         # whose watchdog only counts turns would kill a five-minute loop.
         if self._runner._active_watchdog:

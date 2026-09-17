@@ -275,6 +275,14 @@ class RepeatGuard:
         """The decision for a call about to be made, or None to just run it."""
         if self.mode == "off" or tool_name not in GUARDED_TOOLS:
             return None
+        from robothor.engine.exec_spill import is_spill_readback
+
+        if is_spill_readback(tool_name, args):
+            # Paging back the output this engine cut out of a result is the
+            # remedy the marker told the agent to use. Answering it with "you
+            # already read that" or refusing the fifth one would make the guard
+            # the reason the run never sees its own data.
+            return None
         try:
             decision = self._decide(tool_name, args or {}, workspace)
         except Exception as exc:  # noqa: BLE001 - a guard never breaks a call

@@ -219,6 +219,10 @@ async def _execute_code(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     # that matters; `ToolRpcServer.bind_to_session` is what stops one run's
     # snippet driving another run's proxy.
     code = str(args.get("code") or "")
+    # Where this snippet's proxied calls start in the turn's ledger. A turn may
+    # hold two `execute_code` calls in sequence, and the second one's count of
+    # unread responses must not inherit the first one's.
+    responses_from = len(getattr(proxy, "responses", ()))
     tools_dir = Path(tempfile.mkdtemp(prefix="code-", dir=_run_scratch_root(ctx)))
     server = ToolRpcServer(directory=tools_dir, proxy=proxy, max_calls=max_calls)
     try:
@@ -246,7 +250,19 @@ async def _execute_code(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
             logger.warning("execute_code: closing the tool socket failed: %r", exc)
         shutil.rmtree(tools_dir, ignore_errors=True)
 
-    return shape(result, server=server, workspace=workspace, stdout_cap=stdout_cap)
+    shaped = shape(result, server=server, workspace=workspace, stdout_cap=stdout_cap)
+    # A proxied call's response is EVIDENCE, not a receipt. The measured run
+    # printed only each send's `status` and threw away the three follow-up
+    # messages the service handed back in those same responses; nothing
+    # anywhere said so. This is that, counted.
+    from robothor.engine.act_observe import unread_proxy_responses
+
+    shaped.update(
+        unread_proxy_responses(
+            list(getattr(proxy, "responses", ()))[responses_from:], result.stdout
+        )
+    )
+    return shaped
 
 
 def _resolved_timeout(args: dict[str, Any], ctx: ToolContext) -> int:

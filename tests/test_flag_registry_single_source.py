@@ -71,6 +71,14 @@ HISTORICAL_GOVERNED_FLAGS: frozenset[str] = frozenset(
         # rather than by editing a box, and because the state it replaces was an
         # effective `none` that nobody chose and nobody could see.
         "ROBOTHOR_CALENDAR_SEND_UPDATES",
+        # Added 2026-09-16 with the observation controls. Governed because the
+        # rung decides whether a run can be held for one more ask before it
+        # claims completion, and because the whole point of shipping them on
+        # `observe` is that an operator watches the evidence rows and then moves
+        # the rung from Controls rather than from /etc plus a restart.
+        "ROBOTHOR_TRUNCATION_LEDGER_MODE",
+        "ROBOTHOR_ACT_OBSERVE_MODE",
+        "ROBOTHOR_VERDICT_COMMITMENT_MODE",
     }
 )
 

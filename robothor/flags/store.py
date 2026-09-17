@@ -86,9 +86,12 @@ _BOOL_VALUES: tuple[str, ...] = ("true", "false")
 #: operator-visible action, so an "alert" rung would page on nothing.
 _THREE_RUNG_MODE_FLAGS: frozenset[str] = frozenset(
     {
+        "ROBOTHOR_ACT_OBSERVE_MODE",
         "ROBOTHOR_HONESTY_SUITE_MODE",
         "ROBOTHOR_PER_USER_SESSIONS",
         "ROBOTHOR_STEP_EFFICIENCY_MODE",
+        "ROBOTHOR_TRUNCATION_LEDGER_MODE",
+        "ROBOTHOR_VERDICT_COMMITMENT_MODE",
     }
 )
 

@@ -1,0 +1,540 @@
+"""`exec` output that was cut is PAGINATED, not amputated.
+
+#583 taught the cut to say so: `[truncated: 4000 of 12431 chars shown]`. It
+still threw the other 8,431 characters away, which is the half that decides.
+
+MEASURED 2026-09-16, WildClawBench `03_Social_Interaction/task_2`. One listing
+call returned twenty records; the handler's 4,000-character slice landed inside
+record twelve, and the `total` field — the one value that would have exposed the
+cut — sat after the array, in the discarded tail. The agent then read exactly
+the twelve records it could see and opened its report with "all 12 of your
+recent messages". Every graded item whose evidence was inside the window scored
+full marks; every item past the cut scored zero. The extraction was not the weak
+part: the input was.
+
+A marker tells the agent something is missing. A spill file lets it get the
+missing thing. Only the second one closes this.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from robothor.engine.exec_spill import (
+    SPILL_DIRNAME,
+    STDERR_LIMIT,
+    STDOUT_LIMIT,
+    prune_run_spills,
+    prune_spill_files,
+    shape_exec_result,
+    spill,
+    truncate_stream,
+)
+
+
+def _big(n: int) -> str:
+    return "x" * n
+
+
+class TestShortOutputIsUntouched:
+    def test_it_passes_through_verbatim(self, tmp_path: Path) -> None:
+        shaped = shape_exec_result(
+            {"stdout": "hello\n", "stderr": "", "exit_code": 0}, workspace=tmp_path
+        )
+        assert shaped["stdout"] == "hello\n"
+
+    def test_it_carries_no_flag_and_no_path(self, tmp_path: Path) -> None:
+        """A flag on output that lost nothing is a lie in the other direction,
+        and it is the one that erodes trust in the flag."""
+        shaped = shape_exec_result(
+            {"stdout": _big(3_000), "stderr": "", "exit_code": 0}, workspace=tmp_path
+        )
+        assert "stdout_truncated" not in shaped
+        assert "stdout_path" not in shaped
+        assert "stdout_chars" not in shaped
+
+    def test_exactly_at_the_limit_does_not_spill(self, tmp_path: Path) -> None:
+        text = _big(STDOUT_LIMIT)
+        shaped = shape_exec_result(
+            {"stdout": text, "stderr": "", "exit_code": 0}, workspace=tmp_path
+        )
+        assert shaped["stdout"] == text
+        assert "stdout_path" not in shaped
+        assert not (tmp_path / SPILL_DIRNAME).exists()
+
+    def test_one_byte_over_the_limit_does_spill(self, tmp_path: Path) -> None:
+        """The boundary is the place a cap is wrong, so it is the place the
+        test lives."""
+        text = _big(STDOUT_LIMIT + 1)
+        shaped = shape_exec_result(
+            {"stdout": text, "stderr": "", "exit_code": 0}, workspace=tmp_path
+        )
+        assert shaped["stdout_truncated"] is True
+        assert shaped["stdout_chars"] == STDOUT_LIMIT + 1
+        assert Path(shaped["stdout_path"]).read_text(encoding="utf-8") == text
+
+
+class TestTruncatedOutputIsRecoverable:
+    def test_the_head_is_the_head_and_the_file_is_the_whole(self, tmp_path: Path) -> None:
+        text = "A" + _big(12_000)
+        shaped = shape_exec_result(
+            {"stdout": text, "stderr": "", "exit_code": 0}, workspace=tmp_path
+        )
+        assert shaped["stdout"].startswith("A" + _big(100))
+        assert shaped["stdout_chars"] == len(text)
+        assert Path(shaped["stdout_path"]).read_text(encoding="utf-8") == text
+
+    def test_the_marker_names_the_path(self, tmp_path: Path) -> None:
+        """ "Some output was cut" is unactionable. Where the rest is, is the
+        one sentence that turns a dead end into a next step."""
+        shaped = shape_exec_result(
+            {"stdout": _big(12_431), "stderr": "", "exit_code": 0}, workspace=tmp_path
+        )
+        assert shaped["stdout_path"] in shaped["stdout"]
+        assert f"{STDOUT_LIMIT} of 12431 chars shown" in shaped["stdout"]
+        assert "read_file" in shaped["stdout"]
+
+    def test_the_visible_part_stays_bounded(self, tmp_path: Path) -> None:
+        """The cap exists to bound context. A marker that made the result
+        bigger than the thing it was bounding would be its own defect."""
+        shaped = shape_exec_result(
+            {"stdout": _big(2_000_000), "stderr": "", "exit_code": 0}, workspace=tmp_path
+        )
+        assert len(shaped["stdout"]) < STDOUT_LIMIT + 400
+
+    def test_stderr_has_its_own_limit_and_its_own_file(self, tmp_path: Path) -> None:
+        err = _big(9_000)
+        shaped = shape_exec_result(
+            {"stdout": "ok\n", "stderr": err, "exit_code": 1}, workspace=tmp_path
+        )
+        assert shaped["stderr_truncated"] is True
+        assert shaped["stderr_chars"] == len(err)
+        assert Path(shaped["stderr_path"]).read_text(encoding="utf-8") == err
+        assert "stdout_path" not in shaped
+        assert f"{STDERR_LIMIT} of 9000 chars shown" in shaped["stderr"]
+
+    def test_both_streams_spill_to_different_files(self, tmp_path: Path) -> None:
+        shaped = shape_exec_result(
+            {"stdout": _big(12_000), "stderr": _big(9_000), "exit_code": 1},
+            workspace=tmp_path,
+        )
+        assert shaped["stdout_path"] != shaped["stderr_path"]
+
+    def test_an_undecodable_stream_does_not_raise(self, tmp_path: Path) -> None:
+        """`text=True` on a command emitting raw bytes yields lone surrogates.
+        A spill that raises there would turn a working command into a tool
+        error — the opposite of the trade this makes."""
+        text = "\udcff" * 12_000
+        shaped = shape_exec_result(
+            {"stdout": text, "stderr": "", "exit_code": 0}, workspace=tmp_path
+        )
+        assert shaped["stdout_truncated"] is True
+        assert shaped["stdout_chars"] == len(text)
+
+    def test_a_result_without_streams_is_returned_unchanged(self, tmp_path: Path) -> None:
+        """A timeout or an infrastructure failure returns `{"error": ...}` and
+        has no stream to shape."""
+        shaped = shape_exec_result({"error": "Command timed out"}, workspace=tmp_path)
+        assert shaped == {"error": "Command timed out"}
+
+
+class TestTheListingRegression:
+    """The measured failure, generic-ised: a count that trails its array.
+
+    The agent cannot know the array was cut, because the field that would have
+    told it is itself in the tail. This is the whole task-2 loss in one fixture.
+    """
+
+    @staticmethod
+    def _listing(records: int) -> str:
+        return json.dumps(
+            {
+                "records": [
+                    {"id": f"rec_{i:03d}", "body": "y" * 300} for i in range(1, records + 1)
+                ],
+                "total": records,
+            }
+        )
+
+    def test_before_the_spill_the_tail_is_simply_gone(self) -> None:
+        payload = self._listing(20)
+        head = truncate_stream(payload, STDOUT_LIMIT)
+        assert '"total": 20' not in head
+        assert "rec_020" not in head
+
+    def test_the_shaped_result_carries_the_total_and_the_path(self, tmp_path: Path) -> None:
+        payload = self._listing(20)
+        shaped = shape_exec_result(
+            {"stdout": payload, "stderr": "", "exit_code": 0}, workspace=tmp_path
+        )
+        assert shaped["stdout_truncated"] is True
+        assert shaped["stdout_chars"] == len(payload)
+        recovered = Path(shaped["stdout_path"]).read_text(encoding="utf-8")
+        assert json.loads(recovered)["total"] == 20
+        assert "rec_020" in recovered
+
+
+class TestTheSpillStaysInsideTheWorkspace:
+    def test_it_lands_under_the_workspace_dot_robothor_tree(self, tmp_path: Path) -> None:
+        path = Path(spill(tmp_path, "payload", stream="stdout"))
+        assert path.parent == tmp_path / SPILL_DIRNAME
+        path.relative_to(tmp_path)  # raises if it escaped
+
+    def test_it_is_never_a_home_path(self, tmp_path: Path) -> None:
+        path = Path(spill(tmp_path, "payload", stream="stdout"))
+        assert not str(path).startswith(str(Path.home()))
+
+    def test_a_hostile_run_id_cannot_walk_out_of_the_directory(self, tmp_path: Path) -> None:
+        """The run id reaches the filename. It comes from the engine, not from
+        a model — but a path component is a path component."""
+        path = Path(spill(tmp_path, "payload", stream="stdout", run_id="../../etc/x"))
+        assert path.parent == tmp_path / SPILL_DIRNAME
+
+    def test_an_unresolvable_workspace_writes_nothing(self, monkeypatch) -> None:
+        """No workspace means no answer, and no answer means no file — never
+        a fall back to the home directory or the process cwd."""
+        import robothor.engine.exec_spill as mod
+
+        monkeypatch.setattr(mod, "_settings_workspace", lambda: None)
+        assert spill(None, "payload", stream="stdout") == ""
+
+    def test_a_failed_spill_still_returns_a_usable_result(self, tmp_path: Path) -> None:
+        """The marker degrades to #583's wording rather than the call failing:
+        an unwritable disk must not turn a working command into a tool error."""
+        blocked = tmp_path / "file-not-a-dir"
+        blocked.write_text("", encoding="utf-8")
+        shaped = shape_exec_result(
+            {"stdout": _big(12_000), "stderr": "", "exit_code": 0}, workspace=blocked
+        )
+        assert shaped["stdout_truncated"] is True
+        assert "stdout_path" not in shaped
+        assert "narrower command" in shaped["stdout"]
+
+
+class TestTheSpillIsBounded:
+    """Hostile review I6.
+
+    Before this change nothing from a command reached the disk at all. Now one
+    `exec` under the 900-second ceiling can write whatever it printed, and a
+    killed run's orphan survives for the retention window — so a 50 MB command
+    produced a 50,000,000-byte file under the workspace.
+    """
+
+    def test_a_giant_stream_is_cut_at_the_ceiling(self, tmp_path: Path) -> None:
+        from robothor.engine.exec_spill import max_spill_bytes
+
+        shaped = shape_exec_result(
+            {"stdout": _big(200_000), "stderr": "", "exit_code": 0},
+            workspace=tmp_path,
+        )
+        # The default ceiling is far above this; pin the mechanism instead.
+        kept = Path(shaped["stdout_path"]).stat().st_size
+        assert kept <= max_spill_bytes()
+
+    def test_the_cap_is_honoured_and_reported(self, tmp_path: Path, monkeypatch) -> None:
+        import robothor.engine.exec_spill as mod
+
+        monkeypatch.setattr(mod, "max_spill_bytes", lambda: 5_000)
+        shaped = mod.shape_exec_result(
+            {"stdout": _big(50_000), "stderr": "", "exit_code": 0}, workspace=tmp_path
+        )
+        assert Path(shaped["stdout_path"]).stat().st_size == 5_000
+        assert shaped["stdout_spill_capped"] is True
+        assert shaped["stdout_spill_chars"] == 5_000
+        assert shaped["stdout_chars"] == 50_000
+
+    def test_the_marker_does_not_promise_a_whole_the_file_lacks(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """An agent told "the rest is at <path>" and handed a capped file would
+        read the second amputation as the whole of the first."""
+        import robothor.engine.exec_spill as mod
+
+        monkeypatch.setattr(mod, "max_spill_bytes", lambda: 5_000)
+        shaped = mod.shape_exec_result(
+            {"stdout": _big(50_000), "stderr": "", "exit_code": 0}, workspace=tmp_path
+        )
+        assert "the full output is at" not in shaped["stdout"]
+        assert "the first 5000 chars are at" in shaped["stdout"]
+        assert "the spill is capped" in shaped["stdout"]
+
+    def test_an_uncapped_stream_says_nothing_about_a_cap(self, tmp_path: Path) -> None:
+        shaped = shape_exec_result(
+            {"stdout": _big(12_000), "stderr": "", "exit_code": 0}, workspace=tmp_path
+        )
+        assert "stdout_spill_capped" not in shaped
+        assert "the full output is at" in shaped["stdout"]
+
+    def test_a_multibyte_stream_is_never_cut_mid_character(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A byte-exact cut inside a character would be a second amputation
+        inside the fix for the first."""
+        import robothor.engine.exec_spill as mod
+
+        monkeypatch.setattr(mod, "max_spill_bytes", lambda: 5_001)
+        shaped = mod.shape_exec_result(
+            {"stdout": "\u00e9" * 20_000, "stderr": "", "exit_code": 0}, workspace=tmp_path
+        )
+        recovered = Path(shaped["stdout_path"]).read_text(encoding="utf-8")
+        assert recovered  # decodes cleanly, so nothing was cut through a char
+        assert len(recovered.encode("utf-8")) <= 5_001
+
+    def test_a_spill_that_would_fill_the_disk_is_refused(self, tmp_path: Path, monkeypatch) -> None:
+        """Filling the disk the engine, the database and the operator's own
+        work share is not a trade a convenience gets to make."""
+        import robothor.engine.exec_spill as mod
+
+        monkeypatch.setattr(mod, "_has_room", lambda root, needed: False)
+        shaped = mod.shape_exec_result(
+            {"stdout": _big(12_000), "stderr": "", "exit_code": 0}, workspace=tmp_path
+        )
+        assert shaped["stdout_truncated"] is True
+        assert "stdout_path" not in shaped
+        assert "narrower command" in shaped["stdout"]
+
+
+class TestTheFilesAreReaped:
+    def test_a_run_takes_its_own_spills_with_it(self, tmp_path: Path) -> None:
+        mine = Path(spill(tmp_path, "a" * 10, stream="stdout", run_id="run-a"))
+        theirs = Path(spill(tmp_path, "b" * 10, stream="stdout", run_id="run-b"))
+        assert prune_run_spills(tmp_path, "run-a") == 1
+        assert not mine.exists()
+        assert theirs.exists()
+
+    def test_a_run_that_spilled_nothing_reaps_nothing(self, tmp_path: Path) -> None:
+        assert prune_run_spills(tmp_path, "run-a") == 0
+
+    def test_a_run_reaps_the_spills_in_the_agents_workspace_too(self, tmp_path: Path) -> None:
+        """Found by re-running the reviewer's evidence probe (P5) after the
+        other fixes landed: it reported 3 files left after finalization.
+
+        The finalizer is handed the ENGINE's workspace; a spill is written
+        under the AGENT's, which a manifest may put elsewhere and which every
+        benchmark run does. Reaping only the one it was handed left the other
+        to the 7-day sweep — a directory nobody looks at, growing for a week.
+        """
+        from robothor.engine.observation_ledger import ObservationLedger
+        from robothor.engine.observation_notes import record_observation_verdicts
+
+        agent_ws = tmp_path / "agent"
+        engine_ws = tmp_path / "engine"
+        agent_ws.mkdir()
+        engine_ws.mkdir()
+        shaped = shape_exec_result(
+            {"stdout": _big(12_000), "stderr": "", "exit_code": 0},
+            workspace=agent_ws,
+            run_id="run-1",
+        )
+        assert Path(shaped["stdout_path"]).is_file()
+
+        ledger = ObservationLedger()
+        ledger.record(11, "exec", {"command": "curl -s http://svc.invalid/x"}, shaped)
+        session = type("S", (), {"_observation_ledger": ledger, "messages": []})()
+        run = type("R", (), {"id": "run-1"})()
+        record_observation_verdicts(run, session, str(engine_ws))
+
+        assert not Path(shaped["stdout_path"]).exists()
+
+    def test_the_sweep_catches_what_a_killed_run_orphaned(self, tmp_path: Path) -> None:
+        """A run killed mid-spill never reaches its own cleanup. The retention
+        sweep is what stops that from being a permanent leak."""
+        orphan = Path(spill(tmp_path, "c" * 10, stream="stdout", run_id="run-dead"))
+        removed = prune_spill_files(
+            retention_days=7, workspace=tmp_path, now=orphan.stat().st_mtime + 8 * 86400
+        )
+        assert removed == 1
+        assert not orphan.exists()
+
+    def test_a_fresh_file_survives_the_sweep(self, tmp_path: Path) -> None:
+        fresh = Path(spill(tmp_path, "d" * 10, stream="stdout", run_id="run-live"))
+        assert prune_spill_files(retention_days=7, workspace=tmp_path) == 0
+        assert fresh.exists()
+
+    def test_zero_days_disables_the_sweep_rather_than_deleting_everything(
+        self, tmp_path: Path
+    ) -> None:
+        """ "Keep for zero days" is far likelier to be a misconfiguration than
+        an instruction — the inversion `vision_batch` was corrected for."""
+        kept = Path(spill(tmp_path, "e" * 10, stream="stdout", run_id="run-live"))
+        assert prune_spill_files(retention_days=0, workspace=tmp_path, now=1e12) == 0
+        assert kept.exists()
+
+
+class TestTheHandlerUsesIt:
+    def test_no_bare_slice_survives_anywhere(self) -> None:
+        import inspect
+
+        from robothor.engine import sandbox
+        from robothor.engine.tools.handlers import filesystem
+
+        for module in (filesystem, sandbox):
+            source = inspect.getsource(module)
+            assert "proc.stdout[:4000]" not in source, module.__name__
+            assert "proc.stderr[:2000]" not in source, module.__name__
+
+    def test_the_handler_shapes_both_branches(self) -> None:
+        import inspect
+
+        from robothor.engine.tools.handlers import filesystem
+
+        source = inspect.getsource(filesystem)
+        # The sandboxed branch lost its tail too, and for four releases nobody
+        # noticed, because the fix went into the host branch only.
+        assert source.count("shape_exec_result(") >= 2
+
+
+class TestTheLimitsAreNamedConstants:
+    def test_both_streams_have_one(self) -> None:
+        assert STDOUT_LIMIT > 0
+        assert STDERR_LIMIT > 0
+
+    @pytest.mark.parametrize("stream", ["stdout", "stderr"])
+    def test_a_stream_name_outside_the_pair_is_refused(self, tmp_path: Path, stream: str) -> None:
+        """The stream name reaches the filename and the result keys, so it is
+        a closed set rather than whatever the caller passed."""
+        assert spill(tmp_path, "payload", stream=stream)
+
+    def test_an_unknown_stream_writes_nothing(self, tmp_path: Path) -> None:
+        assert spill(tmp_path, "payload", stream="../../etc/passwd") == ""
+
+
+class TestTheExemptionCannotBeForged:
+    """Hostile review I3.
+
+    The first cut asked whether `.robothor/exec/` and `__` appeared anywhere in
+    the joined argument values. `curl … # .robothor/exec/a__b` was therefore a
+    read-back, and both the repeat-call guard and the no-progress detector can
+    be switched off for a whole run by appending that comment to every command.
+    Those two exist because a run once spent 333 requests going nowhere.
+    """
+
+    def test_a_comment_naming_the_directory_is_not_a_read_back(self) -> None:
+        from robothor.engine.exec_spill import is_spill_readback
+
+        hostile = {"command": "curl -s http://evil.invalid/api # .robothor/exec/a__stdout__b"}
+        assert is_spill_readback("exec", hostile) is False
+
+    def test_a_snippet_mentioning_the_directory_in_a_comment_is_not_one(self) -> None:
+        from robothor.engine.exec_spill import is_spill_readback
+
+        code = {"code": "# .robothor/exec/z__stdout__000000000000.txt\nimport os\n"}
+        assert is_spill_readback("execute_code", code) is False
+
+    def test_a_path_that_does_not_exist_is_not_a_read_back(self, tmp_path: Path) -> None:
+        """The cheapest forgery is a plausible string. A file has to be there."""
+        from robothor.engine.exec_spill import is_spill_readback
+
+        made_up = str(tmp_path / SPILL_DIRNAME / "run-1__stdout__0123456789ab.txt")
+        assert is_spill_readback("read_file", {"path": made_up}) is False
+
+    def test_a_real_spill_read_through_the_shell_is_one(self, tmp_path: Path) -> None:
+        from robothor.engine.exec_spill import is_spill_readback
+
+        path = spill(tmp_path, "payload", stream="stdout", run_id="run-1")
+        for command in (f"cat {path}", f"head -c 500 {path}", f"grep total {path}"):
+            assert is_spill_readback("exec", {"command": command}) is True, command
+
+    def test_a_real_spill_read_through_read_file_is_one(self, tmp_path: Path) -> None:
+        from robothor.engine.exec_spill import is_spill_readback
+
+        path = spill(tmp_path, "payload", stream="stdout", run_id="run-1")
+        assert is_spill_readback("read_file", {"path": path}) is True
+
+    def test_a_file_with_the_right_name_outside_the_spill_directory_is_not_one(
+        self, tmp_path: Path
+    ) -> None:
+        stray = tmp_path / "run-1__stdout__0123456789ab.txt"
+        stray.write_text("x", encoding="utf-8")
+        from robothor.engine.exec_spill import is_spill_readback
+
+        assert is_spill_readback("read_file", {"path": str(stray)}) is False
+
+    def test_a_write_tool_never_qualifies_however_it_is_spelled(self, tmp_path: Path) -> None:
+        from robothor.engine.exec_spill import is_spill_readback
+
+        path = spill(tmp_path, "payload", stream="stdout", run_id="run-1")
+        assert is_spill_readback("write_file", {"path": path, "content": "x"}) is False
+
+
+class TestThePageBackIsNotALoop:
+    """The remedy the marker names must not be refused by another control.
+
+    Both of these answer a call before it runs and neither is handed a session,
+    so the exemption is by SHAPE — the directory and the filename this module
+    writes.
+    """
+
+    def test_the_repeat_guard_lets_a_spill_read_through(self, tmp_path: Path) -> None:
+        from robothor.engine.repeat_guard import RepeatGuard
+
+        guard = RepeatGuard(run_id="run-1", mode="enforce")
+        args = {"path": spill(tmp_path, "payload", stream="stdout", run_id="run-1")}
+        for _ in range(6):
+            assert guard.before("read_file", args, workspace=str(tmp_path)) is None
+
+    def test_an_ordinary_repeated_read_is_still_guarded(self, tmp_path: Path) -> None:
+        """The exemption is for the spill and nothing else — a control that
+        exempted every read would be the control being deleted."""
+        from robothor.engine.repeat_guard import RepeatGuard
+
+        target = tmp_path / "notes.md"
+        target.write_text("unchanged", encoding="utf-8")
+        guard = RepeatGuard(run_id="run-1", mode="enforce")
+        args = {"path": str(target)}
+        guard.after("read_file", args, {"content": "unchanged"}, workspace=str(tmp_path))
+        assert guard.before("read_file", args, workspace=str(tmp_path)) is not None
+
+    def test_the_no_progress_detector_counts_a_spill_read_as_progress(self, tmp_path: Path) -> None:
+        from robothor.engine.scratchpad import Scratchpad
+
+        pad = Scratchpad()
+        args = {"path": spill(tmp_path, "payload", stream="stdout", run_id="run-1")}
+        for _ in range(5):
+            pad.record_tool_call("read_file", result={"content": "same"}, tool_input=args)
+        assert pad._repeat_count == 0
+
+    def test_an_ordinary_identical_read_still_counts_as_a_repeat(self) -> None:
+        from robothor.engine.scratchpad import Scratchpad
+
+        pad = Scratchpad()
+        args = {"path": "/w/notes.md"}
+        for _ in range(5):
+            pad.record_tool_call("read_file", result={"content": "same"}, tool_input=args)
+        assert pad._repeat_count == 5
+
+
+class TestTheSchemaNamesTheCap:
+    def test_exec_says_its_output_is_cut_and_where_the_rest_goes(self) -> None:
+        """An agent cannot route around a limit it was never told about. For
+        one release this description documented the timeout and nothing else
+        while a 4,000-character slice decided what the model saw."""
+        from robothor.engine.tools.schemas import _CODE_SCHEMAS
+
+        description = _CODE_SCHEMAS["exec"]["function"]["description"]
+        assert "4,000" in description
+        assert "stdout_path" in description
+        assert "read_file" in description
+
+    def test_execute_code_names_its_own_cap_and_both_call_spellings(self) -> None:
+        """Brief item 5 asks for the cap on BOTH tools, and `docs/TOOLS.md`
+        plus the unread-responses note both use `genus_tools.call(name,
+        **args)` — a description that dropped it would send an agent looking
+        for a spelling nothing documents (hostile review M4).
+
+        `curl` is deliberately not here: the 400-character cap `tool_search`
+        shows a description whole at is the harder constraint, and the
+        proxy-versus-shell contrast is stated at length in `docs/TOOLS.md`.
+        What the schema has to carry is the instruction — PRINT the response.
+        """
+        from robothor.engine.tools.schemas import _CODE_SCHEMAS
+
+        description = _CODE_SCHEMAS["execute_code"]["function"]["description"]
+        assert "genus_tools.call(name, **args)" in description
+        assert "PRINT each response" in description
+        assert "50,000" in description
+        assert "stdout_file" in description
+        assert len(description) <= 400

@@ -491,6 +491,13 @@ def engine_flag_readers() -> dict[str, tuple[object, str]]:
     from robothor.engine import feature_flags as ff
 
     return {
+        # The three observation ladders (2026-09-17) are single-var, like
+        # `step_efficiency_mode` and `honesty_suite_mode`: no `_ENABLED`
+        # companion, so no gate. All three resolve `observe` when nothing is
+        # written, which is also what they declare, so none of them needs an
+        # entry in `_UNSET_DEFAULTS` — an override that merely repeated the
+        # declaration would fail the test below that forbids exactly that.
+        "ROBOTHOR_ACT_OBSERVE_MODE": (ff.act_observe_mode, ""),
         "ROBOTHOR_ADMISSION_MODE": (ff.execution_mode_admission_mode, "ROBOTHOR_ADMISSION_ENABLED"),
         "ROBOTHOR_APPROVAL_MODE": (ff.approval_mode, "ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED"),
         "ROBOTHOR_BENCHMARK_DECONTAMINATION_MODE": (
@@ -535,6 +542,8 @@ def engine_flag_readers() -> dict[str, tuple[object, str]]:
         ),
         "ROBOTHOR_STEP_EFFICIENCY_MODE": (ff.step_efficiency_mode, ""),
         "ROBOTHOR_TOOL_VERIFY_MODE": (ff.tool_verify_mode, "ROBOTHOR_TOOL_VERIFY_ENABLED"),
+        "ROBOTHOR_TRUNCATION_LEDGER_MODE": (ff.truncation_ledger_mode, ""),
+        "ROBOTHOR_VERDICT_COMMITMENT_MODE": (ff.verdict_commitment_mode, ""),
     }
 
 

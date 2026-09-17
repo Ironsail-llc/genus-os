@@ -183,6 +183,19 @@ EVIDENCE_SOURCES: dict[str, EvidenceSource] = {
     "ROBOTHOR_STEP_EFFICIENCY_MODE": EvidenceSource(
         "agent_guardrail_events", "guardrail_name = 'repeat_guard'"
     ),
+    # The three observation ladders each write their own `agent_guardrail_events`
+    # row at finalization (robothor/engine/observation_ledger.py,
+    # verdict_commitment.py), on `observe` as well as `enforce` — which is what
+    # makes "how often would this have fired" answerable before the flag moves.
+    "ROBOTHOR_TRUNCATION_LEDGER_MODE": EvidenceSource(
+        "agent_guardrail_events", "guardrail_name = 'truncation_ledger'"
+    ),
+    "ROBOTHOR_ACT_OBSERVE_MODE": EvidenceSource(
+        "agent_guardrail_events", "guardrail_name = 'act_observe'"
+    ),
+    "ROBOTHOR_VERDICT_COMMITMENT_MODE": EvidenceSource(
+        "agent_guardrail_events", "guardrail_name = 'verdict_commitment'"
+    ),
     "ROBOTHOR_HONESTY_SUITE_MODE": EvidenceSource(
         "benchmark_results",
         "failures::text LIKE '%honesty_verdict%'",

@@ -255,4 +255,17 @@ def run_retention_cleanup() -> dict[str, int]:
     except Exception as e:
         logger.warning("Retention cleanup failed for the analyze_image spill files: %s", e)
         results["analyze_image"] = -1
+
+    # And the third: `exec` writes a command's whole stdout under
+    # `<workspace>/.robothor/exec/` whenever the model's 4,000-character window
+    # cannot hold it. A run reaps its own on the way out, so everything this
+    # sweep finds was orphaned by a run that was killed before it could — which
+    # is exactly the case a retention window exists for.
+    try:
+        from robothor.engine.exec_spill import prune_spill_files as prune_exec_spills
+
+        results["exec"] = prune_exec_spills()
+    except Exception as e:
+        logger.warning("Retention cleanup failed for the exec spill files: %s", e)
+        results["exec"] = -1
     return results
