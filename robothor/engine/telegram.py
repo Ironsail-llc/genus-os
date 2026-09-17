@@ -1925,10 +1925,19 @@ class TelegramBot(TelegramAttachmentsMixin, TelegramHandlersMixin, PlanModeMixin
                 # Explicitly resolve allowed_updates from registered handlers so the
                 # message_reaction handler (Phase 2 operator signals) actually receives
                 # reaction updates — Telegram omits them from getUpdates by default.
+                # handle_signals=False: the daemon owns SIGTERM/SIGINT for the
+                # whole process (daemon._install_shutdown_signals). aiogram's
+                # handler is installed when polling starts and never removed,
+                # so it both replaced the daemon's and went on "handling" the
+                # signal between polling attempts by setting a dispatcher event
+                # nothing was waiting on — SIGTERM doing nothing, which systemd
+                # resolves at TimeoutStopSec with a kill.
                 await self.dp.start_polling(
-                    self.bot, allowed_updates=self.dp.resolve_used_update_types()
+                    self.bot,
+                    allowed_updates=self.dp.resolve_used_update_types(),
+                    handle_signals=False,
                 )
-                return  # clean stop (aiogram handles SIGTERM/SIGINT) — shutdown
+                return  # dispatcher stopped (see stop()) — shutdown
             except TelegramNetworkError as e:
                 # After a healthy long-lived session, restart the backoff ladder.
                 if time.monotonic() - attempt_started > 300:
@@ -1940,8 +1949,17 @@ class TelegramBot(TelegramAttachmentsMixin, TelegramHandlersMixin, PlanModeMixin
                 logger.error("Telegram polling failed: %s", e, exc_info=True)
                 raise
 
-    async def stop(self) -> None:
-        """Stop the bot gracefully."""
+    async def stop(self, *, polling_stop_timeout: float | None = None) -> None:
+        """Stop the bot gracefully.
+
+        ``polling_stop_timeout`` bounds the dispatcher stop; the daemon passes
+        its slice of the stop budget (robothor.engine.shutdown_budget), and
+        the default is that same slice so no caller carries its own number.
+        """
+        if polling_stop_timeout is None:
+            from robothor.engine.shutdown_budget import POLLING_STOP_TIMEOUT_SECONDS
+
+            polling_stop_timeout = POLLING_STOP_TIMEOUT_SECONDS
         # Clear message buffers and cancel all active tasks
         self._message_buffers.clear()
         self._drain_scheduled.clear()
@@ -1959,6 +1977,13 @@ class TelegramBot(TelegramAttachmentsMixin, TelegramHandlersMixin, PlanModeMixin
         for task in self._active_tasks.values():
             task.cancel()
         self._active_tasks.clear()
+
+        # Nothing else asks the dispatcher to stop now that the daemon owns
+        # SIGTERM, and closing the session under a live poller is how a clean
+        # stop turns into a stack trace. Bounded: a dispatcher that will not
+        # stop must not eat the engine's TimeoutStopSec (shutdown_budget.py).
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(self.dp.stop_polling(), timeout=polling_stop_timeout)
 
         with contextlib.suppress(Exception):
             await self.bot.session.close()

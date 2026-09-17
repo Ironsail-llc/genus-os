@@ -98,7 +98,10 @@ KNOWN_LARGE: dict[str, int] = {
     # 371 -> 365: the Slack start block and the channel-registry warm-up both
     # moved into _start_channels, which is what made room for the warm-up
     # rather than raising this number for it.
-    "daemon.py::main": 364,
+    # 364 -> 354: the shutdown announcement left for _announce_shutdown, which
+    # is what paid for owning SIGTERM in here (the handler install and the
+    # stop-signal task) rather than raising this number for it.
+    "daemon.py::main": 354,
     "telegram.py::_run_interactive": 384,
     # 370 -> 347: shaping the graded child (silent delivery, iteration cap,
     # deny-list, is_benchmark) moved to _shape_child_config, which is what paid

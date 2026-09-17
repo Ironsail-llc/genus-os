@@ -30,6 +30,11 @@ from robothor.engine.hooks import EventHooks
 from robothor.engine.runner import AgentRunner
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.scheduler import CronScheduler
+from robothor.engine.shutdown_budget import (
+    ANNOUNCE_TIMEOUT_SECONDS,
+    DRAIN_TIMEOUT_SECONDS,
+    POLLING_STOP_TIMEOUT_SECONDS,
+)
 from robothor.engine.telegram import TelegramBot
 from robothor.engine.workflow import WorkflowEngine
 from robothor.plugins import reload_plugins
@@ -936,6 +941,94 @@ def perform_plugin_reload() -> int | None:
 _handle_plugin_reload_signal = perform_plugin_reload
 
 
+def _force_exit(code: int) -> None:
+    """End the process now. ``os._exit``, not ``sys.exit``: a SystemExit raised
+    from a loop callback would still run asyncio's cancellation of every task
+    on the way out — the very drain the second signal is escaping."""
+    os._exit(code)
+
+
+def _request_stop(stop: asyncio.Event, sig: signal.Signals) -> None:
+    """Two strikes. The first signal records the stop and nothing else; a
+    second one during the drain is a human insisting — a developer at a hung
+    drain, an operator's repeated ``kill`` — and ends the process now (130 for
+    SIGINT, as a shell reports a Ctrl-C death; 1 otherwise) rather than setting
+    an already-set event and going quiet. systemd never sends a second SIGTERM
+    (it SIGKILLs at TimeoutStopSec), so this never changes a unit's result."""
+    if stop.is_set():
+        logger.warning("Received %s again during shutdown — second signal — exiting now", sig.name)
+        _force_exit(130 if sig == signal.SIGINT else 1)
+        return
+    logger.info("Received %s — stopping", sig.name)
+    stop.set()
+
+
+def _install_shutdown_signals() -> asyncio.Event:
+    """Own SIGTERM/SIGINT for the whole process; return the stop flag.
+
+    systemd stops this service with SIGTERM on every deploy. Without a
+    disposition of its own the daemon died on the spot: no drain of in-flight
+    runs, no lease release, no announcement. (systemd files a MAIN process
+    killed by SIGTERM as a clean stop, so this was never what paged; the
+    2026-09-17 pages were a CONTROL process — ``ExecStartPre=load-secrets.sh``
+    killed when a second restart superseded the first one's start job. See
+    tests/test_pager_hardening.py. This is shutdown hygiene.)
+
+    aiogram installs a handler of its own when polling starts, which is why
+    the daemon sometimes drained and sometimes did not: that handler does not
+    exist during startup, during a polling backoff, or on an instance with no
+    bot token — and it is never removed, so it also outlives the window in
+    which it does anything. ``TelegramBot.start_polling`` now passes
+    ``handle_signals=False`` and this is the process's only disposition.
+
+    The handler does the least a handler can: it sets an event. ``main`` waits
+    on that event alongside the subsystem tasks, so a signal takes the ordinary
+    shutdown path — drain, stop, exit 0 — and nothing runs in signal context.
+    Installing it also means a Ctrl-C no longer raises KeyboardInterrupt;
+    ``run``'s handler for that stays for the two cases that still can raise it
+    — a Ctrl-C before this runs, and a loop that cannot install handlers.
+    """
+    stop = asyncio.Event()
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:  # no loop (a test, the CLI): nothing to install on
+        return stop
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        # Not every platform implements add_signal_handler. A daemon with no
+        # handler is what we had; it must not be a daemon that fails to start.
+        with contextlib.suppress(NotImplementedError, RuntimeError, ValueError):
+            loop.add_signal_handler(sig, _request_stop, stop, sig)
+    return stop
+
+
+async def _announce_shutdown(config: Any) -> None:
+    """Tell the operator's chat the engine is going down, best-effort.
+
+    Extracted from ``main``: it is a leaf with no ordering relationship to the
+    drain around it, and taking it out is what paid for the stop-signal wait
+    going in rather than raising the function's cap. Bounded by
+    ``ANNOUNCE_TIMEOUT_SECONDS``: the send used to be unbounded, and a Telegram
+    that will not answer must not spend the stop budget (shutdown_budget.py).
+    """
+    try:
+        from robothor.engine.dedup import running_agents
+        from robothor.engine.delivery import get_telegram_sender
+
+        active = running_agents()
+        sender = get_telegram_sender()
+        if sender and config.default_chat_id:
+            active_str = ", ".join(active) if active else "none"
+            await asyncio.wait_for(
+                sender(
+                    config.default_chat_id,
+                    f"*Engine Shutting Down*\n\nActive agents: {active_str}",
+                ),
+                timeout=ANNOUNCE_TIMEOUT_SECONDS,
+            )
+    except Exception as e:
+        logger.debug("Shutdown announcement failed: %s", e)
+
+
 def _install_plugin_reload_signal() -> bool:
     """Wire SIGHUP to a plugin reload. Returns whether it was installed.
 
@@ -1108,6 +1201,10 @@ def _harden_and_state_posture() -> None:
 
 async def main() -> int:
     """Start all engine subsystems. Returns the process exit code."""
+    # Own SIGTERM/SIGINT before anything slow, so a stop during startup also
+    # takes the drain path instead of the default disposition's instant death.
+    stop_requested = _install_shutdown_signals()
+
     # Reject unsafe production authentication before touching the database,
     # loading agents, or starting any background subsystem. The Engine verifies
     # Bridge-issued tokens but is not an SSO exchange authority, so it must not
@@ -1350,6 +1447,7 @@ async def main() -> int:
             _capacity_governor_loop(config.max_concurrent_agents), name="capacity-governor"
         ),
         asyncio.create_task(_elector.run(), name="leader"),
+        asyncio.create_task(stop_requested.wait(), name="stop-signal"),
     ]
     if bot is not None:
         tasks.insert(0, asyncio.create_task(bot.start_polling(), name="telegram"))
@@ -1390,8 +1488,8 @@ async def main() -> int:
 
         _register_inventory()
 
-    # Wait for any task to complete (aiogram handles SIGTERM and stops polling,
-    # which completes the telegram task — that's our shutdown trigger)
+    # Wait for any task to complete. A deliberate stop completes the
+    # stop-signal task (SIGTERM/SIGINT); a subsystem dying completes its own.
     done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
 
     # Log what finished — and remember whether this shutdown is a subsystem
@@ -1415,21 +1513,7 @@ async def main() -> int:
     except Exception as e:  # noqa: BLE001 - shutdown must not raise
         logger.debug("Error closing live-steering channel during shutdown: %s", e)
 
-    # Shutdown announcement (best-effort)
-    try:
-        from robothor.engine.dedup import running_agents
-        from robothor.engine.delivery import get_telegram_sender
-
-        active = running_agents()
-        sender = get_telegram_sender()
-        if sender and config.default_chat_id:
-            active_str = ", ".join(active) if active else "none"
-            await sender(
-                config.default_chat_id,
-                f"*Engine Shutting Down*\n\nActive agents: {active_str}",
-            )
-    except Exception as e:
-        logger.debug("Shutdown announcement failed: %s", e)
+    await _announce_shutdown(config)
 
     # Disconnect federation NATS (if connected)
     if nats_mgr is not None:
@@ -1442,12 +1526,12 @@ async def main() -> int:
     # Drain tracked background tasks before stopping subsystems
     from robothor.engine.task_registry import get_task_registry
 
-    await get_task_registry().drain()
+    await get_task_registry().drain(timeout=DRAIN_TIMEOUT_SECONDS)
 
     await scheduler.stop()
     await hooks.stop()
     if bot is not None:
-        await bot.stop()
+        await bot.stop(polling_stop_timeout=POLLING_STOP_TIMEOUT_SECONDS)
     if slack_bot is not None:
         try:
             await slack_bot.stop()
@@ -2317,6 +2401,9 @@ def run() -> None:
     try:
         exit_code = asyncio.run(main())
     except KeyboardInterrupt:
+        # Reachable only before _install_shutdown_signals owns SIGINT, or on a
+        # loop that cannot install handlers; afterwards a Ctrl-C is a clean
+        # stop and a second one is _force_exit. Either way: quiet, and zero.
         return
     except Exception as e:
         logger.error("Engine crashed: %s", e, exc_info=True)
