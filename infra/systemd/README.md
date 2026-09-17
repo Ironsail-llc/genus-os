@@ -114,7 +114,39 @@ Four things about that are load-bearing:
   and `RemainAfterExit=yes` means the oneshot will not re-run on its own — so
   removing the `ExecStartPre` would mean a `systemctl restart robothor-engine`
   after a secret rotation silently kept the old values. Keeping it is also the
-  smaller diff and leaves existing restart behaviour unchanged.
+  smaller diff and leaves existing restart behaviour unchanged. It is a
+  **control process**, and that has one consequence for how you restart: see
+  the next section.
+
+### Restart each unit once
+
+`systemctl restart robothor-secrets.service` propagates a restart to every unit
+that `Requires=` it. A second `systemctl restart` of those units arriving while
+the first is still starting them **supersedes** the running start job, and
+systemd kills whatever that job was doing — on the engine and the orchestrator
+that is `ExecStartPre=load-secrets.sh`, a control process, whose death by
+SIGTERM is not a clean exit (`Control process exited, code=killed,
+status=15/TERM`, `Failed with result 'signal'`, `OnFailure=` pages). That was
+the 2026-09-17 deploy: the two commands were 1.65 s apart.
+
+So a deploy is **one** restart transaction, and the installer derives it from
+the rendered units:
+
+```bash
+sudo scripts/install-units.sh --restart
+# daemon-reload, then ONE
+#   systemctl restart robothor-secrets.service robothor-app.service \
+#     robothor-bridge.service robothor-engine.service robothor-orchestrator.service
+# Without --restart the installer prints that command; run it as printed.
+```
+
+Never `restart robothor-secrets` and then the consumers as a second command,
+and never reach for `SuccessExitStatus=SIGTERM` to quiet the page — to a
+control process that directive means "the step succeeded", and `ExecStart`
+would run with `secrets.env` unwritten. `tests/test_pager_hardening.py` forbids
+it on any unit with a control process; `tests/test_install_units.py` asserts
+the installer issues exactly one transaction. The full account, with a recipe
+that reproduces the race, is in `docs/runbooks/PAGING.md`.
 
 ### What a failed load now costs, and how to recover
 
@@ -143,8 +175,9 @@ systemctl start robothor-secrets.service      # dependents start via Requires=
 
 ### First start after `install-units.sh` must be manual
 
-Install the units, then **start the oneshot by hand and confirm it reaches
-`active (exited)` before restarting anything that depends on it**:
+The **first** time the secrets unit is installed on a box, start the oneshot by
+hand and confirm it reaches `active (exited)` before starting anything that
+depends on it:
 
 ```bash
 sudo scripts/install-units.sh && sudo systemctl daemon-reload
@@ -152,10 +185,13 @@ sudo systemctl enable --now robothor-secrets.service
 systemctl is-active robothor-secrets.service   # must print: active
 ```
 
-Only then restart the consumers. A `daemon-reload` plus a blind restart of all
-four is how a latent secrets problem — one that was previously *silent*,
-because `EnvironmentFile=-` swallowed it — becomes a four-service outage in one
-step. The sandboxing on the oneshot is deliberately a strict subset of what
+Then start the consumers. A blind restart of all four is how a latent secrets
+problem — one that was previously *silent*, because `EnvironmentFile=-`
+swallowed it — becomes a four-service outage in one step. On every deploy
+after that, use the single transaction above (`install-units.sh --restart`):
+`start` on an already-active `RemainAfterExit` unit is a no-op and propagates
+nothing, but `restart` propagates, which is why the first-start `start` here
+and the deploy-time `restart` must not be mixed into a two-command sequence. The sandboxing on the oneshot is deliberately a strict subset of what
 `robothor-engine.service` already applies to the same script, so the first start
 is not also a first test of new confinement. That is enforced, not just
 intended: `test_secrets_unit_applies_no_confinement_the_engine_does_not`

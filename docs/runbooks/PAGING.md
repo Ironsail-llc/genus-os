@@ -32,9 +32,10 @@ sudo systemctl daemon-reload
 
 `install-units.sh` needs `ROBOTHOR_WORKSPACE` and `ROBOTHOR_SERVICE_USER`; it
 resolves anything unset from `/etc/robothor/robothor.env` (override with
-`--env-file`). It is idempotent — a second run reports `unchanged` — and it
-does not reload or restart anything, so the `daemon-reload` above is yours to
-run.
+`--env-file`). It is idempotent — a second run reports `unchanged` — and
+without `--restart` it does not reload or restart anything, so the
+`daemon-reload` above is yours to run. When you do restart, restart each unit
+once — see "A deploy restarts each unit once" below.
 
 ## Verify
 
@@ -116,6 +117,102 @@ Three things about that table are load-bearing:
 The consequence line is only added to the **composed** page. A two-argument
 call supplies its own body and gets neither a headline nor a consequence — see
 below.
+
+## A deploy restarts each unit once
+
+On 2026-09-17 an ordinary deploy paged the operator twice:
+
+```
+robothor-engine.service: Failed with result 'signal'.
+robothor-orchestrator.service: Failed with result 'signal'.
+```
+
+Read the **unfiltered** journal before blaming the main process. This is what
+it said, for the engine, at 08:55:
+
+```
+08:55:52.218  Stopping robothor-engine.service...
+08:55:53.748  robothor-engine.service: Deactivated successfully.      <- main process, CLEAN
+08:55:53.858  Starting robothor-engine.service...                     <- restart #1 begins
+08:55:53.876  Control process exited, code=killed, status=15/TERM     <- ExecStartPre, 18 ms in
+08:55:53.876  Failed with result 'signal'.
+08:55:53.876  Triggering OnFailure= dependencies.                     <- the page
+08:55:53.896  Starting robothor-engine.service...                     <- restart #2
+```
+
+The main process was never the problem: it is "Deactivated successfully" one
+line earlier. systemd judges a **main** process by `EXIT_CLEAN_DAEMON`, where
+death by SIGTERM is a clean stop — which is also why uvicorn's deliberate
+re-raise of the signal in the orchestrator has never paged. It judges a
+**control** process (`ExecStartPre=`, `ExecStartPost=`, `ExecStop=`, …) by
+`EXIT_CLEAN_COMMAND`, where SIGTERM is not clean. The page is
+`ExecStartPre=load-secrets.sh` being killed.
+
+What killed it was the deploy itself, in two commands 1.65 s apart:
+
+1. `systemctl restart robothor-secrets` — the engine, bridge, app and
+   orchestrator all `Requires=` that oneshot, so the restart **propagates** to
+   them: each is stopped and a start job queued.
+2. `systemctl restart robothor-engine robothor-bridge robothor-orchestrator
+   robothor-app` — a second restart job for each, which **supersedes** the
+   start job already running. systemd kills whatever that job was doing. For
+   the bridge and the app that was nothing yet, and they stayed clean; for the
+   two units with an `ExecStartPre` it was the secrets loader, 18 ms in.
+
+**The fix is one restart transaction.** Named together in a single
+`systemctl restart`, the propagated and the explicit jobs merge and each unit
+restarts once:
+
+```bash
+sudo scripts/install-units.sh --restart
+# = daemon-reload, then ONE `systemctl restart robothor-secrets.service <every
+#   unit that Requires= it>`, the set derived from the rendered units.
+# Without --restart the installer prints that one command instead. Run it as
+# printed — never `restart robothor-secrets` and then the consumers again.
+```
+
+The agent-side restart broker (`infra/bin/robothor-restart-handler.sh`) is held
+to the same rule: every request in a pass is issued as one `systemctl restart`,
+a unit that already has a job queued (`systemctl show -p Job <unit>`) is left
+to that job, and a lock serialises two handlers.
+
+**`SuccessExitStatus=SIGTERM` is not the fix, and is dangerous here.** It does
+silence the page — and on a unit with an `ExecStartPre` it does so by telling
+systemd the killed step *succeeded*: systemd proceeds to `ExecStart`, and the
+engine comes up with `/run/robothor/secrets.env` absent or half-written, failing
+closed and quietly. That is the 2026-09-11 sign-in outage (eight days of 403s)
+re-armed on every deploy race. `tests/test_pager_hardening.py` fails any unit
+that runs a control process and whitelists SIGTERM; `SIGKILL` and a stop
+timeout are never whitelisted anywhere, because a process that ignores SIGTERM
+until systemd kills it is a real failure and must page.
+
+**Prove it on an instance.** A single restart never reproduced this; the race
+needs two.
+
+```bash
+# Before the fix (two transactions, the deploy's exact shape):
+sudo systemctl restart robothor-secrets && sleep 1.5 && sudo systemctl restart robothor-engine
+journalctl -u robothor-engine --since '-1 min' | grep -E "Control process exited|Failed with result"
+# expect: "Control process exited, code=killed, status=15/TERM" and
+#         "Failed with result 'signal'" — and a page.
+
+# After the fix (one transaction):
+sudo scripts/install-units.sh --restart
+journalctl -u robothor-engine -u robothor-orchestrator --since '-1 min' \
+  | grep -E "Control process exited|Failed with result|Deactivated successfully"
+# expect: "Deactivated successfully" only — no "Control process exited",
+#         no "Failed with result", nothing under `systemctl list-units 'robothor-alert@*' --all`.
+
+# The pager itself is intact:
+sudo systemctl kill -s SIGKILL robothor-vision
+# expect: "Failed with result 'signal'" and a page — a hard kill is a failure.
+```
+
+The engine's own stop path is separately budgeted to fit inside its
+`TimeoutStopSec=15` (`robothor/engine/shutdown_budget.py`): announce 2 s, drain
+7 s, dispatcher stop 3 s, 3 s margin for the rest. A second SIGTERM or Ctrl-C
+during that drain forces the exit (`second signal — exiting now`) instead of
+being swallowed.
 
 ## Reading `reap_category` on a reaped run
 
