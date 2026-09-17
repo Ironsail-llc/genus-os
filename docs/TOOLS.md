@@ -285,9 +285,12 @@ says `reason_missing: true` rather than having one invented for it, and it is
 
 **A look outranks a filename.** Every result's `summary` ends by saying so, and
 so does behavioural rule 19, which is general rather than about images: *a
-file's name, label or caption is a claim, not an observation; when an
-observation — a tool that looked at the content — disagrees with a name, the
-observation wins unless a second observation says otherwise.* When a batch
+name, label or caption is a claim, not an observation; when an observation of
+that same item — a tool that read its content — disagrees with the name, the
+observation wins unless a second observation says otherwise.* The *same item*
+clause is load-bearing: both tools substitute a same-stem file when an
+extension misses, and an observation of the wrong file is not evidence about
+the right one. When a batch
 disagrees with the names, read two or three `reason`s, spot-check one with
 `view_image`, and then trust the batch. This is measured advice — on a
 100-image sort whose filenames were deliberately misleading, the tool answered
@@ -296,7 +299,11 @@ scoring 0.43 where the answers it already had were worth 0.94.
 
 **Where an answer came from.** Both tools' results carry `provenance:
 "image-content"` and a `provenance_note` saying, in words, that *answers come
-from the model looking at the image content; the filename was not consulted*.
+from the model looking at the image content; the filename was not consulted* —
+on a result that HAS an answer. A `view_image` result where nobody looked, a
+refused path, and a batch where every row failed carry neither: provenance
+describes an answer, and asserting it beside an error saying nothing was seen
+is how an agent learns the field means nothing.
 Nothing in the older results said this, so a row reading `choice: "natural
 scene"` for a file called `3d_render.jpg` looked, to an agent, like something
 that might have been derived from the name — and the name won. The same
@@ -388,6 +395,7 @@ without bound. Copy one somewhere else if you want to keep it.
 |---|---|
 | `ROBOTHOR_VISION_MODEL` | The local VLM, served by Ollama. The default backend. |
 | `ROBOTHOR_VISION_REMOTE_MODEL` | A provider model used instead, for a deployment with no local GPU (a container, the cloud, the benchmark sandbox). Must be **declared** `accepts_images=True` in the engine's model registry — a model the registry has never heard of is refused, same as one it declares text-only. |
+| `ROBOTHOR_VISION_LOOK_TIMEOUT` | Seconds ONE rung of `view_image`'s ladder gets (default 45). It applies to the local and the remote rung separately, so two of them plus overhead must fit inside the agent's `tool_timeout_seconds` (120 by default) — otherwise a local model that is slow rather than absent burns the whole tool budget and the remote rung is never reached. Raise it only alongside the agent's tool timeout. |
 | `ROBOTHOR_VISION_BATCH_CONCURRENCY` | Ceiling on images in flight at once (default 4, platform maximum 16). An agent's `max_concurrency` may ask for fewer, never for more. |
 | `ROBOTHOR_VISION_BATCH_TIMEOUT` | Seconds one image gets (default 90). |
 | `ROBOTHOR_VISION_BATCH_DEADLINE` | Seconds the whole call gets (default 600). |
@@ -419,10 +427,28 @@ model" do not both read as "this instance has no vision".
 | `model` | the model that **answered** — your own on `primary`, the vision model otherwise |
 | `primary_model` | your own model, whether or not it could see |
 | `tokens`, `cost_usd` | present on the remote rung only; the run's spend includes them |
+| `provenance`, `provenance_note` | present wherever there is an ANSWER to attribute — so not on a `nobody` result, and not on a refusal |
 
 A remote fallback is real money spent on a single `view_image` call. Leave
 `ROBOTHOR_VISION_REMOTE_MODEL` unset on a box with a working local VLM and the
 rung is simply never reached.
+
+**A rung that failed says which kind of failure it was.** "No local vision
+model is configured (ROBOTHOR_VISION_MODEL)" and "the local vision model
+(`<m>`) is unavailable (ConnectionError: connection refused)" are different
+sentences because they need different fixes, and each carries the backend's
+own message, capped. Nothing a setting HOLDS is ever quoted back — the setting
+names are, which is what an operator needs.
+
+**Both vision tools refuse the same files.** A path that resolves outside the
+workspace (symlinks followed first) and anything the platform's secret-path
+rule calls a credentials file are refused by `view_image` exactly as
+`analyze_image` refuses them, in the same words, from the same helper — asked
+before any rung reads or decodes the bytes, and asked again about a
+substituted file. This matters more than it used to: on a text-only primary
+those bytes now leave the box for a provider, where they previously stopped at
+the on-box Ollama. A relative path is joined to the workspace, not to whatever
+the process has as its working directory.
 
 ### Several calls in one turn
 

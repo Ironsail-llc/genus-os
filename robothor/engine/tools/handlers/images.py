@@ -47,7 +47,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from robothor.engine.vision_fallback import PROVENANCE, PROVENANCE_NOTE
+from robothor.engine.vision_fallback import (
+    NO_WORKSPACE_REFUSAL,
+    PROVENANCE,
+    PROVENANCE_NOTE,
+    path_refusal,
+    workspace_root,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -328,6 +334,8 @@ async def _describe_instead(
     result["backend"] = described.backend
     result["model"] = described.model
     result["description"] = described.text
+    result["provenance"] = PROVENANCE
+    result["provenance_note"] = PROVENANCE_NOTE
     if described.tokens:
         result["tokens"] = described.tokens
     if described.cost_usd:
@@ -357,7 +365,25 @@ async def view_image(args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
     if not raw_path:
         return {"error": "path is required"}
 
+    # The two guards `analyze_image` has always applied to the same bytes, from
+    # the same helper (round-1 review I-4). Before this, a file under the
+    # instance's secrets directory and a file outside every workspace were both
+    # readable here — and with the remote rung they leave the box. Asked BEFORE
+    # anything reads or decodes the file, and on the RESOLVED path, so a
+    # symlink out of the tree is caught.
+    root = workspace_root(str(getattr(ctx, "workspace", "") or ""))
+    if root is None:
+        return {"error": NO_WORKSPACE_REFUSAL}
     path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        # Relative to the workspace, as the sibling tool resolves it — not to
+        # whatever the process happens to have as its working directory.
+        path = root / path
+    path = path.resolve(strict=False)
+    refused = path_refusal(path, root, Path(raw_path).name)
+    if refused:
+        return {"error": refused}
+
     # `resolved_from` is the path the agent ASKED FOR, and `path` is the file
     # that was read. It used to be the other way round — set to the substitute,
     # which is `path`, so the field was identical to its neighbour on every row
@@ -371,6 +397,13 @@ async def view_image(args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
         if len(siblings) == 1:
             resolved_from = str(path)
             path = siblings[0]
+            # The substitute is a different file, so it is asked the same
+            # questions. It shares a directory with the original, so only the
+            # secret-path name rule can fire here — but asking both is what
+            # keeps the two call sites from drifting.
+            refused = path_refusal(path, root, path.name)
+            if refused:
+                return {"error": refused}
         elif siblings:
             names = ", ".join(sorted(s.name for s in siblings))
             return {
@@ -396,11 +429,6 @@ async def view_image(args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
         "height": prepared.height,
         "path": str(path),
         "resolved_from": resolved_from,
-        # Said on every rung, including the one where the agent looks itself:
-        # a result whose provenance appears only sometimes is one an agent
-        # learns to read as decoration.
-        "provenance": PROVENANCE,
-        "provenance_note": PROVENANCE_NOTE,
     }
     if capability == "rejects":
         # No blocks. The client would strip them and the agent would be
@@ -410,6 +438,13 @@ async def view_image(args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
 
     result["primary_model"] = model
     result["model"] = model
+    # Provenance describes an ANSWER, so it rides exactly where there is one
+    # (round-1 review M-1). It used to be set before the rung was chosen, so a
+    # `seen_by: nobody` result carried "answers come from the model looking at
+    # the image content" beside an error saying nobody looked — while the
+    # earlier refusals carried none at all.
+    result["provenance"] = PROVENANCE
+    result["provenance_note"] = PROVENANCE_NOTE
     result["image_base64"] = base64.b64encode(data).decode("ascii")
     result["image_mime"] = prepared.mime
     result["seen_by"] = "primary"

@@ -17,9 +17,17 @@ from __future__ import annotations
 #: pictures learns nothing about a CSV whose header lies, and the whole reason
 #: this is rule 19 rather than a third sentence inside rule 18 is that the
 #: failure is not a vision failure.
+#:
+#: **"of that same item" is load-bearing** (round-1 review I-3). Without it the
+#: rule says a look beats a name FULL STOP — and both vision tools deliberately
+#: substitute a same-stem file when an extension misses, `read_file` will read
+#: a mistyped path, and an OCR will happily transcribe the facing page. An
+#: observation of the wrong thing is not evidence about the right one, and a
+#: fleet-wide instruction that said otherwise would be the symmetric failure of
+#: the one being fixed.
 EVIDENCE_OUTRANKS_NAMES = (
-    "A file's name, label or caption is a claim, not an observation; when an "
-    "observation — a tool that looked at the content — disagrees with a name, the "
+    "A name, label or caption is a claim, not an observation; when an observation of "
+    "that same item — a tool that read its content — disagrees with the name, the "
     "observation wins unless a second observation says otherwise."
 )
 

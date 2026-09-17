@@ -529,9 +529,12 @@ class TestTheSameGuardsAsItsSibling:
     async def test_a_secrets_file_is_refused_by_both_with_the_same_words(
         self, tmp_path, monkeypatch
     ) -> None:
-        secrets = tmp_path / "secrets"
+        # A real secrets directory by `secret_paths`' own rule, so the test
+        # exercises the shared helper rather than a fixture invented to match
+        # it. A screenshot of a key is still a key.
+        secrets = tmp_path / ".ssh"
         secrets.mkdir()
-        path = _png(secrets, name="credentials.png")
+        path = _png(secrets, name="key_on_screen.png")
 
         looked, row, dialled = await self._both(tmp_path, path, monkeypatch)
 

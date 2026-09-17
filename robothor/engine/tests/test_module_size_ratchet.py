@@ -235,13 +235,31 @@ CAPS = {
     # its pricing) left for `vision_fallback.py`, because `view_image` needed
     # the same rungs and had half of one. The spill/budget cluster
     # (FU-VIS2-SPILL) is still owed.
-    "robothor/engine/vision_batch.py": 1174,
+    # 1174 -> 1151: the workspace resolver and the containment/secret-path
+    # refusal left for `vision_fallback.py` too, once `view_image` had to ask
+    # the same two questions (round-1 review I-4). Two tools with two ideas of
+    # what a vision tool may read is how one becomes the way round the other.
+    "robothor/engine/vision_batch.py": 1151,
     # Which model looks at a picture, for BOTH image tools. Capped at what it
     # was written to. Not folded back into either caller: `vision_batch.py` is
     # the module this repo has an open extraction debt against, and
     # `handlers/images.py` would make a tool handler the owner of the ladder
     # its sibling tool depends on.
-    "robothor/engine/vision_fallback.py": 365,
+    # 365 -> 480 across the round-1 review, all four of which are this module's
+    # own subject -- WHICH model looks, for HOW LONG, at WHAT it is allowed to
+    # read, and what it says when it cannot:
+    #   * a per-rung budget (I-1), because the local rung at 120 s and the
+    #     remote at 90 s could not both fit inside a 120 s tool deadline, so a
+    #     local VLM that was slow rather than absent made the new rung
+    #     unreachable -- the exact failure the ladder exists to remove;
+    #   * per-rung reasons that distinguish "not configured" from "unreachable"
+    #     and carry the backend's own message, capped (I-2);
+    #   * `workspace_root` and `path_refusal`, moved UP from `vision_batch.py`
+    #     rather than copied down, so both tools ask one helper what a vision
+    #     tool may read (I-4).
+    # The alternative to the cap moving was a second copy of the guard, which
+    # is the defect being fixed.
+    "robothor/engine/vision_fallback.py": 480,
     # 248 -> 351: the reply parser. Review finding I1 measured three ordinary
     # model formatting habits — both markers on one line, a JSON object, a
     # parenthetical gloss — each turning a whole batch into `error` rows at

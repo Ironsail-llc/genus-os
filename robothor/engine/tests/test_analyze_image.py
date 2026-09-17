@@ -717,6 +717,25 @@ class TestTheWholeResultIsBounded:
         assert out["analyzed"] == 40, "the totals cover every image, not the preview"
         assert out["results_total"] == 40
         assert 0 < out["results_shown"] < 40
+
+    async def test_a_budget_too_small_for_one_row_still_spills_and_still_bounds(
+        self, tmp_path, local_backend, monkeypatch
+    ):
+        """Round-1 review M-4. The case above moved off 900 because provenance
+        made a preview row stop fitting there — so this keeps 900 pinned
+        rather than deleted. `_max_total_chars` clamps only the UPPER bound, so
+        an operator may still set it this low; what must hold is that the
+        result stays inside the budget, the table still reaches the file, and
+        the totals still describe every image. A zero-row preview is a thin
+        answer, never a lost one."""
+        monkeypatch.setattr(vision_batch, "_max_total_chars", lambda: 900)
+        out = await _analyze(tmp_path, _images(tmp_path, 40))
+
+        assert len(json.dumps(out, default=str)) <= 900
+        assert out["analyzed"] == 40
+        assert out["results_total"] == 40
+        assert out["results_shown"] == 0
+        assert out["results_file"]
         assert len(out["results"]) == out["results_shown"]
         assert "results_file" in out["note"], "the note must say where the rest went"
         assert out["results_file"] not in out["note"], (
@@ -829,7 +848,9 @@ class TestTheStepWriterCapInvariant:
         monkeypatch.setattr(
             vision_fallback, "configured_remote_model", lambda: "openrouter/nobody/unheard-of-v9"
         )
-        monkeypatch.setattr(vision_fallback, "configured_local_model", lambda: "llama3.2-vision:11b")
+        monkeypatch.setattr(
+            vision_fallback, "configured_local_model", lambda: "llama3.2-vision:11b"
+        )
         return deep
 
     @pytest.mark.parametrize("budget", [vision_batch.DEFAULT_MAX_TOTAL_CHARS, 10_000])

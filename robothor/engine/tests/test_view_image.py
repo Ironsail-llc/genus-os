@@ -25,13 +25,23 @@ import base64
 import pytest
 
 
-async def _call(args):
+def _ctx(tmp_path):
+    """A run context with a workspace — what production always passes.
+
+    Round-1 review I-4: `view_image` now judges containment on the resolved
+    path, the way `analyze_image` always has, so a call with no workspace is a
+    shape production never uses.
+    """
+    return type("Ctx", (), {"workspace": str(tmp_path), "run_id": "r1", "agent_id": "probe"})()
+
+
+async def _call(args, ctx=None):
     """Invoke the tool exactly as dispatch does: through the registered map,
     with (args, ctx). Calling the function directly with one argument is how
     a TypeError reached production while every unit test stayed green."""
     from robothor.engine.tools.dispatch import _collect_handlers
 
-    return await _collect_handlers()["view_image"](args, None)
+    return await _collect_handlers()["view_image"](args, ctx)
 
 
 def _png(tmp_path, name="x.png", size=(40, 30), color=(200, 30, 30)):
@@ -45,7 +55,7 @@ def _png(tmp_path, name="x.png", size=(40, 30), color=(200, 30, 30)):
 class TestViewImageTool:
     @pytest.mark.asyncio
     async def test_returns_the_image_convention(self, tmp_path):
-        result = await _call({"path": str(_png(tmp_path))})
+        result = await _call({"path": str(_png(tmp_path))}, _ctx(tmp_path))
         assert result["image_mime"] == "image/png"
         assert result["width"] == 40
         assert result["height"] == 30
@@ -53,7 +63,7 @@ class TestViewImageTool:
 
     @pytest.mark.asyncio
     async def test_a_missing_file_is_an_error_not_a_crash(self, tmp_path):
-        result = await _call({"path": str(tmp_path / "nope.png")})
+        result = await _call({"path": str(tmp_path / "nope.png")}, _ctx(tmp_path))
         assert "error" in result
         assert "image_base64" not in result
 
@@ -62,7 +72,7 @@ class TestViewImageTool:
         """A .png that is really a text file must not reach the model as one."""
         fake = tmp_path / "lies.png"
         fake.write_text("this is not a png", encoding="utf-8")
-        result = await _call({"path": str(fake)})
+        result = await _call({"path": str(fake)}, _ctx(tmp_path))
         assert "error" in result
 
     @pytest.mark.asyncio
@@ -72,14 +82,14 @@ class TestViewImageTool:
         from robothor.engine.tools.handlers.images import MAX_DIMENSION
 
         big = _png(tmp_path, "big.png", size=(6000, 400))
-        result = await _call({"path": str(big)})
+        result = await _call({"path": str(big)}, _ctx(tmp_path))
         assert "error" not in result
         assert max(result["width"], result["height"]) <= MAX_DIMENSION
         assert result["original_width"] == 6000
 
     @pytest.mark.asyncio
     async def test_a_small_image_is_not_touched(self, tmp_path):
-        result = await _call({"path": str(_png(tmp_path))})
+        result = await _call({"path": str(_png(tmp_path))}, _ctx(tmp_path))
         assert "original_width" not in result
 
 

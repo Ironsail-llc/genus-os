@@ -77,7 +77,8 @@ cost:
 * A spilled result also carries a ``sample`` spanning the DISTINCT answers, so
   the spot-check is a glance rather than a ``read_file`` round.
 * And the result says, in words, that a filename is a claim about a picture
-  and a reason is what was in it. ``prompts.py`` rule 18 says the same.
+  and a reason is what was in it. ``prompts.py`` rule 19 says the same,
+  generally.
 
 What the deadline bounds, exactly
 ---------------------------------
@@ -134,11 +135,14 @@ from robothor.engine.vision_contract import (
     parse_reply,
 )
 from robothor.engine.vision_fallback import (
+    NO_WORKSPACE_REFUSAL,
     PROVENANCE,
     PROVENANCE_NOTE,
     Backend,
+    path_refusal,
     remote_answer,
     resolve_backend,
+    workspace_root,
 )
 
 logger = logging.getLogger(__name__)
@@ -311,25 +315,6 @@ def _batch_deadline() -> float:
         return DEFAULT_DEADLINE_SECONDS
 
 
-def _workspace_root(workspace: str) -> Path | None:
-    """The tree an image has to be inside, or None when there is no answer.
-
-    The caller's ``ctx.workspace`` first, settings second — the idiom
-    ``tools/handlers/attachments.py`` uses for the same question, and for the
-    same reason: an unresolvable workspace refuses rather than defaulting to
-    "anywhere on the filesystem".
-    """
-    if workspace:
-        return Path(workspace).expanduser().resolve(strict=False)
-    try:
-        from robothor.settings.sources import workspace_path
-
-        resolved = workspace_path()
-        return resolved.resolve(strict=False) if resolved is not None else None
-    except Exception:  # noqa: BLE001 - an unresolvable workspace refuses, never reads
-        return None
-
-
 def _resolve_one(raw: str, root: Path) -> Resolved:
     """The file one requested image names, or why there is not one.
 
@@ -366,20 +351,12 @@ def _resolve_one(raw: str, root: Path) -> Resolved:
         candidate = root / candidate
     resolved = candidate.resolve(strict=False)
     shown = str(resolved)
-    if root != resolved and root not in resolved.parents:
-        return Resolved(
-            None,
-            (
-                f"refused: {Path(text).name} resolves outside the workspace. Only images "
-                "inside the workspace can be analyzed."
-            ),
-            shown,
-        )
-
-    from robothor.engine.secret_paths import is_secret_path, refusal_for
-
-    if is_secret_path(resolved):
-        return Resolved(None, refusal_for(resolved), shown)
+    # Containment then the secret-path name rule, both from the helper
+    # `view_image` now shares (round-1 review I-4) — one idea of what a vision
+    # tool may read, not two that drift.
+    refused = path_refusal(resolved, root, Path(text).name)
+    if refused:
+        return Resolved(None, refused, shown)
 
     substituted_for = ""
     if not resolved.is_file():
@@ -390,8 +367,9 @@ def _resolve_one(raw: str, root: Path) -> Resolved:
             )
         substituted_for, resolved = shown, found.path
         shown = str(resolved)
-        if is_secret_path(resolved):
-            return Resolved(None, refusal_for(resolved), shown)
+        refused = path_refusal(resolved, root, resolved.name)
+        if refused:
+            return Resolved(None, refused, shown)
 
     size = resolved.stat().st_size
     if size > MAX_IMAGE_BYTES:
@@ -784,7 +762,7 @@ def prune_spill_files(
     days = retention_days if retention_days is not None else _configured_spill_retention_days()
     if days <= 0:
         return 0
-    root = _workspace_root(str(workspace) if workspace else "")
+    root = workspace_root(str(workspace) if workspace else "")
     if root is None:
         return 0
     directory = root / SPILL_DIRNAME
@@ -951,14 +929,9 @@ async def analyze_images(
         notes.append(f"ignored detail={wanted_detail!r}; it must be one of low, high")
         wanted_detail = DEFAULT_DETAIL
 
-    root = _workspace_root(workspace)
+    root = workspace_root(workspace)
     if root is None:
-        return {
-            "error": (
-                "refused: the workspace could not be resolved, so containment cannot be "
-                "judged. Set ROBOTHOR_WORKSPACE."
-            )
-        }
+        return {"error": NO_WORKSPACE_REFUSAL}
 
     backend, refusal = resolve_backend()
     if backend is None:
@@ -1009,13 +982,6 @@ async def analyze_images(
         "backend": backend.kind,
         "analyzed": len(answered),
         "failed": failed,
-        # Where the answers came from, said in the result rather than left to
-        # be inferred. The measured run inferred wrongly: a row reading
-        # `choice: "natural scene"` for a file called `3d_render.jpg` looked,
-        # to the agent, like something that might have been derived from the
-        # name — so the name won. See vision_fallback.PROVENANCE_NOTE.
-        "provenance": PROVENANCE,
-        "provenance_note": PROVENANCE_NOTE,
         "results": list(results),
         "summary": (
             f"{len(answered)} of {len(results)} images answered by {backend.model} "
@@ -1025,6 +991,18 @@ async def analyze_images(
             + PIXELS_BEAT_NAMES
         ),
     }
+    if answered:
+        # Where the answers came from, said in the result rather than left to
+        # be inferred. The measured run inferred wrongly: a row reading
+        # `choice: "natural scene"` for a file called `3d_render.jpg` looked,
+        # to the agent, like something that might have been derived from the
+        # name — so the name won. See vision_fallback.PROVENANCE_NOTE.
+        #
+        # Only when something was actually answered (round-1 review M-1):
+        # provenance describes an ANSWER, and a batch where every row failed
+        # has none to attribute.
+        out["provenance"] = PROVENANCE
+        out["provenance_note"] = PROVENANCE_NOTE
     if tokens:
         out["tokens"] = tokens
     if cost:

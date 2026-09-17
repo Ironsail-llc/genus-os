@@ -46,9 +46,11 @@ a name lives in ``prompts.py`` as its own numbered rule.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from robothor.engine.pooled_completion import acompletion as pooled_acompletion
@@ -56,6 +58,7 @@ from robothor.engine.pooled_completion import acompletion as pooled_acompletion
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "NO_WORKSPACE_REFUSAL",
     "PROVENANCE",
     "PROVENANCE_NOTE",
     "Backend",
@@ -64,9 +67,12 @@ __all__ = [
     "configured_local_model",
     "configured_remote_model",
     "describe_with_fallback",
+    "look_timeout",
+    "path_refusal",
     "price",
     "remote_answer",
     "resolve_backend",
+    "workspace_root",
 ]
 
 #: What a vision result's ``provenance`` field says. A machine-readable token
@@ -87,10 +93,16 @@ PROVENANCE_NOTE = (
 #: transcription; short enough that 200 of them do not become a document.
 MAX_ANSWER_TOKENS = 1024
 
-#: Seconds a remote fallback gets for one picture. ``view_image`` is a single
-#: image and the agent is waiting on it, so this is tighter than the batch's
-#: per-image timeout, which is amortised over a fan-out.
-REMOTE_TIMEOUT_SECONDS = 90.0
+#: Seconds ONE rung of the ``view_image`` ladder gets when the setting cannot
+#: be read. Two rungs at this budget, plus overhead, must fit inside the
+#: agent's ``tool_timeout_seconds`` (120 by default) — see
+#: :func:`describe_with_fallback` for what happens when they do not.
+DEFAULT_LOOK_TIMEOUT_SECONDS = 45.0
+
+#: How much of a failed rung's own message is quoted back. Enough to tell a
+#: 402 from an expired key from a DNS failure; short enough that a provider
+#: answering with a page of HTML does not put the page in the context.
+MAX_RUNG_MESSAGE_CHARS = 200
 
 #: What the vision model is told it is for. The literal, insistent form
 #: ``view_image`` uses — a model that decides it "cannot access websites"
@@ -177,6 +189,69 @@ def configured_local_model() -> str:
     except Exception:  # noqa: BLE001
         logger.debug("settings unavailable while resolving the local vision model")
         return ""
+
+
+def look_timeout() -> float:
+    """``ROBOTHOR_VISION_LOOK_TIMEOUT`` — the budget for ONE rung of the ladder."""
+    try:
+        configured = float(_settings().providers.vision_look_timeout)
+    except Exception:  # noqa: BLE001
+        return DEFAULT_LOOK_TIMEOUT_SECONDS
+    return configured if configured > 0 else DEFAULT_LOOK_TIMEOUT_SECONDS
+
+
+def workspace_root(workspace: str) -> Path | None:
+    """The tree an image has to be inside, or None when there is no answer.
+
+    The caller's ``ctx.workspace`` first, settings second — the idiom
+    ``tools/handlers/attachments.py`` uses for the same question, and for the
+    same reason: an unresolvable workspace refuses rather than defaulting to
+    "anywhere on the filesystem".
+    """
+    if workspace:
+        return Path(workspace).expanduser().resolve(strict=False)
+    try:
+        from robothor.settings.sources import workspace_path
+
+        resolved = workspace_path()
+        return resolved.resolve(strict=False) if resolved is not None else None
+    except Exception:  # noqa: BLE001 - an unresolvable workspace refuses, never reads
+        return None
+
+
+def path_refusal(resolved: Path, root: Path, display_name: str) -> str:
+    """Why no vision tool may read *resolved*, or ``""`` when it may.
+
+    The ONE place both image tools ask, which is the point. Round-1 review I-4
+    found ``view_image`` asking neither question while ``analyze_image`` asked
+    both of them about the same bytes: a file under the instance's secrets
+    directory, and a file outside every workspace, were base64'd and posted to
+    a third-party provider. Two tools with two ideas of what a vision tool may
+    read is how one of them ends up being the way round the other.
+
+    Order matters and mirrors ``attachment_gate.resolve_for_send``: containment
+    on the RESOLVED path, so a symlink pointing out of the tree is caught, then
+    the secret-path NAME rule before any stat, so a refusal never reveals
+    whether the file exists.
+    """
+    if root != resolved and root not in resolved.parents:
+        return (
+            f"refused: {display_name} resolves outside the workspace. Only images "
+            "inside the workspace can be read."
+        )
+    from robothor.engine.secret_paths import is_secret_path, refusal_for
+
+    if is_secret_path(resolved):
+        return refusal_for(resolved)
+    return ""
+
+
+#: What every vision tool answers when it cannot tell what "inside the
+#: workspace" means. Shared so the two tools refuse in the same words.
+NO_WORKSPACE_REFUSAL = (
+    "refused: the workspace could not be resolved, so containment cannot be "
+    "judged. Set ROBOTHOR_WORKSPACE."
+)
 
 
 def _remote_refusal(remote: str) -> str:
@@ -311,39 +386,81 @@ async def remote_answer(
     )
 
 
+def _why(what: str, exc: BaseException) -> str:
+    """One rung's failure: its type AND its message, bounded.
+
+    Round-1 review I-2. The first cut reported ``type(exc).__name__`` alone, so
+    an expired key, a 402 and a network partition all reached the agent as
+    ``failed (APIError)`` — three different fixes behind one word. The message
+    is what distinguishes them and it is the provider's own text, so it is
+    quoted rather than pasted: a backend that answers a failure with a page of
+    HTML must not put the page into the context under an error key.
+
+    Message text only. No setting VALUE is ever interpolated into a reason —
+    the names of the settings are, which is what an operator needs.
+    """
+    message = " ".join(str(exc).split())[:MAX_RUNG_MESSAGE_CHARS]
+    return f"{what} ({type(exc).__name__}{': ' + message if message else ''})"
+
+
 async def describe_with_fallback(
     data: bytes,
     mime: str,
     prompt: str,
     *,
     detail: str = "high",
-    timeout: float = REMOTE_TIMEOUT_SECONDS,
+    timeout: float | None = None,
 ) -> Description:
     """A description of *data* from whichever vision model is reachable.
 
     The ``view_image`` ladder, for a primary model that cannot take pictures:
     the local VLM first (this box's GPU, free), then the configured remote
-    model. Raises :class:`NoVisionBackend` carrying one reason per rung when
-    neither answers — a description nobody produced is the one thing this must
-    never invent.
+    model. Raises :class:`NoVisionBackendError` carrying one reason per rung
+    when neither answers — a description nobody produced is the one thing this
+    must never invent.
+
+    **Each rung is bounded separately** (:func:`look_timeout`), and that is the
+    whole point of the number. Round-1 review I-1: the local rung used to take
+    ``images.VISION_TIMEOUT_SECONDS`` (120 s) and the remote rung 90 s, against
+    a ``view_image`` tool deadline of 120 s — so a box whose Ollama is up but
+    SLOW, which is the ordinary case for a cold model on a busy GPU, spent the
+    entire tool budget on the rung that was going to fail and was cancelled
+    before the remote rung was tried. The agent then saw a tool timeout, which
+    reads to it exactly like the "this instance has no vision" the ladder
+    exists to abolish. Both rungs at 45 s fit inside 120 s with room to spare.
 
     ``detail`` defaults to ``high`` rather than the batch's ``low``: this is
     the tool for the single image somebody has to study, so the cheapness that
     makes a 200-image fan-out affordable is the wrong trade here.
     """
     reasons: list[str] = []
+    budget = look_timeout() if timeout is None else timeout
 
     from robothor.engine.tools.handlers.images import describe_image_bytes
 
-    try:
-        text = (await describe_image_bytes(data, prompt)).strip()
-    except Exception as exc:  # noqa: BLE001 - every rung's failure is reported, not raised
-        reasons.append(f"the local vision model is unavailable ({type(exc).__name__})")
-        logger.debug("local vision rung failed: %s", exc)
+    local = configured_local_model()
+    if not local:
+        # Asked BEFORE dialling, because `describe_image_bytes` reports a
+        # missing setting by raising — and a rung that turns "you configured
+        # nothing" into "something went wrong" sends the operator looking for
+        # an outage. This module's whole promise is that the two read
+        # differently.
+        reasons.append("no local vision model is configured (ROBOTHOR_VISION_MODEL)")
     else:
-        if text:
-            return Description(text, "local", configured_local_model())
-        reasons.append("the local vision model returned nothing")
+        try:
+            # The budget is passed down AND enforced here. A backend that
+            # ignores its own timeout kwarg is not hypothetical on this
+            # instance (litellm did exactly that), and a rung that overruns is
+            # the whole of I-1.
+            async with asyncio.timeout(budget):
+                text = (await describe_image_bytes(data, prompt, timeout=budget)).strip()
+        except Exception as exc:  # noqa: BLE001 - every rung's failure is reported, not raised
+            reasons.append(_why(f"the local vision model ({local}) is unavailable", exc))
+            logger.debug("local vision rung failed: %s", exc)
+        else:
+            if text:
+                return Description(text, "local", local)
+            reasons.append(f"the local vision model ({local}) returned nothing")
 
     remote = configured_remote_model()
     refusal = _remote_refusal(remote)
@@ -352,11 +469,12 @@ async def describe_with_fallback(
         raise NoVisionBackendError(reasons)
 
     try:
-        text, tokens, cost = await remote_answer(
-            Backend("remote", remote), data, mime, prompt, detail, timeout
-        )
+        async with asyncio.timeout(budget):
+            text, tokens, cost = await remote_answer(
+                Backend("remote", remote), data, mime, prompt, detail, budget
+            )
     except Exception as exc:  # noqa: BLE001 - same rule: named, never invented
-        reasons.append(f"the remote vision model ({remote}) failed ({type(exc).__name__})")
+        reasons.append(_why(f"the remote vision model ({remote}) failed", exc))
         logger.warning("remote vision rung failed for %s: %s", remote, exc)
         raise NoVisionBackendError(reasons) from exc
     return Description(text, "remote", remote, tokens, cost)

@@ -24,6 +24,16 @@ def _clean_capability_state():
     mr.reset_image_discoveries()
 
 
+def _ctx(tmp_path):
+    """A run context with a workspace — what production always passes.
+
+    Round-1 review I-4: `view_image` now judges containment on the resolved
+    path, the way `analyze_image` always has, so a call with no workspace is a
+    shape production never uses.
+    """
+    return type("Ctx", (), {"workspace": str(tmp_path), "run_id": "r1", "agent_id": "probe"})()
+
+
 async def _call(args, ctx=None):
     from robothor.engine.tools.dispatch import _collect_handlers
 
@@ -43,7 +53,7 @@ class TestAcceptingModel:
     async def test_the_picture_itself_is_returned(self, tmp_path) -> None:
         token = mr.note_active_model("openrouter/anthropic/claude-sonnet-4.6")
         try:
-            out = await _call({"path": str(_png(tmp_path))})
+            out = await _call({"path": str(_png(tmp_path))}, _ctx(tmp_path))
         finally:
             mr.reset_active_model(token)
         assert out.get("image_base64")
@@ -55,7 +65,7 @@ class TestAcceptingModel:
         the curated table must keep being shown pictures."""
         token = mr.note_active_model("acme/never-heard-of-it-v9")
         try:
-            out = await _call({"path": str(_png(tmp_path))})
+            out = await _call({"path": str(_png(tmp_path))}, _ctx(tmp_path))
         finally:
             mr.reset_active_model(token)
         assert out.get("image_base64")
@@ -74,7 +84,7 @@ class TestRejectingModel:
         monkeypatch.setattr("robothor.engine.tools.handlers.images.describe_image_bytes", fake_vlm)
         token = mr.note_active_model("ollama_chat/qwen3:8b")
         try:
-            out = await _call({"path": str(_png(tmp_path))})
+            out = await _call({"path": str(_png(tmp_path))}, _ctx(tmp_path))
         finally:
             mr.reset_active_model(token)
         assert "image_base64" not in out, "a block the client will only strip is a lie"
@@ -94,10 +104,10 @@ class TestRejectingModel:
         monkeypatch.setattr("robothor.engine.tools.handlers.images.describe_image_bytes", fake_vlm)
         token = mr.note_active_model("openrouter/anthropic/claude-sonnet-4.6")
         try:
-            first = await _call({"path": str(_png(tmp_path))})
+            first = await _call({"path": str(_png(tmp_path))}, _ctx(tmp_path))
             assert first["seen_by"] == "primary"
             mr.note_image_rejection("openrouter/anthropic/claude-sonnet-4.6")
-            second = await _call({"path": str(_png(tmp_path))})
+            second = await _call({"path": str(_png(tmp_path))}, _ctx(tmp_path))
         finally:
             mr.reset_active_model(token)
         assert second["seen_by"] == "vision-model"
@@ -112,7 +122,7 @@ class TestRejectingModel:
         )
         token = mr.note_active_model("ollama_chat/qwen3:8b")
         try:
-            out = await _call({"path": str(_png(tmp_path))})
+            out = await _call({"path": str(_png(tmp_path))}, _ctx(tmp_path))
         finally:
             mr.reset_active_model(token)
         assert "image_base64" not in out

@@ -149,10 +149,8 @@ _ATTACHMENT_SCHEMAS: dict[str, dict[str, Any]] = {
             # which is uncapped and is read while the call is being written.
             "description": (
                 "Look at ONE image file — a photo, screenshot, chart, diagram or "
-                "scan. It is put in front of you; if your model cannot take images "
-                "a vision model looks instead. "
-                + EVIDENCE_OUTRANKS_NAMES
-                + " Many images: analyze_image."
+                "scan. It is put in front of you; a vision model looks if your "
+                "model cannot. " + EVIDENCE_OUTRANKS_NAMES + " Many: analyze_image."
             ),
             "parameters": {
                 "type": "object",
@@ -187,7 +185,7 @@ _ATTACHMENT_SCHEMAS: dict[str, dict[str, Any]] = {
             "description": (
                 "Ask one question about up to 200 images at once. Only the "
                 "ANSWERS come back, so no picture enters your context. Classify "
-                "with `choices`; read each row's `reason`. "
+                "with `choices`; read each `reason`. "
                 + EVIDENCE_OUTRANKS_NAMES
                 + " Study one: view_image."
             ),

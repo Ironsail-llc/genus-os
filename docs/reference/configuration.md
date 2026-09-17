@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-407 settings in 13 groups.
+408 settings in 13 groups.
 
 ## paths
 
@@ -161,6 +161,7 @@ Cloud model routing, budgets and the failure controls around them.
 | `ROBOTHOR_VISION_BATCH_MAX_CHARS` | int | `3500` | no | no | unreleased | How much of an `analyze_image` result comes back inline. Past it the full per-image table is written to a JSON file under <workspace>/.robothor/analyze_image/ and the result carries the path, the first rows and the totals. The default sits just under the 4000-character cap the step writer truncates a tool result at, so what the agent reads is also what the run record keeps -- and a larger value is clamped back to 3800 for that reason, rather than silently flattening the run's per-image record. 0 or less means the default; there is no way to turn the bound off, because the result it bounds reached 108,000 tokens in one message before it existed. |
 | `ROBOTHOR_VISION_BATCH_RETENTION_DAYS` | int | `7` | no | no | unreleased | How long a spilled `analyze_image` table is kept in <workspace>/.robothor/analyze_image/ before the daily retention sweep deletes it. Short by default: these are working files an agent reads in the run that wrote them, not the operator's own data. 0 disables the prune rather than deleting everything. |
 | `ROBOTHOR_VISION_BATCH_TIMEOUT` | float | `90.0` | no | no | unreleased | Seconds one image gets inside an `analyze_image` batch before it is marked timed out. The batch keeps going -- a slow image fails alone. |
+| `ROBOTHOR_VISION_LOOK_TIMEOUT` | float | `45.0` | no | no | unreleased | Seconds ONE rung of `view_image`'s fallback ladder gets when the agent's own model cannot accept images. It applies to the local VLM and to the remote vision model separately, so two rungs plus overhead must fit inside the agent's `tool_timeout_seconds` (120 by default) -- otherwise a local model that is slow rather than absent burns the whole tool budget and the remote rung is never reached, which is the failure the ladder exists to prevent. Raise it only alongside the agent's tool timeout. The batch tool has its own budget in ROBOTHOR_VISION_BATCH_TIMEOUT, which is amortised over a fan-out and so is longer. |
 | `ROBOTHOR_VISION_REMOTE_MODEL` | str | _(empty)_ | no | no | unreleased | Vision-capable provider model `analyze_image` sends images to, instead of the local Ollama VLM (ROBOTHOR_VISION_MODEL). Set it where there is no local vision model -- a container, a cloud deployment, the benchmark sandbox. The model must be DECLARED `accepts_images=True` in the engine's model registry -- a model the registry declares text-only AND a model it has never heard of are both refused rather than dialled, because a provider answers an image block from an unsupported model with a 404 per image. When a local vision model is configured it answers instead, and the result says so; when it is not, the call refuses and names the model. |
 
 ## engine
