@@ -43,7 +43,15 @@ def _step() -> RunStep:
 
 
 class _MissingColumnError(Exception):
-    """What psycopg2 raises, in the shape the detector reads."""
+    """What psycopg2 raises, in the shape the detector reads.
+
+    ``pgcode`` is the attribute that decides; the message carries the column
+    name that narrows it. Both halves are needed, so the stand-in has both.
+    """
+
+    def __init__(self, message: str, pgcode: str = "42703") -> None:
+        super().__init__(message)
+        self.pgcode = pgcode
 
 
 class TestTheDetectorIsNarrow:
@@ -64,8 +72,19 @@ class TestTheDetectorIsNarrow:
         assert tracking._missing_batch_columns(exc) is False
 
     def test_it_does_not_swallow_a_permission_error(self):
-        exc = _MissingColumnError("permission denied for table agent_run_steps")
+        exc = _MissingColumnError("permission denied for table agent_run_steps", pgcode="42501")
         assert tracking._missing_batch_columns(exc) is False
+
+    def test_the_sqlstate_decides_before_the_text_does(self):
+        """Any error whose message merely CONTAINS a column name — a constraint,
+        a trigger, someone else's quoted query — must not degrade this writer.
+        `log_guardrail_event` eight hundred lines down keys on its own SQLSTATE
+        for the same reason; the two degrade paths in this module read alike."""
+        exc = _MissingColumnError('syntax error at or near "batch_id"', pgcode="42601")
+        assert tracking._missing_batch_columns(exc) is False
+
+    def test_an_error_with_no_sqlstate_at_all_is_not_ours(self):
+        assert tracking._missing_batch_columns(RuntimeError("batch_id column")) is False
 
 
 class TestTheInsertShape:

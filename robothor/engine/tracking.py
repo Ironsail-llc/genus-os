@@ -345,17 +345,38 @@ _MIGRATION_HINT = (
 )
 
 
+#: PostgreSQL's SQLSTATE for "column does not exist". Matched on the CODE
+#: first, for the reason ``_CHECK_VIOLATION_SQLSTATE`` states below about its
+#: own: the code is the standardised part, and it survives a driver swap, a
+#: wrapped exception, a pooler and a localised server. The two degrade paths in
+#: this module — an action the CHECK does not know (125's neighbour, 124) and a
+#: column the table does not have (125) — now read alike, which is the point of
+#: them sitting eight hundred lines apart in one file.
+_UNDEFINED_COLUMN_SQLSTATE = "42703"
+
+
 def _missing_batch_columns(exc: BaseException) -> bool:
     """True when this failure is 125 being absent, and not something else.
 
-    Narrow on purpose. Any other ``ProgrammingError`` — a real schema problem, a
-    permission error — must keep raising, because a writer that silently
-    degrades on every failure is a writer that cannot tell you it is broken.
+    Narrow on purpose, in two independent ways. The SQLSTATE says the server
+    refused a column that does not exist rather than anything else; the name
+    check says it was one of OURS. Any other ``ProgrammingError`` — a different
+    missing column, a permission error — must keep raising, because a writer
+    that silently degrades on every failure is a writer that cannot tell you it
+    is broken.
+
+    The text is still consulted because the column NAME is only in the message,
+    and dropping the wrong column would hide a real schema defect. Without the
+    SQLSTATE in front of it, though, any error whose text happened to contain
+    "column" and "batch_id" — a constraint name, a trigger, a quoted query in
+    someone else's error — would have degraded this writer silently.
     """
     if not isinstance(exc, Exception):
         return False
+    if getattr(exc, "pgcode", None) != _UNDEFINED_COLUMN_SQLSTATE:
+        return False
     text = str(exc).lower()
-    return "column" in text and any(name in text for name in _BATCH_COLUMNS)
+    return any(name in text for name in _BATCH_COLUMNS)
 
 
 def _note_missing_batch_columns() -> None:
