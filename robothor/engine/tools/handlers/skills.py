@@ -342,33 +342,44 @@ async def _create_skill(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
 
 @_handler("skill_archive")
 async def _skill_archive(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    """Move an agent-created skill to agents/skills/.archive/ — reversible retirement.
+    """Move an agent-created skill to the instance's ``.archive/`` — reversible.
 
-    The curator's only destructive action (Rip 5). Refuses pinned and operator-
-    authored skills. Content-preserving (a move, not a delete), so a wrongly
-    archived skill is recovered by moving it back.
+    The curator's only destructive action (Rip 5). Refuses pinned skills and
+    anything the platform ships, so retirement can never delete a tracked
+    file. Content-preserving (a move, not a delete), so a wrongly archived
+    skill is recovered by moving it back. A stray still sitting in the
+    platform tree from before the instance split is archived OUT of it.
     """
     import shutil
 
     import robothor.engine.skills as _skills_mod
-    from robothor.engine.skills import _skills_dir, read_skill_view
+    from robothor.engine.skills import (
+        instance_skills_dir,
+        is_instance_skill_meta,
+        read_skill_view,
+        resolve_skill_dir,
+    )
 
     name = (args.get("name") or "").strip()
     if not name:
         return {"error": "name is required"}
 
-    skills_dir = _skills_dir()
-    src = (skills_dir / name).resolve()
-    if not src.is_relative_to(skills_dir.resolve()) or not src.is_dir():
+    try:
+        src = resolve_skill_dir(name)
+    except ValueError:
+        return {"error": f"Skill '{name}' not found"}
+    if src is None:
         return {"error": f"Skill '{name}' not found"}
 
     meta = read_skill_view(name) or {}
     if meta.get("pinned"):
         return {"error": f"Skill '{name}' is pinned — archive refused"}
-    if not (meta.get("is_agent_created") or meta.get("auto_generated")):
-        return {"error": f"Skill '{name}' is operator-authored — archive refused"}
+    if not is_instance_skill_meta(meta):
+        return {
+            "error": (f"Skill '{name}' is operator-authored or platform-bundled — archive refused")
+        }
 
-    archive_dir = skills_dir / ".archive"
+    archive_dir = instance_skills_dir() / ".archive"
     archive_dir.mkdir(parents=True, exist_ok=True)
     dest = archive_dir / name
     if dest.exists():
@@ -384,6 +395,7 @@ async def _update_skill(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     """Update an existing skill with an improved version."""
     from robothor.engine.skills import (
         _MAX_CONTENT_LEN,
+        INSTANCE_ORIGIN,
         RUNTIME_STATE_KEYS,
         _content_hash,
         load_skills,
@@ -458,8 +470,12 @@ async def _update_skill(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
 
     path = write_skill_file(name, frontmatter, content)
 
+    # The write lands in the instance tree — a bundled skill is shadowed by an
+    # overlay, never rewritten in place — so the copy is instance data whatever
+    # the platform's own meta.json said.
     meta.update(
         {
+            "origin": INSTANCE_ORIGIN,
             "revision": revision,
             "content_hash": _content_hash(content),
             "last_revised_by": ctx.agent_id,

@@ -886,6 +886,18 @@ def _build_parser() -> argparse.ArgumentParser:
             "meta.json files into gitignored state.json sidecars (idempotent)"
         ),
     )
+    migrate_instance_p = skills_sub.add_parser(
+        "migrate-instance",
+        help=(
+            "Move skills agents created out of the tracked agents/skills/ tree "
+            "into this instance's own skills directory (idempotent)"
+        ),
+    )
+    migrate_instance_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report what would move without touching anything",
+    )
 
     # agent
     agent_parser = subparsers.add_parser("agent", help="Agent management")

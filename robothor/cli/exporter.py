@@ -96,11 +96,17 @@ def _export_agents(output_dir: Path) -> int:
 
 
 def _export_skills(output_dir: Path) -> int:
-    """Copy skill directories to output."""
-    from robothor.engine.skills import _skills_dir
+    """Copy skill directories to output — both trees, the instance winning.
 
-    source = _skills_dir()
-    if not source.is_dir():
+    A bundle carries what this instance actually runs, so it takes the
+    bundled skills and then the instance's own, in the same precedence the
+    engine reads them: an instance skill shadowing a bundled name is the one
+    exported.
+    """
+    from robothor.engine.skills import skill_search_paths
+
+    sources = [d for d in skill_search_paths() if d.is_dir()]
+    if not sources:
         return 0
 
     import shutil
@@ -108,19 +114,20 @@ def _export_skills(output_dir: Path) -> int:
     target = output_dir / "skills"
     target.mkdir(exist_ok=True)
 
-    count = 0
-    for skill_dir in sorted(source.iterdir()):
-        if not (skill_dir / "SKILL.md").exists():
-            continue
-        shutil.copytree(
-            skill_dir,
-            target / skill_dir.name,
-            dirs_exist_ok=True,
-            ignore=shutil.ignore_patterns("state.json", "*.json.tmp"),
-        )
-        count += 1
+    exported: set[str] = set()
+    for source in sources:
+        for skill_dir in sorted(source.iterdir()):
+            if not (skill_dir / "SKILL.md").exists():
+                continue
+            shutil.copytree(
+                skill_dir,
+                target / skill_dir.name,
+                dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns("state.json", "*.json.tmp"),
+            )
+            exported.add(skill_dir.name)
 
-    return count
+    return len(exported)
 
 
 def _export_memory(tenant_id: str) -> dict[str, str]:

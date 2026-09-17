@@ -66,28 +66,36 @@ def get_accretion_ledger(limit: int = 30) -> dict[str, Any]:
     import subprocess
     from pathlib import Path
 
-    from robothor.engine.skills import read_skill_view
+    from robothor.engine.skills import read_skill_view, skill_search_paths
 
     workspace = Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
-    skills_dir = workspace / "agents" / "skills"
     entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
     try:
-        for meta_path in sorted(skills_dir.glob("*/meta.json")):
-            name = meta_path.parent.name
-            view = read_skill_view(name, base=skills_dir)
-            if view is None:
-                continue
-            if view.get("created_by") in (None, "operator", "human"):
-                continue  # ledger tracks AGENT-authored skills
-            entries.append(
-                {
-                    "skill": name,
-                    "created_by": view.get("created_by"),
-                    "created_at": view.get("created_at"),
-                    "usage_count": view.get("usage_count", 0),
-                    "last_used": view.get("last_used"),
-                }
-            )
+        # Both trees: a skill the fleet wrote lives in the instance directory,
+        # and pre-migration strays are still in the platform one.
+        for skills_dir in skill_search_paths():
+            for meta_path in sorted(skills_dir.glob("*/meta.json")):
+                name = meta_path.parent.name
+                if name in seen:
+                    continue
+                view = read_skill_view(name)
+                if view is None:
+                    continue
+                if view.get("created_by") in (None, "operator", "human"):
+                    continue  # ledger tracks AGENT-authored skills
+                seen.add(name)
+                entries.append(
+                    {
+                        "skill": name,
+                        "created_by": view.get("created_by"),
+                        "created_at": view.get("created_at"),
+                        "usage_count": view.get("usage_count", 0),
+                        "last_used": view.get("last_used"),
+                    }
+                )
+                if len(entries) >= limit:
+                    break
             if len(entries) >= limit:
                 break
     except Exception as e:

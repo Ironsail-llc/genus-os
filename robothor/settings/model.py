@@ -224,6 +224,17 @@ class PathsSettings(SettingsGroup):
         "ROBOTHOR_WORKFLOW_DIR",
         "Directory of workflow definitions. Empty means <workspace>/docs/workflows.",
     )
+    instance_skills_dir: str = declare(
+        "",
+        "ROBOTHOR_INSTANCE_SKILLS_DIR",
+        "Directory the engine writes agent-created skills to, and reads them "
+        "back from after the bundled ones. Empty means <workspace>/brain/skills "
+        "-- instance-land, gitignored, so a skill an agent writes is never "
+        "committed into the platform tree and survives a clean checkout. The "
+        "skills the platform ships stay read-only at <workspace>/agents/skills; "
+        "a skill here with the same name wins.",
+        since="unreleased",
+    )
     agents_dir: str = declare(
         "",
         "ROBOTHOR_AGENTS_DIR",

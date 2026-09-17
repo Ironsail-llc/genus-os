@@ -1,4 +1,5 @@
 {
+  "origin": "platform",
   "revision": 5,
   "content_hash": "ede258ef752bd0da",
   "last_revised_by": "main",
@@ -23,14 +24,14 @@
       "date": "2026-06-15T10:54:39.115827+00:00",
       "agent": "main",
       "content_hash": "855d31b51329c21f",
-      "reason": "Pitfalls were documented but buried at the bottom. Session evidence: agent re-searched the same channel 3x and searched for bare company name 'Quartz' returning mineral results \u2014 both violations of existing pitfalls. Restructuring to surface critical checks as a pre-action checklist at the top of the skill so they're encountered before any tool calls are made."
+      "reason": "Pitfalls were documented but buried at the bottom. Session evidence: agent re-searched the same channel 3x and searched for bare company name 'Quartz' returning mineral results — both violations of existing pitfalls. Restructuring to surface critical checks as a pre-action checklist at the top of the skill so they're encountered before any tool calls are made."
     },
     {
       "revision": 4,
       "date": "2026-06-19T08:53:23.906781+00:00",
       "agent": "main",
       "content_hash": "5af8cadde0fd4d4f",
-      "reason": "Added pitfall: \"a 403 from an external API is not proof the credential is bad\" \u2014 session showed an enrichment tool routing to a deprecated endpoint while the key was valid. Captured the diagnosis sequence (curl the raw API, check tool source routing) as a durable pattern for debugging API 403s across external integrations."
+      "reason": "Added pitfall: \"a 403 from an external API is not proof the credential is bad\" — session showed an enrichment tool routing to a deprecated endpoint while the key was valid. Captured the diagnosis sequence (curl the raw API, check tool source routing) as a durable pattern for debugging API 403s across external integrations."
     }
   ]
 }

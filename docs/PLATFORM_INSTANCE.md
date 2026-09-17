@@ -7,7 +7,7 @@ Genus OS separates **platform code** (what ships to everyone) from **instance co
 | Layer | What | Tracked in git? | Examples |
 |-------|------|-----------------|----------|
 | **Platform** | Core engine, tools, migrations, dashboard, docs | Yes | `robothor/`, `crm/`, `infra/`, `app/`, `docs/*.md` |
-| **Instance** | Identity, agent configs, memory, secrets | No | `brain/`, `docs/agents/*.yaml`, `local/`, `.env` |
+| **Instance** | Identity, agent configs, learned skills, memory, secrets | No | `brain/`, `brain/skills/`, `docs/agents/*.yaml`, `local/`, `.env` |
 | **Runtime** | Session state, assembled prompts, tenant context | No (in-memory) | System prompts, warmup blocks, scratchpad |
 
 A platform upgrade — a new wheel, or a new image tag — only touches Layer 1. Layers 2 and 3 are untouched.
@@ -50,6 +50,10 @@ Is it an agent configuration (schedule, model, tools)?
 Is it an agent instruction (behavior, procedures)?
   → brain/agents/<name>.md (instance)
 
+Is it a skill an agent wrote for itself?
+  → brain/skills/<name>/ (instance) — written there by the engine,
+    never by hand. agents/skills/ is the platform's own library.
+
 Is it a platform tool, migration, or engine feature?
   → robothor/ or crm/ or infra/ (platform)
 
@@ -67,7 +71,7 @@ Is it a test fixture?
 
 Three mechanisms prevent instance data from leaking into platform code:
 
-1. **`.gitignore`** — `brain/*.md`, `docs/agents/*.yaml`, `local/`, `.robothor/`, `.env*` are all excluded from tracking.
+1. **`.gitignore`** — `brain/*.md`, `brain/skills/`, `docs/agents/*.yaml`, `local/`, `.robothor/`, `.env*` are all excluded from tracking — every instance keeps them local.
 
 2. **Pre-commit hook** (`check-instance-leak`) — Scans staged files for hardcoded user home directory paths, personal email addresses, phone numbers, and street addresses. Blocks the commit with clear messages.
 
@@ -119,6 +123,35 @@ Two sub-directories of `docs/agents/` are instance-owned and gitignored too:
 Neither is visible to the engine: `load_manifest_dir` globs `*.yaml` one level
 deep and non-recursively, so a retired or historical manifest can never be
 loaded as a live agent.
+
+## Skills
+
+Skills split the same way, and for the same reason: an agent writes them while
+it works, so they are instance data even though the platform ships a library of
+its own.
+
+| Directory | Layer | Tracked | Written by |
+|-----------|-------|---------|------------|
+| `agents/skills/` | Platform | Yes | Humans, in a pull request. The engine only ever reads it. |
+| `brain/skills/` (`ROBOTHOR_INSTANCE_SKILLS_DIR`) | Instance | No | `create_skill`, `update_skill`, `skill_archive`, `genus import` |
+
+The engine reads the bundled directory first and the instance directory second,
+so a skill in the instance **shadows** a bundled one of the same name. That makes
+`update_skill` on a bundled skill copy-on-write: the tracked file is never
+rewritten, and the revision lands in the instance tree. Retirement
+(`skill_archive`) moves a skill into the instance's `brain/skills/.archive/`,
+so it can never delete a tracked file.
+
+Which layer a skill belongs to is recorded in its `meta.json` as
+`"origin": "instance" | "platform"`. Two things read it:
+
+- `tests/test_no_tracked_instance_files.py` fails if a tracked skill under
+  `agents/skills/` carries an instance origin — the leak this boundary exists to
+  stop.
+- `genus skills migrate-instance` moves exactly those out of the platform tree
+  and into the instance one. It is idempotent, takes `--dry-run`, reports a
+  name that already exists in the instance as a conflict rather than
+  overwriting it, and leaves every platform-origin skill alone.
 
 ## Upgrade Path
 

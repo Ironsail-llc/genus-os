@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from unittest.mock import patch
@@ -184,11 +185,23 @@ def skills_dir(tmp_path: Path):
     _mod._skills_cache = None
 
 
+@contextmanager
 def _patch_skills_dir(skills_dir: Path):
-    """Context manager to patch _skills_dir and invalidate cache."""
+    """Point BOTH skill trees at one tmp directory.
+
+    Reads walk the bundled tree and then the instance tree, and writes go to
+    the instance one -- so a helper that patched only ``_skills_dir`` would
+    send every write to the real workspace's ``brain/skills``. These tests
+    are about write/read behaviour, not about the split; the split has its
+    own suite in ``test_skills_instance_dir.py``.
+    """
     import robothor.engine.skills as _mod
 
-    return patch.object(_mod, "_skills_dir", return_value=skills_dir)
+    with (
+        patch.object(_mod, "_skills_dir", return_value=skills_dir),
+        patch.object(_mod, "instance_skills_dir", return_value=skills_dir),
+    ):
+        yield skills_dir
 
 
 class TestCreateSkillHandler:

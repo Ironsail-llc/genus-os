@@ -281,21 +281,31 @@ def _collapse_adapter(name: str, data: dict[str, Any]) -> tuple[dict[str, Any], 
 # ---------------------------------------------------------------------------
 
 
+#: Where a required skill can live, in the engine's own read order: the
+#: platform's bundled tree, then this instance's own (where every skill an
+#: agent writes now lands). Each is its own contained sub-root.
+_SKILL_ROOTS = ("agents/skills", "brain/skills")
+
+
 def _copy_skill(repo_root: Path, staging: Path, skill: str) -> None:
-    try:
-        source = workspace_path(
-            repo_root,
-            f"agents/skills/{skill}",
-            allowed_prefix="agents/skills",
-            label="skill directory",
-        )
-    except TemplateSecurityError as exc:
-        raise ExportError(str(exc)) from exc
-    if not source.is_dir():
+    source: Path | None = None
+    for root in _SKILL_ROOTS:
+        try:
+            candidate = workspace_path(
+                repo_root,
+                f"{root}/{skill}",
+                allowed_prefix=root,
+                label="skill directory",
+            )
+        except TemplateSecurityError as exc:
+            raise ExportError(str(exc)) from exc
+        if candidate.is_dir():
+            source = candidate
+    if source is None:
         raise ExportError(
             f"The manifest requires the skill {skill!r}, which this instance does not "
-            "have at agents/skills/. Export it from the instance that owns it, or drop "
-            "it from requires.skills."
+            "have at agents/skills/ or brain/skills/. Export it from the instance that "
+            "owns it, or drop it from requires.skills."
         )
     destination = contained_path(staging, f"skills/{skill}", label="staged skill path")
     destination.parent.mkdir(parents=True, exist_ok=True)

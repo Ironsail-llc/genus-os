@@ -1,4 +1,5 @@
 {
+  "origin": "platform",
   "auto_generated": true,
   "created_by": "main",
   "created_at": "2026-06-13T21:12:05.508024+00:00",
@@ -9,7 +10,7 @@
       "date": "2026-07-01T11:06:51.692016+00:00",
       "agent": "main",
       "content_hash": "6a7f700fb1a7ffcb",
-      "reason": "Session learnings: (1) Phantom task references from prior sessions/summaries require validation before operating \u2014 added \"Early Task Validation\" section and pitfall #6. (2) Tool substitution pattern (edit unavailable \u2192 write_file succeeded) \u2014 added pitfall #7. (3) Developer verification failures need reasoned evaluation, not automatic retry \u2014 added \"Handling Developer Verification Failures\" section."
+      "reason": "Session learnings: (1) Phantom task references from prior sessions/summaries require validation before operating — added \"Early Task Validation\" section and pitfall #6. (2) Tool substitution pattern (edit unavailable → write_file succeeded) — added pitfall #7. (3) Developer verification failures need reasoned evaluation, not automatic retry — added \"Handling Developer Verification Failures\" section."
     }
   ],
   "content_hash": "e52432c300724245",
