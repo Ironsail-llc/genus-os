@@ -600,6 +600,31 @@ def log_guardrail_event(run_id: str, guardrail_name: str, action: str, **kwargs:
     tracking.log_guardrail_event(run_id, guardrail_name, action, **kwargs)
 
 
+def enforce_ceiling(messages: list[dict[str, Any]], fit: ContextFit) -> bool:
+    """Put ``messages`` under ``fit``'s ceiling IN PLACE, and say what went.
+
+    The deterministic half of the budget, on a plain message list so that both
+    callers can use it: the run loop through ``context_budget`` and the
+    pre-flight every dispatch path shares. Returns whether the run was given a
+    note — which includes the case where the shrink could not reach the
+    ceiling, because an agent whose conversation the server is about to
+    truncate needs telling either way.
+
+    Never calls a model. Never raises.
+    """
+    try:
+        outcome = shrink_to_fit(messages, fit)
+        if outcome.note is None:
+            return False
+        from robothor.engine.session import ENGINE_CONTEXT_ROLE
+
+        messages[:] = [*outcome.messages, {"role": ENGINE_CONTEXT_ROLE, "content": outcome.note}]
+        return True
+    except Exception as exc:  # noqa: BLE001 — a lost ceiling must not lose the run
+        logger.warning("context ceiling could not be enforced: %s", exc)
+        return False
+
+
 def shrink_after_overflow(messages: list[dict[str, Any]], model: str) -> bool:
     """Make ``messages`` smaller IN PLACE after a provider refused them.
 

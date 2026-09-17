@@ -171,17 +171,9 @@ def enforce_hard_limit(session: Any, fit: Any) -> bool:
     token-comparison test belongs to `shrink_after_overflow`, whose question is
     different: may this call spend its one retry? Never raises.
     """
-    from robothor.engine.context_fit import shrink_to_fit
-    from robothor.engine.session import ENGINE_CONTEXT_ROLE
+    from robothor.engine.context_fit import enforce_ceiling
 
-    outcome = shrink_to_fit(session.messages, fit)
-    if outcome.note is None:
-        return False
-    session.messages[:] = [
-        *outcome.messages,
-        {"role": ENGINE_CONTEXT_ROLE, "content": outcome.note},
-    ]
-    return True
+    return enforce_ceiling(session.messages, fit)
 
 
 async def _dispatch(

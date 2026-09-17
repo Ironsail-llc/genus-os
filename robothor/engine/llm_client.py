@@ -1589,27 +1589,37 @@ class LLMClient:
         """Shared pre-flight: compress context and estimate input tokens.
 
         Mutates messages in-place. Returns estimated input token count.
+
+        This is the ONLY budget the first call of a run gets: the loop's own
+        pass returns early on iteration 0, and a run resumed from a journal or
+        a long chat history starts with the whole conversation already in hand.
+        So it does what the loop does — size against the model that will
+        actually be reached, compact above the threshold, and then ENFORCE the
+        ceiling deterministically. Sizing here used the flat ``chars / 4`` and
+        never touched the ceiling, which shipped ~110k estimated tokens at a
+        65,536-token model with no drop and no note (hostile review, M4).
         """
-        from robothor.engine.context import estimate_tokens, maybe_compress
-        from robothor.engine.model_registry import get_model_limits
+        from robothor.engine.context import maybe_compress
+        from robothor.engine.context_fit import enforce_ceiling, estimate_for, fit_for
 
+        fit = fit_for(self.sizing_model(models, broken_models))
         try:
-            from robothor.engine.run_budget import proactive_compaction_threshold
-
-            model_limits = get_model_limits(self.sizing_model(models, broken_models))
             # Same clamped threshold as the in-loop trigger. The old
             # 0.75-of-window guard was 786K tokens on the fleet primary's 1M
             # window — unreachable, zero firings in 7 days. When the in-loop
             # pass just compacted, this no-ops (estimate is under threshold);
             # it exists for the paths that call the client without the loop.
-            compress_threshold = proactive_compaction_threshold(model_limits.max_input_tokens)
             messages[:] = await maybe_compress(
-                messages, models, threshold=compress_threshold, broken_models=broken_models
+                messages, models, threshold=fit.threshold, broken_models=broken_models
             )
         except Exception as e:
             logger.warning("Pre-flight compression failed: %s", _sanitize(e))
+        # Outside the try on purpose: compaction summarises with a MODEL, and
+        # the call that most needs the ceiling is the one whose summariser
+        # could not reach one. `enforce_ceiling` never raises.
+        enforce_ceiling(messages, fit)
 
-        return estimate_tokens(messages)
+        return estimate_for(messages, fit.model)
 
     # ─── Message hygiene ─────────────────────────────────────────────
 

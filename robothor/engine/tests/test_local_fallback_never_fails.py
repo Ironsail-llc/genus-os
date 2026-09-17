@@ -89,6 +89,16 @@ class TestTheBudgetFollowsTheModelThatWillAnswer:
         )
 
 
+def _answer():
+    """The shape litellm returns, with enough for the caller to unwrap."""
+    message = SimpleNamespace(content="ok", tool_calls=None, reasoning_content=None)
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=message, finish_reason="stop")],
+        usage=SimpleNamespace(prompt_tokens=10, completion_tokens=1),
+        model=LOCAL,
+    )
+
+
 def _long_conversation(turns: int) -> list[dict]:
     """~34k tokens of tool traffic — the shape of the run that died."""
     messages: list[dict] = [
@@ -206,6 +216,73 @@ class TestALongConversationOnTheLocalTierIsMadeToFit:
         )
 
         assert any(m.get("role") == "user" for m in session.messages)
+
+
+class TestTheFirstCallOfARunIsBudgetedToo:
+    """`keep_context_within_budget` returns early on iteration 0, so the loop
+    does not look at the FIRST call of a run — and a run resumed from a journal
+    or a long Telegram history starts with the whole conversation already in
+    hand. The pre-flight every path shares is what has to catch that, and it
+    was sizing with the flat estimator and never touching the ceiling: the
+    measured shape ships ~110k estimated tokens at a 65,536-token model with no
+    note and no drop (hostile review, M4).
+    """
+
+    async def test_it_is_brought_under_the_ceiling_before_it_is_sent(
+        self, spent_cloud_key, monkeypatch
+    ):
+        from unittest.mock import AsyncMock, patch
+
+        async def _no_llm_compaction(messages, models=None, threshold=None, broken_models=None):
+            return messages
+
+        monkeypatch.setattr("robothor.engine.context.maybe_compress", _no_llm_compaction)
+        messages = _long_conversation(30)
+        assert estimate_tokens(messages) > get_model_limits(LOCAL).max_input_tokens
+
+        sent: list[int] = []
+
+        async def _record(**kwargs):
+            sent.append(estimate_tokens(kwargs["messages"]))
+            return _answer()
+
+        with patch(
+            "robothor.engine.llm_client.litellm.acompletion", AsyncMock(side_effect=_record)
+        ):
+            await LLMClient()._call_llm(messages, CHAIN, [], broken_models=set())
+
+        assert sent, "nothing was dialled"
+        assert sent[0] <= fit_for(LOCAL).hard_limit, (
+            f"the first call shipped {sent[0]} tokens at a "
+            f"{fit_for(LOCAL).hard_limit}-token ceiling"
+        )
+
+    async def test_the_agent_is_told_what_the_pre_flight_dropped(
+        self, spent_cloud_key, monkeypatch
+    ):
+        async def _no_llm_compaction(messages, models=None, threshold=None, broken_models=None):
+            return messages
+
+        monkeypatch.setattr("robothor.engine.context.maybe_compress", _no_llm_compaction)
+        messages = _long_conversation(30)
+
+        await LLMClient()._prepare_llm_call(messages, CHAIN, set())
+
+        assert any(
+            m.get("role") == ENGINE_CONTEXT_ROLE and "context window" in str(m.get("content"))
+            for m in messages
+        ), "a silent drop is the failure mode being fixed, not the fix"
+
+    async def test_a_conversation_that_fits_is_left_alone(self, spent_cloud_key, monkeypatch):
+        async def _no_llm_compaction(messages, models=None, threshold=None, broken_models=None):
+            return messages
+
+        monkeypatch.setattr("robothor.engine.context.maybe_compress", _no_llm_compaction)
+        messages = [{"role": "user", "content": "hello"}]
+
+        await LLMClient()._prepare_llm_call(messages, CHAIN, set())
+
+        assert messages == [{"role": "user", "content": "hello"}]
 
 
 # ── An overflow is not a five hundred ────────────────────────────────
