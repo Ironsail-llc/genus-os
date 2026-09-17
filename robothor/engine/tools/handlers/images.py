@@ -300,11 +300,18 @@ async def view_image(args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
         return {"error": "path is required"}
 
     path = Path(raw_path).expanduser()
+    # `resolved_from` is the path the agent ASKED FOR, and `path` is the file
+    # that was read. It used to be the other way round — set to the substitute,
+    # which is `path`, so the field was identical to its neighbour on every row
+    # it appeared on and said nothing. `analyze_image` shipped the useful
+    # reading; two sibling tools with the same key and opposite meanings is how
+    # an agent reads "this is the file I got" off the one field that exists to
+    # tell it otherwise.
     resolved_from: str | None = None
     if not path.is_file():
         siblings = _same_stem_images(path)
         if len(siblings) == 1:
-            resolved_from = str(siblings[0])
+            resolved_from = str(path)
             path = siblings[0]
         elif siblings:
             names = ", ".join(sorted(s.name for s in siblings))
@@ -371,10 +378,10 @@ async def view_image(args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
             "recorded and you will be given the local description instead."
         )
     if resolved_from:
-        notes.append(
-            f"{raw_path} does not exist; read {Path(resolved_from).name} "
-            "instead, which shares its name"
-        )
+        # `path.name`, not `resolved_from` — with `resolved_from` now meaning
+        # "what you asked for", reading the name out of it would say "x.png
+        # does not exist; read x.png instead".
+        notes.append(f"{raw_path} does not exist; read {path.name} instead, which shares its name")
     if prepared.downscaled:
         result["original_width"] = prepared.original_width
         result["original_height"] = prepared.original_height

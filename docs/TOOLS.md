@@ -262,13 +262,24 @@ model ever being called. A refused row reports the same resolved path an
 answered row does, so an agent can line its request up against the results.
 
 **A missed extension is not a miss.** Ask for `scan.png` when the file is
-`scan.jpg` and the one image sharing that stem is read instead; the row reports
-the file that was actually read as `path` and the one you asked for as
-`resolved_from`. Two candidates is a question for you, not a coin flip for the
-tool, so it is an error naming both. A *relative* path that misses says which
-workspace root it was joined to and what that produced — fifty rows of
-`no such file: render.jpg` with no hint that a root join was tried is a wasted
-round.
+`scan.jpg` and the one image sharing that stem is read instead. Two candidates
+is a question for you, not a coin flip for the tool, so it is an error naming
+both. A *relative* path that misses says which workspace root it was joined to
+and what that produced — fifty rows of `no such file: render.jpg` with no hint
+that a root join was tried is a wasted round.
+
+Both vision tools report a substitution the same way, and the two fields never
+mean the same thing:
+
+| Field | Meaning |
+|---|---|
+| `path` | the file that was **actually read** |
+| `resolved_from` | the path you **asked for**, present only when they differ |
+
+So `{"path": "…/scan.jpg", "resolved_from": "…/scan.png"}` reads "you asked for
+the png, I read the jpg". `view_image` used to set `resolved_from` to the
+substitute — making it a copy of `path` that told you nothing — and was
+corrected to match `analyze_image`.
 
 **Plan mode.** `analyze_image` counts as read-only — it changes nothing on the
 box or anywhere else — so an agent in plan mode may call it. On a remote
