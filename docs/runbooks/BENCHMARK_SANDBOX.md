@@ -550,3 +550,9 @@ Two things anchoring does **not** fix, so do not reach for it there:
   production analytics.
 * `docs/runbooks/TOOL_POSTCONDITIONS.md` — the same principle one layer down:
   grade the environment, never the transcript.
+* `bench/wildclaw/README.md` — the external-benchmark harness, which runs every
+  task in a throwaway container rather than this tenant. Its "image contract"
+  section lists what that container provides a task's warm-up (`ffmpeg`, `npm`,
+  the `eval` Python environment at the path the tasks name) and the two gaps it
+  does not — an assumption the image misses is a task that scores zero without
+  running, which is the same failure mode this runbook is about one layer out.
