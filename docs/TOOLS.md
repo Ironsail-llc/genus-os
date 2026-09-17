@@ -284,13 +284,23 @@ says `reason_missing: true` rather than having one invented for it, and it is
 **not** re-asked — a re-ask is for a wrong answer, not a thin one.
 
 **A look outranks a filename.** Every result's `summary` ends by saying so, and
-so does behavioural rule 18: a filename, caption or alt text is a *claim* about
-an image, not evidence of its contents. When a batch disagrees with the names,
-read two or three `reason`s, spot-check one with `view_image`, and then trust
-the batch. This is measured advice — on a 100-image sort whose filenames were
-deliberately misleading, the tool answered 92.9% correctly and the agent threw
-every answer away in favour of the names, scoring 0.43 where the answers it
-already had were worth 0.94.
+so does behavioural rule 19, which is general rather than about images: *a
+file's name, label or caption is a claim, not an observation; when an
+observation — a tool that looked at the content — disagrees with a name, the
+observation wins unless a second observation says otherwise.* When a batch
+disagrees with the names, read two or three `reason`s, spot-check one with
+`view_image`, and then trust the batch. This is measured advice — on a
+100-image sort whose filenames were deliberately misleading, the tool answered
+92.9% correctly and the agent threw every answer away in favour of the names,
+scoring 0.43 where the answers it already had were worth 0.94.
+
+**Where an answer came from.** Both tools' results carry `provenance:
+"image-content"` and a `provenance_note` saying, in words, that *answers come
+from the model looking at the image content; the filename was not consulted*.
+Nothing in the older results said this, so a row reading `choice: "natural
+scene"` for a file called `3d_render.jpg` looked, to an agent, like something
+that might have been derived from the name — and the name won. The same
+sentence is in both tool descriptions.
 
 **Refusals.** A path resolving outside the workspace (symlinks followed
 first), a credentials file, a missing file, something that is not an image,
@@ -392,6 +402,27 @@ registry field to set. Handing images to a model that cannot take them is the
 failure `view_image` was fixed for: a provider 404 one layer down and an agent
 that believes it looked. It is worth being strict here rather than optimistic,
 because one misconfigured setting is 200 of those 404s in a single call.
+
+**Both tools use the same rungs**, in the order each one should. `view_image`
+tries the agent's own model first (it is the only rung that puts the picture in
+front of the agent itself), then the local VLM, then the declared remote model;
+`analyze_image` prefers the declared remote model, because it is about to make
+up to 200 calls and a single local VLM serialises them. Either way a rung that
+failed is **named**: a `view_image` result that could not be answered says what
+each rung said, so "the local model is down" and "you configured no remote
+model" do not both read as "this instance has no vision".
+
+| `view_image` field | Meaning |
+|---|---|
+| `seen_by` | `primary` — you looked; `vision-model` — something looked for you; `nobody` — nothing did, and you must not describe the file |
+| `backend` | on `vision-model`, `local` or `remote` |
+| `model` | the model that **answered** — your own on `primary`, the vision model otherwise |
+| `primary_model` | your own model, whether or not it could see |
+| `tokens`, `cost_usd` | present on the remote rung only; the run's spend includes them |
+
+A remote fallback is real money spent on a single `view_image` call. Leave
+`ROBOTHOR_VISION_REMOTE_MODEL` unset on a box with a working local VLM and the
+rung is simply never reached.
 
 ### Several calls in one turn
 
