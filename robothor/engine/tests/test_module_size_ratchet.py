@@ -248,7 +248,7 @@ CAPS = {
     # reach the spilled table on disk, which the tool tells the agent to open.
     # Twelve lines, ten of which are the reasoning for why a row is the worse
     # half: a 401 fails every image, so the leak arrives once per image.
-    "robothor/engine/vision_batch.py": 1169,
+    "robothor/engine/vision_batch.py": 1168,
     # Which model looks at a picture, for BOTH image tools. Capped at what it
     # was written to. Not folded back into either caller: `vision_batch.py` is
     # the module this repo has an open extraction debt against, and
