@@ -64,8 +64,11 @@ the evidence table under-reports the control until you run it.
 genus doctor --only models.local_fallback_ready
 ```
 
-Required on any instance whose chain names an `ollama_chat/` model; skips on a
-cloud-only one. It fails when the server does not answer, when the model is in
+Recommended, and it runs on any instance whose chain names an `ollama_chat/`
+model; it skips on a cloud-only one. Recommended rather than required on
+purpose: a local server that is restarting must not take `genus doctor` — and
+any install gate or CI job built on it — from exit 0 to exit 1. The failure
+names the consequence instead. It fails when the server does not answer, when the model is in
 the chain but not on the server (it names the `ollama pull`), when the
 registry's window is larger than the model's own context (the engine sends that
 number as `num_ctx`, so a larger one is silently trimmed), or when compaction

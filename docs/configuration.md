@@ -197,7 +197,8 @@ A chain that ends on an `ollama_chat/` model keeps answering when no cloud
 credential works, and the engine sizes each call's context against the model it
 will actually reach — the local one, once the pool is spent, not the primary it
 cannot dial. Prove that tier before you need it with `genus doctor --only
-models.local_fallback_ready` (required on such an instance) and the opt-in
+models.local_fallback_ready` (a recommended check: it reports a degraded tier
+without failing the whole doctor) and the opt-in
 positive control `genus doctor --only models.local_fallback_probe --timeout
 120`; the whole failure mode is in the [local fallback
 runbook](runbooks/LOCAL_FALLBACK.md).
