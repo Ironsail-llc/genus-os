@@ -237,7 +237,7 @@ is gone is a quiet false negative, never a wrong finding.
 #### The rule the model is given
 
 The behavioural half, carried fleet-wide in `prompts.BEHAVIORAL_RULES` as rule
-19, in the same words:
+20, in the same words:
 
 > **An item's own provenance marker is evidence about it** — when something you
 > are classifying carries its own statement of who or what produced it and what
@@ -264,10 +264,14 @@ a reason rather than for a particular verdict.
 The number is load-bearing. `HONEST_CLAIMS_RULE` carries its own hardcoded
 number and is appended behind a flag, so a rule added to the base list without
 renumbering it ships two rules called the same thing in every enforce-mode
-system prompt. `tests/test_research_norms.py` asserts the assembled numbering
-is `1..n` on both rungs — a branch that adds a rule while another branch is
-adding one goes red there and renumbers, which is the whole point of the
-gate.
+system prompt. `robothor/engine/tests/test_research_norms.py` asserts the
+assembled numbering is `1..n` on both rungs — a branch that adds a rule while
+another branch is adding one goes red there and renumbers, which is the whole
+point of the gate — this rule took 20 rather than 19 for exactly that reason,
+after the observed-evidence rule landed first. Write the rule as
+`N. **Title** — …`: the gate matches `^(\d+)\. \*\*`, so a rule whose line
+does not start with a number, a full stop and a bolded title is invisible to it
+and to the numbering it checks.
 
 `observe` logs a WARNING naming the findings. `enforce` re-asks once, quoting
 up to five, and asks the agent to pick one verdict per item, to fold the
@@ -507,7 +511,7 @@ does not apply to it because it carries no date to go stale.
 | One-verdict-per-item ladder (task gate, re-ask, guardrail row) | `robothor/engine/verdict_commitment.py` |
 | What a verdict, a hand-back and a retraction look like on the page | `robothor/engine/verdict_shapes.py` |
 | An item's own provenance marker, and what contradicts a verdict | `robothor/engine/provenance_markers.py` |
-| The fleet-wide rule behind it (rule 19) | `robothor/engine/prompts.py` |
+| The fleet-wide rule behind it (rule 20) | `robothor/engine/prompts.py` |
 | In-loop hold (deliverable check-in) | `robothor/engine/loop_guards.py` (`unread_observation_hold`, `hold_for_hedged_verdicts`) |
 | Finalization call site, spill reaping | `robothor/engine/run_finalizer.py` |
 | Retention backstop for orphaned spills | `robothor/engine/retention.py` (`run_retention_cleanup`, key `"exec"`) |
