@@ -21,6 +21,14 @@ instance skill of the same name **shadows** the bundled one. Updating a
 bundled skill is therefore copy-on-write: the tracked file is left
 exactly as it was and the revised body lands in the instance tree.
 
+Because a shadow is invisible on disk, it is never accidental:
+`create_skill` and `update_skill` refuse a name the platform ships
+unless you pass `shadow_bundled=true`; `list_skills` and `skill_view`
+report `origin` and `shadows_bundled` per skill; the loader logs the
+override at INFO; `genus doctor --only skills.shadowed` lists them all;
+and `skill_archive` on an overlay reports `unshadowed_bundled` — the
+bundled skill is live again, nothing was retired.
+
 Skills agents created before this split are moved out of the platform
 tree, once, by `genus skills migrate-instance` (idempotent; `--dry-run`
 reports without moving anything).

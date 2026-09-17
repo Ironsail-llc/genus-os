@@ -45,7 +45,11 @@ KNOWN_LARGE: dict[str, int] = {
     # cluster, taking `execute_code` with it. The new tool cost this function
     # nothing and paid down 36 lines on the way in, the same trade
     # `_ATTACHMENT_SCHEMAS` made.
-    "tools/schemas.py::get_engine_schemas": 3417,
+    # 3417 -> 3248: the six skill schemas left for `_SKILL_SCHEMAS`. Two of
+    # them gained a `shadow_bundled` argument (writing a skill over a name the
+    # platform ships is now asked for explicitly), and the cluster it travelled
+    # out with paid 17 lines back 169 times over.
+    "tools/schemas.py::get_engine_schemas": 3248,
     # -29: every subsystem router mount extracted to _mount_subsystem_routers,
     # which is what made room for the /api/admin registration rather than
     # raising this number for it.

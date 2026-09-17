@@ -49,6 +49,13 @@ def cmd_skills(args: argparse.Namespace) -> int:
         print(f"to:   {instance_skills_dir()}")
         for name in result["moved"]:
             print(f"  {verb}:    {name}")
+        for name in result["unmarked"]:
+            print(f"  unmarked:  {name} (no origin recorded — left in place)")
+        for name in result["needs-review"]:
+            print(
+                f"  REVIEW:    {name} (no meta.json — most bundled skills have none, "
+                "so check before moving it)"
+            )
         for name in result["conflicts"]:
             print(f"  CONFLICT:  {name} (already present in the instance — resolve by hand)")
         for name in result["errors"]:
@@ -56,9 +63,13 @@ def cmd_skills(args: argparse.Namespace) -> int:
         print(
             f"migrate-instance: {len(result['moved'])} {verb}, "
             f"{len(result['skipped'])} platform-bundled, "
+            f"{len(result['unmarked'])} unmarked, "
+            f"{len(result['needs-review'])} need review, "
             f"{len(result['conflicts'])} conflicts, "
             f"{len(result['errors'])} errors"
         )
+        # `needs-review` and `unmarked` are readings, not faults: they are
+        # skills this pass deliberately would not guess about.
         return 1 if (result["errors"] or result["conflicts"]) else 0
 
     print("Usage: genus skills {migrate-state,migrate-instance}")

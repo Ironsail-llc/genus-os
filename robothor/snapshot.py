@@ -87,7 +87,17 @@ _WORKSPACE_DIRECTORY_PATHS = {
 _CONFIGURED_WORKSPACE_DIRECTORIES = {
     "ROBOTHOR_MANIFEST_DIR": "docs/agents",
     "ROBOTHOR_WORKFLOW_DIR": "docs/workflows",
+    # Where agent-written skills land. The default (brain/skills) already rides
+    # along inside the `brain` root; an operator who moves it elsewhere in the
+    # workspace must not silently lose everything their agents have learned.
+    "ROBOTHOR_INSTANCE_SKILLS_DIR": "brain/skills",
 }
+
+#: Configured directories the engine CREATES on first use rather than on
+#: install. A missing manifest directory means a broken instance and should
+#: stop a backup; a missing skills directory only means no agent has written a
+#: skill yet, and refusing to back the instance up over that would be absurd.
+_OPTIONAL_CONFIGURED_DIRECTORIES = frozenset({"ROBOTHOR_INSTANCE_SKILLS_DIR"})
 _VAULT_KEY_PATH = ".vault-key"
 _FEDERATION_IDENTITY_PATH = ".robothor/identity.json"
 _FEDERATION_KEY_PATH = ".robothor/identity.key"
@@ -574,6 +584,8 @@ def _workspace_state_paths(workspace: Path) -> tuple[list[str], set[str]]:
         if not configured:
             continue
         configured_path = Path(configured).expanduser()
+        if not configured_path.exists() and environment_name in _OPTIONAL_CONFIGURED_DIRECTORIES:
+            continue
         if configured_path.is_symlink() or not configured_path.is_dir():
             raise SnapshotError(
                 f"Configured state directory {environment_name} is missing or is a symlink: "

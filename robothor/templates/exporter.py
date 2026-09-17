@@ -281,15 +281,37 @@ def _collapse_adapter(name: str, data: dict[str, Any]) -> tuple[dict[str, Any], 
 # ---------------------------------------------------------------------------
 
 
-#: Where a required skill can live, in the engine's own read order: the
-#: platform's bundled tree, then this instance's own (where every skill an
-#: agent writes now lands). Each is its own contained sub-root.
+#: The platform's bundled tree, and the default instance tree. The instance one
+#: is only the DEFAULT: ``_skill_roots`` asks the engine where skills actually
+#: land, so an instance that moved the directory can still export a bundle.
 _SKILL_ROOTS = ("agents/skills", "brain/skills")
+
+
+def _skill_roots(repo_root: Path) -> tuple[str, ...]:
+    """Where a required skill can live, in the engine's own read order.
+
+    Workspace-relative, because staging resolves each as its own contained
+    sub-root. A configured instance directory outside the workspace cannot be
+    staged safely, so it is left out and the caller's "this instance does not
+    have it" error stands -- the doctor's ``skills.instance_dir`` is what says
+    that directory is misplaced.
+    """
+    roots = list(_SKILL_ROOTS)
+    try:
+        from robothor.engine.skills import instance_skills_dir
+
+        configured = instance_skills_dir().resolve()
+        relative = configured.relative_to(repo_root.resolve()).as_posix()
+    except Exception:  # noqa: BLE001 - an unreadable override is not an export failure
+        return tuple(roots)
+    if relative and relative not in roots:
+        roots.append(relative)
+    return tuple(roots)
 
 
 def _copy_skill(repo_root: Path, staging: Path, skill: str) -> None:
     source: Path | None = None
-    for root in _SKILL_ROOTS:
+    for root in _skill_roots(repo_root):
         try:
             candidate = workspace_path(
                 repo_root,

@@ -448,3 +448,49 @@ class TestBundleReadBack:
         (plain / "setup.yaml").write_text("agent_id: test-agent\n")
         with pytest.raises(BundleError, match=BUNDLE_FILENAME):
             read_bundle(plain)
+
+
+class TestSkillsFromTheInstanceTree:
+    """A required skill the agents wrote is in the instance tree, not agents/."""
+
+    def test_exports_a_skill_from_the_default_instance_directory(self, tmp_repo, tmp_path):
+        skill = tmp_repo / "brain" / "skills" / "triage"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("# Learned\n")
+        _install_agent(tmp_repo, manifest=MANIFEST + "\nrequires:\n  skills: [triage]\n")
+
+        manifest = export_agent("test-agent", out=tmp_path / "out", repo_root=tmp_repo).manifest
+
+        assert "skills/triage/SKILL.md" in manifest.file_paths()
+
+    def test_exports_a_skill_from_a_configured_instance_directory(
+        self, tmp_repo, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_repo))
+        monkeypatch.setenv("ROBOTHOR_INSTANCE_SKILLS_DIR", str(tmp_repo / "state" / "skills"))
+        from robothor.settings import reset_settings
+
+        reset_settings()
+        skill = tmp_repo / "state" / "skills" / "triage"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("# Learned elsewhere\n")
+        _install_agent(tmp_repo, manifest=MANIFEST + "\nrequires:\n  skills: [triage]\n")
+
+        try:
+            manifest = export_agent("test-agent", out=tmp_path / "out", repo_root=tmp_repo).manifest
+        finally:
+            reset_settings()
+
+        assert "skills/triage/SKILL.md" in manifest.file_paths()
+
+    def test_the_instance_copy_wins_the_way_the_engine_reads_it(self, tmp_repo, tmp_path):
+        _add_skill(tmp_repo, "triage", body="# The platform's\n")
+        instance = tmp_repo / "brain" / "skills" / "triage"
+        instance.mkdir(parents=True)
+        (instance / "SKILL.md").write_text("# The instance's\n")
+        _install_agent(tmp_repo, manifest=MANIFEST + "\nrequires:\n  skills: [triage]\n")
+
+        out = tmp_path / "out"
+        export_agent("test-agent", out=out, repo_root=tmp_repo)
+
+        assert "instance's" in (out / "skills" / "triage" / "SKILL.md").read_text()

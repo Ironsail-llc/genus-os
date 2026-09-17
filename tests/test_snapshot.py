@@ -591,3 +591,77 @@ def test_weak_passphrase_fails_closed(
             include_database=False,
             passphrase="too short",
         )
+
+
+def test_snapshot_includes_a_configured_instance_skills_directory(
+    workspace: Path,
+    database: DatabaseConfig,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The override is only honest if a snapshot captures what it points at.
+
+    ``brain/`` is a workspace root, so the DEFAULT instance skills directory
+    rides along already. An operator who moves it elsewhere in the workspace
+    must not quietly lose every skill their agents wrote.
+    """
+    configured = workspace / "state" / "skills"
+    configured.mkdir(parents=True)
+    (configured / "learned").mkdir()
+    (configured / "learned" / "SKILL.md").write_text("---\nname: learned\n---\n", encoding="utf-8")
+    monkeypatch.setenv("ROBOTHOR_INSTANCE_SKILLS_DIR", str(configured))
+
+    snapshot = create_snapshot(
+        workspace=workspace,
+        database=database,
+        repository=tmp_path / "snapshots",
+        include_database=False,
+        encrypt=False,
+    )
+
+    result = verify_snapshot(snapshot)
+    paths = {entry["path"] for entry in result.manifest["workspace"]["files"]}
+    assert "state/skills/learned/SKILL.md" in paths
+
+
+def test_a_configured_instance_skills_directory_that_does_not_exist_yet_is_fine(
+    workspace: Path,
+    database: DatabaseConfig,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unlike manifests, this directory is created by the first skill write.
+
+    An instance that has configured the override but whose agents have not
+    written a skill yet must still be able to take a backup.
+    """
+    monkeypatch.setenv("ROBOTHOR_INSTANCE_SKILLS_DIR", str(workspace / "state" / "skills"))
+
+    snapshot = create_snapshot(
+        workspace=workspace,
+        database=database,
+        repository=tmp_path / "snapshots",
+        include_database=False,
+        encrypt=False,
+    )
+    assert verify_snapshot(snapshot).manifest["workspace"]["files"]
+
+
+def test_snapshot_fails_if_the_instance_skills_directory_is_outside_the_workspace(
+    workspace: Path,
+    database: DatabaseConfig,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    external = tmp_path / "external-skills"
+    external.mkdir()
+    monkeypatch.setenv("ROBOTHOR_INSTANCE_SKILLS_DIR", str(external))
+
+    with pytest.raises(SnapshotError, match="must be inside the workspace"):
+        create_snapshot(
+            workspace=workspace,
+            database=database,
+            repository=tmp_path / "snapshots",
+            include_database=False,
+            encrypt=False,
+        )

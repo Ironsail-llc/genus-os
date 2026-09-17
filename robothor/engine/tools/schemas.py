@@ -409,6 +409,202 @@ _VAULT_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
+#: The skill tools: invoke, list, view, create, update, retire. Hoisted out of
+#: ``get_engine_schemas`` as one cluster, the way ``_CODE_SCHEMAS`` was -- that
+#: function is the largest in the engine and the size ratchet only lets it
+#: shrink, so the ``shadow_bundled`` argument two of these gained pays for
+#: itself by taking its neighbours with it. They belong together: the model
+#: chooses between them by reading their descriptions side by side.
+_SKILL_SCHEMAS: dict[str, dict[str, Any]] = {
+    "invoke_skill": {
+        "type": "function",
+        "function": {
+            "name": "invoke_skill",
+            "description": (
+                "Invoke a named skill to get step-by-step instructions. "
+                "Skills are pre-built recipes for common multi-step operations."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Name of the skill to invoke (e.g. 'send-email', 'crm-lookup')",
+                    },
+                    "args": {
+                        "type": "object",
+                        "description": "Named arguments for the skill (see skill catalog for parameters)",
+                        "additionalProperties": True,
+                    },
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    "list_skills": {
+        "type": "function",
+        "function": {
+            "name": "list_skills",
+            "description": "List all available skills with their names and descriptions.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
+    "create_skill": {
+        "type": "function",
+        "function": {
+            "name": "create_skill",
+            "description": (
+                "Create a new reusable skill from a multi-step procedure you just performed. "
+                "The skill becomes available to all agents via invoke_skill."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Skill identifier (kebab-case, 3-60 chars, e.g. 'deploy-staging')",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "One-line description of what the skill does",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Full markdown body with step-by-step instructions (max 10,000 chars)",
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Categorization tags (e.g. ['devops', 'deployment'])",
+                    },
+                    "parameters": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "type": {"type": "string", "default": "string"},
+                                "description": {"type": "string"},
+                                "required": {"type": "boolean", "default": False},
+                                "default": {},
+                            },
+                            "required": ["name"],
+                        },
+                        "description": "Typed parameters the skill accepts",
+                    },
+                    "tools_required": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Tools this skill needs (e.g. ['exec', 'gws_gmail_send'])",
+                    },
+                    "output_format": {
+                        "type": "string",
+                        "enum": ["text", "json"],
+                        "description": "Expected output format (default: text)",
+                    },
+                    "overwrite": {
+                        "type": "boolean",
+                        "description": "If true, overwrite an existing skill with the same name",
+                    },
+                    "shadow_bundled": {
+                        "type": "boolean",
+                        "description": (
+                            "Required to use a name the platform already ships. The new "
+                            "skill does not replace the bundled one — it shadows it for "
+                            "every agent while the bundled file stays on disk. Prefer a "
+                            "different name unless you mean to override the platform's."
+                        ),
+                    },
+                },
+                "required": ["name", "description", "content"],
+            },
+        },
+    },
+    "skill_archive": {
+        "type": "function",
+        "function": {
+            "name": "skill_archive",
+            "description": (
+                "Retire an agent-created skill by moving it to "
+                "agents/skills/.archive/ (reversible — content preserved). The "
+                "curator's only destructive action. Refuses pinned and operator-"
+                "authored skills. Use to consolidate near-duplicates (after "
+                "merging into the umbrella) or to archive cold one-offs."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Skill name to archive."},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    "skill_view": {
+        "type": "function",
+        "function": {
+            "name": "skill_view",
+            "description": (
+                "Load the full body of one skill on demand. The system-prompt "
+                "catalog lists only names and truncated descriptions; call this "
+                "with a skill's name when you need the complete procedure."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Name of the skill to load"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    "update_skill": {
+        "type": "function",
+        "function": {
+            "name": "update_skill",
+            "description": (
+                "Update an existing skill with an improved version. "
+                "The previous version is archived in the skill's revision history."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Name of the existing skill to update",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "New markdown body with improved instructions (max 10,000 chars)",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Updated one-line description (optional, keeps existing if omitted)",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Why the skill was improved (recorded in revision history)",
+                    },
+                    "shadow_bundled": {
+                        "type": "boolean",
+                        "description": (
+                            "Required the first time you revise a skill the platform "
+                            "ships. The revision is written as this instance's own copy "
+                            "and shadows the bundled one for every agent; the bundled "
+                            "file is never rewritten."
+                        ),
+                    },
+                },
+                "required": ["name", "content"],
+            },
+        },
+    },
+}
+
+
 #: Every tool whose job is to involve a person. Lifted out of
 #: ``get_engine_schemas`` as a cluster rather than added to it: that function is
 #: pinned by the function-size ratchet and larger on its own than most modules
@@ -2610,176 +2806,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
     }
 
     # ── Skills ────────────────────────────────────────────────────────
-    schemas["invoke_skill"] = {
-        "type": "function",
-        "function": {
-            "name": "invoke_skill",
-            "description": (
-                "Invoke a named skill to get step-by-step instructions. "
-                "Skills are pre-built recipes for common multi-step operations."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": "Name of the skill to invoke (e.g. 'send-email', 'crm-lookup')",
-                    },
-                    "args": {
-                        "type": "object",
-                        "description": "Named arguments for the skill (see skill catalog for parameters)",
-                        "additionalProperties": True,
-                    },
-                },
-                "required": ["name"],
-            },
-        },
-    }
-    schemas["list_skills"] = {
-        "type": "function",
-        "function": {
-            "name": "list_skills",
-            "description": "List all available skills with their names and descriptions.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-            },
-        },
-    }
-    schemas["create_skill"] = {
-        "type": "function",
-        "function": {
-            "name": "create_skill",
-            "description": (
-                "Create a new reusable skill from a multi-step procedure you just performed. "
-                "The skill becomes available to all agents via invoke_skill."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": "Skill identifier (kebab-case, 3-60 chars, e.g. 'deploy-staging')",
-                    },
-                    "description": {
-                        "type": "string",
-                        "description": "One-line description of what the skill does",
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "Full markdown body with step-by-step instructions (max 10,000 chars)",
-                    },
-                    "tags": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Categorization tags (e.g. ['devops', 'deployment'])",
-                    },
-                    "parameters": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "name": {"type": "string"},
-                                "type": {"type": "string", "default": "string"},
-                                "description": {"type": "string"},
-                                "required": {"type": "boolean", "default": False},
-                                "default": {},
-                            },
-                            "required": ["name"],
-                        },
-                        "description": "Typed parameters the skill accepts",
-                    },
-                    "tools_required": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Tools this skill needs (e.g. ['exec', 'gws_gmail_send'])",
-                    },
-                    "output_format": {
-                        "type": "string",
-                        "enum": ["text", "json"],
-                        "description": "Expected output format (default: text)",
-                    },
-                    "overwrite": {
-                        "type": "boolean",
-                        "description": "If true, overwrite an existing skill with the same name",
-                    },
-                },
-                "required": ["name", "description", "content"],
-            },
-        },
-    }
-    schemas["skill_archive"] = {
-        "type": "function",
-        "function": {
-            "name": "skill_archive",
-            "description": (
-                "Retire an agent-created skill by moving it to "
-                "agents/skills/.archive/ (reversible — content preserved). The "
-                "curator's only destructive action. Refuses pinned and operator-"
-                "authored skills. Use to consolidate near-duplicates (after "
-                "merging into the umbrella) or to archive cold one-offs."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Skill name to archive."},
-                },
-                "required": ["name"],
-            },
-        },
-    }
-
-    schemas["skill_view"] = {
-        "type": "function",
-        "function": {
-            "name": "skill_view",
-            "description": (
-                "Load the full body of one skill on demand. The system-prompt "
-                "catalog lists only names and truncated descriptions; call this "
-                "with a skill's name when you need the complete procedure."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Name of the skill to load"},
-                },
-                "required": ["name"],
-            },
-        },
-    }
-    schemas["update_skill"] = {
-        "type": "function",
-        "function": {
-            "name": "update_skill",
-            "description": (
-                "Update an existing skill with an improved version. "
-                "The previous version is archived in the skill's revision history."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": "Name of the existing skill to update",
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "New markdown body with improved instructions (max 10,000 chars)",
-                    },
-                    "description": {
-                        "type": "string",
-                        "description": "Updated one-line description (optional, keeps existing if omitted)",
-                    },
-                    "reason": {
-                        "type": "string",
-                        "description": "Why the skill was improved (recorded in revision history)",
-                    },
-                },
-                "required": ["name", "content"],
-            },
-        },
-    }
-
+    schemas.update(_SKILL_SCHEMAS)
     # ── Timing ────────────────────────────────────────────────────────
     schemas["wait_seconds"] = {
         "type": "function",

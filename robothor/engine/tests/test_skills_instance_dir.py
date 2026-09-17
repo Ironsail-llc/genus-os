@@ -164,7 +164,13 @@ class TestWritesLandInTheInstance:
         before = (bundled / "SKILL.md").read_bytes()
 
         result = await _update_skill(
-            {"name": "crm-lookup", "content": "improved body", "reason": "learned something"},
+            {
+                "name": "crm-lookup",
+                "content": "improved body",
+                "reason": "learned something",
+                # Shadowing a bundled skill is deliberate — see TestShadowingIsDeliberate.
+                "shadow_bundled": True,
+            },
             _FakeCtx(),
         )
 
@@ -393,3 +399,272 @@ def test_every_write_helper_resolves_into_the_instance(workspace):
         (_state_write_path, "state.json"),
     ):
         assert helper("some-skill") == root / "some-skill" / filename
+
+
+# ── Shadowing is visible, and deliberate ─────────────────────────────
+#
+# Round 2. Writing an instance skill that shadows a bundled one used to be
+# both silent and misreported: the tracked file no longer changed, so the
+# checkout said nothing; `list_skills` reported the overlay as
+# `auto_generated: False`; and nothing named the bundled skill that had
+# stopped being the one agents read.
+
+
+class TestShadowingIsVisible:
+    @pytest.mark.asyncio
+    async def test_list_skills_names_the_shadow(self, workspace):
+        from robothor.engine.tools.handlers.skills import _list_skills
+
+        _write_skill(workspace / "agents" / "skills", "escalate", meta={"origin": "platform"})
+        _write_skill(workspace / "brain" / "skills", "escalate", meta={"origin": "instance"})
+        _write_skill(workspace / "brain" / "skills", "own-one", meta={"origin": "instance"})
+
+        rows = {row["name"]: row for row in (await _list_skills({}, _FakeCtx()))["skills"]}
+        assert rows["escalate"]["origin"] == "instance"
+        assert rows["escalate"]["shadows_bundled"] is True
+        assert rows["escalate"]["auto_generated"] is True, "an overlay is instance-authored"
+        assert rows["own-one"]["shadows_bundled"] is False
+
+    @pytest.mark.asyncio
+    async def test_skill_view_names_the_shadow(self, workspace):
+        from robothor.engine.tools.handlers.skills import _skill_view
+
+        _write_skill(workspace / "agents" / "skills", "escalate", meta={"origin": "platform"})
+        _write_skill(
+            workspace / "brain" / "skills",
+            "escalate",
+            body="instance body",
+            meta={"origin": "instance"},
+        )
+
+        view = await _skill_view({"name": "escalate"}, _FakeCtx())
+        assert view["origin"] == "instance"
+        assert view["shadows_bundled"] is True
+        assert "instance body" in view["content"]
+
+    @pytest.mark.asyncio
+    async def test_a_bundled_skill_reports_its_own_origin(self, workspace):
+        from robothor.engine.tools.handlers.skills import _skill_view
+
+        _write_skill(workspace / "agents" / "skills", "escalate", meta={"origin": "platform"})
+        view = await _skill_view({"name": "escalate"}, _FakeCtx())
+        assert view["origin"] == "platform"
+        assert view["shadows_bundled"] is False
+
+    def test_the_loader_says_so_at_info(self, workspace, caplog):
+        import logging
+
+        from robothor.engine.skills import load_skills
+
+        _write_skill(workspace / "agents" / "skills", "escalate", body="platform")
+        _write_skill(workspace / "brain" / "skills", "escalate", body="instance")
+
+        with caplog.at_level(logging.INFO, logger="robothor.engine.skills"):
+            load_skills()
+
+        messages = [record.getMessage() for record in caplog.records if record.levelno >= 20]
+        assert any("escalate" in message for message in messages), (
+            f"nothing was logged about the override: {messages}"
+        )
+
+
+class TestShadowingIsDeliberate:
+    @pytest.mark.asyncio
+    async def test_update_of_a_bundled_skill_is_refused_without_the_flag(self, workspace):
+        from robothor.engine.tools.handlers.skills import _update_skill
+
+        bundled = _write_skill(
+            workspace / "agents" / "skills",
+            "escalate",
+            body="platform body",
+            meta={"origin": "platform"},
+        )
+
+        result = await _update_skill({"name": "escalate", "content": "mine"}, _FakeCtx())
+
+        assert "error" in result
+        assert "escalate" in result["error"]
+        assert "shadow_bundled" in result["error"]
+        assert "platform body" in (bundled / "SKILL.md").read_text()
+        assert not (workspace / "brain" / "skills" / "escalate").exists()
+
+    @pytest.mark.asyncio
+    async def test_update_shadows_when_asked_explicitly(self, workspace):
+        from robothor.engine.tools.handlers.skills import _update_skill
+
+        _write_skill(
+            workspace / "agents" / "skills",
+            "escalate",
+            body="platform body",
+            meta={"origin": "platform", "revision": 2},
+        )
+
+        result = await _update_skill(
+            {"name": "escalate", "content": "mine", "shadow_bundled": True}, _FakeCtx()
+        )
+
+        assert result["updated"] is True
+        assert result["shadows_bundled"] is True
+        assert "mine" in (workspace / "brain" / "skills" / "escalate" / "SKILL.md").read_text()
+
+    @pytest.mark.asyncio
+    async def test_updating_an_existing_overlay_needs_no_flag(self, workspace):
+        from robothor.engine.tools.handlers.skills import _update_skill
+
+        _write_skill(workspace / "agents" / "skills", "escalate", meta={"origin": "platform"})
+        _write_skill(
+            workspace / "brain" / "skills", "escalate", meta={"origin": "instance", "revision": 1}
+        )
+
+        result = await _update_skill({"name": "escalate", "content": "v3"}, _FakeCtx())
+        assert result["updated"] is True
+        assert result["shadows_bundled"] is True
+
+    @pytest.mark.asyncio
+    async def test_updating_a_plain_instance_skill_needs_no_flag(self, workspace):
+        from robothor.engine.tools.handlers.skills import _update_skill
+
+        _write_skill(workspace / "brain" / "skills", "own-one", meta={"origin": "instance"})
+        result = await _update_skill({"name": "own-one", "content": "v2"}, _FakeCtx())
+        assert result["updated"] is True
+        assert result["shadows_bundled"] is False
+
+    @pytest.mark.asyncio
+    async def test_create_over_a_bundled_name_is_refused_without_the_flag(self, workspace):
+        from robothor.engine.tools.handlers.skills import _create_skill
+
+        _write_skill(workspace / "agents" / "skills", "escalate", meta={"origin": "platform"})
+
+        result = await _create_skill(
+            {
+                "name": "escalate",
+                "description": "mine",
+                "content": "body",
+                "overwrite": True,
+            },
+            _FakeCtx(),
+        )
+
+        assert "error" in result
+        assert "platform" in result["error"] or "bundled" in result["error"]
+        assert "shadow_bundled" in result["error"]
+        assert not (workspace / "brain" / "skills" / "escalate").exists()
+
+    @pytest.mark.asyncio
+    async def test_create_shadows_when_asked_explicitly(self, workspace):
+        from robothor.engine.tools.handlers.skills import _create_skill
+
+        _write_skill(workspace / "agents" / "skills", "escalate", meta={"origin": "platform"})
+
+        result = await _create_skill(
+            {
+                "name": "escalate",
+                "description": "mine",
+                "content": "body",
+                "shadow_bundled": True,
+            },
+            _FakeCtx(),
+        )
+
+        assert result["created"] is True
+        assert result["shadows_bundled"] is True
+
+    @pytest.mark.asyncio
+    async def test_the_collision_guard_reads_origin_not_the_legacy_flag(self, workspace):
+        """An instance skill without `auto_generated` is still an instance skill."""
+        from robothor.engine.tools.handlers.skills import _create_skill
+
+        _write_skill(workspace / "brain" / "skills", "own-one", meta={"origin": "instance"})
+
+        refused = await _create_skill(
+            {"name": "own-one", "description": "d", "content": "c"}, _FakeCtx()
+        )
+        assert "error" in refused
+        assert "update_skill" in refused["error"], "an instance skill is revised, not hand-authored"
+
+        allowed = await _create_skill(
+            {"name": "own-one", "description": "d", "content": "c", "overwrite": True},
+            _FakeCtx(),
+        )
+        assert allowed["created"] is True
+
+    def test_the_tools_offer_the_flag(self):
+        """A refusal naming an argument the model cannot pass is a dead end."""
+        from robothor.engine.tools.schemas import get_engine_schemas
+
+        schemas = get_engine_schemas()
+        for tool in ("create_skill", "update_skill"):
+            props = schemas[tool]["function"]["parameters"]["properties"]
+            assert "shadow_bundled" in props, f"{tool} cannot be asked to shadow"
+
+
+class TestArchivingAnOverlay:
+    @pytest.mark.asyncio
+    async def test_archiving_an_overlay_reports_the_un_shadowing(self, workspace):
+        from robothor.engine.tools.handlers.skills import _skill_archive
+
+        _write_skill(
+            workspace / "agents" / "skills",
+            "escalate",
+            body="platform body",
+            meta={"origin": "platform"},
+        )
+        _write_skill(workspace / "brain" / "skills", "escalate", meta={"origin": "instance"})
+
+        result = await _skill_archive({"name": "escalate"}, _FakeCtx())
+
+        assert result.get("unshadowed_bundled") == "escalate"
+        assert "archived" not in result
+        assert (workspace / "brain" / "skills" / ".archive" / "escalate").exists()
+
+        from robothor.engine.skills import get_skill_content
+
+        assert "platform body" in (get_skill_content("escalate") or "")
+
+
+class TestMigrationBuckets:
+    def test_a_stray_without_meta_needs_review(self, workspace):
+        from robothor.engine.skills import migrate_instance_skills
+
+        _write_skill(workspace / "agents" / "skills", "no-meta-stray")
+        result = migrate_instance_skills()
+
+        assert result["needs-review"] == ["no-meta-stray"]
+        assert result["moved"] == []
+        assert (workspace / "agents" / "skills" / "no-meta-stray" / "SKILL.md").exists()
+
+    def test_unmarked_meta_is_left_in_place_under_its_own_name(self, workspace):
+        from robothor.engine.skills import migrate_instance_skills
+
+        _write_skill(workspace / "agents" / "skills", "old-hand-written", meta={"revision": 2})
+        result = migrate_instance_skills()
+
+        assert result["unmarked"] == ["old-hand-written"]
+        assert result["skipped"] == []
+        assert result["moved"] == []
+
+
+class TestSmallerRepairs:
+    def test_a_directory_of_telemetry_is_not_a_skill(self, workspace):
+        from robothor.engine.skills import resolve_skill_dir
+
+        (workspace / "brain" / "skills" / "ghost").mkdir(parents=True)
+        (workspace / "brain" / "skills" / "ghost" / "state.json").write_text("{}")
+        _write_skill(workspace / "agents" / "skills", "ghost", body="the real one")
+
+        assert resolve_skill_dir("ghost") == workspace / "agents" / "skills" / "ghost"
+
+    def test_migrate_state_walks_the_instance_tree(self, workspace):
+        from robothor.engine.skills import migrate_skill_runtime_state, read_skill_state
+
+        _write_skill(
+            workspace / "brain" / "skills",
+            "legacy-instance",
+            meta={"origin": "instance", "usage_count": 7, "last_used": None},
+        )
+        result = migrate_skill_runtime_state()
+
+        assert "legacy-instance" in result["migrated"]
+        state = read_skill_state("legacy-instance")
+        assert state is not None
+        assert state["usage_count"] == 7

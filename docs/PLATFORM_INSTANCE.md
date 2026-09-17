@@ -142,6 +142,31 @@ rewritten, and the revision lands in the instance tree. Retirement
 (`skill_archive`) moves a skill into the instance's `brain/skills/.archive/`,
 so it can never delete a tracked file.
 
+### Shadowing is deliberate, and it is reported
+
+An instance may override a skill it was given — but a shadow is invisible on
+disk (the platform's file is untouched, so a checkout looks clean) while every
+agent reads something else. So it is never a side effect:
+
+- `create_skill` and `update_skill` **refuse** a name the platform ships unless
+  they are passed `shadow_bundled=true`. The refusal names the bundled skill.
+  Once the overlay exists, later revisions need no flag — the decision was
+  already taken.
+- `list_skills` and `skill_view` report `origin` and `shadows_bundled` on every
+  row, so an agent can see which layer the body in front of it came from.
+- The loader logs at INFO, naming both paths, the first time it reads an
+  override.
+- `genus doctor --only skills.shadowed` lists every bundled skill this instance
+  has replaced. It never fails; it is the reading nothing else gives you.
+- `skill_archive` on an overlay reports `unshadowed_bundled` rather than
+  `archived`: nothing was retired, the platform's skill is simply live again.
+
+`genus doctor --only skills.instance_dir` is the one with teeth. It fails if
+`ROBOTHOR_INSTANCE_SKILLS_DIR` points back inside `agents/skills/` (which would
+recreate this whole defect) or outside the workspace (where no snapshot would
+carry it). `.gitignore` covers the default instance directory, `brain/skills/`;
+that check is what covers an override.
+
 Which layer a skill belongs to is recorded in its `meta.json` as
 `"origin": "instance" | "platform"`. Two things read it:
 
@@ -152,6 +177,17 @@ Which layer a skill belongs to is recorded in its `meta.json` as
   and into the instance one. It is idempotent, takes `--dry-run`, reports a
   name that already exists in the instance as a conflict rather than
   overwriting it, and leaves every platform-origin skill alone.
+
+  It walks `SKILL.md`, not `meta.json`, so nothing is invisible to it, and it
+  moves only what says whose it is:
+
+  | Bucket | What it means |
+  |--------|---------------|
+  | `moved` | `origin: instance`, or a pre-marker skill carrying `auto_generated` / `write_origin` / `is_agent_created`. |
+  | `skipped` | `origin: platform`. The platform's own. |
+  | `unmarked` | A `meta.json` with no origin and no legacy marker — left in place; nothing says whose it is. |
+  | `needs-review` | A `SKILL.md` with no `meta.json` at all — left in place, for the operator to place by hand. Most bundled skills are here; so would be a stray written before `meta.json` existed, which is why the pass will not decide for you. |
+  | `conflicts` | The instance already has that name. Nothing is overwritten. |
 
 ## Upgrade Path
 

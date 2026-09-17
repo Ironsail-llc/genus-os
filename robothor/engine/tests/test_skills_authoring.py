@@ -87,6 +87,11 @@ class TestSkillMeta:
     def test_increment_usage(self, tmp_path: Path):
         meta = create_skill_meta(created_by="main")
         write_skill_meta("test-skill", meta, base=tmp_path)
+        # A directory holding only sidecars is not a skill — the counter is
+        # bumped for something an agent can actually invoke.
+        write_skill_file(
+            "test-skill", {"name": "test-skill", "description": "d"}, "body", base=tmp_path
+        )
         meta_bytes = (tmp_path / "test-skill" / "meta.json").read_bytes()
 
         increment_usage("test-skill", base=tmp_path)

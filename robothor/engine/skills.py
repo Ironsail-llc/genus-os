@@ -172,8 +172,20 @@ def load_skills(skills_dir: Path | None = None) -> dict[str, SkillDefinition]:
     skills: dict[str, SkillDefinition] = {}
     for fp in skill_files:
         defn = _parse_skill_file(fp)
-        if defn:
-            skills[defn.name] = defn
+        if not defn:
+            continue
+        shadowed = skills.get(defn.name)
+        if shadowed is not None:
+            # INFO, not debug: from here on every agent that invokes this name
+            # reads the instance's procedure, and the platform's copy is
+            # untouched on disk, so nothing else on the box would say so.
+            logger.info(
+                "Skill %r: %s shadows the bundled %s",
+                defn.name,
+                defn.path,
+                shadowed.path,
+            )
+        skills[defn.name] = defn
 
     _skills_cache = (cache_key, skills)
     logger.debug("Loaded %d skills from %s", len(skills), [str(d) for d in present])
@@ -383,18 +395,59 @@ def _write_file_path(skill_name: str, filename: str, base: Path | None = None) -
 
 
 def resolve_skill_dir(skill_name: str, base: Path | None = None) -> Path | None:
-    """The directory a skill currently lives in, or None if it lives nowhere."""
+    """The directory a skill currently lives in, or None if it lives nowhere.
+
+    A directory is only a skill when it holds a ``SKILL.md``. Testing the
+    directory instead would let a bare telemetry sidecar -- ``state.json``
+    written into the instance tree for a bundled skill -- answer as if the
+    instance owned the skill.
+    """
     bases = (base,) if base is not None else tuple(reversed(skill_search_paths()))
     for candidate in bases:
         if candidate is None:
             continue
         try:
-            directory = _contained(candidate, skill_name, "SKILL.md").parent
+            skill_file = _contained(candidate, skill_name, "SKILL.md")
         except ValueError:
             return None
-        if directory.is_dir():
-            return directory
+        if skill_file.is_file():
+            return skill_file.parent
     return None
+
+
+def bundled_skill_exists(name: str) -> bool:
+    """True when the platform ships a skill under this name."""
+    try:
+        return _contained(_skills_dir(), name, "SKILL.md").is_file()
+    except ValueError:
+        return False
+
+
+def instance_skill_exists(name: str) -> bool:
+    """True when this instance has its own skill under this name."""
+    try:
+        return _contained(instance_skills_dir(), name, "SKILL.md").is_file()
+    except ValueError:
+        return False
+
+
+def shadows_bundled(name: str) -> bool:
+    """True when an instance skill is standing in front of a bundled one.
+
+    Agents read the instance's copy; the platform's file is untouched on
+    disk, so nothing in a checkout reveals the substitution. Every surface
+    that reports a skill reports this.
+    """
+    return instance_skill_exists(name) and bundled_skill_exists(name)
+
+
+def shadowed_skill_names() -> tuple[str, ...]:
+    """Every bundled skill this instance has replaced, sorted."""
+    instance_dir = instance_skills_dir()
+    if not instance_dir.is_dir():
+        return ()
+    names = {fp.parent.name for fp in instance_dir.glob("*/SKILL.md")}
+    return tuple(sorted(name for name in names if bundled_skill_exists(name)))
 
 
 def _meta_path(skill_name: str, base: Path | None = None) -> Path:
@@ -677,9 +730,22 @@ def migrate_skill_runtime_state(base: Path | None = None) -> dict[str, list[str]
     move and touches no files.
 
     Returns {"migrated": [...], "unchanged": [...], "errors": [...]}.
+
+    With no explicit base it walks BOTH trees: the platform's meta.json files
+    are the ones this was written for, but a skill written by an engine that
+    predates the state sidecar can equally be sitting in the instance tree.
     """
-    root = base or _skills_dir()
+    roots = (base,) if base is not None else skill_search_paths()
     result: dict[str, list[str]] = {"migrated": [], "unchanged": [], "errors": []}
+    for root in roots:
+        _migrate_runtime_state_in(root, result)
+    return result
+
+
+def _migrate_runtime_state_in(root: Path, result: dict[str, list[str]]) -> None:
+    """One tree's worth of :func:`migrate_skill_runtime_state`."""
+    if not root.is_dir():
+        return
     for meta_path in sorted(root.glob("*/meta.json")):
         name = meta_path.parent.name
         try:
@@ -706,7 +772,6 @@ def migrate_skill_runtime_state(base: Path | None = None) -> dict[str, list[str]
             meta.pop(key, None)
         write_skill_meta(name, meta, root)
         result["migrated"].append(name)
-    return result
 
 
 def migrate_instance_skills(
@@ -725,9 +790,21 @@ def migrate_instance_skills(
     reported as a conflict rather than overwritten: the two bodies may have
     diverged and only the operator can say which one wins.
 
-    Returns {"moved": [...], "skipped": [...], "conflicts": [...],
-    "errors": [...]}. With ``dry_run`` the same report is produced and
-    nothing on disk is touched.
+    The walk is over ``SKILL.md``, not ``meta.json``: a stray with no sidecar
+    at all is exactly the case a meta glob cannot see, and leaving it
+    uncounted is how it stays in the platform tree forever. It lands in
+    ``needs-review`` instead -- nothing is moved on a guess about provenance.
+
+    Returns {"moved": [...], "skipped": [...], "unmarked": [...],
+    "needs-review": [...], "conflicts": [...], "errors": [...]}:
+
+    * ``skipped`` -- ``meta.json`` says ``origin: platform``. The platform's.
+    * ``unmarked`` -- a ``meta.json`` with no origin and no legacy marker.
+      Left in place; it predates the marker and nothing says whose it is.
+    * ``needs-review`` -- a ``SKILL.md`` with no ``meta.json`` at all.
+
+    With ``dry_run`` the same report is produced and nothing on disk is
+    touched.
     """
     import shutil
 
@@ -735,15 +812,26 @@ def migrate_instance_skills(
 
     src_root = bundled or _skills_dir()
     dest_root = instance or instance_skills_dir()
-    result: dict[str, list[str]] = {"moved": [], "skipped": [], "conflicts": [], "errors": []}
+    result: dict[str, list[str]] = {
+        "moved": [],
+        "skipped": [],
+        "unmarked": [],
+        "needs-review": [],
+        "conflicts": [],
+        "errors": [],
+    }
     if not src_root.is_dir():
         return result
 
-    candidates = sorted(src_root.glob("*/meta.json"))
-    candidates.extend(sorted(src_root.glob(".archive/*/meta.json")))
-    for meta_path in candidates:
-        skill_dir = meta_path.parent
+    candidates = sorted(src_root.glob("*/SKILL.md"))
+    candidates.extend(sorted(src_root.glob(".archive/*/SKILL.md")))
+    for skill_file in candidates:
+        skill_dir = skill_file.parent
         label = str(skill_dir.relative_to(src_root))
+        meta_path = skill_dir / "meta.json"
+        if not meta_path.is_file():
+            result["needs-review"].append(label)
+            continue
         try:
             meta = json.loads(meta_path.read_text())
         except Exception as e:  # noqa: BLE001 - one bad file must not stop the pass
@@ -755,7 +843,8 @@ def migrate_instance_skills(
             result["errors"].append(label)
             continue
         if not is_instance_skill_meta(meta):
-            result["skipped"].append(label)
+            bucket = "skipped" if meta.get("origin") == PLATFORM_ORIGIN else "unmarked"
+            result[bucket].append(label)
             continue
         target = dest_root / label
         if target.exists():
