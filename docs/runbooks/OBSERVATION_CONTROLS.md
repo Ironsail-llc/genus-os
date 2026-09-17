@@ -44,7 +44,7 @@ did.
 |---|---|---|---|
 | `truncation_ledger` | no ledger built at all | the ledger is kept; unresolved entries are logged at WARNING with the run id; unresolved entries at finalization write an `agent_guardrail_events` row (`action='observed'`); nothing is shown to the model | each unresolved entry is quoted to the model once; a run trying to finish with one outstanding is held for up to TWO more model turns — "go and read it", then "say in your answer what you did not read" — and then ends regardless; still-unresolved entries at finalization write the same row with `action='blocked'` |
 | `act_observe` | no ledger, no classification | pending unread state-changes are logged at WARNING; unresolved changes at finalization write an `agent_guardrail_events` row (`action='observed'`) | one note, once per run, telling the agent what it changed and has not re-read — delivered at a check-in if one fires, otherwise at the run's stop, which costs one extra model turn; it never fails a run; still-pending changes at finalization write the same row, also `action='observed'` |
-| `verdict_commitment` | nothing computed | a WARNING naming the undecided items, plus an `agent_guardrail_events` row (`action='observed'`) from `record_verdict_findings` | one re-ask, at most once per run, quoting up to five findings — each with the sentence or the marker that produced it — and asking for one verdict each; findings that survive it write the same row with `action='blocked'` |
+| `verdict_commitment` | nothing computed | an INFO line naming every deliverable it read, how many items it inspected, how many carried a provenance marker and how many findings came out; a WARNING naming the undecided items; plus an `agent_guardrail_events` row (`action='observed'`) from `record_verdict_findings` | the same INFO line, then one re-ask, at most once per run, quoting up to five findings — each with the sentence or the marker that produced it — and asking for one verdict each; findings that survive it write the same row with `action='blocked'` |
 
 Three things about this table are easy to misread:
 
@@ -191,12 +191,29 @@ the order below, because the re-ask is a list the model has to act on:
   incomplete"* are all conditions about the work or the future, and all four
   are silent.
 
-**Every detector is block-local.** A deliverable is cut on markdown headings
-(or blank lines where there are none), and a verdict, a hand-back, a hedge and
-an override only bind to item identifiers in the same block. A hedge written
-under a later `## Notes` heading about an item decided earlier is therefore
-silent. That is a bounded design rather than an oversight, and it is the first
-thing to check when a table is quieter than a deliverable deserves.
+**Every detector is block-local, except that a section assigns its verdict.**
+A deliverable is cut on markdown headings (or blank lines where there are
+none), and a hand-back, a hedge and an override only bind to item identifiers
+in the same block. A hedge written under a later `## Notes` heading about an
+item decided earlier is therefore silent. That is a bounded design rather than
+an oversight, and it is the first thing to check when a table is quieter than a
+deliverable deserves.
+
+A **verdict** reaches further, because the cut used to make the commonest
+triage layout unreadable: `## Critical` followed by `### 1. <item>` put the
+severity in one block and the item in another, so a report that plainly
+assigned a verdict to every item read as assigning none, and three of the four
+shapes above were inert on the whole class (measured 2026-09-17). A block that
+states no verdict of its own now inherits from the nearest ancestor heading
+that IS a label, and the rule is deliberately narrow in both directions
+(`verdict_sections.blocks`):
+
+| Rule | Why |
+|---|---|
+| The verdict must BE the heading — the text with the verdict phrase removed is nothing but filler (a count, an enumerator, or a word like *Issues*, *Items*, *Priority*) | `## Critical`, `## Critical Issues (3)` and `## No action required` are sections. `# Critical Incident Review — Week 38` and `# P1 escalation log` are titles: inheriting from those filed every item in the report under that severity as well as its own, so an item named again under `## Next steps` came back "under two verdicts" — a contradiction the report never made |
+| Only the **nearest** such heading | A `## Low` section inside a `# Critical …` report resolves to *low*, not to both |
+| Not at all when the block states its **own** verdict | `### 3. … — upgraded to Critical` under `## High` is one decision, and reading it as two would invent a disagreement |
+| The section reaches the block as the **label**, never as the heading's own words | Prepending the heading verbatim would feed its every word — a marker field, an identifier, an override phrase — to every other detector for every item in the section |
 
 An item with one verdict and an inline caveat produces nothing — that is
 deliberate. The rule is one verdict per item, not zero doubt: contradicting
@@ -228,11 +245,31 @@ word "test" from becoming a finding on its own:
 | `automated`, `automation`, `bot`, `internal`, `noreply`, `system`, `staging` and `canary` are **deliberately absent** | A genuine outage is reported by an automated internal monitor, a staging outage blocks a real release train, and a failing canary is a real rollout failure. If any of those were a contradiction on its own, this control would fire on most of the alerting in a working fleet |
 | The field belongs to the **last item identifier before it**, within 4,000 characters | One item's footer must not attach to the item above it. This is what a listing of items looks like on the wire |
 | The deliverable must have **classified** the item, and not as `no-action` | An item mentioned in prose has no verdict to contradict, and an item filed as no-action has honoured its marker |
-| A block that **overrides the marker outright** and does not hedge is silent | *"I am overriding that marker: the same outage appears in three independent monitoring feeds"* is a decision. Quoting the marker is not — all three measured runs quoted it at length and then asked the reader what to do with it, and *"escalated regardless, but please confirm whether…"* is the failure itself, so a hedge anywhere on the item cancels the override |
+| A block that **overrides the marker outright, names what outranks it** and does not hedge is silent | *"I am overriding that marker: the same outage appears in three independent monitoring feeds"* is a decision. Quoting the marker is not — all three measured runs quoted it at length and then asked the reader what to do with it, and *"escalated regardless, but please confirm whether…"* is the failure itself, so a hedge anywhere on the item cancels the override. **The reason is required**: see below |
 
 The scan is best-effort by construction: compaction evicts old tool results, so
 a long run's early metadata may no longer be in the transcript. A marker that
 is gone is a quiet false negative, never a wrong finding.
+
+#### An override has to name what outranks the marker
+
+Rule 20 asks a verdict that ignores a marker to *say what overrides it*, and
+the fourth measured run answered with **"the metadata was disregarded"** — the
+assertion with the reason left out, the exact sentence the rule exists to
+forbid — which bought the exemption, because the first cut checked for the
+claim and never for the reason. What counts now (`override_reasons`):
+
+| Rule | Why |
+|---|---|
+| A **source** a reader could go and look at: a message, ticket, email, thread, channel, call, log, dashboard, alert, monitor, feed, screenshot, customer, sender, an `@handle` or address, a time (`14:02`), a date, a link, an item id | *"disregarded for this message"* and *"disregarded in this report"* are the same sentence one preposition later, so a noun on its own cannot be the reason |
+| …**doing something**, within 90 characters: confirmed, corroborated, verified, showed, appeared, opened, raised, paged, phoned, called, said, logged, matched | *"because the report is about a genuine customer impact"*, *"since the system requires escalation"* and *"because the team decided to escalate anyway"* name nothing at all. `report`, `record`, `system`, `team` and `user` are deliberately not sources: they are the writer's own side of the page |
+| A quotation counts only through its **attribution** | *because it "seemed wrong"* quotes the writer |
+| The reason comes **after** the override phrase, in that sentence or the next one, stopping at a blank line | A reason found earlier is usually the marker being described — *"contained trailing test-harness metadata … was disregarded"* would otherwise talk its way out of the finding it is. Forward, it has to reach the next sentence or bullet, because stating the override and then explaining it is the ordinary way to write one |
+
+*"Disregarded because the incident channel confirmed a live outage at 14:02"*
+and *"the metadata was disregarded — the on-call engineer paged at 14:02 and
+three monitors were red"* are both silent. *"The metadata was disregarded for
+routing. Flagged for your awareness."* is a finding.
 
 #### The rule the model is given
 
@@ -510,6 +547,8 @@ does not apply to it because it carries no date to go stale.
 | Act-vs-observe classification, source tokens, unread-proxy-response note | `robothor/engine/act_observe.py` |
 | One-verdict-per-item ladder (task gate, re-ask, guardrail row) | `robothor/engine/verdict_commitment.py` |
 | What a verdict, a hand-back and a retraction look like on the page | `robothor/engine/verdict_shapes.py` |
+| How far a verdict reaches from the heading that assigns it | `robothor/engine/verdict_sections.py` |
+| Whether an override names what outranks the marker | `robothor/engine/override_reasons.py` |
 | An item's own provenance marker, and what contradicts a verdict | `robothor/engine/provenance_markers.py` |
 | The fleet-wide rule behind it (rule 20) | `robothor/engine/prompts.py` |
 | In-loop hold (deliverable check-in) | `robothor/engine/loop_guards.py` (`unread_observation_hold`, `hold_for_hedged_verdicts`) |
