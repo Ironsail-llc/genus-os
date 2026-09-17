@@ -173,18 +173,43 @@ Two kinds of call, one rule:
   `http.client` (the second: seventeen `urllib` sends printing `OK`, proxied
   count an honest zero). `sandbox_runtime/http_recorder.py` is copied into
   the sandbox beside `genus_tools.py` and hooks `http.client` — the one layer
-  `urllib` and `urllib3` share — recording `(method, url, status, body head)`
-  per exchange, at most 200 exchanges and 2,000 body characters each, and
-  fail-open at every hook. `httpx` speaks `h11` over its own sockets and is
-  not seen. The result lists the requests (not the bodies) under
-  `http_calls`, names a raw call as `POST http://host:port/path`, and the
-  ledger records each accepted non-`GET`/`HEAD`/`OPTIONS` call as a change
-  **against its origin** (`scheme://host:port`), so a later read anywhere on
-  that host answers it. A 4xx/5xx changed nothing and is not a change; a
-  body with nothing substantial (`{"ok": true}`, an empty 204) is never
-  counted as unread; a write the same snippet read back (POST then GET the
-  same origin) is already observed. Where the recorder saw at least one
-  accepted write, it outranks the text heuristic for that step.
+  `urllib` and `urllib3` share — recording `(method, url, status, body head,
+  truncated)` per exchange, at most 200 exchanges and 2,000 body characters
+  each, and fail-open at every hook. The result lists the requests (not the
+  bodies) under `http_calls` — identical `(method, url, status)` collapsed
+  into one line with a `count`, in last-seen order, at most 50 lines plus an
+  `{"elided": N}` marker — and names a raw call as `POST http://host:port/path`.
+  When there is no record at all the result says `http_recorder: "absent"`
+  (the recorder failed to install); when the record is oversized (1 MiB cap,
+  checked by `stat` before it is read) or malformed, `"unreadable"`. Neither
+  looks like a snippet that made no request. The ledger records each accepted
+  non-`GET`/`HEAD`/`OPTIONS` call as a change **against its origin**
+  (`scheme://host:port`, rebuilt from the parsed hostname — no userinfo, and
+  nothing that is not a hostname ever reaches a note), so a later read
+  anywhere on that host answers it. A 4xx/5xx changed nothing and is not a
+  change; a body with nothing substantial (`{"ok": true}`, an empty 204) is
+  never counted as unread; a write the same snippet read back (POST then GET
+  the same origin) is already observed. Where the recorder witnessed **any**
+  non-safe attempt — accepted or refused — it outranks the text heuristic for
+  that step, so a snippet whose every POST came back 429 is not held for a
+  change that never happened.
+
+  **What the recorder sees, precisely.** The request line always, for every
+  library on `http.client`. The body only when it is consumed through the
+  wrapped reader: `urllib` reads every body that way, uncompressed or
+  chunked, and is fully seen; `requests`/`urllib3` reads an uncompressed
+  `Content-Length` reply that way and is seen, but decodes a gzip or chunked
+  reply through its own stream and is recorded with an **empty body** —
+  and `requests` asks for gzip by default, so against a server that
+  compresses, `requests` coverage is the request line only. An empty body is
+  "nothing to look for", never "unread": the gap costs a missed count, not a
+  false one (pinned by `test_the_documented_requests_gap_fails_toward_silence`).
+  `httpx` speaks `h11` over its own sockets and is not seen at all;
+  `aiohttp` likewise. A body the recorder **cut** at 2,000 characters no
+  longer parses as JSON; it is matched on the string literals that survived
+  the cut and never on its raw head, because `print(resp)` shows a repr the
+  raw head is not in. Follow-up (not in this change): record
+  `Content-Encoding` and raw bytes and gunzip engine-side.
 
 ### Verdict commitment
 

@@ -229,7 +229,8 @@ async def _execute_code(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     responses_from = len(getattr(proxy, "responses", ()))
     tools_dir = Path(tempfile.mkdtemp(prefix="code-", dir=_run_scratch_root(ctx)))
     server = ToolRpcServer(directory=tools_dir, proxy=proxy, max_calls=max_calls)
-    http_calls: list[dict[str, Any]] = []
+    http_calls: list[dict[str, Any]] | None = None
+    http_recorder = ""
     try:
         await server.start()
         _stage(tools_dir, code)
@@ -243,11 +244,13 @@ async def _execute_code(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
         )
         # Read before the `finally` removes the directory. Best effort in the
         # same sense as the recorder: a record that cannot be read is no
-        # record, and the snippet's own result is unchanged by it.
+        # record, the snippet's own result is unchanged by it, and the result
+        # SAYS so rather than looking like a snippet that made no request.
         try:
             http_calls = recorded_http_calls(tools_dir)
         except Exception as exc:  # noqa: BLE001 - diagnostics never fail the call
             logger.warning("execute_code: the HTTP record could not be read: %r", exc)
+            http_recorder = "unreadable"
     except OSError as exc:
         return {"error": f"execute_code could not start: {exc}"}
     finally:
@@ -263,7 +266,12 @@ async def _execute_code(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
         shutil.rmtree(tools_dir, ignore_errors=True)
 
     shaped = shape(
-        result, server=server, workspace=workspace, stdout_cap=stdout_cap, http_calls=http_calls
+        result,
+        server=server,
+        workspace=workspace,
+        stdout_cap=stdout_cap,
+        http_calls=http_calls,
+        http_recorder=http_recorder,
     )
     # A call's response is EVIDENCE, not a receipt — a proxied call's, and
     # equally one the snippet made on its own. The first measured run printed
@@ -274,7 +282,8 @@ async def _execute_code(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     from robothor.engine.act_observe import raw_http_responses, unread_proxy_responses
 
     proxied = list(getattr(proxy, "responses", ()))[responses_from:]
-    shaped.update(unread_proxy_responses(proxied + raw_http_responses(http_calls), result.stdout))
+    raw = raw_http_responses(http_calls or [])
+    shaped.update(unread_proxy_responses(proxied + raw, result.stdout))
     return shaped
 
 

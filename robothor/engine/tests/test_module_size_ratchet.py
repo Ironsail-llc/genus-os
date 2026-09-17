@@ -367,11 +367,16 @@ CAPS = {
     # and the raw writes join the proxied ones under the one unread-response
     # rule (measured 2026-09-17: a urllib send loop, `OK` per call, proxied
     # count an honest zero, three follow-ups discarded).
-    "robothor/engine/tools/handlers/code_exec.py": 319,
+    # 319 -> 328: the result says "absent" or "unreadable" when the record is
+    # missing or refused, so no http_calls never reads as no HTTP.
+    "robothor/engine/tools/handlers/code_exec.py": 328,
     # 103 -> 150: `recorded_http_calls`, the loader that re-bounds what a
     # process the snippet controlled wrote, and the `http_calls` field on the
     # result — requests without bodies, for the model and for the ledger.
-    "robothor/engine/code_exec_result.py": 150,
+    # 150 -> 198 (review round): the record is refused by `stat` size before
+    # it is read, identical requests collapse into counted lines in last-seen
+    # order with an elision cap, and the recorder state is reported.
+    "robothor/engine/code_exec_result.py": 198,
     # The observation cluster (2026-09-16), each piece capped at the size it was
     # written to and each one a separate question, for the reason the code-
     # sandbox cluster above is four modules: what the model SEES of a command's
@@ -415,7 +420,11 @@ CAPS = {
     # `(name, evidence)` pairs the proxied path produces, a 4xx refusing to be
     # a change, a JSON body with no substantial leaf refusing to be evidence),
     # and `SAFE_METHODS`. Still a table and pure functions; no session.
-    "robothor/engine/act_observe.py": 411,
+    # 411 -> 457 (review round): a cut body is matched on its surviving JSON
+    # literals and never on its raw head; the origin is rebuilt from the
+    # parsed hostname and refused when it is not one; a call URL is stripped
+    # of control characters before it is quoted.
+    "robothor/engine/act_observe.py": 457,
     # 469 -> 505 -> 285 -> 385 across one review round. The middle number is
     # the one that matters: at 505 the DELIVERY half left for
     # observation_notes.py, because "what happened" and "what the run is told
@@ -434,7 +443,9 @@ CAPS = {
     # against their origin, a write read back inside the same snippet already
     # observed), a later read anywhere under a changed origin answering it
     # (`_answers`), and the hold latched separately from the note.
-    "robothor/engine/observation_ledger.py": 451,
+    # 451 -> 460 (review round): the recorder outranks the text heuristic on
+    # any witnessed non-safe attempt, refused included, and reads counts.
+    "robothor/engine/observation_ledger.py": 460,
     # The delivery half, capped at what it was split to plus the second hold and
     # the stop-path nudge. `enforce`'s honest completion used to be appended
     # after the runner had already returned, so it reached the transcript and

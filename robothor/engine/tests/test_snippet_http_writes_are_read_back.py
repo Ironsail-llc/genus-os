@@ -22,9 +22,16 @@ Three defects, three groups of tests:
 * **D3** — a write whose response carried nothing substantial is never
   counted as unread, on the raw path as on the proxied one.
 
+Plus the review round's three false-positive paths, each reproduced against
+the real snippet and the real recorder output before it was closed: a JSON
+body the recorder cut, a snippet whose every write was rejected, and
+``requests`` over HTTPS keyed to a phantom ``http://host:443`` origin.
+
 The D1 tests spawn the real sandbox against a real ``http.server`` on a
 loopback port: the recorder lives inside the child interpreter, and a mock of
-the child would test the mock.
+the child would test the mock. Every ledger assertion feeds the REAL snippet
+text as the step's arguments, so the text heuristic sees ``method="POST"``
+exactly as it would in a run.
 """
 
 from __future__ import annotations
@@ -40,12 +47,20 @@ import pytest
 from robothor.engine.loop_guards import append_engine_note
 from robothor.engine.observation_ledger import ObservationLedger, ledger_for
 from robothor.engine.observation_notes import observation_notes, unobserved_change_nudge
+from robothor.engine.sandbox_runtime.http_recorder import MAX_RECORDED_BODY_CHARS
 from robothor.engine.session import ENGINE_CONTEXT_ROLE
 from robothor.engine.tool_proxy import clear_tool_proxy, set_tool_proxy
 from robothor.engine.tools.dispatch import ToolContext
 from robothor.engine.tools.handlers.code_exec import _execute_code
 
 REPLY_TEXT = "Following up on the DPA: legal needs the signed addendum by Friday, msg_2210."
+
+#: A reply the recorder has to CUT: well past MAX_RECORDED_BODY_CHARS.
+BIG_LIST = [
+    {"id": f"msg_{2200 + i}", "text": f"Inbox item {i}: the quarterly review notes are attached"}
+    for i in range(40)
+]
+assert len(json.dumps(BIG_LIST)) > MAX_RECORDED_BODY_CHARS
 
 
 class _MockService(BaseHTTPRequestHandler):
@@ -75,6 +90,25 @@ class _MockService(BaseHTTPRequestHandler):
         elif self.path == "/slack/empty":
             self.send_response(204)
             self.end_headers()
+        elif self.path == "/slack/big":
+            self._json(200, BIG_LIST)
+        elif self.path == "/slack/gzip":
+            import gzip
+
+            body = gzip.compress(json.dumps({"new_reply": {"text": REPLY_TEXT}}).encode())
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.path == "/slack/chunked":
+            body = json.dumps({"new_reply": {"text": REPLY_TEXT}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            self.wfile.write(b"%x\r\n%s\r\n0\r\n\r\n" % (len(body), body))
         else:
             self._json(200, {"status": "sent", "new_reply": {"id": "msg_2210", "text": REPLY_TEXT}})
 
@@ -114,8 +148,23 @@ async def _run(code: str, workspace) -> dict[str, Any]:
         clear_tool_proxy(token)
 
 
-def _send_snippet(base: str, path: str = "/slack/send", show: str = "'OK'") -> str:
-    """The measured shape: a urllib POST whose response is parsed and dropped."""
+def _ledger_after(code: str, result: dict[str, Any], step: int = 7) -> ObservationLedger:
+    """The ledger as production feeds it: the REAL snippet text as the step's
+    arguments, so the text heuristic sees `method="POST"` exactly as it would
+    in a run, and the result exactly as the handler returned it."""
+    ledger = ObservationLedger()
+    ledger.record(step, "execute_code", {"code": textwrap.dedent(code)}, result)
+    return ledger
+
+
+def _send_snippet(base: str, path: str = "/slack/send", show: str = "'OK'", then: str = "") -> str:
+    """The measured shape: a urllib POST whose response is parsed and dropped.
+
+    `then` is appended at the snippet's own indentation — a block glued on at
+    a different depth is an IndentationError in the child, a snippet that
+    never ran, and a ledger assertion that passes about nothing.
+    """
+    tail = textwrap.indent(textwrap.dedent(then), "        ") if then else ""
     return f"""
         import json, urllib.request
         req = urllib.request.Request(
@@ -123,8 +172,10 @@ def _send_snippet(base: str, path: str = "/slack/send", show: str = "'OK'") -> s
             headers={{"Content-Type": "application/json"}}, method="POST",
         )
         with urllib.request.urlopen(req, timeout=5) as r:
-            resp = json.loads(r.read().decode())
+            raw = r.read().decode()
+            resp = json.loads(raw)
         print("routed msg_2202 -> @x:", {show})
+{tail}
     """
 
 
@@ -147,15 +198,15 @@ class TestASnippetsOwnHttpWrites:
         assert result["unread_response_tools"] == [f"POST {service}/slack/send"]
         assert "never printed" in result["unread_response_note"]
         assert result["http_calls"] == [
-            {"method": "POST", "url": f"{service}/slack/send", "status": 200}
+            {"method": "POST", "url": f"{service}/slack/send", "status": 200, "count": 1}
         ]
+        assert "http_recorder" not in result
 
     async def test_and_it_lands_on_the_ledger_against_its_origin(self, service, tmp_path):
-        result = await _run(_send_snippet(service), tmp_path)
+        code = _send_snippet(service)
+        result = await _run(code, tmp_path)
 
-        ledger = ObservationLedger()
-        ledger.record(7, "execute_code", {"code": "…"}, result)
-        pending = ledger.unobserved_changes()
+        pending = _ledger_after(code, result).unobserved_changes()
         assert len(pending) == 1
         step, tool, sources = pending[0]
         assert (step, tool) == (7, "execute_code")
@@ -164,10 +215,10 @@ class TestASnippetsOwnHttpWrites:
     async def test_a_later_read_of_that_origin_clears_it(self, service, tmp_path):
         """The note says "read that source again"; a read anywhere under the
         same origin is what "that source" means for a write the recorder saw."""
-        result = await _run(_send_snippet(service), tmp_path)
+        code = _send_snippet(service)
+        result = await _run(code, tmp_path)
 
-        ledger = ObservationLedger()
-        ledger.record(7, "execute_code", {"code": "…"}, result)
+        ledger = _ledger_after(code, result)
         ledger.record(
             8, "exec", {"command": f"curl -s {service}/slack/messages"}, {"stdout": "[…]"}
         )
@@ -181,27 +232,29 @@ class TestASnippetsOwnHttpWrites:
         assert "msg_2210" in result["stdout"]
 
     async def test_a_get_only_snippet_is_neither_flagged_nor_a_change(self, service, tmp_path):
-        result = await _run(
-            f"""
+        code = f"""
             import urllib.request
             with urllib.request.urlopen("{service}/slack/messages", timeout=5) as r:
                 r.read()
             print("listed")
-            """,
-            tmp_path,
-        )
+            """
+        result = await _run(code, tmp_path)
 
         assert result["returncode"] == 0, result
         assert "unread_responses" not in result
-        ledger = ObservationLedger()
-        ledger.record(7, "execute_code", {"code": "…"}, result)
+        ledger = _ledger_after(code, result)
         assert ledger.unobserved_changes() == []
         assert ledger.reads, "a GET is a read of that origin"
 
-    async def test_a_requests_post_is_seen_at_the_same_layer(self, service, tmp_path):
+    async def test_a_requests_post_with_identity_encoding_is_seen_at_the_same_layer(
+        self, service, tmp_path
+    ):
         """`requests` goes through urllib3, which subclasses `http.client`:
-        the one hook sees both. The response is consumed by urllib3's own
-        reader, so this also proves the body capture is not urllib-specific."""
+        the one hook sees the request. The BODY is seen only when urllib3
+        reads it through the wrapped reader — an uncompressed Content-Length
+        response, as here. A chunked or gzip response through `requests` is
+        recorded with an empty body (documented in OBSERVATION_CONTROLS.md),
+        which the rule treats as nothing to look for, never as unread."""
         pytest.importorskip("requests")
         result = await _run(
             f"""
@@ -213,7 +266,7 @@ class TestASnippetsOwnHttpWrites:
         )
         assert result["returncode"] == 0, result
         assert result["http_calls"] == [
-            {"method": "POST", "url": f"{service}/slack/send", "status": 200}
+            {"method": "POST", "url": f"{service}/slack/send", "status": 200, "count": 1}
         ]
         assert result["unread_responses"] == 1
 
@@ -227,32 +280,127 @@ class TestASnippetsOwnHttpWrites:
         )
         assert "unread_responses" not in printed
 
+    @pytest.mark.parametrize("path", ["/slack/gzip", "/slack/chunked"])
+    async def test_the_documented_requests_gap_fails_toward_silence(self, service, tmp_path, path):
+        """What `requests` coverage does NOT include, pinned so the docs cannot
+        drift from the code: a gzip or chunked reply is consumed by urllib3's
+        own stream, not the wrapped reader, so the body is recorded empty.
+        Empty is "nothing to look for" — the write is still a change, but it
+        is never reported unread, printed or not. A missed count, never a
+        false one."""
+        pytest.importorskip("requests")
+        code = f"""
+            import requests
+            r = requests.post("{service}{path}", json={{"to": "@x"}}, timeout=5)
+            print("routed:", r.status_code)
+            """
+        result = await _run(code, tmp_path)
+        assert result["returncode"] == 0, result
+        assert result["http_calls"][0]["status"] == 200
+        assert "unread_responses" not in result
+        assert len(_ledger_after(code, result).unobserved_changes()) == 1
+
+    async def test_urllib_reads_a_chunked_reply_through_the_hook(self, service, tmp_path):
+        """And the other half of the same claim: urllib reads every body
+        through `read()`, chunked included, so the same reply IS seen."""
+        result = await _run(_send_snippet(service, path="/slack/chunked"), tmp_path)
+        assert result["returncode"] == 0, result
+        assert result["unread_responses"] == 1
+
     async def test_a_snippet_with_no_http_at_all_carries_no_http_fields(self, tmp_path):
         result = await _run("print('hello')", tmp_path)
         assert result["stdout"].strip() == "hello"
         assert "http_calls" not in result
         assert "unread_responses" not in result
+        # the recorder ran and saw nothing — which is not the same as absent
+        assert "http_recorder" not in result
 
     async def test_a_write_the_snippet_read_back_inside_itself_is_observed(self, service, tmp_path):
         """POST then GET the same origin, in one snippet: the world was looked
         at after it was changed, whatever step number both calls share."""
-        result = await _run(
-            _send_snippet(service)
-            + f"""
+        code = _send_snippet(
+            service,
+            then=f"""
             with urllib.request.urlopen("{service}/slack/messages", timeout=5) as r:
                 print(r.read().decode())
             """,
-            tmp_path,
         )
-        ledger = ObservationLedger()
-        ledger.record(7, "execute_code", {"code": "…"}, result)
-        assert ledger.unobserved_changes() == []
+        result = await _run(code, tmp_path)
+        assert result["returncode"] == 0, result
+        assert [c["method"] for c in result["http_calls"]] == ["POST", "GET"]
+        assert _ledger_after(code, result).unobserved_changes() == []
 
-    async def test_a_rejected_write_changed_nothing(self, service, tmp_path):
-        """A 429 is a refusal; the measured snippet printed its body and retried.
-        Counting it as a change is the false positive that gets a note ignored."""
+    async def test_identical_calls_are_collapsed_and_kept_in_last_seen_order(
+        self, service, tmp_path
+    ):
+        """Three sends and a listing come back as two entries, the listing
+        last — so the ledger's "read after the last write" question is
+        answerable from the order alone, and the model reads two lines, not
+        four. The three sends are still three changes."""
+
+        def snippet(then: str = "") -> str:
+            return f"""
+            import json, urllib.request
+            for i in range(3):
+                req = urllib.request.Request(
+                    "{service}/slack/send", data=b"{{}}",
+                    headers={{"Content-Type": "application/json"}}, method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    r.read()
+            print("sent 3")
+            {then}
+            """
+
+        code = snippet()
+        result = await _run(code, tmp_path)
+        assert result["returncode"] == 0, result
+        assert result["http_calls"] == [
+            {"method": "POST", "url": f"{service}/slack/send", "status": 200, "count": 3}
+        ]
+        assert result["unread_responses"] == 3
+        assert len(_ledger_after(code, result).unobserved_changes()) == 3
+
+        code_then_read = snippet(
+            f'with urllib.request.urlopen("{service}/slack/messages", timeout=5) as r:\n'
+            "                print(r.read().decode())"
+        )
+        result = await _run(code_then_read, tmp_path)
+        assert result["returncode"] == 0, result
+        assert [(c["method"], c["count"]) for c in result["http_calls"]] == [
+            ("POST", 3),
+            ("GET", 1),
+        ]
+        assert _ledger_after(code_then_read, result).unobserved_changes() == []
+
+    async def test_the_entry_list_is_capped_with_an_elision_marker(
+        self, service, tmp_path, monkeypatch
+    ):
+        from robothor.engine import code_exec_result
+
+        monkeypatch.setattr(code_exec_result, "MAX_HTTP_CALL_ENTRIES", 2)
         result = await _run(
             f"""
+            import urllib.request
+            for path in ("/slack/a", "/slack/b", "/slack/c"):
+                with urllib.request.urlopen("{service}" + path, timeout=5) as r:
+                    r.read()
+            print("done")
+            """,
+            tmp_path,
+        )
+        assert [c.get("url", "").rsplit("/", 1)[-1] for c in result["http_calls"][:2]] == ["b", "c"]
+        assert result["http_calls"][-1] == {"elided": 1}
+
+    async def test_a_rejected_write_changed_nothing_even_though_the_text_says_post(
+        self, service, tmp_path
+    ):
+        """Review finding 2. A 429 is a refusal; the measured snippet printed
+        its body and retried. The snippet's TEXT still says `method="POST"`,
+        which the verb heuristic reads as a change — so the recorder, which
+        watched every attempt fail, has to outrank it for this step, or the
+        run is held for a change that never happened."""
+        code = f"""
             import json, urllib.request, urllib.error
             req = urllib.request.Request(
                 "{service}/slack/limited", data=b"{{}}",
@@ -262,20 +410,18 @@ class TestASnippetsOwnHttpWrites:
                 urllib.request.urlopen(req, timeout=5)
             except urllib.error.HTTPError as e:
                 print("HTTP", e.code, e.read().decode())
-            """,
-            tmp_path,
-        )
+            """
+        result = await _run(code, tmp_path)
         assert result["http_calls"][0]["status"] == 429
         assert "unread_responses" not in result
-        ledger = ObservationLedger()
-        ledger.record(7, "execute_code", {"code": "…"}, result)
-        assert ledger.unobserved_changes() == []
+        assert _ledger_after(code, result).unobserved_changes() == []
 
     async def test_a_recorder_that_cannot_install_leaves_the_snippet_alone(
         self, service, tmp_path, monkeypatch
     ):
         """Fail open. A recorder exception must never break the snippet: the
-        result is exactly what an unrecorded run produces."""
+        result is exactly what an unrecorded run produces — and it SAYS the
+        recorder was absent, so nobody reads "no http_calls" as "no HTTP"."""
         from robothor.engine.tools.handlers import code_exec
 
         real_stage = code_exec._stage
@@ -287,13 +433,17 @@ class TestASnippetsOwnHttpWrites:
             )
 
         monkeypatch.setattr(code_exec, "_stage", broken_stage)
-        result = await _run(_send_snippet(service), tmp_path)
+        code = _send_snippet(service)
+        result = await _run(code, tmp_path)
 
         assert result["returncode"] == 0, result
         assert "routed msg_2202 -> @x: OK" in result["stdout"]
         assert result["stderr"] == ""
         assert "http_calls" not in result
         assert "unread_responses" not in result
+        assert result["http_recorder"] == "absent"
+        # with no witness, the text heuristic speaks, as before this feature
+        assert len(_ledger_after(code, result).unobserved_changes()) == 1
 
     async def test_a_loader_that_raises_leaves_the_result_unchanged(
         self, service, tmp_path, monkeypatch
@@ -309,6 +459,119 @@ class TestASnippetsOwnHttpWrites:
         assert result["returncode"] == 0, result
         assert "http_calls" not in result
         assert "unread_responses" not in result
+        assert result["http_recorder"] == "unreadable"
+
+    async def test_an_oversized_record_is_refused_before_it_is_read(
+        self, service, tmp_path, monkeypatch
+    ):
+        """Review finding 4. The file was written by a process the snippet
+        controlled; a same-uid snippet can make it a gigabyte. Its size is
+        checked with `stat` before any byte of it is read."""
+        from robothor.engine import code_exec_result
+
+        monkeypatch.setattr(code_exec_result, "MAX_RECORD_BYTES", 64)
+        result = await _run(_send_snippet(service), tmp_path)
+
+        assert result["returncode"] == 0, result
+        assert "http_calls" not in result
+        assert result["http_recorder"] == "unreadable"
+
+
+# ── Review finding 1: a body the recorder cut ────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestABodyTheRecorderCut:
+    """A 2,954-char JSON reply is cut at MAX_RECORDED_BODY_CHARS, so it no
+    longer parses. The first cut then fell back to the raw 200-char head as
+    evidence — which `print(resp)` (single-quoted repr) never contains, so a
+    reply the snippet printed in full was flagged unread. A cut body is
+    matched on the string literals that survived the cut, and never on its
+    raw head."""
+
+    async def test_printed_as_repr_it_is_not_flagged(self, service, tmp_path):
+        result = await _run(_send_snippet(service, path="/slack/big", show="resp"), tmp_path)
+        assert result["returncode"] == 0, result
+        assert "msg_2239" in result["stdout"]
+        assert "unread_responses" not in result
+
+    async def test_printed_as_raw_text_it_is_not_flagged(self, service, tmp_path):
+        result = await _run(_send_snippet(service, path="/slack/big", show="raw"), tmp_path)
+        assert "unread_responses" not in result
+
+    async def test_printed_indented_it_is_not_flagged(self, service, tmp_path):
+        result = await _run(
+            _send_snippet(service, path="/slack/big", show="json.dumps(resp, indent=2)"),
+            tmp_path,
+        )
+        assert "unread_responses" not in result
+
+    async def test_not_printed_it_is_still_unread(self, service, tmp_path):
+        result = await _run(_send_snippet(service, path="/slack/big"), tmp_path)
+        assert result["unread_responses"] == 1
+        assert result["unread_response_tools"] == [f"POST {service}/slack/big"]
+
+
+# ── Review finding 3: HTTPS through urllib3 ──────────────────────────────
+
+
+class TestTheSchemeOfAUrllib3Connection:
+    """urllib3's HTTPSConnection is not a subclass of `http.client`'s, so an
+    `isinstance` test recorded `requests` over HTTPS as `http://host:443/…` —
+    a phantom origin no https read could ever clear, i.e. a spurious hold."""
+
+    def test_a_urllib3_style_https_connection_is_https(self) -> None:
+        from robothor.engine.sandbox_runtime.http_recorder import _absolute
+
+        class Urllib3Style:  # what urllib3.connection.HTTPSConnection looks like
+            scheme = "https"
+            default_port = 443
+            host = "svc.invalid"
+            port = 443
+
+        assert _absolute(Urllib3Style(), "/inbox/send") == "https://svc.invalid/inbox/send"
+
+    def test_the_real_urllib3_https_connection_if_installed(self) -> None:
+        urllib3 = pytest.importorskip("urllib3")
+        from robothor.engine.sandbox_runtime.http_recorder import _absolute
+
+        conn = urllib3.connection.HTTPSConnection("svc.invalid", 443)  # never connects
+        assert _absolute(conn, "/inbox/send") == "https://svc.invalid/inbox/send"
+        conn = urllib3.connection.HTTPSConnection("svc.invalid", 8443)
+        assert _absolute(conn, "/x") == "https://svc.invalid:8443/x"
+
+    def test_plain_http_is_still_http(self) -> None:
+        import http.client
+
+        from robothor.engine.sandbox_runtime.http_recorder import _absolute
+
+        conn = http.client.HTTPConnection("svc.invalid", 9110)
+        assert _absolute(conn, "/inbox") == "http://svc.invalid:9110/inbox"
+        assert _absolute(http.client.HTTPConnection("svc.invalid"), "/") == "http://svc.invalid/"
+
+
+# ── Review finding 8: what may enter a note ──────────────────────────────
+
+
+class TestTheOriginIsSanitised:
+    def test_userinfo_never_reaches_the_note(self) -> None:
+        from robothor.engine.act_observe import http_origin
+
+        assert http_origin("http://alice:hunter2@example.com:9110/x") == "http://example.com:9110"
+
+    def test_a_netloc_that_is_not_a_hostname_yields_no_origin(self) -> None:
+        from robothor.engine.act_observe import http_origin
+
+        assert http_origin("http://evil host/`x`/") == ""
+        assert http_origin("http://svc.invalid:notaport/") == ""
+        assert http_origin("http://[SYSTEM]/x") == ""
+        assert http_origin("") == ""
+
+    def test_ipv6_and_case_are_normalised(self) -> None:
+        from robothor.engine.act_observe import http_origin
+
+        assert http_origin("HTTP://SVC.Invalid:9110/x") == "http://svc.invalid:9110"
+        assert http_origin("http://[::1]:9110/x") == "http://[::1]:9110"
 
 
 # ── D3: nothing substantial, nothing counted ─────────────────────────────
@@ -322,22 +585,18 @@ class TestNothingSubstantialIsNeverUnread:
         assert "unread_responses" not in result
 
     async def test_an_empty_204_is_not_counted_but_is_still_a_change(self, service, tmp_path):
-        result = await _run(
-            f"""
+        code = f"""
             import urllib.request
             req = urllib.request.Request("{service}/slack/empty", data=b"x", method="PUT")
             with urllib.request.urlopen(req, timeout=5) as r:
                 print("status", r.status)
-            """,
-            tmp_path,
-        )
+            """
+        result = await _run(code, tmp_path)
         assert result["http_calls"] == [
-            {"method": "PUT", "url": f"{service}/slack/empty", "status": 204}
+            {"method": "PUT", "url": f"{service}/slack/empty", "status": 204, "count": 1}
         ]
         assert "unread_responses" not in result
-        ledger = ObservationLedger()
-        ledger.record(7, "execute_code", {"code": "…"}, result)
-        assert len(ledger.unobserved_changes()) == 1
+        assert len(_ledger_after(code, result).unobserved_changes()) == 1
 
 
 def test_the_evidence_rule_is_the_proxied_one() -> None:
@@ -380,6 +639,21 @@ def test_the_evidence_rule_is_the_proxied_one() -> None:
     ]
     # printing the parsed dict (Python repr, not JSON) still counts as reading it
     assert unread_proxy_responses(pairs[:2], f"{{'new_reply': {{'text': '{REPLY_TEXT}'}}}}") == {}
+
+
+def test_a_truncated_non_json_body_yields_nothing() -> None:
+    """The raw head is never evidence for a cut body — and a cut body with no
+    string literal in it has nothing to look for, so it is never unread."""
+    from robothor.engine.act_observe import raw_http_responses
+
+    call = {
+        "method": "POST",
+        "url": "http://svc.invalid:9110/send",
+        "status": 200,
+        "body": "plain text " * 200,
+        "truncated": True,
+    }
+    assert raw_http_responses([call]) == [("POST http://svc.invalid:9110/send", ())]
 
 
 # ── D2: its own message, and the hold is the guarantee ───────────────────

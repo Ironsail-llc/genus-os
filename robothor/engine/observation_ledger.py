@@ -186,38 +186,47 @@ class ObservationLedger:
 
     def _record_recorded_http(self, step: int, tool: str, output: Any) -> bool:
         """The HTTP a snippet made on its own, as its `execute_code` result
-        reports it (`http_calls`, from the in-sandbox recorder). True when at
-        least one accepted write was recorded — the caller then skips the text
-        heuristic for this step, because the recorder is the better witness.
+        reports it (`http_calls`, from the in-sandbox recorder). True when the
+        recorder witnessed ANY non-safe attempt, accepted or refused — the
+        caller then skips the text heuristic for this step, because the
+        recorder is the better witness. Refused too, deliberately: a snippet
+        whose every POST came back 429 still says `method="POST"` in its text,
+        and letting the heuristic speak there recorded a change that never
+        happened and held the run for it (review finding 2).
 
-        Reads are recorded against the origin AND the URL. A write is recorded
-        against the origin only, and not at all when a later call IN THE SAME
-        SNIPPET read that origin back: both calls share one step number, so the
-        "later read" rule below could not see the order, and a snippet that
-        sends and then lists the inbox has done exactly what the note asks.
+        The entries are collapsed `(method, url, status, count)` lines in
+        LAST-SEEN order. Reads are recorded against the origin AND the URL. An
+        accepted write is recorded against the origin only, `count` times, and
+        not at all when a read of that origin sits after it in the list — a
+        read whose last occurrence follows the write's last occurrence, which
+        is what "read it back inside the same snippet" means when both share
+        one step number and the cross-step rule below cannot see the order.
         """
         calls = output.get("http_calls") if isinstance(output, dict) else None
         if not isinstance(calls, list) or not calls:
             return False
-        writes: list[tuple[int, str]] = []
+        attempted = False
+        writes: list[tuple[int, str, int]] = []
         reads: list[tuple[int, str]] = []
         for index, call in enumerate(calls):
             if not isinstance(call, dict):
                 continue
             origin = http_origin(str(call.get("url") or ""))
-            if not origin:
-                continue
             method = str(call.get("method") or "").upper()
+            if not origin or not method:
+                continue
             if method in SAFE_METHODS:
                 reads.append((index, origin))
                 self.reads.append((step, frozenset({origin, str(call.get("url"))})))
-            elif int(call.get("status") or 0) < 400:
-                writes.append((index, origin))
-        for index, origin in writes:
+                continue
+            attempted = True
+            if int(call.get("status") or 0) < 400:
+                writes.append((index, origin, max(1, int(call.get("count") or 1))))
+        for index, origin, count in writes:
             if any(i > index and o == origin for i, o in reads):
                 continue
-            self.changes.append(StateChange(step, tool, frozenset({origin})))
-        return bool(writes)
+            self.changes.extend([StateChange(step, tool, frozenset({origin}))] * count)
+        return attempted
 
     def _register_truncations(
         self, step: int, tool: str, sources: frozenset[str], output: Any

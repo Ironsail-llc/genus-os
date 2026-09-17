@@ -662,9 +662,14 @@ you must use HTTP directly, print the response rather than a status field.
 showed itself. `unread_response_tools` names them (`POST http://host/path` for
 a raw one). The same task was lost a second time by a `urllib` loop that
 printed `OK` per send while the proxied count read an honest zero; the sandbox
-now records the snippet's own HTTP (method, URL, status — listed under
-`http_calls`), so a raw POST is held to the same rule. A rejected write (4xx,
-5xx) and a response with nothing substantial in it are never counted.
+now records the snippet's own HTTP (method, URL, status and a count — listed
+under `http_calls`, most recent last), so a raw POST is held to the same rule.
+A rejected write (4xx, 5xx) and a response with nothing substantial in it are
+never counted. Coverage is exact for `urllib` (every body); for `requests` it
+is the request line always and the body only for an uncompressed
+`Content-Length` reply — a gzip or chunked reply is recorded empty, which is
+never counted as unread. `httpx` is not seen. `http_recorder: "absent"` in a
+result means the recorder did not run, not that you made no requests.
 
 ### After you change something, look again
 

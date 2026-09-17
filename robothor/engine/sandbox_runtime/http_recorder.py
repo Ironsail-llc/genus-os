@@ -18,10 +18,16 @@ method and the URL. ``httpx`` speaks ``h11`` over its own sockets and is not
 seen here; a snippet using it is recorded by nothing, which fails in the
 direction of silence rather than a false report.
 
-What it records: ``(method, url, status, body head)`` per exchange, the body
-as the snippet consumed it — a body the snippet never read is a body nobody
-could have printed, and it is recorded as empty. Bounded in count and in
-bytes, written to a file the engine reads once the process has exited, and
+What it records: ``(method, url, status, body head, truncated)`` per
+exchange, the body as the snippet consumed it THROUGH THIS LAYER — a body the
+snippet never read is a body nobody could have printed, and it is recorded as
+empty. So is a body a library read some other way: ``urllib3`` decodes a gzip
+or chunked response through its own stream rather than the wrapped ``read``,
+so through ``requests`` only an uncompressed ``Content-Length`` reply is seen
+(``requests`` asks for gzip by default). ``urllib`` reads every body through
+``read()`` and is fully seen. An empty body is "nothing to look for", never
+"unread", so the gap costs a missed count, not a false one. Bounded in count
+and in bytes, written to a file the engine reads once the process has exited, and
 fail-open at every hook: a recorder exception is swallowed — there is no
 logger in here that would not write into the snippet's own stderr — and the
 snippet's call proceeds untouched.
@@ -57,10 +63,23 @@ _path: Path | None = None
 _installed = False
 
 
+def _is_https(conn: Any) -> bool:
+    """urllib3's HTTPSConnection is NOT a subclass of http.client's — an
+    `isinstance` test recorded `requests` over HTTPS as `http://host:443/…`,
+    a phantom origin no https read could clear. Every TLS connection class
+    in the family says so one of three ways: its class, its `scheme`
+    attribute (urllib3), or its default port."""
+    if isinstance(conn, http.client.HTTPSConnection):
+        return True
+    if str(getattr(conn, "scheme", "") or "").lower() == "https":
+        return True
+    return getattr(conn, "default_port", None) == 443
+
+
 def _absolute(conn: Any, url: str) -> str:
     if url.startswith(("http://", "https://")):
         return url
-    scheme = "https" if isinstance(conn, http.client.HTTPSConnection) else "http"
+    scheme = "https" if _is_https(conn) else "http"
     host = getattr(conn, "host", "") or ""
     port = getattr(conn, "port", None)
     default = 443 if scheme == "https" else 80
@@ -88,15 +107,24 @@ def flush() -> None:
     if _path is None:
         return
     with contextlib.suppress(Exception):
-        out = [
-            {
-                "method": rec["method"],
-                "url": rec["url"],
-                "status": rec["status"],
-                "body": _text(bytes(rec["body"]))[:MAX_RECORDED_BODY_CHARS],
-            }
-            for rec in _records
-        ]
+        out = []
+        for rec in _records:
+            text = _text(bytes(rec["body"]))
+            out.append(
+                {
+                    "method": rec["method"],
+                    "url": rec["url"],
+                    "status": rec["status"],
+                    "body": text[:MAX_RECORDED_BODY_CHARS],
+                    # Said explicitly, because a cut JSON body no longer parses
+                    # and the engine must not fall back to matching its raw
+                    # head — `print(resp)` shows a repr, which never contains
+                    # the raw head, and the reply would be flagged unread
+                    # although it was printed in full.
+                    "truncated": len(text) > MAX_RECORDED_BODY_CHARS
+                    or len(rec["body"]) >= MAX_RECORDED_BODY_CHARS * 4,
+                }
+            )
         tmp = _path.with_suffix(".tmp")
         tmp.write_text(json.dumps(out), encoding="utf-8")
         tmp.replace(_path)
