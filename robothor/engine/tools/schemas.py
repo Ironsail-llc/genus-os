@@ -161,13 +161,13 @@ _ATTACHMENT_SCHEMAS: dict[str, dict[str, Any]] = {
             # `when_to_use` sentence is one that competes with a sibling, and a
             # hit that loses its tail loses the half that decides.
             "description": (
-                "Ask one question about up to 200 images at once. Each image "
-                "goes to a vision model on its own and only the ANSWERS come "
-                "back, so it is cheap to call and no picture enters your "
-                "context. Use it to sort, label, filter or search a folder of "
-                "images; use view_image for one picture you need to study "
-                "yourself. A big batch writes its table to a JSON file and "
-                "returns the path — work over that file."
+                "Ask one question about up to 200 images at once. Each goes "
+                "to a vision model on its own and only the ANSWERS come back, "
+                "so it is cheap to call and no picture enters your context. "
+                "Sort, label, filter or search a folder of images; use "
+                "view_image for one you must study yourself. Every row says "
+                "WHY, so check reasons rather than doubt labels. A big batch "
+                "writes its table to a file — work over it."
             ),
             "parameters": {
                 "type": "object",
@@ -183,9 +183,23 @@ _ATTACHMENT_SCHEMAS: dict[str, dict[str, Any]] = {
                     "question": {
                         "type": "string",
                         "description": (
-                            "The one question asked of every image. Be specific and ask "
-                            "for the shortest useful answer — a label, a yes/no, the text "
-                            "that is visible."
+                            "The one question asked of every image. Be specific. Every "
+                            "row comes back with the model's `reason` — one sentence of "
+                            "what it saw — so read a few before you trust the answers, "
+                            "and remember a filename is a claim about a picture, not "
+                            "evidence of it: where an answer disagrees with a name, the "
+                            "look is what is in the file."
+                        ),
+                    },
+                    "choices": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "2-20 labels, when the answer is one of a fixed set. Each row "
+                            "comes back as a validated `choice` from this list — a reply "
+                            "outside it is asked once more and then reported as that "
+                            "row's error, never squeezed into the nearest label. Leave "
+                            "out for an open question."
                         ),
                     },
                     "detail": {

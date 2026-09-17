@@ -168,6 +168,58 @@ CAPS = {
     # `code_execution.py` holding all four would be untestable in exactly
     # the place it matters most.
     "robothor/engine/parallel_tools.py": 173,
+    # Capped on the way IN, not after it regrew. `choices` and `reason` landed
+    # in a module that had reached 1,479 lines, so the reply contract — what a
+    # model may answer and how the answer is checked — left for
+    # vision_contract.py before the cap was written. The two are different
+    # subjects: one fans calls out, bounds them and budgets the result; the
+    # other is a matcher whose whole safety property ("equality, never a
+    # prefix") has to be readable in one screen. A cap set at the post-
+    # extraction size is the only one that makes the extraction a one-way door.
+    # 1276 -> 1275: dropping the sample top-up loop (review I3). The cap
+    # follows the file DOWN, or the next change banks a line it did not earn.
+    # 1275 -> 1342: review M4 and M5. A row that times out or blows up mid
+    # re-ask now reports the tokens and money the FIRST call already spent
+    # (`_paid_for`) instead of dropping them, and the spill note is told which
+    # key the rows actually carry so it stops promising "answer" to a batch
+    # whose rows say "choice". Both are corrections to what this module
+    # REPORTS, which is its own subject; there is no cohesive cluster to lift
+    # out of a 20-line ledger helper and a threaded argument.
+    #
+    # THIS CAP CARRIES A DEBT: **FU-VIS2-SPILL** — extract the spill/budget
+    # cluster (`_spill`, `_spill_sentence`, `_spill_path`, `_fit`,
+    # `_pick_sample`, `_sample_row`, `prune_spill_files` and the budget
+    # constants) into a module of its own. Filed in the P4-VIS2 report's
+    # follow-up list; the next change that needs room in this file pays it
+    # rather than raising this number again. An intention is not a commitment,
+    # so it is named here where the raise has to be argued for.
+    "robothor/engine/vision_batch.py": 1342,
+    # 248 -> 351: the reply parser. Review finding I1 measured three ordinary
+    # model formatting habits — both markers on one line, a JSON object, a
+    # parenthetical gloss — each turning a whole batch into `error` rows at
+    # twice the cost, because the matcher was tolerant and the PARSER was not.
+    # The fix is unwrapping (fence, <think>), a JSON-object reader and an
+    # inline-marker split, all of which is this module's own subject: what a
+    # model may answer and how the answer is read. This is the trade
+    # `code_exec_rpc.py`'s entry above already names — correcting a cap set
+    # hours earlier in the same PR for the thing that makes the module correct
+    # is not the same as bumping a long-standing one to dodge a refactor.
+    # 351 -> 385: re-check O1 and F1, same PR, same argument. The JSON reader
+    # the I1 fix added was eating a free-text transcription — an object with an
+    # `answer` key came back as that one field, silently — so it is now gated
+    # on SHAPE, and the inline-marker pattern learned that `_` is a word
+    # character so `\b` never fired inside `__WHY:__`. Both are this module's
+    # own subject, and both are the parser being made correct rather than a
+    # feature being added to it. This module is ONE readable subject at 385
+    # lines; splitting it would produce two files neither of which can be read
+    # alone, which is the opposite of what the ratchet is for.
+    # 385 -> 397: R2-1. The three marker patterns each carried a hand-written
+    # character class and the backtick was missing from all three, so a model
+    # writing `ANSWER:` as inline code had every row rejected and re-asked.
+    # The class is now ONE named constant the three share — which is why this
+    # costs twelve lines instead of three characters, and why the next
+    # character somebody's model likes cannot go missing from two of them.
+    "robothor/engine/vision_contract.py": 397,
     # 277 -> 314: the approval budget. A proxied call passes the same approval
     # gate a turn's call does, which is right and which is also how a loop
     # could queue two hundred prompts at the operator. The check belongs where

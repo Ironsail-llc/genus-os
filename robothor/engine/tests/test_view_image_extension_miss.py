@@ -55,7 +55,8 @@ class TestExtensionMiss:
         _png(tmp_path / "thesis_abstract_page.jpg")
         out = await view_image({"path": str(tmp_path / "thesis_abstract_page.png")}, None)
         assert "error" not in out, out
-        assert out["resolved_from"].endswith("thesis_abstract_page.jpg")
+        assert out["path"].endswith("thesis_abstract_page.jpg"), "the file that was read"
+        assert out["resolved_from"].endswith("thesis_abstract_page.png"), "the file you asked for"
 
     @pytest.mark.asyncio
     async def test_the_substitution_is_always_named(self, tmp_path):
@@ -63,6 +64,22 @@ class TestExtensionMiss:
         _png(tmp_path / "chart.jpeg")
         out = await view_image({"path": str(tmp_path / "chart.webp")}, None)
         assert out.get("resolved_from"), "the tool read a different file without saying so"
+
+    @pytest.mark.asyncio
+    async def test_resolved_from_is_the_path_you_asked_for_not_the_one_you_got(self, tmp_path):
+        """Review I2. `resolved_from` used to be set to the SUBSTITUTE — which
+        is `path`, so the field carried no information at all — while the
+        sibling tool `analyze_image` sets it to the path the agent asked for.
+        Same tool family, same key, opposite readings: an agent that learned
+        the key here read an `analyze_image` row as "this is the file I got",
+        which is the one misreading the field exists to prevent."""
+        _png(tmp_path / "scan.jpg")
+        out = await view_image({"path": str(tmp_path / "scan.png")}, None)
+        assert out["resolved_from"] != out["path"], (
+            "a field equal to `path` on every row it appears on says nothing"
+        )
+        assert out["resolved_from"] == str(tmp_path / "scan.png")
+        assert out["path"] == str(tmp_path / "scan.jpg")
 
     @pytest.mark.asyncio
     async def test_ambiguity_is_refused_not_guessed(self, tmp_path):

@@ -208,28 +208,115 @@ call costs the same as the first.
 ```jsonc
 // call
 {"paths": ["photos/a.jpg", "photos/b.jpg"],   // 1-200, inside the workspace
- "question": "Is there a person in this photo? Answer yes or no.",
+ "question": "Which of these categories does this image belong to?",
+ "choices": ["chart", "photo", "screenshot"], // optional; 2-20 labels
  "detail": "low",                              // or "high" for small text
  "max_concurrency": 4}                         // 1-16
 
 // result
 {"question": "...", "model": "…", "backend": "remote", "analyzed": 2, "failed": 0,
- "results": [{"path": "…/a.jpg", "answer": "yes", "model": "…", "ms": 812,
-              "tokens": 612, "cost_usd": 0.000123},
+ "results": [{"path": "…/a.jpg", "choice": "chart",
+              "reason": "a horizontal bar chart titled 'Net bilateral aid flow'",
+              "model": "…", "ms": 812, "tokens": 612, "cost_usd": 0.000123},
              {"path": "…/b.jpg", "error": "the vision model timed out after 90s on this image",
               "ms": 90004}],
- "summary": "2 of 2 images answered by … in 3.1s (4 at a time)",
+ "summary": "2 of 2 images answered by … in 3.1s (4 at a time). A filename is a claim; …",
  "tokens": 1224, "cost_usd": 0.000246}
 ```
 
-Answers arrive in the order the paths were given. A row carries `answer` or
-`error`, never both — one image that fails does not cost you the batch.
+Answers arrive in the order the paths were given. A row carries exactly one of
+`choice`, `answer` or `error` — one image that fails does not cost you the
+batch.
+
+**`choices` makes the contract "a label from this set".** Pass 2–20 labels and
+each row comes back as a validated `choice`, spelled the way **you** spelled it
+rather than the way the model did, so rows group without splitting on a
+trailing full stop or a capital letter. A reply that names none of them is
+asked once more, quoting what was rejected; if the second reply is off-list too
+the row becomes an `error`. Leave `choices` out and the answer is free text
+under `answer`, as before.
+
+*The matching rule, exactly.* Both the reply and each label are put through the
+same normalisation — **case folded, surrounding punctuation and markdown
+stripped, inner whitespace collapsed** — and then compared for **equality**.
+Nothing else matches:
+
+| Reply, against `choices: ["photo", "chart"]` | Result |
+|---|---|
+| `photo`, `Photo`, `photo.`, `**photo**`, `"photo"` | `choice: "photo"` |
+| `a photo of a beach` | off-list → re-asked → `error` |
+| `照片` | off-list → re-asked → `error` |
+| `categ`, against `["cat", "category"]` | off-list — neither, and `cat` never swallows `category` |
+
+There is **no prefix match, no substring match and no edit distance**. Two
+labels that would normalise to the same key (`["Chart", "chart."]`) are refused
+when you pass them, rather than silently merged, so a `choice` always names
+exactly one of the labels you gave.
+
+The tool also reads the shapes models actually write, without loosening that
+rule: `ANSWER: chart WHY: bars` on one line, `{"answer": "chart", "why":
+"bars"}`, a ```` ``` ```` fence, a `<think>` preamble, `**ANSWER:** chart`, and
+`chart (bars)` all yield the label plus its reason. What is extracted still has
+to *be* a label — `banana (a chart)` names nothing and is off-list like anything
+else.
+
+**Without `choices`, a JSON reply is kept whole** unless it looks like a reply
+to that contract — an answer key *and* a reason key. So asking "transcribe the
+JSON on this screen" returns the whole object even when it happens to contain a
+key called `answer`, `label` or `category`, while `{"answer": "42", "why": "the
+big number"}` is still read as an answer and its reason. Without that shape
+test a transcription would silently come back as one of its own fields.
+
+The two-key test is a shape test, not a mind-reader: an object that carries
+*both* key kinds is read as a reply whatever it was meant to be. A quiz-shaped
+payload — `{"question": "2+2?", "answer": "4", "explanation": "basic sum"}` —
+therefore folds to `answer: "4"` with `reason: "basic sum"`, and the `question`
+field is not in the row. If you are transcribing structured data rather than
+asking a question about it, say so in the question and read the row as a
+transcription, or ask for a field at a time.
+
+**Every answered row carries a `reason`** — one short sentence (capped at 120
+characters) of what the model saw. That is what makes a batch auditable:
+`{"answer": "1"}` is a bare token you can talk yourself out of believing, and
+`{"choice": "1", "reason": "horizontal bar chart of aid flow from Sweden"}` is
+not. A backend that ignores the two-line reply contract still answers; that row
+says `reason_missing: true` rather than having one invented for it, and it is
+**not** re-asked — a re-ask is for a wrong answer, not a thin one.
+
+**A look outranks a filename.** Every result's `summary` ends by saying so, and
+so does behavioural rule 18: a filename, caption or alt text is a *claim* about
+an image, not evidence of its contents. When a batch disagrees with the names,
+read two or three `reason`s, spot-check one with `view_image`, and then trust
+the batch. This is measured advice — on a 100-image sort whose filenames were
+deliberately misleading, the tool answered 92.9% correctly and the agent threw
+every answer away in favour of the names, scoring 0.43 where the answers it
+already had were worth 0.94.
 
 **Refusals.** A path resolving outside the workspace (symlinks followed
 first), a credentials file, a missing file, something that is not an image,
 and anything over 32 MB are each refused as that image's `error`, without a
 model ever being called. A refused row reports the same resolved path an
 answered row does, so an agent can line its request up against the results.
+
+**A missed extension is not a miss.** Ask for `scan.png` when the file is
+`scan.jpg` and the one image sharing that stem is read instead. Two candidates
+is a question for you, not a coin flip for the tool, so it is an error naming
+both. A *relative* path that misses says which workspace root it was joined to
+and what that produced — fifty rows of `no such file: render.jpg` with no hint
+that a root join was tried is a wasted round.
+
+Both vision tools report a substitution the same way, and the two fields never
+mean the same thing:
+
+| Field | Meaning |
+|---|---|
+| `path` | the file that was **actually read** |
+| `resolved_from` | the path you **asked for**, present only when they differ |
+
+So `{"path": "…/scan.jpg", "resolved_from": "…/scan.png"}` reads "you asked for
+the png, I read the jpg". `view_image` used to set `resolved_from` to the
+substitute — making it a copy of `path` that told you nothing — and was
+corrected to match `analyze_image`.
 
 **Plan mode.** `analyze_image` counts as read-only — it changes nothing on the
 box or anywhere else — so an agent in plan mode may call it. On a remote
@@ -252,12 +339,25 @@ its first rows, and the **whole** table goes to
 
 ```jsonc
 {"question": "…", "model": "…", "analyzed": 198, "failed": 2,
+ "sample": [{"path": "…/a.png", "choice": "chart", "reason": "bars and a titled y axis"},
+            {"path": "…/q.png", "choice": "photo", "reason": "a beach at sunset"}],
  "results": [ /* the first rows that fit */ ],
  "results_shown": 12, "results_total": 200,
  "results_file": "/…/.robothor/analyze_image/<run>-1.json",
  "tokens": 121600, "cost_usd": 0.0243,
  "note": "200 rows did not fit … work over that file …"}
 ```
+
+**`sample` is the spot-check, free.** **One row per distinct answer**, up to
+five — never two rows carrying the same label, and never simply the first five,
+because the first five rows of a folder being sorted are five looks at the same
+label. So a two-label sort samples two rows, and one glance tells you whether
+the batch decided sensibly without a `read_file` round. It appears only when the
+table spills (a small batch already has every row inline) and it competes for
+the same characters as everything else: it yields a row at a time rather than
+leave you with a preview and no `results` at all, and the `note` mentions it
+only when there is one. Padding it out to five with duplicates would buy a
+fourth look at one decision by taking away rows you actually read.
 
 Work over that file with `exec` (jq, python) rather than reading it whole —
 that keeps the win. It matters for the record as well as the context: the

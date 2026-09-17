@@ -149,7 +149,10 @@ class TestManyImagesOneCall:
             lambda: (vision_batch.Backend("local", "test-vlm"), ""),
         )
         await _analyze(tmp_path, _images(tmp_path, 2), question="is there a dog?")
-        assert seen == ["is there a dog?", "is there a dog?"]
+        # The reply contract rides behind the question, never in front of it:
+        # the agent's own words are the first thing the model reads.
+        assert all(prompt.startswith("is there a dog?") for prompt in seen)
+        assert len(seen) == 2
 
 
 class TestConcurrency:
@@ -649,7 +652,9 @@ class TestTheRemoteBackend:
         content = seen[0]["messages"][-1]["content"]
         image_block = next(b for b in content if b["type"] == "image_url")
         assert image_block["image_url"]["url"].startswith("data:image/png;base64,")
-        assert any(b.get("text") == "colour?" for b in content if b["type"] == "text")
+        assert any(
+            str(b.get("text", "")).startswith("colour?") for b in content if b["type"] == "text"
+        )
 
     async def test_tokens_and_cost_are_recorded_for_the_run(self, tmp_path, monkeypatch):
         """The runner adds a tool result's `cost_usd` to the run total, so an
@@ -972,3 +977,988 @@ class TestTheResultIsOffloadableLikeAnyOther:
         content = session.messages[-1]["content"]
         assert isinstance(content, str), "a batch of answers must never become content blocks"
         assert "[Full output:" in content
+
+
+# ── choices, reasons, and believing your own eyes ───────────────────────────
+
+
+class ContractVision:
+    """A local VLM that answers in the reply contract, and counts its calls.
+
+    Scripted per call rather than per image: the tests that need a second
+    reply send ONE image, so call *n* gets reply *n* and everything after the
+    last scripted reply repeats it.
+    """
+
+    def __init__(self, *replies: str):
+        self.replies = list(replies) or ["ANSWER: yes\nWHY: a cat is asleep on the couch"]
+        self.prompts: list[str] = []
+
+    async def __call__(self, data: bytes, prompt: str = "", **kwargs: Any) -> str:
+        self.prompts.append(prompt)
+        return self.replies[min(len(self.prompts) - 1, len(self.replies) - 1)]
+
+
+@pytest.fixture
+def scripted(monkeypatch):
+    """Install a ContractVision as the local backend; return the installer."""
+
+    def install(*replies: str) -> ContractVision:
+        fake = ContractVision(*replies)
+        monkeypatch.setattr(vision_batch, "describe_image_bytes", fake)
+        monkeypatch.setattr(
+            vision_batch,
+            "resolve_backend",
+            lambda: (vision_batch.Backend("local", "test-vlm"), ""),
+        )
+        return fake
+
+    return install
+
+
+class TestTheAnswerIsOneOfTheChoices:
+    """P4-TASK8. `analyze_image` answered 92.9% of a hundred-image
+    categorisation correctly and the agent threw every answer away, because a
+    bare `{"answer": "3"}` is unauditable against a confident-looking filename.
+    `choices` makes the contract "a label from this set" rather than "a
+    string", so a reply that is not a label is an error and never a label.
+    """
+
+    async def test_an_in_list_reply_becomes_a_validated_choice(self, tmp_path, scripted):
+        scripted("ANSWER: chart\nWHY: a horizontal bar chart of aid flow from Sweden")
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["chart", "photo", "text"])
+        row = out["results"][0]
+        assert row["choice"] == "chart"
+        assert "answer" not in row, "a constrained row carries the validated choice, not both"
+        assert out["analyzed"] == 1
+
+    async def test_the_canonical_spelling_is_returned_not_the_models(self, tmp_path, scripted):
+        """A row an agent groups by must not split on the model's punctuation."""
+        scripted("ANSWER: **Chart**.\nWHY: bars and an axis")
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["chart", "photo"])
+        assert out["results"][0]["choice"] == "chart"
+
+    async def test_a_bare_reply_with_no_marker_still_matches_a_choice(self, tmp_path, scripted):
+        scripted("3")
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["1", "2", "3", "4", "5"])
+        assert out["results"][0]["choice"] == "3"
+
+    async def test_an_off_list_reply_is_re_asked_exactly_once(self, tmp_path, scripted):
+        fake = scripted(
+            "ANSWER: a lovely bar chart\nWHY: bars",
+            "ANSWER: chart\nWHY: bars and an axis",
+        )
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["chart", "photo"])
+        assert len(fake.prompts) == 2, "one re-ask, not none and not a retry loop"
+        assert out["results"][0]["choice"] == "chart"
+
+    async def test_a_twice_off_list_reply_is_an_error_not_a_label(self, tmp_path, scripted):
+        fake = scripted("ANSWER: 图表\nWHY: 柱状图")
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["chart", "photo"])
+        row = out["results"][0]
+        assert len(fake.prompts) == 2, "exactly one re-ask, then the row is an error"
+        assert "choice" not in row and "answer" not in row
+        assert "not one of the choices" in row["error"]
+        assert out["analyzed"] == 0
+        assert out["failed"] == 1
+
+    async def test_an_off_list_row_does_not_cost_the_batch(self, tmp_path, monkeypatch):
+        class PerImage:
+            """The first image answers off-list twice; the rest comply."""
+
+            def __init__(self) -> None:
+                self.seen = 0
+
+            async def __call__(self, data: bytes, prompt: str = "", **kwargs: Any) -> str:
+                self.seen += 1
+                if self.seen <= 2:
+                    return "ANSWER: banana\nWHY: no"
+                return "ANSWER: photo\nWHY: a beach at sunset"
+
+        monkeypatch.setattr(vision_batch, "describe_image_bytes", PerImage())
+        monkeypatch.setattr(
+            vision_batch,
+            "resolve_backend",
+            lambda: (vision_batch.Backend("local", "test-vlm"), ""),
+        )
+        out = await _analyze(
+            tmp_path, _images(tmp_path, 3), choices=["photo", "chart"], max_concurrency=1
+        )
+        assert out["failed"] == 1
+        assert out["analyzed"] == 2
+
+    async def test_a_prefix_of_a_choice_is_never_coerced_to_it(self, tmp_path, scripted):
+        """Hostile review: `choices` whose members are prefixes of each other.
+        `cat` must not swallow `category`, and a reply of `categ` is neither."""
+        fake = scripted("ANSWER: categ\nWHY: unclear")
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["cat", "category"])
+        assert "choice" not in out["results"][0]
+        assert len(fake.prompts) == 2
+
+    async def test_prefix_members_each_match_themselves(self, tmp_path, scripted):
+        scripted("ANSWER: cat\nWHY: whiskers")
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["cat", "category"])
+        assert out["results"][0]["choice"] == "cat"
+
+    async def test_the_choices_are_put_to_the_model(self, tmp_path, scripted):
+        fake = scripted("ANSWER: photo\nWHY: a beach")
+        await _analyze(tmp_path, _images(tmp_path, 1), choices=["photo", "chart"])
+        assert "photo" in fake.prompts[0] and "chart" in fake.prompts[0]
+
+    async def test_the_re_ask_says_what_was_wrong(self, tmp_path, scripted):
+        fake = scripted("ANSWER: banana\nWHY: no", "ANSWER: photo\nWHY: a beach")
+        await _analyze(tmp_path, _images(tmp_path, 1), choices=["photo", "chart"])
+        assert "banana" in fake.prompts[1], "the correction must quote what was rejected"
+
+
+class TestTheChoicesAreValidatedAtTheBoundary:
+    @pytest.mark.parametrize("bad", [["only"], [], [str(n) for n in range(21)]])
+    async def test_a_list_of_the_wrong_size_is_refused_whole(self, tmp_path, scripted, bad):
+        fake = scripted()
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=bad)
+        assert "error" in out
+        assert not fake.prompts, "a refused call never reaches a backend"
+
+    async def test_exactly_two_and_exactly_twenty_are_allowed(self, tmp_path, scripted):
+        scripted("ANSWER: 0\nWHY: a zero")
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=[str(n) for n in range(20)])
+        assert out["results"][0]["choice"] == "0"
+
+    @pytest.mark.parametrize("bad", ["notalist", 5, [1, 2], ["a", ""], ["a", "   "]])
+    async def test_a_malformed_list_is_refused_whole(self, tmp_path, scripted, bad):
+        fake = scripted()
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=bad)
+        assert "error" in out
+        assert not fake.prompts
+
+    async def test_choices_that_collide_are_refused_rather_than_silently_merged(
+        self, tmp_path, scripted
+    ):
+        """Two entries that normalise to the same label make "which one did it
+        pick" unanswerable. Refuse, rather than pick one."""
+        fake = scripted()
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["Chart", "chart."])
+        assert "error" in out
+        assert not fake.prompts
+
+    async def test_an_over_long_choice_is_refused(self, tmp_path, scripted):
+        out = await _analyze(
+            tmp_path,
+            _images(tmp_path, 1),
+            choices=["a" * (vision_batch.MAX_CHOICE_CHARS + 1), "b"],
+        )
+        assert "error" in out
+
+    async def test_a_choice_containing_the_truncation_mark_is_just_a_string(
+        self, tmp_path, scripted
+    ):
+        """Hostile review: the mark must be a marker for a reader, never a
+        signal the matcher reads."""
+        label = f"odd{vision_batch._TRUNCATION_MARK}"
+        scripted(f"ANSWER: {label}\nWHY: it says so")
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=[label, "plain"])
+        assert out["results"][0]["choice"] == label
+
+    async def test_without_choices_nothing_changes(self, tmp_path, local_backend):
+        out = await _analyze(tmp_path, _images(tmp_path, 2))
+        assert all("answer" in r for r in out["results"])
+        assert all("choice" not in r for r in out["results"])
+
+
+class TestEveryAnsweredRowCarriesItsReason:
+    """The Hermes difference reduced to its active ingredient: `{"answer":"1"}`
+    is dismissible, `{"choice":"1","reason":"horizontal bar chart of aid flow
+    from Sweden"}` is not."""
+
+    async def test_a_reason_comes_back_with_a_free_text_answer(self, tmp_path, scripted):
+        scripted("ANSWER: a bar chart\nWHY: bars and a titled y axis")
+        out = await _analyze(tmp_path, _images(tmp_path, 1))
+        row = out["results"][0]
+        assert row["answer"] == "a bar chart"
+        assert row["reason"] == "bars and a titled y axis"
+
+    async def test_a_reason_comes_back_with_a_choice(self, tmp_path, scripted):
+        scripted("ANSWER: chart\nWHY: bars and a titled y axis")
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["chart", "photo"])
+        assert out["results"][0]["reason"] == "bars and a titled y axis"
+
+    async def test_a_long_reason_is_cut_and_says_so(self, tmp_path, scripted):
+        scripted("ANSWER: chart\nWHY: " + "bars everywhere " * 60)
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["chart", "photo"])
+        reason = out["results"][0]["reason"]
+        assert len(reason) <= vision_batch.MAX_REASON_CHARS + len(vision_batch._TRUNCATION_MARK)
+        assert reason.endswith(vision_batch._TRUNCATION_MARK)
+
+    async def test_an_error_row_carries_no_reason(self, tmp_path, scripted):
+        scripted("ANSWER: banana\nWHY: a banana")
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["chart", "photo"])
+        assert "reason" not in out["results"][0]
+
+    async def test_a_model_that_gives_no_reason_is_flagged_not_invented(
+        self, tmp_path, local_backend
+    ):
+        """The local VLM fixture answers free text with no WHY line. The row
+        must say the evidence is missing rather than quietly manufacture one
+        out of the answer."""
+        out = await _analyze(tmp_path, _images(tmp_path, 1))
+        row = out["results"][0]
+        assert "reason" not in row
+        assert row["reason_missing"] is True
+
+    async def test_a_missing_reason_does_not_cost_a_second_call(self, tmp_path, scripted):
+        """A re-ask is for a WRONG answer. Paying twice for every image because
+        a weak backend skips a marker would undo the cheap-enough-to-loop
+        property the whole tool exists for."""
+        fake = scripted("just a cat, no markers at all")
+        await _analyze(tmp_path, _images(tmp_path, 1))
+        assert len(fake.prompts) == 1
+
+    async def test_the_reply_contract_is_asked_for(self, tmp_path, scripted):
+        fake = scripted()
+        await _analyze(tmp_path, _images(tmp_path, 1), question="what is this?")
+        assert fake.prompts[0].startswith("what is this?")
+        assert "WHY:" in fake.prompts[0]
+
+
+class TestASampleSpansTheLabels:
+    """Build item 3. "Spot-check before you trust it" is one free look rather
+    than a `read_file` round — and a look at the first N rows of a sorted
+    folder is a look at one label."""
+
+    @staticmethod
+    def _one_label_first(monkeypatch, count):
+        """Every image but the last five answers `chart`."""
+        served: list[str] = []
+
+        async def by_position(data: bytes, prompt: str = "", **kwargs: Any) -> str:
+            served.append("x")
+            label = "chart" if len(served) <= count - 5 else "photo"
+            return f"ANSWER: {label}\nWHY: what the pixels show here"
+
+        monkeypatch.setattr(vision_batch, "describe_image_bytes", by_position)
+        monkeypatch.setattr(
+            vision_batch,
+            "resolve_backend",
+            lambda: (vision_batch.Backend("local", "test-vlm"), ""),
+        )
+
+    async def _spilled(self, tmp_path, monkeypatch, budget=1400, count=40):
+        self._one_label_first(monkeypatch, count)
+        monkeypatch.setattr(vision_batch, "_max_total_chars", lambda: budget)
+        return await _analyze(
+            tmp_path, _images(tmp_path, count), choices=["chart", "photo"], max_concurrency=1
+        )
+
+    async def test_the_sample_is_not_the_first_rows(self, tmp_path, monkeypatch):
+        out = await self._spilled(tmp_path, monkeypatch)
+        labels = {row["choice"] for row in out["sample"]}
+        assert labels == {"chart", "photo"}, "a sample of the first N would be all chart"
+
+    async def test_the_sample_is_present_when_the_table_spills(self, tmp_path, monkeypatch):
+        out = await self._spilled(tmp_path, monkeypatch)
+        assert out["sample"], "the spot-check must not need a read_file round"
+        assert all("reason" in row for row in out["sample"])
+        assert len(json.dumps(out, default=str)) <= 1400
+
+    async def test_the_spilled_file_still_holds_every_row(self, tmp_path, monkeypatch):
+        out = await self._spilled(tmp_path, monkeypatch)
+        spilled = json.loads(Path(out["results_file"]).read_text())
+        assert len(spilled["results"]) == 40
+
+    async def test_a_small_batch_needs_no_sample(self, tmp_path, scripted):
+        scripted("ANSWER: chart\nWHY: bars")
+        out = await _analyze(tmp_path, _images(tmp_path, 3), choices=["chart", "photo"])
+        assert "sample" not in out, "every row is already inline; a sample would be a copy"
+
+
+class TestThePixelsOutrankTheFilename:
+    """The one sentence the agent needed and did not have. It wrote
+    "the vision model is giving unreliable results" about answers that were
+    92.9% correct, because the only other signal it had was a filename."""
+
+    async def test_the_result_says_a_look_beats_a_name(self, tmp_path, local_backend):
+        out = await _analyze(tmp_path, _images(tmp_path, 1))
+        assert "filename" in out["summary"]
+
+    def test_the_schema_no_longer_asks_for_the_shortest_useful_answer(self):
+        from robothor.engine.tools.schemas import get_engine_schemas
+
+        schema = get_engine_schemas()["analyze_image"]["function"]
+        flat = json.dumps(schema)
+        assert "shortest useful answer" not in flat, (
+            "that sentence is what produced the unauditable bare digit"
+        )
+        assert "choices" in schema["parameters"]["properties"]
+        assert "reason" in flat
+        assert "filename" in flat
+
+    def test_the_description_still_fits_the_tool_search_cap(self):
+        from robothor.engine.tools.registry import ToolRegistry
+        from robothor.engine.tools.schemas import get_engine_schemas
+
+        description = get_engine_schemas()["analyze_image"]["function"]["description"]
+        assert len(description) <= ToolRegistry._SEARCH_DESC_MAX
+
+    def test_the_instruction_contract_says_the_look_wins(self):
+        from robothor.engine.prompts import BEHAVIORAL_RULES
+
+        rule = BEHAVIORAL_RULES.split("18.")[1]
+        assert "filename" in rule
+        assert "view_image" in rule
+
+
+class TestAnExtensionThatMissedIsNotADeadBatch:
+    """P4-TASK8 §2.2. `retinal_scan_analysis.png` came back `no such file`;
+    the real file is `.jpg`. `view_image` solved exactly this in
+    `handlers/images.py::_same_stem_images` — and this module never imported
+    it, so the same bug lived on in the sibling tool."""
+
+    async def test_a_wrong_extension_resolves_to_the_one_file_that_shares_the_stem(
+        self, tmp_path, local_backend
+    ):
+        _png(tmp_path / "retinal_scan.jpg")
+        out = await _analyze(tmp_path, [str(tmp_path / "retinal_scan.png")])
+        row = out["results"][0]
+        assert "answer" in row, "the file is right there under another extension"
+        assert row["path"] == str(tmp_path / "retinal_scan.jpg")
+        assert row["resolved_from"] == str(tmp_path / "retinal_scan.png")
+
+    async def test_two_candidates_are_a_question_for_the_agent_not_a_coin_flip(
+        self, tmp_path, local_backend
+    ):
+        _png(tmp_path / "twin.jpg")
+        _png(tmp_path / "twin.webp")
+        out = await _analyze(tmp_path, [str(tmp_path / "twin.png")])
+        error = out["results"][0]["error"]
+        assert "twin.jpg" in error and "twin.webp" in error
+
+    async def test_the_substitute_must_still_be_inside_the_workspace(self, tmp_path, local_backend):
+        outside = tmp_path.parent / "outside_ws"
+        outside.mkdir(exist_ok=True)
+        _png(outside / "elsewhere.jpg")
+        out = await _analyze(tmp_path, [str(outside / "elsewhere.png")])
+        assert "outside the workspace" in out["results"][0]["error"]
+
+    async def test_a_relative_miss_names_the_root_it_was_joined_to(self, tmp_path, local_backend):
+        """Batch 1 of the measured run burned 50 paths on `no such file:
+        3d_architectural_render.jpg` with no hint that a root join was tried."""
+        out = await _analyze(tmp_path, ["3d_architectural_render.jpg"])
+        error = out["results"][0]["error"]
+        assert "no such file" in error
+        assert str(tmp_path) in error, "say which root the relative path was joined to"
+
+
+class TestTheInlineResultStillFitsWithReasons:
+    async def test_two_hundred_choice_rows_with_capped_reasons_stay_inline_bounded(
+        self, tmp_path, monkeypatch
+    ):
+        """The #581 invariant, re-measured with `choices` and `reason` present:
+        the constrained choice frees the tokens the free-text answer spent, and
+        the reason is capped, so the worst case must still land under the step
+        writer's cap."""
+        from robothor.engine.tracking import MAX_TOOL_OUTPUT_CHARS, _truncate_json
+
+        async def maximal(data: bytes, prompt: str = "", **kwargs: Any) -> str:
+            return "ANSWER: category-five\nWHY: " + "densely worded evidence " * 40
+
+        monkeypatch.setattr(vision_batch, "describe_image_bytes", maximal)
+        monkeypatch.setattr(
+            vision_batch,
+            "resolve_backend",
+            lambda: (vision_batch.Backend("local", "test-vlm"), ""),
+        )
+        deep = tmp_path
+        while len(str(deep)) < 195:
+            deep = deep / "wsdirectorysegment"
+        deep.mkdir(parents=True, exist_ok=True)
+        out = await _analyze(
+            deep,
+            _images(deep, 200),
+            choices=[f"category-{n}" for n in ("one", "two", "three", "four", "five")],
+            max_concurrency=8,
+        )
+        serialised = json.dumps(out, default=str)
+        assert len(serialised) <= MAX_TOOL_OUTPUT_CHARS
+        assert _truncate_json(out) is out
+        assert out["results_total"] == 200
+
+
+class TestTheMatcherIsEqualityNotResemblance:
+    """`vision_contract` in isolation. The end-to-end tests above prove the
+    tool behaves; these pin the one property everything else rests on, where a
+    future edit will read it: a reply either IS one of the labels, normalised,
+    or it is off-list. There is no third answer, and no distance function."""
+
+    @staticmethod
+    def _contract(*labels):
+        from robothor.engine.vision_contract import build_contract
+
+        contract, refusal = build_contract(list(labels))
+        assert not refusal, refusal
+        return contract
+
+    @pytest.mark.parametrize(
+        "reply",
+        ["chart", "Chart", "  chart  ", "**chart**", "chart.", '"chart"', "CHART!", "`chart`"],
+    )
+    def test_typography_is_not_a_different_answer(self, reply):
+        assert self._contract("chart", "photo").match(reply) == "chart"
+
+    @pytest.mark.parametrize(
+        "reply", ["char", "charts", "chart of sales", "a chart", "图表", "", "   ", "1"]
+    )
+    def test_everything_else_is_off_list(self, reply):
+        assert self._contract("chart", "photo").match(reply) is None
+
+    def test_the_caller_spelling_is_what_comes_back(self):
+        assert self._contract("Charts & Tables", "Photos").match("charts & tables") == (
+            "Charts & Tables"
+        )
+
+    def test_a_label_matches_itself_however_odd(self):
+        """Including one built out of the characters the normaliser strips."""
+        for odd in ("[draft]", "**bold**", "a.b.c", "1.", "yes!"):
+            assert self._contract(odd, "other").match(odd) == odd
+
+    def test_no_contract_matches_nothing(self):
+        from robothor.engine.vision_contract import Contract
+
+        assert Contract().match("anything") is None
+
+    def test_a_reply_with_no_markers_is_the_whole_answer(self):
+        from robothor.engine.vision_contract import Contract, parse_reply
+
+        parsed = parse_reply("a cat on a sofa", Contract())
+        assert parsed.answer == "a cat on a sofa"
+        assert parsed.reason == ""
+        assert parsed.rejected == ""
+
+    def test_the_last_marked_line_wins(self):
+        """A model that restates the instruction before obeying it puts the
+        instruction first."""
+        from robothor.engine.vision_contract import Contract, parse_reply
+
+        parsed = parse_reply(
+            "ANSWER: <your answer>\nWHY: <one sentence>\nANSWER: a cat\nWHY: whiskers",
+            Contract(),
+        )
+        assert parsed.answer == "a cat"
+        assert parsed.reason == "whiskers"
+
+    def test_a_why_line_is_not_swallowed_into_an_unmarked_answer(self):
+        from robothor.engine.vision_contract import Contract, parse_reply
+
+        parsed = parse_reply("a cat on a sofa\nWHY: whiskers and a tail", Contract())
+        assert parsed.answer == "a cat on a sofa"
+        assert parsed.reason == "whiskers and a tail"
+
+
+class TestTheParserMeetsTheModelWhereItWrites:
+    """Hostile review I1. The matcher is tolerant and the PARSER was not, so
+    three ordinary formatting habits each turned a whole batch into `error`
+    rows at twice the cost — a strict regression on the exact workload this
+    change exists to fix, because before it every one of those rows returned a
+    usable `answer`.
+
+    The re-ask cannot recover any of them: it restates the same contract to a
+    model whose HABIT is the problem. These are parsing failures wearing a
+    wrong answer's clothes, and the fix is parsing. Nothing here relaxes
+    `Contract.match` — whatever is extracted still has to be a label, exactly.
+    """
+
+    #: Ten images per format, because the defect was a whole-batch one: the
+    #: measured failure is "20 backend calls, analyzed 0, failed 10".
+    BATCH = 10
+
+    @pytest.mark.parametrize(
+        ("label", "reply"),
+        [
+            ("both markers on one line", "ANSWER: chart WHY: it is a bar chart"),
+            ("a JSON object", '{"answer": "chart", "why": "bars and an axis"}'),
+            ("a JSON object under other keys", '{"choice": "chart", "reason": "bars"}'),
+            ("a parenthetical gloss", "ANSWER: chart (a bar chart with a titled axis)"),
+            ("a markdown fence", "```\nANSWER: chart\nWHY: bars and an axis\n```"),
+            ("a fenced JSON object", '```json\n{"answer": "chart", "why": "bars"}\n```'),
+            ("a <think> preamble", "<think>hmm, bars…</think>\nANSWER: chart\nWHY: bars"),
+            ("lowercase markers", "answer: chart\nwhy: bars and an axis"),
+            ("an inline REASON marker", "ANSWER: chart REASON: bars and an axis"),
+        ],
+    )
+    async def test_a_whole_batch_is_answered_at_one_call_each(
+        self, tmp_path, scripted, label, reply
+    ):
+        fake = scripted(reply)
+        out = await _analyze(tmp_path, _images(tmp_path, self.BATCH), choices=["photo", "chart"])
+        assert out["analyzed"] == self.BATCH, f"{label}: {out['results'][0]}"
+        assert out["failed"] == 0, label
+        assert len(fake.prompts) == self.BATCH, f"{label}: a re-ask cannot fix a format habit"
+        assert all(row["choice"] == "chart" for row in out["results"]), label
+
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            "ANSWER: chart WHY: bars and an axis",
+            '{"answer": "chart", "why": "bars and an axis"}',
+            "ANSWER: chart (bars and an axis)",
+            "```\nANSWER: chart\nWHY: bars and an axis\n```",
+            "<think>hmm</think>\nANSWER: chart\nWHY: bars and an axis",
+        ],
+    )
+    async def test_the_reason_survives_every_shape(self, tmp_path, scripted, reply):
+        scripted(reply)
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["photo", "chart"])
+        assert out["results"][0]["reason"] == "bars and an axis"
+
+    async def test_a_fence_does_not_become_part_of_a_free_text_answer(self, tmp_path, scripted):
+        scripted("```\nANSWER: a bar chart\nWHY: bars and an axis\n```")
+        out = await _analyze(tmp_path, _images(tmp_path, 1))
+        assert out["results"][0]["answer"] == "a bar chart"
+        assert out["results"][0]["reason"] == "bars and an axis"
+
+    async def test_a_think_block_is_never_the_answer(self, tmp_path, scripted):
+        scripted("<think>the filename says MRI but I see bars</think>\na bar chart")
+        out = await _analyze(tmp_path, _images(tmp_path, 1))
+        assert out["results"][0]["answer"] == "a bar chart"
+        assert "think" not in out["results"][0]["answer"]
+
+    async def test_a_lone_why_line_does_not_keep_its_marker(self, tmp_path, scripted):
+        """M2. `WHY: a cat on a sofa` used to answer `WHY: a cat on a sofa` —
+        the sentence twice, once with the marker still stuck to it."""
+        scripted("WHY: a cat on a sofa")
+        out = await _analyze(tmp_path, _images(tmp_path, 1))
+        row = out["results"][0]
+        assert row["answer"] == "a cat on a sofa"
+        assert "WHY" not in row["answer"]
+
+    async def test_a_gloss_is_only_read_when_the_head_is_a_real_label(self, tmp_path, scripted):
+        """The parenthetical split is a last resort, not a licence to trim
+        until something matches. `banana (a chart)` names no choice."""
+        fake = scripted("ANSWER: banana (a chart)")
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["photo", "chart"])
+        assert "choice" not in out["results"][0]
+        assert "not one of the choices" in out["results"][0]["error"]
+        assert len(fake.prompts) == 2
+
+    async def test_free_text_keeps_its_parentheses(self, tmp_path, scripted):
+        """Without `choices` there is no way to tell a gloss from the answer,
+        so nothing is split off and nothing is lost."""
+        scripted("ANSWER: a red square (with a black border)\nWHY: I can see it")
+        out = await _analyze(tmp_path, _images(tmp_path, 1))
+        assert out["results"][0]["answer"] == "a red square (with a black border)"
+
+    async def test_a_json_reply_that_names_no_choice_is_still_off_list(self, tmp_path, scripted):
+        fake = scripted('{"answer": "banana", "why": "a banana"}')
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["photo", "chart"])
+        assert "choice" not in out["results"][0]
+        assert len(fake.prompts) == 2, "one re-ask, as for any other off-list answer"
+
+    async def test_a_json_array_is_not_an_object_and_is_read_as_text(self, tmp_path, scripted):
+        """Only a JSON OBJECT carries named keys. A list is just a reply."""
+        scripted('["chart"]')
+        out = await _analyze(tmp_path, _images(tmp_path, 1))
+        assert out["results"][0]["answer"] == '["chart"]'
+
+    def test_the_correction_shows_the_shape_once_with_a_real_label(self):
+        from robothor.engine.vision_contract import build_contract, correction_suffix
+
+        contract, _ = build_contract(["photo", "chart"])
+        correction = correction_suffix(contract, "banana")
+        assert correction.count("ANSWER:") == 1, "one worked example, not two contracts"
+        assert correction.count("WHY:") == 1
+        assert "ANSWER: photo" in correction, "show a real label, not a placeholder"
+        assert "banana" in correction, "quote what was rejected"
+        assert "Reply in exactly two lines" not in correction, (
+            "restating the contract a model has already ignored is the least likely "
+            "thing to change its mind; showing the exact bytes is the most"
+        )
+
+
+class TestTheSampleNeverPadsItself:
+    """Hostile review I3. After collecting one row per distinct answer the
+    sample topped itself up to five with ANY answered row — i.e. more copies of
+    a label already in it. Measured: a 60-row two-label sort spent 3 of its 5
+    sample rows on duplicates and returned 6 rows under `results`; a 200-row
+    one-label batch spent 4 and returned 4.
+
+    Those duplicates come straight out of the `results` allowance, because the
+    sample is measured inside the same `_fit` probe. `_spill`'s own docstring
+    says that is the wrong trade — "a spot-check is worth more than the fourth
+    copy of one label, and nothing at all under `results` is worth less than
+    either" — and both it and `docs/TOOLS.md` tell the reader the sample SPANS
+    the distinct answers, which after the top-up it did not.
+    """
+
+    @staticmethod
+    def _labelled(monkeypatch, labels):
+        """A backend that answers `labels[i]` for the i-th image, in order."""
+        served: list[str] = []
+
+        async def by_position(data: bytes, prompt: str = "", **kwargs: Any) -> str:
+            served.append("x")
+            label = labels[(len(served) - 1) % len(labels)]
+            return f"ANSWER: {label}\nWHY: what the pixels show in this one"
+
+        monkeypatch.setattr(vision_batch, "describe_image_bytes", by_position)
+        monkeypatch.setattr(
+            vision_batch,
+            "resolve_backend",
+            lambda: (vision_batch.Backend("local", "test-vlm"), ""),
+        )
+
+    async def _spilled(self, tmp_path, monkeypatch, labels, count=60):
+        """At the DEFAULT budget, which is where the review measured it and
+        the only number an operator actually runs.
+
+        Always offers at least two choices — one is refused at the boundary,
+        and a batch that USES only one of the labels on offer is the case that
+        matters here anyway.
+        """
+        self._labelled(monkeypatch, labels)
+        offered = sorted(set(labels) | {"a-label-the-backend-never-picks"})
+        return await _analyze(
+            tmp_path, _images(tmp_path, count), choices=offered, max_concurrency=1
+        )
+
+    @pytest.mark.parametrize("labels", [["chart"], ["chart", "photo"], ["a", "b", "c"]])
+    async def test_the_sample_is_exactly_the_distinct_answers(self, tmp_path, monkeypatch, labels):
+        out = await self._spilled(tmp_path, monkeypatch, labels)
+        seen = [row["choice"] for row in out["sample"]]
+        assert sorted(seen) == sorted(set(labels)), "one row per answer, and no more"
+        assert len(seen) == len(set(seen)), "a duplicate label is a wasted spot-check"
+
+    async def test_more_answers_than_the_cap_are_still_capped(self, tmp_path, monkeypatch):
+        labels = [f"label-{n}" for n in range(8)]
+        out = await self._spilled(tmp_path, monkeypatch, labels)
+        assert len(out["sample"]) == vision_batch.MAX_SAMPLE_ROWS
+        seen = [row["choice"] for row in out["sample"]]
+        assert len(seen) == len(set(seen))
+
+    async def test_dropping_the_padding_hands_rows_back_to_results(self, tmp_path, monkeypatch):
+        """The whole point: the characters the duplicates were spending are
+        `results` rows, which is what the agent actually reads."""
+        out = await self._spilled(tmp_path, monkeypatch, ["chart", "photo"])
+        assert len(out["sample"]) == 2
+        assert out["results_shown"] >= 8, (
+            f"only {out['results_shown']} rows inline — the sample is still eating them"
+        )
+
+    async def test_a_free_text_batch_samples_distinct_answers_too(self, tmp_path, monkeypatch):
+        """Without `choices` every answer tends to differ, so the cap is what
+        bounds it — but two identical answers must still not both appear."""
+        self._labelled(monkeypatch, ["a cat", "a cat", "a dog"])
+        out = await _analyze(tmp_path, _images(tmp_path, 60), max_concurrency=1)
+        seen = [row["answer"] for row in out["sample"]]
+        assert len(seen) == len(set(seen)) == 2
+
+
+class TestARowNeverLosesWhatItAlreadyPaidFor:
+    """Hostile review M5. The re-ask shares the first call's per-image budget —
+    both calls sit inside one `asyncio.wait_for` — which is the right bound
+    (the module's "deadline plus ONE round" guarantee depends on it) but used
+    to lose the first call's ledger: a slow first reply near the deadline
+    turned an off-list row into a plain `timed out` row with no `reasked` and
+    no `tokens`/`cost_usd`, so a remote backend's spend went unreported
+    exactly when a batch was running long.
+
+    The money was spent. The row says so.
+    """
+
+    @staticmethod
+    def _remote(monkeypatch, replies, delay=0.0):
+        seen: list[int] = []
+
+        async def fake_acompletion(**kwargs: Any) -> Any:
+            seen.append(1)
+            if delay:
+                await asyncio.sleep(delay)
+            text = replies[min(len(seen) - 1, len(replies) - 1)]
+            return type(
+                "R",
+                (),
+                {
+                    "choices": [type("C", (), {"message": type("M", (), {"content": text})()})()],
+                    "usage": type("U", (), {"prompt_tokens": 800, "completion_tokens": 12})(),
+                },
+            )()
+
+        monkeypatch.setattr(vision_batch, "pooled_acompletion", fake_acompletion)
+        monkeypatch.setattr(
+            vision_batch,
+            "resolve_backend",
+            lambda: (vision_batch.Backend("remote", "openrouter/z-ai/glm-5.3-flash"), ""),
+        )
+        return seen
+
+    async def test_a_timeout_mid_re_ask_still_reports_the_first_calls_spend(
+        self, tmp_path, monkeypatch
+    ):
+        self._remote(monkeypatch, ["ANSWER: banana\nWHY: no"], delay=0.20)
+        monkeypatch.setattr(vision_batch, "_per_image_timeout", lambda: 0.30)
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["chart", "photo"])
+        row = out["results"][0]
+
+        assert "timed out" in row["error"]
+        assert row["reasked"] is True, "the agent must see that a second call was started"
+        assert row["tokens"] == 812, "the first call was paid for"
+        assert row["cost_usd"] > 0
+        assert out["tokens"] == 812, "and the batch total must agree"
+        assert out["cost_usd"] > 0
+
+    async def test_a_re_ask_that_raises_also_keeps_the_first_calls_spend(
+        self, tmp_path, monkeypatch
+    ):
+        seen: list[int] = []
+
+        async def fake_acompletion(**kwargs: Any) -> Any:
+            seen.append(1)
+            if len(seen) > 1:
+                raise RuntimeError("provider went away")
+            return type(
+                "R",
+                (),
+                {
+                    "choices": [
+                        type(
+                            "C",
+                            (),
+                            {"message": type("M", (), {"content": "ANSWER: banana"})()},
+                        )()
+                    ],
+                    "usage": type("U", (), {"prompt_tokens": 800, "completion_tokens": 12})(),
+                },
+            )()
+
+        monkeypatch.setattr(vision_batch, "pooled_acompletion", fake_acompletion)
+        monkeypatch.setattr(
+            vision_batch,
+            "resolve_backend",
+            lambda: (vision_batch.Backend("remote", "openrouter/z-ai/glm-5.3-flash"), ""),
+        )
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["chart", "photo"])
+        row = out["results"][0]
+        assert "provider went away" in row["error"]
+        assert row["tokens"] == 812
+        assert row["reasked"] is True
+
+    async def test_a_row_that_never_re_asked_claims_nothing(self, tmp_path, monkeypatch):
+        self._remote(monkeypatch, ["ANSWER: chart\nWHY: bars"], delay=0.20)
+        monkeypatch.setattr(vision_batch, "_per_image_timeout", lambda: 0.05)
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["chart", "photo"])
+        row = out["results"][0]
+        assert "timed out" in row["error"]
+        assert "reasked" not in row, "nothing was re-asked, so nothing is claimed"
+        assert "tokens" not in row
+
+
+class TestTheSpillNoteDescribesWhatIsActuallyThere:
+    """Hostile review M4. The note rendered "so **the first 1 are here**" in
+    the common heavily-spilled case, said "none of them fit here" right after
+    "did not fit", and promised the file holds "**answer**, reason, tokens and
+    cost" when a `choices` batch's rows carry `choice`. A note is the one part
+    of the result an agent reads as prose; it has to describe the result it is
+    attached to."""
+
+    @staticmethod
+    def _sentence(total, shown, sampled=True, field="answer"):
+        return vision_batch._spill_sentence(
+            total, shown, Path("/ws/.robothor/analyze_image/r-1.json"), sampled, field
+        )
+
+    def test_one_row_is_singular(self):
+        assert "the first row is here" in self._sentence(200, 1)
+        assert "the first 1 are" not in self._sentence(200, 1)
+
+    def test_several_rows_are_plural(self):
+        assert "the first 7 are here" in self._sentence(200, 7)
+
+    def test_no_rows_does_not_repeat_did_not_fit(self):
+        sentence = self._sentence(200, 0)
+        assert sentence.count("did not fit") == 1
+        assert "none of them fit here" not in sentence
+
+    def test_the_file_is_described_by_the_key_the_rows_actually_use(self):
+        assert "choice, reason" in self._sentence(200, 7, field="choice")
+        assert "answer, reason" in self._sentence(200, 7, field="answer")
+
+    def test_the_sample_is_only_promised_when_there_is_one(self):
+        assert "sample" in self._sentence(200, 7, sampled=True)
+        assert "sample" not in self._sentence(200, 7, sampled=False)
+
+    async def test_a_choices_batch_says_choice_in_its_note(self, tmp_path, monkeypatch):
+        async def answer(data: bytes, prompt: str = "", **kwargs: Any) -> str:
+            return "ANSWER: chart\nWHY: " + "bars and a titled axis, at length " * 3
+
+        monkeypatch.setattr(vision_batch, "describe_image_bytes", answer)
+        monkeypatch.setattr(
+            vision_batch,
+            "resolve_backend",
+            lambda: (vision_batch.Backend("local", "test-vlm"), ""),
+        )
+        out = await _analyze(tmp_path, _images(tmp_path, 60), choices=["chart", "photo"])
+        assert "choice, reason" in out["note"], out["note"]
+        assert "answer, reason" not in out["note"]
+
+
+class TestAFreeTextReplyIsNeverSilentlyTruncated:
+    """Re-check O1. The I1 parser ran `_from_json` before it knew whether a
+    choice was even required, so on a FREE-TEXT question a transcribed JSON
+    payload that happened to carry an `answer` key collapsed to that one
+    value — three fields gone, and the row said nothing about it.
+
+    Two near-identical screenshots must not transcribe differently depending
+    on whether the payload happens to use one of the parser's key names. So
+    the JSON reader is gated on SHAPE: with no `choices`, its result is taken
+    only when the object looks like a reply to the two-line contract — an
+    answer key AND a reason key — and otherwise the whole reply comes back as
+    text. The `choices` path is untouched: there, an extracted string still
+    has to be a label, so there was never any exposure.
+    """
+
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            '{"question_id": 7, "answer": "42", "asked_by": "kiosk"}',
+            '{"answer": "42"}',
+            '{"total": 19.5, "vendor": "kiosk"}',
+            '{"category": "produce", "sku": "A-1", "qty": 3}',
+            '{"label": "urgent", "ticket": 88}',
+        ],
+    )
+    async def test_a_transcribed_json_payload_comes_back_whole(self, tmp_path, scripted, reply):
+        scripted(reply)
+        out = await _analyze(tmp_path, _images(tmp_path, 1), question="transcribe the JSON shown")
+        assert out["results"][0]["answer"] == reply, "every field the image showed"
+
+    @pytest.mark.parametrize(
+        ("reply", "answer", "reason"),
+        [
+            ('{"answer": "42", "why": "the big number"}', "42", "the big number"),
+            ('{"choice": "42", "reason": "the big number"}', "42", "the big number"),
+            ('{"label": "42", "explanation": "the big number"}', "42", "the big number"),
+        ],
+    )
+    async def test_an_answer_plus_reason_object_is_still_read_as_a_reply(
+        self, tmp_path, scripted, reply, answer, reason
+    ):
+        """This is a real reply to the contract and must keep working — it is
+        why the gate is on shape rather than on the `choices` path."""
+        scripted(reply)
+        out = await _analyze(tmp_path, _images(tmp_path, 1), question="what number is shown?")
+        row = out["results"][0]
+        assert row["answer"] == answer
+        assert row["reason"] == reason
+
+    async def test_the_choices_path_still_reads_a_bare_answer_object(self, tmp_path, scripted):
+        """No exposure there, so no gate there: the extracted string still has
+        to be one of the labels, and a data object simply fails to be one."""
+        scripted('{"answer": "chart"}')
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["chart", "photo"])
+        assert out["results"][0]["choice"] == "chart"
+
+    async def test_a_data_object_on_the_choices_path_is_off_list_not_a_label(
+        self, tmp_path, scripted
+    ):
+        fake = scripted('{"question_id": 7, "answer": "42", "asked_by": "kiosk"}')
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["chart", "photo"])
+        assert "choice" not in out["results"][0]
+        assert len(fake.prompts) == 2
+
+    async def test_a_json_transcription_keeps_its_reason_when_the_model_gives_one(
+        self, tmp_path, scripted
+    ):
+        """Markers outside the object still work — the object is the answer."""
+        scripted('{"total": 19.5}\nWHY: a receipt total in the corner')
+        out = await _analyze(tmp_path, _images(tmp_path, 1), question="transcribe it")
+        row = out["results"][0]
+        assert row["answer"] == '{"total": 19.5}'
+        assert row["reason"] == "a receipt total in the corner"
+
+
+class TestMarkdownEmphasisNeverReachesTheRow:
+    """Re-check F1. `_INLINE_WHY` strips markdown before the marker word and
+    between it and the colon, but not the `**` that closes the bold AFTER the
+    colon — so `**ANSWER:** chart **WHY:** bars` yielded `'** chart'` and
+    `'** bars'`. The choice survived (the matcher strips emphasis on both
+    sides) but the free-text answer and every reason carried the leftovers."""
+
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            "**ANSWER:** chart **WHY:** bars and an axis",
+            "**ANSWER:** chart\n**WHY:** bars and an axis",
+            "*ANSWER:* chart *WHY:* bars and an axis",
+            "__ANSWER:__ chart __WHY:__ bars and an axis",
+        ],
+    )
+    async def test_bold_markers_leave_nothing_behind(self, tmp_path, scripted, reply):
+        scripted(reply)
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["chart", "photo"])
+        row = out["results"][0]
+        assert row["choice"] == "chart"
+        assert row["reason"] == "bars and an axis"
+
+    async def test_a_free_text_answer_is_not_left_holding_the_asterisks(self, tmp_path, scripted):
+        scripted("**ANSWER:** a bar chart **WHY:** bars and an axis")
+        out = await _analyze(tmp_path, _images(tmp_path, 1))
+        row = out["results"][0]
+        assert row["answer"] == "a bar chart"
+        assert row["reason"] == "bars and an axis"
+
+
+class TestBacktickedMarkersAreStillMarkers:
+    """Re-check R2-1. The three marker patterns each carried a hand-written
+    prefix class — `[\\s*_#>\\-]` — that listed asterisk and underscore but not
+    the backtick, so a model that writes its markers as inline code got the
+    whole reply rejected, re-asked, and turned into an `error` at twice the
+    cost. Backtick is as ordinary a way to write `ANSWER:` as bold is.
+
+    The same drift is why this now comes from ONE constant: three copies of a
+    character class is three chances to forget the next character."""
+
+    SHAPES = [
+        "`ANSWER:` chart `WHY:` bars and an axis",
+        "`ANSWER`: chart `WHY`: bars and an axis",
+        "**`ANSWER:`** chart **`WHY:`** bars and an axis",
+        "ANSWER: chart `WHY:` bars and an axis",
+        "```\n`ANSWER:` chart\n`WHY:` bars and an axis\n```",
+    ]
+
+    @pytest.mark.parametrize("reply", SHAPES)
+    async def test_the_choices_path_reads_them_in_one_call(self, tmp_path, scripted, reply):
+        fake = scripted(reply)
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["chart", "photo"])
+        row = out["results"][0]
+        assert row["choice"] == "chart", row
+        assert len(fake.prompts) == 1, "a marker style must never cost a re-ask"
+
+    @pytest.mark.parametrize("reply", SHAPES)
+    async def test_the_free_text_path_reads_them_too(self, tmp_path, scripted, reply):
+        scripted(reply)
+        out = await _analyze(tmp_path, _images(tmp_path, 1))
+        row = out["results"][0]
+        assert row["answer"] == "chart", row
+        assert row["reason"] == "bars and an axis", row
+
+    async def test_a_backticked_batch_is_not_a_batch_of_errors(self, tmp_path, scripted):
+        """The shape of the defect: it was never one row, it was all of them."""
+        fake = scripted("`ANSWER:` chart `WHY:` bars and an axis")
+        out = await _analyze(tmp_path, _images(tmp_path, 10), choices=["chart", "photo"])
+        assert out["analyzed"] == 10
+        assert out["failed"] == 0
+        assert len(fake.prompts) == 10
+
+    def test_one_constant_feeds_every_marker_pattern(self):
+        """Three copies of a character class is three chances to forget the
+        next character, which is exactly how the backtick went missing."""
+        from robothor.engine import vision_contract as vc
+
+        for pattern in (vc._ANSWER_LINE, vc._WHY_LINE, vc._INLINE_WHY):
+            assert vc._MARKER_EDGE in pattern.pattern
+
+    def test_a_marker_word_inside_a_sentence_is_still_not_a_marker(self):
+        """The prefix class widening must not turn prose into a split."""
+        from robothor.engine.vision_contract import Contract, parse_reply
+
+        parsed = parse_reply("somewhy: not a marker", Contract())
+        assert parsed.answer == "somewhy: not a marker"
+        assert parsed.reason == ""
