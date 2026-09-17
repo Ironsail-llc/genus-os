@@ -100,6 +100,7 @@ exclude_docs: |
   !/channels/access.md
   !/channels/webchat.md
   !/runbooks/BENCHMARK_SANDBOX.md
+  !/runbooks/LOCAL_FALLBACK.md
   !/architecture.md
   !/memory-system.md
   !/event-bus.md
@@ -146,6 +147,7 @@ nav:
       - Observability: OBSERVABILITY.md
       - Snapshot and restore: runbooks/SNAPSHOT_RESTORE.md
       - Benchmark sandbox: runbooks/BENCHMARK_SANDBOX.md
+      - Local fallback: runbooks/LOCAL_FALLBACK.md
   - Compliance:
       - Security controls: compliance/SECURITY_CONTROLS.md
       - SOC 2 mapping: compliance/SOC2_MAPPING.md

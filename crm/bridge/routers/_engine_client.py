@@ -10,6 +10,11 @@ The credential is minted per call and lives seconds. It is a *service* token in
 the engine's own audience: ``verify_engine_token`` refuses a bridge-audience
 service token outright, so this is not a case of the bridge lending an agent
 credential more authority than it had.
+
+Where the engine IS, and how the token is minted, moved to
+``robothor.engine_control`` when the CLI and the doctor came to need the same
+two answers. This module keeps what is specific to PROXYING: the path check
+(these paths are assembled from ids a caller supplied) and the async client.
 """
 
 from __future__ import annotations
@@ -17,21 +22,16 @@ from __future__ import annotations
 import logging
 import re
 from typing import Any
-from urllib.parse import urlsplit
 
 import httpx
 
-from robothor.auth.tokens import issue_service_token
-from robothor.engine.auth import ENGINE_AUDIENCE
+from robothor.engine_control import TOKEN_TTL_SECONDS as TOKEN_TTL_SECONDS
+from robothor.engine_control import control_token
+from robothor.engine_control import engine_base_url as _shared_base_url
 from robothor.sanitize import sanitize_log
 from routers._operator import PLATFORM_TENANT
 
 logger = logging.getLogger(__name__)
-
-#: How long a minted engine credential is good for. Long enough for one
-#: request including a 20s test connection, short enough that a token captured
-#: from a process listing is worthless by the time it is read.
-TOKEN_TTL_SECONDS = 120
 
 #: The service identity the engine's audit trail sees for these calls.
 SERVICE_ID = "genus-bridge"
@@ -39,16 +39,8 @@ SERVICE_ID = "genus-bridge"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 
 
-#: The only schemes an engine may be reached over. ``ROBOTHOR_ENGINE_URL`` is
-#: an environment variable, so it is exactly as trustworthy as whatever wrote
-#: the unit file — and a ``file://`` or ``unix://`` value there would turn
-#: every proxied call, credential bodies included, into something httpx
-#: resolves somewhere nobody intended.
-_ALLOWED_SCHEMES = frozenset({"http", "https"})
-
-
-#: The shape every engine path must have. The sibling of ``_ALLOWED_SCHEMES``,
-#: and newly load-bearing: paths used to be literals in this repo, and now the
+#: The shape every engine path must have. The sibling of the scheme check in
+#: ``robothor.engine_control.engine_base_url``, and newly load-bearing: paths used to be literals in this repo, and now the
 #: agent-manifest routes assemble one from an agent id a caller supplied. A
 #: path beginning ``//host`` or carrying a scheme, a query or a fragment would
 #: move the request to a different server, or past the engine's own
@@ -77,29 +69,22 @@ def _checked_path(path: str) -> str:
 
 
 def engine_base_url() -> str:
-    """Where the engine answers. Loopback unless deployment says otherwise."""
-    from robothor.settings import get_settings
+    """Where the engine answers. Loopback unless deployment says otherwise.
 
-    engine = get_settings().engine
-    explicit = (engine.url or "").strip()
-    if explicit:
-        parsed = urlsplit(explicit)
-        if parsed.scheme not in _ALLOWED_SCHEMES or not parsed.netloc:
-            raise ValueError(
-                f"ROBOTHOR_ENGINE_URL must be an http(s) URL with a host, got {explicit!r}"
-            )
-        return explicit.rstrip("/")
-    return f"http://{engine.host}:{engine.port}"
+    Shared with ``robothor.engine_control``, which the CLI and the doctor use:
+    two answers to "where is the engine" is how a control call reaches a
+    different instance than the one the operator is reading about.
+    """
+    return _shared_base_url()
 
 
 def _engine_token() -> str:
-    return issue_service_token(
-        SERVICE_ID,
-        PLATFORM_TENANT,
-        audience=ENGINE_AUDIENCE,
-        scopes=("engine:control",),
-        ttl_seconds=TOKEN_TTL_SECONDS,
-    )
+    # ``require_existing_key=False``: the guard is for a CLI or a doctor on a
+    # box whose vault may be unreadable, where minting would generate and
+    # upsert a signing key. A bridge process that could not resolve the key
+    # could not have verified the session of the caller it is proxying for, so
+    # the check is pure latency here -- a live vault read per proxied request.
+    return control_token(SERVICE_ID, PLATFORM_TENANT, require_existing_key=False)
 
 
 async def engine_request(

@@ -55,7 +55,11 @@ def notify_engine(*, quiet: bool = False) -> bool:
         if host in {"0.0.0.0", "::", ""}:  # noqa: S104 - compared, never bound
             host = "127.0.0.1"
         port = int(getattr(settings.engine, "port", 0) or 18800)
-        response = httpx.post(f"http://{host}:{port}{RELOAD_PATH}", timeout=_TIMEOUT_SECONDS)
+        response = httpx.post(
+            f"http://{host}:{port}{RELOAD_PATH}",
+            timeout=_TIMEOUT_SECONDS,
+            headers=_authorization(),
+        )
     except Exception as exc:  # noqa: BLE001 - nobody listening is the normal case
         logger.debug("secrets: no engine to notify (%s)", type(exc).__name__)
         if not quiet:
@@ -63,12 +67,10 @@ def notify_engine(*, quiet: bool = False) -> bool:
         return False
 
     if response.status_code in (401, 403):
-        # The production posture. `/api/admin/*` requires the `engine:control`
-        # scope and this request carries no bearer, so on any instance with
-        # auth enforced the answer is 401 — and the round-2 message said "no
-        # running engine answered" while one was running and answering. Minting
-        # a control token here would put a signing key in a CLI that does not
-        # otherwise need one; saying the true thing costs nothing.
+        # Reached only when no credential could be minted — see
+        # `_authorization`. `/api/admin/*` requires the `engine:control` scope,
+        # and an unauthenticated POST is answered 401 by any instance with auth
+        # enforced, which is every production one.
         logger.debug("secrets: the engine requires authentication for a reload")
         if not quiet:
             _say_the_engine_refused_us()
@@ -83,6 +85,28 @@ def notify_engine(*, quiet: bool = False) -> bool:
     if not quiet:
         print("The running engine has re-read its credentials; the change is live now.")
     return True
+
+
+def _authorization() -> dict[str, str]:
+    """The bearer header for the reload, or none if minting is not safe here.
+
+    An earlier version deliberately sent nothing, reasoning that minting would
+    "put a signing key in a CLI that does not otherwise need one". The cost of
+    that turned up on 2026-09-16: on a production instance every CLI write was
+    answered 401 and the operator was told to wait out a cache TTL, while the
+    engine that needed telling sat there refusing them. ``control_token``
+    refuses to mint when no signing key already RESOLVES — the case that
+    decision was really protecting against, since minting would otherwise
+    generate and store one — so asking is now safe, and a failure here simply
+    sends the request unauthenticated exactly as before.
+    """
+    try:
+        from robothor.engine_control import control_token
+
+        return {"Authorization": f"Bearer {control_token()}"}
+    except Exception as exc:  # noqa: BLE001 - no key, no engine module, no header
+        logger.debug("secrets: no control credential to mint (%s)", type(exc).__name__)
+        return {}
 
 
 def _cache_ttl_seconds() -> float:
@@ -103,9 +127,10 @@ def _say_the_engine_refused_us() -> None:
     """The honest version of a 401, which is the normal answer in production."""
     ttl = _cache_ttl_seconds()
     print(
-        "(An engine is running but requires authentication for a reload, and this "
-        f"command does not hold a control token — the change takes effect within "
-        f"{ttl:.0f}s anyway. Save from the Helm's Settings page to apply it instantly.)"
+        "(An engine is running but refused an unauthenticated reload, and no "
+        f"control credential could be minted here — the change takes effect within "
+        f"{ttl:.0f}s anyway. `genus secrets reload` says why, and the Helm's "
+        "Settings page applies a change instantly.)"
     )
 
 

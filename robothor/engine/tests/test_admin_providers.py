@@ -400,7 +400,7 @@ class TestSecretsReload:
         )
 
         body = client.post("/api/admin/secrets/reload").json()
-        assert body == {"reloaded": ["openrouter"], "slots": 1}
+        assert body == {"reloaded": ["openrouter"], "slots": 1, "restored": []}
         assert os.environ["OPENROUTER_API_KEY"] == VAULT_KEY
 
         pool = key_pool.shared_pool("OPENROUTER_API_KEY")
@@ -415,7 +415,7 @@ class TestSecretsReload:
         monkeypatch.setattr(key_pool, "_vault_export", _explode)
         response = client.post("/api/admin/secrets/reload")
         assert response.status_code == 200
-        assert response.json() == {"reloaded": [], "slots": 0}
+        assert response.json() == {"reloaded": [], "slots": 0, "restored": []}
 
 
 class TestSighup:

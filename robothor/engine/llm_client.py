@@ -42,7 +42,14 @@ import litellm
 
 from robothor.engine.codex_provider import CodexProviderError, is_codex_model
 from robothor.engine.codex_provider import acompletion as codex_acompletion
+from robothor.engine.context import estimate_tokens
+from robothor.engine.context_fit import (
+    CONTEXT_OVERFLOW_SHRINKS,
+    is_context_overflow,
+    shrink_after_overflow,
+)
 from robothor.engine.key_pool import KeyPool, Retirement, env_var_for_model, keys_from_env
+from robothor.engine.last_resort import last_resort_attempt
 from robothor.engine.llm_attempts import (
     REASONING_ONLY_NUDGE,
     CompletionShape,
@@ -263,6 +270,8 @@ def _skip_model_reason(
     dead_credentials: set[str],
     breaker: Any,
     pool_for: Callable[[str], KeyPool | None],
+    *,
+    ignore_breaker: bool = False,
 ) -> tuple[str | None, KeyPool | None]:
     """Why this model must not be tried on this call, plus its credential pool.
 
@@ -285,10 +294,18 @@ def _skip_model_reason(
         # anyone, and treating them as a group would let one provider's quota
         # error strand the local tier — the very outage this code exists to end.
         return "it shares a credential already proven spent", None
-    if breaker.is_open(model):
+    if breaker.is_open(model) and not ignore_breaker:
         # This model has failed repeatedly and is in cooldown. Skipping it here
         # is the point: otherwise a dead provider costs the full per-call
         # timeout on every run, forever (codex/* did exactly that for a month).
+        #
+        # `ignore_breaker` is the ONE exemption, and it is not an amnesty: the
+        # last-resort attempt (`last_resort.py`) is by definition the last
+        # thing tried, after every model in the chain has already failed. A
+        # cooldown is advice about what to try NEXT, and there is no next. Kept
+        # open for a run that dialled it: the breaker still guards the ordinary
+        # path, which is what stops a dead provider costing every run its
+        # timeout.
         return "circuit breaker open", None
     pool = pool_for(model)
     if pool is not None and pool.exhausted():
@@ -699,6 +716,53 @@ def _rotate_credential(
         "credit exhausted" if spent else "auth rejected",
     )
     return True
+
+
+async def _emit_usage(chunk: Any, emit: Callable[[dict[str, Any]], Awaitable[None]]) -> None:
+    """Forward a token count that arrived on a chunk carrying no choices.
+
+    Several providers report usage that way at the end of a stream, and it is
+    the only place the count exists — a stream whose last frame is dropped
+    bills the run at zero.
+    """
+    usage = getattr(chunk, "usage", None)
+    if not usage:
+        return
+    await emit(
+        {
+            "type": "usage",
+            "input_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+            "output_tokens": getattr(usage, "completion_tokens", 0) or 0,
+        }
+    )
+
+
+def _rotated_for(
+    e: Exception,
+    model: str,
+    pool: KeyPool | None,
+    attempt_key: str | None,
+    *,
+    spent: bool,
+    rotations_left: int,
+) -> bool:
+    """Did a spare credential take over for this failure? Then re-ask in place.
+
+    A dead credential is not a dead model. If a spare exists, retire this one
+    and retry the SAME model — advancing the chain would burn models for a
+    reason that has nothing to do with them, and every one of them shares the
+    credential that just failed anyway.
+
+    Both call paths ask the identical question, and asked it in two hand-copied
+    blocks; on the streaming path the in-place retry is safe for a reason worth
+    keeping written down — a credential failure surfaces at stream CREATION,
+    before any chunk has reached ``on_content``, so nothing is duplicated.
+    """
+    if not (spent or is_auth_failure(e)) or attempt_key is None or pool is None:
+        return False
+    return _rotate_credential(
+        model, pool, attempt_key, e, spent=spent, rotations_left=rotations_left
+    )
 
 
 def _streaming_skip_reason(model: str, pool: KeyPool | None) -> str | None:
@@ -1462,7 +1526,7 @@ class LLMClient:
         run_token = _current_run_id_var.set(getattr(session.run, "id", None))
         try:
             if on_content or on_stream_event:
-                return await self._call_llm_streaming(
+                response = await self._call_llm_streaming(
                     session.messages,
                     models,
                     tool_schemas,
@@ -1472,14 +1536,25 @@ class LLMClient:
                     on_stream_event=on_stream_event,
                     timeout_override=timeout_override,
                 )
-            return await self._call_llm(
-                session.messages,
-                models,
-                tool_schemas,
-                broken_models=broken_models,
-                temperature=temperature,
-                timeout_override=timeout_override,
-            )
+            else:
+                response = await self._call_llm(
+                    session.messages,
+                    models,
+                    tool_schemas,
+                    broken_models=broken_models,
+                    temperature=temperature,
+                    timeout_override=timeout_override,
+                )
+            if response is not None:
+                return response
+            # Every model in the chain is out. The local tier is the reason a
+            # last fallback exists, and the commonest reason a chain ends with
+            # nothing is a conversation that outgrew it — so the one thing not
+            # yet tried is the SHORTEST possible conversation. Unstreamed and
+            # untooled: all that is left to produce is a sentence for whoever
+            # is waiting. (2026-09-16: the local model had answered twelve
+            # steps of the run that ended "All models failed to respond".)
+            return await last_resort_attempt(self, session, models)
         finally:
             _current_run_id_var.reset(run_token)
 
@@ -1489,18 +1564,21 @@ class LLMClient:
     def sizing_model(models: list[str], broken_models: set[str] | None = None) -> str:
         """Return the model the context-window math should be sized against.
 
-        G2b: this is the first model in ``models`` not already marked broken —
-        i.e. the one the fallback loop will actually try next — not ``models[0]``
-        (the configured primary). When the primary is down and the run is on a
-        smaller-window fallback, sizing against the primary's window (e.g. 1M)
-        can overflow the fallback (e.g. 200K). Falls back to ``models[0]`` when
-        every model is broken, or ``""`` for an empty list.
+        G2b: this is the model the fallback loop will actually try next, not
+        ``models[0]`` (the configured primary). When the primary is down and
+        the run is on a smaller-window fallback, sizing against the primary's
+        window (e.g. 1M) can overflow the fallback (e.g. 64K).
+
+        "Will actually try next" is decided by :func:`context_fit.
+        next_reachable_model`, which asks the same three questions the chain
+        walk asks — broken, breaker open, credential pool spent. The version
+        that asked only about ``broken_models`` sized a run living entirely on
+        the local tier against the primary it had never once reached, because a
+        spent credential never marks a model broken (2026-09-16).
         """
-        broken = broken_models or set()
-        for model in models:
-            if model not in broken:
-                return model
-        return models[0] if models else ""
+        from robothor.engine.context_fit import next_reachable_model
+
+        return next_reachable_model(models, broken_models)
 
     async def _prepare_llm_call(
         self,
@@ -1511,27 +1589,37 @@ class LLMClient:
         """Shared pre-flight: compress context and estimate input tokens.
 
         Mutates messages in-place. Returns estimated input token count.
+
+        This is the ONLY budget the first call of a run gets: the loop's own
+        pass returns early on iteration 0, and a run resumed from a journal or
+        a long chat history starts with the whole conversation already in hand.
+        So it does what the loop does — size against the model that will
+        actually be reached, compact above the threshold, and then ENFORCE the
+        ceiling deterministically. Sizing here used the flat ``chars / 4`` and
+        never touched the ceiling, which shipped ~110k estimated tokens at a
+        65,536-token model with no drop and no note (hostile review, M4).
         """
-        from robothor.engine.context import estimate_tokens, maybe_compress
-        from robothor.engine.model_registry import get_model_limits
+        from robothor.engine.context import maybe_compress
+        from robothor.engine.context_fit import enforce_ceiling, estimate_for, fit_for
 
+        fit = fit_for(self.sizing_model(models, broken_models))
         try:
-            from robothor.engine.run_budget import proactive_compaction_threshold
-
-            model_limits = get_model_limits(self.sizing_model(models, broken_models))
             # Same clamped threshold as the in-loop trigger. The old
             # 0.75-of-window guard was 786K tokens on the fleet primary's 1M
             # window — unreachable, zero firings in 7 days. When the in-loop
             # pass just compacted, this no-ops (estimate is under threshold);
             # it exists for the paths that call the client without the loop.
-            compress_threshold = proactive_compaction_threshold(model_limits.max_input_tokens)
             messages[:] = await maybe_compress(
-                messages, models, threshold=compress_threshold, broken_models=broken_models
+                messages, models, threshold=fit.threshold, broken_models=broken_models
             )
         except Exception as e:
             logger.warning("Pre-flight compression failed: %s", _sanitize(e))
+        # Outside the try on purpose: compaction summarises with a MODEL, and
+        # the call that most needs the ceiling is the one whose summariser
+        # could not reach one. `enforce_ceiling` never raises.
+        enforce_ceiling(messages, fit)
 
-        return estimate_tokens(messages)
+        return estimate_for(messages, fit.model)
 
     # ─── Message hygiene ─────────────────────────────────────────────
 
@@ -2073,6 +2161,34 @@ class LLMClient:
 
     # ─── Non-streaming call ──────────────────────────────────────────
 
+    def _admit(
+        self,
+        model: str,
+        dead_credentials: set[str],
+        breaker: Any,
+        *,
+        ignore_breaker: bool,
+    ) -> tuple[str | None, KeyPool | None, str | None]:
+        """May this model be dialled? Returns ``(skip reason, pool, env var)``.
+
+        The chain walk's admission step, extracted so the walk reads as one
+        decision per line. ``model_var`` comes back because the spent-credential
+        branch below needs the same name, and re-deriving it there is how two
+        answers to "whose key is this" get to disagree.
+        """
+        model_var = env_var_for_model(model)
+        skip, pool = _skip_model_reason(
+            model,
+            model_var,
+            dead_credentials,
+            breaker,
+            self._key_pool,
+            ignore_breaker=ignore_breaker,
+        )
+        if skip:
+            logger.info("skipping %s — %s", _sanitize(model), skip)
+        return skip, pool, model_var
+
     async def _call_llm(
         self,
         messages: list[dict[str, Any]],
@@ -2081,6 +2197,7 @@ class LLMClient:
         broken_models: set[str] | None = None,
         temperature: float = 0.3,
         timeout_override: float | None = None,
+        ignore_breaker: bool = False,
     ) -> Any:
         """Call LLM with model fallback. Returns litellm response or None.
 
@@ -2105,12 +2222,10 @@ class LLMClient:
         for position, model in enumerate(models):
             if broken_models and model in broken_models:
                 continue
-            model_var = env_var_for_model(model)
-            skip, pool = _skip_model_reason(
-                model, model_var, dead_credentials, breaker, self._key_pool
+            skip, pool, model_var = self._admit(
+                model, dead_credentials, breaker, ignore_breaker=ignore_breaker
             )
             if skip:
-                logger.info("skipping %s — %s", _sanitize(model), skip)
                 continue
             per_call_timeout = _per_call_timeout(model, timeout_override)
             # Rotating through spare credentials must not eat the transient
@@ -2125,6 +2240,7 @@ class LLMClient:
             # what made a batch-trigger dispatch worth an hour of wall clock.
             model_deadline = time.monotonic() + per_call_timeout
             rotations_left = (len(pool) - 1) if pool is not None else 0
+            overflow_shrinks_left = CONTEXT_OVERFLOW_SHRINKS
             malformed_retries_left = MALFORMED_TOOL_ARGS_RETRIES
             re_asks_left = REASONING_ONLY_RE_ASKS_PER_MODEL
             # Set only for the re-ask after a reasoning-only reply.
@@ -2230,31 +2346,30 @@ class LLMClient:
                     # A spent budget is not a busy provider: no wait fixes it,
                     # and every other model on the same key fails identically.
                     # Walking the chain just burns them all.
-                    # A dead credential is not a dead model. If a spare key
-                    # exists, retire this one and retry the SAME model —
-                    # advancing the chain would burn models for a reason
-                    # that has nothing to do with them, and every one of
-                    # them shares the credential that just failed anyway.
                     spent = is_credit_exhausted(e)
-                    if (spent or is_auth_failure(e)) and attempt_key is not None:
-                        assert pool is not None
-                        if _rotate_credential(
-                            model,
-                            pool,
-                            attempt_key,
-                            e,
-                            spent=spent,
-                            rotations_left=rotations_left,
-                        ):
-                            rotations_left -= 1
-                            # Deliberately does not advance `attempt`: a key
-                            # swap is not a retry of a flaky provider.
-                            continue
+                    if _rotated_for(
+                        e, model, pool, attempt_key, spent=spent, rotations_left=rotations_left
+                    ):
+                        rotations_left -= 1
+                        # Deliberately does not advance `attempt`: a key swap
+                        # is not a retry of a flaky provider.
+                        continue
                     if spent:
                         if not _spent_credit_leaves_someone_reachable(
                             models, position, model, model_var, dead_credentials
                         ):
                             raise
+                        break
+                    if is_context_overflow(e):
+                        if overflow_shrinks_left > 0 and shrink_after_overflow(messages, model):
+                            overflow_shrinks_left -= 1
+                            input_est = estimate_tokens(messages)
+                            continue
+                        logger.warning(
+                            "Model %s cannot hold this conversation (%s) — advancing",
+                            _sanitize(model),
+                            _sanitize(e),
+                        )
                         break
                     if is_malformed_tool_arguments(e):
                         if malformed_retries_left > 0:
@@ -2359,6 +2474,7 @@ class LLMClient:
                 logger.info("skipping %s — %s", _sanitize(model), skip)
                 continue
             rotations_left = (len(pool) - 1) if pool is not None else 0
+            overflow_shrinks_left = CONTEXT_OVERFLOW_SHRINKS
             while True:
                 # INSIDE the loop, as in _call_llm: a rotation retry re-enters
                 # here and would otherwise reuse a stale, possibly elapsed
@@ -2446,17 +2562,7 @@ class LLMClient:
                         # alive on dead streams — that was the 07:00/08:00
                         # failure mode (900s of pings, 0 tokens, hard-killed).
                         if not chunk.choices:
-                            # Check for usage in non-choice chunks (some providers)
-                            usage = getattr(chunk, "usage", None)
-                            if usage:
-                                await _emit(
-                                    {
-                                        "type": "usage",
-                                        "input_tokens": getattr(usage, "prompt_tokens", 0) or 0,
-                                        "output_tokens": getattr(usage, "completion_tokens", 0)
-                                        or 0,
-                                    }
-                                )
+                            await _emit_usage(chunk, _emit)
                             continue
                         delta = chunk.choices[0].delta
                         delta_details = getattr(delta, "reasoning_details", None)
@@ -2515,22 +2621,31 @@ class LLMClient:
                     break
                 except Exception as e:
                     note_outcome(model, attempt_started, error=e)
-                    spent = is_credit_exhausted(e)
-                    if (spent or is_auth_failure(e)) and attempt_key is not None:
-                        assert pool is not None
-                        # Safe to retry in place: a credential error surfaces at
-                        # stream creation, before any chunk has reached
-                        # on_content, so nothing is duplicated.
-                        if _rotate_credential(
-                            model,
-                            pool,
-                            attempt_key,
-                            e,
-                            spent=spent,
-                            rotations_left=rotations_left,
-                        ):
-                            rotations_left -= 1
+                    if _rotated_for(
+                        e,
+                        model,
+                        pool,
+                        attempt_key,
+                        spent=is_credit_exhausted(e),
+                        rotations_left=rotations_left,
+                    ):
+                        rotations_left -= 1
+                        continue
+                    if is_context_overflow(e):
+                        # Safe to re-ask in place for the same reason the
+                        # credential rotation above is: an oversized
+                        # conversation is refused at stream CREATION, before
+                        # any chunk has reached `on_content`, so nothing the
+                        # user has already seen can be duplicated. Every
+                        # signature in `OVERFLOW_SIGNATURES` is a request-time
+                        # failure; one that arrived mid-stream would need a
+                        # "nothing emitted yet" guard instead.
+                        if overflow_shrinks_left > 0 and shrink_after_overflow(messages, model):
+                            overflow_shrinks_left -= 1
+                            input_est = estimate_tokens(messages)
                             continue
+                        last_error = e
+                        break
                     if _advance_without_blaming_the_model(e, model):
                         last_error = e
                         break

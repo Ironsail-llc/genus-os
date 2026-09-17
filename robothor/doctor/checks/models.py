@@ -14,7 +14,7 @@ states; ``provider.completion`` reports a latency and an error class.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from robothor.doctor.model import Check, Result, fail, ok, skip
 
@@ -67,7 +67,52 @@ async def _keys(ctx: DoctorContext) -> Result:
             "'genus config set OPENROUTER_API_KEY ...' or from the Helm's Providers page"
         )
     described = "; ".join(f"{label}: {', '.join(slots)}" for _provider_id, label, slots in found)
+    spent = await ctx.run_blocking(_spent_pools)
+    if spent:
+        # A failure, not a note. A retired pool is a configured, unshadowed,
+        # completely unusable credential — three green columns and a stopped
+        # fleet (2026-08-27, 48 hours). The remedy is named because the reload
+        # is the ONLY thing that clears a cooldown early: raising the cap at
+        # the provider changes nothing in the engine's memory.
+        return fail(
+            f"{'; '.join(spent)}. Top up or raise the limit, then run "
+            f"`genus secrets reload`. Configured: {described}"
+        )
     return ok(described)
+
+
+def _spent_pools() -> list[str]:
+    """Providers the RUNNING engine has no credential left for.
+
+    Asked of the engine over its control API, because pools live in ITS memory:
+    a doctor answering from its own process reports "active" for a key the
+    fleet has not been able to use for six hours. An engine that does not
+    answer contributes nothing — this check's job is credentials, and
+    ``services.*`` already owns "is the daemon up".
+    """
+    from robothor.engine_control import control_request
+
+    try:
+        payload = control_request("GET", "/api/admin/providers")
+    except Exception:  # noqa: BLE001 - a silent daemon is not a credential fault
+        return []
+    spent: list[str] = []
+    for provider in payload.get("providers") or []:
+        slots = provider.get("slots") or []
+        if not slots or any(slot.get("state") not in ("capped", "revoked") for slot in slots):
+            continue
+        reasons = {str(slot.get("reason") or slot.get("state")) for slot in slots}
+        returns = [
+            slot.get("returns_in_s")
+            for slot in slots
+            if isinstance(slot.get("returns_in_s"), (int, float))
+        ]
+        window = f", retried in {min(returns) / 3600:.1f}h" if returns else ""
+        spent.append(
+            f"{provider.get('id')}: key exhausted — every credential for "
+            f"{provider.get('env_var')} is retired ({', '.join(sorted(reasons))}{window})"
+        )
+    return spent
 
 
 def _fleet_model() -> str:
@@ -242,6 +287,245 @@ async def _ollama(ctx: DoctorContext) -> Result:
     return fail(f"{base} did not answer: {reported} ({why})")
 
 
+def _local_models() -> list[str]:
+    """Every ``ollama_chat/`` model the fleet's own chain names."""
+    try:
+        return [model for model in _fleet_models() if model.startswith("ollama_chat/")]
+    except Exception:  # noqa: BLE001 - manifests.schema owns an unreadable fleet
+        return []
+
+
+def _server_windows(body: str) -> dict[str, int]:
+    """``{model name: the context it was trained for}`` from ``/api/tags``.
+
+    The number matters as much as the name. The engine sends ``num_ctx`` from
+    its OWN registry, so a registry entry above the model's context is a
+    request the server cannot honour and silently trims — the failure mode that
+    produced an error with no mention of length in it (2026-09-16).
+    """
+    import json
+
+    try:
+        payload = json.loads(body or "{}")
+    except ValueError:
+        return {}
+    windows: dict[str, int] = {}
+    for entry in payload.get("models") or []:
+        name = str(entry.get("name") or "")
+        window = (entry.get("details") or {}).get("context_length")
+        if name:
+            windows[name] = int(window) if isinstance(window, int) else 0
+    return windows
+
+
+def _carried_as(name: str, windows: dict[str, int]) -> str | None:
+    """The server's own spelling of ``name``, or None if it does not have it."""
+    for have in windows:
+        if have == name or have.startswith(f"{name}:"):
+            return have
+    return None
+
+
+async def _local_fallback_ready(ctx: DoctorContext) -> Result:
+    """The last fallback can be reached AND can hold a conversation.
+
+    Required on an instance whose chain ends on Ollama, because that tier is
+    the whole answer to "the cloud key is spent" — and on 2026-09-16 it was up,
+    was answering, and the run still died, because three numbers nobody
+    compared disagreed: the model's own context, the registry window the engine
+    sends as ``num_ctx``, and the point compaction fires.
+    """
+    from robothor.engine.context_fit import fit_for
+
+    models = await ctx.run_blocking(_local_models)
+    if not models:
+        return skip("this instance has no local fallback in its model chain")
+    base = (ctx.settings.ollama.base_url or "").rstrip("/")
+    if not base:
+        return fail("a local fallback is configured but no Ollama endpoint is")
+
+    response = await ctx.run_blocking(ctx.fetch, f"{base}/api/tags")
+    if not response.ok:
+        return fail(
+            f"the local fallback's server at {base} did not answer "
+            f"({response.error or f'HTTP {response.status}'}). Consequence: when a "
+            "cloud credential is spent this instance has nothing left to answer "
+            "with — runs fail instead of degrading."
+        )
+    windows = _server_windows(response.body)
+
+    problems: list[str] = []
+    healthy: list[str] = []
+    for model in models:
+        name = model.split("/", 1)[1]
+        carried = _carried_as(name, windows)
+        if carried is None:
+            problems.append(f"{model} is in the chain but not on the server — `ollama pull {name}`")
+            continue
+        fit = fit_for(model)
+        server_window = windows.get(carried) or 0
+        if server_window and fit.window > server_window:
+            problems.append(
+                f"{model}: the engine asks for num_ctx={fit.window:,} and the model holds "
+                f"{server_window:,} — the server trims the conversation and answers with a "
+                "structural error"
+            )
+            continue
+        if fit.threshold + fit.reserved_output > fit.window:
+            problems.append(
+                f"{model}: compaction fires at {fit.threshold:,} tokens and the answer needs "
+                f"{fit.reserved_output:,}, which overflows its {fit.window:,}-token window"
+            )
+            continue
+        healthy.append(f"{model} ({fit.window:,} ctx, compacts at {fit.threshold:,})")
+    if problems:
+        return fail(
+            f"{'; '.join(problems)}. Consequence: when a cloud credential is "
+            "spent this instance has nothing left to answer with — runs fail "
+            "instead of degrading."
+        )
+    return ok("; ".join(healthy))
+
+
+def _registry_model(name: str) -> str | None:
+    """The REGISTRY's own spelling of this model, or None if it has no entry.
+
+    Two jobs, and both are the probe's. The first is honest sizing: this check
+    compares the registry's window against what the server allocates, so a
+    model the registry has never heard of has no window to compare — `fit_for`
+    would hand back the conservative 128K fallback and the probe would be
+    testing that number instead of this instance's.
+
+    The second is a taint the probe created. `ctx.run_blocking` is one generic
+    helper shared by every check, so CodeQL cannot tell one caller's return
+    from another's: the secrets check passes `secret_source()` through it, and
+    on PR #582 that made a MODEL ID "sensitive data (secret)" all the way into
+    the engine's own log lines. Returning the registry's key — a literal in
+    this repository — is what the probe should be dialling anyway, and it ends
+    that flow at its source rather than arguing about it three modules later.
+    """
+    from robothor.engine.model_registry import _MODEL_REGISTRY, _registry_candidates
+
+    wanted = set(_registry_candidates(name))
+    for key in _MODEL_REGISTRY:
+        if key in wanted:
+            return key
+    return None
+
+
+#: A conversation this many times the model's window, so the probe is testing
+#: the shrink and not the estimate's rounding.
+_PROBE_OVERSHOOT = 1.5
+
+#: Below this budget the probe cannot finish a real generation, and a check
+#: that reports a timeout as a failure of the thing it is probing is worse
+#: than one that did not run.
+_PROBE_MIN_TIMEOUT_S = 60.0
+
+
+async def _local_fallback_probe(ctx: DoctorContext) -> Result:
+    """Positive control: an oversized conversation COMPACTS instead of failing.
+
+    Opt-in (``--only models.local_fallback_probe``) because it spends a real
+    generation on a slow local model. It is here because every inert-control
+    incident on this instance was found the same way — by firing a real
+    violation at a guard and watching nothing happen. The guard under test is
+    the one that was missing: a conversation longer than ``num_ctx`` used to
+    reach the server intact and come back as ``no user query found in
+    messages``.
+    """
+    from robothor.engine.context_fit import estimate_for, fit_for
+    from robothor.engine.llm_client import LLMClient
+
+    models = await ctx.run_blocking(_local_models)
+    if not models:
+        return skip("this instance has no local fallback in its model chain")
+    if ctx.offline:
+        return skip("offline: the probe runs a real generation")
+    if ctx.timeout_s < _PROBE_MIN_TIMEOUT_S:
+        return skip(
+            f"the probe needs a real generation — re-run with "
+            f"`--timeout {int(_PROBE_MIN_TIMEOUT_S * 2)}`"
+        )
+
+    model = _registry_model(models[-1])
+    if model is None:
+        return skip(
+            f"{models[-1]} has no entry in the engine's model registry, so there is no "
+            "window to probe against — add one to `model_registry._MODEL_REGISTRY`"
+        )
+    fit = fit_for(model)
+    filler = "the quick brown fox jumps over the lazy dog. " * 200
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": "You are terse. Answer in one short sentence."},
+        {"role": "user", "content": "Summarise what you were told."},
+    ]
+    turns = int(fit.window * _PROBE_OVERSHOOT * 4 / len(filler)) + 1
+    for index in range(turns):
+        messages.append(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": f"probe-{index}",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": "{}"},
+                    }
+                ],
+            }
+        )
+        messages.append({"role": "tool", "tool_call_id": f"probe-{index}", "content": filler})
+    messages.append({"role": "user", "content": "In one sentence: are you still here?"})
+
+    # THE PROACTIVE HALF FIRST — the actual root-cause fix, and the half the
+    # probe could not see when it called `_call_llm` directly: the budget is
+    # supposed to notice this conversation BEFORE anything is dialled.
+    from types import SimpleNamespace
+
+    from robothor.engine.context_budget import keep_context_within_budget
+
+    session = SimpleNamespace(
+        messages=messages,
+        run_id="doctor-probe",
+        thin_previous_tool_results=lambda protect_after_index=0: 0,
+    )
+    try:
+        await keep_context_within_budget(
+            session,
+            SimpleNamespace(id="doctor", eager_tool_compression=False),
+            iteration=1,
+            models=[model],
+            broken_models=set(),
+            hook_registry=None,
+            pre_iteration_msg_idx=0,
+        )
+    except Exception as exc:  # noqa: BLE001 - the probe reports, never raises
+        return fail(f"the context budget raised {type(exc).__name__} on {model}: {exc}")
+    proactive = estimate_for(session.messages, model)
+    if proactive > fit.hard_limit:
+        return fail(
+            f"the context budget left {proactive:,} tokens against {model}'s "
+            f"{fit.hard_limit:,}-token ceiling — the proactive half did not act"
+        )
+
+    # …and then the reactive half, against the real server.
+    try:
+        response = await LLMClient()._call_llm(session.messages, [model], [], broken_models=set())
+    except Exception as exc:  # noqa: BLE001 - the probe reports, never raises
+        return fail(f"{model} raised {type(exc).__name__} on an oversized conversation: {exc}")
+    if response is None:
+        return fail(
+            f"{model} could not answer a conversation {_PROBE_OVERSHOOT}x its "
+            f"{fit.window:,}-token window — the shrink did not save the call"
+        )
+    return ok(
+        f"{model} answered a conversation {_PROBE_OVERSHOOT}x its window: the "
+        f"budget brought it to ~{proactive:,} tokens before the call (ceiling "
+        f"{fit.hard_limit:,}), and the answer came back"
+    )
+
+
 CHECKS: tuple[Check, ...] = (
     Check(
         id="provider.keys",
@@ -263,5 +547,27 @@ CHECKS: tuple[Check, ...] = (
         category="models",
         severity="recommended",
         run=_ollama,
+    ),
+    Check(
+        id="models.local_fallback_ready",
+        title="The local fallback can hold a conversation",
+        category="models",
+        # RECOMMENDED, deliberately. The tier exists for the hours when no
+        # cloud credential works, so a degraded one matters — but `required`
+        # takes `genus doctor` from exit 0 to exit 1 on every instance whose
+        # chain ends on Ollama the moment that server is down, and the sibling
+        # `ollama.reachable` is recommended for the same reason. An install
+        # gate or a CI job that runs the doctor must not fail because a local
+        # model is restarting; the detail below names the consequence instead.
+        severity="recommended",
+        run=_local_fallback_ready,
+    ),
+    Check(
+        id="models.local_fallback_probe",
+        title="An oversized conversation compacts instead of failing",
+        category="models",
+        severity="recommended",
+        run=_local_fallback_probe,
+        opt_in=True,
     ),
 )

@@ -76,6 +76,16 @@ def _content_chars(content: Any) -> int:
     return len(str(content))
 
 
+def real_tokenizer_enabled() -> bool:
+    """Is the exact tokenizer switched on for this process?
+
+    Public because a caller sizing a CEILING has to know whether
+    ``estimate_tokens`` is returning a measurement or a heuristic: only the
+    heuristic needs a safety margin on top (see ``context_fit.estimate_for``).
+    """
+    return _real_tokenizer_enabled()
+
+
 def _real_tokenizer_enabled() -> bool:
     import os
 

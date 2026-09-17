@@ -36,7 +36,7 @@ import os
 import threading
 import time
 from collections.abc import Callable  # noqa: TC003
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from robothor.settings.env import process_env_get, process_env_set, process_env_unset
@@ -98,12 +98,20 @@ class Retirement(StrEnum):
 
 @dataclass(frozen=True)
 class KeyStatus:
-    """What is knowable about one credential without disclosing it."""
+    """What is knowable about one credential without disclosing it.
+
+    The two durations are ELAPSED and REMAINING, not wall-clock instants: the
+    pool's clock is ``time.monotonic``, which is the right clock for a cooldown
+    and cannot be rendered as a date. An operator asking "when does my key come
+    back" is answered with "in 3.9h", which is the question they meant.
+    """
 
     fingerprint: str
     position: int
     available: bool
     reason: Retirement | None
+    retired_for_s: float | None = None
+    returns_in_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -363,6 +371,13 @@ class SlotStatus:
     source: str  # "vault" | "env"
     fingerprint: str
     state: str  # "active" | "spare" | "capped" | "revoked" | "orphaned"
+    #: Why the LIVE pool has it out, and the cooldown left — None when this
+    #: process has no pool for the provider, which is every process except the
+    #: engine daemon. A CLI answering "is the key spent?" from its own memory
+    #: is answering about a process that has never made an LLM call.
+    reason: Retirement | None = None
+    retired_for_s: float | None = None
+    returns_in_s: float | None = None
 
 
 def scan_slots(provider_id: str) -> list[ResolvedKey]:
@@ -449,6 +464,7 @@ def provider_slots(provider_id: str) -> list[SlotStatus]:
     slots: list[SlotStatus] = []
     active_taken = False
     for item in scanned:
+        status = None
         if item.position not in reachable:
             state = "orphaned"
         else:
@@ -466,6 +482,9 @@ def provider_slots(provider_id: str) -> list[SlotStatus]:
                 source=item.source,
                 fingerprint=key_fingerprint(item.key),
                 state=state,
+                reason=status.reason if status is not None else None,
+                retired_for_s=status.retired_for_s if status is not None else None,
+                returns_in_s=status.returns_in_s if status is not None else None,
             )
         )
     return slots
@@ -473,10 +492,19 @@ def provider_slots(provider_id: str) -> list[SlotStatus]:
 
 @dataclass(frozen=True)
 class ReloadResult:
-    """What one secrets reload actually changed."""
+    """What one secrets reload actually changed.
+
+    ``restored`` is the half an operator is actually waiting for. Raising a cap
+    at the provider changes nothing in this process: the pool keeps the key
+    retired for its whole cooldown (six hours for a calendar quota), and the
+    only thing that clears it early is this reload. Naming the fingerprints
+    that came back is how the operator knows the reload DID something, rather
+    than reporting "0 providers" for a key that lives in the environment.
+    """
 
     reloaded: list[str]
     slots: int
+    restored: list[str] = field(default_factory=list)
 
 
 #: Environment values displaced by a vault-backed credential, so removing the
@@ -536,11 +564,31 @@ def reload_provider_keys() -> ReloadResult:
                 reloaded.append(spec.id)
                 slots += touched
 
+    # Read BEFORE the pools are dropped: afterwards nothing remembers that a
+    # key was ever out, and "your key is back in rotation" is the sentence the
+    # operator ran this for. Through `provider_slots`, so the digest printed
+    # here is the SAME one `genus secrets status`, the provider API and the
+    # vault tools print -- `KeyPool.fingerprint` is a different namespace, and
+    # two names for one credential answer nothing.
+    restored = sorted(
+        {
+            slot.fingerprint
+            for spec in PROVIDERS
+            for slot in provider_slots(spec.id)
+            if slot.state in ("capped", "revoked")
+        }
+    )
     # The pools cache their key list, so a reload that did not drop them would
     # keep dialling the credential the operator just replaced.
     reset_shared_pools()
-    logger.info("Secrets reload: %d provider(s), %d slot(s) from the vault", len(reloaded), slots)
-    return ReloadResult(reloaded=reloaded, slots=slots)
+    logger.info(
+        "Secrets reload: %d provider(s), %d slot(s) from the vault, %d credential(s) back "
+        "in rotation",
+        len(reloaded),
+        slots,
+        len(restored),
+    )
+    return ReloadResult(reloaded=reloaded, slots=slots, restored=restored)
 
 
 def env_var_for_model(model: str) -> str | None:
@@ -571,6 +619,20 @@ def keys_from_env(var: str) -> list[str]:
             seen.add(value)
             keys.append(value)
     return keys
+
+
+def cooldown_for(reason: Retirement) -> float:
+    """How long this retirement reason sits out before a retry.
+
+    Keyed on the reason because the reasons recover differently: a spend cap is
+    operator-fixable in a minute, a calendar quota is not fixable at all until
+    the window rolls. Module-level so the operator alert can name the number
+    without reaching into a pool it does not have — the alert is raised in the
+    engine, read by a person, and acted on from a CLI in a third process.
+    """
+    if reason is Retirement.QUOTA_EXHAUSTED_PERIODIC:
+        return PERIODIC_QUOTA_COOLDOWN_SECONDS
+    return CREDIT_COOLDOWN_SECONDS
 
 
 class KeyPool:
@@ -606,18 +668,6 @@ class KeyPool:
         """
         return "key-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
 
-    @staticmethod
-    def _cooldown_for(reason: Retirement) -> float:
-        """How long this retirement reason sits out before a retry.
-
-        Keyed on the reason because the reasons recover differently: a spend
-        cap is operator-fixable in a minute, a calendar quota is not fixable
-        at all until the window rolls.
-        """
-        if reason is Retirement.QUOTA_EXHAUSTED_PERIODIC:
-            return PERIODIC_QUOTA_COOLDOWN_SECONDS
-        return CREDIT_COOLDOWN_SECONDS
-
     def _available(self, key: str) -> bool:
         entry = self._retired.get(key)
         if entry is None:
@@ -625,7 +675,7 @@ class KeyPool:
         reason, retired_at = entry
         if reason is Retirement.AUTH_FAILED:
             return False
-        cooldown = self._cooldown_for(reason)
+        cooldown = cooldown_for(reason)
         if self._clock() - retired_at >= cooldown:
             # Cooled off. Drop the record so the key resumes its original
             # priority instead of being appended behind the one that
@@ -691,15 +741,29 @@ class KeyPool:
 
     def status(self) -> list[KeyStatus]:
         """The whole pool, in priority order, with no key material."""
-        return [
-            KeyStatus(
-                fingerprint=self.fingerprint(key),
-                position=index,
-                available=self._available(key),
-                reason=(self._retired.get(key) or (None, None))[0],
-            )
-            for index, key in enumerate(self._keys, start=1)
-        ]
+        return [self._status_of(key, index) for index, key in enumerate(self._keys, start=1)]
+
+    def _status_of(self, key: str, position: int) -> KeyStatus:
+        """One credential's rotation state, including how long it has left.
+
+        ``_available`` is consulted first because it is also what CLEARS an
+        expired retirement; reading ``_retired`` before it would report a key
+        as out for a cooldown that has already elapsed.
+        """
+        available = self._available(key)
+        reason, retired_at = self._retired.get(key) or (None, None)
+        elapsed = None if retired_at is None else max(0.0, self._clock() - retired_at)
+        returns_in = None
+        if reason is not None and elapsed is not None and reason is not Retirement.AUTH_FAILED:
+            returns_in = max(0.0, cooldown_for(reason) - elapsed)
+        return KeyStatus(
+            fingerprint=self.fingerprint(key),
+            position=position,
+            available=available,
+            reason=reason,
+            retired_for_s=elapsed,
+            returns_in_s=returns_in,
+        )
 
     def __repr__(self) -> str:
         """Never prints a credential — this object appears in traceback frames."""
@@ -746,6 +810,18 @@ def shared_pool(
         pool = KeyPool(keys, on_exhausted=on_exhausted)
         _SHARED[var] = pool
     return pool
+
+
+def pool_if_built(var: str) -> KeyPool | None:
+    """The pool for ``var`` if this process already has one — never builds it.
+
+    Read-only companion to :func:`shared_pool`, for callers that want to know
+    whether a credential is spent without becoming the one who constructs the
+    pool. Construction takes an ``on_exhausted`` hook, and a pool built by a
+    caller that has no hook to give would cache a pool that can never page the
+    operator — the exact failure ``provider_alerts`` exists to end.
+    """
+    return _SHARED.get(var)
 
 
 def api_key_for_model(model: str) -> str | None:

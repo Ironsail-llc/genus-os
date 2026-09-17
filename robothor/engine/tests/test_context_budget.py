@@ -14,6 +14,12 @@ The behaviour worth pinning, none of which was asserted while this lived inline:
   anything looks.
 * it never raises. A failure here must degrade to a warning: losing compaction
   costs money, and taking the run down with it costs the work.
+
+The estimator these tests patch is ``context_fit.estimate_tokens``, not
+``context.estimate_tokens``: the budget is sized through ``estimate_for``,
+which prices token-dense content at what it actually costs rather than at a
+flat four characters a token. Patching the other one leaves the real estimator
+running and the test silently measures nothing.
 """
 
 from __future__ import annotations
@@ -97,7 +103,7 @@ async def test_it_sizes_against_the_model_that_will_actually_answer():
     session = _session()
 
     with (
-        patch("robothor.engine.context.estimate_tokens", return_value=10),
+        patch("robothor.engine.context_fit.estimate_tokens", return_value=10),
         patch("robothor.engine.context.maybe_compress", new=AsyncMock(return_value=[])),
         patch("robothor.engine.model_registry.get_model_limits") as limits,
     ):
@@ -115,7 +121,7 @@ async def test_a_small_context_is_left_alone():
     session = _session()
 
     with (
-        patch("robothor.engine.context.estimate_tokens", return_value=10),
+        patch("robothor.engine.context_fit.estimate_tokens", return_value=10),
         patch("robothor.engine.context.maybe_compress", new=AsyncMock()) as compress,
     ):
         await _run(session, _config())
@@ -127,7 +133,7 @@ async def test_a_large_context_is_compacted():
     session = _session()
 
     with (
-        patch("robothor.engine.context.estimate_tokens", return_value=10_000_000),
+        patch("robothor.engine.context_fit.estimate_tokens", return_value=10_000_000),
         patch(
             "robothor.engine.context.maybe_compress",
             new=AsyncMock(return_value=[{"role": "user", "content": "smaller"}]),
@@ -136,7 +142,11 @@ async def test_a_large_context_is_compacted():
         await _run(session, _config())
 
     assert compress.called
-    assert session.messages == [{"role": "user", "content": "smaller"}]
+    assert session.messages[0] == {"role": "user", "content": "smaller"}
+    # The estimator is pinned at ten million for the whole test, so the ceiling
+    # can never be reached and the run is TOLD that plainly. A note claiming a
+    # reduction that did not happen is the thing that was fixed here.
+    assert "could not be cut down" in str(session.messages[-1]["content"])
 
 
 # ── Hooks ─────────────────────────────────────────────────────────────
@@ -149,7 +159,7 @@ async def test_both_compaction_hooks_are_dispatched():
     hooks = SimpleNamespace(dispatch=AsyncMock())
 
     with (
-        patch("robothor.engine.context.estimate_tokens", return_value=10_000_000),
+        patch("robothor.engine.context_fit.estimate_tokens", return_value=10_000_000),
         patch("robothor.engine.context.maybe_compress", new=AsyncMock(return_value=[])),
     ):
         await _run(session, _config(), hooks=hooks)
@@ -165,7 +175,7 @@ async def test_a_failing_hook_does_not_stop_the_compaction():
     hooks = SimpleNamespace(dispatch=AsyncMock(side_effect=RuntimeError("bad hook")))
 
     with (
-        patch("robothor.engine.context.estimate_tokens", return_value=10_000_000),
+        patch("robothor.engine.context_fit.estimate_tokens", return_value=10_000_000),
         patch(
             "robothor.engine.context.maybe_compress",
             new=AsyncMock(return_value=[{"role": "user", "content": "smaller"}]),
@@ -179,12 +189,38 @@ async def test_a_failing_hook_does_not_stop_the_compaction():
 # ── It must never take the run down ───────────────────────────────────
 
 
+async def test_the_ceiling_is_enforced_even_when_compaction_fails():
+    """The run that needs the ceiling most is the one where no model answers.
+
+    Compaction summarises WITH a model. On 2026-09-16 every cloud model was
+    unreachable, so the summariser would have walked the same dead chain — and
+    a compaction failure that also skipped the ceiling is how oversized
+    messages reach a server that truncates them in silence.
+    """
+    enforced = []
+    session = _session([{"role": "user", "content": "x" * 2_000_000}])
+
+    with (
+        patch(
+            "robothor.engine.context.maybe_compress",
+            new=AsyncMock(side_effect=RuntimeError("no model could summarise")),
+        ),
+        patch(
+            "robothor.engine.context_budget.enforce_hard_limit",
+            side_effect=lambda s, fit: enforced.append(fit.model) or True,
+        ),
+    ):
+        await _run(session, _config(), models=["ollama_chat/qwen3.8:27b"])
+
+    assert enforced, "compaction failed and the ceiling was never applied"
+
+
 async def test_a_compaction_failure_is_swallowed():
     """Losing compaction costs money. Losing the run costs the work."""
     session = _session()
 
     with (
-        patch("robothor.engine.context.estimate_tokens", return_value=10_000_000),
+        patch("robothor.engine.context_fit.estimate_tokens", return_value=10_000_000),
         patch(
             "robothor.engine.context.maybe_compress",
             new=AsyncMock(side_effect=RuntimeError("compress exploded")),
@@ -202,7 +238,7 @@ async def test_a_thinning_failure_does_not_prevent_compaction():
     session.thin_previous_tool_results = _boom
 
     with (
-        patch("robothor.engine.context.estimate_tokens", return_value=10_000_000),
+        patch("robothor.engine.context_fit.estimate_tokens", return_value=10_000_000),
         patch(
             "robothor.engine.context.maybe_compress",
             new=AsyncMock(return_value=[{"role": "user", "content": "smaller"}]),

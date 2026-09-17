@@ -98,6 +98,18 @@ provided no environment copy of that name is shadowing it. If one is, rotating
 the vault row changes nothing, which is the shadowing problem at its most
 confusing.
 
+A provider credential has a second half the vault cannot reach: the engine's
+credential pool, in memory, which retires a key the provider refused and holds
+it out for a cooldown — six hours for a calendar quota. Topping up the account
+or raising the limit does not tell it anything. **After a top-up, or any change
+made at the provider, run `genus secrets reload`**: it mints a short-lived
+`engine:control` token, makes the running engine re-read the vault, and puts
+retired credentials straight back in rotation, with no restart and no
+in-flight work cancelled. It prints the fingerprint of every credential that
+came back; `genus secrets status` shows the same state per credential at any
+time. The failure it exists for is in the [local fallback
+runbook](../runbooks/LOCAL_FALLBACK.md).
+
 One rotation to plan rather than perform casually: `GENUS_AUTH_SIGNING_KEY`
 derives the key that encrypts stored second-factor secrets, so rotating it
 invalidates every enrolled authenticator. See [Identity](02-identity.md).

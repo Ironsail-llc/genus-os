@@ -98,6 +98,13 @@ class Check:
     severity: Severity
     run: Callable[[DoctorContext], Awaitable[Result | list[Result]]]
     fix: Callable[[DoctorContext], Awaitable[FixResult]] | None = None
+    #: A check nobody wants in the default run: a positive control that spends
+    #: real time or real money to prove a mechanism works. It runs only when
+    #: ``--only`` names it, and a run that omits it is not missing a verdict —
+    #: it never claimed one. The alternative, a check that skips itself by
+    #: reading a flag, prints a skip line per run and trains the operator to
+    #: read past skips.
+    opt_in: bool = False
 
 
 def ok(detail: str = "") -> Result:

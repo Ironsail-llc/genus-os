@@ -158,6 +158,12 @@ def _provider_payload(spec: key_pool.ProviderSpec, timestamps: dict[str, str]) -
                 "source": slot.source,
                 "fingerprint": slot.fingerprint,
                 "state": slot.state,
+                # The LIVE pool's view, which only this process has: why the
+                # key is out and how long the cooldown has left. `genus secrets
+                # status` and the doctor read it from here for that reason.
+                "reason": slot.reason.value if slot.reason is not None else None,
+                "retired_for_s": slot.retired_for_s,
+                "returns_in_s": slot.returns_in_s,
                 "updated_at": (
                     timestamps.get(provider_key(spec.id, slot.position))
                     if slot.source == "vault"
@@ -464,9 +470,16 @@ def register(app: FastAPI) -> None:
 
     @router.post("/secrets/reload")
     async def reload_secrets() -> dict[str, Any]:
-        """Pick up credentials written to the vault without an engine restart."""
+        """Pick up credentials written to the vault without an engine restart.
+
+        Also the ONLY way to put a retired key back before its cooldown
+        expires, which is what an operator who has just raised a cap at the
+        provider needs — hence ``restored``, the fingerprints that were out
+        before this call and are in rotation after it. ``genus secrets reload``
+        is the operator-facing name for this route.
+        """
         result = await asyncio.to_thread(key_pool.reload_provider_keys)
-        return {"reloaded": result.reloaded, "slots": result.slots}
+        return {"reloaded": result.reloaded, "slots": result.slots, "restored": result.restored}
 
     @router.get("/defaults")
     async def read_defaults() -> dict[str, Any]:

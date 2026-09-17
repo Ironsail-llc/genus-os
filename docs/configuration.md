@@ -193,6 +193,16 @@ handful of files, each with one job:
 | Slack tokens | The instance vault (`channels/slack/bot_token`, `channels/slack/app_token`) when this install has a master key; `genus.env` otherwise | `genus channel add slack` prompts for each without echoing it and prints where it wrote (a token passed as a flag is refused, not stored). Every surface -- the daemon that starts the inbound bot, the outbound channel, `genus channel verify` and `genus doctor` -- resolves them through the one reader, so either place works and all four agree. [Setting Slack up](channels/slack.md). |
 | Fleet model defaults | `<workspace>/docs/agents/_defaults.yaml` (instance data) | The probed model becomes the fleet primary, with up to two registry fallbacks — merged, never replacing a chain you wrote. |
 
+A chain that ends on an `ollama_chat/` model keeps answering when no cloud
+credential works, and the engine sizes each call's context against the model it
+will actually reach — the local one, once the pool is spent, not the primary it
+cannot dial. Prove that tier before you need it with `genus doctor --only
+models.local_fallback_ready` (a recommended check: it reports a degraded tier
+without failing the whole doctor) and the opt-in
+positive control `genus doctor --only models.local_fallback_probe --timeout
+120`; the whole failure mode is in the [local fallback
+runbook](runbooks/LOCAL_FALLBACK.md).
+
 `<workspace>/.env` holds exactly one variable, `ROBOTHOR_WORKSPACE`: a
 `config.yaml` that lives inside the workspace cannot say where the workspace is.
 
@@ -257,12 +267,15 @@ that stays dead reads as broken rather than slow). So a credential you store
 with `genus vault set`, `genus secrets migrate` or the setup wizard lands within
 that window on every running process.
 
-Those commands also POST `/api/admin/secrets/reload` so it lands instantly — but
-only where the engine accepts an unauthenticated control call, which a
-production instance does not: `/api/admin/*` requires the `engine:control`
-scope, and the CLI holds no token. On such an instance the command says so, and
-the ten seconds applies. Saving from the Helm's Settings page applies a change
-immediately, because the browser session has the scope.
+Those commands also POST `/api/admin/secrets/reload` so it lands instantly.
+`/api/admin/*` requires the `engine:control` scope, so the CLI mints a
+120-second service token in the engine's own audience for that one request —
+and refuses to mint when no signing key already resolves, because minting would
+otherwise GENERATE one and invalidate every session and every stored MFA
+secret. Where no credential can be minted the request goes unauthenticated, the
+engine answers 401, the command says so, and the ten seconds applies. Saving
+from the Helm's Settings page applies a change immediately too, because the
+browser session has the scope.
 
 The vault tools are **operator-tier**. An operator grants the tier explicitly:
 
@@ -479,6 +492,14 @@ local tier notwithstanding.
 | Provider outage (5xx) | **No** key is retired — the credential was not the problem |
 | Retry target | The **same** model, not the next one — a dead key is not a dead model |
 | Nothing configured | No pool is built and litellm's own env lookup is used, exactly as before |
+| Getting a key back early | `genus secrets reload` — the ONLY thing that clears a cooldown before it expires. Raising a cap at the provider changes nothing in the engine's memory, so a 6-hour quota retirement outlives the fix without it |
+
+**After a top-up, run `genus secrets reload`.** It mints a short-lived
+`engine:control` token, calls `POST /api/admin/secrets/reload` on the running
+engine, and prints the providers it re-read plus the fingerprint of every
+credential that was out of rotation and is back. `genus secrets status` shows
+the same live pool state per credential — in rotation, or retired with the
+reason and the time left.
 
 ## Settings the generated reference cannot carry
 

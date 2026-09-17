@@ -27,10 +27,14 @@ from, and it says so in its own name.
 from __future__ import annotations
 
 import argparse  # noqa: TC003
+import logging
 from dataclasses import dataclass
 from typing import Any
 
 from robothor.constants import DEFAULT_TENANT
+from robothor.engine_control import control_request
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["cmd_secrets"]
 
@@ -90,7 +94,78 @@ def cmd_secrets(args: argparse.Namespace) -> int:
         return _status(args)
     if sub == "migrate":
         return _migrate(args)
-    print("Usage: genus secrets {status|migrate}")
+    if sub == "reload":
+        return _reload(args)
+    print("Usage: genus secrets {status|migrate|reload}")
+    return 0
+
+
+def _hours(seconds: float) -> str:
+    """A duration an operator reads at a glance, never a bare float."""
+    return f"{seconds / 3600:.1f}h" if seconds >= 3600 else f"{int(seconds // 60)}m"
+
+
+def live_rotation() -> dict[str, str]:
+    """``{fingerprint: note}`` from the RUNNING engine, or empty if it is down.
+
+    Rotation state lives in the engine's memory and nowhere else. A CLI that
+    answered from its own process would report "active" for a key the fleet has
+    not been able to use for six hours — so this asks, and says nothing at all
+    when there is nobody to ask.
+    """
+    try:
+        return rotation_notes(control_request("GET", "/api/admin/providers"))
+    except Exception as exc:  # noqa: BLE001 — a down engine is not a CLI error
+        logger.debug("rotation state unavailable: %s", exc)
+        return {}
+
+
+def rotation_notes(payload: dict[str, Any]) -> dict[str, str]:
+    """Turn the engine's provider payload into one line per credential."""
+    notes: dict[str, str] = {}
+    for provider in payload.get("providers") or []:
+        for slot in provider.get("slots") or []:
+            fingerprint = str(slot.get("fingerprint") or "")
+            if not fingerprint:
+                continue
+            if slot.get("state") not in ("capped", "revoked"):
+                notes[fingerprint] = "in rotation"
+                continue
+            parts = [f"retired ({slot.get('reason') or slot.get('state')})"]
+            elapsed = slot.get("retired_for_s")
+            if isinstance(elapsed, (int, float)):
+                parts.append(f"{_hours(float(elapsed))} ago")
+            returns = slot.get("returns_in_s")
+            parts.append(
+                f"returns in {_hours(float(returns))}"
+                if isinstance(returns, (int, float))
+                else "not retried for the life of this process"
+            )
+            notes[fingerprint] = ", ".join(parts)
+    return notes
+
+
+def _reload(args: argparse.Namespace) -> int:
+    """Make the running engine re-read its credentials, and un-retire its keys.
+
+    The command an operator runs after topping up or raising a cap. Without it
+    the only cure for a key the pool retired is a daemon restart or the wait —
+    six hours for a calendar quota — and on 2026-09-16 that is exactly where
+    the operator was left, with a raised limit and a fleet that would not use
+    it. The token is minted per call and never printed.
+    """
+    try:
+        body = control_request("POST", "/api/admin/secrets/reload")
+    except Exception as exc:  # noqa: BLE001 — the message IS the output
+        print(f"Could not reload: {exc}")
+        return 1
+    reloaded = body.get("reloaded") or []
+    restored = body.get("restored") or []
+    print(f"reloaded: {list(reloaded)} ({body.get('slots', 0)} slot(s) from the vault)")
+    if restored:
+        print(f"back in rotation: {', '.join(str(item) for item in restored)}")
+    else:
+        print("no credential was out of rotation")
     return 0
 
 
@@ -105,6 +180,10 @@ def _status(args: argparse.Namespace) -> int:
 
     width = max(len(row.name) for row in rows)
     print(f"{'NAME'.ljust(width)}  ENV    VAULT  SERVED      FINGERPRINT       NOTE")
+    # Asked once for the whole table: the engine holds the only copy of
+    # rotation state, and a credential the pool has retired is configured,
+    # unshadowed, and completely unusable — three columns of green.
+    rotation = live_rotation()
     shadows = 0
     for row in rows:
         note = ""
@@ -113,6 +192,9 @@ def _status(args: argparse.Namespace) -> int:
             note = f"SHADOW — the {row.shadowed_by} holds a different value"
         elif row.bootstrap:
             note = "bootstrap (environment-first by design)"
+        pool_note = rotation.get(row.fingerprint or "")
+        if pool_note and pool_note != "in rotation":
+            note = f"{note}; {pool_note}" if note else pool_note
         print(
             f"{row.name.ljust(width)}  "
             f"{'yes' if row.in_env else '-  '}    "
