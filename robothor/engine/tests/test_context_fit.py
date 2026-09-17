@@ -345,6 +345,21 @@ class TestNothingFromAMessageReachesALog:
         assert self.SECRET not in caplog.text
         assert "FAKE-CREDENTIAL" not in caplog.text
 
+    def test_no_exception_text_from_the_ceiling_reaches_a_log(self, caplog, monkeypatch):
+        """Everything `enforce_ceiling` touches is built from the conversation,
+        so an exception's text is one f-string away from being a slice of it."""
+        from robothor.engine import context_fit
+
+        def _boom(_messages, _fit):
+            raise RuntimeError(f"failed on {self.SECRET}")
+
+        monkeypatch.setattr(context_fit, "shrink_to_fit", _boom)
+        with caplog.at_level(logging.DEBUG):
+            assert context_fit.enforce_ceiling(self._conversation(), fit_for(LOCAL)) is False
+
+        assert self.SECRET not in caplog.text
+        assert "RuntimeError" in caplog.text
+
     def test_a_credential_in_an_exception_from_the_pool_is_not_logged(self, caplog, monkeypatch):
         """The one alert that was not a false positive: `pool.exhausted()`
         reaches `KeyPool.current()`, and an exception from there can carry key

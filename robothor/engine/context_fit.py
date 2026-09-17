@@ -645,7 +645,11 @@ def enforce_ceiling(messages: list[dict[str, Any]], fit: ContextFit) -> bool:
         messages[:] = [*outcome.messages, {"role": ENGINE_CONTEXT_ROLE, "content": outcome.note}]
         return True
     except Exception as exc:  # noqa: BLE001 — a lost ceiling must not lose the run
-        logger.warning("context ceiling could not be enforced: %s", exc)
+        # The CLASS, for the same reason as `next_reachable_model`: everything
+        # this function touches is built from the conversation, so an
+        # exception's text is one `f"...{message}"` away from being a slice of
+        # it. What an operator needs here is that the ceiling did not run.
+        logger.warning("context ceiling could not be enforced: %s", type(exc).__name__)
         return False
 
 
@@ -704,7 +708,7 @@ def shrink_after_overflow(messages: list[dict[str, Any]], model: str) -> bool:
                 mode="enforce",
             )
         except Exception as exc:  # noqa: BLE001 — telemetry never breaks a call
-            logger.debug("context_overflow event not recorded: %s", exc)
+            logger.debug("context_overflow event not recorded: %s", type(exc).__name__)
     _log_overflow(
         "Context overflow on %s — shrank ~%d → ~%d tokens, retrying the same model once",
         model,
