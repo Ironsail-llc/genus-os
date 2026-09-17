@@ -165,7 +165,11 @@ def enforce_hard_limit(session: Any, fit: Any) -> bool:
     enforced deterministically afterwards, or the messages go to a server that
     truncates them in silence and answers with a structural error.
 
-    Returns whether anything was dropped. Never raises.
+    Returns whether the run was given a note — which is also the case when the
+    shrink could NOT reach the ceiling, because an agent whose conversation is
+    about to be truncated by the server needs telling either way. The
+    token-comparison test belongs to `shrink_after_overflow`, whose question is
+    different: may this call spend its one retry? Never raises.
     """
     from robothor.engine.context_fit import shrink_to_fit
     from robothor.engine.session import ENGINE_CONTEXT_ROLE
