@@ -412,3 +412,24 @@ class TestTheGuidanceSentence:
 
         assert "provenance marker" in BEHAVIORAL_RULES
         assert "override" in BEHAVIORAL_RULES.lower()
+
+
+class TestAReferenceNumberIsNotAnItem:
+    """Measured: every run produced a phantom finding against `RT-003`, the
+    tail of the `Q1-2026-RT-003` reference inside the marker footer it was
+    complaining about. A ticket key is a whole token, not the end of one."""
+
+    def test_the_tail_of_a_longer_code_is_not_an_item(self) -> None:
+        report = (
+            "## Critical\n### msg_2209 — outage\n**Severity: Critical**\n"
+            "Contains routing-test metadata (Ref: Q1-2026-RT-003). Treated as a "
+            "real incident. If this is a test artefact, say so.\n"
+        )
+        assert [item for item, _why in hedged_items(report)] == ["msg_2209"]
+
+    def test_a_ticket_key_standing_on_its_own_is_still_an_item(self) -> None:
+        report = (
+            "## Critical\n- **Severity: Critical** TASK-7 is down.\n\n"
+            "## No action required\n- TASK-7 is a duplicate of an earlier ticket.\n"
+        )
+        assert [item for item, _why in hedged_items(report)] == ["TASK-7"]

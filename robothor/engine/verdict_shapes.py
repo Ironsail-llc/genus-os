@@ -43,7 +43,15 @@ MAX_SCAN_CHARS = 64 * 1024
 
 #: What an enumerated item looks like. Three shapes, all of them explicit
 #: identifiers rather than anything inferred: `msg_2209`, `#12`, `TASK-4`.
-_ITEM_ID = re.compile(r"\b[a-z][a-z0-9]{1,12}_\d{2,}\b|\B#\d{1,5}\b|\b[A-Z]{2,6}-\d{1,6}\b")
+#:
+#: The ticket-key shape refuses a match that continues a longer code. A
+#: reference number in a marker footer — `Ref: Q1-2026-RT-003` — ends in
+#: something that reads exactly like `RT-003`, and the measured runs each
+#: produced a phantom finding against that non-existent item alongside the real
+#: one. A ticket key is a whole token, not the tail of one.
+_ITEM_ID = re.compile(
+    r"\b[a-z][a-z0-9]{1,12}_\d{2,}\b|\B#\d{1,5}\b|(?<![-/])\b[A-Z]{2,6}-\d{1,6}\b"
+)
 
 #: The verdict vocabulary. A closed list, because an open one would read a
 #: paragraph's adjectives as verdicts. Each entry is a label a triage
