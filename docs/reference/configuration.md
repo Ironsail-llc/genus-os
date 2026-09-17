@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-409 settings in 13 groups.
+410 settings in 13 groups.
 
 ## paths
 
@@ -491,6 +491,7 @@ Backups, restores, SLO probes, alert delivery and the volume guard — read by s
 | `ROBOTHOR_OFFSITE_VOLUMES` | str | `/mnt/robothor-backup/robothor/docker-volumes` | next run | no | legacy | Local docker-volume dump directory the offsite sync uploads. |
 | `ROBOTHOR_PYTHON` | str | _(empty)_ | next run | no | legacy | Interpreter the restore drill runs its built-in notifier with. Empty means the repository's own venv. |
 | `ROBOTHOR_RESTART_LEGACY_REQUEST` | str | `/run/robothor/restart-request` | next run | no | legacy | Single-file restart request the handler still honours, from before requests became one file per unit. |
+| `ROBOTHOR_RESTART_LOCK` | str | `/run/lock/robothor-restart.lock` | next run | no | legacy | Lock the restart handler and `install-units.sh --restart` both take, so neither can supersede the other's restart transaction. |
 | `ROBOTHOR_RESTART_REQUEST_DIR` | str | `/run/robothor/restart-requests` | next run | no | legacy | Directory the restart handler watches for per-unit restart requests. |
 | `ROBOTHOR_RESTORE_DRILL_CREATEDB` | str | `createdb` | next run | no | legacy | createdb the drill makes the scratch database with. |
 | `ROBOTHOR_RESTORE_DRILL_DB` | str | `robothor_restore_drill` | next run | no | legacy | Scratch database the restore drill restores into. Never the live one: the drill drops it afterwards. |
