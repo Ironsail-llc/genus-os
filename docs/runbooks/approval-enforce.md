@@ -157,8 +157,9 @@ Per deployment, in this order:
 Until step 4, `genus doctor --category agents` reports the declared gates
 this engine is not applying, as **`agents.approval_gate_not_armed`**. That
 report is the intended state during the soak, not a failure to fix by promoting
-early — so it is an `info` check and does **not** mark the instance
-`degraded`. Measured on the 16 stock templates:
+early — so it is an `info` check that reports as a **pass**, and it neither
+marks the instance `degraded` nor prints a ✗. Measured on the 16 stock
+templates:
 
 | Engine posture | `approval_gate_available` (info) | `approval_gate_not_armed` (info) | instance |
 |---|---|---|---|

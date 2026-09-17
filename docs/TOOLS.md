@@ -728,8 +728,12 @@ name an operator reaches for. A manifest can read as carefully gated in review
 and run ungated in production, which is the whole reason this check reads the
 engine's settings as well as the files.
 
-It is `info`, so it never marks the instance `degraded`, and the result says so
-in words: an unarmed gate is the default posture, not a gap. `observe` is a
+It is `info` and it reports as a **pass**, like the check above, and the result
+says so in words: an unarmed gate is the default posture, not a gap. Severity
+alone was not enough — at `info` it already could not mark the instance
+`degraded`, but it still printed a red ✗ beside a sentence explaining that the
+state is the default, and a reader resolves that contradiction in favour of the
+glyph. `observe` is a
 deliberate rung on a documented ladder and the Helm chart ships it: a chart
 cannot guarantee an approver is wired, and `enforce` with none denies every
 escalated call. The result names the promotion step for an instance that wants
@@ -739,9 +743,10 @@ link here would 404 for a reader of the published site.)
 
 Of the `agents.*`/`tools.*` checks, two are `recommended` — reported, never
 fatal, but they do mark the instance `degraded` — and both approval checks are
-`info`, which does not. `calendar.operator_calendar_writable` is `required`: an
-instance that cannot write the operator's calendar will silently do the wrong
-thing every time.
+`info` lines that report as passes, so running autonomously carries no red mark
+anywhere. `calendar.operator_calendar_writable` is `required`: an instance that
+cannot write the operator's calendar will silently do the wrong thing every
+time.
 
 ---
 

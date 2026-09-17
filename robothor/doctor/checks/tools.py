@@ -786,13 +786,19 @@ async def _approval_gate_not_armed(ctx: DoctorContext) -> Result:
     manifest can read as carefully gated in review and run ungated in
     production, because ``ROBOTHOR_APPROVAL_MODE=enforce`` alone is a no-op.
 
-    ``info``, and it says so in words as well: an unarmed gate is the DEFAULT
-    posture, not a gap. ``observe`` is a deliberate rung on a documented ladder
-    and the platform's own Helm chart ships it — a chart cannot guarantee an
-    approver is wired, and ``enforce`` with none denies every escalated call.
-    Reporting a correctly-configured instance mid-soak as ``degraded`` is the
-    "a check that fires on a clean install is a check nobody reads" failure
-    this module argues against twice.
+    ``info`` severity AND a ``pass`` result, like
+    :func:`_approval_gate_available`, and it says so in words as well: an
+    unarmed gate is the DEFAULT posture, not a gap. ``observe`` is a deliberate
+    rung on a documented ladder and the platform's own Helm chart ships it — a
+    chart cannot guarantee an approver is wired, and ``enforce`` with none
+    denies every escalated call.
+
+    Severity alone was not enough. At ``info`` this already could not mark the
+    instance ``degraded``, but it still rendered a red ✗ beside a sentence
+    explaining that the state is the default — a contradiction an operator
+    resolves in favour of the glyph, which is how the platform talked an
+    instance into gating a nightly unattended delete in the first place. There
+    is no red mark anywhere for running autonomously now.
     """
     directory = _manifest_dir(ctx)
     if not directory.is_dir():
@@ -808,7 +814,7 @@ async def _approval_gate_not_armed(ctx: DoctorContext) -> Result:
     mode, why = _approval_gate_state()
     if mode == "enforce":
         return ok("the approval gate is enforcing, so every declared gate applies")
-    return fail(
+    return info(
         f"{len(gated)} declared approval gate(s) this run will not apply: "
         f"{_summarise(gated)}. An unarmed gate is the default, not a gap — the gate is "
         f"opt-in and the platform runs agents autonomously. {why}. Escalations are "
