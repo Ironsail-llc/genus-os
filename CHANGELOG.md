@@ -1,3 +1,11 @@
+## [1.99.1](https://github.com/Ironsail-llc/genus-os/compare/v1.99.0...v1.99.1) (2026-09-17)
+
+### Bug Fixes
+
+* **doctor:** approval gates are opt-in, never a recommendation ([#589](https://github.com/Ironsail-llc/genus-os/issues/589)) ([893a51b](https://github.com/Ironsail-llc/genus-os/commit/893a51bbc4c810147729a5084ad18f0ffb907393)), closes [#579](https://github.com/Ironsail-llc/genus-os/issues/579)
+* **engine:** provenance markers count, and a hedged verdict is asked to decide ([#590](https://github.com/Ironsail-llc/genus-os/issues/590)) ([59a8668](https://github.com/Ironsail-llc/genus-os/commit/59a8668fb83b8f23a6fb39fd2810a7991ed7b768)), closes [#585](https://github.com/Ironsail-llc/genus-os/issues/585)
+* **tools:** observed evidence outranks filenames, and view_image can always see ([#588](https://github.com/Ironsail-llc/genus-os/issues/588)) ([c6fa9c7](https://github.com/Ironsail-llc/genus-os/commit/c6fa9c7976f6e3937cdf503568d9a2ffc6491a7d)), closes [#586](https://github.com/Ironsail-llc/genus-os/issues/586)
+
 ## [1.99.0](https://github.com/Ironsail-llc/genus-os/compare/v1.98.0...v1.99.0) (2026-09-17)
 
 ### Features
