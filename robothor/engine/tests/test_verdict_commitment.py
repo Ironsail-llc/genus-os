@@ -870,7 +870,8 @@ class TestASectionHeadingAssignsTheVerdictToItsItems:
     )
 
     def _per_item(self, report: str) -> dict[str, set[str]]:
-        from robothor.engine.verdict_shapes import blocks, item_ids, verdicts_in
+        from robothor.engine.verdict_sections import blocks
+        from robothor.engine.verdict_shapes import item_ids, verdicts_in
 
         per_item: dict[str, set[str]] = {}
         for block in blocks(report):
@@ -1138,4 +1139,230 @@ class TestTheFinaliserSaysWhatItInspected:
         with caplog.at_level(logging.INFO, logger="robothor.engine.verdict_commitment"):
             record_verdict_findings(session.run, session, workspace)
         assert caplog.records == []
+        assert rows == []
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Round 3 — what the review found in round 2's own repair
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestOnlyAHeadingThatISTheLabelIsAScope:
+    """Round 2 inherited from any ancestor heading that MENTIONED a severity,
+    and a report is very often titled after the severity it is about. Measured
+    against `main`, the first cut INVENTED findings that the shipped code does
+    not make: an item listed in a `## Next steps` section under a title reading
+    "Critical Incident Review" came back filed under two verdicts.
+
+    A section heading is a scope only when the heading IS the label — the
+    verdict word and nothing else but filler. A title that merely contains one
+    is prose about the report.
+    """
+
+    TITLED_REVIEW = (
+        "# Critical Incident Review — Week 38\n\n"
+        "## High\n\n"
+        "### 1. msg_7001 — pipeline lag\n"
+        "- Routed to @owner-a.\n\n"
+        "## Low\n\n"
+        "### 2. msg_7002 — cosmetic glitch\n"
+        "- Routed to @owner-b.\n\n"
+        "## Next steps\n\n"
+        "- msg_7001: owner to confirm the backfill window.\n"
+        "- msg_7002: fold into the next UI sweep.\n"
+    )
+
+    APPENDIX = (
+        "# P1 escalation log\n\n"
+        "## Low\n\n"
+        "### 1. msg_8001 — checkout retry warning\n"
+        "- Routed to @owner-a.\n\n"
+        "## Appendix: methodology\n\n"
+        "- Counts for msg_8001 were taken from the hourly export.\n"
+    )
+
+    def _per_item(self, report: str) -> dict[str, set[str]]:
+        from robothor.engine.verdict_sections import blocks
+        from robothor.engine.verdict_shapes import item_ids, verdicts_in
+
+        per_item: dict[str, set[str]] = {}
+        for block in blocks(report):
+            found = verdicts_in(block)
+            for item in item_ids(block):
+                per_item.setdefault(item, set()).update(found)
+        return per_item
+
+    def test_a_titled_review_does_not_stamp_its_title_on_a_later_section(self) -> None:
+        per_item = self._per_item(self.TITLED_REVIEW)
+        assert per_item["msg_7001"] == {"high"}
+        assert per_item["msg_7002"] == {"low"}
+        assert hedged_items(self.TITLED_REVIEW) == []
+
+    def test_an_appendix_under_a_severity_titled_report_invents_nothing(self) -> None:
+        """The second repro: an item filed Low, named again in an appendix, and
+        a title reading "P1". The first cut read the appendix's nearest scope as
+        the title and filed the item under high AND low."""
+        assert self._per_item(self.APPENDIX)["msg_8001"] == {"low"}
+        assert hedged_items(self.APPENDIX) == []
+
+    def test_an_item_referenced_outside_any_verdict_section_keeps_one_label(self) -> None:
+        """The guard the first cut was missing: the same item named again in a
+        section that decides nothing must not collect a second verdict from
+        whatever heading happens to sit above it."""
+        report = (
+            "# Critical Incident Review\n\n"
+            "## Low\n\n"
+            "### 1. msg_7003 — typo in the footer\n"
+            "- Routed to @owner-c.\n\n"
+            "## Open questions\n\n"
+            "- msg_7003: should this wait for the next release?\n"
+        )
+        assert self._per_item(report)["msg_7003"] == {"low"}
+
+    def test_a_label_heading_with_filler_is_still_a_scope(self) -> None:
+        """ "## Critical Issues (3)" is the same heading as "## Critical"."""
+        report = (
+            "# Support triage\n\n"
+            "## Critical Issues (3)\n\n"
+            "### 1. Platform outage\n"
+            "- **Message ID:** msg_7004\n"
+        )
+        assert self._per_item(report)["msg_7004"] == {"critical"}
+
+    def test_the_scope_contributes_its_verdict_and_nothing_else(self) -> None:
+        """A section reaches its items as the LABEL it is, not as its own text.
+        The first cut prepended the heading verbatim, so every word of it — a
+        marker field, an identifier, an override phrase — fed the detectors of
+        every item in the section as though the item had written it."""
+        from robothor.engine.verdict_sections import blocks
+
+        report = (
+            "# Triage\n\n"
+            "## Critical Issues (3)\n\n"
+            "### 1. Complete platform outage\n"
+            "- **Message ID:** msg_7004\n"
+        )
+        item_block = next(block for block in blocks(report) if "msg_7004" in block)
+        assert "critical" in item_block.lower()
+        assert "Issues (3)" not in item_block
+
+
+class TestAnEvidenceNounIsNotEvidence:
+    """Round 2 asked for a link and a source noun. Measured by the review: a
+    generic noun satisfies it — "because the report is about a genuine customer
+    impact" names no evidence at all — and so does any quoted string. A source
+    has to be doing something, or be concrete enough to go and look at."""
+
+    SECTION = (
+        "# Triage\n\n## Critical\n\n### 1. Platform outage\n"
+        "- **Message ID:** msg_2209\n"
+        "- **Note:** {note}\n"
+    )
+
+    def _findings(self, note: str) -> list[tuple[str, str]]:
+        return hedged_items(self.SECTION.format(note=note), RESULTS_WITH_MARKER)
+
+    @pytest.mark.parametrize(
+        "note",
+        [
+            "The metadata was disregarded because the report is about a genuine customer impact.",
+            "The metadata was disregarded since the system requires escalation.",
+            "The metadata was disregarded given users matter more than metadata.",
+            "The metadata was disregarded because the team decided to escalate anyway.",
+            'The metadata was disregarded because it "seemed wrong".',
+        ],
+        ids=["customer-impact", "the-system", "users-matter", "the-team", "seemed-wrong"],
+    )
+    def test_a_generic_noun_or_an_unattributed_quote_is_not_a_reason(self, note: str) -> None:
+        assert [item for item, _why in self._findings(note)] == ["msg_2209"]
+
+    @pytest.mark.parametrize(
+        "note",
+        [
+            "The metadata was disregarded because the sender confirmed on the call "
+            "it was a real outage.",
+            "The metadata was disregarded because the incident channel confirmed a "
+            "live outage at 14:02.",
+            "The metadata was disregarded because the customer opened two tickets against it.",
+        ],
+        ids=["sender-on-the-call", "channel-at-1402", "customer-opened-tickets"],
+    )
+    def test_a_source_that_did_something_is_a_reason(self, note: str) -> None:
+        assert self._findings(note) == []
+
+
+class TestAReasonMayLandInTheNextSentence:
+    """Round 2 cut the reason window at the first full stop, so an override
+    that stated its reason in the sentence after it — the ordinary way to write
+    one — was read as naming nothing."""
+
+    SECTION = (
+        "# Triage\n\n## Critical\n\n### 1. Platform outage\n- **Message ID:** msg_2209\n{note}\n"
+    )
+
+    def _findings(self, note: str) -> list[tuple[str, str]]:
+        return hedged_items(self.SECTION.format(note=note), RESULTS_WITH_MARKER)
+
+    def test_the_reason_in_the_following_sentence_exempts(self) -> None:
+        note = (
+            "- **Note:** The metadata was disregarded. The on-call engineer paged "
+            "at 14:02 and three monitors were red."
+        )
+        assert self._findings(note) == []
+
+    def test_the_reason_in_the_following_bullet_exempts(self) -> None:
+        note = (
+            "- **Note:** The metadata was disregarded.\n"
+            "- The on-call engineer paged at 14:02 and three monitors were red."
+        )
+        assert self._findings(note) == []
+
+    def test_the_measured_sentence_still_names_nothing(self) -> None:
+        """The reach forward must not reach the measured report out of its own
+        finding: nothing after that sentence names anything either."""
+        assert [item for item, _why in hedged_items(MEASURED_REPORT, MEASURED_RESULTS)] == [
+            "msg_2209"
+        ]
+
+    def test_a_reason_in_a_different_paragraph_is_not_this_overrides_reason(self) -> None:
+        """The reach forward is the next sentence or bullet, not the rest of
+        the section: a blank line ends it, because past one the words belong to
+        a different claim."""
+        note = (
+            "- **Note:** The metadata was disregarded.\n\n"
+            "Separately, the on-call engineer paged at 14:02 about the backlog."
+        )
+        assert [item for item, _why in self._findings(note)] == ["msg_2209"]
+
+
+class TestTheInfoLineNamesEveryDeliverableItRead:
+    def test_two_deliverables_are_both_named(self, workspace, rows, monkeypatch, caplog) -> None:
+        """The counts summed across files and the line named only the last one,
+        so a two-deliverable run reported a number nothing in the log
+        accounted for."""
+        from robothor.engine.verdict_commitment import record_verdict_findings
+
+        _rung(monkeypatch, "observe")
+        _write(workspace, COMMITTED_WITH_MARKER)
+        (workspace / "results" / "second.md").write_text(
+            "# Triage\n\n## Low\n\n### msg_2211 — billing question\n- Routed to @owner-c.\n",
+            encoding="utf-8",
+        )
+        session = _Session(RESULTS_WITH_MARKER)
+        session.run.task_text = (
+            "Route each message to the right owner. Write the report to "
+            "results/results.md. Save the appendix to results/second.md."
+        )
+        with caplog.at_level(logging.INFO, logger="robothor.engine.verdict_commitment"):
+            record_verdict_findings(session.run, session, workspace)
+
+        lines = [
+            record.getMessage()
+            for record in caplog.records
+            if record.levelno == logging.INFO and "verdict commitment" in record.getMessage()
+        ]
+        assert len(lines) == 1
+        assert "inspected 2 item(s)" in lines[0]
+        assert "results/results.md" in lines[0]
+        assert "results/second.md" in lines[0]
         assert rows == []

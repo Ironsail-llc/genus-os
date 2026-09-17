@@ -445,31 +445,40 @@ CAPS = {
     # existed nowhere. Those are a logged handler per failure and a candidate
     # resolver; trimming them to fit would mean deleting the explanation of a
     # measured defect to satisfy a line count.
-    # 376 -> 440: the ladder now reports what it INSPECTED, not only what it
+    # 376 -> 443: the ladder now reports what it INSPECTED, not only what it
     # objected to. The measured 2026-09-17 run read its deliverable, found the
     # planted marker and wrote nothing, and that silence was indistinguishable
     # from a run this control never qualified for — the shape
     # `feedback-probe-dont-trust-silence` records, for the third time. What
-    # landed is one NamedTuple (items, markers, findings) threaded through the
-    # two existing entry points as thin wrappers, plus the INFO line the
-    # finaliser now writes per run. There is no cluster to extract: the counts
-    # are produced by the same single pass over the document that produces the
-    # findings, and computing them anywhere else would mean scanning twice.
-    "robothor/engine/verdict_commitment.py": 440,
+    # landed is one NamedTuple (items, markers, findings, the files read)
+    # threaded through the two existing entry points as thin wrappers, plus the
+    # INFO line the finaliser now writes per run. There is no cluster to
+    # extract: the counts are produced by the same single pass over the document
+    # that produces the findings, and computing them anywhere else would mean
+    # scanning twice.
+    "robothor/engine/verdict_commitment.py": 443,
     # Bounded from the day they land, the schedule_reconcile.py rule: these are
-    # the two modules that would otherwise absorb every new document shape and
+    # the modules that would otherwise absorb every new document shape and
     # every new metadata key.
-    # 251 -> 343: the two gates the measured run walked through. `blocks()`
-    # cut at every heading level, so `## Critical` / `### 1. <item>` — the
-    # commonest triage layout there is — filed every item under no verdict at
-    # all and three of the four shapes were inert on the whole class; and the
-    # override exemption accepted "the metadata was disregarded", the sentence
-    # fleet rule 20 exists to forbid, because it checked for the assertion and
-    # never for the reason. Both are document-model repairs in the module whose
-    # job IS the document model, and both are ~15 lines of code under the
-    # measurement that justifies them. Splitting the section tree away from the
-    # shapes it feeds would put the reading of a document in two files.
-    "robothor/engine/verdict_shapes.py": 343,
+    # Held AT 251 through the section-tree and override-reason work: that change
+    # first took this file to 343, and the ratchet asked for the extraction
+    # rather than the number. It got two, along seams the file's own docstring
+    # already drew — `verdict_sections.py` for how far a verdict reaches from
+    # the heading that assigns it, `override_reasons.py` for whether an override
+    # names what outranks a marker. Neither shares a word of vocabulary with
+    # what is left here, which is the vocabulary itself.
+    "robothor/engine/verdict_shapes.py": 251,
+    # The section tree. Bounded from the day it lands: this is where every
+    # future rule about how a document is SHAPED will want to go, and the one
+    # rule it already carries — only a heading that IS the label becomes a
+    # scope — is the one that kept the repair from inventing findings of its
+    # own on any report titled after a severity.
+    "robothor/engine/verdict_sections.py": 127,
+    # Whether an override named a reason. Bounded for the same reason and with
+    # the same history: two rounds of review each found a sentence that named
+    # nothing and was exempted anyway, and the record of which sentences those
+    # were is most of this file.
+    "robothor/engine/override_reasons.py": 101,
     "robothor/engine/provenance_markers.py": 286,
     "robothor/engine/skill_contract.py": 73,
     "robothor/engine/code_exec_guards.py": 116,

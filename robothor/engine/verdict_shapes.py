@@ -3,7 +3,11 @@
 Extracted from ``verdict_commitment`` so that module can stay the LADDER — the
 task gate, the re-ask, the guardrail row — while the reading of a document
 lives here. The split is the one the ratchet asks for: this file grows when a
-new document shape is recognised, and the ladder does not grow at all.
+new document shape is recognised, and the ladder does not grow at all. Two of
+its neighbours came out of it on the same rule: ``verdict_sections`` for how
+far a verdict reaches from the heading that assigns it, ``override_reasons``
+for whether an override names what outranks a marker. Each is one question with
+its own vocabulary; what is left here is the vocabulary itself.
 
 Everything here is deliberately structural. A verdict is read only from a
 LABEL position (a heading, a bolded lead, a ``Severity:`` field) because prose
@@ -24,10 +28,11 @@ from __future__ import annotations
 
 import re
 
+from robothor.engine.override_reasons import names_a_reason
+
 __all__ = [
     "MAX_SCAN_CHARS",
     "VERDICTS",
-    "blocks",
     "hands_the_verdict_back",
     "hedges_the_verdict",
     "item_id_spans",
@@ -160,49 +165,6 @@ _PROVENANCE_WORD = re.compile(
     re.IGNORECASE,
 )
 
-#: …and what it has to NAME. Fleet rule 20 asks a verdict that ignores a
-#: marker to say what OVERRIDES it, and the measured report answered with
-#: *"the metadata was disregarded"* — the assertion with the reason left out,
-#: which is the exact sentence the rule forbids and which bought the exemption.
-#:
-#: Two halves, both required, for the same reason every other detector here
-#: takes two: a SOURCE on its own is a preposition away from meaning nothing
-#: ("disregarded for this message", "disregarded in this report"), and a
-#: connective on its own points at whatever follows it. Together they are a
-#: claim about evidence — "because the incident channel confirmed a live outage
-#: at 14:02" — which is what outranks an item's own metadata. "The outage is
-#: severe" is the verdict again, not a reason for it.
-_REASON_LINK = re.compile(
-    r"\b(?:because|since|given(?:\s+that)?|after|per|based\s+on|on\s+the\s+basis\s+of|"
-    r"in\s+light\s+of|owing\s+to|due\s+to|"
-    r"confirm\w*|corroborat\w*|verif\w+|validat\w+|independently|cross-?check\w*|"
-    r"reported|reports|shows?|showed|appears?|appeared|opened|paged|phoned|called|"
-    r"matches|matched)\b",
-    re.IGNORECASE,
-)
-
-#: What the claim has to be ABOUT: something a reader could go and look at.
-_REASON_EVIDENCE = re.compile(
-    r"\b(?:message|messages|ticket|tickets|email|emails|thread|channel|channels|"
-    r"call|calls|log|logs|dashboard|alert|alerts|monitor|monitors|monitoring|"
-    r"telemetry|metric|metrics|status\s+page|feed|feeds|report|reports|record|"
-    r"records|screenshot|customer|customers|user|users|sender|on-call|operator|"
-    r"engineer|team|system|systems|timestamp)\b"
-    r"|@[A-Za-z0-9][A-Za-z0-9._-]{1,30}"
-    r"|\b\d{1,2}:\d{2}\b|\b\d{4}-\d{2}-\d{2}\b"
-    r"|\"[^\"\n]{3,}\"|“[^”\n]{3,}”",
-    re.IGNORECASE,
-)
-
-#: A sentence ends at a full stop FOLLOWED BY SPACE — `example.com` and
-#: `14:02` are not sentence ends — or at a blank line.
-_SENTENCE_END = re.compile(r"[.!?](?=\s|$)|\n[ \t]*\n")
-
-#: How far past the override phrase its reason may be. One sentence, capped:
-#: beyond that the words belong to a different claim, and a reason found three
-#: bullets down would exempt a sentence that named nothing.
-_REASON_SCOPE = 240
-
 
 def item_id_spans(chunk: str) -> list[tuple[int, str]]:
     """``(offset, identifier)`` for every explicit identifier, in order.
@@ -216,54 +178,6 @@ def item_id_spans(chunk: str) -> list[tuple[int, str]]:
 def item_ids(chunk: str) -> set[str]:
     """Every explicit identifier in this text."""
     return {item for _offset, item in item_id_spans(chunk)}
-
-
-def blocks(text: str) -> list[str]:
-    """The document cut into item-sized pieces, each one IN ITS SECTION.
-
-    On markdown headings where there are any, on blank lines where there are
-    not. The cut only decides how far a verdict reaches from its item; every
-    detector below re-anchors on the item id itself.
-
-    MEASURED 2026-09-17. The cut used to be all there was, and it cuts at
-    EVERY heading level, so the commonest triage layout there is —
-
-        ## Critical
-        ### 1. <item>
-
-    — put the severity in one block and the item in another. The severity
-    heading was a block with no item, the item was a block with no severity,
-    and a deliverable that plainly assigned a verdict to every one of its items
-    read as assigning none at all. Three of the four shapes in
-    ``verdict_commitment`` anchor on a verdict, so the control was inert on the
-    whole class of them.
-
-    So a block that states no verdict of its own is returned with the NEAREST
-    ancestor heading that states one, and inherits it. Exactly one heading,
-    and only the nearest: a block that names its own verdict
-    (``### 3. … — upgraded to Critical``) keeps only that one, and a report
-    merely TITLED after a severity does not overrule the sections beneath it.
-    Stacking every ancestor instead would read one decision as two and
-    double-book every item under such a title — a contradiction the report
-    never made, which is the failure mode this cluster refuses to trade for
-    reach.
-    """
-    if not re.search(r"^#{1,6}\s", text, re.MULTILINE):
-        return [part for part in re.split(r"\n\s*\n", text) if part.strip()]
-    out: list[str] = []
-    ancestors: list[tuple[int, str]] = []
-    for part in re.split(r"^(?=#{1,6}\s)", text, flags=re.MULTILINE):
-        if not part.strip():
-            continue
-        heading = re.match(r"(#{1,6})\s[^\n]*", part)
-        if heading:
-            while ancestors and ancestors[-1][0] >= len(heading.group(1)):
-                ancestors.pop()
-        scope = next((line for _level, line in reversed(ancestors) if verdicts_in(line)), "")
-        if heading:
-            ancestors.append((len(heading.group(1)), heading.group(0)))
-        out.append(part if not scope or verdicts_in(part) else f"{scope}\n{part}")
-    return out
 
 
 def verdicts_in(chunk: str) -> set[str]:
@@ -324,20 +238,11 @@ def overrides_a_marker(chunk: str) -> bool:
     Nor is it satisfied by the claim alone. The fourth measured run wrote
     *"the metadata was disregarded for routing"* and named nothing whatever,
     and that sentence — the one rule 20 exists to forbid — was what exempted
-    it. The reason has to come AFTER the phrase and inside its own sentence:
-    a reason found earlier is usually the marker being described, which is how
-    "contained trailing test-harness metadata … was disregarded" would talk
-    its way out of the finding it is. And it has to be a CLAIM about evidence,
-    not a noun that happens to name one — otherwise "disregarded for this
-    message" reads as an override that named its reason.
+    it. What counts as naming a reason, and where it may be said, is
+    ``override_reasons.names_a_reason``.
     """
     for match in _OVERRIDE.finditer(chunk):
         window = chunk[max(0, match.start() - 200) : match.end() + 200]
-        if not _PROVENANCE_WORD.search(window):
-            continue
-        rest = chunk[match.end() : match.end() + _REASON_SCOPE]
-        end = _SENTENCE_END.search(rest)
-        reason = rest[: end.start()] if end else rest
-        if _REASON_LINK.search(reason) and _REASON_EVIDENCE.search(reason):
+        if _PROVENANCE_WORD.search(window) and names_a_reason(chunk, match.end()):
             return True
     return False

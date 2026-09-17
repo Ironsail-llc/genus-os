@@ -43,9 +43,9 @@ from pathlib import Path
 from typing import NamedTuple
 
 from robothor.engine.provenance_markers import markers_by_item, tool_result_text
+from robothor.engine.verdict_sections import blocks
 from robothor.engine.verdict_shapes import (
     MAX_SCAN_CHARS,
-    blocks,
     hands_the_verdict_back,
     hedges_the_verdict,
     item_ids,
@@ -69,17 +69,18 @@ __all__ = [
 class Inspection(NamedTuple):
     """What one pass over a deliverable SAW, not only what it objected to.
 
-    The counts exist because zero findings used to look exactly like a run
-    this control never qualified for: the measured run read the deliverable,
-    found the planted marker, produced nothing, and left no trace of any of it
-    (`feedback-probe-dont-trust-silence`). ``items`` and ``marked`` are what
-    make an inert result readable in the run log.
+    The counts exist because zero findings used to look exactly like a run this
+    control never qualified for — the silence described in the module docstring
+    above, `feedback-probe-dont-trust-silence`. ``read`` names every deliverable
+    this run's task declared and this control could open; ``path`` is the one
+    the findings are about.
     """
 
     path: str
     items: int
     marked: int
     findings: list[tuple[str, str]]
+    read: tuple[str, ...] = ()
 
 
 #: The task must ASK for a decision per item. Every verb here takes the items
@@ -127,8 +128,7 @@ def asks_for_verdicts(task_text: str | None) -> bool:
 def hedged_items(report_text: str | None, results_text: str | None = None) -> list[tuple[str, str]]:
     """``(item id, why)`` for every item this deliverable failed to decide.
 
-    The findings half of :func:`inspect_report`, which is what most callers
-    want and what every shape test in this cluster reads.
+    The findings half of :func:`inspect_report`.
     """
     return inspect_report(report_text, results_text).findings
 
@@ -250,9 +250,8 @@ def findings_for_run(
 ) -> tuple[str, list[tuple[str, str]]]:
     """``(deliverable path, findings)`` for this run, or ``("", [])``.
 
-    The two fields of :func:`inspect_run` that decide whether anything
-    happens. The path is the deliverable the findings are ABOUT, so a run with
-    nothing to say names no file.
+    The two fields of :func:`inspect_run` that decide whether anything happens;
+    a run with nothing to say names no file.
     """
     inspected = inspect_run(session, workspace)
     return (inspected.path, inspected.findings) if inspected.findings else ("", [])
@@ -318,7 +317,11 @@ def inspect_run(session: object, workspace: object = None) -> Inspection:
             )
             continue
         read = Inspection(
-            declared, read.items + seen.items, read.marked + seen.marked, seen.findings
+            declared,
+            read.items + seen.items,
+            read.marked + seen.marked,
+            seen.findings,
+            (*read.read, declared),
         )
         if seen.findings:
             return read
@@ -387,11 +390,9 @@ def record_verdict_findings(run: object, session: object, workspace: object = No
     A FRESH read, like ``record_deliverable_verdicts``: the re-ask exists so
     the agent can fix the file, and it may have done exactly that.
 
-    One INFO line per run that READ a deliverable, findings or none. Zero
-    findings and never having qualified used to be the same silence, and the
-    measured 2026-09-17 run spent that silence on a deliverable it had read
-    and a marker it had found: the only way to learn any of that had happened
-    was to replay the run by hand.
+    One INFO line per run that READ a deliverable, findings or none, naming
+    every file the counts are over: the run that went silent had read its
+    deliverable and found its marker, and nothing said so.
     """
     from robothor.engine.feature_flags import verdict_commitment_mode
 
@@ -401,14 +402,16 @@ def record_verdict_findings(run: object, session: object, workspace: object = No
         return
     inspected = inspect_run(session, workspace)
     path, findings = inspected.path, inspected.findings
-    if path:
+    if inspected.read:
+        named = ", ".join(inspected.read[:3])
+        extra = len(inspected.read) - 3
         logger.info(
             "verdict commitment %s: run %s inspected %d item(s) in %s — %d carried a "
             "provenance marker, %d finding(s)",
             mode,
             getattr(run, "id", "?"),
             inspected.items,
-            path,
+            f"{named} (+{extra} more)" if extra > 0 else named,
             inspected.marked,
             len(findings),
         )
