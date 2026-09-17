@@ -414,10 +414,13 @@ _DIRECTIVE_CHECKIN = (
     "task's output does not exist: {listed}. More than half this run's time "
     "budget is gone, and anything unwritten when it expires is lost.\n"
     "Your NEXT action is `write_file` to that exact path, with your best "
-    "current answer in the shape the task described — however incomplete, and "
-    "saying plainly inside it what is missing. Do not read, search, fetch or "
-    "run anything else first. Once it exists you may keep improving it by "
-    "overwriting."
+    "current answer — however incomplete, and saying plainly inside it what is "
+    "missing. Do not read, search, fetch or run anything else first.\n"
+    "Give it the SHAPE the task asked for, not your own: quote the task's "
+    "required format back — the exact filename, the exact header or field "
+    "names, the exact section headings — and match it. A file at the right "
+    "path in the wrong shape scores the same as no file at all. Once it "
+    "exists you may keep improving it by overwriting."
 )
 
 
@@ -439,6 +442,24 @@ def _nothing_written(task_text: str | None, workspace: str | Path | None) -> lis
     return missing if len(missing) == len(paths) else []
 
 
+def _remember_checkins(session: Any, count: int) -> None:
+    """Carry the count on the session, and SAY SO if the session refuses it.
+
+    The write was inside a bare ``contextlib.suppress(AttributeError)``. It
+    works today, and if ``AgentSession`` ever grows ``__slots__`` the counter
+    would stop advancing and this rung would go inert with no signal at all —
+    the shape this repo has shipped four times (hostile review 2026-09-17,
+    finding 7). A control that cannot record its own state should say so.
+    """
+    try:
+        session.empty_checkins = count
+    except AttributeError:
+        logger.debug(
+            "directive check-in cannot keep its count on %s; the rung is inert for this run",
+            type(session).__name__,
+        )
+
+
 def _directive_or_ask(
     iteration: int,
     session: Any,
@@ -449,12 +470,10 @@ def _directive_or_ask(
     """The deliverable check-in, escalated if this run keeps writing nothing."""
     missing = _nothing_written(task_text, workspace)
     if not missing or fraction < DIRECTIVE_FRACTION:
-        with contextlib.suppress(AttributeError):
-            session.empty_checkins = 0
+        _remember_checkins(session, 0)
         return _DELIVERABLE_CHECKIN.format(iteration=iteration)
     seen = int(getattr(session, "empty_checkins", 0) or 0) + 1
-    with contextlib.suppress(AttributeError):
-        session.empty_checkins = seen
+    _remember_checkins(session, seen)
     if seen < DIRECTIVE_AFTER:
         return _DELIVERABLE_CHECKIN.format(iteration=iteration)
     logger.warning(

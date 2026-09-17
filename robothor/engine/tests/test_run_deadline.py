@@ -106,6 +106,71 @@ class TestOneResolver:
         assert budget.seconds > 0
         assert budget.source == "fleet"
 
+    def test_off_is_the_engine_that_shipped_even_with_a_budget_imposed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Hostile review 2026-09-17, finding 1 — the critical one.
+
+        The resolver was not gated on the rung, and the bench harness exports
+        `ROBOTHOR_RUN_BUDGET_SECONDS` on EVERY run whatever the rung says. So
+        the `off` arm of the differential this change has to be judged by was
+        already receiving the largest part of the fix: a run at `off` ended at
+        the imposed 3s instead of the manifest's 30s. The watchdog and the
+        loop still share one derivation; what the rung decides is whether the
+        imposed number is the one they share.
+        """
+        from robothor.engine import run_deadline
+
+        monkeypatch.setenv("ROBOTHOR_RUN_BUDGET_SECONDS", "1200")
+        monkeypatch.setattr("robothor.engine.model_registry.chain_tempo_factor", lambda m: 1.3333)
+        agent = _agent(timeout=1200)
+        assert run_deadline.resolve_run_budget(agent, mode="off").seconds == 1599
+        assert run_deadline.resolve_run_budget(agent, mode="off").source == "manifest"
+        assert run_deadline.resolve_run_budget(agent, mode="enforce").seconds == 1200
+
+    def test_observe_still_gets_the_imposed_number(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`observe` is allowed to differ from `off` — that is the ladder.
+
+        It acts on nothing; it only measures against the number an operator
+        would get at `enforce`, which is what makes its shadow rows worth
+        reading.
+        """
+        from robothor.engine import run_deadline
+
+        monkeypatch.setenv("ROBOTHOR_RUN_BUDGET_SECONDS", "1200")
+        assert run_deadline.resolve_run_budget(_agent(), mode="observe").source == "external"
+
+    def test_the_watchdog_at_off_gets_the_shipped_ceiling_too(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One derivation, so the watchdog cannot disagree with the loop."""
+        from robothor.engine.watchdog_budgets import watchdog_budgets_for
+
+        monkeypatch.setenv("ROBOTHOR_RUN_BUDGET_SECONDS", "3")
+        monkeypatch.setenv("ROBOTHOR_STEP_EFFICIENCY_MODE", "off")
+        config = SimpleNamespace(
+            timeout_seconds=30,
+            stall_timeout_seconds=0,
+            early_stall_timeout_seconds=0,
+            model_primary="openrouter/test/model",
+            model_fallbacks=[],
+        )
+        assert watchdog_budgets_for(config).hard == 30
+
+    def test_a_nonsense_budget_is_loud_rather_than_silent(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Silently falling back restores the defect this module removes."""
+        import logging
+
+        from robothor.engine import run_deadline
+
+        monkeypatch.setenv("ROBOTHOR_RUN_BUDGET_SECONDS", "twenty minutes")
+        with caplog.at_level(logging.WARNING, logger="robothor.engine.run_deadline"):
+            budget = run_deadline.resolve_run_budget(_agent(timeout=900), mode="enforce")
+        assert budget.source == "manifest"
+        assert any("ROBOTHOR_RUN_BUDGET_SECONDS" in r.message for r in caplog.records)
+
     def test_the_watchdog_ceiling_comes_from_the_same_resolver(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -272,6 +337,63 @@ class TestTheStop:
             assert stop.due() == "normal"
         assert any("would" in r.message for r in caplog.records)
 
+    def test_observe_leaves_a_countable_row_not_only_a_log_line(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Hostile review 2026-09-17, finding 5.
+
+        `GUARDRAIL_FLIPS.md` promotes this flag on `agent_guardrail_events`,
+        and the repeat guard on the SAME flag has always written at `observe`.
+        Without this the two halves of one rung had different evidence
+        behaviour and the fleet default could produce no `run_budget` figure
+        at all.
+        """
+        rows: list[tuple[Any, ...]] = []
+        monkeypatch.setattr(
+            "robothor.engine.tracking.log_guardrail_event",
+            lambda *a, **kw: rows.append((a, kw)),
+        )
+        session = _session()
+        session.run.id = "run-observe"
+        clock = _Clock()
+        stop = self._stop(mode="observe", clock=clock, session=session)
+        clock.advance(1100)
+        assert stop.due() == "normal"
+        assert rows, "observe recorded nothing anyone can query"
+        assert rows[0][0][1] == "run_budget"
+        assert rows[0][0][2] == "observed"
+        assert rows[0][1]["mode"] == "observe"
+
+    def test_observe_records_each_rung_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        rows: list[Any] = []
+        monkeypatch.setattr(
+            "robothor.engine.tracking.log_guardrail_event", lambda *a, **kw: rows.append(a)
+        )
+        session = _session()
+        session.run.id = "run-observe"
+        clock = _Clock()
+        stop = self._stop(mode="observe", clock=clock, session=session)
+        clock.advance(1100)
+        for _ in range(5):
+            stop.due()
+        clock.advance(200)
+        for _ in range(5):
+            stop.due()
+        assert len(rows) == 2, "one row per rung, not one per iteration"
+
+    def test_off_records_nothing_at_all(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        rows: list[Any] = []
+        monkeypatch.setattr(
+            "robothor.engine.tracking.log_guardrail_event", lambda *a, **kw: rows.append(a)
+        )
+        session = _session()
+        session.run.id = "run-off"
+        clock = _Clock()
+        stop = self._stop(mode="off", clock=clock, session=session)
+        clock.advance(5000)
+        stop.due()
+        assert rows == []
+
     def test_the_call_window_leaves_the_budget_plus_a_grace_and_no_more(self) -> None:
         clock = _Clock()
         stop = self._stop(clock=clock, grace=15)
@@ -346,6 +468,89 @@ class TestTheStop:
 # ── Wrap-up: what the model may still do ────────────────────────────────────
 
 
+class TestWrapUpIsEnforcedNotAdvised:
+    """Withdrawing a tool from the SCHEMA is a request, not a rule.
+
+    Hostile review 2026-09-17, finding 2: a model that kept asking for `exec`
+    after the narrowing had it executed eight times, so "nothing that starts
+    new work survives" was false as written. Admission now refuses it, the
+    same belt-and-suspenders the plan-mode and `tools_allowed` gates have.
+    """
+
+    def _wrapping_up(self, seconds: int = 1200, elapsed: float = 1150.0) -> Any:
+        from robothor.engine.run_deadline import BudgetStop, RunBudget, begin_wrapup
+
+        clock = _Clock()
+        session = _session()
+        stop = BudgetStop(
+            budget=RunBudget(seconds=seconds, source="external"),
+            mode="enforce",
+            session=session,
+            now=clock,
+            started=clock(),
+        )
+        clock.advance(elapsed)
+        begin_wrapup(session, stop)
+        return session
+
+    def test_a_withdrawn_tool_is_refused_with_the_seconds_and_the_alternatives(self) -> None:
+        from robothor.engine.run_deadline import wrapup_refusal
+
+        session = self._wrapping_up()
+        refusal = wrapup_refusal(session, "exec")
+        assert refusal is not None
+        assert "50s" in refusal
+        assert "write_file" in refusal
+
+    def test_a_writing_tool_is_untouched(self) -> None:
+        from robothor.engine.run_deadline import wrapup_refusal
+
+        session = self._wrapping_up()
+        for tool in ("write_file", "read_file", "list_directory", "todo_write"):
+            assert wrapup_refusal(session, tool) is None
+
+    def test_a_run_not_in_wrapup_refuses_nothing(self) -> None:
+        from robothor.engine.run_deadline import wrapup_refusal
+
+        assert wrapup_refusal(_session(), "exec") is None
+
+    def test_the_explanation_is_given_once_per_tool_and_the_refusal_still_stands(self) -> None:
+        from robothor.engine.run_deadline import wrapup_refusal
+
+        session = self._wrapping_up()
+        first = wrapup_refusal(session, "exec")
+        second = wrapup_refusal(session, "exec")
+        assert first is not None and second is not None
+        assert len(second) < len(first), "the model is not lectured every turn"
+        assert wrapup_refusal(session, "web_search") is not None
+
+    @pytest.mark.asyncio
+    async def test_admission_is_where_it_acts(self) -> None:
+        """Pinned through the real gate, not through the helper."""
+        from robothor.engine.runner import AgentRunner
+
+        session = self._wrapping_up()
+        verdict = await AgentRunner._admit_tool_call(
+            object.__new__(AgentRunner),
+            tc=SimpleNamespace(id="call_1"),
+            tool_name="exec",
+            tool_args={"command": "ls"},
+            session=session,
+            agent_config=SimpleNamespace(id="a"),
+            guardrail_engine=None,
+            hook_registry=None,
+            readonly_mode=False,
+            readonly_tool_set=frozenset(),
+            allowed_tool_set=frozenset({"exec", "write_file"}),
+        )
+        assert verdict.allowed is False
+        assert verdict.output["guard"] == "run_wrapup"
+        assert verdict.escalate is False
+        assert verdict.count_as_iteration_error is False, (
+            "being redirected to write in the last tenth is the control working"
+        )
+
+
 class TestWrapUp:
     def test_only_writing_and_checking_survive_the_filter(self) -> None:
         from robothor.engine.run_deadline import WRAPUP_TOOLS, wrapup_schemas
@@ -375,6 +580,14 @@ class TestWrapUp:
         note = wrapup_note(elapsed=1080.0, budget_seconds=1200, task_text=None, workspace=None)
         assert "120s" in note
         assert "NOW" in note
+
+    def test_a_remainder_under_a_second_does_not_read_as_zero(self) -> None:
+        """`int()` printed "0s … remain" at the one moment the number has to
+        be actionable (hostile review 2026-09-17, finding 9)."""
+        from robothor.engine.run_deadline import wrapup_note
+
+        note = wrapup_note(elapsed=9.4, budget_seconds=10, task_text=None, workspace=None)
+        assert "1s of this run's 10s budget remain" in note
 
     def test_the_note_names_a_declared_path_that_is_not_on_disk(self, tmp_path: Path) -> None:
         from robothor.engine.run_deadline import wrapup_note

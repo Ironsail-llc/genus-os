@@ -149,15 +149,32 @@ CAPS = {
     # absorb the next concern one branch at a time. `_run_loop` paid for the
     # budget wiring by giving up its replanning block, its error-feedback
     # block and its checkpoint block rather than by raising its own cap.
-    "robothor/engine/run_deadline.py": 534,
-    "robothor/engine/repeat_variants.py": 420,
+    "robothor/engine/run_deadline.py": 628,
+    "robothor/engine/repeat_variants.py": 445,
     "robothor/engine/run_replan.py": 127,
+    # Round 1 of hostile review moved three of these: run_deadline 534 -> 628
+    # (the resolver's mode gate, the observe evidence row, and the wrap-up
+    # admission refusal, which is what makes the narrowing a rule rather than
+    # a request), repeat_variants 420 -> 445 (every non-flag token of the
+    # command, and a stemmer that drops one plural instead of a run of
+    # esses), run_pacing 507 -> 526 (the directive check-in keeps the shape
+    # paragraph, and a counter the session refuses now says so). Each is a
+    # correction to a claim the review disproved, which is the case this
+    # file's own header admits a number may move for; `_run_loop` still went
+    # DOWN, 520 -> 519, to pay for the call sites.
+    #
     # Two that were uncapped and grew with the same work. Capped now at their
     # measured size rather than left open: they are the modules a "one more
     # rung on the ladder" change lands in, which is exactly the shape this
     # ratchet exists to make an explicit decision.
-    "robothor/engine/run_pacing.py": 507,
-    "robothor/engine/repeat_guard.py": 651,
+    "robothor/engine/run_pacing.py": 526,
+    # 651 -> 659 on the rebase onto v1.98.0, and the eight lines are not this
+    # branch's: #585 added the spill-readback exemption (paging back output the
+    # engine cut out of a result is the remedy the marker told the agent to
+    # use, so the guard must not answer it with "you already read that"). This
+    # file had no cap for this module before, so those lines arrived under
+    # none; admitting them is what capping it costs.
+    "robothor/engine/repeat_guard.py": 659,
     # 937 (2026-09-13): every module the delivery path runs through was capped
     # except the one that decides delivery. It was uncapped when the
     # thin-announce fallback landed, so nothing but review stood between that
@@ -167,7 +184,12 @@ CAPS = {
     "robothor/engine/delivery.py": 950,
     "robothor/engine/run_lifecycle.py": 709,  # -69: dead copy of the tool-timeout tables
     "robothor/engine/run_llm_calls.py": 381,  # -69: dead copy of the tool-timeout tables
-    "robothor/engine/tool_admission.py": 400,
+    # 400 -> 405: a sixth gate, the budget's wrap-up rung. This module IS the
+    # ordered list of gates — its header calls that order a security property
+    # — so there is nothing cohesive to extract here, and taking one gate out
+    # of six would make the order invisible, which is the opposite of what
+    # this ratchet is for. Five lines: one import and one branch.
+    "robothor/engine/tool_admission.py": 405,
     # One assistant message's tool calls, from admission to the ledger.
     # Bounded from the day it lands, like schedule_reconcile.py: this is the
     # module that would otherwise absorb every per-turn concern the runner

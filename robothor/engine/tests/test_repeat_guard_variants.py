@@ -116,6 +116,36 @@ class TestQuerySimilarity:
         )
         assert same_family("search_files", a, b)
 
+    def test_a_synonym_is_a_different_question_and_this_is_a_known_limit(self) -> None:
+        """Pinned as a LIMIT, not as a feature.
+
+        Hostile review 2026-09-17, finding 4: five realistic rewordings of one
+        question produced four families and nothing was said. Jaccard >= 0.6
+        over a two- or three-token query means one synonym breaks the family —
+        `{computed, score}` vs `{calculated, score}` is 0.33. Lowering the
+        threshold would merge unrelated searches, which costs a capability;
+        so the shape is caught for near-identical rewordings only, and a sweep
+        that counts ZERO variant rows on `web_search` must read that as "aimed
+        at nothing", never as "the loop shape is gone".
+        """
+        from robothor.engine.repeat_variants import same_family, signature
+
+        a = signature("web_search", {"query": "where is the score computed"})
+        b = signature("web_search", {"query": "where is the score calculated"})
+        assert not same_family("web_search", a, b)
+
+    def test_the_stemmer_drops_one_plural_and_not_a_run_of_esses(self) -> None:
+        """`str.rstrip("s")` made `class` -> `cla` and `status` -> `statu`."""
+        from robothor.engine.repeat_variants import _stem
+
+        assert [_stem(w) for w in ("class", "process", "status", "analysis")] == [
+            "class",
+            "process",
+            "status",
+            "analysis",
+        ]
+        assert [_stem(w) for w in ("papers", "files")] == ["paper", "file"]
+
     def test_a_path_shaped_signature_needs_an_exact_match(self) -> None:
         """No fuzz where the argument is a name: `/w/a.py` is not `/w/b.py`."""
         from robothor.engine.repeat_variants import same_family, signature
@@ -130,9 +160,10 @@ class TestQuerySimilarity:
 
 class TestTheLadder:
     def test_nothing_is_said_while_the_results_keep_changing(self) -> None:
+        """One family — only the flags vary — and every result is new."""
         tracker = _tracker()
         for i in range(10):
-            args = {"command": f"python test_sam3.py --case {i}"}
+            args = {"command": f"python test_sam3.py --seed={i}"}
             assert tracker.verdict("exec", args) is None
             tracker.observe("exec", args, _exec(stdout=f"case {i} failed on line {i * 7}"))
 
@@ -205,6 +236,49 @@ class TestTheLadder:
             "search_files", {"path": "/w", "pattern": "class_embed|pred_logits|presence"}
         )
         assert verdict is None or verdict.action == "noted"
+
+
+class TestTheFalsePositivesHostileReviewFound:
+    """Two shapes that a Code task does on purpose, refused on the fifth call.
+
+    2026-09-17. The signature kept only the first two non-flag tokens, and
+    `-m` is a flag — so every `python -m pytest <file>` in a run was one
+    family, and five different test files each printing the identical
+    "1 passed" got the fifth refused with "varying the arguments is not
+    varying the approach". `python solve.py --case N` did the same over six
+    genuinely different cases. WildClaw Code tasks 2/7/8/12 are shaped as
+    "run the solver over N cases", which is the workload being re-measured.
+    """
+
+    def _drive(self, commands: list[str], stdout: str) -> dict[str, list[int]]:
+        tracker = _tracker()
+        seen: dict[str, list[int]] = {"noted": [], "refused": []}
+        for i, command in enumerate(commands):
+            verdict = tracker.verdict("exec", {"command": command})
+            if verdict:
+                seen[verdict.action].append(i)
+            tracker.observe("exec", {"command": command}, _exec(stdout=stdout))
+        return seen
+
+    def test_five_different_test_files_are_five_questions(self) -> None:
+        commands = [
+            f"python -m pytest tests/test_{name}.py -q"
+            for name in ("alpha", "beta", "gamma", "delta", "epsilon")
+        ]
+        assert self._drive(commands, ".\n1 passed in 0.01s\n") == {"noted": [], "refused": []}
+
+    def test_six_cases_of_one_solver_are_six_questions(self) -> None:
+        commands = [f"python solve.py --case {i}" for i in range(6)]
+        assert self._drive(commands, "OK\n") == {"noted": [], "refused": []}
+
+    def test_the_same_target_with_only_flags_varying_is_still_one_question(self) -> None:
+        """The narrowing must not disarm the guard on the shape it is for."""
+        commands = [
+            f"python test_sam3.py --tb={style}"
+            for style in ("short", "long", "auto", "no", "line", "native")
+        ]
+        seen = self._drive(commands, "AssertionError: shapes do not match")
+        assert seen["noted"] and seen["refused"]
 
 
 class TestTheRecordedShapes:

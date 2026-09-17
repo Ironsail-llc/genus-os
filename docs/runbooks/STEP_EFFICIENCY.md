@@ -32,7 +32,7 @@ scope for this control. `sam3_debug` is what it is for.
 | Control | `off` | `observe` | `enforce` |
 |---|---|---|---|
 | Deadline notes | **exactly main**: one note at 80%, main's text with no pace sentence, main's `logger.info` line, no iteration-0 guard | the same note, at WARNING with the run id, plus a log line for the 50% and 95% notes it withholds | notes at 50%, 80% and 95%, each with pace |
-| **The budget ends the run** | nothing; the wallclock self-check ends it as a timeout | logs the rung it would have entered, with the run id | wrap-up at 90%, hard stop at 100% — see below |
+| **The budget ends the run** | **nothing, including the resolver**: `ROBOTHOR_RUN_BUDGET_SECONDS` is ignored and every clock uses the agent's own tempo-scaled `timeout_seconds`, exactly as before; the wallclock self-check ends the run as a timeout | resolves the imposed budget and writes a `run_budget` / `observed` row for each rung it would have entered, with the run id; acts on nothing | wrap-up at 90%, hard stop at 100% — see below |
 | Repeat-call guard | **no guard object is built at all** — no thread hops, no state | runs every call, logs and counts what it would have done | answers an unchanged repeated `read_file`, notes a 3rd identical `exec`, refuses a 5th that spoke |
 | **Varying-argument loops** | not tracked | tracked and logged | same ladder as an exact repeat, keyed on the command head / path / domain / query stem |
 | Tool timeout clamp | requested timeout stands | stands, and the clamp it would have applied is logged with the run id | `min(requested, remaining − 30s)`, floor 5s |
@@ -58,19 +58,36 @@ Four more runs in the same sweep died the same way.
 run's wall-clock budget, and `watchdog_budgets_for` reads it too, so the loop
 and the watchdog cannot disagree:
 
-1. `ROBOTHOR_RUN_BUDGET_SECONDS`, when set, taken **exactly** — an imposed
-   budget is never tempo-scaled, because whoever imposed it is counting the
-   same seconds. The bench harness exports it per task;
+1. `ROBOTHOR_RUN_BUDGET_SECONDS`, when set **and the rung is not `off`**,
+   taken **exactly** — an imposed budget is never tempo-scaled, because
+   whoever imposed it is counting the same seconds. The bench harness exports
+   it per task;
 2. otherwise the agent's `timeout_seconds`, tempo-scaled exactly as before;
 3. otherwise the fleet ceiling.
+
+**The rung gates the resolver too, and that is load-bearing.** The harness
+exports `ROBOTHOR_RUN_BUDGET_SECONDS` on every run whatever the rung says, so
+if the resolver ignored the rung the `off` arm of a differential sweep would
+already carry the largest part of this change — a run ending at the imposed
+1200s instead of being destroyed at 1500s — and the measured `enforce − off`
+delta would be small and mis-attributed to the wrap-up rung. The watchdog and
+the loop still share the one derivation, so they cannot disagree about the
+number; what the rung decides is *which* number they share. A value the
+settings registry rejects logs a WARNING naming the variable and falls back to
+the agent's own timeout rather than degrading silently.
 
 **The ladder.** 50% / 80% / 95% notes as before, then:
 
 - **90% — WRAP-UP.** The tool schema narrows to `write_file`, `read_file`,
-  `list_directory`, `todo_write`; nothing that starts new work survives. The
-  agent is told how many seconds remain (a number, not a percentage) and asked
-  to write its best current answer to the path the task named and read it back
-  against the task's shape. Said once per run.
+  `list_directory`, `todo_write`, and **admission refuses anything else** —
+  withdrawing a tool from the schema is a request, and a model that asked for
+  `exec` anyway was still being served until this was enforced at the gate. A
+  refused call gets a tool result naming the seconds left and the tools still
+  available (the full sentence once per tool, a one-liner after), is not
+  counted as an iteration error and never escalates. The agent is told how
+  many seconds remain (a number, not a percentage) and asked to write its best
+  current answer to the path the task named and read it back against the
+  task's shape. Said once per run.
 - **100% — STOP.** No further LLM call is issued. A call already in flight is
   bounded by `remaining + grace` and then cancelled. The run records
   `budget_exhausted`, writes an honest closing summary naming what is and is
@@ -102,10 +119,30 @@ calls); it asked one question as twenty `search_files` patterns; `link_a_pix`
 rewrote the same script as `rescan.py`, `rescan2.py`, `rescan3.py`, …
 
 `robothor/engine/repeat_variants.py` groups calls into **families** by a coarse
-signature — the command head for `exec` (a leading `cd … &&` peeled, first
-pipeline segment, flags dropped, first two words), the path for `read_file` and
-`list_directory`, domain plus path for `web_fetch`, and a stopworded token set
+signature — for `exec`, what the command runs and on WHAT (a leading
+`cd … &&` peeled, first pipeline segment only, flags and shell punctuation
+dropped, **every** remaining word kept); the path for `read_file` and
+`list_directory`; domain plus path for `web_fetch`; and a stopworded token set
 for `web_search` and `search_files` matched at Jaccard ≥ 0.6.
+
+Keeping every word rather than the first two is a correction, not a
+refinement: `-m` is a flag, so `python -m pytest <file>` collapsed into one
+family and the fifth *different* test file was refused, and `python solve.py
+--case N` did the same across six genuinely different cases. "Run the solver
+over N cases" is the shape of WildClaw Code tasks 2/7/8/12. The target is what
+the work is about, not an argument a loop varies to slip the guard. The trade
+is that a heredoc keys its family on its whole body, so those are rarely
+caught — the safe direction for a control that can withhold a call.
+
+**Read a quiet `web_search` row count as "aimed at nothing", never as "the
+loop shape is gone."** Jaccard ≥ 0.6 over a two- or three-token query means a
+single synonym breaks the family — `{computed, score}` against
+`{calculated, score}` is 0.33 — so five realistic rewordings of one question
+produce four families and nothing is said. Lowering the threshold would merge
+unrelated searches, which costs a capability, so the reworded shape is caught
+for near-identical rewordings only. The `exec` and path families do the work;
+the query families are a bonus. `test_repeat_guard_variants.py` pins this as a
+limit rather than leaving it to be rediscovered from a flat table.
 
 A coarse signature is only safe because the **trigger is the absence of new
 information**, not the call count: a family climbs the ladder only while its
@@ -147,9 +184,13 @@ main's own `deadline_note` beside the pacer across a grid of inputs and pins the
 rest as snapshots taken from `origin/main`.
 
 The budget stop and the varying-argument families are on the same terms: under
-`off` a run past its budget is ended by the loop's wallclock self-check, as a
-TIMEOUT, exactly as before — no wrap-up, no narrowed tool schema, no
-`budget_exhausted` from this path — and no family is tracked at all.
+`off` the resolver ignores `ROBOTHOR_RUN_BUDGET_SECONDS` entirely, so the
+ceiling is the agent's own tempo-scaled `timeout_seconds` and a run past it is
+ended by the loop's wallclock self-check, as a TIMEOUT, at the same second as
+before — no wrap-up, no narrowed tool schema, no admission refusal, no
+`budget_exhausted` from this path, no guardrail row — and no family is tracked
+at all. `robothor/engine/tests/test_budget_ends_the_run.py` drives the loop at
+`off` with the variable set and pins it.
 
 ### Deadline notes
 

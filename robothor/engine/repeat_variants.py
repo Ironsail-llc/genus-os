@@ -159,20 +159,46 @@ def _words(text: str, limit: int = 12) -> tuple[str, ...]:
     """
     seen: list[str] = []
     for word in _WORD_RE.findall(text.lower()):
-        stem = word.rstrip("s") if len(word) > 4 and word.endswith("s") else word
+        stem = _stem(word)
         if stem in _STOPWORDS or stem in seen:
             continue
         seen.append(stem)
     return tuple(sorted(seen)[:limit])
 
 
+def _stem(word: str) -> str:
+    """Drop ONE plural ``s``, and only where it is a plural.
+
+    The first cut used ``str.rstrip("s")``, which strips a RUN of trailing
+    esses: ``class`` became ``cla``, ``process`` ``proce``, ``status``
+    ``statu``, ``kwargs`` ``kwarg``. That made matching arbitrarily more
+    lenient than the comment claimed and merged words that share nothing but a
+    truncation (hostile review 2026-09-17, finding 8).
+    """
+    if len(word) > 4 and word.endswith("s") and not word.endswith(("ss", "us", "is")):
+        return word[:-1]
+    return word
+
+
 def _command_head(command: str) -> tuple[str, ...]:
-    """The first two words of what a shell command actually runs.
+    """What a shell command actually runs, and on WHAT.
 
     A leading ``cd <dir> &&`` is peeled, only the first pipeline segment is
     read, and flags and shell punctuation are dropped — so ``… | tail -40``
     and ``… | tail -5`` are one command, and ``pip install`` is not ``python
     test_sam3.py``.
+
+    **Every** remaining word, not the first two. The first cut kept two and
+    hostile review found the cost on exactly the workload being re-measured:
+    ``-m`` is a flag, so every ``python -m pytest <file>`` in a run collapsed
+    into one family and the fifth DIFFERENT test file was refused with
+    "varying the arguments is not varying the approach"; ``python solve.py
+    --case N`` did the same across six genuinely different cases. The target
+    is not an argument the loop is varying to avoid the guard — it is the
+    thing the work is about, and two different targets are two different
+    questions. The trade is fewer catches on heredocs (whose whole body now
+    keys the family), which is the safe direction for a control that can
+    withhold a call.
     """
     text = _CD_PREFIX_RE.sub("", str(command or "").strip())
     segment = _SEGMENT_RE.split(text, maxsplit=1)[0]
@@ -180,8 +206,7 @@ def _command_head(command: str) -> tuple[str, ...]:
         tokens = shlex.split(segment)
     except ValueError:  # an unbalanced quote is still a command
         tokens = segment.split()
-    words = [t for t in tokens if not t.startswith("-") and t not in _SHELL_OPERATORS]
-    return tuple(words[:2])
+    return tuple(t for t in tokens if not t.startswith("-") and t not in _SHELL_OPERATORS)
 
 
 def signature(tool_name: str, args: dict[str, Any] | None) -> tuple[str, ...] | None:

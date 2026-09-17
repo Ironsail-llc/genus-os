@@ -203,6 +203,70 @@ class TestTheBudgetEndsTheRun:
         assert "write_file" in seen[-1], "wrap-up took away the ability to write"
 
     @pytest.mark.asyncio
+    async def test_wrapup_refuses_the_exec_a_model_asks_for_anyway(self, runner) -> None:
+        """Narrowing the schema is a request; admission is the rule.
+
+        Hostile review 2026-09-17, finding 2: a model that kept asking for
+        `exec` after the narrowing had it executed eight more times, so
+        "nothing that starts new work survives" was false as written.
+        """
+        offered: list[bool] = []  # was `exec` in the schema this turn
+        executed: list[int] = []  # turns on which the registry ran it
+
+        async def _execute(name, *_a, **_kw):
+            if name == "exec":
+                executed.append(len(offered) - 1)
+            return {"content": "ok"}
+
+        async def always_asks_for_exec(**kw):
+            names = {s["function"]["name"] for s in (kw.get("tools") or []) if "function" in s}
+            offered.append("exec" in names)
+            await asyncio.sleep(0.05)
+            return _response(tool_calls=[_tool_call(len(offered))])
+
+        runner.registry.execute = AsyncMock(side_effect=_execute)
+        with _every_other_layer_dead(always_asks_for_exec):
+            await asyncio.wait_for(
+                runner.execute("budgeted-agent", "run things", agent_config=_agent()),
+                timeout=30,
+            )
+        narrowed = [i for i, had in enumerate(offered) if not had]
+        assert narrowed, "wrap-up never narrowed the schema — the test proves nothing"
+        assert executed, "no `exec` ran at all before wrap-up — the test proves nothing"
+        assert not set(executed) & set(narrowed), (
+            f"`exec` ran on turns where it was withdrawn: {sorted(set(executed) & set(narrowed))}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_off_with_an_imposed_budget_is_still_the_previous_engine(
+        self, runner, monkeypatch
+    ) -> None:
+        """Hostile review 2026-09-17, finding 1 — through the real loop.
+
+        The bench harness exports `ROBOTHOR_RUN_BUDGET_SECONDS` on every run
+        whatever the rung says, so the `off` arm of the differential was
+        receiving the biggest part of this change: the run ended at the
+        imposed 2s instead of at the agent's own 60s ceiling. At `off` the
+        imposed number must not be the one any clock uses.
+        """
+        monkeypatch.setenv("ROBOTHOR_STEP_EFFICIENCY_MODE", "off")
+        monkeypatch.setenv("ROBOTHOR_RUN_BUDGET_SECONDS", "2")
+
+        async def quick(**_kw):
+            await asyncio.sleep(0.05)
+            return _response(content="finished in well under two seconds")
+
+        with _every_other_layer_dead(quick):
+            run = await asyncio.wait_for(
+                runner.execute(
+                    "budgeted-agent", "answer now", agent_config=_agent(timeout_seconds=60)
+                ),
+                timeout=30,
+            )
+        assert run.budget_exhausted is False
+        assert "finished in well under two seconds" in (run.output_text or "")
+
+    @pytest.mark.asyncio
     async def test_off_leaves_the_previous_engine(self, runner, monkeypatch) -> None:
         """`off` must be the engine that shipped: the wallclock self-check ends
         the run, as a timeout, with no budget_exhausted flag from this path."""

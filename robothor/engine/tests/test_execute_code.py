@@ -68,12 +68,22 @@ async def _serve(proxy, tmp_path, *, session: int | None = None):
     return server
 
 
+#: What `_request` returns when the connection ENDED rather than the server
+#: answering. Its own marker, so "refused" and "never spoke" stay two
+#: different facts: three tests assert only `ok is False`, and mapping a dead
+#: socket onto that would let a server that simply never replies satisfy all
+#: of them.
+_TRANSPORT_CLOSED = {"ok": False, "transport": "closed"}
+
+
 def _request(server, payload: dict) -> dict:
     """One raw request over the socket, as the sandboxed client makes it.
 
     A refused connection reaches the client as a broken pipe or a reset just
     as often as it does as an empty reply — the server can close before this
-    thread has finished writing — so all three shapes are one answer here.
+    thread has finished writing — so all three of those shapes return
+    `_TRANSPORT_CLOSED`, deterministically, and a test that needs the SERVER
+    to have spoken checks for its absence.
     """
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
@@ -86,10 +96,15 @@ def _request(server, payload: dict) -> dict:
                     break
                 chunks += piece
     except (BrokenPipeError, ConnectionResetError):
-        return {"ok": False, "error": "connection refused by server"}
+        return dict(_TRANSPORT_CLOSED)
     if not chunks.strip():
-        return {"ok": False, "error": "connection refused by server"}
+        return dict(_TRANSPORT_CLOSED)
     return json.loads(chunks.decode())
+
+
+def _spoke(reply: dict) -> bool:
+    """Did the SERVER answer, rather than the connection dying?"""
+    return reply.get("transport") != "closed"
 
 
 class TestTheClientModuleIsShippable:
@@ -139,6 +154,7 @@ class TestTheTransport:
             )
         finally:
             await server.aclose()
+        assert _spoke(reply), "the server must REFUSE a bad token, not drop the connection"
         assert reply.get("ok") is False
         assert proxy.seen == []
 
@@ -220,7 +236,9 @@ class TestTheTransport:
             reply = await asyncio.to_thread(_request, server, huge)
         finally:
             await server.aclose()
+        assert _spoke(reply), "the server must ANSWER and hang up, not just hang up"
         assert reply.get("ok") is False
+        assert reply.get("code") == "too_large"
         assert proxy.seen == []
 
 
@@ -246,8 +264,14 @@ class TestOnlyThisSnippetMaySpeak:
             )
         finally:
             await server.aclose()
+        # The security invariant is the last line and is asserted whatever
+        # happens on the wire. The refusal CODE is only checkable when the
+        # server got its answer out before hanging up — it closes the
+        # connection immediately after an auth refusal, so which of the two
+        # the client sees is a race the client does not control.
         assert reply["ok"] is False
-        assert reply["code"] == "auth"
+        if _spoke(reply):
+            assert reply["code"] == "auth"
         assert proxy.seen == [], "another run's snippet reached this proxy"
 
     @pytest.mark.asyncio
@@ -265,6 +289,9 @@ class TestOnlyThisSnippetMaySpeak:
             )
         finally:
             await server.aclose()
+        # The only test that accepts a dead connection as the answer: an
+        # unbound socket may refuse in either shape, and which one the client
+        # sees is a race it does not control.
         assert reply["ok"] is False
         assert proxy.seen == []
 

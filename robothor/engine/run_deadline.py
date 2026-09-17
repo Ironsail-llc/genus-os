@@ -43,6 +43,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
@@ -144,16 +145,30 @@ def _external_budget_seconds() -> int:
     runs out. Read through the settings registry rather than the environment
     so it is declared, documented and visible in the Helm like every other
     knob.
-    """
-    try:
-        from robothor.settings import get_settings
 
+    A value the registry rejects is LOUD. Falling back silently restores the
+    exact defect this module exists to remove — the run reverts to its
+    tempo-scaled manifest ceiling, aiming past whatever is counting down —
+    and a typo in a unit file is how that would happen twice.
+    """
+    from robothor.settings import get_settings
+
+    try:
         return max(0, int(get_settings().engine.run_budget_seconds))
-    except Exception:  # noqa: BLE001 - a missing setting is "nobody imposed one"
+    except Exception as exc:  # noqa: BLE001 - never raise into a run's setup
+        # The settings registry names the rejected value in its own message,
+        # so the warning carries it without this module reading the
+        # environment behind the registry's back.
+        logger.warning(
+            "ROBOTHOR_RUN_BUDGET_SECONDS is unusable, so no external budget is "
+            "applied and this run falls back to its agent's own timeout — which "
+            "is the very shape this control exists to remove. %s",
+            str(exc).replace("\n", " ")[:300],
+        )
         return 0
 
 
-def resolve_run_budget(agent_config: Any) -> RunBudget:
+def resolve_run_budget(agent_config: Any, *, mode: str | None = None) -> RunBudget:
     """THE wall-clock budget for one run. One derivation, three sources.
 
     Precedence, most authoritative first:
@@ -163,8 +178,25 @@ def resolve_run_budget(agent_config: Any) -> RunBudget:
     * the agent's own ``timeout_seconds``, tempo-scaled exactly as before, so
       nothing about an ordinary fleet run changes;
     * the fleet ceiling, for an agent that declares no cap.
+
+    ``mode`` is the step-efficiency rung, and the external branch is gated on
+    it like everything else in this module. That is not a style choice:
+    hostile review 2026-09-17 drove the loop at ``off`` with the variable set
+    and got a run ending at the imposed 3s rather than at the manifest's 30s
+    — so `off` was not the engine that shipped, and the benchmark harness
+    exports that variable on EVERY run. The baseline arm of the very sweep
+    this change has to be judged by would have carried the largest part of the
+    fix. The watchdog and the loop still share this one derivation, so they
+    cannot disagree about the number; what the rung decides is whether the
+    imposed number is the one they share.
+
+    ``None`` resolves the rung itself, for callers with no run in hand.
     """
-    external = _external_budget_seconds()
+    if mode is None:
+        from robothor.engine.feature_flags import step_efficiency_mode
+
+        mode = step_efficiency_mode()
+    external = _external_budget_seconds() if mode != "off" else 0
     if external > 0:
         return RunBudget(seconds=external, source="external")
     from robothor.engine.watchdog_budgets import chain_for, effective_wallclock_ceiling
@@ -213,6 +245,50 @@ def phase_for(elapsed: float, budget_seconds: int, fraction: float) -> Phase:
     return "normal"
 
 
+#: Where a wrapping-up run's stop is parked so tool admission can find it.
+#: Admission has the session and nothing else; the alternative was threading a
+#: budget through every gate signature for one branch.
+WRAPUP_ATTR = "wrapup_stop"
+
+
+def begin_wrapup(session: Any, stop: BudgetStop) -> None:
+    """Make the narrowing real rather than advisory.
+
+    Withdrawing a tool from the SCHEMA is a request. Hostile review 2026-09-17
+    drove a model that kept asking for ``exec`` after the narrowing and the
+    registry kept running it — eight times — so "nothing that starts new work
+    survives" was false as written. From here admission refuses what the
+    schema no longer offers, the same belt-and-suspenders the plan-mode and
+    ``tools_allowed`` gates already have for exactly this reason.
+    """
+    with contextlib.suppress(AttributeError):
+        setattr(session, WRAPUP_ATTR, stop)
+
+
+def wrapup_refusal(session: Any, tool_name: str) -> str | None:
+    """Why this call is refused during wrap-up, or None to let it run.
+
+    The full explanation once per tool; a one-liner after that. A model that
+    keeps asking is not helped by being lectured every turn, and the seconds
+    remaining are what make the refusal actionable.
+    """
+    stop = getattr(session, WRAPUP_ATTR, None)
+    if stop is None or tool_name in WRAPUP_TOOLS:
+        return None
+    remaining = max(0, math.ceil(stop.remaining()))
+    if tool_name in stop.explained:
+        return f"`{tool_name}` is unavailable: about {remaining}s left. Write the deliverable."
+    stop.explained.add(tool_name)
+    listed = ", ".join(sorted(WRAPUP_TOOLS))
+    return (
+        f"[SYSTEM] `{tool_name}` is withdrawn for the rest of this run: about "
+        f"{remaining}s of the wall-clock budget remain and the run ENDS when they "
+        f"are gone. Only {listed} are still available. Write your best current "
+        "answer to the path the task named, then read it back and check its shape "
+        "against what the task asked for."
+    )
+
+
 def wrapup_schemas(schemas: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """The tools a wrapping-up run may still call.
 
@@ -253,7 +329,10 @@ def wrapup_note(
     number of seconds rather than a percentage, because a percentage of an
     unstated total is not actionable.
     """
-    remaining = max(0, int(budget_seconds - elapsed))
+    # `ceil`, not `int`: truncation printed "0s … remain" for any remainder
+    # under a second, which reads as "already over" at the one moment the
+    # number has to be actionable (hostile review 2026-09-17, finding 9).
+    remaining = max(0, math.ceil(budget_seconds - elapsed))
     listed = ", ".join(sorted(WRAPUP_TOOLS))
     parts = [
         f"[SYSTEM] WRAP-UP: {remaining}s of this run's {int(budget_seconds)}s budget "
@@ -426,6 +505,9 @@ class BudgetStop:
 
     budget: RunBudget
     mode: str = "off"
+    #: The live session, so an ``observe`` rung can leave a countable row
+    #: rather than only a log line — see ``due``.
+    session: Any = None
     fraction: float = DEFAULT_WRAPUP_FRACTION
     grace: int = DEFAULT_GRACE_SECONDS
     now: Callable[[], float] = time.monotonic
@@ -433,9 +515,14 @@ class BudgetStop:
     #: Which rungs this run has already been told about, so a loop that checks
     #: every iteration does not repeat the wrap-up note thirty times.
     announced: set[str] = field(default_factory=set)
+    #: Tools already refused during wrap-up, so the full explanation is given
+    #: once per tool and a model that keeps asking is not lectured every turn.
+    explained: set[str] = field(default_factory=set)
 
     @classmethod
-    def for_run(cls, agent_config: Any, *, mode: str, watchdog: Any = None) -> BudgetStop:
+    def for_run(
+        cls, agent_config: Any, *, mode: str, watchdog: Any = None, session: Any = None
+    ) -> BudgetStop:
         """The stop for one run, started where the RUN started.
 
         Not where the loop started: the watchdog covers setup too (it is
@@ -448,8 +535,9 @@ class BudgetStop:
         with contextlib.suppress(Exception):
             started -= max(0.0, float(getattr(watchdog, "elapsed_seconds", 0) or 0))
         return cls(
-            budget=resolve_run_budget(agent_config),
+            budget=resolve_run_budget(agent_config, mode=mode),
             mode=mode,
+            session=session,
             fraction=wrapup_fraction(),
             grace=grace_seconds(),
             started=started,
@@ -491,12 +579,18 @@ class BudgetStop:
             return phase
         if phase not in self.announced:
             self.announced.add(phase)
-            logger.warning(
-                "step-efficiency observe: run at %.0fs of %ds would enter %s now",
-                self.elapsed,
-                self.budget.seconds,
-                phase,
+            reason = (
+                f"would enter {phase} at {self.elapsed:.0f}s of "
+                f"{self.budget.seconds}s ({self.budget.source})"
             )
+            logger.warning("step-efficiency observe: run %s", reason)
+            # A ROW, not only a line. `GUARDRAIL_FLIPS.md` promotes this flag
+            # on `agent_guardrail_events`, and the repeat guard on the same
+            # flag has always written at `observe` — so without this the two
+            # halves of one rung had different evidence behaviour and the
+            # fleet default could not produce a countable `run_budget` figure
+            # at all (hostile review 2026-09-17, finding 5).
+            _record(self.session, "observed", reason, mode=self.mode)
         return "normal"
 
     def announce(self, phase: Phase) -> bool:

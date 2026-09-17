@@ -94,6 +94,7 @@ from robothor.engine.run_context import mark_benchmark_run
 from robothor.engine.run_deadline import (
     BudgetStop,
     RunBudgetError,
+    begin_wrapup,
     end_run_at_budget,
     wrapup_note,
     wrapup_schemas,
@@ -1831,7 +1832,9 @@ class AgentRunner(
         # ONE resolver, shared with the stall watchdog: a task-imposed budget
         # scaled to 1600 while the container was destroyed at 1500 is how a
         # graded run died mid-LLM-call (robothor/engine/run_deadline.py).
-        _stop = BudgetStop.for_run(agent_config, mode=_mode, watchdog=self._active_watchdog)
+        _stop = BudgetStop.for_run(
+            agent_config, mode=_mode, watchdog=self._active_watchdog, session=session
+        )
         _wallclock_ceiling = _stop.budget.seconds
         _wallclock_deadline = (
             time.monotonic() + _wallclock_ceiling if _wallclock_ceiling > 0 else None
@@ -1843,10 +1846,9 @@ class AgentRunner(
             # ── [BUDGET] Wrap up at 90%, and END at 100% ──
             # BEFORE the guards below, and that order is load-bearing: the
             # wallclock self-check fires at the same instant and ends the run
-            # as a TIMEOUT holding whatever was in the conversation. This is
-            # the graceful form of the same deadline, so it looks first; the
-            # self-check is untouched for `off`, `observe` and an unresolvable
-            # budget. Rungs and resolver: robothor/engine/run_deadline.py.
+            # as a TIMEOUT holding whatever the conversation had. This is the
+            # graceful form of the same deadline (run_deadline.py), so it
+            # looks first; the self-check is untouched at `off`/`observe`.
             _phase = _stop.due()
             if _phase == "expired":
                 end_run_at_budget(
@@ -1859,6 +1861,7 @@ class AgentRunner(
                 return
             if _phase == "wrapup" and _stop.announce("wrapup"):
                 tool_schemas = wrapup_schemas(tool_schemas)
+                begin_wrapup(session, _stop)  # admission enforces what the schema drops
                 append_engine_note(
                     session,
                     wrapup_note(
@@ -2080,9 +2083,8 @@ class AgentRunner(
                 return
 
             # ── [BUDGET] The clock again, after the call, before the work ──
-            # A belt as well as a brace: the window has nothing to raise if the
-            # callee swallows its CancelledError and returns normally, a shape
-            # this engine has measured (2026-08-22).
+            # A belt as well as a brace: the window has nothing to raise if
+            # the callee swallows its CancelledError (measured 2026-08-22).
             if _stop.due() == "expired":
                 end_run_at_budget(
                     session,
@@ -2142,8 +2144,7 @@ class AgentRunner(
             recovery_applied = _recovery.applied
             _helper_spawns_used = _recovery.helper_spawns_used
 
-            # ── [ERROR FEEDBACK] error_actions.py, beside the recovery
-            # whose success suppresses it ──
+            # ── [ERROR FEEDBACK] error_actions.py, beside its suppressor ──
             inject_error_feedback(
                 session,
                 agent_config,
@@ -2170,8 +2171,7 @@ class AgentRunner(
                 if esc_msg:
                     session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": esc_msg})
 
-            # ── [REPLANNING] Is the plan still the plan? (run_replan.py owns
-            # the decision; the loop carries the two values it changes) ──
+            # ── [REPLANNING] Is the plan still the plan? (run_replan.py) ──
             _replanned = await maybe_replan(
                 session,
                 agent_config,
