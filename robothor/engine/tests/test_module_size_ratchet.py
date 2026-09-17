@@ -456,7 +456,7 @@ CAPS = {
     # extract: the counts are produced by the same single pass over the document
     # that produces the findings, and computing them anywhere else would mean
     # scanning twice.
-    "robothor/engine/verdict_commitment.py": 456,
+    "robothor/engine/verdict_commitment.py": 462,
     # Bounded from the day they land, the schedule_reconcile.py rule: these are
     # the modules that would otherwise absorb every new document shape and
     # every new metadata key.
@@ -476,7 +476,7 @@ CAPS = {
     # subject line, against a block whose verdict was `not escalated`), and
     # the two claim detectors return WHERE they matched so the caller can
     # attribute them. Both are vocabulary questions, which is this file.
-    "robothor/engine/verdict_shapes.py": 296,
+    "robothor/engine/verdict_shapes.py": 309,
     # The section tree. Bounded from the day it lands: this is where every
     # future rule about how a document is SHAPED will want to go, and the two
     # it already carries are the ones that kept the repair from inventing
@@ -496,7 +496,13 @@ CAPS = {
     # six ids reported one sentence against all six. Attribution is a
     # question about the document — which bullet a claim is in — so it lives
     # here beside the subject rule rather than in the ladder.
-    "robothor/engine/verdict_sections.py": 242,
+    # 242 -> 272: the review of that change. A subject the id vocabulary
+    # never produces crashed the whole inspection (KeyError, suppressed, the
+    # deliverable UNCHECKED); a table was one unit because it has neither
+    # blank lines nor bullets; and a claim whose unit names nobody was spread
+    # over every id in its block instead of being dropped. Three rules and
+    # their measurements.
+    "robothor/engine/verdict_sections.py": 272,
     # Whether an override named a reason. Bounded for the same reason and with
     # the same history: three rounds of review each found a sentence that named
     # nothing and was exempted anyway — and, the last time, six that named

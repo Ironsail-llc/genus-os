@@ -42,11 +42,12 @@ one:
 
 from __future__ import annotations
 
+import logging
 import re
 
 from robothor.engine.verdict_shapes import VERDICTS, item_id_spans, verdicts_in
 
-__all__ = ["block_subject", "blocks", "claim_owners"]
+__all__ = ["block_subject", "blocks", "claim_owners", "claim_span"]
 
 _HAS_HEADING = re.compile(r"^#{1,6}\s", re.MULTILINE)
 _AT_HEADING = re.compile(r"^(?=#{1,6}\s)", re.MULTILINE)
@@ -85,9 +86,11 @@ _FILLER = frozenset(
 )
 _WORD = re.compile(r"[a-z]+")
 
-#: Where one item's entry in a list begins. A recap is written one item per
-#: bullet, so a bullet is the unit a claim inside it belongs to.
-_BULLET = re.compile(r"^[ \t]*(?:[-*+]|\d{1,3}[.)])[ \t]+", re.MULTILINE)
+#: Where one item's entry begins. A recap is written one item per bullet and
+#: a summary one item per table ROW, so both are units a claim inside them
+#: belongs to. Without the row, a table — no blank lines, no bullets — was
+#: one unit, and a hedge in one cell reached every id in it.
+_UNIT_START = re.compile(r"^[ \t]*(?:(?:[-*+]|\d{1,3}[.)])[ \t]+|\|)", re.MULTILINE)
 
 #: How a block names ITSELF when its heading is a title: an identity field,
 #: in field position, whose value is one identifier and nothing else. The key
@@ -99,7 +102,12 @@ _ID_FIELD = re.compile(
     r"(?:message[ \t_-]*id|msg[ \t_-]*id|item[ \t_-]*id|ticket[ \t_-]*id|"
     r"id|item|message|ticket)"
     r"\**[ \t]*[:=|][ \t]*\**[ \t]*"
-    r"(\b[a-z][a-z0-9]{1,12}_\d{2,}\b|\B#\d{1,5}\b|(?<![-/])\b[A-Z]{2,6}-\d{1,6}\b)"
+    # The KEY is case-insensitive, the VALUE is not: `re.IGNORECASE` made
+    # `[a-z]` match `MSG_2209` and `[A-Z]` match `jira-4412`, so this field
+    # produced subjects `item_ids` never produces. The subject then indexed a
+    # dict built from `item_ids` and raised KeyError, which `loop_guards`
+    # suppresses — the whole deliverable went UNCHECKED and said nothing.
+    r"((?-i:\b[a-z][a-z0-9]{1,12}_\d{2,}\b|\B#\d{1,5}\b|(?<![-/])\b[A-Z]{2,6}-\d{1,6}\b))"
     # A parenthetical after the id is still that id's field:
     # `**Message ID:** msg_2205 (follow-up: msg_2212)` is a block about
     # msg_2205 that says where the thread went. What is still refused is a
@@ -219,24 +227,46 @@ def claim_owners(block: str, subject: str, ids: set[str], offset: int) -> set[st
     model was then asked to re-decide.
 
     So: the block's subject when it has one, else the items named in the claim's
-    own BULLET or paragraph, else — a claim with nothing nearer to attach to —
-    the block. The bullet is the unit rather than the line because prose wraps:
-    the measured recap put the item id on one physical line and the sentence
-    about it two lines later, in the same numbered item.
+    own BULLET, table row or paragraph. The unit is not the line because prose
+    wraps — the measured recap put the item id on one physical line and the
+    sentence about it two lines later, in the same numbered item.
+
+    A claim whose unit names nobody is attributed only where there is no
+    ambiguity left: a block about ONE item. In a block about several it is
+    DROPPED, with a line at DEBUG. "Overall the week is quiet; if it is real,
+    escalate immediately" is a closing sentence about the week, and reporting
+    it against every item listed above it is the fabrication this rule exists
+    to stop — a miss costs one unreported hedge, a fabrication costs the agent
+    a re-ask of a report that was right.
     """
     if subject:
-        return {subject} & ids or {subject}
+        return {subject} & ids
     if offset < 0:
         return ids
-    return {item for _at, item in item_id_spans(_claim_unit(block, offset))} or ids
+    start, end = claim_span(block, offset)
+    named = {item for _at, item in item_id_spans(block[start:end])}
+    if named:
+        return named
+    if len(ids) == 1:
+        return ids
+    logging.getLogger(__name__).debug(
+        "verdict sections: a claim at offset %d names no item and its block names %d — dropped",
+        offset,
+        len(ids),
+    )
+    return set()
 
 
-def _claim_unit(block: str, offset: int) -> str:
-    """The bullet or paragraph the text at ``offset`` belongs to."""
-    starts = [match.start() for match in _BULLET.finditer(block) if match.start() <= offset]
+def claim_span(block: str, offset: int) -> tuple[int, int]:
+    """``(start, end)`` of the bullet, table row or paragraph at ``offset``.
+
+    Also what bounds the sentence the re-ask QUOTES: shown the whole window,
+    the model was handed the next row's text and a trailing pipe.
+    """
+    starts = [match.start() for match in _UNIT_START.finditer(block) if match.start() <= offset]
     paragraph = block.rfind("\n\n", 0, offset)
     start = max([0, *starts, paragraph + 2 if paragraph >= 0 else 0])
-    ends = [match.start() for match in _BULLET.finditer(block) if match.start() > offset]
+    ends = [match.start() for match in _UNIT_START.finditer(block) if match.start() > offset]
     paragraph = block.find("\n\n", offset)
     end = min([len(block), *ends, paragraph if paragraph >= 0 else len(block)])
-    return block[start:end]
+    return start, end

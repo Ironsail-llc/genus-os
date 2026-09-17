@@ -2104,15 +2104,17 @@ class TestAClaimIsAboutTheLineItIsOn:
         )
         assert [item for item, _why in hedged_items(report)] == ["msg_2209"]
 
-    def test_a_hedge_on_a_line_naming_nobody_still_reaches_the_block(self) -> None:
-        """Unchanged where there is nothing better to anchor to: the hedge is
-        about the items the block is about, which is all of them."""
+    def test_a_hedge_whose_unit_names_nobody_is_dropped(self) -> None:
+        """Where there is nothing better to anchor to, the claim is DROPPED
+        rather than spread. Reporting it against both items is a fabrication
+        against at least one of them, and the cost of the miss is one
+        unreported hedge — see `TestAClaimAboutNobodyIsDropped`."""
         report = (
             "# Triage\n\n## Critical\n\n"
             "- msg_2301 and msg_2302 were both escalated.\n"
             "- If this is a routing drill, downgrade both.\n"
         )
-        assert sorted(item for item, _why in hedged_items(report)) == ["msg_2301", "msg_2302"]
+        assert hedged_items(report) == []
 
     def test_a_hand_back_is_anchored_the_same_way(self) -> None:
         report = (
@@ -2182,3 +2184,131 @@ class TestTheShapesOfAnIdentityField:
         from robothor.engine.verdict_sections import block_subject
 
         assert block_subject(f"### 1. An item\n{field}\n") == ""
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Round 3 of the review: a crash, a table, and a claim about nobody
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestASubjectIsAlwaysOneOfTheBlocksItems:
+    """CRASH. `_ID_FIELD` is case-insensitive and its value alternation was
+    too, so it read `MSG_2209` and `jira-4412` as subjects — identifiers
+    `item_ids` does not produce. The subject then indexed a dict built from
+    `item_ids`, raised KeyError inside `inspect_report`, and the
+    `contextlib.suppress` in `loop_guards` turned the whole deliverable into a
+    silent UNCHECKED. A guardrail that cannot read its input reporting an
+    honest zero forever, for the fourth time in this cluster.
+    """
+
+    @pytest.mark.parametrize(
+        "field",
+        ["- **Message ID:** MSG_2209", "- **Ticket:** jira-4412", "- **ID:** Msg_2209"],
+        ids=["upper-msg", "lower-ticket", "mixed-case"],
+    )
+    def test_a_value_the_id_vocabulary_rejects_never_crashes(self, field: str) -> None:
+        report = f"# Triage\n\n## Critical\n\n### 1. An outage\n{field}\n- Routed to @owner-a.\n"
+        assert hedged_items(report, RESULTS_WITH_MARKER) == []
+
+    @pytest.mark.parametrize(
+        "report",
+        [
+            MEASURED_REPORT,
+            FLAT_REPORT,
+            LIVE_REPORT,
+            LIVE_REPORT_B,
+            DOUBLE_VERDICT_REPORT,
+            COMMITTED_WITH_MARKER,
+            HEDGED_REPORT,
+        ],
+        ids=["measured", "flat", "live-a", "live-b", "double", "committed", "hedged"],
+    )
+    def test_every_subject_is_an_item_of_its_own_block(self, report: str) -> None:
+        """The invariant the crash violated, over every deliverable fixture in
+        this file: a block's subject is one of the ids that block names."""
+        from robothor.engine.verdict_sections import block_subject, blocks
+        from robothor.engine.verdict_shapes import item_ids
+
+        for block in blocks(report):
+            subject = block_subject(block)
+            assert subject == "" or subject in item_ids(block), block[:80]
+
+
+class TestATableRowIsAClaimsUnit:
+    """A markdown table has no blank lines and no bullets, so the whole table
+    was one unit: a hedge in one cell was attributed to every id in it."""
+
+    TABLE = """# Triage
+
+## Notes
+
+| Message ID | Owner | Note |
+|------------|-------|------|
+| msg_4101 | @owner-a | Routed and acknowledged. |
+| msg_4103 | @owner-b | Filed as a drill; if it is real, escalate immediately. |
+| msg_4105 | @owner-c | Closed with the customer. |
+"""
+
+    def test_a_hedge_in_one_row_is_about_that_row(self) -> None:
+        assert [item for item, _why in hedged_items(self.TABLE)] == ["msg_4103"]
+
+    def test_the_quoted_sentence_stops_at_the_row(self) -> None:
+        """And what the model is shown is that row, not the next one: the
+        re-ask quotes the sentence the agent has to replace."""
+        findings = hedged_items(self.TABLE)
+        why = findings[0][1]
+        assert "msg_4105" not in why
+        assert "|" not in why
+
+
+class TestAClaimAboutNobodyIsDropped:
+    """The block-wide fallback fabricated on its own. A closing paragraph —
+    "Overall the week is quiet; if it is real, escalate immediately." — names
+    nobody, and in a section listing several items it was reported against all
+    of them. A claim whose unit names nobody is attributed only where there is
+    exactly one item it could be about."""
+
+    def test_a_closing_paragraph_in_a_multi_item_section_is_dropped(self) -> None:
+        report = (
+            "# Triage\n\n## Notes\n\n"
+            "- msg_4201 went to @owner-a.\n"
+            "- msg_4202 went to @owner-b.\n"
+            "- msg_4203 went to @owner-c.\n\n"
+            "Overall the week is quiet; if it is real, escalate immediately.\n"
+        )
+        assert hedged_items(report) == []
+
+    def test_a_block_about_one_item_still_takes_the_claim(self) -> None:
+        """Fails closed, not silent: where the block names one item there is no
+        ambiguity about who the sentence is about."""
+        report = (
+            "# Triage\n\n## Critical\n\n### 1. An outage\n"
+            "- **Message ID:** msg_4204\n"
+            "- Routed to @owner-a.\n\n"
+            "If this is a routing drill, downgrade it.\n"
+        )
+        assert [item for item, _why in hedged_items(report)] == ["msg_4204"]
+
+    def test_the_drop_is_logged(self, caplog) -> None:
+        report = (
+            "# Triage\n\n## Notes\n\n"
+            "- msg_4205 went to @owner-a.\n"
+            "- msg_4206 went to @owner-b.\n\n"
+            "If this is a drill, downgrade both.\n"
+        )
+        with caplog.at_level(logging.DEBUG, logger="robothor.engine.verdict_sections"):
+            assert hedged_items(report) == []
+        assert "names no item" in caplog.text
+
+
+class TestTheQuotedSentenceStaysInsideItsUnit:
+    def test_the_next_bullet_is_not_quoted_into_the_re_ask(self) -> None:
+        report = (
+            "# Triage\n\n## Notes\n\n"
+            "1. msg_4301 was filed as a drill; if it is real, escalate immediately.\n"
+            "2. msg_4302 is a billing question and needs nothing from you.\n"
+        )
+        findings = hedged_items(report)
+        assert [item for item, _why in findings] == ["msg_4301"]
+        assert "msg_4302" not in findings[0][1]
+        assert "billing" not in findings[0][1]

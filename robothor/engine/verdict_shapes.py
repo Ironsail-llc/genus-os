@@ -33,7 +33,9 @@ from robothor.engine.override_reasons import names_a_reason
 __all__ = [
     "MAX_SCAN_CHARS",
     "VERDICTS",
+    "HEDGE_SCOPE",
     "hands_the_verdict_back",
+    "hedge_quote",
     "hedges_the_verdict",
     "item_id_spans",
     "item_ids",
@@ -159,9 +161,10 @@ _WHAT_IT_IS = re.compile(
     re.IGNORECASE,
 )
 
-#: How far after the hedge hinge to look for what it questions. Shorter than
+#: How far after the hedge hinge to look for what it questions, and how much
+#: of it the re-ask may quote. Shorter than
 #: the hand-back window: a conditional binds tighter than a request does.
-_HEDGE_SCOPE = 160
+HEDGE_SCOPE = 160
 
 #: An override stated outright. Paired with :data:`_PROVENANCE_WORD` below,
 #: because "regardless" on its own is an adverb and this has to be a claim
@@ -256,21 +259,31 @@ def hands_the_verdict_back(chunk: str) -> int:
     return -1
 
 
-def hedges_the_verdict(chunk: str) -> tuple[int, str]:
-    """``(offset, quoted text)`` of the retraction, or ``(-1, "")``.
+def hedges_the_verdict(chunk: str) -> int:
+    """WHERE this block takes its own verdict back, or ``-1``.
 
     Same two-halves shape as :func:`hands_the_verdict_back`, and for the same
     reason: the hinge word alone is far too common in an honest report. The
-    text is returned because the whole point of the enforce rung is that the
-    model is shown the sentence it has to replace, and the offset for the
-    reason given there.
+    sentence the model is shown comes from :func:`hedge_quote`, which the
+    caller bounds by the claim's own bullet or table row.
     """
     for match in _HEDGE.finditer(chunk):
-        window = chunk[match.end() : match.end() + _HEDGE_SCOPE]
+        window = chunk[match.end() : match.end() + HEDGE_SCOPE]
         if _WHAT_IT_IS.search(window):
-            quoted = " ".join(chunk[match.start() : match.end() + _HEDGE_SCOPE].split())
-            return match.start(), quoted[:120]
-    return -1, ""
+            return match.start()
+    return -1
+
+
+def hedge_quote(chunk: str, start: int, end: int) -> str:
+    """The retraction as the re-ask quotes it, whitespace-collapsed.
+
+    Bounded by the caller rather than by a fixed window: quoting the window
+    handed the model the next table row's text and a trailing pipe, which is
+    not a sentence it can replace.
+    """
+    # The trailing cell separator goes with it: a row's own `|` is markup,
+    # not part of the sentence the agent wrote.
+    return " ".join(chunk[start : min(end, start + HEDGE_SCOPE)].split()).rstrip(" |")[:120]
 
 
 def overrides_a_marker(chunk: str) -> bool:

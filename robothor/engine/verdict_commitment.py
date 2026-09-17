@@ -43,10 +43,11 @@ from pathlib import Path
 from typing import NamedTuple
 
 from robothor.engine.provenance_markers import markers_by_item, tool_result_text
-from robothor.engine.verdict_sections import block_subject, blocks, claim_owners
+from robothor.engine.verdict_sections import block_subject, blocks, claim_owners, claim_span
 from robothor.engine.verdict_shapes import (
     MAX_SCAN_CHARS,
     hands_the_verdict_back,
+    hedge_quote,
     hedges_the_verdict,
     item_ids,
     overrides_a_marker,
@@ -169,7 +170,7 @@ def inspect_report(report_text: str | None, results_text: str | None = None) -> 
         subject = block_subject(block)
         found = verdicts_in(block)
         asks_at = hands_the_verdict_back(block)
-        hedge_at, hedge = hedges_the_verdict(block)
+        hedge_at = hedges_the_verdict(block)
         override = overrides_a_marker(block)
         for item in ids:
             per_item.setdefault(item, set())
@@ -177,8 +178,13 @@ def inspect_report(report_text: str | None, results_text: str | None = None) -> 
             per_item[item].update(found)
         for item in claim_owners(block, subject, ids, asks_at) if asks_at >= 0 else ():
             handback[item] = True
-        for item in claim_owners(block, subject, ids, hedge_at) if hedge else ():
-            hedges.setdefault(item, hedge)
+        if hedge_at >= 0:
+            # Quoted no further than its own bullet or table row: the re-ask
+            # shows the model the sentence it has to replace, and a fixed
+            # window handed it the next row's text and a trailing pipe.
+            quote = hedge_quote(block, hedge_at, claim_span(block, hedge_at)[1])
+            for item in claim_owners(block, subject, ids, hedge_at):
+                hedges.setdefault(item, quote)
         for item in claim_owners(block, subject, ids, -1) if override else ():
             overridden[item] = True
 
