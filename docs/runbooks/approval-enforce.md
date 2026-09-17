@@ -1,5 +1,33 @@
 # Runbook: Flipping Human-Approval to Enforce Mode
 
+## Autonomy first
+
+Genus OS runs agents **autonomously**. That is the default and the design; no
+agent on a fresh install has an approval gate, and nothing in the platform asks
+you to add one. When an agent lacks a permission it needs, grant it or give the
+agent another route — do not put a person in front of it.
+
+The gate is a real feature and turning it on is one manifest edit, per agent,
+for the tools that agent chooses:
+
+```yaml
+v2:
+  guardrails: [human_approval]
+  human_approval_tools: [issue_refund]
+```
+
+Use it for an **irreversible external action** — a refund, a payment, a
+deletion in someone else's system — where the wrong call cannot be taken back.
+Those queue for a human and are worth the wait. Everything else should stay
+automated: on an unattended schedule nobody answers, so the call waits out
+`human_approval_timeout` and is denied, the run achieves nothing, and the
+operator gets one prompt per item.
+
+This runbook is the ENGINE half — what to set once an instance has decided it
+wants gates. It is not a recommendation to want them.
+
+## The loop
+
 The human-approval escalation loop lets a guardrail pause a tool call and
 require an operator's yes/no via Telegram before it proceeds:
 
@@ -132,18 +160,22 @@ report is the intended state during the soak, not a failure to fix by promoting
 early — so it is an `info` check and does **not** mark the instance
 `degraded`. Measured on the 16 stock templates:
 
-| Engine posture | `destructive_tool_not_gated` (recommended) | `approval_gate_not_armed` (info) | instance |
+| Engine posture | `approval_gate_available` (info) | `approval_gate_not_armed` (info) | instance |
 |---|---|---|---|
 | `ENABLED=1 MODE=enforce` (this instance's drop-in) | pass | pass | `ok` |
-| `ENABLED=1 MODE=observe` (the chart's default) | pass | fail | `ok`, one info line |
-| neither set (compose, or systemd without the drop-in) | pass | fail | `ok`, one info line |
+| `ENABLED=1 MODE=observe` (the chart's default) | pass | pass | `ok` |
+| neither set (compose, or systemd without the drop-in) | pass | pass | `ok` |
 
-The two checks are split by who owns the fix. **`agents.approval_gate_not_armed`**
-is about this engine's posture and clears the moment you finish the promotion
-above. **`agents.destructive_tool_not_gated`** is a manifest that granted a
-record-deleting tool without asking for a human at all — no flag can gate a
-tool the manifest never named — so that one stays `recommended` and does mark
-the instance `degraded` at every posture until the manifest is fixed.
+No shipped template declares a gate, so on a clean install the engine check has
+nothing to report at any posture. The two checks are split by what they read.
+**`agents.approval_gate_not_armed`** is about this engine's posture and clears
+the moment you finish the promotion above.
+**`agents.approval_gate_available`** reads the manifests and names which
+record-deleting grants have no gate, plus the two keys that add one. Both are
+`info` and neither degrades the instance: ungated is how Genus OS runs. Until
+2026-09-17 the second was `agents.destructive_tool_not_gated` at
+`recommended`, an instance read it as advice, and a nightly unattended hygiene
+scan spent every run asking a person to confirm a duplicate-contact delete.
 
 ### Status 2026-07-13 (historical): the gate was INERT, not clean
 

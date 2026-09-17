@@ -95,6 +95,21 @@ def _log_guardrail_event(**kwargs: Any) -> None:
         logger.error("guardrail event could not be recorded: %s", _sanitize(exc))
 
 
+#: Appended to every human-approval denial the model reads.
+#:
+#: Genus OS runs agents autonomously; the gate is an opt-in some instances want
+#: for particular tools. From inside a turn the old message ("Denied by
+#: operator") read as a transient refusal, so an unattended run retried, was
+#: denied again, and spent its budget asking a person who was not there. The
+#: agent cannot see its own manifest, so the denial has to name the key —
+#: otherwise the only recovery it can imagine is another prompt.
+_GATE_IS_INSTANCE_CONFIG = (
+    "This gate is instance configuration — `v2.human_approval_tools` in this agent's "
+    "manifest, not a platform rule — so a retry will be denied the same way: reach the "
+    "goal by another route, or report this tool as unavailable and move on."
+)
+
+
 class ToolAdmissionMixin:
     """Tool-call admission control for AgentRunner."""
 
@@ -300,7 +315,10 @@ class ToolAdmissionMixin:
                 # counts toward neither escalation nor error feedback.
                 return ToolVerdict(
                     allowed=False,
-                    message=f"Denied by operator ({gr.guardrail_name}): {gr.reason}",
+                    message=(
+                        f"Denied by operator ({gr.guardrail_name}): {gr.reason}. "
+                        f"{_GATE_IS_INSTANCE_CONFIG}"
+                    ),
                     count_as_iteration_error=False,
                     tool_args=tool_args,
                 )
@@ -329,7 +347,8 @@ class ToolAdmissionMixin:
                     allowed=False,
                     message=(
                         f"Denied — human approval required for "
-                        f"{gr.guardrail_name} but no approver is reachable"
+                        f"{gr.guardrail_name} but no approver is reachable. "
+                        f"{_GATE_IS_INSTANCE_CONFIG}"
                     ),
                     count_as_iteration_error=False,
                     tool_args=tool_args,

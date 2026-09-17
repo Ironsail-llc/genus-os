@@ -37,28 +37,31 @@ flags:
     soak: >
       The gate was INERT until 2026-07-13 (no agent set human_approval_tools, so
       nothing could ever escalate — zero events meant "no mechanism", not "safe").
-      Now real, but narrower than this entry used to claim, and the claim was
-      checked against the shipped templates rather than restated: the opt-in is
-      CRM-STEWARD, not main, and it is delete_person alone. main and
-      morning-briefing declare no tools_allowed and no human_approval, so they
-      hold every delete tool UNGATED. Neither doctor check reports them: both
-      scope to grants a manifest made ON PURPOSE, because "this agent is
+      Real since then, and as of 2026-09-17 no SHIPPED template declares a gate
+      at all: crm-steward's human_approval block became a commented example,
+      because arming it in a template made one instance's policy choice the
+      default for everyone who installed it — and on that agent's nightly
+      unattended scan every delete asked a person, timed out and was denied.
+      main and morning-briefing declare no tools_allowed and no human_approval,
+      so they hold every delete tool UNGATED. Neither doctor check reports them:
+      both scope to grants a manifest made ON PURPOSE, because "this agent is
       unrestricted" is a different finding and counting it fires on a clean
       install. vault_delete and
       gws_calendar_delete are named here as intent and are not covered by the
       check; docs/TOOLS.md says so plainly.
-      Two checks, split by owner: agents.destructive_tool_not_gated
-      (recommended) is a manifest that never asked for a human, which no flag
-      value can fix; agents.approval_gate_not_armed (info) is this engine not
-      enforcing the gates the manifests DID declare, which promoting this flag
-      is exactly what fixes. The second is info so that an instance correctly
-      sitting at observe during its soak does not report as degraded — the
-      Helm chart ships observe deliberately, because a chart cannot guarantee
-      an approver is wired and enforce with none denies every escalated call.
+      Two checks, split by what they read, and BOTH info so that neither can
+      mark an instance degraded for running the way the platform is designed to
+      run: agents.approval_gate_available reads the manifests and states which
+      destructive grants have no gate, plus the two keys that add one;
+      agents.approval_gate_not_armed is this engine not enforcing the gates the
+      manifests DID declare, which promoting this flag is exactly what fixes.
+      The first was agents.destructive_tool_not_gated at recommended until
+      2026-09-17, and an instance read the recommendation as an instruction.
       Deliberately narrow: the operator's standing mandate is autonomous
       operation, so sending email, calendar creation and everything else stay
-      ungated. A delete cannot be undone and is rare, so one Telegram tap costs
-      nothing. Timeout = deny, fail-secure; the default is 300s
+      ungated, and the gate is for irreversible external actions — a refund, a
+      payment — that an instance chooses to queue.
+      Timeout = deny, fail-secure; the default is 300s
       (models.py human_approval_timeout), not the 600s this entry used to say.
       Probe-verified: deletes escalate, gws_gmail_send and search_memory stay
       autonomous.

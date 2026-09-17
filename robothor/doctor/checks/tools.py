@@ -28,10 +28,11 @@ carry agent ids and tool names.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from fnmatch import fnmatch
 from typing import TYPE_CHECKING, Any
 
-from robothor.doctor.model import Check, Result, fail, ok, skip
+from robothor.doctor.model import Check, Result, fail, info, ok, skip
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from pathlib import Path
@@ -571,7 +572,7 @@ async def _exec_allowlist_bypasses_denied_tool(ctx: DoctorContext) -> Result:
     return fail(f"{len(lines)} agent(s) whose exec allowlist bypasses a denied tool: {shown}")
 
 
-# ── agents.approval_gate_not_armed ────────────────────────────────────
+# ── agents.approval_gate_available ────────────────────────────────────
 
 #: Tools that destroy a record outright, where "it was wrong" is not something
 #: the operator can undo from the UI.
@@ -586,6 +587,24 @@ async def _exec_allowlist_bypasses_denied_tool(ctx: DoctorContext) -> Result:
 _DESTRUCTIVE_TOOLS: frozenset[str] = frozenset(
     {"delete_person", "delete_company", "delete_note", "delete_task"}
 )
+
+
+@dataclass(frozen=True)
+class _Grant:
+    """One agent's destructive grants, and what its manifest says about them.
+
+    A record rather than a preformatted line so the caller can count TOOLS as
+    well as agents: "3 destructive tools" and "1 agent" are different facts and
+    the report states the first.
+    """
+
+    agent_id: str
+    tools: tuple[str, ...]
+    note: str = ""
+
+    def __str__(self) -> str:
+        tail = f" ({self.note})" if self.note else ""
+        return f"{self.agent_id}: {', '.join(self.tools)}{tail}"
 
 
 def _approval_gate_state() -> tuple[str, str]:
@@ -620,7 +639,7 @@ def _approval_gate_state() -> tuple[str, str]:
     )
 
 
-def _destructive_grants(directory: Path) -> tuple[list[str], list[str]]:
+def _destructive_grants(directory: Path) -> tuple[list[_Grant], list[_Grant]]:
     """``(ungated, gated)`` destructive grants across this instance's manifests.
 
     Scoped to grants the manifest has an OPINION about: a record-deleting tool
@@ -631,18 +650,20 @@ def _destructive_grants(directory: Path) -> tuple[list[str], list[str]]:
     install and gets ignored.
 
     **ungated** — the manifest itself does not gate them, so no environment
-    setting can. Three ways, and an operator can hold any of the three beliefs
-    while reading a manifest that looks careful: the policy is missing from
-    ``v2.guardrails``; ``v2.human_approval_tools`` does not name the tool; or
-    ``human_approval_fail_open: true`` defeats ``enforce`` outright.
+    setting can. Three ways: the policy is missing from ``v2.guardrails``;
+    ``v2.human_approval_tools`` does not name the tool; or
+    ``human_approval_fail_open: true`` defeats ``enforce`` outright. None of
+    the three is a defect — ungated is what the platform does by default — but
+    an operator reading a manifest that looks careful may believe otherwise,
+    and that mismatch is worth recording.
 
     **gated** — the manifest declares both halves correctly. Whether anything
     actually escalates then depends entirely on the engine's two environment
     variables, which is the half nothing else brings together.
     """
     registered = _registered_names()
-    ungated: list[str] = []
-    gated: list[str] = []
+    ungated: list[_Grant] = []
+    gated: list[_Grant] = []
     for manifest in _scan_manifests(directory):
         v2 = manifest.get("v2") or {}
         if not isinstance(v2, dict):
@@ -673,46 +694,64 @@ def _destructive_grants(directory: Path) -> tuple[list[str], list[str]]:
         agent_id = str(manifest.get("id") or manifest.get("name") or "?")
         if "human_approval" not in policies:
             ungated.append(
-                f"{agent_id}: {', '.join(sorted(interesting))} "
-                "(v2.guardrails does not list human_approval, so nothing escalates)"
+                _Grant(
+                    agent_id,
+                    tuple(sorted(interesting)),
+                    "v2.guardrails does not list human_approval, so nothing escalates",
+                )
             )
             continue
-        missing = sorted(interesting - named)
+        missing = tuple(sorted(interesting - named))
         if missing:
-            ungated.append(f"{agent_id}: {', '.join(missing)} (not in human_approval_tools)")
-        covered = sorted(interesting & named)
+            ungated.append(_Grant(agent_id, missing, "not in human_approval_tools"))
+        covered = tuple(sorted(interesting & named))
         if not covered:
             continue
         if v2.get("human_approval_fail_open"):
             ungated.append(
-                f"{agent_id}: {', '.join(covered)} (human_approval_fail_open: true defeats enforce)"
+                _Grant(agent_id, covered, "human_approval_fail_open: true defeats enforce")
             )
         else:
-            gated.append(f"{agent_id}: {', '.join(covered)}")
+            gated.append(_Grant(agent_id, covered))
     return ungated, gated
 
 
-def _summarise(lines: list[str]) -> str:
-    shown = "; ".join(lines[:_MAX_LISTED])
-    if len(lines) > _MAX_LISTED:
-        shown += f"; and {len(lines) - _MAX_LISTED} more"
+def _summarise(grants: list[_Grant]) -> str:
+    shown = "; ".join(str(grant) for grant in grants[:_MAX_LISTED])
+    if len(grants) > _MAX_LISTED:
+        shown += f"; and {len(grants) - _MAX_LISTED} more"
     return shown
 
 
-async def _destructive_tool_not_gated(ctx: DoctorContext) -> Result:
-    """A record-deleting tool granted with no human in the loop declared.
+def _tool_total(grants: list[_Grant]) -> int:
+    return sum(len(grant.tools) for grant in grants)
 
-    The MANIFEST half, and the half whose fix is the operator's regardless of
-    how the engine is configured: no environment setting can gate a tool the
-    manifest never named in ``v2.human_approval_tools``, never paired with
-    ``v2.guardrails: [human_approval]``, or exempted with
-    ``human_approval_fail_open: true``.
 
-    Split from :func:`_approval_gate_not_armed` because the two findings have
-    different owners and different urgencies, and ``recommended`` on the pair
-    of them marked an instance ``degraded`` for a posture the platform's own
-    chart ships. This one stays ``recommended``: it is a real gap, and it does
-    not go away by promoting a flag.
+async def _approval_gate_available(ctx: DoctorContext) -> Result:
+    """Which record-deleting grants declare the OPTIONAL approval gate.
+
+    A fact for the record, never a recommendation. Genus OS runs agents
+    autonomously by design; ``v2.human_approval_tools`` is an opt-in an
+    instance may want for particular tools, and nothing in the platform may
+    push anyone toward it.
+
+    It shipped as ``agents.destructive_tool_not_gated`` at ``recommended``,
+    which read as "you should gate this" — and on 2026-09-17 an instance did:
+    a nightly CRM hygiene scan put ``delete_person`` behind ``human_approval``,
+    so every duplicate-contact delete asked a person on an unattended run,
+    waited out ``human_approval_timeout`` and was denied. The run deleted
+    nothing and the operator got one prompt per duplicate.
+
+    So the severity is ``info`` AND the result is a ``pass``. Severity alone
+    only keeps the row out of the ``recommended`` count; a red cross beside a
+    sentence explaining that this is the default is the same nudge wearing a
+    different label.
+
+    Not silence either. The gate is a good feature and turning it on must stay
+    easy, so the line says the gate is AVAILABLE and names the two manifest
+    keys that switch it on — an operator who wants a human in the loop for a
+    refund or a payment should not have to go looking. What it does not do is
+    imply that anything is missing.
     """
     directory = _manifest_dir(ctx)
     if not directory.is_dir():
@@ -728,9 +767,14 @@ async def _destructive_tool_not_gated(ctx: DoctorContext) -> Result:
         # the stock templates hold all four record-deleting tools that way — so
         # "every destructive grant is gated" would be a reassurance nobody
         # earned.
-        return ok("every record-deleting grant an agent made on purpose is declared gated")
-    return fail(
-        f"{len(ungated)} record-deleting grant(s) with no human in the loop: {_summarise(ungated)}"
+        return ok("every record-deleting grant an agent made on purpose declares the optional gate")
+    return info(
+        f"{_tool_total(ungated)} destructive tools are granted without an approval gate; "
+        "the gate is optional (`human_approval_tools`) — autonomous is the default. "
+        "It is available per agent and takes one manifest edit: add the tool to "
+        "v2.human_approval_tools and human_approval to v2.guardrails. Worth it for an "
+        f"irreversible external action — a refund, a payment; rarely for anything else: "
+        f"{_summarise(ungated)}"
     )
 
 
@@ -742,14 +786,13 @@ async def _approval_gate_not_armed(ctx: DoctorContext) -> Result:
     manifest can read as carefully gated in review and run ungated in
     production, because ``ROBOTHOR_APPROVAL_MODE=enforce`` alone is a no-op.
 
-    ``info``, not ``recommended``, because ``observe`` is a deliberate rung on
-    a documented ladder and the platform's own Helm chart ships it — a chart
-    cannot guarantee an approver is wired, and ``enforce`` with none denies
-    every escalated call. Reporting a correctly-configured instance mid-soak as
-    ``degraded`` is the "a check that fires on a clean install is a check
-    nobody reads" failure this module argues against twice. The manifest gap
-    that IS the operator's to fix is
-    :func:`_destructive_tool_not_gated`, and that one still degrades.
+    ``info``, and it says so in words as well: an unarmed gate is the DEFAULT
+    posture, not a gap. ``observe`` is a deliberate rung on a documented ladder
+    and the platform's own Helm chart ships it — a chart cannot guarantee an
+    approver is wired, and ``enforce`` with none denies every escalated call.
+    Reporting a correctly-configured instance mid-soak as ``degraded`` is the
+    "a check that fires on a clean install is a check nobody reads" failure
+    this module argues against twice.
     """
     directory = _manifest_dir(ctx)
     if not directory.is_dir():
@@ -767,10 +810,11 @@ async def _approval_gate_not_armed(ctx: DoctorContext) -> Result:
         return ok("the approval gate is enforcing, so every declared gate applies")
     return fail(
         f"{len(gated)} declared approval gate(s) this run will not apply: "
-        f"{_summarise(gated)}. {why}. Escalations are recorded and the call proceeds; "
-        "promote with the checklist in docs/runbooks/approval-enforce.md — wire an "
-        "approver, prove one round-trip, soak 48h, then set "
-        "ROBOTHOR_APPROVAL_MODE=enforce."
+        f"{_summarise(gated)}. An unarmed gate is the default, not a gap — the gate is "
+        f"opt-in and the platform runs agents autonomously. {why}. Escalations are "
+        "recorded and the call proceeds; if this instance wants the gate, promote with "
+        "the checklist in docs/runbooks/approval-enforce.md — wire an approver, prove "
+        "one round-trip, soak 48h, then set ROBOTHOR_APPROVAL_MODE=enforce."
     )
 
 
@@ -903,11 +947,11 @@ CHECKS: tuple[Check, ...] = (
         run=_tools_named_but_not_granted,
     ),
     Check(
-        id="agents.destructive_tool_not_gated",
-        title="A record-deleting tool is granted with a human in the loop",
+        id="agents.approval_gate_available",
+        title="Record-deleting grants, and which declare the optional approval gate",
         category="agents",
-        severity="recommended",
-        run=_destructive_tool_not_gated,
+        severity="info",
+        run=_approval_gate_available,
     ),
     Check(
         id="agents.approval_gate_not_armed",

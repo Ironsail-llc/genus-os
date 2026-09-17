@@ -201,7 +201,7 @@ fails if one is re-dated without a reason.
 | `ROBOTHOR_RBAC_MODE` | enforce | done 2026-07-02 |
 | `ROBOTHOR_INJECTION_SCAN_MODE` | enforce | done 2026-07-13 — 0 events in 11d |
 | `ROBOTHOR_EXEC_ALLOWLIST_STRICT_MODE` | enforce | done 2026-07-13 |
-| `ROBOTHOR_APPROVAL_MODE` | enforce | done 2026-07-13, on a watched day (see `docs/runbooks/approval-enforce.md`) |
+| `ROBOTHOR_APPROVAL_MODE` | enforce | done 2026-07-13, on a watched day (see `docs/runbooks/approval-enforce.md`). This flag only decides what happens to an escalation an agent's OWN manifest asked for — agents run autonomously and no shipped template declares a gate, so on a clean install it changes nothing |
 | `ROBOTHOR_COMPLETION_CONTRACTS_MODE` | enforce | done 2026-07-14 — 3 events, evidence gap fixed |
 | `ROBOTHOR_RIP_7_MODE` | enforce | done 2026-07-13 — the only positively PROVEN mechanism |
 | `ROBOTHOR_ADMISSION_MODE` | enforce | **enforcing since 2026-08-27**; recorded in `flags.yaml` 2026-09-02. 52 `execution_mode_admission` rows 08-28..30 prove it fires. 14 are `critical:` — a pool reservation defect, fixed separately, NOT a reason to drop back to observe |
