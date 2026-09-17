@@ -31,6 +31,7 @@ import re
 from robothor.engine.override_reasons import names_a_reason
 
 __all__ = [
+    "ITEM_ID",
     "MAX_SCAN_CHARS",
     "VERDICTS",
     "HEDGE_SCOPE",
@@ -51,14 +52,18 @@ MAX_SCAN_CHARS = 64 * 1024
 #: What an enumerated item looks like. Three shapes, all of them explicit
 #: identifiers rather than anything inferred: `msg_2209`, `#12`, `TASK-4`.
 #:
+#: PUBLIC because `verdict_sections` builds its identity-field pattern out of
+#: it. A second copy of this alternation lived there until it diverged by one
+#: flag — `re.IGNORECASE` on the field made it admit `MSG_2209`, which this
+#: pattern rejects — and a subject no other reader recognised crashed the
+#: inspection. One definition, interpolated, is what makes that structural.
+#:
 #: The ticket-key shape refuses a match that continues a longer code. A
 #: reference number in a marker footer — `Ref: Q1-2026-RT-003` — ends in
 #: something that reads exactly like `RT-003`, and the measured runs each
 #: produced a phantom finding against that non-existent item alongside the real
 #: one. A ticket key is a whole token, not the tail of one.
-_ITEM_ID = re.compile(
-    r"\b[a-z][a-z0-9]{1,12}_\d{2,}\b|\B#\d{1,5}\b|(?<![-/])\b[A-Z]{2,6}-\d{1,6}\b"
-)
+ITEM_ID = re.compile(r"\b[a-z][a-z0-9]{1,12}_\d{2,}\b|\B#\d{1,5}\b|(?<![-/])\b[A-Z]{2,6}-\d{1,6}\b")
 
 #: The verdict vocabulary. A closed list, because an open one would read a
 #: paragraph's adjectives as verdicts. Each entry is a label a triage
@@ -215,7 +220,7 @@ def item_id_spans(chunk: str) -> list[tuple[int, str]]:
     The offsets are what binds a metadata field to the item it belongs to:
     a field belongs to the last identifier introduced before it.
     """
-    return [(match.start(), match.group(0)) for match in _ITEM_ID.finditer(chunk)]
+    return [(match.start(), match.group(0)) for match in ITEM_ID.finditer(chunk)]
 
 
 def item_ids(chunk: str) -> set[str]:
@@ -283,7 +288,7 @@ def hedge_quote(chunk: str, start: int, end: int) -> str:
     """
     # The trailing cell separator goes with it: a row's own `|` is markup,
     # not part of the sentence the agent wrote.
-    return " ".join(chunk[start : min(end, start + HEDGE_SCOPE)].split()).rstrip(" |")[:120]
+    return " ".join(chunk[start : min(end, start + HEDGE_SCOPE)].split())[:120].rstrip(" |")
 
 
 def overrides_a_marker(chunk: str) -> bool:

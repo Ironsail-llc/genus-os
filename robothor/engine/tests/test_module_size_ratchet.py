@@ -456,6 +456,17 @@ CAPS = {
     # extract: the counts are produced by the same single pass over the document
     # that produces the findings, and computing them anywhere else would mean
     # scanning twice.
+    # 443 -> 452: the subject gate. `### 4. msg_3104 — duplicate of msg_3101`
+    # filed msg_3101 under a verdict it never received, so a block that names
+    # itself decides that item alone. Nine lines: the call site and the branch,
+    # with the rule itself in verdict_sections.py.
+    # 452 -> 456: the identity FIELD arrives with it (the first live `enforce`
+    # run titled every item and identified it in a field), which is one more
+    # import and the same branch.
+    # 456 -> 462: the four shapes are attributed separately — a verdict to the
+    # block, a claim to its own bullet or row — plus the bounded quote for the
+    # re-ask. Six lines here; the attribution rule is in verdict_sections.py
+    # and the quoting in verdict_shapes.py, which is why this stayed small.
     "robothor/engine/verdict_commitment.py": 462,
     # Bounded from the day they land, the schedule_reconcile.py rule: these are
     # the modules that would otherwise absorb every new document shape and
@@ -476,7 +487,14 @@ CAPS = {
     # subject line, against a block whose verdict was `not escalated`), and
     # the two claim detectors return WHERE they matched so the caller can
     # attribute them. Both are vocabulary questions, which is this file.
-    "robothor/engine/verdict_shapes.py": 309,
+    # 296 -> 309: `hedge_quote`, and `ITEM_ID` made public. The quote is now
+    # bounded by the caller — the model was being shown the next table row's
+    # text and a trailing pipe — and the item vocabulary is public because
+    # `verdict_sections` builds its identity field out of it. A hand-copied
+    # second alternation there had diverged by one flag, which is what crashed
+    # the whole inspection; one definition cannot drift from itself. (314 with
+    # the note that says so, which is the part that keeps it one.)
+    "robothor/engine/verdict_shapes.py": 314,
     # The section tree. Bounded from the day it lands: this is where every
     # future rule about how a document is SHAPED will want to go, and the two
     # it already carries are the ones that kept the repair from inventing
@@ -501,8 +519,10 @@ CAPS = {
     # deliverable UNCHECKED); a table was one unit because it has neither
     # blank lines nor bullets; and a claim whose unit names nobody was spread
     # over every id in its block instead of being dropped. Three rules and
-    # their measurements.
-    "robothor/engine/verdict_sections.py": 272,
+    # their measurements. 272 -> 275: the identity field is now built by
+    # interpolating `verdict_shapes.ITEM_ID` rather than restating it, so the
+    # invariant the crash broke is structural rather than sampled.
+    "robothor/engine/verdict_sections.py": 275,
     # Whether an override named a reason. Bounded for the same reason and with
     # the same history: three rounds of review each found a sentence that named
     # nothing and was exempted anyway — and, the last time, six that named

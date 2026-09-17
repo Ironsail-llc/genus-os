@@ -45,7 +45,7 @@ from __future__ import annotations
 import logging
 import re
 
-from robothor.engine.verdict_shapes import VERDICTS, item_id_spans, verdicts_in
+from robothor.engine.verdict_shapes import ITEM_ID, VERDICTS, item_id_spans, verdicts_in
 
 __all__ = ["block_subject", "blocks", "claim_owners", "claim_span"]
 
@@ -102,12 +102,15 @@ _ID_FIELD = re.compile(
     r"(?:message[ \t_-]*id|msg[ \t_-]*id|item[ \t_-]*id|ticket[ \t_-]*id|"
     r"id|item|message|ticket)"
     r"\**[ \t]*[:=|][ \t]*\**[ \t]*"
-    # The KEY is case-insensitive, the VALUE is not: `re.IGNORECASE` made
-    # `[a-z]` match `MSG_2209` and `[A-Z]` match `jira-4412`, so this field
-    # produced subjects `item_ids` never produces. The subject then indexed a
-    # dict built from `item_ids` and raised KeyError, which `loop_guards`
-    # suppresses — the whole deliverable went UNCHECKED and said nothing.
-    r"((?-i:\b[a-z][a-z0-9]{1,12}_\d{2,}\b|\B#\d{1,5}\b|(?<![-/])\b[A-Z]{2,6}-\d{1,6}\b))"
+    # The value is `verdict_shapes.ITEM_ID` itself, interpolated, and the
+    # `(?-i:…)` keeps it case-SENSITIVE inside a case-insensitive key. Both
+    # halves are the same defect: a hand-copied alternation here diverged by
+    # one flag, `re.IGNORECASE` made `[a-z]` match `MSG_2209` and `[A-Z]`
+    # match `jira-4412`, and this field produced subjects `item_ids` never
+    # produces. That subject indexed a dict built from `item_ids`, raised
+    # KeyError, and `loop_guards` suppressed it — the whole deliverable went
+    # UNCHECKED and said nothing. One definition cannot drift from itself.
+    rf"((?-i:{ITEM_ID.pattern}))"
     # A parenthetical after the id is still that id's field:
     # `**Message ID:** msg_2205 (follow-up: msg_2212)` is a block about
     # msg_2205 that says where the thread went. What is still refused is a

@@ -2312,3 +2312,32 @@ class TestTheQuotedSentenceStaysInsideItsUnit:
         assert [item for item, _why in findings] == ["msg_4301"]
         assert "msg_4302" not in findings[0][1]
         assert "billing" not in findings[0][1]
+
+
+class TestTheIdVocabularyHasOneDefinition:
+    """The KeyError existed because two copies of the same alternation drifted
+    apart by one flag. The field pattern is now built out of the vocabulary it
+    has to agree with, so the next reader cannot re-create that gap."""
+
+    def test_the_identity_field_is_built_from_the_item_vocabulary(self) -> None:
+        from robothor.engine.verdict_sections import _ID_FIELD
+        from robothor.engine.verdict_shapes import ITEM_ID
+
+        assert f"(?-i:{ITEM_ID.pattern})" in _ID_FIELD.pattern
+
+    @pytest.mark.parametrize(
+        ("field", "subject"),
+        [
+            ("- **Message ID:** msg_2208", "msg_2208"),
+            ("- **Ticket:** ABC-12", "ABC-12"),
+            ("- **Message ID:** MSG_2209", ""),
+            ("- **Ticket:** jira-4412", ""),
+        ],
+        ids=["msg", "ticket", "upper-msg", "lower-ticket"],
+    )
+    def test_the_field_admits_exactly_what_the_vocabulary_admits(
+        self, field: str, subject: str
+    ) -> None:
+        from robothor.engine.verdict_sections import block_subject
+
+        assert block_subject(f"### 1. An item\n{field}\n") == subject
