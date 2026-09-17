@@ -276,26 +276,34 @@ def nudge_for_missing_deliverable(session: Any, workspace: str | Path | None = N
     # written over everything the run was actually shown. A run that never read
     # the tail of its own listing can satisfy both of the first two and still be
     # answering about a smaller world than the one the task put in front of it.
-    from robothor.engine.observation_notes import (
-        unobserved_change_nudge,
-        unread_observation_hold,
-    )
+    # Suppressed the way `append_engine_note` above suppresses its own extras:
+    # these run inside the runner's main loop, and a pacing aid that can raise
+    # there takes the run with it (hostile review M6). A control that cannot
+    # fire is a worse outcome than a run that ends unaided, but a control that
+    # ends the run is worse than both.
+    with contextlib.suppress(Exception):
+        from robothor.engine.observation_notes import unread_observation_hold
 
-    if unread_observation_hold(session):
-        return True
+        if unread_observation_hold(session):
+            return True
     # And the other half of the same question: did it change something at the
     # other end and never look again. Delivered HERE rather than only at a
     # check-in, because the check-in cadence is every 25 iterations and the run
     # this exists for made 21 requests — the moment it tried to stop is the one
     # moment it was certain to reach.
-    if unobserved_change_nudge(session):
-        return True
+    with contextlib.suppress(Exception):
+        from robothor.engine.observation_notes import unobserved_change_nudge
+
+        if unobserved_change_nudge(session):
+            return True
     # Fourth and last: where the task asked for a decision per item, does the
     # artefact contain one. Its own flag, because it is the only question here
     # that is about judgement rather than about information.
-    from robothor.engine.verdict_commitment import hold_for_hedged_verdicts
+    with contextlib.suppress(Exception):
+        from robothor.engine.verdict_commitment import hold_for_hedged_verdicts
 
-    return hold_for_hedged_verdicts(session, workspace)
+        return bool(hold_for_hedged_verdicts(session, workspace))
+    return False
 
 
 def reask_for_wrong_deliverable_shape(session: Any, workspace: str | Path | None = None) -> bool:

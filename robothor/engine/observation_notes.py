@@ -300,6 +300,13 @@ def record_observation_verdicts(run: Any, session: Any, workspace: Any = None) -
         record_verdict_findings(run, session, workspace)
 
 
+#: Controls that can HOLD a run at `enforce`, and so may honestly write a
+#: `blocked` guardrail row. `act_observe` is deliberately absent: its own flag
+#: doc promises it never fails a run, and a table reading three blocks where one
+#: is advice is a table an operator cannot act on (hostile review M1).
+_CAN_BLOCK = frozenset({"truncation_ledger", "verdict_commitment"})
+
+
 def _log_event(run: Any, name: str, mode: str, reason: str) -> None:
     with contextlib.suppress(Exception):
         from robothor.engine.tracking import log_guardrail_event
@@ -307,7 +314,7 @@ def _log_event(run: Any, name: str, mode: str, reason: str) -> None:
         log_guardrail_event(
             run_id=run.id,
             guardrail_name=name,
-            action="blocked" if mode == "enforce" else "observed",
+            action="blocked" if (mode == "enforce" and name in _CAN_BLOCK) else "observed",
             reason=reason[:500],
             mode=mode,
         )

@@ -87,10 +87,10 @@ _CODE_SCHEMAS: dict[str, dict[str, Any]] = {
             "description": (
                 "Use this when the SAME tool call repeats over many items — loop "
                 "over ids, fetch each page, check every file. The snippet calls "
-                "your tools with `from genus_tools import web_fetch`, so fifty "
-                "lookups cost one turn and each keeps its whole response on this "
-                "run's ledger — `urllib` or `curl` keeps only what you print. Big "
-                "stdout goes to `stdout_file`. Needs `exec`."
+                "your tools with `from genus_tools import web_fetch` or "
+                "`genus_tools.call(name, **args)`, so fifty lookups cost one turn. "
+                "PRINT each response — only stdout reaches you, and over ~50,000 "
+                "chars it goes to `stdout_file`. Needs `exec`."
             ),
             "parameters": {
                 "type": "object",

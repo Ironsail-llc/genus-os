@@ -136,7 +136,7 @@ CAPS = {
     # for a decision per item, did its artefact contain one. Both bodies are in
     # their own modules (observation_ledger.py, verdict_commitment.py); what
     # this file gains is the chaining, which is the job this file exists for.
-    "robothor/engine/loop_guards.py": 360,
+    "robothor/engine/loop_guards.py": 368,
     # 937 (2026-09-13): every module the delivery path runs through was capped
     # except the one that decides delivery. It was uncapped when the
     # thin-announce fallback landed, so nothing but review stood between that
@@ -251,7 +251,7 @@ CAPS = {
     # re-run is compared on the TARGET with the query stripped, and a call that
     # observed nothing no longer counts. Findings I4, I5 and M2.
     "robothor/engine/observation_ledger.py": 362,
-    "robothor/engine/observation_notes.py": 317,
+    "robothor/engine/observation_notes.py": 324,
     # 265 -> 322: the guardrail row this control writes at finalization on
     # `observe` as well as `enforce`. Without it `flags/evidence.py` would
     # report the one ladder whose promotion depends on watching the evidence as

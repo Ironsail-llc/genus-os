@@ -446,6 +446,14 @@ Both work. They differ in what survives the call.
 | `genus_tools.call("x", …)` inside `execute_code` | The **whole response**, on this run's step ledger, whatever the snippet printed — plus the audit row, the guardrail pass and the post-condition check a turn's call gets. |
 | `urllib` / `requests` / `curl` inside `exec` or a snippet | **Only what you printed.** Everything else is gone the moment the process exits. |
 
+**The step ledger is not your context.** A proxied call earns a durable row
+that the run viewer, the verification pass and an operator can read afterwards
+— and it deliberately does **not** put a message in front of you, because the
+whole value of the code path is that fifty lookups cost one turn's context
+rather than fifty. You cannot read that row back later. So `genus_tools` makes
+the response *recoverable by a human*; only printing it makes the response
+*available to you*. Print what you need to reason about, every time.
+
 That difference decided a graded task. An agent sent twelve messages in one
 loop and printed `result.get("status")`; the service had returned a follow-up
 message inline in three of those very responses, carrying a deadline, a penalty

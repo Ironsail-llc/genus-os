@@ -42,23 +42,43 @@ did.
 
 | Control | `off` | `observe` (default) | `enforce` |
 |---|---|---|---|
-| `truncation_ledger` | no ledger built at all | the ledger is kept; unresolved entries are logged at WARNING with the run id at each check-in; unresolved entries at finalization write an `agent_guardrail_events` row (`action='observed'`); nothing is shown to the model | each unresolved entry is quoted to the model once at a deliverable check-in; a run trying to finish with one outstanding is held for exactly ONE more ask; still-unresolved entries at finalization write the same row with `action='blocked'` |
-| `act_observe` | no ledger, no classification | pending unread state-changes are logged at WARNING at each check-in; unresolved changes at finalization write an `agent_guardrail_events` row (`action='observed'`) | one note at a deliverable check-in — never more than once per run — telling the agent what it changed and has not re-read; blocks nothing; still-pending changes at finalization write the same row with `action='blocked'` |
-| `verdict_commitment` | nothing computed | a WARNING log line naming the hedged items, once per finalization pass; **no durable row** (see below) | one re-ask, at most once per run, quoting up to five hedged items and asking for one verdict each |
+| `truncation_ledger` | no ledger built at all | the ledger is kept; unresolved entries are logged at WARNING with the run id; unresolved entries at finalization write an `agent_guardrail_events` row (`action='observed'`); nothing is shown to the model | each unresolved entry is quoted to the model once; a run trying to finish with one outstanding is held for up to TWO more model turns — "go and read it", then "say in your answer what you did not read" — and then ends regardless; still-unresolved entries at finalization write the same row with `action='blocked'` |
+| `act_observe` | no ledger, no classification | pending unread state-changes are logged at WARNING; unresolved changes at finalization write an `agent_guardrail_events` row (`action='observed'`) | one note, once per run, telling the agent what it changed and has not re-read — delivered at a check-in if one fires, otherwise at the run's stop, which costs one extra model turn; it never fails a run; still-pending changes at finalization write the same row, also `action='observed'` |
+| `verdict_commitment` | nothing computed | a WARNING naming the hedged items, plus an `agent_guardrail_events` row (`action='observed'`) from `record_verdict_findings` | one re-ask, at most once per run, quoting up to five hedged items and asking for one verdict each; findings that survive it write the same row with `action='blocked'` |
 
-Two things about this table are easy to misread:
+Three things about this table are easy to misread:
 
 * **`action='blocked'` here does not mean a tool call was refused.** Nothing in
-  either ladder ever refuses a call. It means the entry was still unresolved
-  when the run reached finalization even under `enforce` — i.e. the one extra
-  ask did not produce a read, and the run finished honestly naming what it
-  never looked at. A `blocked` row is evidence the safety net caught something
-  the ask alone did not fix, not evidence of a refusal.
+  any of the three ladders ever refuses a call. It means the entry was still
+  unresolved when the run reached finalization even under `enforce` — the extra
+  asks did not produce a read — and the run finished saying so. A `blocked` row
+  is evidence the safety net caught something the ask alone did not fix.
+* **`act_observe` never writes `blocked`, on any rung.** Its own flag doc
+  promises it never fails a run, and it does not: at `enforce` it costs at most
+  one extra model turn. A table reading three blocks where one of them is
+  advice is a table nobody can act on, so its rows are always `observed`.
 * **A resolved entry never appears at all.** If the run reads its own spill
-  back, or re-reads the source it changed, before it reaches a check-in, no row
-  is written for that entry, on either rung. The absence of a row is therefore
+  back, or re-reads the source it changed, before it tries to stop, no row is
+  written for that entry on either rung. The absence of a row is therefore
   ambiguous between "this never happened" and "this happened and the run
   recovered on its own" — see "How to read a quiet table" below.
+
+**A hold is a model turn, not a refusal.** This is the distinction the first
+cut of `truncation_ledger` got wrong and it is worth stating plainly. The
+runner's stop branch reads
+
+```python
+if nudge_for_missing_deliverable(session, _workspace):
+    continue
+return
+```
+
+so a control that appends a note and returns `False` returns the run — no
+further LLM call happens, and `session.get_final_text()` walks backwards to the
+last message whose role is `assistant`, which is the answer produced *before*
+the note. A note delivered that way reaches the transcript and nothing else.
+Every hold described above therefore returns `True` and costs a real model
+turn, and every one of them is bounded so the run always ends.
 
 ### Truncation ledger
 
@@ -76,17 +96,27 @@ read_file it, or re-run with a narrower command]
 chars_total, path)` for every truncated result and clears an entry only two
 ways, both requiring a call that came back **whole**:
 
-* the run reads the spill file back — its path appears in a later call's
-  arguments — the resolution `is_spill_readback` in `exec_spill.py` also uses,
-  to keep this reader exempt from the repeat-call guard and the no-progress
-  detector; or
-* the run re-runs the same tool over the same source, narrower, and this time
-  nothing was cut.
+* **the run reads the spill file back**, through any tool that can read one —
+  `read_file`, or `cat`/`head`/`grep`/`sed` through `exec`, or `open()` inside
+  a snippet. Recognised by `exec_spill.spill_paths_in`, which requires a token
+  outside a comment, the filename this engine writes, the right directory, and
+  a file that actually exists. The same function keeps that reader exempt from
+  the repeat-call guard and the no-progress detector — paging in the rest of
+  your own output is progress, not a loop; or
+* **the run re-runs the same tool over the same target, narrower**, and this
+  time the result is neither truncated nor empty. Targets are compared with the
+  query string stripped, so `…/messages?limit=2` answers a truncated
+  `…/messages`; and `curl -s -o /dev/null …` does not clear anything, because
+  it observed nothing.
 
 It does **not** clear because the model mentioned the path in its answer. A run
 that writes "some output was truncated" and finishes anyway has demonstrated
 only that it read the marker — the failure this control exists for is a
 confident answer over partial input, and a caveat is not a read.
+
+Entries are keyed by `(step, stream)`, so an `exec` that cut both its streams
+has two of them and reading the stdout spill back does not clear the stderr
+one.
 
 ### Act → observe
 
@@ -101,9 +131,22 @@ method that is not a read, `curl --data`, `requests.post`-and-friends. A false
 unrecognised call classifies as neither — conservative in the direction that
 costs a missed note, not a mistrusted one.
 
+Writing the run's own deliverable is **not** a state change, whatever path it
+is written to. That was the first cut's biggest defect: `source_tokens` counted
+anything containing a slash, every graded task writes its answer to an absolute
+path, and the note therefore fired on nearly every run with advice about
+nothing. A change now needs either a remote target — a scheme, a dotted host
+with a path, or a bare `host:port/path` — or a name shaped like one (`send_*`,
+`create_*`, `*_write`, `*_reply`), which is how a CRM row or a mailbox gets
+classified when its arguments name no host at all.
+
 A run that made at least one state-changing call against a source and has not
-read that source since gets told so once, at a deliverable check-in, at
-`enforce` only. Separately — and on **both** rungs, since it is diagnostic
+read that source since gets told so once, at `enforce` only. Delivery is at a
+deliverable check-in if one fires, and **otherwise at the moment the run tries
+to stop**. That second path matters more than it looks: the check-in cadence is
+every 25 iterations and the deadline rungs are at 50/80/95% of the budget, and
+the run this control was built for made 21 requests in 85.9 s of a 300 s
+budget, crossing neither. Separately — and on **both** rungs, since it is diagnostic
 rather than gated the same way — `execute_code`'s result carries
 `unread_responses` / `unread_response_tools` / `unread_response_note`, counting
 proxied `genus_tools` calls whose response body the snippet's own stdout never
@@ -115,17 +158,23 @@ calls, twelve of them printing nothing but `status`.
 The narrowest of the three, because it is the only one that touches model
 *judgement* rather than information the run already has on disk. It does
 nothing unless the task itself asked for a decision on each of several items —
-triage, classify, route, prioritise, in so many words, with "each" or "every"
-attached (`asks_for_verdicts`). Inside such a deliverable it fires on exactly
+triage, classify, route, prioritise, in so many words, AND distributed over
+items — `each`, `every`, `for each`, `all the`, or the contract stated outright
+as `exactly one` / `one of the following` (`asks_for_verdicts`). Read
+read-only against all 61 WildClawBench task specs, 4 open the gate, and all
+four are genuinely "classify each into exactly one category" tasks. Inside such a deliverable it fires on exactly
 two shapes, both anchored on an explicit item identifier (`msg_2209`, `#12`,
 `TASK-4`):
 
 * the same item appears under two different verdict **labels** — read only
   from label positions (a heading, a bolded lead, a `Severity:` field), never
   from prose, so "confidence is moderate" in a sentence cannot be misread as a
-  medium verdict; or
+  medium verdict. Every label is a PHRASE, never a bare word: `**Priority:
+  High** — this is a test-infrastructure item` is one verdict, not two; or
 * the item's own block asks the reader to decide (*"please verify whether…"*,
-  *"a human should decide"*).
+  *"a human should decide"*) **about the verdict itself**. "Please confirm
+  whether the three remaining endpoints are in scope" is a question about the
+  work asked alongside a verdict that was reached, and is silent.
 
 An item with one verdict and an inline caveat produces nothing — that is
 deliberate. The rule is one verdict per item, not zero doubt: contradicting
@@ -150,25 +199,24 @@ GROUP BY 1, 2
 ORDER BY 1, 2;
 ```
 
-`truncation_ledger` and `act_observe` write that row from
-`observation_ledger.record_observation_verdicts`, called once per run from
-`run_finalizer.py`, on **both** `observe` and `enforce` — which is what lets
-"how often would this have fired" be answered before either flag moves.
+All three write that row on **both** `observe` and `enforce`, which is what
+lets "how often would this have fired" be answered before any of them moves:
 
-`verdict_commitment` does not. Read `robothor/engine/verdict_commitment.py` and
-`robothor/engine/loop_guards.py` and there is no call into
-`log_guardrail_event` anywhere on either rung — `observe` produces a WARNING
-log line and nothing durable. `EVIDENCE_SOURCES` in `robothor/flags/evidence.py`
-still declares `guardrail_name = 'verdict_commitment'` for it, because a
-governed flag with no entry there takes down `GET /api/controls` with a
-`KeyError` — but the query behind that entry has no writer to find. Until one
-is added, `verdict()` in `robothor/flags/evidence.py` reports this flag
-`INERT` **permanently**, on every rung, no matter how many real hedged
-deliverables it catches: `last_fired` can only ever be `NULL`. Do not read that
-`INERT` as "the detector never fires" — read it as "nothing durable has been
-wired up to say so yet", and check the WARNING log line
-(`verdict commitment observe: run … would be re-asked about …`) instead when
-deciding whether this control has anything to catch on your workload.
+| `guardrail_name` | written by | called from |
+|---|---|---|
+| `truncation_ledger` | `observation_notes.record_observation_verdicts` | `run_finalizer`, once per run |
+| `act_observe` | `observation_notes.record_observation_verdicts` | the same call |
+| `verdict_commitment` | `verdict_commitment.record_verdict_findings` | `record_observation_verdicts`, so the finalizer has one call site for the cluster |
+
+`verdict_commitment`'s writer exists for a specific reason. The first cut of
+this branch had none: `flags/evidence.py` declared
+`guardrail_name = 'verdict_commitment'` for it — a governed flag with no entry
+there takes down `GET /api/controls` with a `KeyError` — while no code path
+wrote that row, so `verdict()` would have reported the flag `INERT`
+permanently, on every rung, however many real hedged deliverables it caught.
+That is `controls-were-armed-but-aimed-at-nothing` exactly, and it is the flag
+whose entire promotion story is "watch the evidence first". It was caught in
+review rather than in production.
 
 ## How to read a quiet table
 
@@ -191,9 +239,13 @@ reminder not to read an empty count as proof of nothing happening:
    nothing repeats" case `STEP_EFFICIENCY.md` describes for the repeat-call
    guard, and it calls for the same response: do not promote on a quiet table,
    go measure a workload that actually exercises the failure mode first.
-4. **Nothing is wired to record it.** `verdict_commitment`'s permanent `INERT`
-   above is exactly this case: the table is quiet because no code path writes
-   to it, not because the judgement check never fires.
+4. **Nothing is wired to record it.** All three controls write their row on
+   both rungs today, so this case should not arise — but it is the one that
+   cost this branch a review finding, and it is the one an operator cannot
+   distinguish from case 1 by looking at the table. Before reading a zero as
+   case 1, confirm a writer exists: `grep -n log_guardrail_event
+   robothor/engine/observation_notes.py robothor/engine/verdict_commitment.py`
+   should find one call in each.
 
 Before reading a zero as "there is nothing here", check which of the four it
 is: re-run the WildClawBench `03_Social` tasks in the sandbox (below) and
@@ -210,6 +262,15 @@ marker-only fix), named `<run-stem>__<stream>__<random>.txt`. Under
 collides with the `.robothor/secret*` prefix the tool sandbox already refuses
 to serve. An unresolvable workspace writes nothing rather than guessing at a
 path outside it.
+
+One spill is capped at `ROBOTHOR_EXEC_SPILL_MAX_BYTES` (default 8 MiB), and a
+spill that would leave the filesystem with under 64 MiB free is refused
+outright — the result degrades to the marker-only form rather than the command
+failing. Before this existed nothing from a command reached the disk at all, so
+a single `exec` under the 900-second ceiling could fill the workspace; a 50 MB
+command measured at 50,000,000 bytes on disk. When the file is capped the
+result says so (`stdout_spill_capped`, `stdout_spill_chars`) and the marker
+stops promising a whole the file does not hold.
 
 Retention is two-layered:
 
@@ -278,17 +339,17 @@ against yet". Two reasons, and either alone would be enough:
    "read something you already produced"; this one fails toward "commit to a
    judgement you might be wrong about", and that asymmetry is why it gets its
    own flag rather than sharing a ladder with the other two.
-2. **It has not been probed with a real double-verdict artefact.** It has been
-   run read-only against 60 real WildClawBench task specs: 4 open the gate at
-   all (task text asking to classify each of several items into exactly one
-   category), and all four are genuinely that shape — a useful negative-case
-   result, but not the positive proof this control needs before a date belongs
-   next to it. Per `feedback-probe-dont-trust-silence`, that proof has to come
-   from firing a genuine double-verdict artefact through `enforce` and
+2. **It has not been probed with a real double-verdict artefact in a real
+   run.** It has been run read-only against all 61 WildClawBench task specs: 4
+   open the gate at all, and all four are genuinely "classify each into exactly
+   one category" tasks. Its detector has also been driven over the measured
+   hedged report and over nine negative fixtures, three of which it used to get
+   wrong. That is a good negative-case result and it is not the positive proof
+   this control needs before a date belongs next to it. Per
+   `feedback-probe-dont-trust-silence`, that proof has to come from firing a
+   genuine double-verdict artefact through `enforce` in a live run and
    confirming the re-ask lands and is answered correctly — not from reading a
-   WARNING line it printed about itself, and not from the permanent `INERT`
-   Controls-page reading described above, which currently cannot distinguish
-   "never wrong" from "never wired up to say so".
+   WARNING line the control printed about itself.
 
 Until that probe exists, `verdict_commitment` stays on `observe` regardless of
 what the other two do, and `tests/test_flag_manifest.py`'s dated-entry check

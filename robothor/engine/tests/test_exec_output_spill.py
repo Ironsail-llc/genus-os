@@ -488,10 +488,22 @@ class TestTheSchemaNamesTheCap:
         assert "stdout_path" in description
         assert "read_file" in description
 
-    def test_execute_code_says_the_proxy_keeps_the_whole_response(self) -> None:
+    def test_execute_code_names_its_own_cap_and_both_call_spellings(self) -> None:
+        """Brief item 5 asks for the cap on BOTH tools, and `docs/TOOLS.md`
+        plus the unread-responses note both use `genus_tools.call(name,
+        **args)` — a description that dropped it would send an agent looking
+        for a spelling nothing documents (hostile review M4).
+
+        `curl` is deliberately not here: the 400-character cap `tool_search`
+        shows a description whole at is the harder constraint, and the
+        proxy-versus-shell contrast is stated at length in `docs/TOOLS.md`.
+        What the schema has to carry is the instruction — PRINT the response.
+        """
         from robothor.engine.tools.schemas import _CODE_SCHEMAS
 
         description = _CODE_SCHEMAS["execute_code"]["function"]["description"]
-        assert "genus_tools" in description
-        assert "curl" in description
+        assert "genus_tools.call(name, **args)" in description
+        assert "PRINT each response" in description
+        assert "50,000" in description
         assert "stdout_file" in description
+        assert len(description) <= 400
