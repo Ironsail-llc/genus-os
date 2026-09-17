@@ -141,6 +141,27 @@ Tags:
 | `OVERDUE` | still in a pre-promotion mode past its `planned_promotion` |
 | `DEBUG-ENV` | a panic switch or self-test hook is set on this box |
 
+### Value-set flags — a setting, not a ladder
+
+Most flags here climb `off → observe → alert → enforce`. A few do not: their
+values are a setting's own options, there is no rung to promote and no
+`observe` to soak in. `infra/flags.yaml` declares one with a `values:` list,
+and its `mode:` is the posture production runs **spelled in those values** —
+`ROBOTHOR_CALENDAR_SEND_UPDATES` is `values: [all, externalOnly, none]` with
+`mode: all`. `robothor/flags/store.py::VALUE_SET_FLAGS` is the mirror the
+engine, the Controls API (422 on anything outside the set) and `flag_audit.py`
+all read; `tests/test_flag_manifest.py` fails if the two lists disagree, so an
+operator can never be offered a value that would be refused or ignored.
+
+Read one as a ladder and the audit describes a system that does not exist:
+until 2026-09-17 this entry said `mode: "on"`, `flag_audit.py` expected `true`,
+the engine ran its `all` default, and the flag was tagged `MISMATCH` every
+morning — a correctly-configured setting failing the daily check forever. Three
+rules follow from the declaration: unset means the flag's **code default**
+(never `observe`), values keep their case (`externalOnly` is a posture,
+`externalonly` is a typo the engine clamps), and an unrecognised value clamps to
+that code default, which the audit prints as a note naming the dead line.
+
 `PINNED:db@<actor>` and `SHADOW-LAYER:db` are the same layer with different
 provenance, and the difference is deliberate. `robothor.flags.store.set_flag`
 is called from exactly one place — the Controls dashboard, whose

@@ -59,14 +59,25 @@ def __getattr__(name: str) -> Any:
 
 _MODE_VALUES: tuple[str, ...] = ("off", "observe", "alert", "enforce")
 
-#: ``ROBOTHOR_CALENDAR_SEND_UPDATES`` is the one governed flag that is not a
-#: ladder at all: it names Google's ``sendUpdates`` audience directly. Without
-#: an entry here it fell through to the four-rung ladder, so the one posture it
-#: exists for — ``none``, "stop mailing my attendees" — was a 422 from Controls
-#: while ``off`` was accepted, stored, and then silently read back as ``all`` by
-#: the engine. An operator seeing a value saved and not honoured is exactly what
-#: this function's docstring says must not happen.
-_CALENDAR_SEND_UPDATES_VALUES: tuple[str, ...] = ("all", "externalOnly", "none")
+#: Governed flags that are not a ladder at all: their values are a setting's
+#: own options, so there is no rung to promote and no ``observe`` to soak in.
+#: ``infra/flags.yaml`` declares each one with ``values:`` and its ``mode:`` is
+#: spelled in those values; ``tests/test_flag_manifest.py`` pins the two lists
+#: together, and ``scripts/flag_audit.py`` asks here rather than assuming the
+#: ladder — which is what made a correctly-defaulted setting report ``observe``
+#: and MISMATCH against the manifest every morning.
+#:
+#: ``ROBOTHOR_CALENDAR_SEND_UPDATES`` names Google's ``sendUpdates`` audience
+#: directly. Without an entry here it fell through to the four-rung ladder, so
+#: the one posture it exists for — ``none``, "stop mailing my attendees" — was a
+#: 422 from Controls while ``off`` was accepted, stored, and then silently read
+#: back as ``all`` by the engine. An operator seeing a value saved and not
+#: honoured is exactly what ``valid_values_for``'s docstring says must not
+#: happen. A registry rather than a name in an ``if``: the next setting-shaped
+#: flag is one line, in the one place every surface already reads.
+VALUE_SET_FLAGS: dict[str, tuple[str, ...]] = {
+    "ROBOTHOR_CALENDAR_SEND_UPDATES": ("all", "externalOnly", "none"),
+}
 _RIP_13_VALUES: tuple[str, ...] = ("observe", "enforce")
 _HONESTY_SUITE_VALUES: tuple[str, ...] = ("off", "observe", "enforce")
 
@@ -110,8 +121,10 @@ def valid_values_for(name: str) -> tuple[str, ...]:
     a grader (``feature_flags.honesty_suite_mode``) and
     ``ROBOTHOR_PER_USER_SESSIONS`` decides which session a caller lands on
     (``feature_flags.per_user_sessions_mode``).
-    ``ROBOTHOR_CALENDAR_SEND_UPDATES`` is not a ladder: its values are Google's
-    own ``sendUpdates`` audiences (``all``/``externalOnly``/``none``).
+    :data:`VALUE_SET_FLAGS` are not ladders at all: their values are a
+    setting's own options — ``ROBOTHOR_CALENDAR_SEND_UPDATES`` is Google's
+    ``sendUpdates`` audience (``all``/``externalOnly``/``none``), and the
+    manifest mirrors the set.
     Every other ``*_MODE`` flag accepts the full ladder: ``off``/``observe``/``alert``/``enforce``.
 
     Both the bridge's write-path validation (422 on an out-of-range value) and
@@ -125,8 +138,8 @@ def valid_values_for(name: str) -> tuple[str, ...]:
         return _RIP_13_VALUES
     if name in _THREE_RUNG_MODE_FLAGS:
         return _HONESTY_SUITE_VALUES
-    if name == "ROBOTHOR_CALENDAR_SEND_UPDATES":
-        return _CALENDAR_SEND_UPDATES_VALUES
+    if name in VALUE_SET_FLAGS:
+        return VALUE_SET_FLAGS[name]
     return _MODE_VALUES
 
 
@@ -267,13 +280,21 @@ def normalise(name: str, value: Any) -> str:
     :func:`default_value_for`, which mirrors what each accessor does with a
     value it does not recognise: a typo in a variable must not appear to have
     set a rung.
+
+    A :data:`VALUE_SET_FLAGS` value keeps its case, because its reader compares
+    case-sensitively: ``calendar_send_updates`` does ``.strip()`` and nothing
+    else, so ``externalOnly`` is a posture and ``externalonly`` is a typo that
+    falls back to ``all``. Lower-casing it here handed every surface ``all``
+    for a value the operator had legitimately chosen.
     """
     if value is True:
         text = "true"
     elif value is False:
         text = "false"
     else:
-        text = str(value if value is not None else "").strip().lower()
+        text = str(value if value is not None else "").strip()
+        if name not in VALUE_SET_FLAGS:
+            text = text.lower()
 
     valid = valid_values_for(name)
     if valid == _BOOL_VALUES and text:

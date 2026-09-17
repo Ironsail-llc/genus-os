@@ -316,6 +316,31 @@ def _valid_values_for(flag: str) -> tuple[str, ...]:
     return valid_values_for(flag)
 
 
+def _is_value_set_flag(flag: str) -> bool:
+    """Is this a setting whose values are its own, rather than a mode ladder?
+
+    ``robothor.flags.store.VALUE_SET_FLAGS`` decides, for the same reason
+    :func:`_valid_values_for` asks the store: a flag whose values are
+    ``all``/``externalOnly``/``none`` has no rung to sit on, so reading it
+    through the ladder reports a value it cannot hold.
+    """
+    from robothor.flags.store import VALUE_SET_FLAGS
+
+    return flag in VALUE_SET_FLAGS
+
+
+def _code_default(flag: str) -> str:
+    """What the ENGINE runs for *flag* when no layer sets it.
+
+    ``store.default_value_for`` derives it from the settings registry — the
+    same declaration ``feature_flags`` passes to ``_resolve_raw`` — so the
+    audit cannot invent a default the engine does not have.
+    """
+    from robothor.flags.store import default_value_for
+
+    return default_value_for(flag)
+
+
 def effective_value(
     flag: str,
     resolved: dict[str, str],
@@ -336,26 +361,47 @@ def effective_value(
     "effective" would report a mode the engine has never run. The raw value is
     not thrown away either: it goes into *notes*, because an /etc line that
     does nothing is precisely what an operator needs told.
+
+    A VALUE-SET flag (``store.VALUE_SET_FLAGS``) is none of that. It is a
+    setting whose values are its own — Google's ``sendUpdates`` audience, say —
+    so it has no ``*_ENABLED`` gate, no rung to default to and no reason to be
+    lower-cased: its reader compares ``externalOnly`` case-sensitively. Unset,
+    it runs its declared code default, and an unrecognised value clamps to that
+    same default rather than to ``observe``, which is a value it cannot hold.
+    Reading one through the ladder is what made a correctly-defaulted setting
+    report ``observe`` and MISMATCH against the manifest every morning.
     """
     if _truthy(resolved.get(PANIC_KEY)):
         return "off"
     if flag.endswith("_ENABLED"):
         return "true" if _truthy(resolved.get(flag)) else "false"
+    value_set = _is_value_set_flag(flag)
     gate = gates.get(flag)
-    if gate is not None and gate.enabled_var and not _truthy(resolved.get(gate.enabled_var)):
+    if (
+        not value_set
+        and gate is not None
+        and gate.enabled_var
+        and not _truthy(resolved.get(gate.enabled_var))
+    ):
         return "off"
-    raw = (resolved.get(flag) or "").strip().lower()
+    raw = (resolved.get(flag) or "").strip()
+    if not value_set:
+        raw = raw.lower()
+    if value_set:
+        fallback = _code_default(flag)
+    else:
+        fallback = gate.default if gate is not None else "observe"
     if not raw:
-        return gate.default if gate is not None else "observe"
+        return fallback
     valid = _valid_values_for(flag)
     if raw not in valid:
         if notes is not None:
             notes.append(
                 f"{flag} is set to '{raw}', which is not one of "
-                f"{', '.join(valid)} — the engine clamps it to 'observe', so that "
+                f"{', '.join(valid)} — the engine clamps it to '{fallback}', so that "
                 "line governs nothing. Fix the value or remove it."
             )
-        return "observe"
+        return fallback
     return raw
 
 
@@ -364,9 +410,15 @@ def expected_from_manifest(flag: str, yaml_mode: str | None) -> str | None:
 
     ``mode: "on"`` in flags.yaml is how a boolean flag spells enabled; the
     engine spells the same state ``true``.
+
+    A value-set flag's mode is spelled in its own values, so it is neither
+    translated nor lower-cased: ``externalOnly`` is the posture, and
+    ``externalonly`` is a value the engine would refuse.
     """
     if yaml_mode is None:
         return None
+    if _is_value_set_flag(flag):
+        return str(yaml_mode).strip()
     mode = str(yaml_mode).strip().lower()
     if flag.endswith("_ENABLED"):
         return {"on": "true", "off": "false", "true": "true", "false": "false"}.get(mode, mode)

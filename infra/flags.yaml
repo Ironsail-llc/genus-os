@@ -639,7 +639,15 @@ flags:
 
   - name: ROBOTHOR_CALENDAR_SEND_UPDATES
     owner: ops
-    mode: "on"  # quoted: bare `on` is a YAML 1.1 boolean
+    # A value-set flag, not a ladder: `values` declares what it may hold and
+    # `mode` is the posture production runs, spelled in those values. Any reader
+    # of this file that assumes the off/observe/alert/enforce ladder here is
+    # describing a flag that does not exist — `mode: "on"` made flag_audit.py
+    # expect `true` while the engine ran its `all` default, so a correctly
+    # defaulted setting was a MISMATCH every morning until 2026-09-17.
+    # robothor/flags/store.py::VALUE_SET_FLAGS is the mirror; a test pins them.
+    values: [all, externalOnly, none]
+    mode: all
     soak: |
       Not a ladder: the values are `all` (default), `externalOnly` and `none`,
       and they say who Google emails when an agent creates or cancels an event

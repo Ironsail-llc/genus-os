@@ -57,7 +57,15 @@ def test_manifest_entries_have_required_fields():
     for entry in data["flags"]:
         for field in ("name", "owner", "mode", "soak"):
             assert field in entry, f"{entry.get('name', entry)} missing {field!r}"
-        assert entry["mode"] in ("off", "observe", "alert", "enforce", "on"), entry["name"]
+        if entry.get("values"):
+            # A value-set flag is a setting, not a rollout ladder: its `mode` is
+            # the posture production runs, spelled in its OWN values.
+            assert entry["mode"] in entry["values"], (
+                f"{entry['name']}: mode {entry['mode']!r} is not one of its "
+                f"declared values {entry['values']}"
+            )
+        else:
+            assert entry["mode"] in ("off", "observe", "alert", "enforce", "on"), entry["name"]
         # every non-terminal flag must carry a promotion deadline, or say in
         # `promotion:` why it will never have one
         if entry["mode"] in ("observe", "alert"):
@@ -228,3 +236,30 @@ def test_enforced_flags_are_pinned_in_the_versioned_dropin():
     )
     disagree = {name: dropin[name] for name in enforced if dropin[name] != "enforce"}
     assert not disagree, f"drop-in value != the manifest's enforce: {disagree}"
+
+
+def test_value_set_flags_declare_the_values_the_engine_accepts():
+    """A flag whose values are a setting's options, not a rollout ladder,
+    declares them with ``values:`` — and they must be exactly what
+    ``robothor.flags.store.valid_values_for`` returns.
+
+    Both halves matter. Without the declaration, every reader of the manifest
+    (``flag_audit.py`` above all) has to guess at the four-rung ladder, and
+    ``ROBOTHOR_CALENDAR_SEND_UPDATES`` — correctly sitting on its `all` default
+    — read as `observe` and MISMATCHed forever. Without the mirror, the manifest
+    could offer an operator a value the Controls API would refuse with a 422.
+    """
+    from robothor.flags.store import VALUE_SET_FLAGS, valid_values_for
+
+    data = yaml.safe_load(MANIFEST.read_text())
+    declared = {e["name"]: list(e["values"]) for e in data["flags"] if e.get("values")}
+    assert declared, "no value-set flag declared in the manifest"
+    for name, values in declared.items():
+        assert values == list(valid_values_for(name)), (
+            f"{name}: manifest values {values} != store.valid_values_for "
+            f"{list(valid_values_for(name))}"
+        )
+    assert set(declared) == set(VALUE_SET_FLAGS), (
+        "every value-set flag the store knows about must say so in the "
+        f"manifest: store={sorted(VALUE_SET_FLAGS)} manifest={sorted(declared)}"
+    )
