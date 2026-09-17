@@ -46,6 +46,7 @@ from robothor.engine.act_observe import (
     remote_tokens,
     source_tokens,
 )
+from robothor.engine.exec_spill import READBACK_TOOLS, spill_paths_in
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,13 @@ class Truncation:
     chars_shown: int
     chars_total: int
     path: str
-    sources: frozenset[str] = frozenset()
+    stream: str = "stdout"
+    targets: frozenset[str] = frozenset()
+
+    @property
+    def key(self) -> tuple[int, str]:
+        """What identifies this entry. One step can cut BOTH of its streams."""
+        return (self.step, self.stream)
 
     def sentence(self) -> str:
         where = (
@@ -112,8 +119,11 @@ class ObservationLedger:
 
     truncations: list[Truncation] = field(default_factory=list)
     changes: list[StateChange] = field(default_factory=list)
-    resolved: set[int] = field(default_factory=set)
-    quoted: set[int] = field(default_factory=set)
+    #: Keyed by ``(step, stream)``, not by step. One `exec` can spill BOTH of
+    #: its streams, and keying on the step alone meant reading the stdout spill
+    #: back silently cleared the stderr one too.
+    resolved: set[tuple[int, str]] = field(default_factory=set)
+    quoted: set[tuple[int, str]] = field(default_factory=set)
     #: Step numbers of reads, with what they read, newest last.
     reads: list[tuple[int, frozenset[str]]] = field(default_factory=list)
     change_note_given: bool = False
@@ -136,13 +146,20 @@ class ObservationLedger:
         kind = classify(tool, args, _read_only())
         if kind == READ:
             self.reads.append((step, sources))
-            self._resolve_by_read(step, tool, args, sources, output)
         elif kind == CHANGE:
             # The REMOTE ones only. A change is recorded so the note can say
             # "you have not read THAT source since", and the answer has to be
             # somewhere the agent could go and look — not the run's own
             # scratch paths, which reading again would tell it nothing.
             self.changes.append(StateChange(step, tool, remote_tokens(args)))
+        # Resolution is asked on EVERY call, not only inside the READ branch.
+        # `cat`, `head` and `grep` of a spill path classify as `neither` — they
+        # reach nothing remote — so gating this on the classification meant the
+        # most natural read-back in the world did not clear the entry, and at
+        # `enforce` the run was then told to declare it never read something it
+        # had just read (hostile review I4). A control for honesty that
+        # manufactures a false statement is worse than one that is silent.
+        self._resolve(tool, args, sources, output)
         self._register_truncations(step, tool, sources, output)
 
     def _register_truncations(
@@ -165,46 +182,61 @@ class ObservationLedger:
                     chars_shown=min(shown, total) if total else shown,
                     chars_total=total or shown,
                     path=str(output.get(f"{stream}_path") or ""),
-                    sources=sources,
+                    stream=stream,
+                    targets=_targets(sources),
                 )
             )
 
-    def _resolve_by_read(
+    def _resolve(
         self,
-        step: int,
         tool: str,
         args: dict[str, Any],
         sources: frozenset[str],
         output: Any,
     ) -> None:
-        """Clear the entries this read actually answered.
+        """Clear the entries this call actually answered. Two ways, both narrow.
 
-        Two ways, and BOTH require a tool call that returned something whole:
+        **The read-back.** The call names the spill file, through whatever tool
+        can read one — ``read_file``, or ``cat``/``head``/``grep`` through
+        ``exec``, or ``open()`` inside a snippet. Recognised by
+        ``exec_spill.spill_paths_in``, so it is a RESOLVED path and not a
+        substring: a ``write_file`` whose CONTENT quotes the path is still not a
+        read, which is the hostile case the brief names, and neither is a path
+        inside a comment.
 
-        * the run read the spill file back — the path appears in this call's
-          arguments;
-        * the run asked the same source again, narrower, and this time nothing
-          was cut.
+        **The narrower re-run.** The same tool, against the same TARGET with the
+        query changed, returning something whole. All three conditions matter
+        and each one was a hole:
+
+        * targets are compared with the query string stripped, so
+          ``…/messages?limit=2`` — a genuinely narrower request — answers a
+          truncated ``…/messages``, where a literal token comparison did not;
+        * the new result must not itself be truncated;
+        * it must have OBSERVED something. ``curl -s -o /dev/null <url>`` is the
+          same tool against the same target with an untruncated, empty result,
+          and it showed the model nothing at all. It used to resolve the entry.
         """
-        argument_text = " ".join(str(v) for v in (args or {}).values())
+        readback = set(spill_paths_in(args)) if tool in READBACK_TOOLS else set()
         truncated_now = isinstance(output, dict) and (
             output.get("stdout_truncated") or output.get("stderr_truncated")
         )
+        observed = _observed_something(output)
+        targets = _targets(sources)
         for entry in self.truncations:
-            if entry.step in self.resolved:
+            if entry.key in self.resolved:
                 continue
-            if entry.path and entry.path in argument_text:
-                self.resolved.add(entry.step)
+            if entry.path and entry.path in readback:
+                self.resolved.add(entry.key)
                 continue
-            if truncated_now or entry.tool != tool:
+            if truncated_now or not observed or entry.tool != tool:
                 continue
-            if entry.sources and sources & entry.sources:
-                self.resolved.add(entry.step)
+            if entry.targets and targets & entry.targets:
+                self.resolved.add(entry.key)
 
     # ── reading back ────────────────────────────────────────────────────
 
     def unresolved(self) -> list[Truncation]:
-        return [t for t in self.truncations if t.step not in self.resolved]
+        return [t for t in self.truncations if t.key not in self.resolved]
 
     def unobserved_changes(self) -> list[tuple[int, str, frozenset[str]]]:
         """Changes nothing has read since.
@@ -226,9 +258,43 @@ class ObservationLedger:
 
     def take_unquoted(self) -> list[Truncation]:
         """Unresolved entries this run has not been told about yet."""
-        fresh = [t for t in self.unresolved() if t.step not in self.quoted][:MAX_QUOTED]
-        self.quoted.update(t.step for t in fresh)
+        fresh = [t for t in self.unresolved() if t.key not in self.quoted][:MAX_QUOTED]
+        self.quoted.update(t.key for t in fresh)
         return fresh
+
+
+#: Result fields that carry what the model was shown. A call whose result has
+#: none of them non-empty observed nothing, whatever else it did.
+_OBSERVED_FIELDS = ("stdout", "content", "text", "body", "result")
+
+
+def _observed_something(output: Any) -> bool:
+    """Did this call actually put anything in front of the model?
+
+    ``curl -s -o /dev/null <url>`` returns exit 0 and an empty stdout: the same
+    tool, the same target, nothing truncated, and nothing seen. It used to
+    resolve a truncation entry (hostile review I5).
+    """
+    if not isinstance(output, dict):
+        return bool(output)
+    for field_name in _OBSERVED_FIELDS:
+        value = output.get(field_name)
+        if isinstance(value, str) and value.strip():
+            return True
+        if isinstance(value, (list, dict)) and value:
+            return True
+    return False
+
+
+def _targets(tokens: frozenset[str]) -> frozenset[str]:
+    """Sources with the query string and fragment stripped.
+
+    ``…/messages`` and ``…/messages?limit=2`` are the same target asked two
+    different ways, and the second is exactly what "re-run it narrower" means.
+    Comparing the literal tokens made the narrowing itself the reason the entry
+    stayed open.
+    """
+    return frozenset(token.split("?", 1)[0].split("#", 1)[0].rstrip("/") for token in tokens)
 
 
 def _read_only() -> frozenset[str]:

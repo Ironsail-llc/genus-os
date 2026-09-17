@@ -12,7 +12,7 @@ the answer about to be written was based on everything the run actually saw.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -28,6 +28,9 @@ from robothor.engine.act_observe import (
 )
 from robothor.engine.observation_ledger import ObservationLedger, ledger_for
 from robothor.engine.observation_notes import observation_notes, unread_observation_hold
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 API = "http://service.invalid:9110/inbox/messages"
 SEND = "http://service.invalid:9110/inbox/send"
@@ -156,6 +159,25 @@ class TestClassification:
         assert source_tokens({"command": "echo hello --quiet"}) == frozenset()
 
 
+def _with_spill(tmp_path: Path) -> tuple[ObservationLedger, str]:
+    """A ledger holding one REAL truncation, with the spill file on disk.
+
+    Real, because the read-back check resolves the path and requires the file
+    to exist — a fixture built from a made-up path would certify nothing.
+    """
+    from robothor.engine.exec_spill import shape_exec_result
+
+    out = shape_exec_result(
+        {"stdout": "x" * 12_431, "stderr": "", "exit_code": 0},
+        workspace=tmp_path,
+        run_id="run-1",
+    )
+    ledger = ObservationLedger()
+    ledger.record(11, "exec", {"command": f"curl -s {API}"}, out)
+    assert len(ledger.unresolved()) == 1
+    return ledger, out["stdout_path"]
+
+
 class TestTheTruncationLedger:
     def test_a_cut_result_registers(self) -> None:
         ledger = ObservationLedger()
@@ -171,11 +193,92 @@ class TestTheTruncationLedger:
         ledger.record(11, "exec", {"command": f"curl {API}"}, {"stdout": "short", "exit_code": 0})
         assert ledger.unresolved() == []
 
-    def test_reading_the_spill_back_resolves_it(self) -> None:
-        ledger = ObservationLedger()
-        ledger.record(11, "exec", {"command": f"curl {API}"}, _cut())
-        ledger.record(12, "read_file", {"path": _cut()["stdout_path"]}, {"content": "..."})
+    def test_reading_the_spill_back_resolves_it(self, tmp_path: Path) -> None:
+        ledger, path = _with_spill(tmp_path)
+        ledger.record(12, "read_file", {"path": path}, {"content": "..."})
         assert ledger.unresolved() == []
+
+    @pytest.mark.parametrize(
+        "tool,args",
+        [
+            ("exec", {"command": "head -c 500 {path}"}),
+            ("exec", {"command": "cat {path}"}),
+            ("exec", {"command": "grep total {path} | tail -3"}),
+            ("exec", {"command": "sed -n '4000,$p' {path}"}),
+            ("execute_code", {"code": "print(open('{path}').read())"}),
+        ],
+    )
+    def test_reading_the_spill_back_through_the_shell_resolves_it(
+        self, tmp_path: Path, tool: str, args: dict
+    ) -> None:
+        """Hostile review I4. Resolution used to be asked only inside the READ
+        branch, and `cat`/`head`/`grep` of a local path classify as `neither` —
+        they reach nothing remote. So the most natural read-back in the world
+        left the entry open, and at `enforce` the run was then handed a note
+        telling it to declare it never read something it had just read."""
+        ledger, path = _with_spill(tmp_path)
+        filled = {k: v.format(path=path) for k, v in args.items()}
+        ledger.record(12, tool, filled, {"stdout": "the rest of it", "exit_code": 0})
+        assert ledger.unresolved() == []
+
+    def test_a_snippet_that_only_mentions_the_path_does_not_resolve_it(
+        self, tmp_path: Path
+    ) -> None:
+        """A path inside a comment is not a path the call is reading."""
+        ledger, path = _with_spill(tmp_path)
+        ledger.record(
+            12,
+            "execute_code",
+            {"code": f"# TODO: read {path}\nprint('later')\n"},
+            {"stdout": "later", "exit_code": 0},
+        )
+        assert len(ledger.unresolved()) == 1
+
+    def test_both_streams_of_one_step_are_tracked_separately(self, tmp_path: Path) -> None:
+        """One `exec` can cut BOTH its streams. The entries were keyed by step
+        number alone, so reading the stdout spill back silently cleared the
+        stderr one as well (hostile review M2)."""
+        from robothor.engine.exec_spill import shape_exec_result
+
+        out = shape_exec_result(
+            {"stdout": "x" * 12_000, "stderr": "e" * 9_000, "exit_code": 1},
+            workspace=tmp_path,
+            run_id="run-1",
+        )
+        ledger = ObservationLedger()
+        ledger.record(11, "exec", {"command": f"curl {API}"}, out)
+        assert len(ledger.unresolved()) == 2
+
+        ledger.record(12, "read_file", {"path": out["stdout_path"]}, {"content": "whole"})
+        remaining = ledger.unresolved()
+        assert [entry.stream for entry in remaining] == ["stderr"]
+
+    def test_a_narrower_query_on_the_same_target_resolves_it(self, tmp_path: Path) -> None:
+        """Hostile review I5. `…/messages?limit=2` is what "re-run it narrower"
+        MEANS, and a literal token comparison made the narrowing itself the
+        reason the entry stayed open."""
+        ledger, _path = _with_spill(tmp_path)
+        ledger.record(
+            12,
+            "exec",
+            {"command": f"curl -s {API}?limit=2"},
+            {"stdout": "two records", "exit_code": 0},
+        )
+        assert ledger.unresolved() == []
+
+    def test_a_rerun_that_observed_nothing_does_not_resolve_it(self, tmp_path: Path) -> None:
+        """`curl -s -o /dev/null <url>`: same tool, same target, nothing
+        truncated — and the model was shown nothing at all. It used to resolve
+        the entry, which is the weaker half of "cannot be satisfied by merely
+        mentioning it"."""
+        ledger, _path = _with_spill(tmp_path)
+        ledger.record(
+            12,
+            "exec",
+            {"command": f"curl -s -o /dev/null {API}"},
+            {"stdout": "", "stderr": "", "exit_code": 0},
+        )
+        assert len(ledger.unresolved()) == 1
 
     def test_a_narrower_rerun_of_the_same_source_resolves_it(self) -> None:
         ledger = ObservationLedger()
@@ -386,12 +489,21 @@ class TestTheLadder:
         assert unread_observation_hold(session) is False
         assert len(session.messages) == 2
 
-    def test_a_resolved_entry_never_holds_the_run(self, session: _Session, monkeypatch) -> None:
+    def test_a_resolved_entry_never_holds_the_run(
+        self, session: _Session, tmp_path: Path, monkeypatch
+    ) -> None:
+        from robothor.engine.exec_spill import shape_exec_result
+
         _set_modes(monkeypatch, truncation="enforce", act="off")
         ledger = ledger_for(session)
         assert ledger is not None
-        ledger.record(11, "exec", {"command": f"curl {API}"}, _cut())
-        ledger.record(12, "read_file", {"path": _cut()["stdout_path"]}, {"content": "..."})
+        out = shape_exec_result(
+            {"stdout": "x" * 12_431, "stderr": "", "exit_code": 0},
+            workspace=tmp_path,
+            run_id="run-1",
+        )
+        ledger.record(11, "exec", {"command": f"curl {API}"}, out)
+        ledger.record(12, "read_file", {"path": out["stdout_path"]}, {"content": "..."})
         assert unread_observation_hold(session) is False
         assert session.messages == []
 

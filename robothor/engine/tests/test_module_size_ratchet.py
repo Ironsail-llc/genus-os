@@ -221,7 +221,7 @@ CAPS = {
     # rest of the run (hostile review I3); qualifying now takes a token outside
     # a comment, the filename this module writes, the right directory, and a
     # file that exists.
-    "robothor/engine/exec_spill.py": 332,
+    "robothor/engine/exec_spill.py": 339,
     # 232 -> 331: classification by tool KIND and TARGET. The first cut asked
     # only "does this call name something with a slash in it", so every
     # `write_file` to an absolute path — which is every WildClaw deliverable —
@@ -241,7 +241,12 @@ CAPS = {
     # exactly where both of this branch's review findings landed. The ratchet
     # asked for an extraction rather than a bigger number when the act→observe
     # stop path needed somewhere to live, and got one.
-    "robothor/engine/observation_ledger.py": 285,
+# 285 -> 351: resolution that answers the question it claims to. It is
+    # asked on every call rather than only inside the READ branch (a `cat` of
+    # the spill classifies as `neither`), the read-back is a resolved path, a
+    # re-run is compared on the TARGET with the query stripped, and a call that
+    # observed nothing no longer counts. Findings I4, I5 and M2.
+    "robothor/engine/observation_ledger.py": 351,
     "robothor/engine/observation_notes.py": 317,
     # 265 -> 322: the guardrail row this control writes at finalization on
     # `observe` as well as `enforce`. Without it `flags/evidence.py` would

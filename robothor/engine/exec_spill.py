@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "DEFAULT_SPILL_RETENTION_DAYS",
+    "READBACK_TOOLS",
     "SPILL_DIRNAME",
     "STDERR_LIMIT",
     "STDOUT_LIMIT",
@@ -94,8 +95,14 @@ _SPILL_NAME = re.compile(r"^[A-Za-z0-9-]{1,120}__(?:stdout|stderr)__[0-9a-f]{12}
 #: not a path the call is reading.
 _COMMENT = re.compile(r"(?m)(?<![\"'])#[^\n]*$")
 
+#: A path-shaped run of characters. Not a whitespace split: the read-back an
+#: agent writes inside a snippet is `print(open('<path>').read())`, where the
+#: path is wrapped in quotes and parentheses and a whitespace split hands back
+#: one unusable token.
+_PATH_TOKEN = re.compile(r"[^\s'\"`(),;\[\]{}=]{4,4096}")
+
 #: The tools through which an agent can actually read a file back.
-_READBACK_TOOLS = frozenset({"read_file", "exec", "execute_code"})
+READBACK_TOOLS = frozenset({"read_file", "exec", "execute_code"})
 
 
 def truncate_stream(text: str, limit: int, path: str = "") -> str:
@@ -243,8 +250,8 @@ def spill_paths_in(tool_input: dict[str, Any] | None) -> list[str]:
     for value in (tool_input or {}).values():
         if not isinstance(value, (str, int, float)):
             continue
-        for token in _COMMENT.sub(" ", str(value)).split():
-            candidate = token.strip("\"'`,;()[]{}").replace("\\", "/")
+        for token in _PATH_TOKEN.findall(_COMMENT.sub(" ", str(value))):
+            candidate = token.replace("\\", "/")
             if not candidate.endswith(".txt") or _SEP not in candidate:
                 continue
             path = Path(candidate)
@@ -273,7 +280,7 @@ def is_spill_readback(tool_name: str, tool_input: dict[str, Any] | None) -> bool
     and because a run restored from the database has an empty in-memory ledger
     while its spill files are still on disk.
     """
-    if tool_name not in _READBACK_TOOLS:
+    if tool_name not in READBACK_TOOLS:
         return False
     return bool(spill_paths_in(tool_input))
 
