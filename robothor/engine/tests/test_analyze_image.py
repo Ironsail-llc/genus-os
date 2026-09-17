@@ -39,7 +39,7 @@ from typing import Any
 
 import pytest
 
-from robothor.engine import vision_batch
+from robothor.engine import vision_batch, vision_fallback
 
 # ── fixtures ────────────────────────────────────────────────────────────────
 
@@ -529,9 +529,9 @@ class TestBackendHonesty:
         """The same `accepts_images` honesty `view_image` learned in #578: a
         model the registry says rejects images is never handed one."""
         monkeypatch.setattr(
-            vision_batch, "_configured_remote_model", lambda: "ollama_chat/qwen3:8b"
+            vision_fallback, "configured_remote_model", lambda: "ollama_chat/qwen3:8b"
         )
-        monkeypatch.setattr(vision_batch, "_configured_local_model", lambda: "")
+        monkeypatch.setattr(vision_fallback, "configured_local_model", lambda: "")
         backend, refusal = vision_batch.resolve_backend()
         assert backend is None
         assert "accept images" in refusal
@@ -545,9 +545,9 @@ class TestBackendHonesty:
         `!= "rejects"` waves through every model nobody has written an entry
         for. Declared able, or not dialled."""
         monkeypatch.setattr(
-            vision_batch, "_configured_remote_model", lambda: "openrouter/nobody/unheard-of-v9"
+            vision_fallback, "configured_remote_model", lambda: "openrouter/nobody/unheard-of-v9"
         )
-        monkeypatch.setattr(vision_batch, "_configured_local_model", lambda: "")
+        monkeypatch.setattr(vision_fallback, "configured_local_model", lambda: "")
         backend, refusal = vision_batch.resolve_backend()
         assert backend is None
         assert "openrouter/nobody/unheard-of-v9" in refusal
@@ -555,9 +555,9 @@ class TestBackendHonesty:
 
     def test_it_falls_back_to_the_local_model_rather_than_failing(self, monkeypatch):
         monkeypatch.setattr(
-            vision_batch, "_configured_remote_model", lambda: "ollama_chat/qwen3:8b"
+            vision_fallback, "configured_remote_model", lambda: "ollama_chat/qwen3:8b"
         )
-        monkeypatch.setattr(vision_batch, "_configured_local_model", lambda: "llava:7b")
+        monkeypatch.setattr(vision_fallback, "configured_local_model", lambda: "llava:7b")
         backend, refusal = vision_batch.resolve_backend()
         assert backend.kind == "local"
         assert backend.model == "llava:7b"
@@ -566,9 +566,9 @@ class TestBackendHonesty:
 
     def test_an_unknown_model_falls_back_to_the_local_one_and_says_why(self, monkeypatch):
         monkeypatch.setattr(
-            vision_batch, "_configured_remote_model", lambda: "openrouter/nobody/unheard-of-v9"
+            vision_fallback, "configured_remote_model", lambda: "openrouter/nobody/unheard-of-v9"
         )
-        monkeypatch.setattr(vision_batch, "_configured_local_model", lambda: "llava:7b")
+        monkeypatch.setattr(vision_fallback, "configured_local_model", lambda: "llava:7b")
         backend, refusal = vision_batch.resolve_backend()
         assert backend.kind == "local"
         assert refusal == ""
@@ -578,16 +578,16 @@ class TestBackendHonesty:
         fake = FakeVision()
         monkeypatch.setattr(vision_batch, "describe_image_bytes", fake)
         monkeypatch.setattr(
-            vision_batch, "_configured_remote_model", lambda: "openrouter/nobody/unheard-of-v9"
+            vision_fallback, "configured_remote_model", lambda: "openrouter/nobody/unheard-of-v9"
         )
-        monkeypatch.setattr(vision_batch, "_configured_local_model", lambda: "llava:7b")
+        monkeypatch.setattr(vision_fallback, "configured_local_model", lambda: "llava:7b")
         out = await _analyze(tmp_path, _images(tmp_path, 1))
         assert out["backend"] == "local"
         assert "unheard-of-v9" in out["note"]
 
     def test_a_declared_vision_model_is_used_remotely(self, monkeypatch):
         monkeypatch.setattr(
-            vision_batch, "_configured_remote_model", lambda: "openrouter/z-ai/glm-5.3-flash"
+            vision_fallback, "configured_remote_model", lambda: "openrouter/z-ai/glm-5.3-flash"
         )
         backend, refusal = vision_batch.resolve_backend()
         assert backend.kind == "remote"
@@ -595,8 +595,8 @@ class TestBackendHonesty:
         assert refusal == ""
 
     async def test_no_vision_model_anywhere_says_so_plainly(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(vision_batch, "_configured_remote_model", lambda: "")
-        monkeypatch.setattr(vision_batch, "_configured_local_model", lambda: "")
+        monkeypatch.setattr(vision_fallback, "configured_remote_model", lambda: "")
+        monkeypatch.setattr(vision_fallback, "configured_local_model", lambda: "")
         out = await _analyze(tmp_path, _images(tmp_path, 1))
         assert "error" in out
         assert "vision model" in out["error"]
@@ -639,7 +639,7 @@ class TestTheRemoteBackend:
             seen.append(kwargs)
             return self._fake_response()
 
-        monkeypatch.setattr(vision_batch, "pooled_acompletion", fake_acompletion)
+        monkeypatch.setattr(vision_fallback, "pooled_acompletion", fake_acompletion)
         monkeypatch.setattr(
             vision_batch,
             "resolve_backend",
@@ -663,7 +663,7 @@ class TestTheRemoteBackend:
         async def fake_acompletion(**kwargs: Any) -> Any:
             return self._fake_response()
 
-        monkeypatch.setattr(vision_batch, "pooled_acompletion", fake_acompletion)
+        monkeypatch.setattr(vision_fallback, "pooled_acompletion", fake_acompletion)
         monkeypatch.setattr(
             vision_batch,
             "resolve_backend",
@@ -683,7 +683,7 @@ class TestTheRemoteBackend:
             seen.append(kwargs)
             return self._fake_response()
 
-        monkeypatch.setattr(vision_batch, "pooled_acompletion", fake_acompletion)
+        monkeypatch.setattr(vision_fallback, "pooled_acompletion", fake_acompletion)
         monkeypatch.setattr(
             vision_batch,
             "resolve_backend",
@@ -704,13 +704,38 @@ class TestTheWholeResultIsBounded:
     async def test_a_big_batch_returns_totals_and_a_file_not_the_table(
         self, tmp_path, local_backend, monkeypatch
     ):
+        # 900 -> 1200. The result gained `provenance` and `provenance_note`
+        # (~130 characters, fixed, whatever the batch size), and at 900 those
+        # left no room for the preview rows this test is about — a budget so
+        # tight that zero rows fit is a different regime from the one being
+        # pinned here. The production default is 3500, clamped at 3800.
+        budget = 1200
+        monkeypatch.setattr(vision_batch, "_max_total_chars", lambda: budget)
+        out = await _analyze(tmp_path, _images(tmp_path, 40))
+
+        assert len(json.dumps(out, default=str)) <= budget
+        assert out["analyzed"] == 40, "the totals cover every image, not the preview"
+        assert out["results_total"] == 40
+        assert 0 < out["results_shown"] < 40
+
+    async def test_a_budget_too_small_for_one_row_still_spills_and_still_bounds(
+        self, tmp_path, local_backend, monkeypatch
+    ):
+        """Round-1 review M-4. The case above moved off 900 because provenance
+        made a preview row stop fitting there — so this keeps 900 pinned
+        rather than deleted. `_max_total_chars` clamps only the UPPER bound, so
+        an operator may still set it this low; what must hold is that the
+        result stays inside the budget, the table still reaches the file, and
+        the totals still describe every image. A zero-row preview is a thin
+        answer, never a lost one."""
         monkeypatch.setattr(vision_batch, "_max_total_chars", lambda: 900)
         out = await _analyze(tmp_path, _images(tmp_path, 40))
 
         assert len(json.dumps(out, default=str)) <= 900
-        assert out["analyzed"] == 40, "the totals cover every image, not the preview"
+        assert out["analyzed"] == 40
         assert out["results_total"] == 40
-        assert 0 < out["results_shown"] < 40
+        assert out["results_shown"] == 0
+        assert out["results_file"]
         assert len(out["results"]) == out["results_shown"]
         assert "results_file" in out["note"], "the note must say where the rest went"
         assert out["results_file"] not in out["note"], (
@@ -727,7 +752,7 @@ class TestTheWholeResultIsBounded:
         async def fake_acompletion(**kwargs: Any) -> Any:
             return TestTheRemoteBackend()._fake_response()
 
-        monkeypatch.setattr(vision_batch, "pooled_acompletion", fake_acompletion)
+        monkeypatch.setattr(vision_fallback, "pooled_acompletion", fake_acompletion)
         monkeypatch.setattr(
             vision_batch,
             "resolve_backend",
@@ -821,9 +846,11 @@ class TestTheStepWriterCapInvariant:
 
         monkeypatch.setattr(vision_batch, "describe_image_bytes", verbose)
         monkeypatch.setattr(
-            vision_batch, "_configured_remote_model", lambda: "openrouter/nobody/unheard-of-v9"
+            vision_fallback, "configured_remote_model", lambda: "openrouter/nobody/unheard-of-v9"
         )
-        monkeypatch.setattr(vision_batch, "_configured_local_model", lambda: "llama3.2-vision:11b")
+        monkeypatch.setattr(
+            vision_fallback, "configured_local_model", lambda: "llama3.2-vision:11b"
+        )
         return deep
 
     @pytest.mark.parametrize("budget", [vision_batch.DEFAULT_MAX_TOTAL_CHARS, 10_000])
@@ -1681,7 +1708,7 @@ class TestARowNeverLosesWhatItAlreadyPaidFor:
                 },
             )()
 
-        monkeypatch.setattr(vision_batch, "pooled_acompletion", fake_acompletion)
+        monkeypatch.setattr(vision_fallback, "pooled_acompletion", fake_acompletion)
         monkeypatch.setattr(
             vision_batch,
             "resolve_backend",
@@ -1728,7 +1755,7 @@ class TestARowNeverLosesWhatItAlreadyPaidFor:
                 },
             )()
 
-        monkeypatch.setattr(vision_batch, "pooled_acompletion", fake_acompletion)
+        monkeypatch.setattr(vision_fallback, "pooled_acompletion", fake_acompletion)
         monkeypatch.setattr(
             vision_batch,
             "resolve_backend",

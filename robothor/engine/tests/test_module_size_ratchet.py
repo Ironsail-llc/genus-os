@@ -229,7 +229,56 @@ CAPS = {
     # follow-up list; the next change that needs room in this file pays it
     # rather than raising this number again. An intention is not a commitment,
     # so it is named here where the raise has to be argued for.
-    "robothor/engine/vision_batch.py": 1342,
+    #
+    # 1342 -> 1174. Part of that debt is PAID: the backend ladder (`Backend`,
+    # `resolve_backend`, the two configured-model readers, the remote call and
+    # its pricing) left for `vision_fallback.py`, because `view_image` needed
+    # the same rungs and had half of one. The spill/budget cluster
+    # (FU-VIS2-SPILL) is still owed.
+    # 1174 -> 1151: the workspace resolver and the containment/secret-path
+    # refusal left for `vision_fallback.py` too, once `view_image` had to ask
+    # the same two questions (round-1 review I-4). Two tools with two ideas of
+    # what a vision tool may read is how one becomes the way round the other.
+    # 1151 -> 1157: an unspellable path (a NUL byte) refuses as that ROW
+    # rather than raising out of the handler, which is six lines of try around
+    # the resolution the guard needs (round-2 review M-8).
+    # 1157 -> 1169: the batch half of the credential leak (round-2 re-check
+    # C-3). Three sites repeat a backend's own exception -- a failed row's
+    # `error`, an undecodable file's `error`, and the log line -- and all three
+    # reach the spilled table on disk, which the tool tells the agent to open.
+    # Twelve lines, ten of which are the reasoning for why a row is the worse
+    # half: a 401 fails every image, so the leak arrives once per image.
+    "robothor/engine/vision_batch.py": 1168,
+    # Which model looks at a picture, for BOTH image tools. Capped at what it
+    # was written to. Not folded back into either caller: `vision_batch.py` is
+    # the module this repo has an open extraction debt against, and
+    # `handlers/images.py` would make a tool handler the owner of the ladder
+    # its sibling tool depends on.
+    # 365 -> 480 across the round-1 review, all four of which are this module's
+    # own subject -- WHICH model looks, for HOW LONG, at WHAT it is allowed to
+    # read, and what it says when it cannot:
+    #   * a per-rung budget (I-1), because the local rung at 120 s and the
+    #     remote at 90 s could not both fit inside a 120 s tool deadline, so a
+    #     local VLM that was slow rather than absent made the new rung
+    #     unreachable -- the exact failure the ladder exists to remove;
+    #   * per-rung reasons that distinguish "not configured" from "unreachable"
+    #     and carry the backend's own message, capped (I-2);
+    #   * `workspace_root` and `path_refusal`, moved UP from `vision_batch.py`
+    #     rather than copied down, so both tools ask one helper what a vision
+    #     tool may read (I-4).
+    # The alternative to the cap moving was a second copy of the guard, which
+    # is the defect being fixed.
+    # 480 -> 508 for the round-2 review's C-1: a provider's own exception text
+    # is put through `secrets/redaction.py::redact` BEFORE the cap, in the
+    # reason the agent reads and in the two log lines, because a 401 from this
+    # instance's provider carries the api_key and the Authorization header and
+    # nothing redacts a tool result that returns normally. Two call sites, one
+    # existing helper, and the reasoning for the ordering -- redact after the
+    # cap and a sliced token is a prefix no redactor recognises.
+    # 508 -> 515: `_safe` becomes the public `safe_backend_message`, because
+    # `vision_batch` imports it for C-3 -- a private name reached from another
+    # module is a contract nobody declared.
+    "robothor/engine/vision_fallback.py": 515,
     # 248 -> 351: the reply parser. Review finding I1 measured three ordinary
     # model formatting habits — both markers on one line, a JSON object, a
     # parenthetical gloss — each turning a whole batch into `error` rows at

@@ -672,6 +672,22 @@ class ProviderSettings(SettingsGroup):
         restart_required=False,
         since="unreleased",
     )
+    vision_look_timeout: float = declare(
+        45.0,
+        "ROBOTHOR_VISION_LOOK_TIMEOUT",
+        "Seconds ONE rung of `view_image`'s fallback ladder gets when the "
+        "agent's own model cannot accept images. It applies to the local VLM "
+        "and to the remote vision model separately, so two rungs plus "
+        "overhead must fit inside the agent's `tool_timeout_seconds` (120 by "
+        "default) -- otherwise a local model that is slow rather than absent "
+        "burns the whole tool budget and the remote rung is never reached, "
+        "which is the failure the ladder exists to prevent. Raise it only "
+        "alongside the agent's tool timeout. The batch tool has its own "
+        "budget in ROBOTHOR_VISION_BATCH_TIMEOUT, which is amortised over a "
+        "fan-out and so is longer.",
+        restart_required=False,
+        since="unreleased",
+    )
     vision_batch_concurrency: int = declare(
         4,
         "ROBOTHOR_VISION_BATCH_CONCURRENCY",

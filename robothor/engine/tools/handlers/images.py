@@ -47,6 +47,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from robothor.engine.vision_fallback import (
+    NO_WORKSPACE_REFUSAL,
+    PROVENANCE,
+    PROVENANCE_NOTE,
+    path_refusal,
+    workspace_root,
+)
+
 logger = logging.getLogger(__name__)
 
 #: Longest edge, in pixels, that reaches the model. Provider payload limits
@@ -89,6 +97,17 @@ def _same_stem_images(path: Path) -> list[Path]:
     Only real files count — a directory named `assets.jpg` is not an image —
     and the caller substitutes only when exactly one candidate exists. Two
     candidates is a question for the agent, not a coin flip for the tool.
+
+    **Every candidate comes back RESOLVED, and callers depend on it.** Round-2
+    review C-2: `iterdir()` yields the literal entry, so
+    `<workspace>/holiday.jpg -> <outside>/board_deck.png` named a path inside
+    the workspace while being a file outside it. Both tools asked
+    `vision_fallback.path_refusal` about that literal path, passed containment,
+    and then decoded and uploaded the target — one symlink under a different
+    extension walked round the guard in both. Resolving at the two call sites
+    would have left the next caller to rediscover it, so the promise is made
+    here, where the candidate is produced, and pinned by a test on this
+    function.
     """
     parent = path.parent
     if not parent.is_dir():
@@ -97,7 +116,7 @@ def _same_stem_images(path: Path) -> list[Path]:
     # iterdir, not glob: a stem containing `[` or `*` is a valid filename and
     # a glob pattern, and the two disagree.
     return sorted(
-        candidate
+        candidate.resolve(strict=False)
         for candidate in parent.iterdir()
         if candidate.stem == stem
         and candidate.is_file()
@@ -287,6 +306,64 @@ def prepare_image_bytes(path: Path) -> PreparedImage:
         )
 
 
+async def _describe_instead(
+    result: dict[str, Any],
+    data: bytes,
+    mime: str,
+    model: str,
+    path: Path,
+    args: dict[str, Any],
+) -> dict[str, Any]:
+    """Fill *result* from the vision ladder, for a primary that cannot see.
+
+    Extracted from ``view_image`` when the remote rung arrived: the branch is
+    now two outcomes with three reasons between them, and a handler that ends
+    in a nested try is a handler nobody reads to the bottom.
+
+    ``seen_by`` stays ``vision-model`` on either rung — rule 18 of the
+    instruction contract names those three values and an agent reading
+    ``seen_by`` is asking "did I look, or was I told", not "which GPU". Which
+    model answered is ``backend`` plus ``model``, in the same spelling
+    ``analyze_image`` uses.
+    """
+    from robothor.engine.vision_fallback import NoVisionBackendError, describe_with_fallback
+
+    try:
+        described = await describe_with_fallback(data, mime, str(args.get("prompt") or ""))
+    except NoVisionBackendError as exc:
+        logger.warning("no vision backend could describe %s: %s", path.name, exc)
+        result["seen_by"] = "nobody"
+        result["error"] = (
+            f"{model or 'this model'} cannot accept images and no vision model could "
+            f"look instead ({'; '.join(exc.reasons)}). Nobody has looked at "
+            f"{path.name}. Inspect it programmatically — e.g. Pillow via exec — "
+            "or say plainly that you could not see it."
+        )
+        return result
+
+    result["seen_by"] = "vision-model"
+    result["backend"] = described.backend
+    result["model"] = described.model
+    result["description"] = described.text
+    result["provenance"] = PROVENANCE
+    result["provenance_note"] = PROVENANCE_NOTE
+    if described.tokens:
+        result["tokens"] = described.tokens
+    if described.cost_usd:
+        # The runner adds a tool result's `cost_usd` to the run total, so a
+        # paid fallback that reported nothing would spend money invisibly.
+        result["cost_usd"] = round(described.cost_usd, 6)
+    result["note"] = (
+        f"{model or 'this model'} cannot accept images, so this is the "
+        f"{described.backend} vision model"
+        + (f" ({described.model})" if described.model else "")
+        + "'s description rather than the picture itself. Treat it as a second-hand "
+        "account: if a detail decides the task, read the file programmatically to "
+        "confirm it."
+    )
+    return result
+
+
 async def view_image(args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
     """Return an image file as content the agent's own model can see.
 
@@ -299,7 +376,33 @@ async def view_image(args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
     if not raw_path:
         return {"error": "path is required"}
 
-    path = Path(raw_path).expanduser()
+    # The two guards `analyze_image` has always applied to the same bytes, from
+    # the same helper (round-1 review I-4). Before this, a file under the
+    # instance's secrets directory and a file outside every workspace were both
+    # readable here — and with the remote rung they leave the box. Asked BEFORE
+    # anything reads or decodes the file, and on the RESOLVED path, so a
+    # symlink out of the tree is caught.
+    root = workspace_root(str(getattr(ctx, "workspace", "") or ""))
+    if root is None:
+        return {"error": NO_WORKSPACE_REFUSAL}
+    try:
+        path = Path(raw_path).expanduser()
+        if not path.is_absolute():
+            # Relative to the workspace, as the sibling tool resolves it — not
+            # to whatever the process happens to have as its working directory.
+            path = root / path
+        path = path.resolve(strict=False)
+    except ValueError:
+        # A NUL byte, or anything else the OS cannot spell as a path.
+        # `Path.is_file()` used to swallow these and answer "no such file";
+        # resolving raises, and an unhandled exception leaving a handler is a
+        # failure the dispatcher has to classify rather than a refusal the
+        # agent can read (round-2 review M-8).
+        return {"error": f"no such file: {raw_path!r} is not a usable path"}
+    refused = path_refusal(path, root, Path(raw_path).name)
+    if refused:
+        return {"error": refused}
+
     # `resolved_from` is the path the agent ASKED FOR, and `path` is the file
     # that was read. It used to be the other way round — set to the substitute,
     # which is `path`, so the field was identical to its neighbour on every row
@@ -313,6 +416,13 @@ async def view_image(args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
         if len(siblings) == 1:
             resolved_from = str(path)
             path = siblings[0]
+            # The substitute is a different file, so it is asked the same
+            # questions. It shares a directory with the original, so only the
+            # secret-path name rule can fire here — but asking both is what
+            # keeps the two call sites from drifting.
+            refused = path_refusal(path, root, path.name)
+            if refused:
+                return {"error": refused}
         elif siblings:
             names = ", ".join(sorted(s.name for s in siblings))
             return {
@@ -342,27 +452,18 @@ async def view_image(args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
     if capability == "rejects":
         # No blocks. The client would strip them and the agent would be
         # told it looked at something it never saw.
-        result["model"] = model
-        try:
-            result["description"] = await describe_image_bytes(data, str(args.get("prompt") or ""))
-            result["seen_by"] = "vision-model"
-            result["note"] = (
-                f"{model or 'this model'} cannot accept images, so this is the local "
-                "vision model's description rather than the picture itself. Treat it "
-                "as a second-hand account: if a detail decides the task, read the "
-                "file programmatically to confirm it."
-            )
-        except Exception as exc:  # noqa: BLE001 - reported, never invented
-            logger.warning("local vision model could not describe %s: %s", path.name, exc)
-            result["seen_by"] = "nobody"
-            result["error"] = (
-                f"{model or 'this model'} cannot accept images and the local vision "
-                f"model is unavailable ({type(exc).__name__}). Nobody has looked at "
-                f"{path.name}. Inspect it programmatically — e.g. Pillow via exec — "
-                "or say plainly that you could not see it."
-            )
-        return result
+        result["primary_model"] = model
+        return await _describe_instead(result, data, prepared.mime, model, path, args)
 
+    result["primary_model"] = model
+    result["model"] = model
+    # Provenance describes an ANSWER, so it rides exactly where there is one
+    # (round-1 review M-1). It used to be set before the rung was chosen, so a
+    # `seen_by: nobody` result carried "answers come from the model looking at
+    # the image content" beside an error saying nobody looked — while the
+    # earlier refusals carried none at all.
+    result["provenance"] = PROVENANCE
+    result["provenance_note"] = PROVENANCE_NOTE
     result["image_base64"] = base64.b64encode(data).decode("ascii")
     result["image_mime"] = prepared.mime
     result["seen_by"] = "primary"

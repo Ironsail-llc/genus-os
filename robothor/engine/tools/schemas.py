@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from robothor.engine.prompts import EVIDENCE_OUTRANKS_NAMES
+from robothor.engine.vision_fallback import PROVENANCE_NOTE
+
 # Long descriptions live out here: get_engine_schemas is already one of the
 # engine's largest functions and the size ratchet only lets it shrink.
 _WEB_SEARCH_DESCRIPTION = (
@@ -126,26 +129,45 @@ _CODE_SCHEMAS: dict[str, dict[str, Any]] = {
 #: itself by taking its neighbours with it. These two belong together — an
 #: agent that was sent a photo looks at it with the first and answers with a
 #: file through the second.
+#: The provenance line both vision tools show, worded for a reader rather
+#: than for a field: it is the same sentence their results carry.
+PROVENANCE_SENTENCE = f"Note that {PROVENANCE_NOTE}."
+
+
 _ATTACHMENT_SCHEMAS: dict[str, dict[str, Any]] = {
     "view_image": {
         "type": "function",
         "function": {
             "name": "view_image",
+            # The evidence rule rides here VERBATIM from `prompts.py`, not as a
+            # paraphrase: an agent meets this text at the moment it is deciding
+            # whether to look, which is later and more specific than the system
+            # prompt, and two wordings of one rule is how an agent learns that
+            # neither is load-bearing. It costs half of the 400-character cap
+            # `tool_search` shows a description whole at, so what it displaced —
+            # the affordances and the backend ladder — moved into `path` below,
+            # which is uncapped and is read while the call is being written.
             "description": (
                 "Look at ONE image file — a photo, screenshot, chart, diagram or "
-                "scan. The picture itself is placed in front of you, so read it "
-                "directly rather than writing code to inspect its pixels. Use "
-                "this whenever a task depends on what an image SHOWS. For many "
-                "images, or the same question asked of each one, use "
-                "analyze_image instead — it answers without filling your context "
-                "with pictures."
+                "scan. It is put in front of you; a vision model looks if your "
+                "model cannot. " + EVIDENCE_OUTRANKS_NAMES + " Many: analyze_image."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Path to the image (PNG, JPEG, GIF, WEBP, BMP, TIFF)",
+                        "description": (
+                            "Path to the image (PNG, JPEG, GIF, WEBP, BMP, TIFF). Read "
+                            "it directly rather than writing code to inspect its "
+                            "pixels, and call this whenever a task depends on what an "
+                            "image SHOWS — including to check an answer you doubt. "
+                            + PROVENANCE_SENTENCE
+                            + " `seen_by` says whether you looked (`primary`), a "
+                            "vision model looked for you (`vision-model`, with "
+                            "`backend` and `model` naming which), or nobody did "
+                            "(`nobody` — then do not describe it)."
+                        ),
                     },
                 },
                 "required": ["path"],
@@ -161,13 +183,11 @@ _ATTACHMENT_SCHEMAS: dict[str, dict[str, Any]] = {
             # `when_to_use` sentence is one that competes with a sibling, and a
             # hit that loses its tail loses the half that decides.
             "description": (
-                "Ask one question about up to 200 images at once. Each goes "
-                "to a vision model on its own and only the ANSWERS come back, "
-                "so it is cheap to call and no picture enters your context. "
-                "Sort, label, filter or search a folder of images; use "
-                "view_image for one you must study yourself. Every row says "
-                "WHY, so check reasons rather than doubt labels. A big batch "
-                "writes its table to a file — work over it."
+                "Ask one question about up to 200 images at once. Only the "
+                "ANSWERS come back, so no picture enters your context. Classify "
+                "with `choices`; read each `reason`. "
+                + EVIDENCE_OUTRANKS_NAMES
+                + " Study one: view_image."
             ),
             "parameters": {
                 "type": "object",
@@ -177,7 +197,11 @@ _ATTACHMENT_SCHEMAS: dict[str, dict[str, Any]] = {
                         "items": {"type": "string"},
                         "description": (
                             "Image paths, 1-200, inside the workspace. Answers come "
-                            "back in this order."
+                            "back in this order, one row each — so this is how you "
+                            "sort, label, filter or search a folder of images, cheaply "
+                            "enough to do it in one call. A big batch writes its table "
+                            "to a file and hands you the path; work over that file "
+                            "rather than reading it back whole. " + PROVENANCE_SENTENCE
                         ),
                     },
                     "question": {
@@ -185,17 +209,16 @@ _ATTACHMENT_SCHEMAS: dict[str, dict[str, Any]] = {
                         "description": (
                             "The one question asked of every image. Be specific. Every "
                             "row comes back with the model's `reason` — one sentence of "
-                            "what it saw — so read a few before you trust the answers, "
-                            "and remember a filename is a claim about a picture, not "
-                            "evidence of it: where an answer disagrees with a name, the "
-                            "look is what is in the file."
+                            "what it saw — so read a few, and a few of the images, "
+                            "before you decide the answers are wrong."
                         ),
                     },
                     "choices": {
                         "type": "array",
                         "items": {"type": "string"},
                         "description": (
-                            "2-20 labels, when the answer is one of a fixed set. Each row "
+                            "2-20 labels, when the answer is one of a fixed set, and the "
+                            "way to classify. Each row "
                             "comes back as a validated `choice` from this list — a reply "
                             "outside it is asked once more and then reported as that "
                             "row's error, never squeezed into the nearest label. Leave "

@@ -77,7 +77,8 @@ cost:
 * A spilled result also carries a ``sample`` spanning the DISTINCT answers, so
   the spot-check is a glance rather than a ``read_file`` round.
 * And the result says, in words, that a filename is a claim about a picture
-  and a reason is what was in it. ``prompts.py`` rule 18 says the same.
+  and a reason is what was in it. ``prompts.py`` rule 19 says the same,
+  generally.
 
 What the deadline bounds, exactly
 ---------------------------------
@@ -109,7 +110,6 @@ and ``exec`` and is about credentials, not location.
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import logging
 import time
@@ -117,7 +117,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from robothor.engine.pooled_completion import acompletion as pooled_acompletion
 from robothor.engine.tools.constants import MAX_TOOL_OUTPUT_CHARS
 from robothor.engine.tools.handlers.images import (
     UnsupportedImageError,
@@ -134,6 +133,17 @@ from robothor.engine.vision_contract import (
     contract_suffix,
     correction_suffix,
     parse_reply,
+)
+from robothor.engine.vision_fallback import (
+    NO_WORKSPACE_REFUSAL,
+    PROVENANCE,
+    PROVENANCE_NOTE,
+    Backend,
+    path_refusal,
+    remote_answer,
+    resolve_backend,
+    safe_backend_message,
+    workspace_root,
 )
 
 logger = logging.getLogger(__name__)
@@ -179,10 +189,6 @@ MAX_QUESTION_CHARS = 2000
 #: detail decides the answer.
 DEFAULT_DETAIL = "low"
 _DETAIL_CHOICES = frozenset({"low", "high"})
-
-#: Answer tokens one image gets. Enough for a paragraph of description or a
-#: transcription; short enough that 200 of them do not become a document.
-MAX_ANSWER_TOKENS = 1024
 
 #: And the same bound on the way back, in characters. A model told to answer
 #: briefly usually does; a model that decides to narrate would otherwise put
@@ -241,26 +247,6 @@ SPILL_DIRNAME = ".robothor/analyze_image"
 
 
 @dataclass(frozen=True)
-class Backend:
-    """Which vision model answers, and how it is dialled.
-
-    ``kind`` is ``"remote"`` (an OpenAI-compatible provider, images as data
-    URIs) or ``"local"`` (this box's Ollama VLM). Two code paths, one because
-    the sandbox has no Ollama and one because the box should not have to pay a
-    provider to look at its own screenshots.
-
-    ``note`` is how a fallback tells the truth. A batch that quietly answered
-    from a different model than the operator configured is a result the agent
-    cannot reason about, so the sentence rides on the backend and lands in the
-    result.
-    """
-
-    kind: str
-    model: str
-    note: str = ""
-
-
-@dataclass(frozen=True)
 class Resolved:
     """What one requested path turned into: a file to read, or why not.
 
@@ -281,24 +267,6 @@ def _settings() -> Any:
     from robothor.settings import get_settings
 
     return get_settings()
-
-
-def _configured_remote_model() -> str:
-    """``ROBOTHOR_VISION_REMOTE_MODEL``, or empty when the box uses Ollama."""
-    try:
-        return str(_settings().providers.vision_remote_model or "").strip()
-    except Exception:  # noqa: BLE001 - a missing config is "not configured", not a crash
-        logger.debug("settings unavailable while resolving the remote vision model")
-        return ""
-
-
-def _configured_local_model() -> str:
-    """``ROBOTHOR_VISION_MODEL`` — the same field ``view_image`` reads."""
-    try:
-        return str(_settings().ollama.vision_model or "").strip()
-    except Exception:  # noqa: BLE001
-        logger.debug("settings unavailable while resolving the local vision model")
-        return ""
 
 
 def _configured_concurrency() -> int:
@@ -348,89 +316,6 @@ def _batch_deadline() -> float:
         return DEFAULT_DEADLINE_SECONDS
 
 
-def resolve_backend() -> tuple[Backend | None, str]:
-    """``(backend, refusal)`` — exactly one of the two is meaningful.
-
-    The remote model must be DECLARED ``accepts_images`` in the registry. Not
-    "not declared blind" — declared able. The first version of this gate asked
-    ``!= "rejects"``, which passes every model nobody has written an entry for,
-    and a hostile review set that setting to an undeclared model and watched
-    the batch dial it: OpenRouter answered ``404 No endpoints found that
-    support image input`` per image. That is exactly the #578 failure, reached
-    two hundred times per call, on the one setting whose entire job is to name
-    a vision model.
-
-    ``view_image`` is right to keep dialling on ``unknown`` and this is right
-    not to, for a reason worth stating: there the model is whatever the fleet
-    happens to be running and one image is at stake, so the result carries a
-    note and the agent learns. Here an operator has explicitly named a model to
-    be *the vision backend*, so "we have never heard of it" is a configuration
-    mistake to report, not a risk to take 200 times.
-
-    When a local VLM is configured the batch falls back to it (the backend
-    carries a ``note`` saying so); when it is not, this refuses rather than
-    pretending.
-    """
-    remote = _configured_remote_model()
-    local = _configured_local_model()
-    if remote:
-        from robothor.engine.model_registry import image_capability
-
-        capability = image_capability(remote)
-        if capability == "accepts":
-            return Backend("remote", remote), ""
-        why = (
-            "does not accept images"
-            if capability == "rejects"
-            else "is not declared `accepts_images` in the engine's model registry"
-        )
-        if not local:
-            return None, (
-                f"refused: the configured remote vision model ({remote}) {why}. Add a "
-                "registry entry declaring `accepts_images=True` for it, name a declared "
-                "model in ROBOTHOR_VISION_REMOTE_MODEL, or configure a local one with "
-                "ROBOTHOR_VISION_MODEL."
-            )
-        logger.warning("remote vision model %s %s; falling back to the local VLM", remote, why)
-        return (
-            Backend(
-                "local",
-                local,
-                note=(
-                    f"the configured remote vision model ({remote}) {why}, so the local "
-                    f"vision model ({local}) answered instead."
-                ),
-            ),
-            "",
-        )
-    if local:
-        return Backend("local", local), ""
-    return None, (
-        "refused: no vision model is configured. Set ROBOTHOR_VISION_MODEL (local, via "
-        "Ollama) or ROBOTHOR_VISION_REMOTE_MODEL (a provider model the registry declares "
-        "`accepts_images`)."
-    )
-
-
-def _workspace_root(workspace: str) -> Path | None:
-    """The tree an image has to be inside, or None when there is no answer.
-
-    The caller's ``ctx.workspace`` first, settings second — the idiom
-    ``tools/handlers/attachments.py`` uses for the same question, and for the
-    same reason: an unresolvable workspace refuses rather than defaulting to
-    "anywhere on the filesystem".
-    """
-    if workspace:
-        return Path(workspace).expanduser().resolve(strict=False)
-    try:
-        from robothor.settings.sources import workspace_path
-
-        resolved = workspace_path()
-        return resolved.resolve(strict=False) if resolved is not None else None
-    except Exception:  # noqa: BLE001 - an unresolvable workspace refuses, never reads
-        return None
-
-
 def _resolve_one(raw: str, root: Path) -> Resolved:
     """The file one requested image names, or why there is not one.
 
@@ -461,26 +346,24 @@ def _resolve_one(raw: str, root: Path) -> Resolved:
     if not text:
         return Resolved(None, "path is required", str(raw))
 
-    candidate = Path(text).expanduser()
-    relative = not candidate.is_absolute()
-    if relative:
-        candidate = root / candidate
-    resolved = candidate.resolve(strict=False)
+    try:
+        candidate = Path(text).expanduser()
+        relative = not candidate.is_absolute()
+        if relative:
+            candidate = root / candidate
+        resolved = candidate.resolve(strict=False)
+    except ValueError:
+        # A NUL byte, or anything else the OS cannot spell as a path. One
+        # unspellable path in a list of two hundred must fail as that row, not
+        # as the whole call (round-2 review M-8).
+        return Resolved(None, f"no such file: {text!r} is not a usable path", str(raw))
     shown = str(resolved)
-    if root != resolved and root not in resolved.parents:
-        return Resolved(
-            None,
-            (
-                f"refused: {Path(text).name} resolves outside the workspace. Only images "
-                "inside the workspace can be analyzed."
-            ),
-            shown,
-        )
-
-    from robothor.engine.secret_paths import is_secret_path, refusal_for
-
-    if is_secret_path(resolved):
-        return Resolved(None, refusal_for(resolved), shown)
+    # Containment then the secret-path name rule, both from the helper
+    # `view_image` now shares (round-1 review I-4) — one idea of what a vision
+    # tool may read, not two that drift.
+    refused = path_refusal(resolved, root, Path(text).name)
+    if refused:
+        return Resolved(None, refused, shown)
 
     substituted_for = ""
     if not resolved.is_file():
@@ -491,8 +374,9 @@ def _resolve_one(raw: str, root: Path) -> Resolved:
             )
         substituted_for, resolved = shown, found.path
         shown = str(resolved)
-        if is_secret_path(resolved):
-            return Resolved(None, refusal_for(resolved), shown)
+        refused = path_refusal(resolved, root, resolved.name)
+        if refused:
+            return Resolved(None, refused, shown)
 
     size = resolved.stat().st_size
     if size > MAX_IMAGE_BYTES:
@@ -556,81 +440,6 @@ def _load(path: Path) -> tuple[bytes, str]:
     return prepared.data, prepared.mime
 
 
-def _price(model: str, prompt_tokens: int, completion_tokens: int) -> float:
-    """What this call cost, from the registry's declared rates.
-
-    Computed here rather than read from the provider's response: the registry
-    is what every other cost number on this instance is derived from, and a
-    tool result that reported a different basis would make the run total
-    disagree with itself.
-    """
-    try:
-        from robothor.engine.model_registry import get_model_limits
-
-        limits = get_model_limits(model)
-    except Exception:  # noqa: BLE001 - an unpriced model costs an unknown amount, not a crash
-        return 0.0
-    return (
-        prompt_tokens * limits.input_cost_per_token
-        + completion_tokens * limits.output_cost_per_token
-    )
-
-
-async def _remote_answer(
-    backend: Backend, data: bytes, mime: str, question: str, detail: str, timeout: float
-) -> tuple[str, int, float]:
-    """``(answer, tokens, cost)`` from an OpenAI-compatible vision provider.
-
-    Through the pooled client, never ``litellm.acompletion`` directly: a
-    module that resolves its own key cannot rotate off a capped one, which is
-    how a single retired credential kept being re-dialled for a whole day.
-    """
-    payload = base64.b64encode(data).decode("ascii")
-    response = await pooled_acompletion(
-        model=backend.model,
-        messages=[
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": question},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{mime};base64,{payload}", "detail": detail},
-                    },
-                ],
-            },
-        ],
-        max_tokens=MAX_ANSWER_TOKENS,
-        temperature=0.1,
-        timeout=timeout,
-    )
-    answer = str(response.choices[0].message.content or "").strip()
-    usage = getattr(response, "usage", None)
-    prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
-    completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
-    if not answer:
-        raise RuntimeError("the vision model returned nothing")
-    return (
-        answer,
-        prompt_tokens + completion_tokens,
-        _price(backend.model, prompt_tokens, completion_tokens),
-    )
-
-
-#: What the vision model is told it is for. The literal, insistent form
-#: ``view_image`` uses — a model that decides it "cannot access websites"
-#: because the screenshot contains a URL has described nothing — with the
-#: batch's own instruction to answer the question that was asked.
-_SYSTEM_PROMPT = (
-    "You are a vision system answering one question about one image. Answer the question "
-    "directly and concretely, in at most a short paragraph. Read and transcribe any text "
-    "that bears on the answer, exactly as shown. Never refuse, never say you cannot access "
-    "websites or URLs — a URL in an image is text to be read, not a page to visit. If the "
-    "image does not contain what was asked about, say so plainly rather than guessing."
-)
-
-
 @dataclass(frozen=True)
 class Attempt:
     """What one image cost and what came back, parsed. ``reasked`` is True when
@@ -654,7 +463,7 @@ async def _ask_once(
 ) -> Attempt:
     """One backend call, parsed and bounded. Raises on a backend that fails."""
     if backend.kind == "remote":
-        raw, tokens, cost = await _remote_answer(backend, data, mime, question, detail, timeout)
+        raw, tokens, cost = await remote_answer(backend, data, mime, question, detail, timeout)
     else:
         # The local VLM reports no usage and costs nothing: it is this box's GPU.
         raw = (await describe_image_bytes(data, question, timeout=timeout)).strip()
@@ -773,7 +582,9 @@ async def _analyze_one(
         except Exception as exc:  # noqa: BLE001 - Pillow raises widely on malformed input
             return {
                 "path": str(resolved),
-                "error": f"could not read as an image: {type(exc).__name__}: {exc}",
+                "error": (
+                    f"could not read as an image: {type(exc).__name__}: {safe_backend_message(exc)}"
+                ),
                 "ms": int((time.monotonic() - started) * 1000),
             }
 
@@ -796,11 +607,19 @@ async def _analyze_one(
                 spent,
             )
         except Exception as exc:  # noqa: BLE001 - one image's failure, reported as one row
-            logger.warning("vision call failed for %s: %s", resolved.name, exc)
+            # Redacted, collapsed and capped before it is repeated ANYWHERE
+            # (round-2 re-check C-3). A provider's 401 carries the api_key and
+            # the Authorization header, this row is copied into the result, the
+            # journal and the spilled table on disk, and a 401 fails every
+            # image in the batch -- so the leak arrives two hundred times, once
+            # per row, in a file the tool tells the agent to read back.
+            logger.warning(
+                "vision call failed for %s: %s", resolved.name, safe_backend_message(exc)
+            )
             return _paid_for(
                 {
                     "path": str(resolved),
-                    "error": f"{type(exc).__name__}: {exc}",
+                    "error": f"{type(exc).__name__}: {safe_backend_message(exc)}",
                     "ms": int((time.monotonic() - started) * 1000),
                 },
                 spent,
@@ -960,7 +779,7 @@ def prune_spill_files(
     days = retention_days if retention_days is not None else _configured_spill_retention_days()
     if days <= 0:
         return 0
-    root = _workspace_root(str(workspace) if workspace else "")
+    root = workspace_root(str(workspace) if workspace else "")
     if root is None:
         return 0
     directory = root / SPILL_DIRNAME
@@ -1127,14 +946,9 @@ async def analyze_images(
         notes.append(f"ignored detail={wanted_detail!r}; it must be one of low, high")
         wanted_detail = DEFAULT_DETAIL
 
-    root = _workspace_root(workspace)
+    root = workspace_root(workspace)
     if root is None:
-        return {
-            "error": (
-                "refused: the workspace could not be resolved, so containment cannot be "
-                "judged. Set ROBOTHOR_WORKSPACE."
-            )
-        }
+        return {"error": NO_WORKSPACE_REFUSAL}
 
     backend, refusal = resolve_backend()
     if backend is None:
@@ -1194,6 +1008,18 @@ async def analyze_images(
             + PIXELS_BEAT_NAMES
         ),
     }
+    if answered:
+        # Where the answers came from, said in the result rather than left to
+        # be inferred. The measured run inferred wrongly: a row reading
+        # `choice: "natural scene"` for a file called `3d_render.jpg` looked,
+        # to the agent, like something that might have been derived from the
+        # name — so the name won. See vision_fallback.PROVENANCE_NOTE.
+        #
+        # Only when something was actually answered (round-1 review M-1):
+        # provenance describes an ANSWER, and a batch where every row failed
+        # has none to attribute.
+        out["provenance"] = PROVENANCE
+        out["provenance_note"] = PROVENANCE_NOTE
     if tokens:
         out["tokens"] = tokens
     if cost:
