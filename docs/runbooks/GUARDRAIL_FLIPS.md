@@ -102,7 +102,7 @@ layer to take. That is how `ROBOTHOR_PER_USER_SESSIONS` came to be governed by
 the env file alone — `SHADOW-LAYER:envfile` every morning until 2026-09-17.
 Adding the line to the drop-in only half-fixes it: the env file is applied
 *after* the drop-in, so the env-file line must be deleted in the same
-maintenance window, then `scripts/install_units.sh` and a restart.
+maintenance window, then `scripts/install-units.sh` and a restart.
 
 **Before trusting a flip, confirm the running process actually changed:**
 
