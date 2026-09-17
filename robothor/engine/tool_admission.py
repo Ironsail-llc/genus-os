@@ -280,61 +280,18 @@ class ToolAdmissionMixin:
             return None
 
         # ── [HUMAN APPROVAL] Escalation for opt-in agents ──
+        # In approval_gate.py, which is reached only when this agent's own
+        # manifest declared the gate. Nothing on a default install gets here.
         if gr.action == "escalate":
-            from robothor.engine.permission_escalation import get_permission_manager
+            from robothor.engine.approval_gate import resolve_escalation
 
-            mgr = get_permission_manager()
-            if mgr:
-                approved = await mgr.request_approval(
-                    agent_id=agent_config.id,
-                    run_id=session.run_id,
-                    tool_name=tool_name,
-                    tool_args=tool_args,
-                    guardrail_name=gr.guardrail_name,
-                    reason=gr.reason,
-                    timeout_seconds=agent_config.human_approval_timeout,
-                )
-                if approved:
-                    return None
-                # An operator saying no is not the agent erring: this denial
-                # counts toward neither escalation nor error feedback.
-                return ToolVerdict(
-                    allowed=False,
-                    message=f"Denied by operator ({gr.guardrail_name}): {gr.reason}",
-                    count_as_iteration_error=False,
-                    tool_args=tool_args,
-                )
-            if agent_config.human_approval_fail_open:
-                return None  # opted-in unattended autonomy: auto-approve
-
-            # No approver reachable. Legacy behavior auto-approves;
-            # ROBOTHOR_APPROVAL_* makes this fail closed (observe logs the
-            # would-deny; enforce denies the tool).
-            from robothor.engine.feature_flags import approval_mode
-            from robothor.engine.permission_escalation import fail_closed_on_missing_manager
-
-            appr_mode = approval_mode()
-            if appr_mode != "off":
-                _log_guardrail_event(
-                    run_id=session.run.id,
-                    guardrail_name=gr.guardrail_name,
-                    action="blocked" if appr_mode == "enforce" else "observed",
-                    tool_name=tool_name,
-                    reason="human approval required but no approver reachable",
-                    mode=appr_mode,
-                    step_number=len(session.run.steps),
-                )
-            if fail_closed_on_missing_manager():
-                return ToolVerdict(
-                    allowed=False,
-                    message=(
-                        f"Denied — human approval required for "
-                        f"{gr.guardrail_name} but no approver is reachable"
-                    ),
-                    count_as_iteration_error=False,
-                    tool_args=tool_args,
-                )
-            return None  # otherwise auto-approve (legacy) and fall through
+            return await resolve_escalation(
+                gr=gr,
+                tool_name=tool_name,
+                tool_args=tool_args,
+                session=session,
+                agent_config=agent_config,
+            )
 
         # Plain block.
         _log_guardrail_event(

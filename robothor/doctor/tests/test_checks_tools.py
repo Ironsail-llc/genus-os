@@ -721,8 +721,9 @@ class TestTheApprovalGateIsArmed:
     stops. Nothing told the operator; this check does — as `info`, because
     `observe` is a deliberate rung the platform's own chart ships and marking
     a correctly-configured instance `degraded` for it is the failure this
-    module argues against twice. The manifest gap that IS the operator's to fix
-    is `agents.destructive_tool_not_gated`, which stays `recommended`.
+    module argues against twice. The manifest side is
+    `agents.approval_gate_available`, which is `info` too and reports a fact:
+    an ungated destructive grant is the platform's default, not a gap.
     """
 
     @pytest.fixture
@@ -747,11 +748,15 @@ class TestTheApprovalGateIsArmed:
         )
 
     @pytest.mark.asyncio
-    async def test_it_fires_when_the_gate_is_off(self, instance: Path, gate_off: None) -> None:
+    async def test_it_reports_when_the_gate_is_off(self, instance: Path, gate_off: None) -> None:
+        """A `pass`, because an unarmed gate is the default — but it still says
+        which variable is missing, which is the whole reason the check reads the
+        engine's settings and not only the files."""
         self._gated_agent(instance)
         result = await _run("agents.approval_gate_not_armed")
 
-        assert result.status == "fail", result.detail
+        assert result.status == "pass", result.detail
+        assert "will not apply" in result.detail
         assert "delete_person" in result.detail
         assert "ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED" in result.detail
         assert "ROBOTHOR_APPROVAL_MODE" in result.detail
@@ -767,7 +772,8 @@ class TestTheApprovalGateIsArmed:
         self._gated_agent(instance)
 
         result = await _run("agents.approval_gate_not_armed")
-        assert result.status == "fail", result.detail
+        assert result.status == "pass", result.detail
+        assert "will not apply" in result.detail
 
     @pytest.mark.asyncio
     async def test_observe_is_not_enough_either(
@@ -778,15 +784,21 @@ class TestTheApprovalGateIsArmed:
         self._gated_agent(instance)
 
         result = await _run("agents.approval_gate_not_armed")
-        assert result.status == "fail", result.detail
+        assert result.status == "pass", result.detail
+        assert "will not apply" in result.detail
         assert "observe" in result.detail
 
     @pytest.mark.asyncio
-    async def test_it_is_quiet_when_the_gate_is_armed(self, instance: Path, gate_on: None) -> None:
+    async def test_it_says_so_when_the_gate_is_armed(self, instance: Path, gate_on: None) -> None:
+        """Both answers are a `pass` now, so the DETAIL is what separates them —
+        a test that only checked the status would pass on a check that had
+        stopped reading the engine at all."""
         self._gated_agent(instance)
         result = await _run("agents.approval_gate_not_armed")
 
         assert result.status == "pass", result.detail
+        assert "is enforcing" in result.detail
+        assert "will not apply" not in result.detail
 
     @pytest.mark.asyncio
     async def test_the_pass_does_not_claim_more_than_it_checked(
@@ -800,7 +812,7 @@ class TestTheApprovalGateIsArmed:
         self._gated_agent(instance)
         _write_agent(instance, "unrestricted", {})
 
-        result = await _run("agents.destructive_tool_not_gated")
+        result = await _run("agents.approval_gate_available")
 
         assert result.status == "pass", result.detail
         assert "on purpose" in result.detail, result.detail
@@ -812,7 +824,7 @@ class TestTheApprovalGateIsArmed:
         """A check that fires on an instance with nothing to protect is a check
         nobody reads."""
         _write_agent(instance, "reader", {"tools_allowed": ["read_file", "list_people"]})
-        result = await _run("agents.destructive_tool_not_gated")
+        result = await _run("agents.approval_gate_available")
 
         assert result.status == "pass", result.detail
 
@@ -829,7 +841,7 @@ class TestTheApprovalGateIsArmed:
             "careful",
             {"tools_allowed": ["read_file", "delete_person"], "tools_denied": ["delete_person"]},
         )
-        result = await _run("agents.destructive_tool_not_gated")
+        result = await _run("agents.approval_gate_available")
 
         assert result.status == "pass", result.detail
 
@@ -844,12 +856,12 @@ class TestTheApprovalGateIsArmed:
                 "tools_denied": ["delete_*"],
             },
         )
-        result = await _run("agents.destructive_tool_not_gated")
+        result = await _run("agents.approval_gate_available")
 
         assert result.status == "pass", result.detail
 
     @pytest.mark.asyncio
-    async def test_denying_only_one_still_reports_the_other(
+    async def test_denying_only_one_still_records_the_other(
         self, instance: Path, gate_off: None
     ) -> None:
         """The subtraction must be per tool, not all-or-nothing."""
@@ -861,19 +873,22 @@ class TestTheApprovalGateIsArmed:
                 "tools_denied": ["delete_person"],
             },
         )
-        result = await _run("agents.destructive_tool_not_gated")
+        result = await _run("agents.approval_gate_available")
 
-        assert result.status == "fail", result.detail
+        assert result.status == "pass", result.detail
         assert "delete_task" in result.detail
         assert "delete_person" not in result.detail, result.detail
 
     @pytest.mark.asyncio
-    async def test_a_destructive_grant_with_no_guardrail_at_all_is_reported(
+    async def test_a_destructive_grant_with_no_guardrail_at_all_is_recorded(
         self, instance: Path, gate_on: None
     ) -> None:
         """`human_approval_tools` without the policy in `v2.guardrails` is the
         half-declaration that reads as protection and is none: the engine needs
-        both halves, so the gate being armed does nothing here."""
+        both halves, so the gate being armed does nothing here. Worth saying
+        out loud, which is not the same as worth flagging — the tool runs
+        autonomously, which is the default, and the manifest is what disagrees
+        with itself."""
         _write_agent(
             instance,
             "steward",
@@ -882,17 +897,18 @@ class TestTheApprovalGateIsArmed:
                 "v2": {"human_approval_tools": ["delete_person"]},
             },
         )
-        result = await _run("agents.destructive_tool_not_gated")
+        result = await _run("agents.approval_gate_available")
 
-        assert result.status == "fail", result.detail
+        assert result.status == "pass", result.detail
         assert "delete_person" in result.detail
 
     @pytest.mark.asyncio
-    async def test_fail_open_defeats_the_gate_and_is_reported(
+    async def test_fail_open_defeats_the_gate_and_is_recorded(
         self, instance: Path, gate_on: None
     ) -> None:
         """`human_approval_fail_open: true` defeats `enforce` entirely — an
-        undocumented per-agent bypass."""
+        undocumented per-agent bypass, and the one shape here where a manifest
+        says one thing and does another."""
         _write_agent(
             instance,
             "steward",
@@ -905,9 +921,9 @@ class TestTheApprovalGateIsArmed:
                 },
             },
         )
-        result = await _run("agents.destructive_tool_not_gated")
+        result = await _run("agents.approval_gate_available")
 
-        assert result.status == "fail", result.detail
+        assert result.status == "pass", result.detail
         assert "fail_open" in result.detail
 
 
@@ -934,7 +950,7 @@ class TestTheDocsDescribeTheCoverageTheCheckHas:
         from robothor.doctor.checks.tools import _registered_names
 
         text = (_Path(__file__).resolve().parents[3] / "docs" / "TOOLS.md").read_text()
-        start = text.index("`agents.destructive_tool_not_gated`")
+        start = text.index("`agents.approval_gate_available`")
         end = text.index(self._CLAIM_ENDS, start)
         return set(re.findall(r"`(\w+)`", text[start:end])) & _registered_names()
 
@@ -958,9 +974,11 @@ class TestTheSplitKeepsACleanInstallClean:
     check that fires on a clean install is a check nobody reads" failure this
     module argues against twice.
 
-    Split by OWNER: the manifest gap is the operator's to fix whatever the
-    engine does (`recommended`, degrades); the engine sitting at `observe` is a
-    documented rung on a ladder (`info`, does not degrade).
+    Split by OWNER: one check reads the manifests, the other reads the engine.
+    Since 2026-09-17 BOTH are `info` — running a destructive tool ungated is
+    what Genus OS does by default, and a `recommended` line telling an operator
+    otherwise is how the platform talked an instance into gating a nightly
+    unattended delete.
     """
 
     #: The three postures a shipped deployment actually runs in.
@@ -982,63 +1000,86 @@ class TestTheSplitKeepsACleanInstallClean:
         for var, value in self.POSTURES[name].items():
             monkeypatch.setenv(var, value)
 
-    def test_the_severities_are_what_the_split_is_for(self) -> None:
+    def test_neither_approval_check_can_degrade_an_instance(self) -> None:
         by_id = {check.id: check for check in CHECKS}
 
-        assert by_id["agents.destructive_tool_not_gated"].severity == "recommended"
-        assert by_id["agents.approval_gate_not_armed"].severity == "info", (
-            "an info failure must not mark the instance degraded — that is the "
-            "whole point of the split"
-        )
+        for check_id in ("agents.approval_gate_available", "agents.approval_gate_not_armed"):
+            assert by_id[check_id].severity == "info", (
+                f"{check_id} must not mark the instance degraded — autonomous "
+                "operation is the platform's default, not a finding"
+            )
 
     @pytest.mark.parametrize("posture", ["drop-in", "chart", "compose"])
     @pytest.mark.asyncio
     async def test_the_stock_templates_never_degrade_an_instance(
         self, stock_instance: Path, monkeypatch: pytest.MonkeyPatch, posture: str
     ) -> None:
-        """All 16 shipped templates, at every posture. `crm-steward` declares
-        the only gate, so the ENGINE check reports at `observe`/off — and that
-        must never be a degradation."""
+        """All 16 shipped templates, at every posture."""
         self._posture(monkeypatch, posture)
 
-        gap = await _run("agents.destructive_tool_not_gated")
+        gap = await _run("agents.approval_gate_available")
         assert gap.status == "pass", gap.detail
 
+    @pytest.mark.parametrize("posture", ["drop-in", "chart", "compose"])
     @pytest.mark.asyncio
-    async def test_the_engine_check_is_quiet_only_when_enforcing(
-        self, stock_instance: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        self._posture(monkeypatch, "drop-in")
-        assert (await _run("agents.approval_gate_not_armed")).status == "pass"
-
-    @pytest.mark.parametrize("posture", ["chart", "compose"])
-    @pytest.mark.asyncio
-    async def test_the_engine_check_names_the_promotion_step(
+    async def test_no_shipped_template_declares_a_gate(
         self, stock_instance: Path, monkeypatch: pytest.MonkeyPatch, posture: str
     ) -> None:
-        """An info line an operator cannot act on is noise."""
+        """`crm-steward` used to arm one, and every instance installing that
+        template inherited a nightly unattended delete that asked a person. The
+        ENGINE check therefore has nothing to report at any posture — which is
+        the shape a clean install should have."""
         self._posture(monkeypatch, posture)
 
         result = await _run("agents.approval_gate_not_armed")
 
-        assert result.status == "fail", result.detail
-        assert "crm-steward" in result.detail
+        assert result.status == "pass", result.detail
+        assert "no agent asks for human approval" in result.detail
+
+    @pytest.mark.parametrize("posture", ["chart", "compose"])
+    @pytest.mark.asyncio
+    async def test_the_engine_check_names_the_promotion_step(
+        self, instance: Path, monkeypatch: pytest.MonkeyPatch, posture: str
+    ) -> None:
+        """An info line an operator cannot act on is noise — but it must not
+        read as an instruction either, so it says the unarmed gate is the
+        default before it names the ladder."""
+        self._posture(monkeypatch, posture)
+        _write_agent(
+            instance,
+            "steward",
+            {
+                "tools_allowed": ["read_file", "delete_person"],
+                "v2": {
+                    "guardrails": ["human_approval"],
+                    "human_approval_tools": ["delete_person"],
+                },
+            },
+        )
+
+        result = await _run("agents.approval_gate_not_armed")
+
+        assert result.status == "pass", result.detail
+        assert "steward" in result.detail
+        assert "not a gap" in result.detail
         assert "approval-enforce.md" in result.detail
         assert "ROBOTHOR_APPROVAL_MODE=enforce" in result.detail
 
     @pytest.mark.asyncio
-    async def test_a_manifest_gap_still_degrades_at_every_posture(
+    async def test_an_ungated_grant_degrades_nothing_at_any_posture(
         self, instance: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Promoting the flag must not silence a manifest that never asked for
-        a human at all — no engine setting can gate that."""
+        """The inversion of the round-5 test this replaces. A manifest that
+        never asked for a human is the DEFAULT, so it is recorded and it never
+        moves the verdict — whatever the engine flags say."""
         _write_agent(instance, "reckless", {"tools_allowed": ["read_file", "delete_person"]})
 
         for posture in self.POSTURES:
             self._posture(monkeypatch, posture)
-            result = await _run("agents.destructive_tool_not_gated")
-            assert result.status == "fail", (posture, result.detail)
+            result = await _run("agents.approval_gate_available")
+            assert result.status == "pass", (posture, result.detail)
             assert "delete_person" in result.detail
+            assert "autonomous is the default" in result.detail
 
 
 # ── tools.exec_allowlist_bypasses_denied_tool ─────────────────────────
@@ -1369,3 +1410,163 @@ class TestRegistration:
         from robothor.doctor.registry import categories
 
         assert {"agents", "tools", "calendar"} <= set(categories())
+
+
+# ── autonomy is the default ───────────────────────────────────────────
+
+
+class TestTheGateIsOfferedNeverRecommended:
+    """2026-09-17. The check shipped as `agents.destructive_tool_not_gated` at
+    `recommended`, which reads as "you should gate this" — and an instance did.
+    A CRM hygiene agent put `delete_person` behind `human_approval` on a
+    nightly unattended scan, so every duplicate-contact delete asked a person,
+    waited out `human_approval_timeout` and was denied: the run did nothing and
+    the operator got a prompt per duplicate.
+
+    Genus OS runs agents autonomously by design. The approval gate is an opt-in
+    an instance may want for particular tools, and nothing in the platform may
+    push anyone toward it. So the check reports a FACT: severity `info`, and a
+    `pass` result, because a red cross beside a sentence saying "this is the
+    default" is the same nudge wearing a different label.
+    """
+
+    def test_the_recommending_name_is_gone(self) -> None:
+        by_id = {check.id: check for check in CHECKS}
+
+        assert "agents.destructive_tool_not_gated" not in by_id, (
+            "the id is what a dashboard, a runbook and an agent reading the "
+            "report all quote — 'not_gated' names a defect"
+        )
+        assert "agents.approval_gate_available" in by_id
+
+    def test_it_is_info(self) -> None:
+        by_id = {check.id: check for check in CHECKS}
+
+        assert by_id["agents.approval_gate_available"].severity == "info"
+
+    @pytest.mark.asyncio
+    async def test_an_ungated_delete_is_a_fact_not_a_failure(self, instance: Path) -> None:
+        _write_agent(instance, "reckless", {"tools_allowed": ["read_file", "delete_person"]})
+
+        result = await _run("agents.approval_gate_available")
+
+        assert result.status == "pass", result.detail
+        assert "delete_person" in result.detail
+        assert "the gate is optional (`human_approval_tools`)" in result.detail
+        assert "autonomous is the default" in result.detail
+
+    #: Both approval checks, at their worst: one agent grants a delete with no
+    #: gate at all, another declares a gate the engine is not arming.
+    _APPROVAL_CHECKS = ("agents.approval_gate_available", "agents.approval_gate_not_armed")
+
+    async def _report(self, instance: Path):  # type: ignore[no-untyped-def]
+        from robothor.doctor.runner import CheckResult, DoctorReport
+
+        _write_agent(instance, "reckless", {"tools_allowed": ["read_file", "delete_person"]})
+        _write_agent(
+            instance,
+            "steward",
+            {
+                "tools_allowed": ["read_file", "delete_company"],
+                "v2": {
+                    "guardrails": ["human_approval"],
+                    "human_approval_tools": ["delete_company"],
+                },
+            },
+        )
+        by_id = {check.id: check for check in CHECKS}
+        rows = []
+        for check_id in self._APPROVAL_CHECKS:
+            check = by_id[check_id]
+            result = await check.run(DoctorContext())
+            rows.append(
+                CheckResult(
+                    id=check.id,
+                    title=check.title,
+                    category=check.category,
+                    severity=check.severity,
+                    status=result.status,
+                    detail=result.detail,
+                    fixable=result.fixable,
+                )
+            )
+        return DoctorReport(results=rows)
+
+    @pytest.mark.asyncio
+    async def test_neither_check_reaches_the_failing_or_recommended_counts(
+        self, instance: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The summary line is what an operator reads, and a dashboard banner
+        renders `status`. Neither may move because an agent runs the way the
+        platform is designed to run."""
+        monkeypatch.delenv("ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED", raising=False)
+        monkeypatch.delenv("ROBOTHOR_APPROVAL_MODE", raising=False)
+
+        report = await self._report(instance)
+
+        assert [row.id for row in report.results] == list(self._APPROVAL_CHECKS)
+        assert report.summary["required_failed"] == 0
+        assert report.summary["recommended_failed"] == 0
+        assert report.summary["passed"] == len(self._APPROVAL_CHECKS)
+        assert report.status == "ok"
+        assert report.exit_code == 0
+
+    @pytest.mark.asyncio
+    async def test_neither_check_renders_as_a_failure(
+        self, instance: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The counts are not the whole surface: an `info` row that still
+        returned `fail` printed a red ✗ next to a sentence explaining that the
+        state is the default, and an operator resolves that contradiction in
+        favour of the glyph. There is no red mark anywhere for running
+        autonomously."""
+        from robothor.doctor.render import render_text
+
+        monkeypatch.delenv("ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED", raising=False)
+        monkeypatch.delenv("ROBOTHOR_APPROVAL_MODE", raising=False)
+
+        report = await self._report(instance)
+        lines = {
+            check_id: next(line for line in render_text(report).splitlines() if check_id in line)
+            for check_id in self._APPROVAL_CHECKS
+        }
+
+        for check_id, line in lines.items():
+            assert "✗" not in line, line
+            assert "✓" in line, line
+            assert "(info)" in line, check_id
+        assert "0 failed, 0 recommended" in render_text(report)
+
+    def test_the_title_states_a_fact(self) -> None:
+        by_id = {check.id: check for check in CHECKS}
+        title = by_id["agents.approval_gate_available"].title.lower()
+
+        for nudge in ("should", "must", "needs", "with a human in the loop"):
+            assert nudge not in title, title
+
+    @pytest.mark.asyncio
+    async def test_the_engine_check_says_an_unarmed_gate_is_the_default(
+        self, instance: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`agents.approval_gate_not_armed` is `info` and passes too, and its
+        wording may not read as a gap either: an instance that declared a gate
+        and left the engine at `observe` is running the default posture."""
+        monkeypatch.delenv("ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED", raising=False)
+        monkeypatch.delenv("ROBOTHOR_APPROVAL_MODE", raising=False)
+        _write_agent(
+            instance,
+            "steward",
+            {
+                "tools_allowed": ["read_file", "delete_person"],
+                "v2": {
+                    "guardrails": ["human_approval"],
+                    "human_approval_tools": ["delete_person"],
+                },
+            },
+        )
+
+        result = await _run("agents.approval_gate_not_armed")
+
+        assert result.status == "pass", result.detail
+        assert "not a gap" in result.detail, result.detail
+        assert "opt-in" in result.detail, result.detail

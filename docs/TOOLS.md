@@ -740,14 +740,42 @@ denial reads as a policy and is not one: the same account is reached through
 `exec`, past the do-not-contact check, the duplicate-reply guard, the threading
 and the benchmark gate.
 
-Human approval takes two checks, because the gap has two owners and only one
-of them is the reader's to fix.
+### Autonomy first
 
-**`agents.destructive_tool_not_gated`** (`recommended`) — an agent that granted
-one of the four record-deleting CRM tools — `delete_person`, `delete_company`,
-`delete_note`, `delete_task` — without declaring it under
+Genus OS runs agents **autonomously**. That is the default and the design: an
+agent holds the tools its manifest grants and uses them without asking. When an
+agent lacks a permission it needs, the remedy is to grant it or give it another
+route — never to put a person in front of it. Neither check below is telling
+you to add a gate.
+
+The approval gate is a real feature and turning it on is one manifest edit, per
+agent, for the tools that agent chooses:
+
+```yaml
+v2:
+  guardrails: [human_approval]
+  human_approval_tools: [issue_refund]
+```
+
+Use it for an **irreversible external action** — a refund, a payment, a
+deletion in someone else's system — where a wrong call cannot be taken back.
+That is a small list on most instances. Putting it in front of ordinary work
+costs a run: on an unattended schedule nobody answers, the call waits out
+`human_approval_timeout` and is then denied, so the agent does nothing and the
+operator gets a prompt per item.
+
+Two checks report on it, because the two halves have different owners.
+
+**`agents.approval_gate_available`** (`info`, and it reports as a pass) — which
+of the four record-deleting CRM tools — `delete_person`, `delete_company`,
+`delete_note`, `delete_task` — an agent granted without declaring under
 `v2.human_approval_tools` alongside `v2.guardrails: [human_approval]`, or
-having exempted itself with `human_approval_fail_open: true`.
+having exempted itself with `human_approval_fail_open: true`. A fact for the
+record and a pointer to the keys above, not a gap: ungated is how the platform
+runs. It shipped as `agents.destructive_tool_not_gated` at `recommended`, which
+read as advice — and an instance took it, gated `delete_person` on a nightly
+unattended hygiene scan, and every duplicate-contact delete asked a person,
+timed out and was denied.
 
 **Those four and nothing else.** It does not cover `gws_gmail_send`,
 `write_file`, `exec` or `git_push`: naming those fired on 16 of the 16 stock
@@ -757,7 +785,7 @@ earlier version of this paragraph said it was. `gws_calendar_delete` and
 `vault_delete` are irreversible too and are deliberately still outside the set —
 adding them is a live question, not an oversight.
 
-No engine setting can fix this one: a tool the manifest never named cannot be
+No engine setting changes this one: a tool the manifest never named cannot be
 escalated whatever the flags say.
 
 **`agents.approval_gate_not_armed`** (`info`) — the manifests asked for human
@@ -770,21 +798,25 @@ name an operator reaches for. A manifest can read as carefully gated in review
 and run ungated in production, which is the whole reason this check reads the
 engine's settings as well as the files.
 
-It is `info`, so it never marks the instance `degraded`. `observe` is a
+It is `info` and it reports as a **pass**, like the check above, and the result
+says so in words: an unarmed gate is the default posture, not a gap. Severity
+alone was not enough — at `info` it already could not mark the instance
+`degraded`, but it still printed a red ✗ beside a sentence explaining that the
+state is the default, and a reader resolves that contradiction in favour of the
+glyph. `observe` is a
 deliberate rung on a documented ladder and the Helm chart ships it: a chart
 cannot guarantee an approver is wired, and `enforce` with none denies every
-escalated call. Reporting a correctly-configured instance mid-soak as broken is
-the same "check nobody reads" failure as above, pointed the other way. The
-result names the promotion step; `docs/runbooks/approval-enforce.md` in the
-repo has the full matrix and the checklist. (Not linked: that runbook is in
-`mkdocs.yml`'s `exclude_docs`, so a link here would 404 for a reader of the
-published site.)
+escalated call. The result names the promotion step for an instance that wants
+it; `docs/runbooks/approval-enforce.md` in the repo has the full matrix and the
+checklist. (Not linked: that runbook is in `mkdocs.yml`'s `exclude_docs`, so a
+link here would 404 for a reader of the published site.)
 
-Of the `agents.*`/`tools.*` checks, three are `recommended` — reported, never
-fatal, but they do mark the instance `degraded` — and
-`agents.approval_gate_not_armed` is `info`, which does not.
-`calendar.operator_calendar_writable` is `required`: an instance that cannot
-write the operator's calendar will silently do the wrong thing every time.
+Of the `agents.*`/`tools.*` checks, two are `recommended` — reported, never
+fatal, but they do mark the instance `degraded` — and both approval checks are
+`info` lines that report as passes, so running autonomously carries no red mark
+anywhere. `calendar.operator_calendar_writable` is `required`: an instance that
+cannot write the operator's calendar will silently do the wrong thing every
+time.
 
 ---
 

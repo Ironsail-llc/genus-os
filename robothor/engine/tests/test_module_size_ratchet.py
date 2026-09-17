@@ -189,7 +189,21 @@ CAPS = {
     # — so there is nothing cohesive to extract here, and taking one gate out
     # of six would make the order invisible, which is the opposite of what
     # this ratchet is for. Five lines: one import and one branch.
-    "robothor/engine/tool_admission.py": 405,
+    # 405 -> 362 on merge: the human-approval escalation branch left for
+    # approval_gate.py on a branch that did not see the wrap-up gate. Its
+    # extraction removed the escalate BODY, not the gate — the ordered list
+    # above still names human approval in its place, and what left was one
+    # cohesive cluster with one external dependency (permission_escalation)
+    # that a default install never reaches. Neither branch's figure is right
+    # for the merged tree, so this is the MEASURED count of the rebase result
+    # rather than 405 minus the extraction, which would bank one side's saving
+    # as the other's headroom.
+    "robothor/engine/tool_admission.py": 362,
+    # Capped at the size it was extracted at, like schedule_reconcile.py: a new
+    # module with no cap is how the next branch's "just one more case" lands
+    # somewhere the ratchet is not looking. One branch, one dependency, and it
+    # should stay that — an approval gate that grows needs a reason.
+    "robothor/engine/approval_gate.py": 116,
     # One assistant message's tool calls, from admission to the ledger.
     # Bounded from the day it lands, like schedule_reconcile.py: this is the
     # module that would otherwise absorb every per-turn concern the runner
