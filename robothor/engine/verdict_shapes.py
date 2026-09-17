@@ -31,9 +31,12 @@ import re
 from robothor.engine.override_reasons import names_a_reason
 
 __all__ = [
+    "ITEM_ID",
     "MAX_SCAN_CHARS",
     "VERDICTS",
+    "HEDGE_SCOPE",
     "hands_the_verdict_back",
+    "hedge_quote",
     "hedges_the_verdict",
     "item_id_spans",
     "item_ids",
@@ -49,14 +52,18 @@ MAX_SCAN_CHARS = 64 * 1024
 #: What an enumerated item looks like. Three shapes, all of them explicit
 #: identifiers rather than anything inferred: `msg_2209`, `#12`, `TASK-4`.
 #:
+#: PUBLIC because `verdict_sections` builds its identity-field pattern out of
+#: it. A second copy of this alternation lived there until it diverged by one
+#: flag — `re.IGNORECASE` on the field made it admit `MSG_2209`, which this
+#: pattern rejects — and a subject no other reader recognised crashed the
+#: inspection. One definition, interpolated, is what makes that structural.
+#:
 #: The ticket-key shape refuses a match that continues a longer code. A
 #: reference number in a marker footer — `Ref: Q1-2026-RT-003` — ends in
 #: something that reads exactly like `RT-003`, and the measured runs each
 #: produced a phantom finding against that non-existent item alongside the real
 #: one. A ticket key is a whole token, not the tail of one.
-_ITEM_ID = re.compile(
-    r"\b[a-z][a-z0-9]{1,12}_\d{2,}\b|\B#\d{1,5}\b|(?<![-/])\b[A-Z]{2,6}-\d{1,6}\b"
-)
+ITEM_ID = re.compile(r"\b[a-z][a-z0-9]{1,12}_\d{2,}\b|\B#\d{1,5}\b|(?<![-/])\b[A-Z]{2,6}-\d{1,6}\b")
 
 #: The verdict vocabulary. A closed list, because an open one would read a
 #: paragraph's adjectives as verdicts. Each entry is a label a triage
@@ -159,9 +166,10 @@ _WHAT_IT_IS = re.compile(
     re.IGNORECASE,
 )
 
-#: How far after the hedge hinge to look for what it questions. Shorter than
+#: How far after the hedge hinge to look for what it questions, and how much
+#: of it the re-ask may quote. Shorter than
 #: the hand-back window: a conditional binds tighter than a request does.
-_HEDGE_SCOPE = 160
+HEDGE_SCOPE = 160
 
 #: An override stated outright. Paired with :data:`_PROVENANCE_WORD` below,
 #: because "regardless" on its own is an adverb and this has to be a claim
@@ -180,13 +188,39 @@ _PROVENANCE_WORD = re.compile(
 )
 
 
+#: A quoted span inside a label. MEASURED 2026-09-17: a report titled its
+#: flagged item with the message's own subject line — ``### 9. "P0 platform
+#: outage" with QA-test provenance metadata`` — and the `P0` inside those
+#: quotes was read as the block's verdict, against a block whose actual verdict
+#: was *not escalated*. A quotation in a heading is what the item CALLS itself.
+_QUOTED = re.compile(r"\"[^\"\n]*\"|'[^'\n]*'|`[^`\n]*`|“[^”\n]*”|‘[^’\n]*’")
+
+
+def _unquoted(label: str) -> str:
+    """A label with quoted TITLES blanked, and quoted LABELS kept.
+
+    The line between them is whether the quotation is the verdict or contains
+    one: ``**Severity: "High"**`` and ``## "Critical"`` are labels somebody
+    punctuated, and *"P0 platform outage"* is a title that happens to start
+    with a severity.
+    """
+
+    def _blank(match: re.Match[str]) -> str:
+        inner = match.group(0)[1:-1].strip()
+        if any(pattern.fullmatch(inner) for pattern in VERDICTS.values()):
+            return match.group(0)
+        return " " * (match.end() - match.start())
+
+    return _QUOTED.sub(_blank, label)
+
+
 def item_id_spans(chunk: str) -> list[tuple[int, str]]:
     """``(offset, identifier)`` for every explicit identifier, in order.
 
     The offsets are what binds a metadata field to the item it belongs to:
     a field belongs to the last identifier introduced before it.
     """
-    return [(match.start(), match.group(0)) for match in _ITEM_ID.finditer(chunk)]
+    return [(match.start(), match.group(0)) for match in ITEM_ID.finditer(chunk)]
 
 
 def item_ids(chunk: str) -> set[str]:
@@ -204,39 +238,57 @@ def verdicts_in(chunk: str) -> set[str]:
     document puts in a heading, a bolded lead or a ``Severity:`` field —
     prose that happens to contain the word is discussion, not a decision.
     """
-    labels = " | ".join(part for match in _LABEL.finditer(chunk) for part in match.groups() if part)
+    labels = " | ".join(
+        _unquoted(part) for match in _LABEL.finditer(chunk) for part in match.groups() if part
+    )
     return {name for name, pattern in VERDICTS.items() if pattern.search(labels)}
 
 
-def hands_the_verdict_back(chunk: str) -> bool:
-    """True when this block asks the reader to make the CLASSIFICATION.
+def hands_the_verdict_back(chunk: str) -> int:
+    """WHERE this block asks the reader to make the classification, or ``-1``.
 
     Both halves required: the hand-back phrasing, and — within the sentence
     that follows it — something that is actually the verdict. A report that
     reaches a verdict and separately asks a question about the work has not
     handed its decision to anybody.
+
+    The offset is returned rather than a bare ``True`` because a claim belongs
+    to the item it is written beside: in a recap section naming six items, one
+    sentence about one of them was reported against all six (measured
+    2026-09-17). The caller anchors on the line this offset falls in.
     """
     for match in _HANDBACK.finditer(chunk):
         window = chunk[match.end() : match.end() + _HANDBACK_SCOPE]
         if _ABOUT_THE_VERDICT.search(window):
-            return True
-    return False
+            return match.start()
+    return -1
 
 
-def hedges_the_verdict(chunk: str) -> str:
-    """The retraction this block appends to its own verdict, or ``""``.
+def hedges_the_verdict(chunk: str) -> int:
+    """WHERE this block takes its own verdict back, or ``-1``.
 
     Same two-halves shape as :func:`hands_the_verdict_back`, and for the same
     reason: the hinge word alone is far too common in an honest report. The
-    return value is the quoted text, because the whole point of the enforce
-    rung is that the model is shown the sentence it has to replace.
+    sentence the model is shown comes from :func:`hedge_quote`, which the
+    caller bounds by the claim's own bullet or table row.
     """
     for match in _HEDGE.finditer(chunk):
-        window = chunk[match.end() : match.end() + _HEDGE_SCOPE]
+        window = chunk[match.end() : match.end() + HEDGE_SCOPE]
         if _WHAT_IT_IS.search(window):
-            quoted = " ".join(chunk[match.start() : match.end() + _HEDGE_SCOPE].split())
-            return quoted[:120]
-    return ""
+            return match.start()
+    return -1
+
+
+def hedge_quote(chunk: str, start: int, end: int) -> str:
+    """The retraction as the re-ask quotes it, whitespace-collapsed.
+
+    Bounded by the caller rather than by a fixed window: quoting the window
+    handed the model the next table row's text and a trailing pipe, which is
+    not a sentence it can replace.
+    """
+    # The trailing cell separator goes with it: a row's own `|` is markup,
+    # not part of the sentence the agent wrote.
+    return " ".join(chunk[start : min(end, start + HEDGE_SCOPE)].split())[:120].rstrip(" |")
 
 
 def overrides_a_marker(chunk: str) -> bool:

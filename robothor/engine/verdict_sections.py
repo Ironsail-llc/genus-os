@@ -42,11 +42,12 @@ one:
 
 from __future__ import annotations
 
+import logging
 import re
 
-from robothor.engine.verdict_shapes import VERDICTS, item_id_spans, verdicts_in
+from robothor.engine.verdict_shapes import ITEM_ID, VERDICTS, item_id_spans, verdicts_in
 
-__all__ = ["blocks", "heading_subject"]
+__all__ = ["block_subject", "blocks", "claim_owners", "claim_span"]
 
 _HAS_HEADING = re.compile(r"^#{1,6}\s", re.MULTILINE)
 _AT_HEADING = re.compile(r"^(?=#{1,6}\s)", re.MULTILINE)
@@ -84,6 +85,41 @@ _FILLER = frozenset(
     }
 )
 _WORD = re.compile(r"[a-z]+")
+
+#: Where one item's entry begins. A recap is written one item per bullet and
+#: a summary one item per table ROW, so both are units a claim inside them
+#: belongs to. Without the row, a table — no blank lines, no bullets — was
+#: one unit, and a hedge in one cell reached every id in it.
+_UNIT_START = re.compile(r"^[ \t]*(?:(?:[-*+]|\d{1,3}[.)])[ \t]+|\|)", re.MULTILINE)
+
+#: How a block names ITSELF when its heading is a title: an identity field,
+#: in field position, whose value is one identifier and nothing else. The key
+#: list is closed and short for the same reason every other vocabulary here is
+#: — `**Routed to:** msg_2210` and `**Duplicate of:** msg_3101` name somebody
+#: else, and a key that admitted them would move the defect rather than fix it.
+_ID_FIELD = re.compile(
+    r"^[ \t]*(?:[-*+][ \t]+)?\|?[ \t]*\**[ \t]*"
+    r"(?:message[ \t_-]*id|msg[ \t_-]*id|item[ \t_-]*id|ticket[ \t_-]*id|"
+    r"id|item|message|ticket)"
+    r"\**[ \t]*[:=|][ \t]*\**[ \t]*"
+    # The value is `verdict_shapes.ITEM_ID` itself, interpolated, and the
+    # `(?-i:…)` keeps it case-SENSITIVE inside a case-insensitive key. Both
+    # halves are the same defect: a hand-copied alternation here diverged by
+    # one flag, `re.IGNORECASE` made `[a-z]` match `MSG_2209` and `[A-Z]`
+    # match `jira-4412`, and this field produced subjects `item_ids` never
+    # produces. That subject indexed a dict built from `item_ids`, raised
+    # KeyError, and `loop_guards` suppressed it — the whole deliverable went
+    # UNCHECKED and said nothing. One definition cannot drift from itself.
+    rf"((?-i:{ITEM_ID.pattern}))"
+    # A parenthetical after the id is still that id's field:
+    # `**Message ID:** msg_2205 (follow-up: msg_2212)` is a block about
+    # msg_2205 that says where the thread went. What is still refused is a
+    # bare list — `**Message IDs:** msg_2202 / msg_2210` names two items, and
+    # picking one of them would be the heading rule's known limit with none of
+    # its excuse, so it falls back to no subject at all.
+    r"[ \t]*\**[ \t]*(?:\([^)\n]{0,80}\))?[ \t]*\**[ \t]*\|?[ \t]*$",
+    re.IGNORECASE,
+)
 
 
 def _scope_line(heading: str) -> str:
@@ -134,32 +170,106 @@ def blocks(text: str) -> list[str]:
     return out
 
 
-def heading_subject(block: str) -> str:
-    """The item this block's own heading is ABOUT, or ``""``.
+def block_subject(block: str) -> str:
+    """The item this block is ABOUT, or ``""`` when it names none.
 
-    A heading that leads with an identifier names the item the block decides;
-    any further identifier in it is a reference to somebody else's item.
-    ``### 4. msg_3104 — duplicate of msg_3101`` is a verdict about msg_3104,
-    and reading it as one about msg_3101 too filed an item decided Critical in
-    its own section under a second verdict it never received (review, round 4).
+    A block that names itself — in its heading, or in an identity field —
+    decides that item; every further identifier in it is a reference to
+    somebody else's. ``### 4. msg_3104 — duplicate of msg_3101`` is a verdict
+    about msg_3104, and reading it as one about msg_3101 too filed an item
+    decided Critical in its own section under a second verdict it never
+    received (review, round 4).
 
-    The block may arrive with its inherited scope line in front of it, so the
-    block's own heading is the LAST of the leading heading lines.
+    MEASURED 2026-09-17, the first verified `enforce` run: the same defect came
+    through the other door. Every item in that report was titled rather than
+    identified — ``### 9. Automated weekly ticket summary`` over
+    ``- **Message ID:** msg_2208`` — so the heading named no subject, and the
+    summary's own sentence about the week ("they correlate with the customer
+    complaints in msg_2203 and msg_2207") filed two items decided High under
+    *low* as well. Two of the run's three findings were invented, and at
+    `enforce` the model was re-asked to fix them.
+
+    So an identity FIELD counts as naming the block's subject, which is what
+    the heading rule always meant. The heading wins when both are present; a
+    block with neither — a severity section with a bullet per item, the flat
+    layout — still assigns its verdict to every id in it.
 
     KNOWN LIMIT, pinned by a test marked as such: a heading that decides two
     items at once — ``## msg_2209 and msg_2210 — both outages`` over one
     ``**Severity: Critical**`` — attributes the verdict to the first alone, so
     a marker contradicting the second goes unreported. It fails CLOSED, which
     is the right side of this trade: the alternative is the cross-reference bug
-    this rule exists to fix, where *"duplicate of msg_3101"* files somebody
-    else's item under a verdict it never received. Telling a conjunction from a
-    reference needs vocabulary this module deliberately does not have.
+    this rule exists to fix. Telling a conjunction from a reference needs
+    vocabulary this module deliberately does not have.
     """
     heading = ""
+    body: list[str] = []
     for line in block.splitlines():
-        if line.startswith("#"):
+        if not body and line.startswith("#"):
             heading = line
         elif line.strip():
-            break
+            body.append(line)
     spans = item_id_spans(heading)
-    return spans[0][1] if spans else ""
+    if spans:
+        return spans[0][1]
+    for line in body:
+        field = _ID_FIELD.match(line)
+        if field:
+            return field.group(1)
+    return ""
+
+
+def claim_owners(block: str, subject: str, ids: set[str], offset: int) -> set[str]:
+    """The items a claim made at ``offset`` in this block is ABOUT.
+
+    A hedge, a hand-back and an override are claims about an item, and the
+    first cut wrote each of them into every identifier in its block. MEASURED
+    2026-09-17: a `## Notes & Recommendations` recap named six items, said of
+    ONE of them "if it is real, escalate immediately", and the control reported
+    five items that sentence was never about — at `enforce`, five items the
+    model was then asked to re-decide.
+
+    So: the block's subject when it has one, else the items named in the claim's
+    own BULLET, table row or paragraph. The unit is not the line because prose
+    wraps — the measured recap put the item id on one physical line and the
+    sentence about it two lines later, in the same numbered item.
+
+    A claim whose unit names nobody is attributed only where there is no
+    ambiguity left: a block about ONE item. In a block about several it is
+    DROPPED, with a line at DEBUG. "Overall the week is quiet; if it is real,
+    escalate immediately" is a closing sentence about the week, and reporting
+    it against every item listed above it is the fabrication this rule exists
+    to stop — a miss costs one unreported hedge, a fabrication costs the agent
+    a re-ask of a report that was right.
+    """
+    if subject:
+        return {subject} & ids
+    if offset < 0:
+        return ids
+    start, end = claim_span(block, offset)
+    named = {item for _at, item in item_id_spans(block[start:end])}
+    if named:
+        return named
+    if len(ids) == 1:
+        return ids
+    logging.getLogger(__name__).debug(
+        "verdict sections: a claim at offset %d names no item and its block names %d — dropped",
+        offset,
+        len(ids),
+    )
+    return set()
+
+
+def claim_span(block: str, offset: int) -> tuple[int, int]:
+    """``(start, end)`` of the bullet, table row or paragraph at ``offset``.
+
+    Also what bounds the sentence the re-ask QUOTES: shown the whole window,
+    the model was handed the next row's text and a trailing pipe.
+    """
+    starts = [match.start() for match in _UNIT_START.finditer(block) if match.start() <= offset]
+    paragraph = block.rfind("\n\n", 0, offset)
+    start = max([0, *starts, paragraph + 2 if paragraph >= 0 else 0])
+    ends = [match.start() for match in _UNIT_START.finditer(block) if match.start() > offset]
+    paragraph = block.find("\n\n", offset)
+    end = min([len(block), *ends, paragraph if paragraph >= 0 else len(block)])
+    return start, end

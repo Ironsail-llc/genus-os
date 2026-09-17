@@ -43,10 +43,11 @@ from pathlib import Path
 from typing import NamedTuple
 
 from robothor.engine.provenance_markers import markers_by_item, tool_result_text
-from robothor.engine.verdict_sections import blocks, heading_subject
+from robothor.engine.verdict_sections import block_subject, blocks, claim_owners, claim_span
 from robothor.engine.verdict_shapes import (
     MAX_SCAN_CHARS,
     hands_the_verdict_back,
+    hedge_quote,
     hedges_the_verdict,
     item_ids,
     overrides_a_marker,
@@ -156,27 +157,36 @@ def inspect_report(report_text: str | None, results_text: str | None = None) -> 
     hedges: dict[str, str] = {}
     overridden: dict[str, bool] = {}
     for block in blocks(text):
+        # Who each of the four shapes is ABOUT, rather than which block it was
+        # written in. A block that names itself decides that item and merely
+        # mentions the others; a block that names no subject — a recap, a
+        # severity section with a bullet per item — attributes a verdict to
+        # every id in it and a CLAIM to the ids on the claim's own line.
+        # Measured twice on 2026-09-17: without the first rule a summary item's
+        # cross-reference filed two others under its verdict, and without the
+        # second one sentence about one item was reported against all six ids
+        # in a `## Notes & Recommendations` recap.
+        ids = item_ids(block)
+        subject = block_subject(block)
         found = verdicts_in(block)
-        asks_reader = hands_the_verdict_back(block)
-        hedge = hedges_the_verdict(block)
+        asks_at = hands_the_verdict_back(block)
+        hedge_at = hedges_the_verdict(block)
         override = overrides_a_marker(block)
-        # A block headed by an item decides THAT item; the other identifiers in
-        # it are references. `### 4. msg_3104 — duplicate of msg_3101` under
-        # `## No action required` filed msg_3101 — Critical in its own section —
-        # under a second verdict it never received. A block whose heading names
-        # no item (a severity section with a bullet per item, the flat layout
-        # this control already caught) still assigns to every id in it.
-        subject = heading_subject(block)
-        for item in item_ids(block):
+        for item in ids:
             per_item.setdefault(item, set())
-            if not subject or item == subject:
-                per_item[item].update(found)
-            if asks_reader:
-                handback[item] = True
-            if hedge:
-                hedges.setdefault(item, hedge)
-            if override:
-                overridden[item] = True
+        for item in claim_owners(block, subject, ids, -1) if found else ():
+            per_item[item].update(found)
+        for item in claim_owners(block, subject, ids, asks_at) if asks_at >= 0 else ():
+            handback[item] = True
+        if hedge_at >= 0:
+            # Quoted no further than its own bullet or table row: the re-ask
+            # shows the model the sentence it has to replace, and a fixed
+            # window handed it the next row's text and a trailing pipe.
+            quote = hedge_quote(block, hedge_at, claim_span(block, hedge_at)[1])
+            for item in claim_owners(block, subject, ids, hedge_at):
+                hedges.setdefault(item, quote)
+        for item in claim_owners(block, subject, ids, -1) if override else ():
+            overridden[item] = True
 
     findings: list[tuple[str, str]] = []
     for item in sorted(per_item):
