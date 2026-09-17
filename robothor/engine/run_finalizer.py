@@ -337,6 +337,15 @@ class RunFinalizationMixin:
 
         record_deliverable_verdicts(run, session, self.config.workspace)
 
+        # And what the run never finished reading — a separate question from
+        # whether the artefact is right, because a run can write exactly the
+        # file the task named, in exactly the shape it named, over a strictly
+        # smaller set of facts than the task put in front of it. Takes the
+        # run's `exec` spill files with it on the way out.
+        from robothor.engine.observation_ledger import record_observation_verdicts
+
+        record_observation_verdicts(run, session, self.config.workspace)
+
     @staticmethod
     def _check_primary_model_reached(run: AgentRun, agent_config: Any) -> None:
         """Alert when a run answered on a fallback instead of the configured primary.

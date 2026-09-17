@@ -777,3 +777,95 @@ flags:
       targets, because the timeout clamp's per-call annotation changed the
       result digest the repeat counter keyed on, and a zero here would have been
       misread as "the workload has no repeats".
+  - name: ROBOTHOR_TRUNCATION_LEDGER_MODE
+    owner: ops
+    mode: observe
+    planned_promotion: "2026-10-15"
+    soak: >
+      NEW 2026-09-16. A ledger of the tool results this run saw only part of.
+      `exec` now writes a truncated stream whole to a file under
+      `<workspace>/.robothor/exec/` and hands back `stdout_path`,
+      `stdout_chars` and `stdout_truncated`; this decides what happens when a
+      run reaches the end without having read any of that back.
+
+      THE MEASUREMENT: on the worst-scoring Social task one listing call was
+      cut at 4,000 of 12,431 characters. The response shape was
+      `{"records": [...], "total": N}`, so `total` — the one field that would
+      have exposed the cut — was itself in the discarded tail. The agent read
+      the twelve records it could see, opened its report "all 12", and scored
+      FULL MARKS on every graded item whose evidence was inside the window and
+      ZERO on every item past it. The extraction was never the weak part.
+
+      Observe changes nothing the agent sees: it keeps the ledger, logs the
+      unresolved entries at WARNING with the run id, and writes an
+      `agent_guardrail_events` row at finalization. Enforce quotes each
+      unresolved entry to the model once and holds a finishing run for exactly
+      ONE more ask, after which the run completes with a sentence naming what
+      it never read — never a loop, because the failure being corrected is a
+      confident wrong answer and a stuck run is not an improvement on it.
+
+      BLOCKER: a re-measured WildClawBench 03_Social sweep in the sandbox, two
+      runs of task_2 and task_5, showing the tail actually reached the model's
+      answer — plus `agent_guardrail_events` rows with guardrail_name =
+      'truncation_ledger' proving entries were registered on real runs. A quiet
+      table here means the ledger is inert, not that nothing is truncated; read
+      it the way the step-efficiency entry says to.
+  - name: ROBOTHOR_ACT_OBSERVE_MODE
+    owner: ops
+    mode: observe
+    planned_promotion: "2026-10-15"
+    soak: >
+      NEW 2026-09-16. A call that changed something at the other end
+      invalidates what the run knew about that source, and nothing in the
+      engine said so.
+
+      THE MEASUREMENT: on the second Social task the agent made nineteen
+      state-changing calls inside one shell script that printed each one's
+      `status` and nothing else. The service returned three follow-up messages
+      inline in those very responses; all three were discarded, and no read of
+      that inbox happened between the first send and the report. The grader
+      scored `output_quality` 1.0 and `severity_accuracy` 0.0 in the same pass.
+
+      Observe logs what would have been said; enforce says it once at a
+      deliverable check-in. It blocks nothing on any rung — "look again" is
+      advice, and an agent that has genuinely finished has to be able to
+      finish. The classification reuses
+      `tools/read_only.declared_read_only_tools`, the same table the parallel
+      planner trusts, so the two controls cannot disagree about whether a tool
+      writes.
+
+      BLOCKER: evidence that the note fires on a real act-then-write run and
+      not on a read-only one — `agent_guardrail_events` rows with
+      guardrail_name = 'act_observe' from the sandbox sweep, checked against
+      the runs' own step ledgers. The shell heuristic is deliberately narrow
+      (an HTTP method that is not a read); a zero could mean it is too narrow
+      rather than that nothing acted.
+  - name: ROBOTHOR_VERDICT_COMMITMENT_MODE
+    owner: ops
+    mode: observe
+    promotion: n/a-on-this-instance
+    soak: >
+      NEW 2026-09-16. Where a task asked the agent to classify, triage, route
+      or prioritise each of several items, the finished artefact should carry
+      exactly one verdict per item, with the contradicting evidence folded INTO
+      that verdict as its reason.
+
+      THE MEASUREMENT: a planted QA-routing marker sat in one message's footer.
+      The agent found it, filed the message as Critical #1 with two named
+      owners anyway, and appended "please verify whether this is a live
+      incident or a quarterly QA routing test". The rubric was binary and a
+      top-of-report P0 is an escalation whatever the footnote says.
+
+      This is the only one of the three observation ladders that touches model
+      JUDGEMENT, which is why it has its own flag and why it carries no
+      promotion date. It stays on observe until it has been probed by firing a
+      REAL double-verdict artefact through it — not by reading a log line it
+      prints itself, which is the failure `feedback-probe-dont-trust-silence`
+      records. Detection is narrow on purpose: the task must ask for a decision
+      per item, and the artefact must show an explicit item identifier under
+      two verdict labels or in a block that asks the reader to decide.
+
+      BLOCKER: a probe in the sandbox with (a) a genuine double-verdict report
+      that fires it and (b) twenty real task specs read read-only from the
+      benchmark checkout that produce nothing. Only after both does a promotion
+      date belong here at all.

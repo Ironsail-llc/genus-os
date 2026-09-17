@@ -1855,6 +1855,36 @@ class FlagSettings(SettingsGroup):
         "progress check-in every 25 iterations.",
         governed=True,
     )
+    truncation_ledger_mode: str = declare(
+        "observe",
+        "ROBOTHOR_TRUNCATION_LEDGER_MODE",
+        "Ledger of tool results the run saw only part of: 'off' keeps none, "
+        "'observe' (default) keeps it, logs the unresolved entries at WARNING "
+        "and writes a guardrail row at the end, 'enforce' also quotes each "
+        "unresolved entry to the model once and holds a finishing run for one "
+        "more ask before it completes saying what it never read.",
+        governed=True,
+    )
+    act_observe_mode: str = declare(
+        "observe",
+        "ROBOTHOR_ACT_OBSERVE_MODE",
+        "The act-then-observe rule: a call that changed something at the other "
+        "end invalidates what the run knew about that source. 'observe' "
+        "(default) logs what would have been said, 'enforce' tells the agent "
+        "once at a deliverable check-in, 'off' says nothing. Blocks nothing on "
+        "any rung.",
+        governed=True,
+    )
+    verdict_commitment_mode: str = declare(
+        "observe",
+        "ROBOTHOR_VERDICT_COMMITMENT_MODE",
+        "One verdict per item where the task asked the agent to classify, "
+        "triage, route or prioritise: 'observe' (default) logs an item filed "
+        "under two verdicts or handed back to the reader, 'enforce' re-asks "
+        "once, 'off' checks nothing. The only ladder here that touches model "
+        "judgement, so it stays on observe until it has been probed.",
+        governed=True,
+    )
     judge_enabled: bool = declare(
         False,
         "ROBOTHOR_JUDGE_ENABLED",

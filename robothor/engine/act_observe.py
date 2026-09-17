@@ -1,0 +1,232 @@
+"""Acting invalidates what you observed before you acted.
+
+MEASURED 2026-09-16, the second Social task we lost. The task's whole design is
+that messaging an internal contact makes the mock service append a follow-up to
+the inbox *and* hand it back inline in that very response. All three follow-ups
+fired. Our agent made nineteen state-changing calls inside one shell script that
+printed ``result.get("status")`` and nothing else, so its entire view of twelve
+of them was ``[1/12] To: … → sent``, twelve times — and it never read that inbox
+again before writing its report. The grader scored ``output_quality`` **1.0**
+and ``severity_accuracy`` **0.0** in the same pass: a perfect report about the
+wrong world.
+
+Nothing in the engine said either of the two things that would have caught it:
+
+* a state-changing call's RESPONSE is evidence, not a receipt; and
+* once you have changed a source, what you knew about it is out of date.
+
+This module is the classification both rules need, kept free of any session or
+run so it can be tested against a table of names and command strings:
+
+* :func:`classify` — is this call a read of some source, a change to one, or
+  neither. Tool names come from the platform's own read-only classification
+  (the table the parallel planner already trusts); ``exec`` and
+  ``execute_code`` are shell, and get a deliberately narrow verb heuristic.
+* :func:`source_tokens` — which sources a call touched, so "you have not read
+  THAT inbox" is answerable rather than "you have not read anything".
+* :func:`unread_proxy_responses` — how many ``genus_tools`` calls a snippet
+  made whose response it never printed. This is the task-5 failure expressed
+  as a number the model can see.
+
+Conservative in one direction on purpose: an unrecognised call is ``neither``,
+never ``change``. A false "you changed something" teaches an agent to ignore
+the note, and a note that is ignored is worse than no note.
+"""
+
+from __future__ import annotations
+
+import re
+from typing import Any
+
+__all__ = [
+    "CHANGE",
+    "NEITHER",
+    "READ",
+    "act_observe_note",
+    "classify",
+    "response_evidence",
+    "source_tokens",
+    "unread_proxy_responses",
+]
+
+READ = "read"
+CHANGE = "change"
+NEITHER = "neither"
+
+#: The two tools whose argument is a program rather than a request. Everything
+#: else is classified by name.
+_SHELL_TOOLS = frozenset({"exec", "execute_code"})
+
+#: A shell command or snippet that CHANGES something at the other end. Narrow
+#: on purpose — an HTTP method that is not a read, or a client call spelled for
+#: one. `curl --data` is here because curl with a body is a POST whether or not
+#: `-X` says so, which is exactly how the measured run sent nineteen messages
+#: without the string "POST" appearing near some of them.
+_MUTATING_SHELL = re.compile(
+    r"(?:-X|--request)\s+[\"']?(?:POST|PUT|PATCH|DELETE)\b"
+    r"|--data(?:-raw|-binary|-urlencode)?\b"
+    r"|\brequests\.(?:post|put|patch|delete)\s*\("
+    r"|\bsession\.(?:post|put|patch|delete)\s*\("
+    r"|\bhttpx\.(?:post|put|patch|delete)\s*\("
+    r"|\bmethod\s*=\s*[\"'](?:POST|PUT|PATCH|DELETE)[\"']",
+    re.IGNORECASE,
+)
+
+#: A shell command that READS something at the other end. A command with no
+#: source token at all reads nothing this module has an opinion about.
+_FETCHING_SHELL = re.compile(
+    r"\bcurl\b|\bwget\b|\bhttpx\b|\brequests\.get\s*\(|\burlopen\s*\(|\bfetch\s*\(",
+    re.IGNORECASE,
+)
+
+#: What a "source" looks like in a command: a URL, an endpoint, a path. The
+#: character class is a single bounded repetition, so this stays linear on
+#: hostile input (the rule `deliverable_extract` records five findings for).
+_TOKEN = re.compile(r"[A-Za-z0-9._~:/?#@!$&'*+,;=%-]{4,200}")
+
+#: A response field short enough that seeing it in stdout proves nothing. The
+#: measured snippet printed `sent`; the payload it threw away was a paragraph.
+MIN_EVIDENCE_CHARS = 12
+
+#: How many leaf values are kept per proxied response, and how much of each.
+#: Bounded because this is held for the length of a turn and a snippet may make
+#: two hundred calls.
+MAX_EVIDENCE_VALUES = 5
+MAX_EVIDENCE_CHARS = 200
+
+
+def source_tokens(value: Any) -> frozenset[str]:
+    """The sources a call names: URLs, endpoints and paths, as bare strings.
+
+    A token qualifies by containing a ``/`` — which is what separates
+    ``/slack/messages`` and ``http://host/x`` from ``--silent`` and ``json``.
+    Returns an empty set rather than guessing when a call names no source.
+    """
+    if isinstance(value, dict):
+        text = " ".join(str(v) for v in value.values() if isinstance(v, (str, int, float)))
+    else:
+        text = str(value or "")
+    return frozenset(
+        token.strip("\"'`,;")
+        for token in _TOKEN.findall(text)
+        if "/" in token and not token.startswith("//")
+    )
+
+
+def classify(tool_name: str, tool_input: dict[str, Any], read_only: frozenset[str]) -> str:
+    """``READ``, ``CHANGE`` or ``NEITHER`` for one admitted call.
+
+    Args:
+        tool_name: the registered name the call was admitted under.
+        tool_input: its arguments.
+        read_only: what this instance has CLASSIFIED read-only — the same
+            answer ``parallel_tools`` is given, so the two controls can never
+            disagree about whether a tool writes.
+
+    ``NEITHER`` is the honest answer for a call that touches no remote source:
+    writing a local file changes nothing an earlier observation was about.
+    """
+    if tool_name in _SHELL_TOOLS:
+        program = " ".join(
+            str(v) for v in (tool_input or {}).values() if isinstance(v, (str, int, float))
+        )
+        if not source_tokens(program):
+            return NEITHER
+        if _MUTATING_SHELL.search(program):
+            return CHANGE
+        return READ if _FETCHING_SHELL.search(program) else NEITHER
+    if tool_name in read_only:
+        return READ
+    if not tool_name:
+        return NEITHER
+    # Absent means WRITE in the platform's classification, and that direction
+    # is the whole point of `tools/read_only.py` — but "write" there means
+    # "may not run beside another call", which includes local-only tools. Only
+    # a call that names a remote source, or one spelled as a send or a spawn,
+    # invalidates an observation.
+    if tool_name.startswith(("send_", "spawn_", "create_", "update_", "delete_")):
+        return CHANGE
+    return CHANGE if source_tokens(tool_input) else NEITHER
+
+
+def response_evidence(result: Any) -> tuple[str, ...]:
+    """The strings that would PROVE a snippet looked at this response.
+
+    Leaf string values long enough that their presence in stdout cannot be a
+    coincidence. A response made entirely of short values yields nothing, and
+    a call whose response yields nothing is never counted as unread — the
+    absence of evidence must not become evidence of absence.
+    """
+    found: list[str] = []
+
+    def walk(node: Any, depth: int) -> None:
+        if len(found) >= MAX_EVIDENCE_VALUES or depth > 6:
+            return
+        if isinstance(node, str):
+            if len(node) >= MIN_EVIDENCE_CHARS:
+                found.append(node[:MAX_EVIDENCE_CHARS])
+            return
+        if isinstance(node, dict):
+            for value in node.values():
+                walk(value, depth + 1)
+        elif isinstance(node, (list, tuple)):
+            for value in node:
+                walk(value, depth + 1)
+
+    walk(result, 0)
+    return tuple(found)
+
+
+def unread_proxy_responses(
+    responses: list[tuple[str, tuple[str, ...]]], stdout: str
+) -> dict[str, Any]:
+    """How many of a snippet's proxied calls returned something it never showed.
+
+    ``{}`` when every response left a trace in stdout, or when none carried
+    anything substantial enough to look for. Otherwise a count and the tool
+    names, so the model reads "3 of your 12 calls returned a body you did not
+    print" rather than having to infer it.
+    """
+    unread: list[str] = []
+    for name, evidence in responses:
+        if not evidence:
+            continue
+        if any(value in stdout for value in evidence):
+            continue
+        unread.append(name)
+    if not unread:
+        return {}
+    names = sorted(set(unread))
+    return {
+        "unread_responses": len(unread),
+        "unread_response_tools": names,
+        "unread_response_note": (
+            f"{len(unread)} of the {len(responses)} tool calls this snippet made returned a "
+            "response body the snippet never printed. A call through `genus_tools` keeps its "
+            "full response on this run's step ledger whatever you print; a call through "
+            "`urllib` or `curl` keeps only what you print. If a reply, a new record or a "
+            f"follow-up could have come back from {', '.join(names)}, print it and look."
+        ),
+    }
+
+
+def act_observe_note(changes: list[tuple[int, str, frozenset[str]]]) -> str:
+    """ "You changed this and have not looked since" — or "" when nothing did.
+
+    One sentence per source, not per call: twelve sends to one inbox is one
+    thing the agent has not re-read, and a note that lists twelve of anything
+    is a note that gets skimmed.
+    """
+    if not changes:
+        return ""
+    tools = sorted({tool for _step, tool, _sources in changes})
+    sources = sorted({source for _s, _t, srcs in changes for source in srcs})[:3]
+    where = f" against {', '.join(sources)}" if sources else ""
+    plural = "call" if len(changes) == 1 else "calls"
+    return (
+        f"[SYSTEM] You have made {len(changes)} state-changing {plural} "
+        f"({', '.join(tools)}){where} and have not read that source since. A response you "
+        "did not inspect may have carried new information, and anything you knew about "
+        "that source before you changed it is now out of date. Read it again before you "
+        "write your answer."
+    )

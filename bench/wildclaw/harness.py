@@ -423,6 +423,24 @@ def _container_command(
         # default is the platform's own; setting it to 1 in the environment
         # gives a clean sequential control run.
         "ROBOTHOR_PARALLEL_TOOL_CALLS": os.environ.get("ROBOTHOR_PARALLEL_TOOL_CALLS", "4"),
+        # The three observation ladders, same host-override idiom. Measured
+        # 2026-09-16 on 03_Social: one task lost 48 points to a listing whose
+        # tail was silently cut, another lost 45 to nineteen state-changing
+        # calls whose responses were never read back. The platform default is
+        # `observe`, which by design changes nothing the model sees — so a
+        # sweep left on the default could not show either fix working even once
+        # it existed, exactly the way the deliverable contract above could not.
+        "ROBOTHOR_TRUNCATION_LEDGER_MODE": os.environ.get(
+            "ROBOTHOR_TRUNCATION_LEDGER_MODE", "enforce"
+        ),
+        "ROBOTHOR_ACT_OBSERVE_MODE": os.environ.get("ROBOTHOR_ACT_OBSERVE_MODE", "enforce"),
+        # Except this one. It is the ladder that touches model judgement, it has
+        # not been probed with a real double-verdict artefact yet, and a
+        # benchmark is the wrong place to discover a false positive — so the
+        # harness runs it where the fleet runs it until that probe exists.
+        "ROBOTHOR_VERDICT_COMMITMENT_MODE": os.environ.get(
+            "ROBOTHOR_VERDICT_COMMITMENT_MODE", "observe"
+        ),
         # Genus resolves its skills directory from this, so the task's skills
         # land somewhere the loader actually reads.
         "ROBOTHOR_WORKSPACE": CONTAINER_WORKSPACE,

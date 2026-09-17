@@ -537,6 +537,32 @@ class AgentSession:
         )
         self.run.steps.append(step)
 
+        # The observation ledgers, before the `append_message` return below and
+        # not after it. A snippet's proxied calls never put a message in front
+        # of the model, and they are precisely the calls the measured run threw
+        # its evidence away in — a hook that ran only for turn-level calls would
+        # have been blind to all nineteen of them.
+        from robothor.engine.observation_ledger import observe_tool_call
+        from robothor.engine.skill_contract import remember_skill_text
+
+        observe_tool_call(self, step)
+        # A skill body is where some tasks state the output path they will be
+        # graded on, and `task_text_for_run` reads only the prompt. Kept here
+        # so the contract, the check-in and the finalizer all read the same
+        # source — three consumers that must never disagree.
+        remember_skill_text(self, tool_name, tool_output)
+
+        # An `exec` spill is an offloaded artifact by every property that
+        # matters: the model was handed a path instead of the content and is
+        # being told to read it back. Putting it on the same ledger is what
+        # stops that read_file from being re-offloaded into a second stub, the
+        # loop that kept the offload mechanism disabled for a year.
+        if isinstance(tool_output, dict):
+            for key in ("stdout_path", "stderr_path"):
+                spilled = tool_output.get(key)
+                if isinstance(spilled, str) and spilled:
+                    self._offloaded_paths.add(spilled)
+
         # A proxied call — one a snippet made through `genus_tools` inside
         # `execute_code` — is a STEP but not a TURN: it earns its row in the
         # ledger and its audit entry, and it must not put a `tool` message in

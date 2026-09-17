@@ -299,9 +299,15 @@ class Sandbox:
                 "exit_code": 124,
             }
 
+        # WHOLE streams, deliberately. This used to slice to 4,000/2,000 here,
+        # which meant the container branch kept the silent amputation for four
+        # releases after the host branch stopped doing it. The caller
+        # (`tools/handlers/filesystem._exec`) shapes both branches through
+        # `exec_spill.shape_exec_result`, so the cut is named, counted and
+        # written to a file in exactly one place.
         return {
-            "stdout": proc.stdout[:4000],
-            "stderr": proc.stderr[:2000],
+            "stdout": proc.stdout,
+            "stderr": proc.stderr,
             "exit_code": proc.returncode,
         }
 

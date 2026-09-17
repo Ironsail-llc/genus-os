@@ -7,6 +7,7 @@ import subprocess
 from typing import TYPE_CHECKING, Any
 
 from robothor.constants import DEFAULT_TENANT
+from robothor.engine.exec_spill import shape_exec_result
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -33,33 +34,9 @@ DEFAULT_EXEC_TIMEOUT = 30
 #: media work while staying inside every agent's wall-clock ceiling.
 MAX_EXEC_TIMEOUT = 900
 
-#: How much of a command's output reaches the model. Unchanged in size and
-#: named for the first time: they were two bare literals inside a subprocess
-#: result, which is how the real defect went unnoticed — the slice was silent.
-STDOUT_LIMIT = 4_000
-STDERR_LIMIT = 2_000
-
-
-def truncate_stream(text: str, limit: int) -> str:
-    """One stream of a command's output, cut visibly rather than silently.
-
-    MEASURED 2026-09-16. The four benchmark tasks that scored worst were bulk
-    extraction over 21 to 130 documents with 57 to 70 `exec` calls each, and
-    every listing, dump and diagnostic on those runs lost its tail to a bare
-    `[:4000]`. The model cannot tell a command that printed forty lines from
-    one that printed four thousand and showed it the first eight percent, so it
-    reasons from the visible part as though it were the whole.
-
-    The remedy is not a bigger slice — that has the same defect one order of
-    magnitude later. It is that the cut is named, counted, and paired with what
-    to do instead, so truncation becomes something the agent can act on.
-    """
-    if len(text) <= limit:
-        return text
-    return (
-        text[:limit] + f"\n\n[truncated: {limit} of {len(text)} chars shown — re-run with a "
-        "narrower command, or write the full output to a file and read_file it]"
-    )
+#: How much of a command's output reaches the model, and where the rest of it
+#: goes. Both live in `exec_spill` now: the window and the file that makes the
+#: window safe are one subject, and the second half is the one #583 was missing.
 
 
 def resolve_exec_timeout(args: dict[str, Any]) -> int:
@@ -136,6 +113,12 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             result = await sandbox.exec_shell(command, timeout=timeout)
         except Exception as e:
             return {"error": f"Sandboxed exec failed: {e}"}
+        # The sandboxed branch had its OWN bare `[:4000]` inside `exec_shell`,
+        # so #583's marker never reached a container-sandboxed agent at all —
+        # the fix went into the host branch and nobody checked the other one.
+        # `exec_shell` now returns the whole stream and the shaping happens
+        # here, once, for both branches.
+        result = shape_exec_result(result, workspace=ctx.workspace, run_id=run_id)
         sandboxed_grants = _grants(
             getattr(ctx, "agent_id", "") or "", getattr(ctx, "workspace", "") or ""
         )
@@ -198,11 +181,15 @@ async def _exec(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 cwd=ctx.workspace or None,
                 env=child_env.env,
             )
-            return {
-                "stdout": truncate_stream(proc.stdout, STDOUT_LIMIT),
-                "stderr": truncate_stream(proc.stderr, STDERR_LIMIT),
-                "exit_code": proc.returncode,
-            }
+            return shape_exec_result(
+                {
+                    "stdout": proc.stdout,
+                    "stderr": proc.stderr,
+                    "exit_code": proc.returncode,
+                },
+                workspace=ctx.workspace,
+                run_id=run_id,
+            )
         except subprocess.TimeoutExpired:
             # The limit rides in its OWN field, never inside the message. When
             # the run's remaining budget is clamping this call, that number

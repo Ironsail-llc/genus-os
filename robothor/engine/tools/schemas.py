@@ -45,12 +45,19 @@ _CODE_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "exec",
+            # The output cap is named here on purpose. An agent cannot route
+            # around a limit it was never told about, and for one release this
+            # description documented the timeout and nothing else while a
+            # 4,000-character slice was silently deciding what the model saw.
             "description": (
                 "Execute a shell command. Defaults to a 30s limit; pass "
                 "`timeout` (seconds, up to 900) for anything slower — a model "
                 "call, a build, media processing. Do NOT background a long "
                 "command to dodge the limit: a backgrounded child is killed "
-                "when exec returns, and its output file is left truncated."
+                "when exec returns, and its output file is left truncated. "
+                "Output over ~4,000 chars is cut; the whole of it is written "
+                "to a file whose path comes back in `stdout_path` — read_file "
+                "that rather than assuming you saw everything."
             ),
             "parameters": {
                 "type": "object",
@@ -80,10 +87,10 @@ _CODE_SCHEMAS: dict[str, dict[str, Any]] = {
             "description": (
                 "Use this when the SAME tool call repeats over many items — loop "
                 "over ids, fetch each page, check every file. The snippet calls "
-                "your tools with `from genus_tools import web_fetch, read_file` "
-                "(or `genus_tools.call(name, **args)`), so fifty lookups cost one "
-                "turn instead of fifty. Print what you need; only stdout comes "
-                "back. Needs `exec`."
+                "your tools with `from genus_tools import web_fetch`, so fifty "
+                "lookups cost one turn and each keeps its whole response on this "
+                "run's ledger — `urllib` or `curl` keeps only what you print. Big "
+                "stdout goes to `stdout_file`. Needs `exec`."
             ),
             "parameters": {
                 "type": "object",

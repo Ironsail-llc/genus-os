@@ -114,6 +114,16 @@ class Scratchpad:
             self._repeat_signature = None
             self._repeat_count = 0
             return
+        from robothor.engine.exec_spill import is_spill_readback
+
+        if is_spill_readback(tool_name, tool_input):
+            # Going to get the rest of a result the engine truncated is
+            # progress by definition — it is the run acquiring information it
+            # did not have. Counting it as a no-progress repeat would make the
+            # detector fire on the one behaviour the truncation marker asks for.
+            self._repeat_signature = None
+            self._repeat_count = 0
+            return
         try:
             payload = json.dumps(
                 {"tool": tool_name, "args": tool_input or {}, "result": result},

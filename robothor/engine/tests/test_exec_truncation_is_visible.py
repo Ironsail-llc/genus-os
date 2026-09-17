@@ -17,7 +17,7 @@ named, counted, and paired with what to do instead.
 
 from __future__ import annotations
 
-from robothor.engine.tools.handlers.filesystem import (
+from robothor.engine.exec_spill import (
     STDERR_LIMIT,
     STDOUT_LIMIT,
     truncate_stream,
@@ -76,11 +76,14 @@ class TestTheLimitsAreNamedConstants:
         assert STDERR_LIMIT > 0
 
     def test_the_handler_uses_them(self):
+        """The marker is no longer composed at the call site — the handler
+        hands both streams whole to `exec_spill.shape_exec_result`, which cuts
+        them, counts them and writes the rest to a file. What must stay true
+        is that no bare slice survives anywhere on the path."""
         import inspect
 
         from robothor.engine.tools.handlers import filesystem
 
         source = inspect.getsource(filesystem)
         assert "proc.stdout[:4000]" not in source
-        assert "truncate_stream(proc.stdout" in source
-        assert "truncate_stream(proc.stderr" in source
+        assert "shape_exec_result(" in source

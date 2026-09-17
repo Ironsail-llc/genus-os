@@ -399,6 +399,75 @@ snippet there has no route to the tool proxy. The tool refuses and says so
 rather than quietly running on the host, which would undo the isolation the
 manifest asked for.
 
+### `exec` — what you see of a command's output
+
+A command's output reaches you through a bounded window: **~4,000 characters of
+stdout and ~2,000 of stderr**. Past that the result carries three more fields
+and a marker:
+
+```json
+{
+  "stdout": "…the first 4,000 characters…\n\n[truncated: 4000 of 12431 chars shown — the full output is at <workspace>/.robothor/exec/<run>__stdout__<id>.txt; read_file it, or re-run with a narrower command]",
+  "stdout_truncated": true,
+  "stdout_chars": 12431,
+  "stdout_path": "<workspace>/.robothor/exec/<run>__stdout__<id>.txt",
+  "exit_code": 0
+}
+```
+
+**Truncation is pagination, not amputation.** The whole stream is written to
+that file before anything is cut, so `read_file` on `stdout_path` gets what the
+window could not hold. A stream that fit carries none of these fields at all —
+their absence means nothing was lost, and that is a promise you can rely on.
+
+**Why it matters more than it looks.** Measured 2026-09-16: one listing call
+returned `{"records": [...], "total": 20}`, the cut landed inside record twelve,
+and `total` — the one field that would have revealed the cut — was itself in the
+discarded tail. The agent reported over twelve of twenty records as though they
+were all of them and scored zero on every graded item past the cut, while
+scoring full marks on everything inside the window. Nothing about the reasoning
+was wrong; the input was smaller than the task.
+
+The spill lives under `<workspace>/.robothor/exec/`, so it is never mistaken for
+a deliverable. It is deleted when the run ends, and a retention sweep reaps
+anything a killed run orphaned. Reading it back is exempt from the repeat guard
+and the no-progress detector — paging in the rest of your own output is
+progress, not a loop.
+
+`execute_code` has the same contract with a bigger window: see
+[its section](#execute_code-calling-tools-from-inside-python) and `stdout_file`.
+
+### Calling an API from code: `genus_tools`, not `curl`
+
+Both work. They differ in what survives the call.
+
+| | What the run keeps |
+|---|---|
+| `genus_tools.call("x", …)` inside `execute_code` | The **whole response**, on this run's step ledger, whatever the snippet printed — plus the audit row, the guardrail pass and the post-condition check a turn's call gets. |
+| `urllib` / `requests` / `curl` inside `exec` or a snippet | **Only what you printed.** Everything else is gone the moment the process exits. |
+
+That difference decided a graded task. An agent sent twelve messages in one
+loop and printed `result.get("status")`; the service had returned a follow-up
+message inline in three of those very responses, carrying a deadline, a penalty
+and an account list. The model's entire view of the twelve calls was
+`[1/12] To: … → sent`, twelve times, and the report it then wrote scored 1.0
+for quality and 0.0 for accuracy.
+
+So: **route API calls through `genus_tools` where the tool exists**, and where
+you must use HTTP directly, print the response rather than a status field.
+`execute_code` now counts what you skipped — a result carrying
+`unread_responses` is telling you that many proxied calls returned a body your
+snippet never showed itself.
+
+### After you change something, look again
+
+A call that changed remote state invalidates what you knew about that source.
+Sending a message, creating a record or POSTing to an endpoint can cause the
+other side to produce something new — and it very often does. If a run makes
+state-changing calls and then writes its deliverable with no read in between,
+the engine says so once at a check-in. Treat that note as what it is: the
+report you are about to write is about the world as it was *before* you acted.
+
 ### Everything else
 
 The full registry is large and changes with the release; `tool_search` over the
@@ -519,6 +588,12 @@ write the operator's calendar will silently do the wrong thing every time.
 ---
 
 ## Limits
+
+`exec` caps what the MODEL sees at 4,000 characters of stdout and 2,000 of
+stderr, and writes the whole stream to a file first — see [what you see of a
+command's output](#exec-what-you-see-of-a-commands-output). Nothing below
+changes that; this section is about the separate cap on what the DATABASE
+keeps.
 
 One tool result is capped at `MAX_TOOL_OUTPUT_CHARS` (4,000 characters) **when
 it is persisted with the run step** — head-and-tail, with a marker in the

@@ -217,8 +217,25 @@ def task_text_for_run(run: object, session: object = None) -> str:
     output path. The contracts are in prompt-borne task specs, and reading the
     task row first meant a run WITH a task row could never see its own spec.
 
+    On top of whichever one answers: the body of every SKILL this run loaded.
+    Measured 2026-09-16 — one benchmark task states its output path only inside
+    its skill, so prompt-only extraction returned an empty contract for exactly
+    the run that had been handed one. Appended rather than preferred: a skill is
+    additional instruction, never a replacement for what the operator asked.
+
     Returns ``""`` when none is available; the contract then requires nothing.
     """
+    from robothor.engine.skill_contract import loaded_skill_text
+
+    return _join(_prompt_text(run, session), loaded_skill_text(session))
+
+
+def _join(*parts: str) -> str:
+    return "\n\n".join(part for part in parts if part).strip()
+
+
+def _prompt_text(run: object, session: object = None) -> str:
+    """The three prompt-borne sources, in order of how much each is trusted."""
     persisted = str(getattr(run, "task_text", "") or "")
     if persisted:
         return persisted

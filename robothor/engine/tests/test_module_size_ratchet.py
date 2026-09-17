@@ -94,7 +94,13 @@ CAPS = {
     # lines here; it paid for itself by taking the ~100 that were already there.
     # The ratchet asked for an extraction rather than a bigger number, by this
     # file's own header, and got one.
-    "robothor/engine/run_finalizer.py": 992,  # -69: dead copy of the tool-timeout tables
+    # 992 -> 1001: one more irreducible call site, the `chat.py` case. What a
+    # run never finished READING is a different question from whether its
+    # artefact is right — a run can write exactly the named file in exactly the
+    # named shape over a strictly smaller set of facts than the task gave it —
+    # and the whole ladder for it lives in observation_ledger.py. Nine lines is
+    # the comment, the import and the call; there is nothing here to extract.
+    "robothor/engine/run_finalizer.py": 1001,
     # The deliverable-contract cluster, capped at the size it was split to.
     # Hostile review 2026-09-16 (I6): `deliverable_contract.py` had reached
     # 1,354 lines and none of the three new modules was listed here, so "the
@@ -103,7 +109,14 @@ CAPS = {
     # and checking share nothing but the item definitions — so it was cut
     # there, and every piece is now something the next change has to argue
     # with.
-    "robothor/engine/deliverable_contract.py": 469,
+    # 469 -> 486: a contract stated only inside a loaded SKILL was invisible
+    # here, because this accessor reads the prompt. Measured — one benchmark
+    # task's output path is in its skill body, so prompt-only extraction
+    # returned an empty contract for exactly the run that had been handed one.
+    # The remembering went to skill_contract.py; what is here is the accessor
+    # split into `_prompt_text` plus a two-line join, so all three consumers
+    # keep reading one source and cannot disagree about what the task asked.
+    "robothor/engine/deliverable_contract.py": 486,
     # 552 -> 594: CodeQL's five `py/polynomial-redos` findings. Every added
     # line is the reasoning for a regex, not another extractor — the rule that
     # keeps this module linear on hostile input is worth more written down
@@ -118,7 +131,12 @@ CAPS = {
     "robothor/engine/deliverable_check.py": 549,
     "robothor/engine/deliverable_items.py": 256,
     "robothor/engine/deliverable_verdict.py": 249,
-    "robothor/engine/loop_guards.py": 325,
+    # 325 -> 350: the third and fourth questions asked of a run that wants to
+    # stop — did it finish reading what it was shown, and where the task asked
+    # for a decision per item, did its artefact contain one. Both bodies are in
+    # their own modules (observation_ledger.py, verdict_commitment.py); what
+    # this file gains is the chaining, which is the job this file exists for.
+    "robothor/engine/loop_guards.py": 350,
     # 937 (2026-09-13): every module the delivery path runs through was capped
     # except the one that decides delivery. It was uncapped when the
     # thin-announce fallback landed, so nothing but review stood between that
@@ -147,7 +165,12 @@ CAPS = {
     # gate a turn's call does, which is right and which is also how a loop
     # could queue two hundred prompts at the operator. The check belongs where
     # the reach is decided, not in the socket.
-    "robothor/engine/tool_proxy.py": 314,
+    # 314 -> 322: the per-call response ledger. A proxied call's response is
+    # EVIDENCE, not a receipt — the measured run printed each send's `status`
+    # and threw away the three follow-up messages that rode back in those same
+    # responses. Eight lines, and the evidence extraction itself is in
+    # act_observe.py rather than here.
+    "robothor/engine/tool_proxy.py": 322,
     # 209 -> 283: the peer-session check. Not a feature, a control: the token
     # alone could not tell one run's snippet from another's, and a probe drove
     # a second run's proxy with a stolen token. Correcting a cap set hours
@@ -174,8 +197,33 @@ CAPS = {
     # sandbox_runtime/boot_template.py, beside the client it loads. Ninety
     # lines of code that runs somewhere else was the shape `genus_tools.py`
     # was deliberately not written in; the reaper it grew made that obvious.
-    "robothor/engine/tools/handlers/code_exec.py": 281,
+    # 281 -> 297: the count of proxied responses this snippet never printed.
+    # The computation is in act_observe.py; this is the bracket that says which
+    # of the turn's proxied calls belong to THIS snippet, plus the call.
+    "robothor/engine/tools/handlers/code_exec.py": 297,
     "robothor/engine/code_exec_result.py": 103,
+    # The observation cluster (2026-09-16), each piece capped at the size it was
+    # written to and each one a separate question, for the reason the code-
+    # sandbox cluster above is four modules: what the model SEES of a command's
+    # output and where the rest goes (`exec_spill`); how a call is CLASSIFIED as
+    # a read or a change (`act_observe`, a table of names and two regexes, no
+    # runtime behind it); what one RUN has not finished reading
+    # (`observation_ledger`); and whether a classification artefact actually
+    # classified (`verdict_commitment`, the only one touching judgement, which
+    # is why it is reachable and testable without a session). One
+    # `observations.py` holding all four would be untestable in the place it
+    # matters most — and `exec_spill` in particular has to be importable by the
+    # repeat guard and the no-progress detector, neither of which may drag a
+    # ladder or a session in with it.
+    "robothor/engine/exec_spill.py": 275,
+    "robothor/engine/act_observe.py": 232,
+    "robothor/engine/observation_ledger.py": 469,
+    # 265 -> 322: the guardrail row this control writes at finalization on
+    # `observe` as well as `enforce`. Without it `flags/evidence.py` would
+    # report the one ladder whose promotion depends on watching the evidence as
+    # permanently inert, which is the failure this repo has recorded twice.
+    "robothor/engine/verdict_commitment.py": 322,
+    "robothor/engine/skill_contract.py": 73,
     "robothor/engine/code_exec_guards.py": 116,
     # 122 -> 129: the same disclosure, said where the reaper is, because this
     # is the `finally` that `os._exit` skips and a reader here is the one who

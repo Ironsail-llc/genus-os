@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-400 settings in 13 groups.
+403 settings in 13 groups.
 
 ## paths
 
@@ -294,6 +294,7 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 | Variable | Type | Default | Restart | Secret | Since | Description |
 | --- | --- | --- | --- | --- | --- | --- |
 | `ROBOTHOR_ACCRETION_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Let agents accrete durable notes from their runs into the workspace. |
+| `ROBOTHOR_ACT_OBSERVE_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** The act-then-observe rule: a call that changed something at the other end invalidates what the run knew about that source. 'observe' (default) logs what would have been said, 'enforce' tells the agent once at a deliverable check-in, 'off' says nothing. Blocks nothing on any rung. |
 | `ROBOTHOR_ADMISSION_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Run the admission check that refuses work an agent is not equipped to do rather than letting it fail late. |
 | `ROBOTHOR_ADMISSION_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Admission ladder position: observe logs refusals, enforce applies them. |
 | `ROBOTHOR_APPROVAL_FAILCLOSED_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Switch for fail-closed human approval: a tool an agent must ask about is denied when the operator does not answer in time. |
@@ -345,6 +346,8 @@ Guardrails and feature gates. Ones marked governed are inventoried in `infra/fla
 | `ROBOTHOR_TODO_PROMOTE_SUBTASKS_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Promote a todo's subtasks into their own CRM tasks. |
 | `ROBOTHOR_TOOL_VERIFY_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Switch for tool-level post-condition checks -- did the write the tool reported actually land? |
 | `ROBOTHOR_TOOL_VERIFY_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Tool-verification ladder position: observe records a failed post-condition, enforce reports the tool call as failed. |
+| `ROBOTHOR_TRUNCATION_LEDGER_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** Ledger of tool results the run saw only part of: 'off' keeps none, 'observe' (default) keeps it, logs the unresolved entries at WARNING and writes a guardrail row at the end, 'enforce' also quotes each unresolved entry to the model once and holds a finishing run for one more ask before it completes saying what it never read. |
+| `ROBOTHOR_VERDICT_COMMITMENT_MODE` | str | `observe` | `robothor-engine` | no | legacy | **governed.** One verdict per item where the task asked the agent to classify, triage, route or prioritise: 'observe' (default) logs an item filed under two verdicts or handed back to the reader, 'enforce' re-asks once, 'off' checks nothing. The only ladder here that touches model judgement, so it stays on observe until it has been probed. |
 | `ROBOTHOR_WEB_SEARCH_BROWSER_FALLBACK` | str | _(empty)_ | `robothor-engine` | no | legacy | 'on' lets web_search fall back to a real browser when the scraped engines block the host IP — the failure mode behind a whole day of 'can't even web search'. |
 
 ## services

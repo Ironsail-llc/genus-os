@@ -274,11 +274,13 @@ class TestRunRetentionCleanup:
         mock_cleanup.return_value = 0
         with patch("robothor.engine.messaging.purge_old_messages", return_value=0):
             results = run_retention_cleanup()
-        # +3, and none of them is a table: agent_messages purges via
+        # +4, and none of them is a table: agent_messages purges via
         # messaging.purge_old_messages (it carries two clocks the table loop
         # can't express), `inbox` is the channel attachment tree on disk, and
-        # `analyze_image` is the batch-vision spill directory beside it.
-        assert len(results) == len(RETENTION_POLICY) + 3
+        # `analyze_image` and `exec` are the two spill directories beside it —
+        # the second one added 2026-09-16 when `exec` learned to write a
+        # truncated stream whole instead of destroying its tail.
+        assert len(results) == len(RETENTION_POLICY) + 4
         assert all(v == 0 for v in results.values())
 
     @patch("robothor.engine.retention._cleanup_table")
@@ -295,11 +297,11 @@ class TestRunRetentionCleanup:
             results = run_retention_cleanup()
 
         assert results["telemetry"] == -1  # failure marker
-        # All other tables should succeed. `inbox` and `analyze_image` are not
-        # tables and do not go through _cleanup_table, so neither is one of the
-        # ten.
+        # All other tables should succeed. `inbox`, `analyze_image` and `exec`
+        # are not tables and do not go through _cleanup_table, so none of them
+        # is one of the ten.
         for table, count in results.items():
-            if table not in ("telemetry", "inbox", "analyze_image"):
+            if table not in ("telemetry", "inbox", "analyze_image", "exec"):
                 assert count == 10, table
 
     @patch("robothor.engine.retention._cleanup_table")
