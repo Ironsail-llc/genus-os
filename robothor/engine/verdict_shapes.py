@@ -180,6 +180,32 @@ _PROVENANCE_WORD = re.compile(
 )
 
 
+#: A quoted span inside a label. MEASURED 2026-09-17: a report titled its
+#: flagged item with the message's own subject line — ``### 9. "P0 platform
+#: outage" with QA-test provenance metadata`` — and the `P0` inside those
+#: quotes was read as the block's verdict, against a block whose actual verdict
+#: was *not escalated*. A quotation in a heading is what the item CALLS itself.
+_QUOTED = re.compile(r"\"[^\"\n]*\"|'[^'\n]*'|`[^`\n]*`|“[^”\n]*”|‘[^’\n]*’")
+
+
+def _unquoted(label: str) -> str:
+    """A label with quoted TITLES blanked, and quoted LABELS kept.
+
+    The line between them is whether the quotation is the verdict or contains
+    one: ``**Severity: "High"**`` and ``## "Critical"`` are labels somebody
+    punctuated, and *"P0 platform outage"* is a title that happens to start
+    with a severity.
+    """
+
+    def _blank(match: re.Match[str]) -> str:
+        inner = match.group(0)[1:-1].strip()
+        if any(pattern.fullmatch(inner) for pattern in VERDICTS.values()):
+            return match.group(0)
+        return " " * (match.end() - match.start())
+
+    return _QUOTED.sub(_blank, label)
+
+
 def item_id_spans(chunk: str) -> list[tuple[int, str]]:
     """``(offset, identifier)`` for every explicit identifier, in order.
 
@@ -204,39 +230,47 @@ def verdicts_in(chunk: str) -> set[str]:
     document puts in a heading, a bolded lead or a ``Severity:`` field —
     prose that happens to contain the word is discussion, not a decision.
     """
-    labels = " | ".join(part for match in _LABEL.finditer(chunk) for part in match.groups() if part)
+    labels = " | ".join(
+        _unquoted(part) for match in _LABEL.finditer(chunk) for part in match.groups() if part
+    )
     return {name for name, pattern in VERDICTS.items() if pattern.search(labels)}
 
 
-def hands_the_verdict_back(chunk: str) -> bool:
-    """True when this block asks the reader to make the CLASSIFICATION.
+def hands_the_verdict_back(chunk: str) -> int:
+    """WHERE this block asks the reader to make the classification, or ``-1``.
 
     Both halves required: the hand-back phrasing, and — within the sentence
     that follows it — something that is actually the verdict. A report that
     reaches a verdict and separately asks a question about the work has not
     handed its decision to anybody.
+
+    The offset is returned rather than a bare ``True`` because a claim belongs
+    to the item it is written beside: in a recap section naming six items, one
+    sentence about one of them was reported against all six (measured
+    2026-09-17). The caller anchors on the line this offset falls in.
     """
     for match in _HANDBACK.finditer(chunk):
         window = chunk[match.end() : match.end() + _HANDBACK_SCOPE]
         if _ABOUT_THE_VERDICT.search(window):
-            return True
-    return False
+            return match.start()
+    return -1
 
 
-def hedges_the_verdict(chunk: str) -> str:
-    """The retraction this block appends to its own verdict, or ``""``.
+def hedges_the_verdict(chunk: str) -> tuple[int, str]:
+    """``(offset, quoted text)`` of the retraction, or ``(-1, "")``.
 
     Same two-halves shape as :func:`hands_the_verdict_back`, and for the same
     reason: the hinge word alone is far too common in an honest report. The
-    return value is the quoted text, because the whole point of the enforce
-    rung is that the model is shown the sentence it has to replace.
+    text is returned because the whole point of the enforce rung is that the
+    model is shown the sentence it has to replace, and the offset for the
+    reason given there.
     """
     for match in _HEDGE.finditer(chunk):
         window = chunk[match.end() : match.end() + _HEDGE_SCOPE]
         if _WHAT_IT_IS.search(window):
             quoted = " ".join(chunk[match.start() : match.end() + _HEDGE_SCOPE].split())
-            return quoted[:120]
-    return ""
+            return match.start(), quoted[:120]
+    return -1, ""
 
 
 def overrides_a_marker(chunk: str) -> bool:

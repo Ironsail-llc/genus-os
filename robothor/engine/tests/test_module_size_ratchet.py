@@ -456,7 +456,7 @@ CAPS = {
     # extract: the counts are produced by the same single pass over the document
     # that produces the findings, and computing them anywhere else would mean
     # scanning twice.
-    "robothor/engine/verdict_commitment.py": 452,
+    "robothor/engine/verdict_commitment.py": 456,
     # Bounded from the day they land, the schedule_reconcile.py rule: these are
     # the modules that would otherwise absorb every new document shape and
     # every new metadata key.
@@ -471,7 +471,12 @@ CAPS = {
     # hyphen as a boundary, so `## High-level findings` was a *high* section
     # and filed every item under it twice — and its reasoning, which is the
     # part a future reader needs (258 after ruff split the four re.compile calls).
-    "robothor/engine/verdict_shapes.py": 262,
+    # 262 -> 296: quoted TITLES stop being labels (`### 9. "P0 platform
+    # outage" …` filed an item Critical on the strength of the customer's own
+    # subject line, against a block whose verdict was `not escalated`), and
+    # the two claim detectors return WHERE they matched so the caller can
+    # attribute them. Both are vocabulary questions, which is this file.
+    "robothor/engine/verdict_shapes.py": 296,
     # The section tree. Bounded from the day it lands: this is where every
     # future rule about how a document is SHAPED will want to go, and the two
     # it already carries are the ones that kept the repair from inventing
@@ -486,7 +491,12 @@ CAPS = {
     # item's cross-reference filed two others under its own verdict. The
     # identity field is one regex and four lines of lookup; the rest is the
     # measurement, which is the part that stops the next round undoing it.
-    "robothor/engine/verdict_sections.py": 198,
+    # 198 -> 242: `claim_owners`, from the SECOND live run. A hedge, a
+    # hand-back and an override are claims about an item, and a recap naming
+    # six ids reported one sentence against all six. Attribution is a
+    # question about the document — which bullet a claim is in — so it lives
+    # here beside the subject rule rather than in the ladder.
+    "robothor/engine/verdict_sections.py": 242,
     # Whether an override named a reason. Bounded for the same reason and with
     # the same history: three rounds of review each found a sentence that named
     # nothing and was exempted anyway — and, the last time, six that named

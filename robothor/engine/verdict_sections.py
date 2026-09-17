@@ -46,7 +46,7 @@ import re
 
 from robothor.engine.verdict_shapes import VERDICTS, item_id_spans, verdicts_in
 
-__all__ = ["block_subject", "blocks"]
+__all__ = ["block_subject", "blocks", "claim_owners"]
 
 _HAS_HEADING = re.compile(r"^#{1,6}\s", re.MULTILINE)
 _AT_HEADING = re.compile(r"^(?=#{1,6}\s)", re.MULTILINE)
@@ -85,6 +85,10 @@ _FILLER = frozenset(
 )
 _WORD = re.compile(r"[a-z]+")
 
+#: Where one item's entry in a list begins. A recap is written one item per
+#: bullet, so a bullet is the unit a claim inside it belongs to.
+_BULLET = re.compile(r"^[ \t]*(?:[-*+]|\d{1,3}[.)])[ \t]+", re.MULTILINE)
+
 #: How a block names ITSELF when its heading is a title: an identity field,
 #: in field position, whose value is one identifier and nothing else. The key
 #: list is closed and short for the same reason every other vocabulary here is
@@ -96,7 +100,13 @@ _ID_FIELD = re.compile(
     r"id|item|message|ticket)"
     r"\**[ \t]*[:=|][ \t]*\**[ \t]*"
     r"(\b[a-z][a-z0-9]{1,12}_\d{2,}\b|\B#\d{1,5}\b|(?<![-/])\b[A-Z]{2,6}-\d{1,6}\b)"
-    r"[ \t]*\**[ \t]*\|?[ \t]*$",
+    # A parenthetical after the id is still that id's field:
+    # `**Message ID:** msg_2205 (follow-up: msg_2212)` is a block about
+    # msg_2205 that says where the thread went. What is still refused is a
+    # bare list — `**Message IDs:** msg_2202 / msg_2210` names two items, and
+    # picking one of them would be the heading rule's known limit with none of
+    # its excuse, so it falls back to no subject at all.
+    r"[ \t]*\**[ \t]*(?:\([^)\n]{0,80}\))?[ \t]*\**[ \t]*\|?[ \t]*$",
     re.IGNORECASE,
 )
 
@@ -196,3 +206,37 @@ def block_subject(block: str) -> str:
         if field:
             return field.group(1)
     return ""
+
+
+def claim_owners(block: str, subject: str, ids: set[str], offset: int) -> set[str]:
+    """The items a claim made at ``offset`` in this block is ABOUT.
+
+    A hedge, a hand-back and an override are claims about an item, and the
+    first cut wrote each of them into every identifier in its block. MEASURED
+    2026-09-17: a `## Notes & Recommendations` recap named six items, said of
+    ONE of them "if it is real, escalate immediately", and the control reported
+    five items that sentence was never about — at `enforce`, five items the
+    model was then asked to re-decide.
+
+    So: the block's subject when it has one, else the items named in the claim's
+    own BULLET or paragraph, else — a claim with nothing nearer to attach to —
+    the block. The bullet is the unit rather than the line because prose wraps:
+    the measured recap put the item id on one physical line and the sentence
+    about it two lines later, in the same numbered item.
+    """
+    if subject:
+        return {subject} & ids or {subject}
+    if offset < 0:
+        return ids
+    return {item for _at, item in item_id_spans(_claim_unit(block, offset))} or ids
+
+
+def _claim_unit(block: str, offset: int) -> str:
+    """The bullet or paragraph the text at ``offset`` belongs to."""
+    starts = [match.start() for match in _BULLET.finditer(block) if match.start() <= offset]
+    paragraph = block.rfind("\n\n", 0, offset)
+    start = max([0, *starts, paragraph + 2 if paragraph >= 0 else 0])
+    ends = [match.start() for match in _BULLET.finditer(block) if match.start() > offset]
+    paragraph = block.find("\n\n", offset)
+    end = min([len(block), *ends, paragraph if paragraph >= 0 else len(block)])
+    return block[start:end]
