@@ -61,6 +61,12 @@ def _response(content=None, tool_calls=None, model="test-model"):
 
 @pytest.fixture
 def runner(engine_config):
+    # The shipped check-in interval this harness runs at is small (five), so
+    # the act→observe tests below keep their runs under it: a check-in would
+    # deliver the note through the OTHER path and the stop path — the one
+    # finding I2 is about — would not be the thing under test. On the bench
+    # agent the interval is 80 and the measured run took 21 iterations, which
+    # is asserted directly in `test_a_twenty_one_iteration_run_gets_no_checkin`.
     with patch("robothor.engine.runner.get_registry") as mock_reg:
         registry = MagicMock()
         registry.build_for_agent.return_value = [
@@ -86,6 +92,7 @@ def agent_config() -> AgentConfig:
         planning_enabled=False,
         scratchpad_enabled=False,
         error_feedback=False,
+        max_iterations=80,
     )
 
 
@@ -268,3 +275,153 @@ async def test_a_run_that_reads_the_spill_back_is_never_held(
 
     assert run.output_text == "read the whole thing"
     assert turns["n"] == 3, "a run that read the spill back was held anyway"
+
+
+async def _drive_sends(runner, agent_config, sends: int, answers: list[str]):
+    """`sends` state-changing calls, then answers — no truncation anywhere.
+
+    The measured shape: 21 requests in 85.9 s of a 300 s budget, so neither the
+    25-iteration check-in nor any deadline rung fires. Before the stop-path
+    delivery the act→observe note had no way to reach this run at all.
+    """
+    turns = {"n": 0}
+    prompts: list[list[dict]] = []
+
+    async def completion(**kwargs):
+        prompts.append(list(kwargs.get("messages") or []))
+        turns["n"] += 1
+        if turns["n"] <= sends:
+            return _response(
+                tool_calls=[
+                    _tool_call(
+                        "exec",
+                        {"command": "curl -s -X POST http://svc.invalid/inbox/send --data @m.json"},
+                        f"call_{turns['n']}",
+                    )
+                ]
+            )
+        index = min(turns["n"] - sends - 1, len(answers) - 1)
+        return _response(content=answers[index])
+
+    async def execute(name, args, **kwargs):
+        return {"stdout": "sent", "stderr": "", "exit_code": 0}
+
+    runner.registry.execute = AsyncMock(side_effect=execute)
+
+    with (
+        patch("robothor.engine.runner.create_run"),
+        patch("robothor.engine.runner.update_run"),
+        patch("robothor.engine.run_finalizer.create_step"),
+        patch("litellm.acompletion", side_effect=completion),
+    ):
+        run = await runner.execute("hold-agent", "go", agent_config=agent_config)
+    return run, prompts
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_mock_run_persistence")
+async def test_act_observe_reaches_a_short_run_at_its_stop(runner, agent_config, monkeypatch):
+    """Hostile review I2. `observation_notes` was reachable only from the
+    deadline rungs and the 25-iteration check-in, so a run that sent everything
+    it was going to send and then finished — the exact measured shape — never
+    saw the note under `enforce`."""
+    monkeypatch.setenv("ROBOTHOR_TRUNCATION_LEDGER_MODE", "off")
+    monkeypatch.setenv("ROBOTHOR_ACT_OBSERVE_MODE", "enforce")
+    monkeypatch.setenv("ROBOTHOR_VERDICT_COMMITMENT_MODE", "off")
+
+    run, prompts = await _drive_sends(runner, agent_config, 3, ["all sent", "and I looked again"])
+
+    notes = "\n".join(_engine_notes(prompts))
+    assert "state-changing calls" in notes
+    assert "svc.invalid/inbox/send" in notes
+    assert run.output_text == "and I looked again"
+
+
+def test_a_twenty_one_iteration_run_gets_no_checkin() -> None:
+    """Why the stop path had to exist at all.
+
+    The bench agent's `max_iterations` is 80, which is also the shipped
+    check-in interval, and the added cadence is every 25 iterations. The
+    measured run took 21 — so on the rung the harness runs at, neither path
+    fires, and before this fix the act→observe note had no way to reach it.
+    """
+    from robothor.engine.run_pacing import checkin_note
+
+    for mode in ("off", "observe", "enforce"):
+        assert checkin_note(21, 80, mode) is None, mode
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_mock_run_persistence")
+async def test_it_is_said_once_and_the_run_ends(runner, agent_config, monkeypatch):
+    """One extra turn, never two. The flag's promise is that it never fails a
+    run, and a second nudge on the same unread source would be nagging."""
+    monkeypatch.setenv("ROBOTHOR_TRUNCATION_LEDGER_MODE", "off")
+    monkeypatch.setenv("ROBOTHOR_ACT_OBSERVE_MODE", "enforce")
+    monkeypatch.setenv("ROBOTHOR_VERDICT_COMMITMENT_MODE", "off")
+
+    _run, prompts = await _drive_sends(runner, agent_config, 3, ["done"])
+
+    # three tool turns + the first answer + exactly one more after the note
+    assert len(prompts) == 5
+    assert len(_engine_notes(prompts)) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_mock_run_persistence")
+async def test_a_run_that_read_the_source_again_is_never_nudged(runner, agent_config, monkeypatch):
+    """The behaviour being taught, not just the absence of the note."""
+    monkeypatch.setenv("ROBOTHOR_TRUNCATION_LEDGER_MODE", "off")
+    monkeypatch.setenv("ROBOTHOR_ACT_OBSERVE_MODE", "enforce")
+    monkeypatch.setenv("ROBOTHOR_VERDICT_COMMITMENT_MODE", "off")
+
+    turns = {"n": 0}
+    prompts: list[list[dict]] = []
+
+    async def completion(**kwargs):
+        prompts.append(list(kwargs.get("messages") or []))
+        turns["n"] += 1
+        if turns["n"] == 1:
+            return _response(
+                tool_calls=[
+                    _tool_call(
+                        "exec",
+                        {"command": "curl -X POST http://svc.invalid/inbox/send --data @m.json"},
+                    )
+                ]
+            )
+        if turns["n"] == 2:
+            return _response(
+                tool_calls=[
+                    _tool_call("exec", {"command": "curl -s http://svc.invalid/inbox/send"}, "c2")
+                ]
+            )
+        return _response(content="sent, then looked")
+
+    runner.registry.execute = AsyncMock(
+        side_effect=lambda *a, **k: {"stdout": "[]", "stderr": "", "exit_code": 0}
+    )
+
+    with (
+        patch("robothor.engine.runner.create_run"),
+        patch("robothor.engine.runner.update_run"),
+        patch("robothor.engine.run_finalizer.create_step"),
+        patch("litellm.acompletion", side_effect=completion),
+    ):
+        run = await runner.execute("hold-agent", "go", agent_config=agent_config)
+
+    assert _engine_notes(prompts) == []
+    assert run.output_text == "sent, then looked"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_mock_run_persistence")
+async def test_observe_says_nothing_to_a_short_run(runner, agent_config, monkeypatch):
+    monkeypatch.setenv("ROBOTHOR_TRUNCATION_LEDGER_MODE", "off")
+    monkeypatch.setenv("ROBOTHOR_ACT_OBSERVE_MODE", "observe")
+    monkeypatch.setenv("ROBOTHOR_VERDICT_COMMITMENT_MODE", "off")
+
+    run, prompts = await _drive_sends(runner, agent_config, 3, ["all sent"])
+
+    assert _engine_notes(prompts) == []
+    assert run.output_text == "all sent"

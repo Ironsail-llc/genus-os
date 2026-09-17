@@ -42,7 +42,6 @@ from typing import Any
 from robothor.engine.act_observe import (
     CHANGE,
     READ,
-    act_observe_note,
     classify,
     remote_tokens,
     source_tokens,
@@ -51,29 +50,18 @@ from robothor.engine.act_observe import (
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "LEDGER_ATTR",
+    "MAX_QUOTED",
     "ObservationLedger",
     "StateChange",
     "Truncation",
     "ledger_for",
-    "observation_notes",
     "observe_tool_call",
-    "record_observation_verdicts",
-    "unread_observation_hold",
 ]
 
 #: The attribute the ledger hangs off the session. Lazily created, like the
 #: repeat guard, so a session that never makes a tool call never builds one.
 LEDGER_ATTR = "_observation_ledger"
-
-#: How many model turns an unresolved truncation is worth. TWO, and each one
-#: is a different sentence: "go and read it", then — if the run still tries to
-#: stop with the entry outstanding — "then say in your answer what you did not
-#: read". Both have to be real holds, because the runner's stop branch returns
-#: on a False and `get_final_text` then walks back past anything appended after
-#: the last assistant message. Two and no more: an unbounded "you are not done"
-#: is a loop, and a run whose entry can never be resolved — the spill gone, the
-#: source gone — has to be able to finish.
-MAX_HOLDS = 2
 
 #: How many entries a single note quotes. Beyond this the note stops being read.
 MAX_QUOTED = 3
@@ -295,211 +283,3 @@ def _both_modes_off() -> bool:
         return truncation_ledger_mode() == "off" and act_observe_mode() == "off"
     except Exception:  # noqa: BLE001 - an unreadable flag is not a reason to crash
         return False
-
-
-def observation_notes(session: Any) -> str:
-    """What to add to the next engine note, or "" when there is nothing.
-
-    Called from ``loop_guards.append_engine_note``, so every deliverable
-    check-in and every deadline rung carries it. Each truncation is quoted at
-    most once and the act→observe sentence at most once per run, because a
-    control that repeats itself is a control that gets skimmed.
-    """
-    from robothor.engine.feature_flags import act_observe_mode, truncation_ledger_mode
-
-    ledger = ledger_for(session)
-    if ledger is None:
-        return ""
-    parts: list[str] = []
-
-    truncation_mode = truncation_ledger_mode()
-    if truncation_mode != "off":
-        fresh = ledger.take_unquoted() if truncation_mode == "enforce" else ledger.unresolved()
-        if fresh and truncation_mode == "enforce":
-            parts.append(
-                "[SYSTEM] Unfinished observations:\n"
-                + "\n".join(f"- {entry.sentence()}" for entry in fresh)
-            )
-        elif fresh:
-            logger.warning(
-                "truncation ledger observe: run %s would quote %d unresolved truncation(s): %s",
-                _run_id(session),
-                len(fresh),
-                "; ".join(entry.sentence() for entry in fresh[:MAX_QUOTED]),
-            )
-
-    act_mode = act_observe_mode()
-    if act_mode != "off" and not ledger.change_note_given:
-        pending = ledger.unobserved_changes()
-        note = act_observe_note(pending)
-        if note and act_mode == "enforce":
-            ledger.change_note_given = True
-            parts.append(note)
-        elif note:
-            logger.warning(
-                "act-observe observe: run %s would be told about %d unobserved change(s): %s",
-                _run_id(session),
-                len(pending),
-                note.replace("\n", " ")[:300],
-            )
-    return "\n".join(parts)
-
-
-def unread_observation_hold(session: Any) -> bool:
-    """The run wants to stop. Does it still owe itself a read?
-
-    True means "do not end this iteration": a note has been appended and the
-    loop runs another model turn with it in context. Only at ``enforce``, at
-    most :data:`MAX_HOLDS` times, and only for a truncation the run could still
-    resolve.
-
-    Two holds, and the second one is the point. Hold 1 says "go and read it".
-    Hold 2 — spent when the run tries to stop again with the entry STILL
-    unresolved — says "then say so in your answer", and it must return True as
-    well, because of how the runner's stop branch is written::
-
-        if nudge_for_missing_deliverable(session, _workspace):
-            continue
-        return
-
-    A False there returns immediately, no further LLM call happens, and
-    ``session.get_final_text`` walks back to the last message whose role is
-    ``assistant`` — which is the answer produced BEFORE the note. The first cut
-    of this function appended the honest-completion text and returned False, so
-    the note reached nothing but the transcript and the run's output was
-    byte-identical to what ``observe`` would have produced. A control that
-    appends a string to itself and calls it an honest completion is
-    `controls-were-armed-but-aimed-at-nothing` with a better name.
-
-    After both holds the run ends whatever the ledger still says. The failure
-    being corrected is a confident wrong answer; a stuck run is not an
-    improvement on it.
-    """
-    from robothor.engine.feature_flags import truncation_ledger_mode
-    from robothor.engine.session import ENGINE_CONTEXT_ROLE
-
-    mode = truncation_ledger_mode()
-    if mode == "off":
-        return False
-    ledger = ledger_for(session)
-    if ledger is None:
-        return False
-    outstanding = ledger.unresolved()
-    if not outstanding:
-        return False
-    if mode != "enforce":
-        logger.warning(
-            "truncation ledger observe: run %s would be held for %d unread observation(s)",
-            _run_id(session),
-            len(outstanding),
-        )
-        return False
-    if ledger.holds_used >= MAX_HOLDS:
-        logger.warning(
-            "truncation ledger enforce: run %s ends with %d unread observation(s)",
-            _run_id(session),
-            len(outstanding),
-        )
-        return False
-    quoted = "\n".join(f"- {entry.sentence()}" for entry in outstanding[:MAX_QUOTED])
-    if ledger.holds_used == MAX_HOLDS - 1:
-        body = (
-            "[SYSTEM] You are about to finish with these observations still unread:\n"
-            f"{quoted}\n"
-            "Give your final answer now, and say in it what you did not read and what it "
-            "would have changed. Do not present the answer as complete."
-        )
-    else:
-        body = (
-            "[SYSTEM] Before you finish: part of what you asked for was never shown to you.\n"
-            f"{quoted}\n"
-            "Read it now if your answer depends on it. If it does not, say why in your "
-            "answer and finish."
-        )
-    ledger.holds_used += 1
-    session.messages.append(
-        {
-            "role": ENGINE_CONTEXT_ROLE,
-            "content": body,
-        }
-    )
-    logger.warning(
-        "truncation ledger enforce: run %s held (%d/%d) for %d unread observation(s)",
-        _run_id(session),
-        ledger.holds_used,
-        MAX_HOLDS,
-        len(outstanding),
-    )
-    return True
-
-
-def record_observation_verdicts(run: Any, session: Any, workspace: Any = None) -> None:
-    """The end-of-run record: what this run never read, and what it never re-read.
-
-    A guardrail row rather than a log line, because the evidence query an
-    operator runs to decide whether to promote this flag has to be able to
-    count it — a control whose only trace is a message it printed to itself is
-    the shape `feedback-probe-dont-trust-silence` records.
-    """
-    from robothor.engine.feature_flags import act_observe_mode, truncation_ledger_mode
-
-    # The spill files this run wrote go with it. They exist so the agent can
-    # page its own truncated output back WHILE the run is alive; nothing reads
-    # them afterwards, and a directory nobody looks at that only ever grows is
-    # how the `analyze_image` spill shipped its one bad release. A run killed
-    # before it reaches here leaves orphans, which is what the retention sweep
-    # in `retention.run_retention_cleanup` is the backstop for.
-    with contextlib.suppress(Exception):
-        from robothor.engine.exec_spill import prune_run_spills
-
-        prune_run_spills(workspace, getattr(run, "id", "") or "")
-
-    ledger = getattr(session, LEDGER_ATTR, None)
-    if ledger is None:
-        return
-    truncation_mode = truncation_ledger_mode()
-    if truncation_mode != "off":
-        outstanding = ledger.unresolved()
-        if outstanding:
-            _log_event(
-                run,
-                "truncation_ledger",
-                truncation_mode,
-                f"{len(outstanding)} truncated tool result(s) were never read back: "
-                + "; ".join(entry.sentence() for entry in outstanding[:MAX_QUOTED]),
-            )
-    act_mode = act_observe_mode()
-    if act_mode != "off":
-        pending = ledger.unobserved_changes()
-        if pending:
-            _log_event(
-                run,
-                "act_observe",
-                act_mode,
-                act_observe_note(pending),
-            )
-    # The third ladder's row, written here rather than beside its own check so
-    # the finalizer has ONE call site for the observation cluster. Without it
-    # `flags/evidence.py` would report the verdict control permanently inert —
-    # the failure mode this repo keeps rediscovering.
-    with contextlib.suppress(Exception):
-        from robothor.engine.verdict_commitment import record_verdict_findings
-
-        record_verdict_findings(run, session, workspace)
-
-
-def _log_event(run: Any, name: str, mode: str, reason: str) -> None:
-    with contextlib.suppress(Exception):
-        from robothor.engine.tracking import log_guardrail_event
-
-        log_guardrail_event(
-            run_id=run.id,
-            guardrail_name=name,
-            action="blocked" if mode == "enforce" else "observed",
-            reason=reason[:500],
-            mode=mode,
-        )
-
-
-def _run_id(session: Any) -> str:
-    return str(getattr(getattr(session, "run", None), "id", "") or "?")

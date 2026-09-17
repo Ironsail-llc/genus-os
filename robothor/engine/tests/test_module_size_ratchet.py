@@ -136,7 +136,7 @@ CAPS = {
     # for a decision per item, did its artefact contain one. Both bodies are in
     # their own modules (observation_ledger.py, verdict_commitment.py); what
     # this file gains is the chaining, which is the job this file exists for.
-    "robothor/engine/loop_guards.py": 350,
+    "robothor/engine/loop_guards.py": 360,
     # 937 (2026-09-13): every module the delivery path runs through was capped
     # except the one that decides delivery. It was uncapped when the
     # thin-announce fallback landed, so nothing but review stood between that
@@ -229,7 +229,14 @@ CAPS = {
     # transcript and nothing else (hostile review C1). Both holds are real
     # holds now, with a sentence each, and the reasoning for why a False there
     # is inert is written where the next reader will need it.
-    "robothor/engine/observation_ledger.py": 505,
+# 505 -> 287: the DELIVERY half left for observation_notes.py. "What
+    # happened" and "what the run is told about it, and when" are different
+    # questions, and only the second is allowed to change a run — which is
+    # exactly where both of this branch's review findings landed. The ratchet
+    # asked for an extraction rather than a bigger number when the act→observe
+    # stop path needed somewhere to live, and got one.
+    "robothor/engine/observation_ledger.py": 285,
+    "robothor/engine/observation_notes.py": 317,
     # 265 -> 322: the guardrail row this control writes at finalization on
     # `observe` as well as `enforce`. Without it `flags/evidence.py` would
     # report the one ladder whose promotion depends on watching the evidence as

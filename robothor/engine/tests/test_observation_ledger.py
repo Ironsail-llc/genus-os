@@ -26,12 +26,8 @@ from robothor.engine.act_observe import (
     source_tokens,
     unread_proxy_responses,
 )
-from robothor.engine.observation_ledger import (
-    ObservationLedger,
-    ledger_for,
-    observation_notes,
-    unread_observation_hold,
-)
+from robothor.engine.observation_ledger import ObservationLedger, ledger_for
+from robothor.engine.observation_notes import observation_notes, unread_observation_hold
 
 API = "http://service.invalid:9110/inbox/messages"
 SEND = "http://service.invalid:9110/inbox/send"

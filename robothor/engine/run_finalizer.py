@@ -342,7 +342,7 @@ class RunFinalizationMixin:
         # file the task named, in exactly the shape it named, over a strictly
         # smaller set of facts than the task put in front of it. Takes the
         # run's `exec` spill files with it on the way out.
-        from robothor.engine.observation_ledger import record_observation_verdicts
+        from robothor.engine.observation_notes import record_observation_verdicts
 
         record_observation_verdicts(run, session, self.config.workspace)
 

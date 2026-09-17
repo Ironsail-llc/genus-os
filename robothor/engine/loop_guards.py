@@ -235,7 +235,7 @@ def append_engine_note(session: Any, note: str | None, workspace: str | Path | N
         # looking again. Rides on the note that is already going out rather
         # than becoming a fourth interruption of its own — and each entry is
         # quoted at most once, so this cannot turn into nagging.
-        from robothor.engine.observation_ledger import observation_notes
+        from robothor.engine.observation_notes import observation_notes
 
         observations = observation_notes(session)
         if observations:
@@ -276,9 +276,19 @@ def nudge_for_missing_deliverable(session: Any, workspace: str | Path | None = N
     # written over everything the run was actually shown. A run that never read
     # the tail of its own listing can satisfy both of the first two and still be
     # answering about a smaller world than the one the task put in front of it.
-    from robothor.engine.observation_ledger import unread_observation_hold
+    from robothor.engine.observation_notes import (
+        unobserved_change_nudge,
+        unread_observation_hold,
+    )
 
     if unread_observation_hold(session):
+        return True
+    # And the other half of the same question: did it change something at the
+    # other end and never look again. Delivered HERE rather than only at a
+    # check-in, because the check-in cadence is every 25 iterations and the run
+    # this exists for made 21 requests — the moment it tried to stop is the one
+    # moment it was certain to reach.
+    if unobserved_change_nudge(session):
         return True
     # Fourth and last: where the task asked for a decision per item, does the
     # artefact contain one. Its own flag, because it is the only question here
