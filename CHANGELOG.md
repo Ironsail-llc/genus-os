@@ -1,3 +1,9 @@
+## [1.99.0](https://github.com/Ironsail-llc/genus-os/compare/v1.98.0...v1.99.0) (2026-09-17)
+
+### Features
+
+* **engine:** the deadline ends the run with its best artefact ([#587](https://github.com/Ironsail-llc/genus-os/issues/587)) ([a6ea46d](https://github.com/Ironsail-llc/genus-os/commit/a6ea46d812b496e3bdc240b91e6e95f82d4cfea2))
+
 ## [1.98.0](https://github.com/Ironsail-llc/genus-os/compare/v1.97.0...v1.98.0) (2026-09-17)
 
 ### Features
