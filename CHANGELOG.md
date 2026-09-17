@@ -1,3 +1,14 @@
+## [1.98.0](https://github.com/Ironsail-llc/genus-os/compare/v1.97.0...v1.98.0) (2026-09-17)
+
+### Features
+
+* **engine:** lossless shell output, and a run that observes before it reports ([#585](https://github.com/Ironsail-llc/genus-os/issues/585)) ([91b2366](https://github.com/Ironsail-llc/genus-os/commit/91b23666b86ce661008b65d427b43e6a977c6880)), closes [#580](https://github.com/Ironsail-llc/genus-os/issues/580)
+
+### Bug Fixes
+
+* **bench:** the task image provides the environment warm-ups assume ([#584](https://github.com/Ironsail-llc/genus-os/issues/584)) ([a9a1689](https://github.com/Ironsail-llc/genus-os/commit/a9a1689549cf5269eb5f3212622850e0b8d0b1cf)), closes [#580](https://github.com/Ironsail-llc/genus-os/issues/580)
+* **tools:** analyze_image answers from the caller's choices, with a reason ([#586](https://github.com/Ironsail-llc/genus-os/issues/586)) ([54aba41](https://github.com/Ironsail-llc/genus-os/commit/54aba41e11302fe747943597c30ba53104ae0d9b))
+
 ## [1.97.0](https://github.com/Ironsail-llc/genus-os/compare/v1.96.0...v1.97.0) (2026-09-17)
 
 ### Features
