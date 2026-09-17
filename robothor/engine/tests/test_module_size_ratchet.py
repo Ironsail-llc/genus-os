@@ -143,6 +143,16 @@ CAPS = {
     # `code_execution.py` holding all four would be untestable in exactly
     # the place it matters most.
     "robothor/engine/parallel_tools.py": 173,
+    # Capped on the way IN, not after it regrew. `choices` and `reason` landed
+    # in a module that had reached 1,479 lines, so the reply contract — what a
+    # model may answer and how the answer is checked — left for
+    # vision_contract.py before the cap was written. The two are different
+    # subjects: one fans calls out, bounds them and budgets the result; the
+    # other is a matcher whose whole safety property ("equality, never a
+    # prefix") has to be readable in one screen. A cap set at the post-
+    # extraction size is the only one that makes the extraction a one-way door.
+    "robothor/engine/vision_batch.py": 1276,
+    "robothor/engine/vision_contract.py": 248,
     # 277 -> 314: the approval budget. A proxied call passes the same approval
     # gate a turn's call does, which is right and which is also how a loop
     # could queue two hundred prompts at the operator. The check belongs where

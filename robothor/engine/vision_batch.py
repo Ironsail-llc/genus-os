@@ -48,6 +48,37 @@ What it will not do
   not cover this: ``tool_offload_threshold`` defaults to 0, and the manifest
   this change is measured on does not set it.
 
+Why an answer comes with its reason
+-----------------------------------
+Measured again on 2026-09-17, on the same task. This time the agent DID call
+the batch: 99 of 100 images answered, **92.9% of them correctly**, for $0.0145
+and 29 s of model time. Copied verbatim into folders those answers were worth
+0.936. It scored **0.432** — because it threw every one of them away.
+
+The task's filenames are a deliberate derangement: ``brain_mri_scan.png`` is a
+bar chart about Swedish aid flow, and filename-semantics agree with the truth
+on **0 of 100** files. The tool returned ``{"answer": "3"}``. Facing a naked
+digit against a confident-looking name, the agent wrote *"the vision model is
+giving unreliable results"* — citing three examples, two of which were correct
+— and hand-wrote a filename table with no vision input at all.
+
+A bare token is unauditable, so it loses to any prior that looks like
+evidence. The competing harness returned a paragraph and therefore detected the
+trap in one turn. So this returns the active ingredient without the paragraph's
+cost:
+
+* ``choices`` makes the contract *"a label from this set"* rather than *"a
+  string"*. The row carries a validated ``choice``, in the CALLER's spelling;
+  an off-list reply is re-asked once and then reported as that row's ``error``
+  — never prefix-matched, never squeezed into the nearest label.
+* ``reason`` rides on every answered row: one capped sentence of what the model
+  saw. ``{"choice": "1", "reason": "horizontal bar chart of aid flow from
+  Sweden"}`` is not a thing an agent talks itself out of believing.
+* A spilled result also carries a ``sample`` spanning the DISTINCT answers, so
+  the spot-check is a glance rather than a ``read_file`` round.
+* And the result says, in words, that a filename is a claim about a picture
+  and a reason is what was in it. ``prompts.py`` rule 18 says the same.
+
 What the deadline bounds, exactly
 ---------------------------------
 It bounds when new work STARTS. Two things inside a round cannot be cancelled
@@ -90,8 +121,19 @@ from robothor.engine.pooled_completion import acompletion as pooled_acompletion
 from robothor.engine.tools.constants import MAX_TOOL_OUTPUT_CHARS
 from robothor.engine.tools.handlers.images import (
     UnsupportedImageError,
+    _same_stem_images,
     describe_image_bytes,
     prepare_image_bytes,
+)
+from robothor.engine.vision_contract import (
+    MAX_CHOICE_CHARS,
+    MAX_QUOTED_REPLY_CHARS,
+    Contract,
+    Reply,
+    build_contract,
+    contract_suffix,
+    correction_suffix,
+    parse_reply,
 )
 
 logger = logging.getLogger(__name__)
@@ -151,6 +193,17 @@ MAX_ANSWER_TOKENS = 1024
 MAX_ANSWER_CHARS = 2000
 _TRUNCATION_MARK = " […truncated]"
 
+#: Longest a row's ``reason`` may be. The reason exists to be READ — a glance
+#: at five of them is the spot-check — so it is bounded far tighter than the
+#: answer: 200 rows of a 2,000-character justification is the context this
+#: module exists to keep empty, arriving under a different key.
+MAX_REASON_CHARS = 120
+
+#: Rows in the spot-check ``sample`` a spilled result carries inline. Chosen to
+#: span the DISTINCT answers rather than to be the first N, because the first N
+#: rows of a folder an agent is sorting are the first N rows of one label.
+MAX_SAMPLE_ROWS = 5
+
 #: And the bound on the WHOLE result, which the per-answer cap does not give:
 #: 200 short yes/no rows serialise to ~40,000 characters (~10k tokens) and 200
 #: capped ones to ~432,000 (~108k tokens), measured. A tool whose stated
@@ -205,6 +258,23 @@ class Backend:
     kind: str
     model: str
     note: str = ""
+
+
+@dataclass(frozen=True)
+class Resolved:
+    """What one requested path turned into: a file to read, or why not.
+
+    ``shown`` is the path the row reports whatever happened, so an agent can
+    line its request up against the results by string. ``substituted_for`` is
+    set when the agent asked for an extension that missed and exactly one image
+    beside it shared the stem — the row says both, because an agent that is not
+    told it was handed a different file believes it looked at the one it named.
+    """
+
+    path: Path | None
+    refusal: str
+    shown: str
+    substituted_for: str = ""
 
 
 def _settings() -> Any:
@@ -361,8 +431,8 @@ def _workspace_root(workspace: str) -> Path | None:
         return None
 
 
-def _resolve_one(raw: str, root: Path) -> tuple[Path | None, str, str]:
-    """``(path, refusal, path as reported)`` for one requested image.
+def _resolve_one(raw: str, root: Path) -> Resolved:
+    """The file one requested image names, or why there is not one.
 
     No backend call on a refusal. Order matters and mirrors
     ``attachment_gate.resolve_for_send``: containment on the RESOLVED path (so
@@ -370,23 +440,35 @@ def _resolve_one(raw: str, root: Path) -> tuple[Path | None, str, str]:
     any stat (so a refusal does not reveal whether the file exists), then
     shape, then size.
 
-    The third element exists because a refused row used to report the path as
-    the agent spelled it while an answered row reported the resolved one, so an
-    agent zipping its request to the results by path string got a mismatch on
-    exactly the rows it needed to retry. Every row that got as far as resolving
-    now reports the resolved path; a blank one has nothing to resolve.
+    ``shown`` exists because a refused row used to report the path as the agent
+    spelled it while an answered row reported the resolved one, so an agent
+    zipping its request to the results by path string got a mismatch on exactly
+    the rows it needed to retry. Every row that got as far as resolving now
+    reports the resolved path; a blank one has nothing to resolve.
+
+    A missed EXTENSION is not a miss. ``view_image`` learned that in
+    ``handlers/images.py::_same_stem_images`` — added because the recovery was
+    costing Code Intelligence tasks — and this module shipped without importing
+    it, so the same bug lived on in the sibling tool: ``retinal_scan.png`` came
+    back "no such file" with ``retinal_scan.jpg`` sitting beside it. The rule is
+    the one ``view_image`` already applies: exactly one candidate substitutes,
+    two is a question for the agent rather than a coin flip for the tool. The
+    substitute is looked for only in a directory strictly inside the workspace,
+    so a path that resolves TO the root cannot reach the root's siblings, and it
+    is put through the secret-path rule like any other file.
     """
     text = str(raw or "").strip()
     if not text:
-        return None, "path is required", str(raw)
+        return Resolved(None, "path is required", str(raw))
 
     candidate = Path(text).expanduser()
-    if not candidate.is_absolute():
+    relative = not candidate.is_absolute()
+    if relative:
         candidate = root / candidate
     resolved = candidate.resolve(strict=False)
     shown = str(resolved)
     if root != resolved and root not in resolved.parents:
-        return (
+        return Resolved(
             None,
             (
                 f"refused: {Path(text).name} resolves outside the workspace. Only images "
@@ -398,14 +480,23 @@ def _resolve_one(raw: str, root: Path) -> tuple[Path | None, str, str]:
     from robothor.engine.secret_paths import is_secret_path, refusal_for
 
     if is_secret_path(resolved):
-        return None, refusal_for(resolved), shown
+        return Resolved(None, refusal_for(resolved), shown)
 
+    substituted_for = ""
     if not resolved.is_file():
-        return None, f"no such file: {text}", shown
+        found = _substitute(resolved, root)
+        if found.refusal or found.path is None:
+            return Resolved(
+                None, found.refusal or _no_such_file(text, shown, root, relative), shown
+            )
+        substituted_for, resolved = shown, found.path
+        shown = str(resolved)
+        if is_secret_path(resolved):
+            return Resolved(None, refusal_for(resolved), shown)
 
     size = resolved.stat().st_size
     if size > MAX_IMAGE_BYTES:
-        return (
+        return Resolved(
             None,
             (
                 f"refused: {resolved.name} is too large to analyze ({size // (1024 * 1024)} MB; "
@@ -413,7 +504,45 @@ def _resolve_one(raw: str, root: Path) -> tuple[Path | None, str, str]:
             ),
             shown,
         )
-    return resolved, "", shown
+    return Resolved(resolved, "", shown, substituted_for)
+
+
+def _substitute(resolved: Path, root: Path) -> Resolved:
+    """The one image beside *resolved* sharing its stem, or why there is none."""
+    if root not in resolved.parents:
+        return Resolved(None, "", str(resolved))
+    siblings = _same_stem_images(resolved)
+    if len(siblings) == 1:
+        return Resolved(siblings[0], "", str(siblings[0]))
+    if siblings:
+        names = ", ".join(sorted(s.name for s in siblings))
+        return Resolved(
+            None,
+            (
+                f"no such file: {resolved.name} — several images share that name "
+                f"({names}). Ask for the one you want."
+            ),
+            str(resolved),
+        )
+    return Resolved(None, "", str(resolved))
+
+
+def _no_such_file(text: str, shown: str, root: Path, relative: bool) -> str:
+    """Why nothing was read, said usefully enough to fix on the next call.
+
+    Batch 1 of the measured run passed fifty bare basenames, every one of which
+    came back ``no such file: 3d_architectural_render.jpg`` — with no hint that
+    a root join had been tried, or what root. The images were one directory
+    down. Fifty rows of an error that does not say where it looked is a wasted
+    round; saying it costs one sentence on the rows that already failed.
+    """
+    if not relative:
+        return f"no such file: {text}"
+    return (
+        f"no such file: {text} — a relative path is joined to the workspace root "
+        f"({root}), which gave {shown}. Pass the path read_file would take, or list "
+        "the directory first."
+    )
 
 
 def _load(path: Path) -> tuple[bytes, str]:
@@ -502,33 +631,93 @@ _SYSTEM_PROMPT = (
 )
 
 
-async def _answer_one(
-    backend: Backend, data: bytes, mime: str, question: str, detail: str, timeout: float
-) -> tuple[str, int, float, bool]:
-    """``(answer, tokens, cost, was cut)`` from whichever backend is configured."""
+@dataclass(frozen=True)
+class Attempt:
+    """What one image cost and what came back, parsed. ``reasked`` is True when
+    the first reply named no allowed choice and a second was paid for."""
+
+    reply: Reply
+    tokens: int
+    cost: float
+    truncated: bool
+    reasked: bool = False
+
+
+async def _ask_once(
+    backend: Backend,
+    data: bytes,
+    mime: str,
+    question: str,
+    detail: str,
+    timeout: float,
+    contract: Contract,
+) -> Attempt:
+    """One backend call, parsed and bounded. Raises on a backend that fails."""
     if backend.kind == "remote":
-        answer, tokens, cost = await _remote_answer(backend, data, mime, question, detail, timeout)
-        capped, cut = _cap(answer)
-        return capped, tokens, cost, cut
-    answer = (await describe_image_bytes(data, question, timeout=timeout)).strip()
-    if not answer:
+        raw, tokens, cost = await _remote_answer(backend, data, mime, question, detail, timeout)
+    else:
+        # The local VLM reports no usage and costs nothing: it is this box's GPU.
+        raw = (await describe_image_bytes(data, question, timeout=timeout)).strip()
+        tokens, cost = 0, 0.0
+    if not raw:
         raise RuntimeError("the vision model returned nothing")
-    # The local VLM reports no usage and costs nothing: it is this box's GPU.
-    capped, cut = _cap(answer)
-    return capped, 0, 0.0, cut
+    parsed = parse_reply(raw, contract)
+    answer, cut = _cap(parsed.answer, MAX_ANSWER_CHARS)
+    reason, _ = _cap(parsed.reason, MAX_REASON_CHARS)
+    return Attempt(Reply(answer, reason, parsed.rejected), tokens, cost, cut)
 
 
-def _cap(answer: str) -> tuple[str, bool]:
-    """One answer, bounded, and whether it was cut.
+async def _answer_one(
+    backend: Backend,
+    data: bytes,
+    mime: str,
+    question: str,
+    detail: str,
+    timeout: float,
+    contract: Contract,
+) -> Attempt:
+    """One image's answer, with the single re-ask a rejected label earns.
+
+    The re-ask is for a WRONG answer, never for a thin one. A model that gave a
+    valid label and skipped its WHY line has still answered; charging every
+    image in the batch a second vision call because a weak backend does not
+    emit a marker would undo the property the whole tool rests on. That row
+    says ``reason_missing`` instead, so the gap is visible rather than filled in.
+    """
+    first = await _ask_once(
+        backend, data, mime, question + contract_suffix(contract), detail, timeout, contract
+    )
+    if not first.reply.rejected:
+        return first
+    second = await _ask_once(
+        backend,
+        data,
+        mime,
+        question + correction_suffix(contract, first.reply.rejected),
+        detail,
+        timeout,
+        contract,
+    )
+    return Attempt(
+        second.reply,
+        first.tokens + second.tokens,
+        first.cost + second.cost,
+        second.truncated,
+        reasked=True,
+    )
+
+
+def _cap(answer: str, limit: int) -> tuple[str, bool]:
+    """One string, bounded, and whether it was cut.
 
     The marker inside the string is for a reader; the flag is for a caller. An
     agent transcribing text off a hundred images needs to know WHICH rows it
     only half has, and asking it to substring-match a marker to find out is how
     a truncation goes unnoticed.
     """
-    if len(answer) <= MAX_ANSWER_CHARS:
+    if len(answer) <= limit:
         return answer, False
-    return answer[:MAX_ANSWER_CHARS].rstrip() + _TRUNCATION_MARK, True
+    return answer[:limit].rstrip() + _TRUNCATION_MARK, True
 
 
 async def _analyze_one(
@@ -540,12 +729,14 @@ async def _analyze_one(
     detail: str,
     semaphore: asyncio.Semaphore,
     deadline: float,
+    contract: Contract,
 ) -> dict[str, Any]:
     """One image's row of the result. Never raises — a row always comes back."""
     started = time.monotonic()
-    resolved, refusal, shown = _resolve_one(raw, root)
+    found = _resolve_one(raw, root)
+    resolved = found.path
     if resolved is None:
-        return {"path": shown, "error": refusal, "ms": 0}
+        return {"path": found.shown, "error": found.refusal, "ms": 0}
 
     async with semaphore:
         remaining = deadline - time.monotonic()
@@ -575,8 +766,8 @@ async def _analyze_one(
             }
 
         try:
-            answer, tokens, cost, was_cut = await asyncio.wait_for(
-                _answer_one(backend, data, mime, question, detail, timeout),
+            attempt = await asyncio.wait_for(
+                _answer_one(backend, data, mime, question, detail, timeout, contract),
                 timeout=timeout,
             )
         except TimeoutError:
@@ -593,18 +784,61 @@ async def _analyze_one(
                 "ms": int((time.monotonic() - started) * 1000),
             }
 
-    row: dict[str, Any] = {
-        "path": str(resolved),
-        "answer": answer,
-        "model": backend.model,
-        "ms": int((time.monotonic() - started) * 1000),
-    }
-    if tokens:
-        row["tokens"] = tokens
-    if cost:
-        row["cost_usd"] = round(cost, 6)
-    if was_cut:
+    return _row(attempt, resolved, found.substituted_for, backend, contract, started)
+
+
+def _row(
+    attempt: Attempt,
+    resolved: Path,
+    substituted_for: str,
+    backend: Backend,
+    contract: Contract,
+    started: float,
+) -> dict[str, Any]:
+    """One answered image, as the agent reads it.
+
+    A constrained row carries ``choice`` and a free one carries ``answer``, and
+    neither carries both: the validated label IS the answer, and saying it twice
+    doubles the one thing the inline budget is measured in. A label the model
+    never gave is not written at all — that row is an ``error``, which is the
+    difference between "give me a string" and "give me a label from this set".
+
+    A rejected row carries no ``reason`` either. The sentence justifies a label
+    the tool refused to record, so keeping it would put the unvalidated answer
+    back one key over.
+    """
+    row: dict[str, Any] = {"path": str(resolved)}
+    if substituted_for:
+        row["resolved_from"] = substituted_for
+    if attempt.reply.rejected:
+        quoted = attempt.reply.rejected[:MAX_QUOTED_REPLY_CHARS].replace("\n", " ")
+        row["error"] = (
+            f"the vision model answered {quoted!r} twice, which is not one of the choices "
+            f"({contract.listed}). Nothing is recorded for this image rather than a label "
+            "the model did not give — look at it with view_image if it decides the task."
+        )
+    else:
+        if contract.labels:
+            row["choice"] = attempt.reply.answer
+        else:
+            row["answer"] = attempt.reply.answer
+        if attempt.reply.reason:
+            row["reason"] = attempt.reply.reason
+        else:
+            # Never manufactured out of the answer: an invented justification
+            # is worse than a missing one, because the agent cannot tell them
+            # apart.
+            row["reason_missing"] = True
+    row["model"] = backend.model
+    row["ms"] = int((time.monotonic() - started) * 1000)
+    if attempt.tokens:
+        row["tokens"] = attempt.tokens
+    if attempt.cost:
+        row["cost_usd"] = round(attempt.cost, 6)
+    if attempt.truncated:
         row["truncated"] = True
+    if attempt.reasked:
+        row["reasked"] = True
     return row
 
 
@@ -710,6 +944,72 @@ def _configured_spill_retention_days() -> int:
         return DEFAULT_SPILL_RETENTION_DAYS
 
 
+#: The sentence the measured failure turned on, said in every result.
+#:
+#: The agent had 99 answers that were 92.9% correct and a hundred filenames
+#: that were a deliberate derangement — agreeing with the truth on 0 of 100
+#: files — and it wrote "the vision model is giving unreliable results" and
+#: shipped the filenames. Two of the three answers it cited as proof of
+#: unreliability were correct. The rule is not bench-shaped: a mislabelled
+#: download, a scan saved under whatever the scanner called it and a camera
+#: roll are all the same shape, and this is the one place an agent reading the
+#: answers is guaranteed to see it.
+PIXELS_BEAT_NAMES = (
+    "A filename is a claim; a reason is what was seen. Where they disagree, trust the look."
+)
+
+
+def _is_answered(row: dict[str, Any]) -> bool:
+    """Whether a row holds an answer, under either of the two keys it can use."""
+    return "choice" in row or "answer" in row
+
+
+def _sample_row(row: dict[str, Any]) -> dict[str, Any]:
+    """One preview row: which file, what was decided, and why. Nothing else.
+
+    The model, the timing and the ledger are already inline as totals and in
+    the spilled file; repeating them per sample row would spend the budget the
+    sample is competing for on the one part of a row a spot-check never reads.
+    """
+    preview: dict[str, Any] = {"path": row["path"]}
+    if "choice" in row:
+        preview["choice"] = row["choice"]
+    else:
+        preview["answer"] = _cap(str(row.get("answer", "")), MAX_REASON_CHARS)[0]
+    if row.get("reason"):
+        preview["reason"] = row["reason"]
+    return preview
+
+
+def _pick_sample(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    """Up to *limit* answered rows spanning the DISTINCT answers.
+
+    Not the first N. An agent sorting a folder gets its rows in the order it
+    passed the paths, which for a folder listing is alphabetical, which for a
+    real folder is one label at a time — so the first five rows of a hundred
+    are five looks at the same decision. Spanning the distinct answers is what
+    makes one glance worth the characters it costs, and it is the cheap version
+    of the competing harness's "let me verify a few more images to confirm".
+    """
+    by_answer: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        label = row.get("choice") or row.get("answer")
+        if not isinstance(label, str):
+            continue
+        by_answer.setdefault(label[:MAX_CHOICE_CHARS], row)
+        if len(by_answer) >= limit:
+            break
+    picked = list(by_answer.values())
+    taken = {id(row) for row in picked}
+    for row in rows:
+        if len(picked) >= limit:
+            break
+        if id(row) not in taken and _is_answered(row):
+            picked.append(row)
+            taken.add(id(row))
+    return [_sample_row(row) for row in picked]
+
+
 def _fit(out: dict[str, Any], rows: list[dict[str, Any]], budget: int) -> int:
     """How many of *rows* fit in *budget* once the rest of *out* is counted.
 
@@ -735,6 +1035,7 @@ async def analyze_images(
     paths: Any,
     question: str,
     detail: str = "",
+    choices: Any = None,
     max_concurrency: Any = None,
     workspace: str = "",
     run_id: str = "",
@@ -742,13 +1043,16 @@ async def analyze_images(
     """Answer *question* about every path in *paths*. Never returns a picture.
 
     The return shape is the contract the tool schema advertises: ``results`` in
-    the order the paths were given, one row each, carrying either ``answer`` or
-    ``error`` and never both.
+    the order the paths were given, one row each, carrying ``choice`` (when
+    *choices* constrained it), ``answer`` (when it did not) or ``error``, and
+    never more than one of the three. Every answered row also carries the
+    model's ``reason`` — the short account of what it saw — or says plainly that
+    the backend gave none.
 
-    A result too big for the budget keeps its totals and its first rows inline
-    and writes the whole table to a file whose path it returns — see
-    :data:`DEFAULT_MAX_TOTAL_CHARS` for why that is not left to the session's
-    offloading.
+    A result too big for the budget keeps its totals, a label-spanning
+    ``sample`` and its first rows inline, and writes the whole table to a file
+    whose path it returns — see :data:`DEFAULT_MAX_TOTAL_CHARS` for why that is
+    not left to the session's offloading.
     """
     if not isinstance(paths, (list, tuple)) or not paths:
         return {"error": f"paths is required: a list of 1–{MAX_PATHS} image paths"}
@@ -764,6 +1068,10 @@ async def analyze_images(
     if not asked:
         return {"error": "question is required — say what you want to know about each image"}
     asked = asked[:MAX_QUESTION_CHARS]
+
+    contract, bad_choices = build_contract(choices)
+    if bad_choices:
+        return {"error": bad_choices}
 
     notes: list[str] = []
     if len(question.strip()) > MAX_QUESTION_CHARS:
@@ -818,12 +1126,13 @@ async def analyze_images(
                 detail=wanted_detail,
                 semaphore=semaphore,
                 deadline=deadline,
+                contract=contract,
             )
             for raw in paths
         )
     )
 
-    answered = [r for r in results if "answer" in r]
+    answered = [r for r in results if _is_answered(r)]
     failed = len(results) - len(answered)
     elapsed = time.monotonic() - started
     tokens = sum(int(r.get("tokens") or 0) for r in results)
@@ -840,6 +1149,8 @@ async def analyze_images(
             f"{len(answered)} of {len(results)} images answered by {backend.model} "
             f"in {elapsed:.1f}s ({concurrency} at a time)"
             + (f"; {failed} failed — see the per-image error" if failed else "")
+            + ". "
+            + PIXELS_BEAT_NAMES
         ),
     }
     if tokens:
@@ -857,26 +1168,31 @@ async def analyze_images(
     return out
 
 
-def _spill_sentence(total: int, shown: int, written: Path | None) -> str:
+def _spill_sentence(total: int, shown: int, written: Path | None, sampled: bool = False) -> str:
     """What the agent is told about a table that went to disk.
 
     The path is NOT repeated here: it is already in ``results_file``, and a
     note that quotes it too spends a long workspace path twice out of a budget
     measured in hundreds of characters.
+
+    ``sampled`` is not decoration. A note promising a spot-check beside a
+    result that has none is the tool lying about its own shape, and the sample
+    is the first thing the budget takes back — so the probe measures the widest
+    sentence and the caller is told which one it actually got.
     """
+    preview = f"the first {shown} are here" if shown else "none of them fit here"
+    spot = ", sample spans the distinct answers" if sampled else ""
     if written is not None:
         return (
-            f"{total} rows did not fit in one tool result, so the first {shown} are here "
-            f"and all {total} — each image's answer, tokens and cost — are in the file "
-            "named in results_file. If you have exec, work over that file there (jq or "
-            "python is cheaper than reading it into this conversation); otherwise read "
-            "it. Either way, do not ask about the same images again."
+            f"{total} rows did not fit, so {preview}{spot}, and all {total} — answer, "
+            "reason, tokens and cost — are in results_file. Work over that file with "
+            "exec (jq or python) rather than reading it back whole; do not ask about "
+            "these images again."
         )
     return (
-        f"{total} rows did not fit in one tool result and the full table could not be "
-        f"written to disk, so only the first {shown} are here. The totals above cover all "
-        f"{total}. Ask about the remaining images in smaller batches, or raise "
-        "ROBOTHOR_VISION_BATCH_MAX_CHARS, rather than repeating this one whole."
+        f"{total} rows did not fit and the table could not be written to disk, so "
+        f"{preview}. The totals above cover all {total}. Ask about the rest in smaller "
+        "batches, or raise ROBOTHOR_VISION_BATCH_MAX_CHARS; do not repeat this call whole."
     )
 
 
@@ -908,6 +1224,12 @@ def _spill(
     are trimmed anyway and the note says the rest is gone. Returning 108k
     tokens because the disk was full would end the run the budget exists to
     protect.
+
+    The ``sample`` competes for the same characters and is measured in the same
+    probe, so it can never push the result over the cap. It yields, one row at a
+    time, rather than leaving the caller with a preview and no actual rows: a
+    spot-check is worth more than the fourth copy of one label, and nothing at
+    all under ``results`` is worth less than either.
     """
     header = {key: value for key, value in out.items() if key not in ("results", "note")}
     written: Path | None = None
@@ -927,18 +1249,28 @@ def _spill(
     # on. Probe with `shown = len(rows)`, the widest number it can ever be, so
     # the note the caller actually gets is never longer than the one that was
     # measured.
-    widest = " ".join([*notes, _spill_sentence(len(rows), len(rows), written)])
-    probe = {
-        **header,
-        "results_shown": len(rows),
-        "results_total": len(rows),
-        "note": widest,
-    }
-    shown = _fit(probe, rows, budget)
+    widest = " ".join([*notes, _spill_sentence(len(rows), len(rows), written, sampled=True)])
+    sample = _pick_sample(rows, MAX_SAMPLE_ROWS)
+    while True:
+        probe = {
+            **header,
+            **({"sample": sample} if sample else {}),
+            "results_shown": len(rows),
+            "results_total": len(rows),
+            "note": widest,
+        }
+        shown = _fit(probe, rows, budget)
+        if shown or not sample:
+            break
+        sample = sample[:-1]
 
     out.clear()
     out.update(header)
+    if sample:
+        out["sample"] = sample
     out["results"] = rows[:shown]
     out["results_shown"] = shown
     out["results_total"] = len(rows)
-    out["note"] = " ".join([*notes, _spill_sentence(len(rows), shown, written)])
+    out["note"] = " ".join(
+        [*notes, _spill_sentence(len(rows), shown, written, sampled=bool(sample))]
+    )

@@ -403,6 +403,7 @@ async def analyze_image(args: dict[str, Any], ctx: Any = None) -> dict[str, Any]
         paths=args.get("paths"),
         question=str(args.get("question") or ""),
         detail=str(args.get("detail") or ""),
+        choices=args.get("choices"),
         max_concurrency=args.get("max_concurrency"),
         workspace=str(getattr(ctx, "workspace", "") or ""),
         run_id=str(getattr(ctx, "run_id", "") or ""),
