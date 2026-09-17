@@ -1,3 +1,15 @@
+## [1.99.2](https://github.com/Ironsail-llc/genus-os/compare/v1.99.1...v1.99.2) (2026-09-17)
+
+### Bug Fixes
+
+* **backup:** the base backup probes the directory it writes under ([#594](https://github.com/Ironsail-llc/genus-os/issues/594)) ([a74ca6a](https://github.com/Ironsail-llc/genus-os/commit/a74ca6ae5aa5eeda46fe554eda9de187056fe256))
+* **bench:** the bundled benchmark defaults name a model that still exists ([#592](https://github.com/Ironsail-llc/genus-os/issues/592)) ([190d923](https://github.com/Ironsail-llc/genus-os/commit/190d92336278f8075844f20bcae2d1c86080ca69)), closes [#495](https://github.com/Ironsail-llc/genus-os/issues/495)
+* **flags:** value-set flags audit by value; per-user sessions in the drop-in ([#591](https://github.com/Ironsail-llc/genus-os/issues/591)) ([d9b6802](https://github.com/Ironsail-llc/genus-os/commit/d9b6802547df2e7504729d5556ebeb859bf56b78))
+
+### Documentation
+
+* **templates:** the conversation resolver decides borderline threads ([#593](https://github.com/Ironsail-llc/genus-os/issues/593)) ([3562ae1](https://github.com/Ironsail-llc/genus-os/commit/3562ae1afde0253cec6ee345395d792cbe541091))
+
 ## [1.99.1](https://github.com/Ironsail-llc/genus-os/compare/v1.99.0...v1.99.1) (2026-09-17)
 
 ### Bug Fixes
