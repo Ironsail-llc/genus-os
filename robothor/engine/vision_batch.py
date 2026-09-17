@@ -345,11 +345,17 @@ def _resolve_one(raw: str, root: Path) -> Resolved:
     if not text:
         return Resolved(None, "path is required", str(raw))
 
-    candidate = Path(text).expanduser()
-    relative = not candidate.is_absolute()
-    if relative:
-        candidate = root / candidate
-    resolved = candidate.resolve(strict=False)
+    try:
+        candidate = Path(text).expanduser()
+        relative = not candidate.is_absolute()
+        if relative:
+            candidate = root / candidate
+        resolved = candidate.resolve(strict=False)
+    except ValueError:
+        # A NUL byte, or anything else the OS cannot spell as a path. One
+        # unspellable path in a list of two hundred must fail as that row, not
+        # as the whole call (round-2 review M-8).
+        return Resolved(None, f"no such file: {text!r} is not a usable path", str(raw))
     shown = str(resolved)
     # Containment then the secret-path name rule, both from the helper
     # `view_image` now shares (round-1 review I-4) — one idea of what a vision

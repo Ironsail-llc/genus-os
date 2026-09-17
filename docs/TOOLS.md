@@ -433,19 +433,29 @@ A remote fallback is real money spent on a single `view_image` call. Leave
 `ROBOTHOR_VISION_REMOTE_MODEL` unset on a box with a working local VLM and the
 rung is simply never reached.
 
+A path the OS cannot spell — a NUL byte, say — is refused like any other bad
+path rather than raised out of the tool, and in a batch it fails as that row.
+
 **A rung that failed says which kind of failure it was.** "No local vision
 model is configured (ROBOTHOR_VISION_MODEL)" and "the local vision model
 (`<m>`) is unavailable (ConnectionError: connection refused)" are different
 sentences because they need different fixes, and each carries the backend's
-own message, capped. Nothing a setting HOLDS is ever quoted back — the setting
-names are, which is what an operator needs.
+own message — **redacted** through the platform's credential redactor and then
+capped. A provider's 401 carries the request headers and the api_key, and
+nothing redacts a tool result that returns normally, so the redaction happens
+here, before the text reaches the agent's context, the run's step ledger or the
+journal. Redacting after the cap would be worse than useless: a cut can slice a
+token in half and leave a prefix the redactor no longer recognises. Model names
+are quoted back, because an operator needs them and they are not secrets.
 
 **Both vision tools refuse the same files.** A path that resolves outside the
 workspace (symlinks followed first) and anything the platform's secret-path
 rule calls a credentials file are refused by `view_image` exactly as
 `analyze_image` refuses them, in the same words, from the same helper — asked
-before any rung reads or decodes the bytes, and asked again about a
-substituted file. This matters more than it used to: on a text-only primary
+before any rung reads or decodes the bytes, and asked again about a substituted
+same-stem file. Every candidate is **resolved** before it is judged, so a
+symlink whose literal path sits inside the workspace cannot carry a file from
+outside it. This matters more than it used to: on a text-only primary
 those bytes now leave the box for a provider, where they previously stopped at
 the on-box Ollama. A relative path is joined to the workspace, not to whatever
 the process has as its working directory.

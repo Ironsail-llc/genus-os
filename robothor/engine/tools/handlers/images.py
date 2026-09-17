@@ -97,6 +97,17 @@ def _same_stem_images(path: Path) -> list[Path]:
     Only real files count — a directory named `assets.jpg` is not an image —
     and the caller substitutes only when exactly one candidate exists. Two
     candidates is a question for the agent, not a coin flip for the tool.
+
+    **Every candidate comes back RESOLVED, and callers depend on it.** Round-2
+    review C-2: `iterdir()` yields the literal entry, so
+    `<workspace>/holiday.jpg -> <outside>/board_deck.png` named a path inside
+    the workspace while being a file outside it. Both tools asked
+    `vision_fallback.path_refusal` about that literal path, passed containment,
+    and then decoded and uploaded the target — one symlink under a different
+    extension walked round the guard in both. Resolving at the two call sites
+    would have left the next caller to rediscover it, so the promise is made
+    here, where the candidate is produced, and pinned by a test on this
+    function.
     """
     parent = path.parent
     if not parent.is_dir():
@@ -105,7 +116,7 @@ def _same_stem_images(path: Path) -> list[Path]:
     # iterdir, not glob: a stem containing `[` or `*` is a valid filename and
     # a glob pattern, and the two disagree.
     return sorted(
-        candidate
+        candidate.resolve(strict=False)
         for candidate in parent.iterdir()
         if candidate.stem == stem
         and candidate.is_file()
@@ -374,12 +385,20 @@ async def view_image(args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
     root = workspace_root(str(getattr(ctx, "workspace", "") or ""))
     if root is None:
         return {"error": NO_WORKSPACE_REFUSAL}
-    path = Path(raw_path).expanduser()
-    if not path.is_absolute():
-        # Relative to the workspace, as the sibling tool resolves it — not to
-        # whatever the process happens to have as its working directory.
-        path = root / path
-    path = path.resolve(strict=False)
+    try:
+        path = Path(raw_path).expanduser()
+        if not path.is_absolute():
+            # Relative to the workspace, as the sibling tool resolves it — not
+            # to whatever the process happens to have as its working directory.
+            path = root / path
+        path = path.resolve(strict=False)
+    except ValueError:
+        # A NUL byte, or anything else the OS cannot spell as a path.
+        # `Path.is_file()` used to swallow these and answer "no such file";
+        # resolving raises, and an unhandled exception leaving a handler is a
+        # failure the dispatcher has to classify rather than a refusal the
+        # agent can read (round-2 review M-8).
+        return {"error": f"no such file: {raw_path!r} is not a usable path"}
     refused = path_refusal(path, root, Path(raw_path).name)
     if refused:
         return {"error": refused}

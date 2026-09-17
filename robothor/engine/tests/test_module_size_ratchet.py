@@ -239,7 +239,10 @@ CAPS = {
     # refusal left for `vision_fallback.py` too, once `view_image` had to ask
     # the same two questions (round-1 review I-4). Two tools with two ideas of
     # what a vision tool may read is how one becomes the way round the other.
-    "robothor/engine/vision_batch.py": 1151,
+    # 1151 -> 1157: an unspellable path (a NUL byte) refuses as that ROW
+    # rather than raising out of the handler, which is six lines of try around
+    # the resolution the guard needs (round-2 review M-8).
+    "robothor/engine/vision_batch.py": 1157,
     # Which model looks at a picture, for BOTH image tools. Capped at what it
     # was written to. Not folded back into either caller: `vision_batch.py` is
     # the module this repo has an open extraction debt against, and
@@ -259,7 +262,14 @@ CAPS = {
     #     tool may read (I-4).
     # The alternative to the cap moving was a second copy of the guard, which
     # is the defect being fixed.
-    "robothor/engine/vision_fallback.py": 480,
+    # 480 -> 508 for the round-2 review's C-1: a provider's own exception text
+    # is put through `secrets/redaction.py::redact` BEFORE the cap, in the
+    # reason the agent reads and in the two log lines, because a 401 from this
+    # instance's provider carries the api_key and the Authorization header and
+    # nothing redacts a tool result that returns normally. Two call sites, one
+    # existing helper, and the reasoning for the ordering -- redact after the
+    # cap and a sliced token is a prefix no redactor recognises.
+    "robothor/engine/vision_fallback.py": 508,
     # 248 -> 351: the reply parser. Review finding I1 measured three ordinary
     # model formatting habits — both markers on one line, a JSON object, a
     # parenthetical gloss — each turning a whole batch into `error` rows at

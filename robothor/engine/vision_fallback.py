@@ -396,11 +396,39 @@ def _why(what: str, exc: BaseException) -> str:
     quoted rather than pasted: a backend that answers a failure with a page of
     HTML must not put the page into the context under an error key.
 
-    Message text only. No setting VALUE is ever interpolated into a reason —
-    the names of the settings are, which is what an operator needs.
+    **Redacted first, then capped**, and the order is the point. Round-2 review
+    C-1: a litellm/OpenRouter ``AuthenticationError`` carries the request
+    headers and the ``api_key``, so a single 401 put this instance's key into
+    the tool result, the model's context and ``agent_run_steps`` — nothing
+    redacts a tool result that returns NORMALLY, which is why the precedent
+    sits in ``dispatch.py``'s audit row and not in the tool layer. Redacting
+    after the cap would be worse than useless: a 200-character cut can slice a
+    token in half and leave a prefix no redactor still recognises.
+
+    ``redact`` never raises and never returns None, so this cannot become the
+    second bug in a line that is already reporting a failure.
+
+    What IS interpolated from configuration is model NAMES — ``the local vision
+    model (llava:7b)`` — which an operator needs and which are not secrets. No
+    credential-bearing setting is read here at all.
     """
-    message = " ".join(str(exc).split())[:MAX_RUNG_MESSAGE_CHARS]
+    from robothor.secrets.redaction import redact
+
+    message = redact(" ".join(str(exc).split()))[:MAX_RUNG_MESSAGE_CHARS]
     return f"{what} ({type(exc).__name__}{': ' + message if message else ''})"
+
+
+def _safe(exc: BaseException) -> str:
+    """A backend exception as it may be LOGGED. Same rule as :func:`_why`.
+
+    A log line outlives the run and is exported wholesale into a support
+    bundle, so the rung that must not put a key in the context must not put one
+    in the journal either — the round-2 probe found the untruncated message in
+    both places.
+    """
+    from robothor.secrets.redaction import redact
+
+    return redact(" ".join(str(exc).split()))[:MAX_RUNG_MESSAGE_CHARS]
 
 
 async def describe_with_fallback(
@@ -456,7 +484,7 @@ async def describe_with_fallback(
                 text = (await describe_image_bytes(data, prompt, timeout=budget)).strip()
         except Exception as exc:  # noqa: BLE001 - every rung's failure is reported, not raised
             reasons.append(_why(f"the local vision model ({local}) is unavailable", exc))
-            logger.debug("local vision rung failed: %s", exc)
+            logger.debug("local vision rung failed: %s", _safe(exc))
         else:
             if text:
                 return Description(text, "local", local)
@@ -475,6 +503,6 @@ async def describe_with_fallback(
             )
     except Exception as exc:  # noqa: BLE001 - same rule: named, never invented
         reasons.append(_why(f"the remote vision model ({remote}) failed", exc))
-        logger.warning("remote vision rung failed for %s: %s", remote, exc)
+        logger.warning("remote vision rung failed for %s: %s", remote, _safe(exc))
         raise NoVisionBackendError(reasons) from exc
     return Description(text, "remote", remote, tokens, cost)

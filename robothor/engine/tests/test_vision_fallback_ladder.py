@@ -696,9 +696,7 @@ class TestASubstitutedFileIsJudgedOnItsRealLocation:
         (workspace / "holiday.jpg").symlink_to(real)
         return workspace, workspace / "holiday.png"
 
-    async def test_view_image_refuses_the_substituted_symlink(
-        self, tmp_path, monkeypatch
-    ) -> None:
+    async def test_view_image_refuses_the_substituted_symlink(self, tmp_path, monkeypatch) -> None:
         from robothor.engine import vision_fallback
 
         async def local(data: bytes, prompt: str = "", **kw: Any) -> str:
