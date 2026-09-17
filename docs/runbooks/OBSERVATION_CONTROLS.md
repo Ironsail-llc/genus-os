@@ -277,7 +277,9 @@ Retention is two-layered:
 * **The run reaps its own on the way out.** `record_observation_verdicts`
   calls `exec_spill.prune_run_spills` at finalization, deleting every file
   whose stem matches that run's id, whether or not the ledger ever read them
-  back.
+  back — in every workspace the run's own spills went to, not only the one the
+  finalizer was handed. A spill is written under the AGENT's workspace, which a
+  manifest may put elsewhere and which every benchmark run does.
 * **The 7-day sweep is the backstop**, for a run killed before it gets there.
   `robothor/engine/retention.py`'s `run_retention_cleanup()` now calls
   `exec_spill.prune_spill_files()` under the `"exec"` key of its results dict,
@@ -286,6 +288,15 @@ Retention is two-layered:
   disables the sweep rather than deleting on the spot, on the same reasoning as
   every other retention policy in that module — "keep for zero days" reads as a
   misconfiguration, not an instruction.
+
+**The one gap, stated plainly:** the time-based sweep walks the INSTANCE
+workspace only. A spill written under an agent's own workspace and orphaned by
+a hard kill — a run that never reaches finalization at all — is collected by
+neither layer. If your fleet runs agents with their own `workspace:` and you
+see `.robothor/exec/` growing there, that is this gap and not a bug in the
+reap; `prune_spill_files(workspace=<that path>)` collects it, and a scheduled
+job per such workspace is the workaround until the sweep learns to enumerate
+them.
 
 Nothing reads a spill file after the run that wrote it ends. A directory
 nobody ever prunes is exactly the shape of the `analyze_image` spill's one bad
