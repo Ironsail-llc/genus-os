@@ -221,7 +221,7 @@ CAPS = {
     # rest of the run (hostile review I3); qualifying now takes a token outside
     # a comment, the filename this module writes, the right directory, and a
     # file that exists.
-# 339 -> 420: the size ceiling and the free-space check. A 50 MB command
+    # 339 -> 420: the size ceiling and the free-space check. A 50 MB command
     # wrote a 50,000,000-byte file under the workspace (hostile review I6) —
     # before this branch nothing from a command reached the disk at all, so the
     # ceiling is new surface this change is responsible for.
@@ -239,13 +239,13 @@ CAPS = {
     # transcript and nothing else (hostile review C1). Both holds are real
     # holds now, with a sentence each, and the reasoning for why a False there
     # is inert is written where the next reader will need it.
-# 505 -> 287: the DELIVERY half left for observation_notes.py. "What
+    # 505 -> 287: the DELIVERY half left for observation_notes.py. "What
     # happened" and "what the run is told about it, and when" are different
     # questions, and only the second is allowed to change a run — which is
     # exactly where both of this branch's review findings landed. The ratchet
     # asked for an extraction rather than a bigger number when the act→observe
     # stop path needed somewhere to live, and got one.
-# 285 -> 351: resolution that answers the question it claims to. It is
+    # 285 -> 351: resolution that answers the question it claims to. It is
     # asked on every call rather than only inside the READ branch (a `cat` of
     # the spill classifies as `neither`), the read-back is a resolved path, a
     # re-run is compared on the TARGET with the query stripped, and a call that
@@ -256,7 +256,7 @@ CAPS = {
     # `observe` as well as `enforce`. Without it `flags/evidence.py` would
     # report the one ladder whose promotion depends on watching the evidence as
     # permanently inert, which is the failure this repo has recorded twice.
-# 322 -> 368: three false positives the hostile review found, and the
+    # 322 -> 368: three false positives the hostile review found, and the
     # reasoning for each. The bare word `test` in a label read as a verdict,
     # `per \w+` opened the gate on "as per the runbook", and a hand-back about
     # the WORK read as a refusal to decide. This is the one control here that
