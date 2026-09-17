@@ -52,7 +52,11 @@ def _agent(**kw: Any) -> AgentConfig:
         id="budgeted-agent",
         name="Budgeted Agent",
         model_primary="openrouter/test/model",
-        timeout_seconds=kw.pop("timeout_seconds", 4),
+        # Two seconds, not four. Only the three tests that deliberately use
+        # REAL time read this — the rest drive `_budget_clock` — and for those
+        # three the outcome is inevitable rather than raced, so the number only
+        # decides how long the suite waits to watch it happen.
+        timeout_seconds=kw.pop("timeout_seconds", 2),
         delivery_mode=DeliveryMode.NONE,
         planning_enabled=False,
         scratchpad_enabled=False,
@@ -86,6 +90,12 @@ def _tool_call(i: int, name: str = "exec"):
     return call
 
 
+#: Budget seconds each model call spends. With a 1200s budget and the rung at
+#: 50 %, three calls cross the whole ladder: turns 0 and 1 below it, turn 2
+#: above it, and the fourth look expires the run.
+_STEP = 400
+
+
 class _Clock:
     """A budget clock the test moves by hand. Nothing here waits on the real one."""
 
@@ -97,6 +107,28 @@ class _Clock:
 
     def advance(self, seconds: float) -> None:
         self.t += seconds
+
+
+@contextlib.contextmanager
+def _without_step_persistence():
+    """Take the per-iteration database write out of these tests.
+
+    The subject here is the loop's budget ladder, not persistence. Leaving the
+    write in made the outcome depend on whether a database happens to be
+    running: `flush_new_steps_sync` goes through `tracking.create_steps_batch`,
+    which is wrapped in `retry.py`'s exponential backoff — so on a machine
+    with no database each iteration SLEEPS through its retries. Measured here:
+    ~0.12s per iteration with PostgreSQL up, ~3.6s with it down. CI has no
+    database, which is why twelve iterations sailed past pytest-timeout's 30s
+    there and took a second and a half on this box.
+
+    Patched at the session, not at the connection: refusing connections makes
+    every other best-effort caller retry too, which was slower still.
+    """
+    from robothor.engine.session import AgentSession
+
+    with patch.object(AgentSession, "flush_new_steps_sync", lambda self: 0):
+        yield
 
 
 @contextlib.contextmanager
@@ -115,6 +147,12 @@ def _budget_clock(seconds: int = 1200, fraction: float = 0.5):
 
     So the clock advances only where this test says it does — once per model
     call — and the rung is crossed at a turn number, not at a second.
+
+    The step is sized so the whole ladder takes THREE model calls: turns 0 and
+    1 below the rung, turn 2 above it, and the fourth look expires the run.
+    Twelve turns was the first cut and it was four times the work for the same
+    assertion — and on a machine with no database, four times a cost that is
+    not this test's subject.
     """
     from robothor.engine.run_deadline import BudgetStop, RunBudget
 
@@ -144,6 +182,7 @@ def _every_other_layer_dead(llm):
         patch("robothor.engine.runner.update_run"),
         patch("robothor.engine.run_finalizer.create_step"),
         patch("litellm.acompletion", side_effect=llm),
+        _without_step_persistence(),
     ):
         yield
 
@@ -158,7 +197,7 @@ class TestTheBudgetEndsTheRun:
             async def endless(**_kw):
                 nonlocal calls
                 calls += 1
-                clock.advance(100)
+                clock.advance(_STEP)
                 return _response(tool_calls=[_tool_call(calls)])
 
             runner.registry.execute = AsyncMock(return_value={"content": "ok"})
@@ -167,7 +206,7 @@ class TestTheBudgetEndsTheRun:
                     runner.execute("budgeted-agent", "work forever", agent_config=_agent()),
                     timeout=120,
                 )
-        assert calls == 12, f"the budget was not spent where the arithmetic says: {calls}"
+        assert calls == 3, f"the budget was not spent where the arithmetic says: {calls}"
         assert run.budget_exhausted is True
         assert "budget" in (run.error_message or "").lower()
         # `budget_exhausted` is the FIELD, not a new status — the same shape
@@ -183,7 +222,7 @@ class TestTheBudgetEndsTheRun:
         with _budget_clock() as clock:
 
             async def endless(**_kw):
-                clock.advance(100)
+                clock.advance(_STEP)
                 return _response(tool_calls=[_tool_call(1)])
 
             runner.registry.execute = AsyncMock(return_value={"content": "ok"})
@@ -239,8 +278,8 @@ class TestTheBudgetEndsTheRun:
     async def test_wrapup_takes_the_exploring_tools_away(self, runner) -> None:
         """At the wrap-up rung the model keeps writing and loses `exec`.
 
-        1200s budget, wrap-up at 50 %, 100s of budget spent per model call —
-        so the rung is crossed at turn 6 and the budget at turn 12, by
+        1200s budget, wrap-up at 50 %, 400s of budget spent per model call —
+        so the rung is crossed at turn 2 and the budget at turn 3, by
         arithmetic rather than by how fast the box is.
         """
         seen: list[list[str]] = []
@@ -251,7 +290,7 @@ class TestTheBudgetEndsTheRun:
                 seen.append(
                     [s["function"]["name"] for s in (kw.get("tools") or []) if "function" in s]
                 )
-                clock.advance(100)
+                clock.advance(_STEP)
                 return _response(tool_calls=[_tool_call(len(seen))])
 
             runner.registry.execute = AsyncMock(return_value={"content": "ok"})
@@ -260,9 +299,9 @@ class TestTheBudgetEndsTheRun:
                     runner.execute("budgeted-agent", "work forever", agent_config=_agent()),
                     timeout=120,
                 )
-        assert len(seen) == 12, f"the ladder was not crossed where the arithmetic says: {len(seen)}"
-        assert all("exec" in turn for turn in seen[:6]), "the full tool set before the rung"
-        assert all("exec" not in turn for turn in seen[6:]), "wrap-up never narrowed the tools"
+        assert len(seen) == 3, f"the ladder was not crossed where the arithmetic says: {len(seen)}"
+        assert all("exec" in turn for turn in seen[:2]), "the full tool set before the rung"
+        assert all("exec" not in turn for turn in seen[2:]), "wrap-up never narrowed the tools"
         assert all("write_file" in turn for turn in seen), "wrap-up took away the ability to write"
 
     @pytest.mark.asyncio
@@ -286,7 +325,7 @@ class TestTheBudgetEndsTheRun:
             async def always_asks_for_exec(**kw):
                 names = {s["function"]["name"] for s in (kw.get("tools") or []) if "function" in s}
                 offered.append("exec" in names)
-                clock.advance(100)
+                clock.advance(_STEP)
                 return _response(tool_calls=[_tool_call(len(offered))])
 
             runner.registry.execute = AsyncMock(side_effect=_execute)
@@ -296,8 +335,8 @@ class TestTheBudgetEndsTheRun:
                     timeout=120,
                 )
         narrowed = [i for i, had in enumerate(offered) if not had]
-        assert narrowed == list(range(6, len(offered))), (
-            f"the rung was not crossed at turn 6: {narrowed}"
+        assert narrowed == list(range(2, len(offered))), (
+            f"the rung was not crossed at turn 2: {narrowed}"
         )
         assert executed, "no `exec` ran at all before wrap-up — the test proves nothing"
         assert not set(executed) & set(narrowed), (
