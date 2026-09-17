@@ -230,17 +230,18 @@ def append_engine_note(session: Any, note: str | None, workspace: str | Path | N
             comparison = contract_checkin_note(text, workspace)
             if comparison:
                 note = f"{note}\n{comparison}"
+    session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": note})
     with contextlib.suppress(Exception):
         # What the run has not finished reading, and what it changed without
-        # looking again. Rides on the note that is already going out rather
-        # than becoming a fourth interruption of its own — and each entry is
+        # looking again. Delivered at the same MOMENT as the note above, and
+        # each as its own message: folded into the pacing text, the measured
+        # run read "decide NOW what to deliver … read it again before you
+        # write" as one instruction, and it was the first. Each entry is still
         # quoted at most once, so this cannot turn into nagging.
-        from robothor.engine.observation_notes import observation_notes
+        from robothor.engine.observation_notes import observation_note_parts
 
-        observations = observation_notes(session)
-        if observations:
-            note = f"{note}\n{observations}"
-    session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": note})
+        for observation in observation_note_parts(session):
+            session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": observation})
 
 
 def nudge_for_missing_deliverable(session: Any, workspace: str | Path | None = None) -> bool:

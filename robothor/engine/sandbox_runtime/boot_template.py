@@ -7,7 +7,7 @@ HERE, beside ``genus_tools.py``, because the two files copied into a sandbox
 are one subject — and because ninety lines of in-sandbox source inside the
 handler is the shape the client module was deliberately not written in.
 
-It does three things the engine cannot do from outside:
+It does four things the engine cannot do from outside:
 
 * puts the per-call directory on ``sys.path`` (``-I`` deliberately leaves it
   off) so ``genus_tools`` is importable and nothing else the venv holds is on
@@ -16,6 +16,9 @@ It does three things the engine cannot do from outside:
   snippet can filter ``sys.meta_path`` in one line — and not the boundary,
   which is that the child's environment holds nothing worth importing the
   engine for;
+* installs the outbound-HTTP recorder (``http_recorder.py``, copied beside
+  it) so a write the snippet makes with ``urllib`` is as visible to the
+  engine's unread-response check as one made through ``genus_tools``;
 * kills what the snippet started, on the way out, FROM INSIDE. The engine also
   kills (the process group, plus the descendants its census saw) but the engine
   can only sample: a snippet that spawns fifteen detached children and exits
@@ -69,6 +72,17 @@ class _RefuseEngineImports:
 
 
 sys.meta_path.insert(0, _RefuseEngineImports())
+
+# Record the HTTP the snippet makes on its own — through urllib, requests or
+# http.client directly — so the engine can count the state-changing responses
+# it never printed, exactly as it counts the proxied ones. Fail-open: a
+# recorder that cannot install records nothing and the snippet runs unchanged.
+try:
+    import {recorder} as _genus_http
+
+    _genus_http.install(os.path.join(_DIR, {record_file!r}))
+except Exception:
+    pass
 
 
 def _descendants():

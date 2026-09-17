@@ -43,7 +43,9 @@ from typing import Any
 from robothor.engine.act_observe import (
     CHANGE,
     READ,
+    SAFE_METHODS,
     classify,
+    http_origin,
     remote_tokens,
     source_tokens,
 )
@@ -131,7 +133,12 @@ class ObservationLedger:
     quoted: set[tuple[int, str]] = field(default_factory=set)
     #: Step numbers of reads, with what they read, newest last.
     reads: list[tuple[int, frozenset[str]]] = field(default_factory=list)
+    #: The mid-run NOTE (a nudge, at most once) and the stop-time HOLD (the
+    #: guarantee, at most once) are separate latches. One latch for both is
+    #: how the measured run was told once, inside a deadline blob, and then
+    #: allowed to finish without looking.
     change_note_given: bool = False
+    change_hold_used: bool = False
     holds_used: int = 0
 
     # ── recording ───────────────────────────────────────────────────────
@@ -148,6 +155,16 @@ class ObservationLedger:
         if isinstance(output, dict) and output.get("error"):
             return
         sources = source_tokens(args)
+        # What the sandbox recorder SAW outranks what the snippet's text
+        # suggests: a snippet whose writes went through `urllib` is classified
+        # from its actual requests, against their origin, not from a regex
+        # over its source. The heuristic still speaks when the recorder saw no
+        # write — a `subprocess.run(["curl", "-X", "POST", …])` is invisible
+        # to an `http.client` hook and visible to the verb regex.
+        if self._record_recorded_http(step, tool, output):
+            self._resolve(tool, args, sources, output)
+            self._register_truncations(step, tool, sources, output)
+            return
         kind = classify(tool, args, _read_only())
         if kind == READ:
             self.reads.append((step, sources))
@@ -166,6 +183,41 @@ class ObservationLedger:
         # manufactures a false statement is worse than one that is silent.
         self._resolve(tool, args, sources, output)
         self._register_truncations(step, tool, sources, output)
+
+    def _record_recorded_http(self, step: int, tool: str, output: Any) -> bool:
+        """The HTTP a snippet made on its own, as its `execute_code` result
+        reports it (`http_calls`, from the in-sandbox recorder). True when at
+        least one accepted write was recorded — the caller then skips the text
+        heuristic for this step, because the recorder is the better witness.
+
+        Reads are recorded against the origin AND the URL. A write is recorded
+        against the origin only, and not at all when a later call IN THE SAME
+        SNIPPET read that origin back: both calls share one step number, so the
+        "later read" rule below could not see the order, and a snippet that
+        sends and then lists the inbox has done exactly what the note asks.
+        """
+        calls = output.get("http_calls") if isinstance(output, dict) else None
+        if not isinstance(calls, list) or not calls:
+            return False
+        writes: list[tuple[int, str]] = []
+        reads: list[tuple[int, str]] = []
+        for index, call in enumerate(calls):
+            if not isinstance(call, dict):
+                continue
+            origin = http_origin(str(call.get("url") or ""))
+            if not origin:
+                continue
+            method = str(call.get("method") or "").upper()
+            if method in SAFE_METHODS:
+                reads.append((index, origin))
+                self.reads.append((step, frozenset({origin, str(call.get("url"))})))
+            elif int(call.get("status") or 0) < 400:
+                writes.append((index, origin))
+        for index, origin in writes:
+            if any(i > index and o == origin for i, o in reads):
+                continue
+            self.changes.append(StateChange(step, tool, frozenset({origin})))
+        return bool(writes)
 
     def _register_truncations(
         self, step: int, tool: str, sources: frozenset[str], output: Any
@@ -264,7 +316,7 @@ class ObservationLedger:
             if not later:
                 out.append((change.step, change.tool, change.sources))
                 continue
-            if change.sources and not any(src & change.sources for _s, src in later):
+            if change.sources and not any(_answers(src, change.sources) for _s, src in later):
                 out.append((change.step, change.tool, change.sources))
         return out
 
@@ -318,6 +370,20 @@ def _observed_something(output: Any) -> bool:
         if isinstance(value, (list, dict)) and value:
             return True
     return False
+
+
+def _answers(read: frozenset[str], changed: frozenset[str]) -> bool:
+    """Does a later read answer a change against these sources?
+
+    The same token, or a read anywhere UNDER a changed origin: a write the
+    recorder saw is keyed to ``http://host:port``, and a later
+    ``curl http://host:port/inbox/messages`` is a read of that source in the
+    only sense that matters. A change keyed to a full URL (the `exec`
+    heuristic's) still needs that URL read back, as before.
+    """
+    if read & changed:
+        return True
+    return any(token.startswith(origin.rstrip("/") + "/") for origin in changed for token in read)
 
 
 def _targets(tokens: frozenset[str]) -> frozenset[str]:

@@ -27,6 +27,11 @@ run so it can be tested against a table of names and command strings:
 * :func:`unread_proxy_responses` — how many ``genus_tools`` calls a snippet
   made whose response it never printed. This is the task-5 failure expressed
   as a number the model can see.
+* :func:`raw_http_responses` — the same pairs for the HTTP a snippet made on
+  its OWN, through ``urllib`` or ``requests``, as the sandbox recorder saw it
+  (`sandbox_runtime/http_recorder.py`). Measured 2026-09-17: the rerun of the
+  same task sent everything with ``urllib`` and printed ``OK`` per call, and
+  the proxied count was an honest, useless zero.
 
 Conservative in one direction on purpose: an unrecognised call is ``neither``,
 never ``change``. A false "you changed something" teaches an agent to ignore
@@ -35,8 +40,10 @@ the note, and a note that is ignored is worse than no note.
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
+from urllib.parse import urlsplit
 
 __all__ = [
     "CHANGE",
@@ -45,7 +52,10 @@ __all__ = [
     "READ",
     "WORKSPACE_TOOLS",
     "act_observe_note",
+    "SAFE_METHODS",
     "classify",
+    "http_origin",
+    "raw_http_responses",
     "remote_tokens",
     "response_evidence",
     "source_tokens",
@@ -178,6 +188,10 @@ MIN_EVIDENCE_CHARS = 12
 #: two hundred calls.
 MAX_EVIDENCE_VALUES = 5
 MAX_EVIDENCE_CHARS = 200
+
+#: HTTP methods that change nothing at the other end (RFC 9110 §9.2.1). Every
+#: other method the recorder saw is a state change whose response is evidence.
+SAFE_METHODS: frozenset[str] = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
 def source_tokens(value: Any) -> frozenset[str]:
@@ -316,13 +330,63 @@ def unread_proxy_responses(
         "unread_responses": len(unread),
         "unread_response_tools": names,
         "unread_response_note": (
-            f"{len(unread)} of the {len(responses)} tool calls this snippet made returned a "
+            f"{len(unread)} of the {len(responses)} calls this snippet made returned a "
             "response body the snippet never printed. A call through `genus_tools` keeps its "
             "full response on this run's step ledger whatever you print; a call through "
-            "`urllib` or `curl` keeps only what you print. If a reply, a new record or a "
-            f"follow-up could have come back from {', '.join(names)}, print it and look."
+            "`urllib`, `requests` or `curl` keeps only what you print. If a reply, a new "
+            f"record or a follow-up could have come back from {', '.join(names)}, print it "
+            "and look."
         ),
     }
+
+
+def http_origin(url: str) -> str:
+    """``scheme://host[:port]`` — the SOURCE a recorded call touched.
+
+    The origin rather than the path, because that is what "read that source
+    again" has to mean for a service: a POST to ``/slack/send`` is answered by
+    a GET of ``/slack/messages`` on the same host, and never by another call
+    to ``/slack/send``.
+    """
+    parts = urlsplit(str(url or ""))
+    if not parts.scheme or not parts.netloc:
+        return ""
+    return f"{parts.scheme}://{parts.netloc}"
+
+
+def _is_recorded_write(call: dict[str, Any]) -> bool:
+    """A state-changing method that the service ACCEPTED. A 4xx or 5xx is a
+    refusal — the measured snippet's 429s changed nothing and were retried —
+    and counting one is the false positive that gets a note ignored."""
+    method = str(call.get("method") or "").upper()
+    status = int(call.get("status") or 0)
+    return bool(method) and method not in SAFE_METHODS and status < 400
+
+
+def raw_http_responses(calls: list[dict[str, Any]]) -> list[tuple[str, tuple[str, ...]]]:
+    """``(name, evidence)`` per recorded state-changing call, proxied-shaped.
+
+    The name is ``METHOD url`` so the note can say which call. The evidence is
+    what :func:`response_evidence` would take from the body parsed as JSON —
+    a snippet that printed the parsed dict shows Python's repr, in which the
+    leaf strings still appear — plus the raw head for a body that is not JSON.
+    A body the snippet never read, or one the recorder could not keep as text,
+    yields no evidence and so is never counted (D3: the rule is the same as
+    for a proxied ``{"ok": true}``).
+    """
+    out: list[tuple[str, tuple[str, ...]]] = []
+    for call in calls:
+        if not isinstance(call, dict) or not _is_recorded_write(call):
+            continue
+        body = str(call.get("body") or "")
+        try:
+            # JSON: the leaf strings, and ONLY those — `{"ok": true}` is twelve
+            # characters of nothing to look for, not a body worth flagging.
+            evidence = response_evidence(json.loads(body))
+        except ValueError:
+            evidence = (body[:MAX_EVIDENCE_CHARS],) if len(body) >= MIN_EVIDENCE_CHARS else ()
+        out.append((f"{str(call.get('method')).upper()} {call.get('url')}", evidence))
+    return out
 
 
 def act_observe_note(changes: list[tuple[int, str, frozenset[str]]]) -> str:

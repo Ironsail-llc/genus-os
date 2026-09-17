@@ -18,6 +18,7 @@ silently gone.
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -30,7 +31,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["HARD_CAP_MULTIPLIER", "WORKDIR_NAME", "shape", "spill"]
+__all__ = ["HARD_CAP_MULTIPLIER", "WORKDIR_NAME", "recorded_http_calls", "shape", "spill"]
 
 #: How much more than the model's stdout budget is kept for the spill file.
 #: The spill exists so the agent can page the whole output back, so it has to
@@ -63,8 +64,46 @@ def spill(workspace: Path, stdout: str) -> str:
         return ""
 
 
+def recorded_http_calls(tools_dir: Path) -> list[dict[str, Any]]:
+    """What the in-sandbox recorder saw the snippet do over HTTP, bounded again.
+
+    ``[]`` when the snippet made none, or when there is no record — a recorder
+    that failed to install writes nothing, and nothing is the honest answer.
+    Re-bounded here rather than trusted: the file was written by a process
+    the snippet controlled.
+    """
+    from robothor.engine.sandbox_runtime.http_recorder import (
+        MAX_RECORDED_BODY_CHARS,
+        MAX_RECORDED_CALLS,
+        RECORD_FILE,
+    )
+
+    path = tools_dir / RECORD_FILE
+    if not path.is_file():
+        return []
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    calls: list[dict[str, Any]] = []
+    for item in raw[:MAX_RECORDED_CALLS] if isinstance(raw, list) else []:
+        if not isinstance(item, dict) or not item.get("method") or not item.get("url"):
+            continue
+        calls.append(
+            {
+                "method": str(item["method"])[:16].upper(),
+                "url": str(item["url"])[:2048],
+                "status": int(item.get("status") or 0),
+                "body": str(item.get("body") or "")[:MAX_RECORDED_BODY_CHARS],
+            }
+        )
+    return calls
+
+
 def shape(
-    result: SandboxResult, *, server: Any, workspace: Path, stdout_cap: int
+    result: SandboxResult,
+    *,
+    server: Any,
+    workspace: Path,
+    stdout_cap: int,
+    http_calls: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The result the model reads: bounded, marked, and never silently cut."""
     full_stdout = result.stdout
@@ -100,4 +139,12 @@ def shape(
         )
     if server.calls_served >= server.max_calls:
         shaped["tool_call_limit_reached"] = True
+    if http_calls:
+        # The requests, not the bodies: what the snippet did over the network
+        # on its own, so the model and the observation ledger both see the
+        # writes. The bodies stay out of the context — the point of the
+        # unread-response count is that the snippet should have printed them.
+        shaped["http_calls"] = [
+            {"method": c["method"], "url": c["url"], "status": c["status"]} for c in http_calls
+        ]
     return shaped

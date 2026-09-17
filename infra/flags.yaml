@@ -851,10 +851,16 @@ flags:
       that inbox happened between the first send and the report. The grader
       scored `output_quality` 1.0 and `severity_accuracy` 0.0 in the same pass.
 
-      Observe logs what would have been said; enforce says it once at a
-      deliverable check-in. It blocks nothing on any rung — "look again" is
-      advice, and an agent that has genuinely finished has to be able to
-      finish. The classification reuses
+      Observe logs what would have been said; enforce says it as its own
+      message — once at a check-in or deadline rung if one comes round, and
+      once more as a one-turn hold when the run tries to stop with the source
+      still unread (2026-09-17: the rerun got the note inside the 50% deadline
+      blob, ignored it, and the stop path, latched on the same flag, was
+      silent). It blocks nothing on any rung — "look again" is advice, and an
+      agent that has genuinely finished has to be able to finish. The same
+      rerun sent everything with `urllib` inside `execute_code`, so the
+      sandbox now records the snippet's own HTTP and the unread-response
+      count covers it. The classification reuses
       `tools/read_only.declared_read_only_tools`, the same table the parallel
       planner trusts, so the two controls cannot disagree about whether a tool
       writes.

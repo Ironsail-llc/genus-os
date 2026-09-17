@@ -710,10 +710,11 @@ def act_observe_mode() -> ObservationMode:
     inbox it had just changed, and wrote a report the grader scored 1.0 for
     quality and 0.0 for accuracy.
 
-    ``observe`` (default) logs what would have been said; ``enforce`` says it,
-    once per run, at a deliverable check-in. Nothing is ever blocked by it —
-    "look again" is advice, and an agent that has genuinely finished must be
-    able to finish.
+    ``observe`` (default) logs what would have been said; ``enforce`` says it
+    as its own message — a note at most once mid-run, and a one-turn hold at
+    most once when the run tries to stop with the source still unread, each
+    on its own latch. Nothing is ever blocked by it — "look again" is advice,
+    and an agent that has genuinely finished must be able to finish.
     """
     return _observation_mode("ROBOTHOR_ACT_OBSERVE_MODE")
 
