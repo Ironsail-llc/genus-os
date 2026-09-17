@@ -39,7 +39,14 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from robothor.engine.act_observe import CHANGE, READ, act_observe_note, classify, source_tokens
+from robothor.engine.act_observe import (
+    CHANGE,
+    READ,
+    act_observe_note,
+    classify,
+    remote_tokens,
+    source_tokens,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +150,11 @@ class ObservationLedger:
             self.reads.append((step, sources))
             self._resolve_by_read(step, tool, args, sources, output)
         elif kind == CHANGE:
-            self.changes.append(StateChange(step, tool, sources))
+            # The REMOTE ones only. A change is recorded so the note can say
+            # "you have not read THAT source since", and the answer has to be
+            # somewhere the agent could go and look — not the run's own
+            # scratch paths, which reading again would tell it nothing.
+            self.changes.append(StateChange(step, tool, remote_tokens(args)))
         self._register_truncations(step, tool, sources, output)
 
     def _register_truncations(

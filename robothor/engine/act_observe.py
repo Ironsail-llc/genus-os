@@ -40,10 +40,13 @@ from typing import Any
 
 __all__ = [
     "CHANGE",
+    "CHANGE_TOOLS",
     "NEITHER",
     "READ",
+    "WORKSPACE_TOOLS",
     "act_observe_note",
     "classify",
+    "remote_tokens",
     "response_evidence",
     "source_tokens",
     "unread_proxy_responses",
@@ -84,6 +87,80 @@ _FETCHING_SHELL = re.compile(
 #: hostile input (the rule `deliverable_extract` records five findings for).
 _TOKEN = re.compile(r"[A-Za-z0-9._~:/?#@!$&'*+,;=%-]{4,200}")
 
+#: What makes a token a source somewhere OTHER than this workspace: a scheme,
+#: or a dotted host with a path. A filesystem path is deliberately excluded —
+#: see :func:`remote_tokens`.
+_REMOTE = re.compile(
+    r"^[a-z][a-z0-9+.\-]{1,15}://"
+    r"|^(?:[a-z0-9-]{1,63}\.){1,4}[a-z]{2,24}(?::\d{1,5})?/"
+    # A bare `host:port/path` with no dot and no scheme. This alternative is
+    # not decoration: the mock services every graded task talks to are reached
+    # as `localhost:9110/...`, and without it the one workload this control was
+    # built for would classify as touching nothing.
+    r"|^[a-z0-9-]{1,63}:\d{1,5}/",
+    re.IGNORECASE,
+)
+
+#: Tools whose only target is this run's own workspace or its own bookkeeping.
+#: They are absent from the read-only table because they WRITE, and they are
+#: here because what they write is the run's own output — changing it
+#: invalidates no earlier observation. Closed and short on purpose; anything
+#: not listed falls through to the target test below, which answers NEITHER
+#: for a call that names nothing remote.
+WORKSPACE_TOOLS: frozenset[str] = frozenset(
+    {
+        "write_file",
+        "search_files",
+        "todo_write",
+        "team_scratchpad_read",
+    }
+)
+
+#: Name shapes that reach something outside this run whether or not the
+#: arguments name a host: a person, another agent, a CRM row, a repository, a
+#: real screen. Read as a family rather than a list of tools, so a new
+#: `send_*` or `*_reply` is classified the day it is registered — the drift
+#: `hardcoded-names-drift` records is a hand-maintained list of NAMES, and this
+#: is a rule about shape.
+_CHANGE_PREFIXES: tuple[str, ...] = (
+    "send_",
+    "spawn_",
+    "create_",
+    "update_",
+    "delete_",
+    "merge_",
+    "link_",
+    "store_",
+    "enroll_",
+    "unenroll_",
+    "approve_",
+    "reject_",
+    "resolve_",
+    "ack_",
+    "register_",
+    "desktop_",
+)
+_CHANGE_SUFFIXES: tuple[str, ...] = (
+    "_send",
+    "_write",
+    "_reply",
+    "_modify",
+    "_push",
+    "_commit",
+)
+
+#: And the ones whose name says nothing either way.
+CHANGE_TOOLS: frozenset[str] = frozenset(
+    {
+        "browser",
+        "make_call",
+        "mcp_call_tool",
+        "vault_set",
+        "vault_delete",
+        "federation_trigger",
+    }
+)
+
 #: A response field short enough that seeing it in stdout proves nothing. The
 #: measured snippet printed `sent`; the payload it threw away was a paragraph.
 MIN_EVIDENCE_CHARS = 12
@@ -113,6 +190,23 @@ def source_tokens(value: Any) -> frozenset[str]:
     )
 
 
+def remote_tokens(value: Any) -> frozenset[str]:
+    """The sources in *value* that live somewhere other than this workspace.
+
+    A path is not a source this control has an opinion about.
+    ``/tmp_workspace/results/results.md`` is where the run is asked to put its
+    ANSWER — telling an agent that it changed its own deliverable and should
+    read it again before writing its answer is advice about nothing, and the
+    first cut of this module gave exactly that advice on every WildClaw run,
+    because every one of them writes to an absolute path (hostile review I1).
+
+    Remote means a scheme (``https://``, ``postgres://``) or a dotted host with
+    a path. Nothing else qualifies, and a call that names nothing remote is not
+    a state change this control can say anything useful about.
+    """
+    return frozenset(token for token in source_tokens(value) if _REMOTE.search(token))
+
+
 def classify(tool_name: str, tool_input: dict[str, Any], read_only: frozenset[str]) -> str:
     """``READ``, ``CHANGE`` or ``NEITHER`` for one admitted call.
 
@@ -123,30 +217,35 @@ def classify(tool_name: str, tool_input: dict[str, Any], read_only: frozenset[st
             answer ``parallel_tools`` is given, so the two controls can never
             disagree about whether a tool writes.
 
-    ``NEITHER`` is the honest answer for a call that touches no remote source:
-    writing a local file changes nothing an earlier observation was about.
+    By tool KIND and TARGET, in that order, because neither alone is enough.
+    The platform's read-only table answers "may this run beside another call",
+    which is a different question: ``write_file``, ``todo_write`` and
+    ``tool_search`` are all absent from it and none of them changes anything an
+    earlier observation was about.
+
+    ``NEITHER`` is the honest answer for a call that reaches nothing outside
+    this run, and it is the direction to be wrong in: a false "you changed
+    something" teaches an agent to ignore the note, and a note that is ignored
+    is worse than no note.
     """
     if tool_name in _SHELL_TOOLS:
         program = " ".join(
             str(v) for v in (tool_input or {}).values() if isinstance(v, (str, int, float))
         )
-        if not source_tokens(program):
+        if not remote_tokens(program):
             return NEITHER
         if _MUTATING_SHELL.search(program):
             return CHANGE
         return READ if _FETCHING_SHELL.search(program) else NEITHER
     if tool_name in read_only:
         return READ
-    if not tool_name:
+    if not tool_name or tool_name in WORKSPACE_TOOLS:
         return NEITHER
-    # Absent means WRITE in the platform's classification, and that direction
-    # is the whole point of `tools/read_only.py` — but "write" there means
-    # "may not run beside another call", which includes local-only tools. Only
-    # a call that names a remote source, or one spelled as a send or a spawn,
-    # invalidates an observation.
-    if tool_name.startswith(("send_", "spawn_", "create_", "update_", "delete_")):
+    if tool_name.startswith(_CHANGE_PREFIXES) or tool_name.endswith(_CHANGE_SUFFIXES):
         return CHANGE
-    return CHANGE if source_tokens(tool_input) else NEITHER
+    if tool_name in CHANGE_TOOLS:
+        return CHANGE
+    return CHANGE if remote_tokens(tool_input) else NEITHER
 
 
 def response_evidence(result: Any) -> tuple[str, ...]:

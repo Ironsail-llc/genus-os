@@ -95,6 +95,64 @@ class TestClassification:
         something' teaches an agent to ignore the note."""
         assert classify("todo_write", {"items": []}, READ_ONLY) == NEITHER
 
+    def test_the_runs_own_deliverable_write_is_not_a_state_change(self) -> None:
+        """Hostile review I1. Every WildClaw task writes its answer to an
+        absolute path, `source_tokens` counted anything with a slash, and the
+        note therefore fired on essentially every run telling the agent to go
+        and re-read the file it had just written. Advice about nothing, and an
+        `act_observe` evidence column that is non-zero on every run carries no
+        signal at all."""
+        args = {"path": "/tmp_workspace/results/results.md", "content": "# Report"}
+        assert classify("write_file", args, READ_ONLY) == NEITHER
+
+    def test_a_relative_and_an_absolute_write_classify_the_same(self) -> None:
+        """The first cut answered `neither` for a relative path and `change`
+        for an absolute one — the same call, two answers, decided by spelling."""
+        for path in ("/tmp_workspace/results/results.md", "results/results.md"):
+            assert classify("write_file", {"path": path, "content": "x"}, READ_ONLY) == NEITHER
+
+    @pytest.mark.parametrize(
+        "tool,args",
+        [
+            ("create_task", {"title": "Follow up with the vendor"}),
+            ("update_person", {"person_id": "p1", "email": "someone@example.com"}),
+            ("delete_note", {"note_id": "n1"}),
+            ("resolve_task", {"task_id": "t1"}),
+            ("memory_block_write", {"block": "identity", "content": "x"}),
+            ("gws_gmail_reply", {"thread_id": "t", "body": "ok"}),
+            ("store_memory", {"text": "remember this"}),
+        ],
+    )
+    def test_a_real_crm_or_messaging_write_is_a_state_change(self, tool: str, args: dict) -> None:
+        """None of these names a host in its arguments, so a target-only rule
+        would miss every one of them. The CRM row, the mailbox and the memory
+        block are all state an earlier observation was about."""
+        assert classify(tool, args, READ_ONLY) == CHANGE
+
+    @pytest.mark.parametrize(
+        "tool,args",
+        [
+            ("tool_search", {"query": "email"}),
+            ("skill_view", {"name": "triage"}),
+            ("invoke_skill", {"name": "triage"}),
+            ("search_files", {"pattern": "TODO", "path": "/w/src"}),
+            ("wait_seconds", {"seconds": 5}),
+        ],
+    )
+    def test_a_local_or_meta_call_is_neither(self, tool: str, args: dict) -> None:
+        assert classify(tool, args, READ_ONLY) == NEITHER
+
+    def test_a_local_shell_command_naming_a_path_is_neither(self) -> None:
+        """`wc -l /tmp_workspace/results/results.md` reaches nothing."""
+        args = {"command": "wc -l /tmp_workspace/results/results.md"}
+        assert classify("exec", args, READ_ONLY) == NEITHER
+
+    def test_a_bare_host_and_port_still_counts_as_remote(self) -> None:
+        """The mock services every graded task talks to are reached as
+        `localhost:9110/...` — no dot, and often no scheme."""
+        args = {"command": "curl -s -X POST localhost:9110/inbox/send --data @m.json"}
+        assert classify("exec", args, READ_ONLY) == CHANGE
+
     def test_source_tokens_find_the_endpoint(self) -> None:
         assert API in source_tokens({"command": f"curl -s {API} | head"})
 

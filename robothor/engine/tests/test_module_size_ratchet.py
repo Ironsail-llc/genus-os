@@ -216,13 +216,20 @@ CAPS = {
     # repeat guard and the no-progress detector, neither of which may drag a
     # ladder or a session in with it.
     "robothor/engine/exec_spill.py": 275,
-    "robothor/engine/act_observe.py": 232,
+    # 232 -> 331: classification by tool KIND and TARGET. The first cut asked
+    # only "does this call name something with a slash in it", so every
+    # `write_file` to an absolute path — which is every WildClaw deliverable —
+    # read as a remote state change and the note fired on essentially every run
+    # (hostile review I1). The added lines are three tables and the reasoning
+    # for each; the alternative was a target-only rule that misses every CRM
+    # write, which names no host at all.
+    "robothor/engine/act_observe.py": 331,
     # 469 -> 494: the second hold. `enforce`'s honest completion used to be
     # appended after the runner had already returned, so it reached the
     # transcript and nothing else (hostile review C1). Both holds are real
     # holds now, with a sentence each, and the reasoning for why a False there
     # is inert is written where the next reader will need it.
-    "robothor/engine/observation_ledger.py": 494,
+    "robothor/engine/observation_ledger.py": 505,
     # 265 -> 322: the guardrail row this control writes at finalization on
     # `observe` as well as `enforce`. Without it `flags/evidence.py` would
     # report the one ladder whose promotion depends on watching the evidence as
