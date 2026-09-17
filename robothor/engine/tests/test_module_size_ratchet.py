@@ -215,7 +215,13 @@ CAPS = {
     # matters most — and `exec_spill` in particular has to be importable by the
     # repeat guard and the no-progress detector, neither of which may drag a
     # ladder or a session in with it.
-    "robothor/engine/exec_spill.py": 275,
+    # 275 -> 332: the read-back check resolves a real path instead of matching
+    # a substring. Appending `# .robothor/exec/a__b` to a command used to
+    # switch off the repeat-call guard AND the no-progress detector for the
+    # rest of the run (hostile review I3); qualifying now takes a token outside
+    # a comment, the filename this module writes, the right directory, and a
+    # file that exists.
+    "robothor/engine/exec_spill.py": 332,
     # 232 -> 331: classification by tool KIND and TARGET. The first cut asked
     # only "does this call name something with a slash in it", so every
     # `write_file` to an absolute path — which is every WildClaw deliverable —

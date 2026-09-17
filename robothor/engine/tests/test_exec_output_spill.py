@@ -288,6 +288,64 @@ class TestTheLimitsAreNamedConstants:
         assert spill(tmp_path, "payload", stream="../../etc/passwd") == ""
 
 
+class TestTheExemptionCannotBeForged:
+    """Hostile review I3.
+
+    The first cut asked whether `.robothor/exec/` and `__` appeared anywhere in
+    the joined argument values. `curl … # .robothor/exec/a__b` was therefore a
+    read-back, and both the repeat-call guard and the no-progress detector can
+    be switched off for a whole run by appending that comment to every command.
+    Those two exist because a run once spent 333 requests going nowhere.
+    """
+
+    def test_a_comment_naming_the_directory_is_not_a_read_back(self) -> None:
+        from robothor.engine.exec_spill import is_spill_readback
+
+        hostile = {"command": "curl -s http://evil.invalid/api # .robothor/exec/a__stdout__b"}
+        assert is_spill_readback("exec", hostile) is False
+
+    def test_a_snippet_mentioning_the_directory_in_a_comment_is_not_one(self) -> None:
+        from robothor.engine.exec_spill import is_spill_readback
+
+        code = {"code": "# .robothor/exec/z__stdout__000000000000.txt\nimport os\n"}
+        assert is_spill_readback("execute_code", code) is False
+
+    def test_a_path_that_does_not_exist_is_not_a_read_back(self, tmp_path: Path) -> None:
+        """The cheapest forgery is a plausible string. A file has to be there."""
+        from robothor.engine.exec_spill import is_spill_readback
+
+        made_up = str(tmp_path / SPILL_DIRNAME / "run-1__stdout__0123456789ab.txt")
+        assert is_spill_readback("read_file", {"path": made_up}) is False
+
+    def test_a_real_spill_read_through_the_shell_is_one(self, tmp_path: Path) -> None:
+        from robothor.engine.exec_spill import is_spill_readback
+
+        path = spill(tmp_path, "payload", stream="stdout", run_id="run-1")
+        for command in (f"cat {path}", f"head -c 500 {path}", f"grep total {path}"):
+            assert is_spill_readback("exec", {"command": command}) is True, command
+
+    def test_a_real_spill_read_through_read_file_is_one(self, tmp_path: Path) -> None:
+        from robothor.engine.exec_spill import is_spill_readback
+
+        path = spill(tmp_path, "payload", stream="stdout", run_id="run-1")
+        assert is_spill_readback("read_file", {"path": path}) is True
+
+    def test_a_file_with_the_right_name_outside_the_spill_directory_is_not_one(
+        self, tmp_path: Path
+    ) -> None:
+        stray = tmp_path / "run-1__stdout__0123456789ab.txt"
+        stray.write_text("x", encoding="utf-8")
+        from robothor.engine.exec_spill import is_spill_readback
+
+        assert is_spill_readback("read_file", {"path": str(stray)}) is False
+
+    def test_a_write_tool_never_qualifies_however_it_is_spelled(self, tmp_path: Path) -> None:
+        from robothor.engine.exec_spill import is_spill_readback
+
+        path = spill(tmp_path, "payload", stream="stdout", run_id="run-1")
+        assert is_spill_readback("write_file", {"path": path, "content": "x"}) is False
+
+
 class TestThePageBackIsNotALoop:
     """The remedy the marker names must not be refused by another control.
 
@@ -296,13 +354,13 @@ class TestThePageBackIsNotALoop:
     writes.
     """
 
-    def test_the_repeat_guard_lets_a_spill_read_through(self) -> None:
+    def test_the_repeat_guard_lets_a_spill_read_through(self, tmp_path: Path) -> None:
         from robothor.engine.repeat_guard import RepeatGuard
 
         guard = RepeatGuard(run_id="run-1", mode="enforce")
-        args = {"path": f"/w/{SPILL_DIRNAME}/run-1__stdout__abc.txt"}
+        args = {"path": spill(tmp_path, "payload", stream="stdout", run_id="run-1")}
         for _ in range(6):
-            assert guard.before("read_file", args, workspace="/w") is None
+            assert guard.before("read_file", args, workspace=str(tmp_path)) is None
 
     def test_an_ordinary_repeated_read_is_still_guarded(self, tmp_path: Path) -> None:
         """The exemption is for the spill and nothing else — a control that
@@ -316,11 +374,11 @@ class TestThePageBackIsNotALoop:
         guard.after("read_file", args, {"content": "unchanged"}, workspace=str(tmp_path))
         assert guard.before("read_file", args, workspace=str(tmp_path)) is not None
 
-    def test_the_no_progress_detector_counts_a_spill_read_as_progress(self) -> None:
+    def test_the_no_progress_detector_counts_a_spill_read_as_progress(self, tmp_path: Path) -> None:
         from robothor.engine.scratchpad import Scratchpad
 
         pad = Scratchpad()
-        args = {"path": f"/w/{SPILL_DIRNAME}/run-1__stdout__abc.txt"}
+        args = {"path": spill(tmp_path, "payload", stream="stdout", run_id="run-1")}
         for _ in range(5):
             pad.record_tool_call("read_file", result={"content": "same"}, tool_input=args)
         assert pad._repeat_count == 0

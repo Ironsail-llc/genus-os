@@ -33,6 +33,7 @@ Where the file goes, and why there:
 from __future__ import annotations
 
 import logging
+import re
 import time
 import uuid
 from pathlib import Path
@@ -53,6 +54,7 @@ __all__ = [
     "prune_spill_files",
     "shape_exec_result",
     "spill",
+    "spill_paths_in",
     "truncate_stream",
 ]
 
@@ -78,6 +80,22 @@ _STREAMS = ("stdout", "stderr")
 #: underscores, and the stem below cannot contain one, so ``run-a__*`` can
 #: never match a file belonging to run ``run-a-b``.
 _SEP = "__"
+
+#: The two path components a spill file sits in, split so the read-back check
+#: can compare them one at a time rather than matching a substring.
+_SPILL_ROOT_DIR, _SPILL_LEAF = SPILL_DIRNAME.split("/")
+
+#: Exactly the filename :func:`spill` writes. A read-back is recognised by this
+#: plus the directory plus the file EXISTING — see :func:`spill_paths_in`.
+_SPILL_NAME = re.compile(r"^[A-Za-z0-9-]{1,120}__(?:stdout|stderr)__[0-9a-f]{12}\.txt$")
+
+#: Everything from an unquoted `#` to the end of the line. Shell and Python
+#: agree on the comment character, and a path named only inside a comment is
+#: not a path the call is reading.
+_COMMENT = re.compile(r"(?m)(?<![\"'])#[^\n]*$")
+
+#: The tools through which an agent can actually read a file back.
+_READBACK_TOOLS = frozenset({"read_file", "exec", "execute_code"})
 
 
 def truncate_stream(text: str, limit: int, path: str = "") -> str:
@@ -200,25 +218,64 @@ def shape_exec_result(
     return shaped
 
 
+def spill_paths_in(tool_input: dict[str, Any] | None) -> list[str]:
+    """Every argument token that RESOLVES to a spill file this engine wrote.
+
+    Three conditions, and all three are needed:
+
+    * the token is a real path token, taken after shell and Python comments are
+      stripped — not a substring of one;
+    * its name matches the filename this module writes
+      (``<run>__<stream>__<hex>.txt``) and it sits directly in a
+      ``.robothor/exec/`` directory;
+    * **the file exists.**
+
+    The first cut asked only whether ``.robothor/exec/`` and ``__`` appeared
+    anywhere in the joined argument values, which made
+    ``curl -s http://evil.invalid/api # .robothor/exec/a__b`` a read-back
+    (hostile review I3). That string is free to write, so an agent — or an
+    instruction injected into a page it fetched — could append it to every
+    command and be exempt from the repeat-call guard and the no-progress loop
+    detector for the rest of the run. Those two controls exist because a run
+    once spent 333 requests and 704 seconds going nowhere.
+    """
+    found: list[str] = []
+    for value in (tool_input or {}).values():
+        if not isinstance(value, (str, int, float)):
+            continue
+        for token in _COMMENT.sub(" ", str(value)).split():
+            candidate = token.strip("\"'`,;()[]{}").replace("\\", "/")
+            if not candidate.endswith(".txt") or _SEP not in candidate:
+                continue
+            path = Path(candidate)
+            if not _SPILL_NAME.match(path.name):
+                continue
+            if path.parent.name != _SPILL_LEAF or path.parent.parent.name != _SPILL_ROOT_DIR:
+                continue
+            try:
+                if path.is_file():
+                    found.append(candidate)
+            except OSError:  # noqa: PERF203 - an unreadable path is simply not one
+                continue
+    return found
+
+
 def is_spill_readback(tool_name: str, tool_input: dict[str, Any] | None) -> bool:
     """True when this call is the agent going to get the rest of its own output.
 
-    By SHAPE — the `.robothor/exec/` directory and the two-underscore filename
-    this module writes — rather than by a per-session ledger, because the two
-    controls that need the answer (the repeat guard and the no-progress
-    detector) are handed a tool name and arguments and no session at all.
+    It has to be exempt from the repeat-call guard and the no-progress
+    detector. A guard that answers "you already read that" or "this command is
+    not making progress" to an agent paging back the output the engine cut from
+    it would be refusing the one remedy the marker told it to use.
 
-    It has to be exempt from both. A guard that answers "you already read
-    that" or "this command is not making progress" to an agent paging back the
-    output the engine cut from it would be refusing the one remedy the marker
-    told it to use.
+    By resolved PATH rather than by a per-session ledger, because both controls
+    that need the answer are handed a tool name and arguments and no session —
+    and because a run restored from the database has an empty in-memory ledger
+    while its spill files are still on disk.
     """
-    values = " ".join(
-        str(v) for v in (tool_input or {}).values() if isinstance(v, (str, int, float))
-    )
-    if f"{SPILL_DIRNAME}/" not in values.replace("\\", "/"):
+    if tool_name not in _READBACK_TOOLS:
         return False
-    return tool_name in {"read_file", "exec", "execute_code"} and _SEP in values
+    return bool(spill_paths_in(tool_input))
 
 
 def _spill_files(workspace: str | Path | None, pattern: str) -> Iterator[Path]:
