@@ -109,6 +109,42 @@ def test_db_unreachable_falls_through_to_env(monkeypatch):
     assert store.resolve("ROBOTHOR_RBAC_MODE") == "enforce"
 
 
+def test_valid_values_for_a_value_set_flag_is_its_own_value_set():
+    """A value-set flag is not a rollout ladder: its values are a setting's
+    options. ``ROBOTHOR_CALENDAR_SEND_UPDATES`` names Google's `sendUpdates`
+    audience, and the one posture it exists for — `none` — is not a rung.
+
+    Registry-driven, not a name in an `if`: every surface that has to agree
+    (the Controls API's 422, the value list the page renders, and
+    ``scripts/flag_audit.py``'s effective value) reads the same mapping.
+    """
+    assert store.VALUE_SET_FLAGS["ROBOTHOR_CALENDAR_SEND_UPDATES"] == (
+        "all",
+        "externalOnly",
+        "none",
+    )
+    assert store.valid_values_for("ROBOTHOR_CALENDAR_SEND_UPDATES") == (
+        "all",
+        "externalOnly",
+        "none",
+    )
+    # The ladders are untouched by the registry.
+    assert store.valid_values_for("ROBOTHOR_RBAC_MODE") == ("off", "observe", "alert", "enforce")
+
+
+def test_normalise_keeps_the_case_of_a_value_set_value():
+    """``externalOnly`` is camelCase and ``feature_flags.calendar_send_updates``
+    compares it case-sensitively. Lower-casing it the way a mode ladder is
+    lower-cased made the store hand back ``all`` — a page serving a value the
+    operator did not choose, for the flag whose whole point is that a saved
+    value is honoured."""
+    assert store.normalise("ROBOTHOR_CALENDAR_SEND_UPDATES", "externalOnly") == "externalOnly"
+    assert store.normalise("ROBOTHOR_CALENDAR_SEND_UPDATES", "  none  ") == "none"
+    # Still clamps what the engine would not honour, to what the engine runs.
+    assert store.normalise("ROBOTHOR_CALENDAR_SEND_UPDATES", "externalonly") == "all"
+    assert store.normalise("ROBOTHOR_CALENDAR_SEND_UPDATES", None) == "all"
+
+
 def test_set_flag_writes_audit_and_notifies(flag_store_db):
     store.set_flag("ROBOTHOR_RBAC_MODE", "enforce", actor="operator:alice", reason="promote")
     rows = flag_store_db.audit("ROBOTHOR_RBAC_MODE")

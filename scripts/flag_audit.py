@@ -43,6 +43,7 @@ from __future__ import annotations
 import argparse
 import ast
 import datetime as dt
+import functools
 import json
 import shlex
 import subprocess
@@ -295,6 +296,61 @@ def mode_gate_map(source: Path | None = None) -> dict[str, ModeGate]:
     return gates
 
 
+@functools.lru_cache(maxsize=4)
+def _panic_disabled(source: Path | None = None) -> frozenset[str]:
+    """Cached :func:`panic_disabled_flags` — read once per source, not per flag."""
+    return panic_disabled_flags(source)
+
+
+def panic_disabled_flags(source: Path | None = None) -> frozenset[str]:
+    """Every flag ``ROBOTHOR_DISABLE_ALL_RIPS=1`` actually forces off.
+
+    Derived from the readers, never hand-listed — the same rule
+    :func:`mode_gate_map` follows, and for the same reason: a name list here
+    would drift the day a flag stopped consulting the switch, and the audit
+    would go on reporting it dark.
+
+    The panic switch is NOT global, whatever its name suggests. Two governed
+    flags deliberately ignore it: ``do_not_contact_mode`` says so in its
+    docstring (a compliance opt-out is not new behaviour, and a panic state
+    that mails the people who asked not to be mailed is not a safe state to
+    panic into) and ``calendar_send_updates`` never consults it. Reporting
+    those ``off`` printed a rung neither can hold — and, once the manifest was
+    right, a MISMATCH with it.
+
+    A flag is panic-disabled when it is read either through
+    ``_enforcement_mode`` (whose own body starts ``if _disabled_all() or ...``)
+    or inside a function that consults the switch itself.
+    """
+    path = source or FEATURE_FLAGS_SOURCE
+    tree = ast.parse(path.read_text())
+    out: set[str] = set()
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        consults = False
+        read_here: list[str] = []
+        for call in ast.walk(node):
+            if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
+                continue
+            literals = [a.value for a in call.args if isinstance(a, ast.Constant)]
+            literals = [a for a in literals if isinstance(a, str)]
+            name = call.func.id
+            if name == "_disabled_all":
+                consults = True
+            elif name == "_enforcement_mode" and len(literals) == 2:
+                out.update(literals)  # the helper panics on behalf of its caller
+            elif name in ("_env_bool", "_resolve_raw") and literals:
+                if literals[0] == PANIC_KEY:
+                    consults = True
+                else:
+                    read_here.append(literals[0])
+        if consults:
+            out.update(read_here)
+    return frozenset(out)
+
+
 # ── Effective value ─────────────────────────────────────────────────────────
 
 
@@ -314,6 +370,31 @@ def _valid_values_for(flag: str) -> tuple[str, ...]:
     from robothor.flags.store import valid_values_for
 
     return valid_values_for(flag)
+
+
+def _is_value_set_flag(flag: str) -> bool:
+    """Is this a setting whose values are its own, rather than a mode ladder?
+
+    ``robothor.flags.store.VALUE_SET_FLAGS`` decides, for the same reason
+    :func:`_valid_values_for` asks the store: a flag whose values are
+    ``all``/``externalOnly``/``none`` has no rung to sit on, so reading it
+    through the ladder reports a value it cannot hold.
+    """
+    from robothor.flags.store import VALUE_SET_FLAGS
+
+    return flag in VALUE_SET_FLAGS
+
+
+def _code_default(flag: str) -> str:
+    """What the ENGINE runs for *flag* when no layer sets it.
+
+    ``store.default_value_for`` derives it from the settings registry — the
+    same declaration ``feature_flags`` passes to ``_resolve_raw`` — so the
+    audit cannot invent a default the engine does not have.
+    """
+    from robothor.flags.store import default_value_for
+
+    return default_value_for(flag)
 
 
 def effective_value(
@@ -336,26 +417,52 @@ def effective_value(
     "effective" would report a mode the engine has never run. The raw value is
     not thrown away either: it goes into *notes*, because an /etc line that
     does nothing is precisely what an operator needs told.
+
+    A VALUE-SET flag (``store.VALUE_SET_FLAGS``) is none of that. It is a
+    setting whose values are its own — Google's ``sendUpdates`` audience, say —
+    so it has no ``*_ENABLED`` gate, no rung to default to and no reason to be
+    lower-cased: its reader compares ``externalOnly`` case-sensitively. Unset,
+    it runs its declared code default, and an unrecognised value clamps to that
+    same default rather than to ``observe``, which is a value it cannot hold.
+    Reading one through the ladder is what made a correctly-defaulted setting
+    report ``observe`` and MISMATCH against the manifest every morning.
+
+    The panic switch reaches only the flags the engine panic-disables
+    (:func:`panic_disabled_flags`), and an UN-GATED flag — no ``*_ENABLED``
+    companion, and so no entry in the ``*_MODE``-keyed gate map — falls back to
+    its own code default rather than to the generic ladder's ``observe``.
+    ``ROBOTHOR_PER_USER_SESSIONS`` defaults to ``enforce`` in
+    ``feature_flags.per_user_sessions_mode``; printing ``observe`` for it was
+    printing a rung this instance has never run.
     """
-    if _truthy(resolved.get(PANIC_KEY)):
+    if _truthy(resolved.get(PANIC_KEY)) and flag in _panic_disabled():
         return "off"
     if flag.endswith("_ENABLED"):
         return "true" if _truthy(resolved.get(flag)) else "false"
+    value_set = _is_value_set_flag(flag)
     gate = gates.get(flag)
-    if gate is not None and gate.enabled_var and not _truthy(resolved.get(gate.enabled_var)):
+    if (
+        not value_set
+        and gate is not None
+        and gate.enabled_var
+        and not _truthy(resolved.get(gate.enabled_var))
+    ):
         return "off"
-    raw = (resolved.get(flag) or "").strip().lower()
+    raw = (resolved.get(flag) or "").strip()
+    if not value_set:
+        raw = raw.lower()
+    fallback = gate.default if gate is not None and not value_set else _code_default(flag)
     if not raw:
-        return gate.default if gate is not None else "observe"
+        return fallback
     valid = _valid_values_for(flag)
     if raw not in valid:
         if notes is not None:
             notes.append(
                 f"{flag} is set to '{raw}', which is not one of "
-                f"{', '.join(valid)} — the engine clamps it to 'observe', so that "
+                f"{', '.join(valid)} — the engine clamps it to '{fallback}', so that "
                 "line governs nothing. Fix the value or remove it."
             )
-        return "observe"
+        return fallback
     return raw
 
 
@@ -364,9 +471,15 @@ def expected_from_manifest(flag: str, yaml_mode: str | None) -> str | None:
 
     ``mode: "on"`` in flags.yaml is how a boolean flag spells enabled; the
     engine spells the same state ``true``.
+
+    A value-set flag's mode is spelled in its own values, so it is neither
+    translated nor lower-cased: ``externalOnly`` is the posture, and
+    ``externalonly`` is a value the engine would refuse.
     """
     if yaml_mode is None:
         return None
+    if _is_value_set_flag(flag):
+        return str(yaml_mode).strip()
     mode = str(yaml_mode).strip().lower()
     if flag.endswith("_ENABLED"):
         return {"on": "true", "off": "false", "true": "true", "false": "false"}.get(mode, mode)

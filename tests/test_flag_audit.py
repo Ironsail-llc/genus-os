@@ -139,6 +139,40 @@ def test_panic_flag_forces_every_flag_off():
     assert fa.effective_value("ROBOTHOR_ADMISSION_MODE", resolved, gates) == "off"
 
 
+def test_the_panic_switch_only_reaches_the_flags_the_engine_panics_on():
+    """``ROBOTHOR_DISABLE_ALL_RIPS`` forces off what the ENGINE forces off.
+
+    Two governed flags deliberately ignore it. ``do_not_contact_mode`` says so
+    in as many words — a legal obligation is not new behaviour, and a panic
+    state that mails the people who asked not to be mailed is not a safe state
+    to panic into — and ``calendar_send_updates`` never consults it at all.
+    Reporting them ``off`` printed a rung neither flag can even hold, plus a
+    MISMATCH against a manifest that was right.
+    """
+    gates = fa.mode_gate_map()
+    panicking = {fa.PANIC_KEY: "1"}
+    send_updates = "ROBOTHOR_CALENDAR_SEND_UPDATES"
+
+    assert fa.effective_value("ROBOTHOR_DNC_MODE", panicking, gates) == "enforce"
+    assert fa.effective_value(send_updates, panicking, gates) == "all"
+    assert fa.effective_value(send_updates, {**panicking, send_updates: "none"}, gates) == "none"
+
+    # ...and everything that DOES go through _enforcement_mode still goes dark.
+    rbac = {**panicking, "ROBOTHOR_RBAC_ENABLED": "1", "ROBOTHOR_RBAC_MODE": "enforce"}
+    assert fa.effective_value("ROBOTHOR_RBAC_MODE", rbac, gates) == "off"
+
+
+def test_panic_disabled_flags_are_derived_from_feature_flags_source():
+    """Derived from the reader, never hand-listed — the rule the gate map
+    already follows. A name list here would drift the day a flag stopped
+    consulting the switch, and the audit would keep reporting it dark."""
+    panicked = fa.panic_disabled_flags()
+    assert "ROBOTHOR_RBAC_MODE" in panicked  # via _enforcement_mode
+    assert "ROBOTHOR_RIP_7_MODE" in panicked  # hand-rolled, calls _disabled_all
+    assert "ROBOTHOR_DNC_MODE" not in panicked
+    assert "ROBOTHOR_CALENDAR_SEND_UPDATES" not in panicked
+
+
 # --- the whole audit --------------------------------------------------------
 
 
@@ -147,6 +181,8 @@ def _manifest(tmp_path, entries):
     body = "flags:\n"
     for e in entries:
         body += f'  - name: {e["name"]}\n    owner: ops\n    mode: "{e["mode"]}"\n'
+        if e.get("values"):
+            body += "    values: [" + ", ".join(e["values"]) + "]\n"
         if e.get("planned_promotion"):
             body += f'    planned_promotion: "{e["planned_promotion"]}"\n'
         body += "    soak: s\n"
@@ -1058,6 +1094,115 @@ def test_effective_value_leaves_a_valid_value_alone_and_notes_nothing():
     resolved = {"ROBOTHOR_RIP_13_ENABLED": "1", "ROBOTHOR_RIP_13_MODE": "enforce"}
     assert fa.effective_value("ROBOTHOR_RIP_13_MODE", resolved, gates, notes=notes) == "enforce"
     assert notes == []
+
+
+# --- value-set flags: a setting, not a rollout ladder -----------------------
+#
+# `ROBOTHOR_CALENDAR_SEND_UPDATES` names Google's `sendUpdates` audience —
+# `all` (the code default), `externalOnly`, `none`. Reading it through the
+# generic ladder made a correctly-defaulted setting report `observe` and
+# MISMATCH against the manifest forever, which is the guardrail_watch failure
+# of 2026-09-17. A value-set flag's unset value is its own code default.
+
+VALUE_SET_FLAG = "ROBOTHOR_CALENDAR_SEND_UPDATES"
+SEND_UPDATES_VALUES = ["all", "externalOnly", "none"]
+
+
+def _value_set_manifest(tmp_path):
+    return _manifest(
+        tmp_path,
+        [{"name": VALUE_SET_FLAG, "mode": "all", "values": SEND_UPDATES_VALUES}],
+    )
+
+
+def _audit_value_set(tmp_path, dropin_lines, notes=None):
+    env_file = tmp_path / "robothor.env"
+    env_file.write_text("")
+    dropin = _dropin(tmp_path, dropin_lines) if dropin_lines else tmp_path / "none"
+    rows = fa.audit(
+        flags_yaml=_value_set_manifest(tmp_path),
+        env_file=env_file,
+        dropin_dir=dropin,
+        environ_path=tmp_path / "none",
+        db=None,
+        today=TODAY,
+        notes=notes,
+    )
+    return next(r for r in rows if r.flag == VALUE_SET_FLAG), rows
+
+
+def test_an_unset_value_set_flag_is_its_code_default_not_observe(tmp_path):
+    """Nothing sets it, so the engine runs its declared default — `all`.
+
+    Reporting `observe` here is reporting a value the flag cannot hold: the
+    manifest says `all`, the engine runs `all`, and the audit said they
+    disagreed every morning.
+    """
+    row, rows = _audit_value_set(tmp_path, [])
+    assert row.effective == "all"
+    assert row.layer == "code-default"
+    assert "MISMATCH" not in row.tags
+    assert not fa.has_drift(rows)
+
+
+def test_a_value_set_flag_keeps_the_case_of_the_value_it_is_given(tmp_path):
+    """`externalOnly` is camelCase and the engine compares it case-sensitively.
+
+    Lower-casing it the way a mode ladder is lower-cased turns a legitimate
+    posture into an out-of-range value the audit reports as dead.
+    """
+    row, rows = _audit_value_set(tmp_path, [f"{VALUE_SET_FLAG}=externalOnly"])
+    assert row.effective == "externalOnly"
+    assert row.layer == "dropin"
+
+
+def test_a_bogus_value_set_value_is_clamped_to_the_code_default_and_reported(tmp_path):
+    """The engine falls back to `all` and logs; the audit must say the same and
+    print the dead line rather than silently agreeing with the manifest."""
+    notes: list[str] = []
+    row, _ = _audit_value_set(tmp_path, [f"{VALUE_SET_FLAG}=bogus"], notes=notes)
+    assert row.effective == "all"
+    assert any(VALUE_SET_FLAG in n and "bogus" in n for n in notes), notes
+    assert any("all" in n for n in notes), "the note must name what the engine clamps to"
+
+
+def test_an_ungated_single_var_flag_is_its_code_default_not_observe(tmp_path):
+    """``ROBOTHOR_PER_USER_SESSIONS`` has no ``*_ENABLED`` companion and no rung
+    to fall back to except its own: ``per_user_sessions_mode`` defaults it to
+    ``enforce``, because a typo must not silently re-open the session-ownership
+    hole. With nothing set, ``observe`` is a value the engine never ran, and the
+    manifest — which correctly says ``enforce`` — MISMATCHed against it.
+
+    The gate map only carries ``*_MODE`` names, so every single-variable flag
+    landed on the generic ladder's ``observe``. The code default is the one
+    answer, and ``store.default_value_for`` derives it from the same settings
+    declaration the engine reads.
+    """
+    manifest = _manifest(tmp_path, [{"name": "ROBOTHOR_PER_USER_SESSIONS", "mode": "enforce"}])
+    env_file = tmp_path / "robothor.env"
+    env_file.write_text("")
+    rows = fa.audit(
+        flags_yaml=manifest,
+        env_file=env_file,
+        dropin_dir=tmp_path / "none",
+        environ_path=tmp_path / "none",
+        db=None,
+        today=TODAY,
+    )
+    row = next(r for r in rows if r.flag == "ROBOTHOR_PER_USER_SESSIONS")
+    assert row.effective == "enforce"
+    assert row.layer == "code-default"
+    assert "MISMATCH" not in row.tags
+
+    # A GATED ladder flag is unaffected: no *_ENABLED companion still means off.
+    gates = fa.mode_gate_map()
+    assert fa.effective_value("ROBOTHOR_ADMISSION_MODE", {}, gates) == "off"
+
+
+def test_effective_value_of_a_value_set_flag_ignores_the_mode_ladder():
+    gates = fa.mode_gate_map()
+    assert fa.effective_value(VALUE_SET_FLAG, {}, gates) == "all"
+    assert fa.effective_value(VALUE_SET_FLAG, {VALUE_SET_FLAG: "none"}, gates) == "none"
 
 
 def test_cli_notes_the_raw_value_of_a_clamped_flag(tmp_path, capsys):

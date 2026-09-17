@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import datetime as dt
 import importlib.util
+import sys
 from pathlib import Path
 
 import yaml
@@ -24,6 +25,18 @@ spec = importlib.util.spec_from_file_location(
 )
 guardrail_watch = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(spec and guardrail_watch)
+
+# The audit's own drop-in parser, reused rather than re-implemented: it splits a
+# directive the way systemd does (shlex), so a quoted or multi-assignment pin
+# cannot walk past the mirror test below.
+_fa_spec = importlib.util.spec_from_file_location(
+    "flag_audit", REPO_ROOT / "scripts" / "flag_audit.py"
+)
+flag_audit = importlib.util.module_from_spec(_fa_spec)
+# Registered before exec: @dataclass resolves its own module out of sys.modules,
+# and a spec-loaded script that never lands there raises on the first one.
+sys.modules["flag_audit"] = flag_audit
+_fa_spec.loader.exec_module(flag_audit)
 
 
 def test_manifest_exists_and_parses():
@@ -57,7 +70,15 @@ def test_manifest_entries_have_required_fields():
     for entry in data["flags"]:
         for field in ("name", "owner", "mode", "soak"):
             assert field in entry, f"{entry.get('name', entry)} missing {field!r}"
-        assert entry["mode"] in ("off", "observe", "alert", "enforce", "on"), entry["name"]
+        if entry.get("values"):
+            # A value-set flag is a setting, not a rollout ladder: its `mode` is
+            # the posture production runs, spelled in its OWN values.
+            assert entry["mode"] in entry["values"], (
+                f"{entry['name']}: mode {entry['mode']!r} is not one of its "
+                f"declared values {entry['values']}"
+            )
+        else:
+            assert entry["mode"] in ("off", "observe", "alert", "enforce", "on"), entry["name"]
         # every non-terminal flag must carry a promotion deadline, or say in
         # `promotion:` why it will never have one
         if entry["mode"] in ("observe", "alert"):
@@ -184,3 +205,90 @@ def test_manifest_modes_match_dropin_mirror():
             )
             checked += 1
     assert checked >= 5, "expected several *_MODE flags in the drop-in"
+
+
+#: The engine's versioned drop-in directory — every ``*.conf`` systemd loads,
+#: not just the flags file, because that is what reaches the process.
+DROPIN_DIR = REPO_ROOT / "infra" / "systemd" / "robothor-engine.service.d"
+
+
+def dropin_environment(path: Path = DROPIN_DIR) -> dict[str, str]:
+    """Every ``Environment=NAME=VALUE`` in the versioned drop-in mirror.
+
+    Parsed by ``scripts/flag_audit.py::parse_dropin_dir`` rather than by a
+    second parser here. systemd splits a directive with shell-like word
+    splitting, so ``Environment=A=1 B=2`` and ``Environment="A=1" "B=2"`` each
+    set TWO variables; a ``partition("=")`` of the line reads the first as one
+    flag whose value is ``1 B=2`` and never sees the second. A mirror test that
+    cannot see a pin is a mirror test a pin can walk past.
+    """
+    return flag_audit.parse_dropin_dir(path)
+
+
+def test_dropin_environment_reads_systemd_assignments_the_way_systemd_does(tmp_path):
+    (tmp_path / "flags.conf").write_text(
+        "[Service]\n"
+        "Environment=ROBOTHOR_A_MODE=enforce ROBOTHOR_B_MODE=observe\n"
+        'Environment="ROBOTHOR_C_MODE=enforce" "ROBOTHOR_D_MODE=off"\n'
+    )
+    assert dropin_environment(tmp_path) == {
+        "ROBOTHOR_A_MODE": "enforce",
+        "ROBOTHOR_B_MODE": "observe",
+        "ROBOTHOR_C_MODE": "enforce",
+        "ROBOTHOR_D_MODE": "off",
+    }
+
+
+def test_enforced_flags_are_pinned_in_the_versioned_dropin():
+    """A flag the manifest records at ``enforce`` must be SET in the drop-in.
+
+    The manifest records intent and sets nothing at runtime, so a posture that
+    exists nowhere versioned is governed by whatever unversioned layer happens
+    to carry it — ``/etc/robothor/robothor.env``, which systemd applies AFTER
+    the drop-in. A flip applied to the drop-in then does nothing, a rebuilt box
+    comes up without the control, and ``flag_audit.py`` tags it
+    ``SHADOW-LAYER:envfile`` every morning. That is exactly what
+    ``ROBOTHOR_PER_USER_SESSIONS`` did from the day it shipped until 2026-09-17.
+
+    A matching code default is not a substitute: it is the platform's opinion
+    about a fresh install, not this instance's recorded posture, and a later
+    refactor can move it without touching the manifest.
+    """
+    data = yaml.safe_load(MANIFEST.read_text())
+    dropin = dropin_environment()
+    enforced = [e["name"] for e in data["flags"] if str(e["mode"]) == "enforce"]
+    missing = [name for name in enforced if name not in dropin]
+    assert not missing, (
+        f"manifest says enforce but the drop-in sets nothing: {missing}. Add "
+        "Environment=<FLAG>=enforce to "
+        "infra/systemd/robothor-engine.service.d/upgrade-rip-flags.conf"
+    )
+    disagree = {name: dropin[name] for name in enforced if dropin[name] != "enforce"}
+    assert not disagree, f"drop-in value != the manifest's enforce: {disagree}"
+
+
+def test_value_set_flags_declare_the_values_the_engine_accepts():
+    """A flag whose values are a setting's options, not a rollout ladder,
+    declares them with ``values:`` — and they must be exactly what
+    ``robothor.flags.store.valid_values_for`` returns.
+
+    Both halves matter. Without the declaration, every reader of the manifest
+    (``flag_audit.py`` above all) has to guess at the four-rung ladder, and
+    ``ROBOTHOR_CALENDAR_SEND_UPDATES`` — correctly sitting on its `all` default
+    — read as `observe` and MISMATCHed forever. Without the mirror, the manifest
+    could offer an operator a value the Controls API would refuse with a 422.
+    """
+    from robothor.flags.store import VALUE_SET_FLAGS, valid_values_for
+
+    data = yaml.safe_load(MANIFEST.read_text())
+    declared = {e["name"]: list(e["values"]) for e in data["flags"] if e.get("values")}
+    assert declared, "no value-set flag declared in the manifest"
+    for name, values in declared.items():
+        assert values == list(valid_values_for(name)), (
+            f"{name}: manifest values {values} != store.valid_values_for "
+            f"{list(valid_values_for(name))}"
+        )
+    assert set(declared) == set(VALUE_SET_FLAGS), (
+        "every value-set flag the store knows about must say so in the "
+        f"manifest: store={sorted(VALUE_SET_FLAGS)} manifest={sorted(declared)}"
+    )
