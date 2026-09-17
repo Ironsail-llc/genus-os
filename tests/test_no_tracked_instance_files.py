@@ -176,3 +176,43 @@ def test_the_instance_skills_directory_is_gitignored():
         "brain/skills/ is where agents write their skills and is not gitignored; "
         "a checkout used as a workspace would commit them"
     )
+
+
+def test_every_bundled_skill_has_a_meta_that_claims_it():
+    """A bundled skill with no meta.json at all is not a safe silence.
+
+    ``migrate-instance`` walks SKILL.md and can only place what says whose it
+    is, so a meta-less bundled skill lands in ``needs-review`` on every run --
+    a permanent finding for a directory that is never going to move, which is
+    how an operator learns to read past the bucket that exists to catch a real
+    stray. One line of metadata per skill retires the whole class.
+    """
+    import json
+
+    from robothor.engine.skills import PLATFORM_ORIGIN
+
+    if not (REPO_ROOT / ".git").exists():
+        pytest.skip("not a git checkout — nothing to ls-files against")
+
+    tracked = subprocess.run(
+        ["git", "ls-files", "agents/skills/"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+    skills = {line.split("/")[2] for line in tracked if line.endswith("/SKILL.md")}
+    metas = {line.split("/")[2] for line in tracked if line.endswith("/meta.json")}
+
+    missing = sorted(skills - metas)
+    assert not missing, (
+        "these bundled skills carry no meta.json, so nothing records that the "
+        'platform owns them — add `{"origin": "platform"}`: ' + str(missing)
+    )
+
+    unmarked = []
+    for name in sorted(skills):
+        meta = json.loads((REPO_ROOT / "agents" / "skills" / name / "meta.json").read_text())
+        if meta.get("origin") != PLATFORM_ORIGIN:
+            unmarked.append(name)
+    assert not unmarked, f"bundled skills whose meta.json does not say origin=platform: {unmarked}"

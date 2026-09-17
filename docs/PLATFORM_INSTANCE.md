@@ -163,9 +163,14 @@ agent reads something else. So it is never a side effect:
 
 `genus doctor --only skills.instance_dir` is the one with teeth. It fails if
 `ROBOTHOR_INSTANCE_SKILLS_DIR` points back inside `agents/skills/` (which would
-recreate this whole defect) or outside the workspace (where no snapshot would
-carry it). `.gitignore` covers the default instance directory, `brain/skills/`;
-that check is what covers an override.
+recreate this whole defect), outside the workspace (where no snapshot would
+carry it), or — when the workspace is a checkout — at a directory the checkout
+does not ignore, which `<workspace>/docs/skills` would be: inside the
+workspace, outside `agents/`, and still one `add -A` from the repository. It
+asks the checkout with `check-ignore` rather than re-reading the ignore rules,
+and says nothing when the workspace is not a checkout. `.gitignore` covers the
+default instance directory, `brain/skills/`; that check is what covers an
+override.
 
 Which layer a skill belongs to is recorded in its `meta.json` as
 `"origin": "instance" | "platform"`. Two things read it:

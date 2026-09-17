@@ -668,3 +668,46 @@ class TestSmallerRepairs:
         state = read_skill_state("legacy-instance")
         assert state is not None
         assert state["usage_count"] == 7
+
+
+class TestOnePayloadOneAnswer:
+    """`skill_view` used to say `origin: instance` and `is_agent_created: False`
+    in the same breath. Both fields answer "whose skill is this"; they are now
+    derived from the same marker, the way `list_skills` already does it."""
+
+    @pytest.mark.asyncio
+    async def test_an_overlay_does_not_contradict_itself(self, workspace):
+        from robothor.engine.tools.handlers.skills import _skill_view
+
+        _write_skill(workspace / "agents" / "skills", "escalate", meta={"origin": "platform"})
+        _write_skill(
+            workspace / "brain" / "skills",
+            "escalate",
+            meta={"origin": "instance", "revision": 2},
+        )
+
+        view = await _skill_view({"name": "escalate"}, _FakeCtx())
+        assert view["origin"] == "instance"
+        assert view["is_agent_created"] is True
+
+    @pytest.mark.asyncio
+    async def test_a_bundled_skill_is_not_agent_created(self, workspace):
+        from robothor.engine.tools.handlers.skills import _skill_view
+
+        _write_skill(workspace / "agents" / "skills", "escalate", meta={"origin": "platform"})
+        view = await _skill_view({"name": "escalate"}, _FakeCtx())
+        assert view["origin"] == "platform"
+        assert view["is_agent_created"] is False
+
+    @pytest.mark.asyncio
+    async def test_the_two_surfaces_agree(self, workspace):
+        from robothor.engine.tools.handlers.skills import _list_skills, _skill_view
+
+        _write_skill(workspace / "brain" / "skills", "own-one", meta={"origin": "instance"})
+
+        row = next(
+            r for r in (await _list_skills({}, _FakeCtx()))["skills"] if r["name"] == "own-one"
+        )
+        view = await _skill_view({"name": "own-one"}, _FakeCtx())
+        assert row["auto_generated"] == view["is_agent_created"] is True
+        assert row["origin"] == view["origin"]

@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING
 from robothor.doctor.model import Check, Result, fail, info, ok
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from pathlib import Path
+
     from robothor.doctor.context import DoctorContext
 
 
@@ -66,9 +68,16 @@ async def _instance_dir(ctx: DoctorContext) -> Result:
     * **Outside the workspace.** Snapshots capture workspace paths, so a
       directory elsewhere on the filesystem is skills nobody is backing up.
 
-    The fix is the same for both: point ``ROBOTHOR_INSTANCE_SKILLS_DIR`` at a
-    directory inside the workspace and outside ``agents/``, or unset it and
-    take the default.
+    And a third, which the first two do not catch: a directory inside the
+    workspace, outside ``agents/``, and **not ignored by the checkout** --
+    ``<workspace>/docs/skills`` passes both rules above and is tracked ground,
+    so the skills an agent writes are one ``add -A`` from the repository. When
+    the workspace is a checkout, this asks the checkout; when it is not, there
+    is nothing to ask and nothing to report.
+
+    The fix is the same for all three: point ``ROBOTHOR_INSTANCE_SKILLS_DIR``
+    at an ignored directory inside the workspace and outside ``agents/``, or
+    unset it and take the default.
     """
 
     def _read() -> tuple[str, str, str]:
@@ -109,8 +118,54 @@ async def _instance_dir(ctx: DoctorContext) -> Result:
                 f"would not be in any backup. Point ROBOTHOR_INSTANCE_SKILLS_DIR inside "
                 f"{workspace}, or unset it for the default."
             )
+        if (root / ".git").exists():
+            ignored = await ctx.run_blocking(_is_ignored, root, instance)
+            if ignored is False:
+                relative = instance.relative_to(root).as_posix()
+                return fail(
+                    f"the instance skills directory is not ignored by this checkout "
+                    f"({relative}). Every skill an agent writes would be one `add -A` "
+                    f"from the platform repository — the leak this boundary exists to "
+                    f"stop. Add it to .gitignore, or point ROBOTHOR_INSTANCE_SKILLS_DIR "
+                    f"at a directory that is ignored."
+                )
 
     return ok(f"agent-written skills land in {instance_dir}")
+
+
+def _is_ignored(root: Path, directory: Path) -> bool | None:
+    """Does this checkout ignore *directory*? None when it cannot answer.
+
+    ``check-ignore`` is the checkout's own answer rather than a re-reading of
+    ``.gitignore``: the rules compose across files, negations and excludes, and
+    a guard that reimplements them is a guard that disagrees with the thing it
+    is guarding. Same question the boundary tests ask, asked the same way.
+
+    Asked about a file INSIDE the directory, which is what actually gets
+    written and is the only form that answers for a directory the instance has
+    not created yet: a ``brain/skills/``-style rule (trailing slash, directory
+    only) does not match a path that is not on disk, so asking about the bare
+    directory reports a clean instance as unignored.
+    """
+    import subprocess
+
+    probe = directory / "example" / "SKILL.md"
+    try:
+        completed = subprocess.run(
+            ["git", "check-ignore", "-q", str(probe)],
+            cwd=root,
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode == 0:
+        return True
+    if completed.returncode == 1:
+        return False
+    # 128: not a repository, or git could not run. No answer, not a verdict.
+    return None
 
 
 CHECKS: tuple[Check, ...] = (

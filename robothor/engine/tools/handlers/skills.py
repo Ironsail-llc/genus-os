@@ -199,6 +199,7 @@ async def _skill_view(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     counter so the curator (Rip 5) can rank stale skills.
     """
     from robothor.engine.skills import (
+        INSTANCE_ORIGIN,
         get_skill_content,
         increment_usage,
         load_skills,
@@ -218,6 +219,7 @@ async def _skill_view(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     skills = load_skills()
     defn = skills[name]
     view = read_skill_view(name) or {}
+    origin = skill_origin(view)
 
     # Side effect: bump the usage counter so the curator can
     # distinguish hot skills (don't archive) from cold ones
@@ -247,10 +249,13 @@ async def _skill_view(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "output_format": defn.output_format,
         # Which layer this body came from, and whether it is standing in front
         # of a bundled skill of the same name.
-        "origin": skill_origin(view),
+        "origin": origin,
         "shadows_bundled": shadows_bundled(name),
         "write_origin": view.get("write_origin", "foreground"),
-        "is_agent_created": view.get("is_agent_created", False),
+        # Derived from the same marker as `origin`, not from the legacy flag:
+        # a payload that says `origin: instance` and `is_agent_created: False`
+        # answers the one question twice, differently.
+        "is_agent_created": origin == INSTANCE_ORIGIN,
         "usage_count": view.get("usage_count", 0),
     }
 

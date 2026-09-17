@@ -125,3 +125,67 @@ class TestInstanceDirCheck:
         result = await _check("skills.instance_dir").run(_Ctx(get_settings()))
         assert result.status == "fail"
         assert "snapshot" in result.detail.lower() or "workspace" in result.detail.lower()
+
+
+class TestInstanceDirMustBeIgnored:
+    """Inside the workspace and outside agents/skills is not enough.
+
+    `<workspace>/docs/skills` passes both of those and is tracked ground: the
+    skills an agent writes would be one `add -A` from the platform repository,
+    which is the leak this whole boundary exists to close. When the workspace
+    is a checkout, the check asks the checkout.
+    """
+
+    @staticmethod
+    def _repo(path):
+        import subprocess
+
+        subprocess.run(["git", "init", "-q", str(path)], check=True)
+        return path
+
+    @pytest.fixture
+    def repo_workspace(self, tmp_path, monkeypatch):
+        workspace = self._repo(tmp_path / "workspace")
+        (workspace / "agents" / "skills").mkdir(parents=True)
+        (workspace / ".gitignore").write_text("brain/skills/\n")
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(workspace))
+        from robothor.settings import reset_settings
+
+        reset_settings()
+        yield workspace
+        reset_settings()
+
+    @pytest.mark.asyncio
+    async def test_the_default_is_ignored_and_passes(self, repo_workspace):
+        from robothor.settings import get_settings
+
+        result = await _check("skills.instance_dir").run(_Ctx(get_settings()))
+        assert result.status == "pass"
+
+    @pytest.mark.asyncio
+    async def test_a_tracked_directory_fails(self, repo_workspace, monkeypatch):
+        from robothor.settings import get_settings, reset_settings
+
+        monkeypatch.setenv("ROBOTHOR_INSTANCE_SKILLS_DIR", str(repo_workspace / "docs" / "skills"))
+        reset_settings()
+
+        result = await _check("skills.instance_dir").run(_Ctx(get_settings()))
+        assert result.status == "fail"
+        assert "ignore" in result.detail.lower()
+        assert "docs/skills" in result.detail
+
+    @pytest.mark.asyncio
+    async def test_a_workspace_that_is_not_a_checkout_is_not_a_finding(self, tmp_path, monkeypatch):
+        """Most instances are not a checkout; that is not a reason to fail."""
+        workspace = tmp_path / "plain"
+        (workspace / "agents" / "skills").mkdir(parents=True)
+        monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(workspace))
+        monkeypatch.setenv("ROBOTHOR_INSTANCE_SKILLS_DIR", str(workspace / "docs" / "skills"))
+        from robothor.settings import get_settings, reset_settings
+
+        reset_settings()
+        try:
+            result = await _check("skills.instance_dir").run(_Ctx(get_settings()))
+        finally:
+            reset_settings()
+        assert result.status == "pass"
