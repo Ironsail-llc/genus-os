@@ -59,11 +59,21 @@ _ASKS = re.compile(
     re.IGNORECASE,
 )
 
-#: And it must ask for it PER ITEM. One word, but it is the word that separates
-#: "triage this incident" from "triage these incidents", and only the second is
-#: a contract this module has anything to say about.
+#: And it must ask for it PER ITEM, in so many words. The word is what
+#: separates "triage this incident" from "triage these incidents", and only the
+#: second is a contract this module has anything to say about.
+#:
+#: ``per \w+`` used to be one of these alternatives and it was far too loose:
+#: it opened the gate on "escalate blockers … **as per** the runbook" and on
+#: "extract the tables, one **per page**, and rank them" (hostile review I7).
+#: Neither asks for a decision about anything. What is left is explicit
+#: distribution over items, plus the two phrasings that state the
+#: one-category-per-item contract outright.
 _PER_ITEM = re.compile(
-    r"\b(?:each|every|all\s+(?:of\s+)?the|per\s+\w+|for\s+each)\b", re.IGNORECASE
+    r"\b(?:each|every|for\s+each|all\s+(?:of\s+)?the)\b"
+    r"|\bexactly\s+one\b"
+    r"|\bone\s+of\s+the\s+following\b",
+    re.IGNORECASE,
 )
 
 #: What an enumerated item looks like. Three shapes, all of them explicit
@@ -78,9 +88,16 @@ _VERDICTS: dict[str, re.Pattern[str]] = {
     "high": re.compile(r"\b(?:high(?:\s+priority)?|p1|urgent)\b", re.IGNORECASE),
     "medium": re.compile(r"\b(?:medium(?:\s+priority)?|moderate|p2)\b", re.IGNORECASE),
     "low": re.compile(r"\b(?:low(?:\s+priority)?|p3|p4|minor)\b", re.IGNORECASE),
+    # Every alternative here is a PHRASE, not a word. The bare word `test`
+    # used to be one, so `**Priority: High** — this is a test-infrastructure
+    # item` read as two verdicts, High and no-action (hostile review I7). A
+    # vocabulary that fires on an ordinary English word inside a label is a
+    # vocabulary that reports noise into the one table this flag's promotion
+    # depends on.
     "no-action": re.compile(
-        r"\b(?:no\s+action|not\s+escalated?|ignore[ds]?|dismissed?|false\s+positive|"
-        r"test(?:\s+message)?|drill|qa\s+(?:test|routing))\b",
+        r"\b(?:no\s+action(?:\s+required)?|not\s+escalated|false\s+positive|"
+        r"qa\s+(?:test|routing)|routing\s+test|test\s+message|"
+        r"dismissed|duplicate|drill)\b",
         re.IGNORECASE,
     ),
 }
@@ -105,6 +122,22 @@ _HANDBACK = re.compile(
     r"|\b(?:someone|a\s+human)\s+(?:should|must)\s+decide\b",
     re.IGNORECASE,
 )
+
+#: …and the hand-back has to be ABOUT THE VERDICT. "Please confirm whether the
+#: three remaining endpoints are in scope" is a question about the work, asked
+#: alongside a verdict that was reached; the first cut read it as a refusal to
+#: decide (hostile review I7). What follows the "whether" has to be the
+#: classification itself: a severity word, an escalation, or whether the thing
+#: is real at all.
+_ABOUT_THE_VERDICT = re.compile(
+    r"\b(?:escalat\w*|severit\w*|priorit\w*|incident|genuine|legitimate|real|"
+    r"critical|urgent|p0|p1|false\s+positive|test|drill|routing)\b",
+    re.IGNORECASE,
+)
+
+#: How far after the hand-back phrase to look for what it is about. One
+#: sentence: beyond that the words belong to a different claim.
+_HANDBACK_SCOPE = 200
 
 
 def asks_for_verdicts(task_text: str | None) -> bool:
@@ -148,6 +181,21 @@ def _verdicts_in(chunk: str) -> set[str]:
     return {name for name, pattern in _VERDICTS.items() if pattern.search(labels)}
 
 
+def _hands_the_verdict_back(chunk: str) -> bool:
+    """True when this block asks the reader to make the CLASSIFICATION.
+
+    Both halves required: the hand-back phrasing, and — within the sentence
+    that follows it — something that is actually the verdict. A report that
+    reaches a verdict and separately asks a question about the work has not
+    handed its decision to anybody.
+    """
+    for match in _HANDBACK.finditer(chunk):
+        window = chunk[match.end() : match.end() + _HANDBACK_SCOPE]
+        if _ABOUT_THE_VERDICT.search(window):
+            return True
+    return False
+
+
 def hedged_items(report_text: str | None) -> list[tuple[str, str]]:
     """``(item id, why)`` for every item this deliverable failed to decide.
 
@@ -167,7 +215,7 @@ def hedged_items(report_text: str | None) -> list[tuple[str, str]]:
     handback: dict[str, bool] = {}
     for block in _blocks(text):
         found = _verdicts_in(block)
-        asks_reader = bool(_HANDBACK.search(block))
+        asks_reader = _hands_the_verdict_back(block)
         for item in set(_ITEM_ID.findall(block)):
             per_item.setdefault(item, set()).update(found)
             if asks_reader:

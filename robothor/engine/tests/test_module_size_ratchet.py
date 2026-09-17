@@ -256,7 +256,13 @@ CAPS = {
     # `observe` as well as `enforce`. Without it `flags/evidence.py` would
     # report the one ladder whose promotion depends on watching the evidence as
     # permanently inert, which is the failure this repo has recorded twice.
-    "robothor/engine/verdict_commitment.py": 322,
+# 322 -> 368: three false positives the hostile review found, and the
+    # reasoning for each. The bare word `test` in a label read as a verdict,
+    # `per \w+` opened the gate on "as per the runbook", and a hand-back about
+    # the WORK read as a refusal to decide. This is the one control here that
+    # touches judgement; a false positive teaches an agent to stop stating its
+    # doubts, which is worse than the defect.
+    "robothor/engine/verdict_commitment.py": 370,
     "robothor/engine/skill_contract.py": 73,
     "robothor/engine/code_exec_guards.py": 116,
     # 122 -> 129: the same disclosure, said where the reaper is, because this

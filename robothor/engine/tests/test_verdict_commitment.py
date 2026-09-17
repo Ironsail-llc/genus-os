@@ -67,6 +67,16 @@ class TestTheTaskGateComesFirst:
         assert asks_for_verdicts(None) is False
         assert asks_for_verdicts("") is False
 
+    def test_an_explicit_one_category_instruction_qualifies(self) -> None:
+        """The other phrasing of the same contract, and the one the real corpus
+        uses: "classify every paper into exactly one of the following
+        categories"."""
+        task = (
+            "Fetch the papers and classify them into exactly one of the "
+            "following categories. Write the result to /w/digest.md."
+        )
+        assert asks_for_verdicts(task) is True
+
     @pytest.mark.parametrize(
         "task",
         [
@@ -77,6 +87,8 @@ class TestTheTaskGateComesFirst:
             "Answer the question below in plain prose. No file needed.",
             "Triage this one alert and tell me what you think.",
             "For each file in the directory, print its line count.",
+            "Escalate blockers to the on-call engineer as per the runbook.",
+            "Extract the tables, one per page, and rank them by row count.",
         ],
         ids=[
             "summary",
@@ -86,6 +98,8 @@ class TestTheTaskGateComesFirst:
             "prose",
             "single-item-triage",
             "per-item-but-no-verdict",
+            "incidental-as-per",
+            "incidental-per-page",
         ],
     )
     def test_a_non_classification_task_never_qualifies(self, task: str) -> None:
@@ -110,6 +124,45 @@ class TestWhatFires:
         assert "msg_2209" in note
         assert "/w/results/results.md" in note
         assert "still an escalation" in note
+
+
+class TestTheVocabularyIsPhrases:
+    """Hostile review I7. Every false positive it found, as a test.
+
+    The cost of one here is an agent that learns to stop stating its doubts,
+    and noise in the one table this flag's promotion depends on.
+    """
+
+    def test_a_bare_test_inside_a_label_is_not_a_verdict(self) -> None:
+        report = (
+            "## Backlog\n"
+            "- **Priority: High** — TASK-7 is a test-infrastructure item, so it "
+            "waits for the platform work.\n"
+        )
+        assert hedged_items(report) == []
+
+    def test_a_question_about_the_work_is_not_a_hand_back(self) -> None:
+        """ "Confirm whether the endpoints are in scope" is a question asked
+        ALONGSIDE a verdict, not instead of one."""
+        report = (
+            "## Critical\n"
+            "### msg_2212 — SQL injection\n"
+            "**Severity: Critical**\n"
+            "Production is patched. Please confirm whether the three remaining "
+            "endpoints are in scope for this ticket.\n"
+        )
+        assert hedged_items(report) == []
+
+    def test_a_hand_back_about_the_verdict_itself_still_fires(self) -> None:
+        """The measured sentence, and the distinction the window is drawn for."""
+        report = (
+            "## Critical\n"
+            "### msg_2209 — outage\n"
+            "**Severity: Critical**\n"
+            "Please verify whether this is a live incident or a quarterly QA "
+            "routing test before committing full engineering resources.\n"
+        )
+        assert [item for item, _why in hedged_items(report)] == ["msg_2209"]
 
 
 class TestWhatDoesNotFire:
