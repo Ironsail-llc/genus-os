@@ -250,8 +250,8 @@ CAPS = {
     # the spill classifies as `neither`), the read-back is a resolved path, a
     # re-run is compared on the TARGET with the query stripped, and a call that
     # observed nothing no longer counts. Findings I4, I5 and M2.
-    "robothor/engine/observation_ledger.py": 362,
-    "robothor/engine/observation_notes.py": 324,
+    "robothor/engine/observation_ledger.py": 385,
+    "robothor/engine/observation_notes.py": 334,
     # 265 -> 322: the guardrail row this control writes at finalization on
     # `observe` as well as `enforce`. Without it `flags/evidence.py` would
     # report the one ladder whose promotion depends on watching the evidence as

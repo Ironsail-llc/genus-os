@@ -37,6 +37,7 @@ from __future__ import annotations
 import contextlib
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from robothor.engine.act_observe import (
@@ -266,6 +267,28 @@ class ObservationLedger:
             if change.sources and not any(src & change.sources for _s, src in later):
                 out.append((change.step, change.tool, change.sources))
         return out
+
+    def spill_workspaces(self) -> list[str]:
+        """The workspaces this run's spills were actually written under.
+
+        The finalizer is handed the ENGINE's workspace, and a spill is written
+        under the AGENT's (`tool ctx.workspace`, which a manifest may set
+        elsewhere). Reaping only the one it was handed leaves the other to the
+        retention sweep — a directory nobody looks at, growing for a week,
+        which is the shape `analyze_image`'s one bad release had.
+
+        Derived from the paths the ledger already holds: a spill path is
+        ``<workspace>/.robothor/exec/<file>``, so the workspace is three
+        parents up.
+        """
+        roots: list[str] = []
+        for entry in self.truncations:
+            if not entry.path:
+                continue
+            root = str(Path(entry.path).parent.parent.parent)
+            if root not in roots:
+                roots.append(root)
+        return roots
 
     def take_unquoted(self) -> list[Truncation]:
         """Unresolved entries this run has not been told about yet."""

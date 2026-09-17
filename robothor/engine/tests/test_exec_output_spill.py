@@ -308,6 +308,37 @@ class TestTheFilesAreReaped:
     def test_a_run_that_spilled_nothing_reaps_nothing(self, tmp_path: Path) -> None:
         assert prune_run_spills(tmp_path, "run-a") == 0
 
+    def test_a_run_reaps_the_spills_in_the_agents_workspace_too(self, tmp_path: Path) -> None:
+        """Found by re-running the reviewer's evidence probe (P5) after the
+        other fixes landed: it reported 3 files left after finalization.
+
+        The finalizer is handed the ENGINE's workspace; a spill is written
+        under the AGENT's, which a manifest may put elsewhere and which every
+        benchmark run does. Reaping only the one it was handed left the other
+        to the 7-day sweep — a directory nobody looks at, growing for a week.
+        """
+        from robothor.engine.observation_ledger import ObservationLedger
+        from robothor.engine.observation_notes import record_observation_verdicts
+
+        agent_ws = tmp_path / "agent"
+        engine_ws = tmp_path / "engine"
+        agent_ws.mkdir()
+        engine_ws.mkdir()
+        shaped = shape_exec_result(
+            {"stdout": _big(12_000), "stderr": "", "exit_code": 0},
+            workspace=agent_ws,
+            run_id="run-1",
+        )
+        assert Path(shaped["stdout_path"]).is_file()
+
+        ledger = ObservationLedger()
+        ledger.record(11, "exec", {"command": "curl -s http://svc.invalid/x"}, shaped)
+        session = type("S", (), {"_observation_ledger": ledger, "messages": []})()
+        run = type("R", (), {"id": "run-1"})()
+        record_observation_verdicts(run, session, str(engine_ws))
+
+        assert not Path(shaped["stdout_path"]).exists()
+
     def test_the_sweep_catches_what_a_killed_run_orphaned(self, tmp_path: Path) -> None:
         """A run killed mid-spill never reaches its own cleanup. The retention
         sweep is what stops that from being a permanent leak."""

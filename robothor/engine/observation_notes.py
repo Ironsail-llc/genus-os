@@ -261,12 +261,22 @@ def record_observation_verdicts(run: Any, session: Any, workspace: Any = None) -
     # how the `analyze_image` spill shipped its one bad release. A run killed
     # before it reaches here leaves orphans, which is what the retention sweep
     # in `retention.run_retention_cleanup` is the backstop for.
+    ledger = getattr(session, LEDGER_ATTR, None)
     with contextlib.suppress(Exception):
         from robothor.engine.exec_spill import prune_run_spills
 
-        prune_run_spills(workspace, getattr(run, "id", "") or "")
+        run_id = getattr(run, "id", "") or ""
+        # Every workspace this run's spills were written under, not just the
+        # engine's. An agent whose manifest names its own workspace — and every
+        # sandboxed or benchmark run — writes its spills there, and reaping
+        # only the workspace this function was handed left them to the 7-day
+        # sweep, which looks in the instance workspace and nowhere else.
+        roots = list(ledger.spill_workspaces()) if ledger is not None else []
+        if workspace and str(workspace) not in roots:
+            roots.append(str(workspace))
+        for root in roots:
+            prune_run_spills(root, run_id)
 
-    ledger = getattr(session, LEDGER_ATTR, None)
     if ledger is None:
         return
     truncation_mode = truncation_ledger_mode()
