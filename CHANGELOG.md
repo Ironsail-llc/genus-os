@@ -1,3 +1,13 @@
+## [1.96.0](https://github.com/Ironsail-llc/genus-os/compare/v1.95.0...v1.96.0) (2026-09-17)
+
+### Features
+
+* **engine:** deliverable contracts check the shape the task named ([#580](https://github.com/Ironsail-llc/genus-os/issues/580)) ([157274e](https://github.com/Ironsail-llc/genus-os/commit/157274e4e545a68dc65adcd0a22a9f49576f4c85))
+
+### Bug Fixes
+
+* **engine:** the local fallback compacts to its own window ([#582](https://github.com/Ironsail-llc/genus-os/issues/582)) ([c0343d4](https://github.com/Ironsail-llc/genus-os/commit/c0343d436821b70dea39677d611c144946510d24))
+
 ## [1.95.0](https://github.com/Ironsail-llc/genus-os/compare/v1.94.0...v1.95.0) (2026-09-16)
 
 ### Features
