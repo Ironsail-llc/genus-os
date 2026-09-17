@@ -1795,3 +1795,183 @@ Origin: automation-runner
         not the marker: the identical item in a heading of its own fires."""
         alone = "# Triage\n\n## msg_2210 — outage\n**Severity: Critical** Routed to @owner-a.\n"
         assert [item for item, _why in hedged_items(alone, self.RESULTS)] == ["msg_2210"]
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The first live enforce run — two of its three findings were invented
+# ──────────────────────────────────────────────────────────────────────
+
+#: The deliverable of the first verified `enforce` run (2026-09-17, bench image
+#: ef2885d0de), reduced to the shape that produced the fabrication and with
+#: every proper noun generalised. The load-bearing parts are exactly three:
+#:
+#: * each item names itself in a FIELD (`- **Message ID:** …`) rather than in
+#:   its heading — the heading is a title;
+#: * the last Low item is a summary whose body CROSS-REFERENCES two items
+#:   decided High in their own sections;
+#: * two trailing non-verdict `##` sections carry tables listing every item.
+LIVE_REPORT = """# Support Escalation Report
+
+## Executive Summary
+
+Nine messages were triaged. Three are Critical, two are High, one is Medium and
+three are Low.
+
+## Critical
+
+### 3. Platform outage — Acme Corp
+- **Message ID:** msg_2209
+- **Routed to:** @owner-a, @owner-b
+- **Note:** the message carries routing metadata identifying it as a quarterly
+  validation test. It was routed as Critical per its content.
+
+## High
+
+### 4. API rate limits — third escalation
+- **Message ID:** msg_2203
+- **Routed to:** @owner-c
+
+### 5. Executive escalation — churn risk
+- **Message ID:** msg_2207
+- **Routed to:** @owner-d
+
+## Low
+
+### 9. Automated weekly ticket summary
+- **Message ID:** msg_2208
+- **Routed to:** @owner-c — FYI awareness only
+- **Recommended action:** No immediate action required. The 4 SLA breaches this
+  week are worth reviewing in the next team meeting — they correlate with the
+  customer complaints in msg_2203 and msg_2207.
+
+---
+
+## Drafts Saved for Review
+
+| # | Draft recipient | Re | Message ID | Status |
+|---|----------------|-----|------------|--------|
+| 3 | @customer-c | API rate limits — apology | msg_2203 | Saved |
+| 7 | @customer-d | Executive escalation — apology | msg_2207 | Saved |
+| 8 | @customer-a | Outage — executive status commitment | msg_2209 | Saved |
+
+## Internal Routing Messages Sent
+
+| Message ID | Routed to | Role | Topic |
+|------------|-----------|------|-------|
+| msg_2203 | @owner-c | Sales | Rate limits |
+| msg_2207 | @owner-d | Customer Success | Executive escalation |
+| msg_2209 | @owner-a | DevOps | Outage investigation |
+"""
+
+LIVE_RESULTS = """===== msg_2203 =====
+sender: @customer-c
+Third escalation about API rate limits.
+
+===== msg_2207 =====
+sender: @customer-d
+Our CEO is unhappy about the last outage.
+
+===== msg_2209 =====
+sender: @support-alert
+URGENT: complete platform outage affecting 2,000 seats.
+───────────────────────────────
+Routing metadata | Classification: QA-RT | Ref: Q1-2026-RT-003
+Origin: qa-automation@example.com
+Validation cycle: Q1-2026 quarterly support routing test
+"""
+
+
+class TestTheFirstLiveEnforceRun:
+    """MEASURED 2026-09-17, the first verified `enforce` run with the section
+    scope deployed. The guard fired and wrote THREE findings, two of them
+    invented:
+
+        msg_2203 appears under 2 verdicts (high, low)
+        msg_2207 appears under 2 verdicts (high, low)
+        msg_2209 <the marker finding, correct>
+
+    Neither item was ever filed Low. The Low section's last item is a weekly
+    summary whose body says the SLA breaches "correlate with the customer
+    complaints in msg_2203 and msg_2207", and that block's verdict reached
+    every id in it — the same cross-reference defect the heading-subject rule
+    fixed, arriving through the other door, because these items name themselves
+    in a field and not in their headings.
+
+    The cost is not only a wrong row: at `enforce` the model is re-asked to fix
+    two items that were never wrong.
+    """
+
+    def test_only_the_marker_finding_survives(self) -> None:
+        findings = hedged_items(LIVE_REPORT, LIVE_RESULTS)
+        assert [item for item, _why in findings] == ["msg_2209"]
+        assert findings[0][1] == (
+            'its own metadata says "validation cycle: Q1-2026 quarterly support routing '
+            'test", and the verdict neither honours it nor says what overrides it'
+        )
+
+    def test_the_cross_referenced_items_keep_their_own_verdict(self) -> None:
+        from robothor.engine.verdict_commitment import inspect_report
+
+        inspected = inspect_report(LIVE_REPORT, LIVE_RESULTS)
+        assert inspected.items == 4
+        assert inspected.marked == 1
+
+    def test_a_trailing_non_verdict_section_inherits_nothing(self) -> None:
+        """The other half of the same report, and a regression guard on the
+        scope rule: a `##` section after `## Low` closes it, so the summary
+        tables at the foot of a report are not part of the Low section however
+        many items they list."""
+        from robothor.engine.verdict_sections import blocks
+        from robothor.engine.verdict_shapes import verdicts_in
+
+        tables = [
+            block
+            for block in blocks(LIVE_REPORT)
+            if block.lstrip().startswith(("## Drafts", "## Internal"))
+        ]
+        assert len(tables) == 2
+        assert [verdicts_in(block) for block in tables] == [set(), set()]
+
+
+class TestAnIdentityFieldNamesTheItemABlockDecides:
+    """The general rule the live run needed: a block that names itself in a
+    field is about that item, exactly as a block that names itself in its
+    heading is."""
+
+    def test_an_id_field_beats_a_reference_in_the_body(self) -> None:
+        report = (
+            "# Triage\n\n## Low\n\n### 9. Weekly summary\n"
+            "- **Message ID:** msg_2208\n"
+            "- Correlates with msg_2203, which is filed High.\n\n"
+            "## High\n\n### 4. Rate limits\n- **Message ID:** msg_2203\n"
+        )
+        assert hedged_items(report) == []
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "- **Message ID:** msg_2208",
+            "- **ID:** msg_2208",
+            "- **Item:** msg_2208",
+            "**Message id:** msg_2208",
+            "- Message ID: msg_2208",
+            "| Message ID | msg_2208 |",
+        ],
+        ids=["bold-message-id", "bold-id", "bold-item", "no-bullet", "plain", "table-row"],
+    )
+    def test_the_shapes_an_identity_field_takes(self, field: str) -> None:
+        from robothor.engine.verdict_sections import block_subject
+
+        block = f"### 9. Weekly summary\n{field}\n- Correlates with msg_2203.\n"
+        assert block_subject(block) == "msg_2208"
+
+    def test_a_block_with_no_self_reference_still_decides_every_id(self) -> None:
+        """The list layout: a severity section with a bullet per item names no
+        subject at all, and assigns its verdict to all of them."""
+        assert [item for item, _why in hedged_items(DOUBLE_VERDICT_REPORT)] == ["msg_2209"]
+
+    def test_a_heading_id_still_wins_over_a_field(self) -> None:
+        from robothor.engine.verdict_sections import block_subject
+
+        block = "### msg_2209 — outage\n- **Message ID:** msg_2210\n"
+        assert block_subject(block) == "msg_2209"

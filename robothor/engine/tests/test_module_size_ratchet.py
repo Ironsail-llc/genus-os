@@ -477,10 +477,16 @@ CAPS = {
     # it already carries are the ones that kept the repair from inventing
     # findings of its own — only a heading that IS the label becomes a scope,
     # and only one that names exactly ONE verdict (`## Critical / High priority
-    # items` filed every item under it under both) — plus `heading_subject`,
-    # which is where "a block headed by an item decides THAT item" belongs:
+    # items` filed every item under it under both) — plus `block_subject`,
+    # which is where "a block that names itself decides THAT item" belongs:
     # it is a question about the document, not about the ladder.
-    "robothor/engine/verdict_sections.py": 165,
+    # 165 -> 198: the first live `enforce` run wrote three findings and two
+    # were invented, because every item in that report was TITLED and
+    # identified in a field, so the heading named no subject and a summary
+    # item's cross-reference filed two others under its own verdict. The
+    # identity field is one regex and four lines of lookup; the rest is the
+    # measurement, which is the part that stops the next round undoing it.
+    "robothor/engine/verdict_sections.py": 198,
     # Whether an override named a reason. Bounded for the same reason and with
     # the same history: three rounds of review each found a sentence that named
     # nothing and was exempted anyway — and, the last time, six that named

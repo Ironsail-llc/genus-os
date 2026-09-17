@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from robothor.engine.provenance_markers import markers_by_item, tool_result_text
-from robothor.engine.verdict_sections import blocks, heading_subject
+from robothor.engine.verdict_sections import block_subject, blocks
 from robothor.engine.verdict_shapes import (
     MAX_SCAN_CHARS,
     hands_the_verdict_back,
@@ -166,7 +166,7 @@ def inspect_report(report_text: str | None, results_text: str | None = None) -> 
         # under a second verdict it never received. A block whose heading names
         # no item (a severity section with a bullet per item, the flat layout
         # this control already caught) still assigns to every id in it.
-        subject = heading_subject(block)
+        subject = block_subject(block)
         for item in item_ids(block):
             per_item.setdefault(item, set())
             if not subject or item == subject:
