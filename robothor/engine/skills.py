@@ -24,7 +24,9 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_skills_cache: tuple[float, dict[str, SkillDefinition]] | None = None
+#: (cache key, skills). The key is the max mtime plus the file list across
+#: every directory that was read -- see load_skills.
+_skills_cache: tuple[tuple[float, tuple[str, ...]], dict[str, SkillDefinition]] | None = None
 
 _KEBAB_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,58}[a-z0-9])?$")
 _MAX_CONTENT_LEN = 10_000
