@@ -97,11 +97,29 @@ _TOOL_CALL_TOKENS = 400
 _CHARS_PER_TOKEN_PROSE = 3.6
 _CHARS_PER_TOKEN_DENSE = 1.1
 
-#: Whitespace fraction above which content is prose or source code. Measured:
-#: prose 0.16, python 0.20; csv 0.008, hex lines 0.015, base64 and minified
-#: JSON ~0. Whitespace is the signal because it is what a tokenizer's merges
-#: are built around — content without it has no word boundaries to merge on.
-_PROSE_WHITESPACE_RATIO = 0.10
+#: Two signals, and content is prose only if it passes BOTH. Measured on the
+#: text with its LAYOUT removed (see :func:`_chars_per_token`):
+#:
+#:   content         intra-line ws   digits   real chars/token
+#:   english prose        0.164       0.00          5.5
+#:   python source        0.079       0.00          4.2
+#:   indented json        0.040       0.55          1.47
+#:   csv numbers          0.000       0.88          2.17
+#:   hex digests          0.000       0.40          1.13
+#:   base64               0.000       0.16          1.36
+#:
+#: Whitespace inside a line is the first signal because it is what a
+#: tokenizer's merges are built around; indentation and line breaks are layout
+#: and counting them put pretty-printed JSON in the prose class, 63% under what
+#: it really costs. Digits are the second, because they are what separates
+#: indented CODE — whose lines are words — from an indented numeric PAYLOAD.
+#: Both thresholds sit between the two groups with room either side.
+_PROSE_WHITESPACE_RATIO = 0.06
+
+#: Digit fraction at or above which content is priced as dense whatever its
+#: spacing. Prose with a few figures in it is unaffected; a page of floats
+#: wearing indentation is not prose.
+_PROSE_MAX_DIGIT_RATIO = 0.15
 
 #: How much of a long string is sampled to classify it. Classification must be
 #: O(1) per message: this runs before every call, on conversations that can be
@@ -110,17 +128,29 @@ _SAMPLE_CHARS = 4096
 
 
 def _chars_per_token(text: str) -> float:
-    """Which density class this text belongs to, from a bounded sample."""
+    """Which density class this text belongs to, from a bounded sample.
+
+    LAYOUT is removed before the ratio is taken — leading whitespace per line
+    and the line breaks themselves — because neither is word structure.
+    Measured: pretty-printed JSON is 35.8% whitespace and tokenizes at 1.47
+    chars/token, and pricing it as prose under-counted a 34KB sample by 59%
+    (9,571 estimated against 23,468 real). Nearly all of that whitespace is the
+    indent and the many short lines; what is left inside a line is one space
+    after each colon. Source code is indented too and stays prose, because its
+    lines are full of real word boundaries.
+    """
     if len(text) <= _SAMPLE_CHARS:
         sample = text
     else:
         third = _SAMPLE_CHARS // 3
         middle = len(text) // 2
         sample = text[:third] + text[middle : middle + third] + text[-third:]
+    sample = "".join(line.lstrip() for line in sample.splitlines())
     if not sample:
         return _CHARS_PER_TOKEN_PROSE
-    whitespace = sum(1 for character in sample if character.isspace())
-    if whitespace / len(sample) >= _PROSE_WHITESPACE_RATIO:
+    spaced = sum(1 for character in sample if character.isspace()) / len(sample)
+    numeric = sum(1 for character in sample if character.isdigit()) / len(sample)
+    if spaced >= _PROSE_WHITESPACE_RATIO and numeric < _PROSE_MAX_DIGIT_RATIO:
         return _CHARS_PER_TOKEN_PROSE
     return _CHARS_PER_TOKEN_DENSE
 

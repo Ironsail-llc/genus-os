@@ -11,6 +11,7 @@ HIGH on prose — and 0.28-0.54x on the content a large tool result is made of:
     base64                 8000     2000     5898      0.34   UNDER by 66%
     minified json         22451     5612    16963      0.33   UNDER by 67%
     hex digest lines      16249     4062    14370      0.28   UNDER by 72%
+    indented json         34458     8614    23468      0.37   UNDER by 63%
 
 A conversation the engine believed sat exactly on the local model's 57,344-token
 ceiling was, for those contents, 105,000-203,000 real tokens — two to three
@@ -41,12 +42,18 @@ MEASURED = {
     "base64": (8000, 5898),
     "minified json": (22451, 16963),
     "hex digest lines": (16249, 14370),
+    # Added after the first round: the classifier priced INDENTED JSON as
+    # prose, because indentation and many short lines made it 35.8%
+    # whitespace. Layout is not word structure, and 63% under on a 34KB tool
+    # result is the incident's own shape.
+    "indented json": (34458, 23468),
 }
 
 
 def _cases() -> dict[str, str]:
-    """The reviewer's six samples, reconstructed byte-for-byte (seed 7)."""
+    """The measured samples, reconstructed byte-for-byte (seed 7)."""
     random.seed(7)
+    rng = random.Random(7)
     return {
         "english prose": "The quarterly revenue report lists every line item for the region. "
         * 140,
@@ -64,6 +71,13 @@ def _cases() -> dict[str, str]:
         "hex digest lines": "\n".join(random.randbytes(32).hex() for _ in range(250)),
         "csv numbers": "\n".join(
             ",".join(str(random.randint(0, 10**9)) for _ in range(12)) for _ in range(300)
+        ),
+        # Its own stream, so adding it cannot shift a single byte of the six
+        # above — their token counts are measured fixtures, and a fixture whose
+        # content silently changes is testing nothing anyone measured.
+        "indented json": json.dumps(
+            [{"id": index, "v": rng.random(), "k": f"k{index}"} for index in range(500)],
+            indent=2,
         ),
     }
 
@@ -83,6 +97,24 @@ def test_the_estimate_is_never_below_the_real_token_count(name):
         f"{name}: estimated {estimate} for {real} real tokens — a conversation "
         "sized on this lands over the window"
     )
+
+
+def test_indentation_does_not_make_dense_content_look_like_prose():
+    """The classifier reads word structure, not layout. Pretty-printing a
+    payload must not halve what the engine thinks it costs."""
+    from robothor.engine.context_fit import _chars_per_token
+
+    assert _chars_per_token(_cases()["indented json"]) == _chars_per_token(
+        _cases()["minified json"]
+    )
+
+
+def test_source_code_is_still_prose_despite_its_indentation():
+    """The other half of the same judgement: code IS indented, and its lines
+    are full of real word boundaries."""
+    from robothor.engine.context_fit import _CHARS_PER_TOKEN_PROSE, _chars_per_token
+
+    assert _chars_per_token(_cases()["python source"]) == _CHARS_PER_TOKEN_PROSE
 
 
 def test_prose_is_not_inflated_out_of_all_proportion():
