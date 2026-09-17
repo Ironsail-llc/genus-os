@@ -441,7 +441,10 @@ model is configured (ROBOTHOR_VISION_MODEL)" and "the local vision model
 (`<m>`) is unavailable (ConnectionError: connection refused)" are different
 sentences because they need different fixes, and each carries the backend's
 own message — **redacted** through the platform's credential redactor and then
-capped. A provider's 401 carries the request headers and the api_key, and
+capped. So does every `analyze_image` row that failed: the batch is the worse
+half, because a 401 fails every image, and a failed row is copied into the
+result, the journal **and** the spilled table on disk that the tool tells you
+to open. A provider's 401 carries the request headers and the api_key, and
 nothing redacts a tool result that returns normally, so the redaction happens
 here, before the text reaches the agent's context, the run's step ledger or the
 journal. Redacting after the cap would be worse than useless: a cut can slice a

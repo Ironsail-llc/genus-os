@@ -142,6 +142,7 @@ from robothor.engine.vision_fallback import (
     path_refusal,
     remote_answer,
     resolve_backend,
+    safe_backend_message,
     workspace_root,
 )
 
@@ -581,7 +582,9 @@ async def _analyze_one(
         except Exception as exc:  # noqa: BLE001 - Pillow raises widely on malformed input
             return {
                 "path": str(resolved),
-                "error": f"could not read as an image: {type(exc).__name__}: {exc}",
+                "error": (
+                    f"could not read as an image: {type(exc).__name__}: {safe_backend_message(exc)}"
+                ),
                 "ms": int((time.monotonic() - started) * 1000),
             }
 
@@ -604,11 +607,19 @@ async def _analyze_one(
                 spent,
             )
         except Exception as exc:  # noqa: BLE001 - one image's failure, reported as one row
-            logger.warning("vision call failed for %s: %s", resolved.name, exc)
+            # Redacted, collapsed and capped before it is repeated ANYWHERE
+            # (round-2 re-check C-3). A provider's 401 carries the api_key and
+            # the Authorization header, this row is copied into the result, the
+            # journal and the spilled table on disk, and a 401 fails every
+            # image in the batch -- so the leak arrives two hundred times, once
+            # per row, in a file the tool tells the agent to read back.
+            logger.warning(
+                "vision call failed for %s: %s", resolved.name, safe_backend_message(exc)
+            )
             return _paid_for(
                 {
                     "path": str(resolved),
-                    "error": f"{type(exc).__name__}: {exc}",
+                    "error": f"{type(exc).__name__}: {safe_backend_message(exc)}",
                     "ms": int((time.monotonic() - started) * 1000),
                 },
                 spent,

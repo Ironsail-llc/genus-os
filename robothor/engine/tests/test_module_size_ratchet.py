@@ -242,7 +242,13 @@ CAPS = {
     # 1151 -> 1157: an unspellable path (a NUL byte) refuses as that ROW
     # rather than raising out of the handler, which is six lines of try around
     # the resolution the guard needs (round-2 review M-8).
-    "robothor/engine/vision_batch.py": 1157,
+    # 1157 -> 1169: the batch half of the credential leak (round-2 re-check
+    # C-3). Three sites repeat a backend's own exception -- a failed row's
+    # `error`, an undecodable file's `error`, and the log line -- and all three
+    # reach the spilled table on disk, which the tool tells the agent to open.
+    # Twelve lines, ten of which are the reasoning for why a row is the worse
+    # half: a 401 fails every image, so the leak arrives once per image.
+    "robothor/engine/vision_batch.py": 1169,
     # Which model looks at a picture, for BOTH image tools. Capped at what it
     # was written to. Not folded back into either caller: `vision_batch.py` is
     # the module this repo has an open extraction debt against, and
@@ -269,7 +275,10 @@ CAPS = {
     # nothing redacts a tool result that returns normally. Two call sites, one
     # existing helper, and the reasoning for the ordering -- redact after the
     # cap and a sliced token is a prefix no redactor recognises.
-    "robothor/engine/vision_fallback.py": 508,
+    # 508 -> 515: `_safe` becomes the public `safe_backend_message`, because
+    # `vision_batch` imports it for C-3 -- a private name reached from another
+    # module is a contract nobody declared.
+    "robothor/engine/vision_fallback.py": 515,
     # 248 -> 351: the reply parser. Review finding I1 measured three ordinary
     # model formatting habits — both markers on one line, a JSON object, a
     # parenthetical gloss — each turning a whole batch into `error` rows at

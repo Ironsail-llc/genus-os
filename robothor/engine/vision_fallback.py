@@ -72,6 +72,7 @@ __all__ = [
     "price",
     "remote_answer",
     "resolve_backend",
+    "safe_backend_message",
     "workspace_root",
 ]
 
@@ -418,13 +419,19 @@ def _why(what: str, exc: BaseException) -> str:
     return f"{what} ({type(exc).__name__}{': ' + message if message else ''})"
 
 
-def _safe(exc: BaseException) -> str:
-    """A backend exception as it may be LOGGED. Same rule as :func:`_why`.
+def safe_backend_message(exc: BaseException) -> str:
+    """A backend exception as it may be SHOWN — redacted, collapsed, capped.
 
+    The rule :func:`_why` applies, reachable by everything that repeats a
+    backend's own words: the log lines here, and `vision_batch`'s failed rows.
     A log line outlives the run and is exported wholesale into a support
-    bundle, so the rung that must not put a key in the context must not put one
-    in the journal either — the round-2 probe found the untruncated message in
-    both places.
+    bundle, and a spilled batch table is a FILE under the workspace that the
+    tool tells the agent to open — so the rung that must not put a key in the
+    context must not put one in the journal or on disk either.
+
+    Public, and named rather than `_safe`, because a second module imports it:
+    the batch half of this leak (round-2 re-check C-3) is the worse half, since
+    a 401 fails every image and two hundred images are two hundred copies.
     """
     from robothor.secrets.redaction import redact
 
@@ -484,7 +491,7 @@ async def describe_with_fallback(
                 text = (await describe_image_bytes(data, prompt, timeout=budget)).strip()
         except Exception as exc:  # noqa: BLE001 - every rung's failure is reported, not raised
             reasons.append(_why(f"the local vision model ({local}) is unavailable", exc))
-            logger.debug("local vision rung failed: %s", _safe(exc))
+            logger.debug("local vision rung failed: %s", safe_backend_message(exc))
         else:
             if text:
                 return Description(text, "local", local)
@@ -503,6 +510,6 @@ async def describe_with_fallback(
             )
     except Exception as exc:  # noqa: BLE001 - same rule: named, never invented
         reasons.append(_why(f"the remote vision model ({remote}) failed", exc))
-        logger.warning("remote vision rung failed for %s: %s", remote, _safe(exc))
+        logger.warning("remote vision rung failed for %s: %s", remote, safe_backend_message(exc))
         raise NoVisionBackendError(reasons) from exc
     return Description(text, "remote", remote, tokens, cost)
