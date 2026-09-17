@@ -888,3 +888,99 @@ class TestAMalformedPathRefusesRatherThanRaises:
             {"paths": [f"{tmp_path}/a\x00b.png"], "question": "what?"}, _ctx(tmp_path)
         )
         assert "error" in out["results"][0]
+
+
+class TestTheBatchRedactsWhatABackendSays:
+    """Re-check C-3. Round 2 redacted the `view_image` rung and left the batch
+    building a failed row's `error` and its log line from the raw exception.
+
+    The batch is the worse half of the same leak, because it repeats: a 401
+    fails every image, so two hundred images are two hundred copies of the key
+    — in the rows, in the result the model reads, in the journal, and in the
+    spill FILE written under the workspace, which the tool then tells the agent
+    to open with `exec`. A credential on disk in a working file is the shape
+    that outlives the run.
+    """
+
+    LEAKY = TestABackendsOwnWordsAreRedacted.LEAKY
+
+    async def _batch(self, tmp_path, monkeypatch, caplog):
+        from robothor.engine import vision_batch
+        from robothor.engine.tools.dispatch import _collect_handlers
+
+        async def leaky(data: bytes, prompt: str = "", **kw: Any) -> str:
+            raise RuntimeError(self.LEAKY)
+
+        monkeypatch.setattr(vision_batch, "describe_image_bytes", leaky)
+        monkeypatch.setattr(
+            vision_batch, "resolve_backend", lambda: (vision_batch.Backend("local", "test-vlm"), "")
+        )
+        # Small enough that three failed rows do not fit inline, so the table
+        # goes to the file this test is half about.
+        monkeypatch.setattr(vision_batch, "_max_total_chars", lambda: 400)
+        paths = [str(_png(tmp_path, name=f"shot{i}.png")) for i in range(3)]
+
+        with caplog.at_level("DEBUG"):
+            out = await _collect_handlers()["analyze_image"](
+                {"paths": paths, "question": "what is this?"}, _ctx(tmp_path)
+            )
+        return out
+
+    async def test_no_row_no_result_no_log_and_no_spill_file_holds_the_key(
+        self, tmp_path, monkeypatch, caplog
+    ) -> None:
+        import json
+        from pathlib import Path
+
+        out = await self._batch(tmp_path, monkeypatch, caplog)
+
+        assert out["failed"] == 3, out
+        spilled = Path(out["results_file"])
+        assert spilled.is_file(), out
+        blob = "\n".join(
+            [json.dumps(out, default=str), caplog.text, spilled.read_text(encoding="utf-8")]
+        )
+        assert "sk-or-v1-" not in blob, blob[:2000]
+        assert "deadbeef" not in blob
+        assert "Bearer" not in blob
+
+    async def test_the_diagnosis_still_reaches_the_agent(
+        self, tmp_path, monkeypatch, caplog
+    ) -> None:
+        """Redaction takes the value, not the reason the call failed.
+
+        Read from the spill file as well as the result: at this budget the rows
+        are in the file, which is where the tool tells the agent to look.
+        """
+        import json
+        from pathlib import Path
+
+        out = await self._batch(tmp_path, monkeypatch, caplog)
+        blob = json.dumps(out, default=str) + Path(out["results_file"]).read_text(encoding="utf-8")
+
+        assert "401" in blob
+        assert "AuthenticationError" in blob
+
+    async def test_an_undecodable_file_says_so_without_quoting_a_credential(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """The third site: Pillow's own exception, which carries a path rather
+        than a key — redacted anyway, because a rule that holds for two of
+        three failure paths in one function is a rule nobody can rely on."""
+        from robothor.engine import vision_batch
+        from robothor.engine.tools.dispatch import _collect_handlers
+
+        def leaky_decode(path):
+            raise OSError(self.LEAKY)
+
+        monkeypatch.setattr(vision_batch, "prepare_image_bytes", leaky_decode)
+        monkeypatch.setattr(
+            vision_batch, "resolve_backend", lambda: (vision_batch.Backend("local", "test-vlm"), "")
+        )
+        out = await _collect_handlers()["analyze_image"](
+            {"paths": [str(_png(tmp_path))], "question": "what is this?"}, _ctx(tmp_path)
+        )
+
+        error = out["results"][0]["error"]
+        assert "could not read as an image" in error
+        assert "sk-or-v1-" not in error, error
