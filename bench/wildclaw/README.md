@@ -355,6 +355,68 @@ from `internlm/WildClawBench-Trajectories` and read the per-task
 `score.json`. Ten models have one; MiMo does not, which is why the comparison
 above uses GLM 5.2 rather than our own fleet model.
 
+## The image contract the tasks assume
+
+A WildClawBench warmup is written against the benchmark authors' own container
+and declares none of what it takes for granted. Every such assumption is a way
+for a task to score zero without running, and two have already cost a
+measurement:
+
+- `npm install -g agent-browser` — six of the ten Productivity tasks. The
+  image had no npm, the warmup failed silently, and those six ran without the
+  skill every other harness is handed.
+- `~/miniconda3/envs/eval/bin/pip install numpy==1.26.4 opencv-python==4.9.0.80`
+  — the two SAM3 tasks. The image had no such path, so the warmup exited 127.
+  Once warmups began failing loudly (#580) both were skipped and scored 0
+  without running: two tasks in our weakest category, lost to a missing
+  directory.
+
+So the assumptions are written down, in `bench/wildclaw/warmup_env.py`: every
+command head a warmup may open with, and the line of `bench/wildclaw/Dockerfile`
+that answers it. `tests/test_warmup_environment.py` checks that list three ways
+— against the 60 specs (nothing undocumented), against the Dockerfile (nothing
+claimed that is not installed), and, under `slow`, against the built image with
+`command -v` for each name:
+
+```bash
+# static — needs a benchmark checkout for the corpus half
+pytest bench/wildclaw/tests/test_warmup_environment.py -m "not slow"
+
+# the image itself; BENCH_IMAGE points it at a candidate build
+BENCH_IMAGE=localhost/genus-bench-tools:latest \
+    pytest bench/wildclaw/tests/test_warmup_environment.py -m slow
+```
+
+**The `eval` environment is a venv, not conda.** Three Code Intelligence tasks
+tell the agent its Python is at `~/miniconda3/envs/eval`, described as a conda
+environment. What they actually use is `<prefix>/bin/pip` and
+`<prefix>/bin/python`, so the image creates a Python 3.12 venv at exactly that
+path — the newest interpreter both pinned wheels publish, since the benchmark's
+README never states the authors' version. `conda` itself is
+`bench/wildclaw/conda_shim.sh`: it answers `conda run -n eval …` and the env
+listings for real, and for anything else exits non-zero naming the interpreter
+path. It says in its own header that it is a shim, because a fake nobody
+documented is the inert control this repository keeps re-learning about.
+
+The two SAM3 pins, `ffmpeg`, `poppler-utils` and `playwright` are pre-installed
+even though the warmups install them anyway: the warmup still runs — we never
+edit a task's declared warmup — it simply becomes a satisfied no-op instead of
+a network round-trip charged to the task's own clock. That is most of the
+~800MB this layer adds to a local-only image.
+
+**Two gaps are open, and named rather than discovered in a transcript**
+(`KNOWN_GAPS` in `warmup_env.py`):
+
+- **torch is not in the `eval` environment.** SAM3 depends on `timm`, hence
+  torch, and the SAM3 warmups install only numpy and opencv — so the authors'
+  environment carries it already. A CPU torch is ~1GB on an image all 60 tasks
+  pull, for two of them. Build with `--build-arg EVAL_TORCH=1` when measuring
+  `02_Code_Intelligence`; otherwise the agent installs it itself, inside its
+  1200s budget.
+- **Warmups still reach the network.** `apt-get update`, `npm install -g`,
+  `pip install` and `playwright install chromium` all do. The pre-installs
+  above cover the common lines; anything else needs a reachable mirror.
+
 ## Why it is shaped this way
 
 **The harness under test never grades itself.** Scoring is each task's own
