@@ -1,3 +1,9 @@
+## [1.99.3](https://github.com/Ironsail-llc/genus-os/compare/v1.99.2...v1.99.3) (2026-09-17)
+
+### Bug Fixes
+
+* **engine:** section verdicts reach items; an override must name why ([#595](https://github.com/Ironsail-llc/genus-os/issues/595)) ([ef2885d](https://github.com/Ironsail-llc/genus-os/commit/ef2885d0de7688f62074c8634de8423b6be8e2e6)), closes [#590](https://github.com/Ironsail-llc/genus-os/issues/590)
+
 ## [1.99.2](https://github.com/Ironsail-llc/genus-os/compare/v1.99.1...v1.99.2) (2026-09-17)
 
 ### Bug Fixes
