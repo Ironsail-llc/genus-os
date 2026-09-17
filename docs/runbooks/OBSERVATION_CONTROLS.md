@@ -277,9 +277,11 @@ Retention is two-layered:
 * **The run reaps its own on the way out.** `record_observation_verdicts`
   calls `exec_spill.prune_run_spills` at finalization, deleting every file
   whose stem matches that run's id, whether or not the ledger ever read them
-  back — in every workspace the run's own spills went to, not only the one the
-  finalizer was handed. A spill is written under the AGENT's workspace, which a
-  manifest may put elsewhere and which every benchmark run does.
+  back. It reaps the engine workspace it is handed, **plus every workspace that
+  appears among the run's own ledger entries** — a spill is written under the
+  AGENT's workspace, which a manifest may put elsewhere and which every
+  benchmark run does. Read the next bullet before relying on that second half:
+  it depends on there being a ledger.
 * **The 7-day sweep is the backstop**, for a run killed before it gets there.
   `robothor/engine/retention.py`'s `run_retention_cleanup()` now calls
   `exec_spill.prune_spill_files()` under the `"exec"` key of its results dict,
@@ -289,14 +291,50 @@ Retention is two-layered:
   every other retention policy in that module — "keep for zero days" reads as a
   misconfiguration, not an instruction.
 
-**The one gap, stated plainly:** the time-based sweep walks the INSTANCE
-workspace only. A spill written under an agent's own workspace and orphaned by
-a hard kill — a run that never reaches finalization at all — is collected by
-neither layer. If your fleet runs agents with their own `workspace:` and you
-see `.robothor/exec/` growing there, that is this gap and not a bug in the
-reap; `prune_spill_files(workspace=<that path>)` collects it, and a scheduled
-job per such workspace is the workaround until the sweep learns to enumerate
-them.
+## The retention gap, stated plainly
+
+**If you run agents with their own `workspace:`, read this before turning both
+ladders off.**
+
+The run-scoped reap learns where a run's spills went **from the ledger**, and
+the ledger is only built when at least one of `ROBOTHOR_TRUNCATION_LEDGER_MODE`
+and `ROBOTHOR_ACT_OBSERVE_MODE` is above `off` (`observation_ledger.
+observe_tool_call` returns early otherwise). The time-based sweep resolves the
+**instance** workspace and looks nowhere else. Put together, there are three
+cases and only one of them is safe:
+
+| Agent workspace | Ladders | What happens to its spills |
+|---|---|---|
+| the instance workspace | any | reaped at finalization; swept after 7 days if the run was killed. **Fine.** |
+| its own `workspace:` | either ladder on | reaped at finalization from the ledger's paths. A **hard kill** leaves them, and the sweep does not reach that tree. |
+| its own `workspace:` | **both off** | **nothing reaps them.** No ledger is built, so the finalizer only knows the engine workspace, and the sweep only knows the instance one. They accumulate on every completed run, not just killed ones. |
+
+Both ladders default to `observe`, so a stock instance is in row two. Row three
+is what an operator gets by turning both off — which is a reasonable thing to
+want and currently costs a growing directory.
+
+Until the sweep learns to enumerate the workspaces the engine actually used,
+collect them on a schedule, one invocation per agent workspace:
+
+```bash
+python3 - <<'PY'
+from robothor.engine.exec_spill import prune_spill_files
+# one line per agent workspace; retention_days matches the instance default
+for workspace in ("/srv/agents/research", "/srv/agents/ops"):
+    print(workspace, prune_spill_files(retention_days=7, workspace=workspace))
+PY
+```
+
+`prune_spill_files` walks `<workspace>/.robothor/exec/` and nothing else, so it
+cannot touch a file an agent moved somewhere useful. `retention_days <= 0`
+disables it rather than deleting everything, so a typo there is a no-op and not
+a purge.
+
+To find the trees that need it:
+
+```bash
+grep -l '^workspace:' docs/agents/*.yaml
+```
 
 Nothing reads a spill file after the run that wrote it ends. A directory
 nobody ever prunes is exactly the shape of the `analyze_image` spill's one bad

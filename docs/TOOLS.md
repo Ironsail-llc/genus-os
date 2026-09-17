@@ -402,23 +402,46 @@ manifest asked for.
 ### `exec` — what you see of a command's output
 
 A command's output reaches you through a bounded window: **~4,000 characters of
-stdout and ~2,000 of stderr**. Past that the result carries three more fields
-and a marker:
+stdout and ~2,000 of stderr**. Past that the result carries four more fields and
+a marker:
 
 ```json
 {
   "stdout": "…the first 4,000 characters…\n\n[truncated: 4000 of 12431 chars shown — the full output is at <workspace>/.robothor/exec/<run>__stdout__<id>.txt; read_file it, or re-run with a narrower command]",
   "stdout_truncated": true,
   "stdout_chars": 12431,
+  "stdout_shown_chars": 4000,
   "stdout_path": "<workspace>/.robothor/exec/<run>__stdout__<id>.txt",
   "exit_code": 0
 }
 ```
 
-**Truncation is pagination, not amputation.** The whole stream is written to
-that file before anything is cut, so `read_file` on `stdout_path` gets what the
-window could not hold. A stream that fit carries none of these fields at all —
-their absence means nothing was lost, and that is a promise you can rely on.
+`stdout_chars` is how much the command produced; `stdout_shown_chars` is how
+much of it is above, which is the marker's first number in a field. stderr
+carries the same four under `stderr_*`.
+
+**Truncation is pagination, not amputation** — up to a limit, and the limit is
+stated rather than discovered. The stream is written to that file before
+anything is cut, so `read_file` on `stdout_path` gets what the window could not
+hold. A stream that fit carries none of these fields at all, and that absence
+does mean nothing was lost.
+
+**Two things can make the file less than the whole**, and the result says so
+both times rather than leaving you to find out:
+
+* **The spill has its own ceiling** (`ROBOTHOR_EXEC_SPILL_MAX_BYTES`, 8 MiB by
+  default). A command that printed more than that gets a file holding the first
+  8 MiB, and the result then carries `"stdout_spill_capped": true` and
+  `"stdout_spill_chars"` — how much the file actually holds — while the marker
+  changes to *"the first N chars are at `<path>` (the spill is capped)"*. If
+  what you need is past that, narrow the command; the file will not have it.
+* **A spill that would leave the filesystem with under 64 MiB free is skipped.**
+  No file is written, `stdout_path` is absent, and the marker falls back to
+  *"re-run with a narrower command, or write the full output to a file and
+  read_file it"*. The command itself still succeeds.
+
+So the rule to work from: **`stdout_path` present and `stdout_spill_capped`
+absent means the file is the whole stream.** Anything else, read the marker.
 
 **Why it matters more than it looks.** Measured 2026-09-16: one listing call
 returned `{"records": [...], "total": 20}`, the cut landed inside record twelve,
@@ -429,10 +452,10 @@ scoring full marks on everything inside the window. Nothing about the reasoning
 was wrong; the input was smaller than the task.
 
 The spill lives under `<workspace>/.robothor/exec/`, so it is never mistaken for
-a deliverable. It is deleted when the run ends, and a retention sweep reaps
-anything a killed run orphaned. Reading it back is exempt from the repeat guard
-and the no-progress detector — paging in the rest of your own output is
-progress, not a loop.
+a deliverable. It is deleted when the run ends. Reading it back is exempt from
+the repeat guard and the no-progress detector — paging in the rest of your own
+output is progress, not a loop — and that exemption is keyed on the path
+resolving to a real spill file, so quoting the path in a comment buys nothing.
 
 `execute_code` has the same contract with a bigger window: see
 [its section](#execute_code-calling-tools-from-inside-python) and `stdout_file`.
