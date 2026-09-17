@@ -71,11 +71,15 @@ VERDICTS: dict[str, re.Pattern[str]] = {
     "critical": re.compile(
         r"(?<![-\w])(?:critical|p0|sev\s*0|sev\s*1|highest)(?![-\w])", re.IGNORECASE
     ),
-    "high": re.compile(r"(?<![-\w])(?:high(?:\s+priority)?|p1|urgent)(?![-\w])", re.IGNORECASE),
+    # `high[-\s]priority`, not `high\s+priority`: the fence is about compounds
+    # that mean something else, and `High-priority` is the same label spelled
+    # with a dash. It cannot re-open `High-level`, because the optional group
+    # only matches when the word after the hyphen is `priority`.
+    "high": re.compile(r"(?<![-\w])(?:high(?:[-\s]priority)?|p1|urgent)(?![-\w])", re.IGNORECASE),
     "medium": re.compile(
-        r"(?<![-\w])(?:medium(?:\s+priority)?|moderate|p2)(?![-\w])", re.IGNORECASE
+        r"(?<![-\w])(?:medium(?:[-\s]priority)?|moderate|p2)(?![-\w])", re.IGNORECASE
     ),
-    "low": re.compile(r"(?<![-\w])(?:low(?:\s+priority)?|p3|p4|minor)(?![-\w])", re.IGNORECASE),
+    "low": re.compile(r"(?<![-\w])(?:low(?:[-\s]priority)?|p3|p4|minor)(?![-\w])", re.IGNORECASE),
     # Every alternative here is a PHRASE, not a word. The bare word `test`
     # used to be one, so `**Priority: High** — this is a test-infrastructure
     # item` read as two verdicts, High and no-action (hostile review I7). A

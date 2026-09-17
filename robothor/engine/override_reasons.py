@@ -86,13 +86,24 @@ _REFERENT = re.compile(
     re.IGNORECASE,
 )
 
-#: …or a count of them. "40 messages", "three monitors", "two tickets": a
-#: quantity is a claim about how much there is to look at.
+#: …or a count of them. "40 messages", "three replies": a quantity says how
+#: much there is to look at. On its own beside a source it is NOT a reason —
+#: "because three customers exist" counts something and claims nothing — so it
+#: only ever qualifies the possessive below.
 _QUANTITY = re.compile(
     r"\b(?:\d{1,6}|one|two|three|four|five|six|seven|eight|nine|ten|"
     r"several|dozens?|hundreds?|thousands?)\b",
     re.IGNORECASE,
 )
+
+#: The possessive, which is a verb only when it says what is possessed. "The
+#: incident channel HAS 40 messages about it" points at something; "the
+#: customer has a point", "the engineer has seniority" and "the sender has
+#: priority" are the same word doing nothing (review, round 4).
+_POSSESSIVE = re.compile(r"\b(?:has|have|had)\b", re.IGNORECASE)
+
+#: How far after a possessive its object may be.
+_POSSESSED_REACH = 40
 
 #: …and what a source may be DOING. Round 3 took only the strong reporting
 #: verbs and so read "three monitors are red at 14:02" and "the incident
@@ -109,7 +120,7 @@ _CORROBORATION = re.compile(
     # exempted the sentence that names nothing (round 4, caught by its own test).
     r"reported|shows?|showed|showing|appears?|appeared|opened|raised|fired|"
     r"escalated|emailed|messaged|paged|phoned|called|replied|posted|said|says|wrote|"
-    r"logged|recorded|matched|matches|traced|reproduced|has|have|had)\b",
+    r"logged|recorded|matched|matches|traced|reproduced)\b",
     re.IGNORECASE,
 )
 
@@ -129,20 +140,32 @@ def _near(spans: list[int], others: list[int], reach: int = PAIR_REACH) -> bool:
     return any(abs(one - other) <= reach for one in spans for other in others)
 
 
+def _acts(window: str) -> list[int]:
+    """Where something is CLAIMED in this window, possessives qualified."""
+    acts = [match.start() for match in _CORROBORATION.finditer(window)]
+    for match in _POSSESSIVE.finditer(window):
+        after = window[match.end() : match.end() + _POSSESSED_REACH]
+        if _QUANTITY.search(after) or _REFERENT.search(after):
+            acts.append(match.start())
+    return acts
+
+
 def names_a_reason(chunk: str, start: int) -> bool:
     """True when what follows ``start`` names evidence that outranks a marker.
 
-    Either the source is doing something, or it has been pointed at: a handle,
-    a time, a link, an id, or a count of them. A referent or a verb with no
-    source is not a reason, and neither is a source with neither.
+    Two ways to name evidence, and a handle is one of them: something CLAIMED
+    about a source or about a referent (``@owner-a confirmed it``, ``INC-4412
+    was opened at 14:02``, ``https://… showed a live outage``), or a source
+    that has been pointed at by a referent (``the incident channel at 14:02``).
+    Requiring a source NOUN first made the most checkable reason a report can
+    give — an id, a link, an address — no reason at all (review, round 4).
+
+    What is never enough: a verb with nothing to attach to, a referent nobody
+    says anything about, or a source with neither.
     """
     window = _reach(chunk, start)
     sources = [match.start() for match in _SOURCE.finditer(window)]
-    if not sources:
-        return False
     referents = [match.start() for match in _REFERENT.finditer(window)]
-    return (
-        _near(sources, [match.start() for match in _CORROBORATION.finditer(window)])
-        or _near(sources, referents)
-        or _near(sources, [match.start() for match in _QUANTITY.finditer(window)], 40)
-    )
+    if not sources and not referents:
+        return False
+    return _near(sources + referents, _acts(window)) or _near(sources, referents)

@@ -456,7 +456,7 @@ CAPS = {
     # extract: the counts are produced by the same single pass over the document
     # that produces the findings, and computing them anywhere else would mean
     # scanning twice.
-    "robothor/engine/verdict_commitment.py": 443,
+    "robothor/engine/verdict_commitment.py": 452,
     # Bounded from the day they land, the schedule_reconcile.py rule: these are
     # the modules that would otherwise absorb every new document shape and
     # every new metadata key.
@@ -471,21 +471,23 @@ CAPS = {
     # hyphen as a boundary, so `## High-level findings` was a *high* section
     # and filed every item under it twice — and its reasoning, which is the
     # part a future reader needs (258 after ruff split the four re.compile calls).
-    "robothor/engine/verdict_shapes.py": 258,
+    "robothor/engine/verdict_shapes.py": 262,
     # The section tree. Bounded from the day it lands: this is where every
     # future rule about how a document is SHAPED will want to go, and the two
     # it already carries are the ones that kept the repair from inventing
     # findings of its own — only a heading that IS the label becomes a scope,
     # and only one that names exactly ONE verdict (`## Critical / High priority
-    # items` filed every item under it under both).
-    "robothor/engine/verdict_sections.py": 134,
+    # items` filed every item under it under both) — plus `heading_subject`,
+    # which is where "a block headed by an item decides THAT item" belongs:
+    # it is a question about the document, not about the ladder.
+    "robothor/engine/verdict_sections.py": 156,
     # Whether an override named a reason. Bounded for the same reason and with
     # the same history: three rounds of review each found a sentence that named
     # nothing and was exempted anyway — and, the last time, six that named
     # something in ordinary English and were not. The record of which sentences
     # those were, and why the bare copula is still not enough, is most of this
-    # file; the classifier itself is four vocabularies and ten lines.
-    "robothor/engine/override_reasons.py": 148,
+    # file; the classifier itself is five vocabularies and a dozen lines.
+    "robothor/engine/override_reasons.py": 171,
     "robothor/engine/provenance_markers.py": 286,
     "robothor/engine/skill_contract.py": 73,
     "robothor/engine/code_exec_guards.py": 116,

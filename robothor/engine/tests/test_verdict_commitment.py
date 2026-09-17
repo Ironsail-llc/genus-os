@@ -1536,3 +1536,174 @@ class TestTheClassifierEnforcesDisclosureNotSoundness:
             f"- **Message ID:** msg_2209\n{note}\n"
         )
         assert hedged_items(report, RESULTS_WITH_MARKER) == []
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Round 5 — the checkable reasons, and a cross-reference
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestTheMostCheckableReasonsAreReasons:
+    """Round 4 required a source NOUN before anything else was looked at, so a
+    handle, a ticket key, a link or an address — the most checkable things a
+    report can name — could never be the reason, whatever verb sat beside
+    them."""
+
+    SECTION = (
+        "# Triage\n\n## Critical\n\n### 1. Platform outage\n"
+        "- **Message ID:** msg_2209\n"
+        "- **Note:** {note}\n"
+    )
+
+    def _findings(self, note: str) -> list[tuple[str, str]]:
+        return hedged_items(self.SECTION.format(note=note), RESULTS_WITH_MARKER)
+
+    @pytest.mark.parametrize(
+        "note",
+        [
+            "The metadata was disregarded because @owner-a confirmed it.",
+            "The metadata was disregarded because @owner-a confirmed the outage at 14:02.",
+            "The metadata was disregarded because INC-4412 was opened at 14:02.",
+            "The metadata was disregarded because ABC-12 shows nothing unusual.",
+            "The metadata was disregarded because https://status.example.com showed a live outage.",
+            "The metadata was disregarded because qa-lead@example.com confirmed it is real.",
+            "The metadata was disregarded because msg_2210 from the same account "
+            "reported the same fault.",
+        ],
+        ids=["handle", "handle-time", "ticket", "ticket-shows", "url", "address", "sibling-item"],
+    )
+    def test_a_referent_with_a_verb_is_a_reason(self, note: str) -> None:
+        assert self._findings(note) == []
+
+    @pytest.mark.parametrize(
+        "note",
+        [
+            "The metadata was disregarded and the item was routed to @owner-a.",
+            "The metadata was disregarded because reasons.",
+        ],
+        ids=["routed-to", "because-reasons"],
+    )
+    def test_a_referent_with_nothing_said_about_it_is_not(self, note: str) -> None:
+        assert [item for item, _why in self._findings(note)] == ["msg_2209"]
+
+
+class TestACrossReferenceDoesNotDoubleBookItsTarget:
+    """A block whose heading names an item is ABOUT that item; the other ids in
+    it are references. `### 4. msg_3104 — duplicate of msg_3101` under
+    `## No action required` filed msg_3101 — decided Critical in its own
+    section — under a second verdict it never received."""
+
+    CROSS_REFERENCE = (
+        "# Support triage\n\n"
+        "## Critical Issues (3)\n\n"
+        "### 1. msg_3101 — complete platform outage\n"
+        "- Routed to @owner-a.\n\n"
+        "## No action required\n\n"
+        "### 4. msg_3104 — duplicate of msg_3101\n"
+        "- Not routed.\n"
+    )
+
+    def _per_item(self, report: str) -> dict[str, set[str]]:
+        from robothor.engine.verdict_sections import blocks
+        from robothor.engine.verdict_shapes import item_ids, verdicts_in
+
+        per_item: dict[str, set[str]] = {}
+        for block in blocks(report):
+            found = verdicts_in(block)
+            for item in item_ids(block):
+                per_item.setdefault(item, set()).update(found)
+        return per_item
+
+    def test_the_referenced_item_keeps_its_own_verdict(self) -> None:
+        findings = hedged_items(self.CROSS_REFERENCE)
+        assert findings == []
+
+    def test_each_item_is_filed_where_its_own_section_put_it(self) -> None:
+        from robothor.engine.verdict_commitment import inspect_report
+
+        inspected = inspect_report(self.CROSS_REFERENCE)
+        assert inspected.items == 2
+        assert inspected.findings == []
+
+    def test_a_list_block_still_files_every_id_in_it(self) -> None:
+        """The other half: a block whose heading names no item — a severity
+        section with a bullet per item — still assigns its verdict to all of
+        them. That is the flat layout the control already caught, and it must
+        not move."""
+        assert [item for item, _why in hedged_items(DOUBLE_VERDICT_REPORT)] == ["msg_2209"]
+        assert self._per_item(DOUBLE_VERDICT_REPORT)["msg_2212"] == {"no-action"}
+
+    def test_the_flat_shape_is_unchanged(self) -> None:
+        assert hedged_items(FLAT_REPORT, MEASURED_RESULTS) == [("msg_2209", MEASURED_FINDING)]
+
+
+class TestAPossessiveNeedsSomethingToPossess:
+    """`has` was added to the verb list for "the incident channel has 40
+    messages about it", and it brought "the customer has a point" with it."""
+
+    SECTION = (
+        "# Triage\n\n## Critical\n\n### 1. Platform outage\n"
+        "- **Message ID:** msg_2209\n"
+        "- **Note:** {note}\n"
+    )
+
+    def _findings(self, note: str) -> list[tuple[str, str]]:
+        return hedged_items(self.SECTION.format(note=note), RESULTS_WITH_MARKER)
+
+    @pytest.mark.parametrize(
+        "note",
+        [
+            "The metadata was disregarded because the customer has a point.",
+            "The metadata was disregarded because the engineer has seniority.",
+            "The metadata was disregarded because the sender has priority.",
+            "The metadata was disregarded because three customers exist.",
+        ],
+        ids=["has-a-point", "has-seniority", "has-priority", "three-exist"],
+    )
+    def test_having_something_unnamed_is_not_evidence(self, note: str) -> None:
+        assert [item for item, _why in self._findings(note)] == ["msg_2209"]
+
+    @pytest.mark.parametrize(
+        "note",
+        [
+            "The metadata was disregarded because the incident channel has 40 messages about it.",
+            "The metadata was disregarded because the thread has three replies from the customer.",
+        ],
+        ids=["40-messages", "three-replies"],
+    )
+    def test_having_something_counted_still_is(self, note: str) -> None:
+        assert self._findings(note) == []
+
+
+class TestAHyphenatedPriorityIsStillThatPriority:
+    """The compound fence is about compounds that mean something else. A hyphen
+    inside the priority phrase itself is the same label spelled with a dash."""
+
+    def _per_item(self, report: str) -> dict[str, set[str]]:
+        from robothor.engine.verdict_sections import blocks
+        from robothor.engine.verdict_shapes import item_ids, verdicts_in
+
+        per_item: dict[str, set[str]] = {}
+        for block in blocks(report):
+            found = verdicts_in(block)
+            for item in item_ids(block):
+                per_item.setdefault(item, set()).update(found)
+        return per_item
+
+    def test_a_hyphenated_priority_section_is_a_scope(self) -> None:
+        report = (
+            "# Weekly report\n\n## High-priority items\n\n"
+            "### 1. A note\n- **Message ID:** msg_3201\n"
+        )
+        assert self._per_item(report)["msg_3201"] == {"high"}
+
+    def test_a_hyphenated_priority_label_is_a_verdict(self) -> None:
+        report = "# Weekly report\n\n### 1. A note\n- **Severity: Low-priority** msg_3202 waits.\n"
+        assert self._per_item(report)["msg_3202"] == {"low"}
+
+    def test_the_unrelated_compound_is_still_not_one(self) -> None:
+        report = (
+            "# Weekly report\n\n## High-level findings\n\n"
+            "### 1. A note\n- **Message ID:** msg_3203\n"
+        )
+        assert self._per_item(report)["msg_3203"] == set()

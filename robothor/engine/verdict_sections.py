@@ -44,9 +44,9 @@ from __future__ import annotations
 
 import re
 
-from robothor.engine.verdict_shapes import VERDICTS, verdicts_in
+from robothor.engine.verdict_shapes import VERDICTS, item_id_spans, verdicts_in
 
-__all__ = ["blocks"]
+__all__ = ["blocks", "heading_subject"]
 
 _HAS_HEADING = re.compile(r"^#{1,6}\s", re.MULTILINE)
 _AT_HEADING = re.compile(r"^(?=#{1,6}\s)", re.MULTILINE)
@@ -132,3 +132,25 @@ def blocks(text: str) -> list[str]:
             ancestors.append((len(heading.group(1)), _scope_line(heading.group(0))))
         out.append(part if not scope or verdicts_in(part) else f"{scope}\n{part}")
     return out
+
+
+def heading_subject(block: str) -> str:
+    """The item this block's own heading is ABOUT, or ``""``.
+
+    A heading that leads with an identifier names the item the block decides;
+    any further identifier in it is a reference to somebody else's item.
+    ``### 4. msg_3104 — duplicate of msg_3101`` is a verdict about msg_3104,
+    and reading it as one about msg_3101 too filed an item decided Critical in
+    its own section under a second verdict it never received (review, round 4).
+
+    The block may arrive with its inherited scope line in front of it, so the
+    block's own heading is the LAST of the leading heading lines.
+    """
+    heading = ""
+    for line in block.splitlines():
+        if line.startswith("#"):
+            heading = line
+        elif line.strip():
+            break
+    spans = item_id_spans(heading)
+    return spans[0][1] if spans else ""

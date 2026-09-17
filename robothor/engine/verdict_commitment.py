@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from robothor.engine.provenance_markers import markers_by_item, tool_result_text
-from robothor.engine.verdict_sections import blocks
+from robothor.engine.verdict_sections import blocks, heading_subject
 from robothor.engine.verdict_shapes import (
     MAX_SCAN_CHARS,
     hands_the_verdict_back,
@@ -160,8 +160,17 @@ def inspect_report(report_text: str | None, results_text: str | None = None) -> 
         asks_reader = hands_the_verdict_back(block)
         hedge = hedges_the_verdict(block)
         override = overrides_a_marker(block)
+        # A block headed by an item decides THAT item; the other identifiers in
+        # it are references. `### 4. msg_3104 — duplicate of msg_3101` under
+        # `## No action required` filed msg_3101 — Critical in its own section —
+        # under a second verdict it never received. A block whose heading names
+        # no item (a severity section with a bullet per item, the flat layout
+        # this control already caught) still assigns to every id in it.
+        subject = heading_subject(block)
         for item in item_ids(block):
-            per_item.setdefault(item, set()).update(found)
+            per_item.setdefault(item, set())
+            if not subject or item == subject:
+                per_item[item].update(found)
             if asks_reader:
                 handback[item] = True
             if hedge:
