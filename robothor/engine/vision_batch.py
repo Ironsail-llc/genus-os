@@ -675,6 +675,7 @@ async def _answer_one(
     detail: str,
     timeout: float,
     contract: Contract,
+    spent: list[Attempt],
 ) -> Attempt:
     """One image's answer, with the single re-ask a rejected label earns.
 
@@ -683,12 +684,23 @@ async def _answer_one(
     image in the batch a second vision call because a weak backend does not
     emit a marker would undo the property the whole tool rests on. That row
     says ``reason_missing`` instead, so the gap is visible rather than filled in.
+
+    Both calls share ONE per-image budget, deliberately: the caller wraps this
+    whole coroutine in a single ``wait_for``, which is what keeps the module's
+    "deadline plus one round" guarantee true — giving the re-ask a budget of
+    its own would double the overshoot a hung backend can cause. The cost of
+    that choice is that a slow first reply can leave no room for the second,
+    so the first attempt is appended to *spent* the moment it is paid for.
+    A row that times out or blows up mid-re-ask then still reports the tokens
+    and money that actually left, instead of losing them exactly when a batch
+    is running long.
     """
     first = await _ask_once(
         backend, data, mime, question + contract_suffix(contract), detail, timeout, contract
     )
     if not first.reply.rejected:
         return first
+    spent.append(first)
     second = await _ask_once(
         backend,
         data,
@@ -765,26 +777,56 @@ async def _analyze_one(
                 "ms": int((time.monotonic() - started) * 1000),
             }
 
+        spent: list[Attempt] = []
         try:
             attempt = await asyncio.wait_for(
-                _answer_one(backend, data, mime, question, detail, timeout, contract),
+                _answer_one(backend, data, mime, question, detail, timeout, contract, spent),
                 timeout=timeout,
             )
         except TimeoutError:
-            return {
-                "path": str(resolved),
-                "error": f"the vision model timed out after {timeout:.0f}s on this image",
-                "ms": int((time.monotonic() - started) * 1000),
-            }
+            during = " while it was being asked again" if spent else ""
+            return _paid_for(
+                {
+                    "path": str(resolved),
+                    "error": (
+                        f"the vision model timed out after {timeout:.0f}s on this image{during}"
+                    ),
+                    "ms": int((time.monotonic() - started) * 1000),
+                },
+                spent,
+            )
         except Exception as exc:  # noqa: BLE001 - one image's failure, reported as one row
             logger.warning("vision call failed for %s: %s", resolved.name, exc)
-            return {
-                "path": str(resolved),
-                "error": f"{type(exc).__name__}: {exc}",
-                "ms": int((time.monotonic() - started) * 1000),
-            }
+            return _paid_for(
+                {
+                    "path": str(resolved),
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "ms": int((time.monotonic() - started) * 1000),
+                },
+                spent,
+            )
 
     return _row(attempt, resolved, found.substituted_for, backend, contract, started)
+
+
+def _paid_for(row: dict[str, Any], spent: list[Attempt]) -> dict[str, Any]:
+    """Put a paid-for first call onto a row whose second call never landed.
+
+    A re-ask that times out or blows up still sent an image to a provider and
+    still got billed for it. The runner adds a tool result's ``cost_usd`` to
+    the run total, so dropping it here would spend money invisibly — the same
+    reason the batch reports its total at all — and ``reasked`` is the signal
+    that tells an agent why one row cost twice what its neighbours did.
+    """
+    tokens = sum(attempt.tokens for attempt in spent)
+    cost = sum(attempt.cost for attempt in spent)
+    if tokens:
+        row["tokens"] = tokens
+    if cost:
+        row["cost_usd"] = round(cost, 6)
+    if spent:
+        row["reasked"] = True
+    return row
 
 
 def _row(
@@ -1163,27 +1205,49 @@ async def analyze_images(
     if notes:
         out["note"] = " ".join(notes)
     if len(json.dumps(out, default=str)) > budget:
-        _spill(out, list(results), notes=notes, root=root, run_id=run_id, budget=budget)
+        _spill(
+            out,
+            list(results),
+            notes=notes,
+            root=root,
+            run_id=run_id,
+            budget=budget,
+            field="choice" if contract.labels else "answer",
+        )
     return out
 
 
-def _spill_sentence(total: int, shown: int, written: Path | None, sampled: bool = False) -> str:
+def _spill_sentence(
+    total: int,
+    shown: int,
+    written: Path | None,
+    sampled: bool = False,
+    field: str = "answer",
+) -> str:
     """What the agent is told about a table that went to disk.
 
     The path is NOT repeated here: it is already in ``results_file``, and a
     note that quotes it too spends a long workspace path twice out of a budget
     measured in hundreds of characters.
 
-    ``sampled`` is not decoration. A note promising a spot-check beside a
-    result that has none is the tool lying about its own shape, and the sample
-    is the first thing the budget takes back — so the probe measures the widest
-    sentence and the caller is told which one it actually got.
+    Everything it says is true of the result it is attached to. ``sampled``
+    decides whether a spot-check is promised — the sample is the first thing
+    the budget takes back, so a note promising one beside a result that has
+    none is the tool lying about its own shape. ``field`` names the key the
+    rows actually carry, which is ``choice`` on a constrained batch. And one
+    row is "the first row", not "the first 1 are". The probe measures the
+    widest of these, so the caller is always told what it actually got.
     """
-    preview = f"the first {shown} are here" if shown else "none of them fit here"
+    if shown == 0:
+        preview = "none of them are here"
+    elif shown == 1:
+        preview = "the first row is here"
+    else:
+        preview = f"the first {shown} are here"
     spot = ", sample spans the distinct answers" if sampled else ""
     if written is not None:
         return (
-            f"{total} rows did not fit, so {preview}{spot}, and all {total} — answer, "
+            f"{total} rows did not fit, so {preview}{spot}, and all {total} — {field}, "
             "reason, tokens and cost — are in results_file. Work over that file with "
             "exec (jq or python) rather than reading it back whole; do not ask about "
             "these images again."
@@ -1203,6 +1267,7 @@ def _spill(
     root: Path,
     run_id: str,
     budget: int,
+    field: str,
 ) -> None:
     """Move the full table to a file, leave the totals and a preview. Mutates *out*.
 
@@ -1248,7 +1313,9 @@ def _spill(
     # on. Probe with `shown = len(rows)`, the widest number it can ever be, so
     # the note the caller actually gets is never longer than the one that was
     # measured.
-    widest = " ".join([*notes, _spill_sentence(len(rows), len(rows), written, sampled=True)])
+    widest = " ".join(
+        [*notes, _spill_sentence(len(rows), len(rows), written, sampled=True, field=field)]
+    )
     sample = _pick_sample(rows, MAX_SAMPLE_ROWS)
     while True:
         probe = {
@@ -1271,5 +1338,5 @@ def _spill(
     out["results_shown"] = shown
     out["results_total"] = len(rows)
     out["note"] = " ".join(
-        [*notes, _spill_sentence(len(rows), shown, written, sampled=bool(sample))]
+        [*notes, _spill_sentence(len(rows), shown, written, bool(sample), field)]
     )

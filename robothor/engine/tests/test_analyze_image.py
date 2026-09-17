@@ -1649,3 +1649,151 @@ class TestTheSampleNeverPadsItself:
         out = await _analyze(tmp_path, _images(tmp_path, 60), max_concurrency=1)
         seen = [row["answer"] for row in out["sample"]]
         assert len(seen) == len(set(seen)) == 2
+
+
+class TestARowNeverLosesWhatItAlreadyPaidFor:
+    """Hostile review M5. The re-ask shares the first call's per-image budget —
+    both calls sit inside one `asyncio.wait_for` — which is the right bound
+    (the module's "deadline plus ONE round" guarantee depends on it) but used
+    to lose the first call's ledger: a slow first reply near the deadline
+    turned an off-list row into a plain `timed out` row with no `reasked` and
+    no `tokens`/`cost_usd`, so a remote backend's spend went unreported
+    exactly when a batch was running long.
+
+    The money was spent. The row says so.
+    """
+
+    @staticmethod
+    def _remote(monkeypatch, replies, delay=0.0):
+        seen: list[int] = []
+
+        async def fake_acompletion(**kwargs: Any) -> Any:
+            seen.append(1)
+            if delay:
+                await asyncio.sleep(delay)
+            text = replies[min(len(seen) - 1, len(replies) - 1)]
+            return type(
+                "R",
+                (),
+                {
+                    "choices": [type("C", (), {"message": type("M", (), {"content": text})()})()],
+                    "usage": type("U", (), {"prompt_tokens": 800, "completion_tokens": 12})(),
+                },
+            )()
+
+        monkeypatch.setattr(vision_batch, "pooled_acompletion", fake_acompletion)
+        monkeypatch.setattr(
+            vision_batch,
+            "resolve_backend",
+            lambda: (vision_batch.Backend("remote", "openrouter/z-ai/glm-5.3-flash"), ""),
+        )
+        return seen
+
+    async def test_a_timeout_mid_re_ask_still_reports_the_first_calls_spend(
+        self, tmp_path, monkeypatch
+    ):
+        self._remote(monkeypatch, ["ANSWER: banana\nWHY: no"], delay=0.20)
+        monkeypatch.setattr(vision_batch, "_per_image_timeout", lambda: 0.30)
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["chart", "photo"])
+        row = out["results"][0]
+
+        assert "timed out" in row["error"]
+        assert row["reasked"] is True, "the agent must see that a second call was started"
+        assert row["tokens"] == 812, "the first call was paid for"
+        assert row["cost_usd"] > 0
+        assert out["tokens"] == 812, "and the batch total must agree"
+        assert out["cost_usd"] > 0
+
+    async def test_a_re_ask_that_raises_also_keeps_the_first_calls_spend(
+        self, tmp_path, monkeypatch
+    ):
+        seen: list[int] = []
+
+        async def fake_acompletion(**kwargs: Any) -> Any:
+            seen.append(1)
+            if len(seen) > 1:
+                raise RuntimeError("provider went away")
+            return type(
+                "R",
+                (),
+                {
+                    "choices": [
+                        type(
+                            "C",
+                            (),
+                            {"message": type("M", (), {"content": "ANSWER: banana"})()},
+                        )()
+                    ],
+                    "usage": type("U", (), {"prompt_tokens": 800, "completion_tokens": 12})(),
+                },
+            )()
+
+        monkeypatch.setattr(vision_batch, "pooled_acompletion", fake_acompletion)
+        monkeypatch.setattr(
+            vision_batch,
+            "resolve_backend",
+            lambda: (vision_batch.Backend("remote", "openrouter/z-ai/glm-5.3-flash"), ""),
+        )
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["chart", "photo"])
+        row = out["results"][0]
+        assert "provider went away" in row["error"]
+        assert row["tokens"] == 812
+        assert row["reasked"] is True
+
+    async def test_a_row_that_never_re_asked_claims_nothing(self, tmp_path, monkeypatch):
+        self._remote(monkeypatch, ["ANSWER: chart\nWHY: bars"], delay=0.20)
+        monkeypatch.setattr(vision_batch, "_per_image_timeout", lambda: 0.05)
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["chart", "photo"])
+        row = out["results"][0]
+        assert "timed out" in row["error"]
+        assert "reasked" not in row, "nothing was re-asked, so nothing is claimed"
+        assert "tokens" not in row
+
+
+class TestTheSpillNoteDescribesWhatIsActuallyThere:
+    """Hostile review M4. The note rendered "so **the first 1 are here**" in
+    the common heavily-spilled case, said "none of them fit here" right after
+    "did not fit", and promised the file holds "**answer**, reason, tokens and
+    cost" when a `choices` batch's rows carry `choice`. A note is the one part
+    of the result an agent reads as prose; it has to describe the result it is
+    attached to."""
+
+    @staticmethod
+    def _sentence(total, shown, sampled=True, field="answer"):
+        return vision_batch._spill_sentence(
+            total, shown, Path("/ws/.robothor/analyze_image/r-1.json"), sampled, field
+        )
+
+    def test_one_row_is_singular(self):
+        assert "the first row is here" in self._sentence(200, 1)
+        assert "the first 1 are" not in self._sentence(200, 1)
+
+    def test_several_rows_are_plural(self):
+        assert "the first 7 are here" in self._sentence(200, 7)
+
+    def test_no_rows_does_not_repeat_did_not_fit(self):
+        sentence = self._sentence(200, 0)
+        assert sentence.count("did not fit") == 1
+        assert "none of them fit here" not in sentence
+
+    def test_the_file_is_described_by_the_key_the_rows_actually_use(self):
+        assert "choice, reason" in self._sentence(200, 7, field="choice")
+        assert "answer, reason" in self._sentence(200, 7, field="answer")
+
+    def test_the_sample_is_only_promised_when_there_is_one(self):
+        assert "sample" in self._sentence(200, 7, sampled=True)
+        assert "sample" not in self._sentence(200, 7, sampled=False)
+
+    async def test_a_choices_batch_says_choice_in_its_note(self, tmp_path, monkeypatch):
+        async def answer(data: bytes, prompt: str = "", **kwargs: Any) -> str:
+            return "ANSWER: chart\nWHY: " + "bars and a titled axis, at length " * 3
+
+        monkeypatch.setattr(vision_batch, "describe_image_bytes", answer)
+        monkeypatch.setattr(
+            vision_batch,
+            "resolve_backend",
+            lambda: (vision_batch.Backend("local", "test-vlm"), ""),
+        )
+        out = await _analyze(tmp_path, _images(tmp_path, 60), choices=["chart", "photo"])
+        assert "choice, reason" in out["note"], out["note"]
+        assert "answer, reason" not in out["note"]

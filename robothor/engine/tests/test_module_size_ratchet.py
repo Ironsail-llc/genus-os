@@ -153,7 +153,16 @@ CAPS = {
     # extraction size is the only one that makes the extraction a one-way door.
     # 1276 -> 1275: dropping the sample top-up loop (review I3). The cap
     # follows the file DOWN, or the next change banks a line it did not earn.
-    "robothor/engine/vision_batch.py": 1275,
+    # 1275 -> 1342: review M4 and M5. A row that times out or blows up mid
+    # re-ask now reports the tokens and money the FIRST call already spent
+    # (`_paid_for`) instead of dropping them, and the spill note is told which
+    # key the rows actually carry so it stops promising "answer" to a batch
+    # whose rows say "choice". Both are corrections to what this module
+    # REPORTS, which is its own subject; there is no cohesive cluster to lift
+    # out of a 20-line ledger helper and a threaded argument. The spill/budget
+    # cluster is the extraction this file will want next, and it is a change
+    # of its own rather than one made in a review round.
+    "robothor/engine/vision_batch.py": 1342,
     # 248 -> 351: the reply parser. Review finding I1 measured three ordinary
     # model formatting habits — both markers on one line, a JSON object, a
     # parenthetical gloss — each turning a whole batch into `error` rows at

@@ -233,10 +233,31 @@ each row comes back as a validated `choice`, spelled the way **you** spelled it
 rather than the way the model did, so rows group without splitting on a
 trailing full stop or a capital letter. A reply that names none of them is
 asked once more, quoting what was rejected; if the second reply is off-list too
-the row becomes an `error`. It is never squeezed into the nearest label — no
-prefix match, no fuzzy match — so `["cat", "category"]` stays two answers and a
-reply of `categ` is neither. Leave `choices` out and the answer is free text
+the row becomes an `error`. Leave `choices` out and the answer is free text
 under `answer`, as before.
+
+*The matching rule, exactly.* Both the reply and each label are put through the
+same normalisation — **case folded, surrounding punctuation and markdown
+stripped, inner whitespace collapsed** — and then compared for **equality**.
+Nothing else matches:
+
+| Reply, against `choices: ["photo", "chart"]` | Result |
+|---|---|
+| `photo`, `Photo`, `photo.`, `**photo**`, `"photo"` | `choice: "photo"` |
+| `a photo of a beach` | off-list → re-asked → `error` |
+| `照片` | off-list → re-asked → `error` |
+| `categ`, against `["cat", "category"]` | off-list — neither, and `cat` never swallows `category` |
+
+There is **no prefix match, no substring match and no edit distance**. Two
+labels that would normalise to the same key (`["Chart", "chart."]`) are refused
+when you pass them, rather than silently merged, so a `choice` always names
+exactly one of the labels you gave.
+
+The tool also reads the shapes models actually write, without loosening that
+rule: `ANSWER: chart WHY: bars` on one line, `{"answer": "chart", "why":
+"bars"}`, a ```` ``` ```` fence, a `<think>` preamble, and `chart (bars)` all
+yield the label plus its reason. What is extracted still has to *be* a label —
+`banana (a chart)` names nothing and is off-list like anything else.
 
 **Every answered row carries a `reason`** — one short sentence (capped at 120
 characters) of what the model saw. That is what makes a batch auditable:
