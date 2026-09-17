@@ -217,12 +217,21 @@ def correction_suffix(contract: Contract, rejected: str) -> str:
     )
 
 
+#: What a model may put AROUND a marker word: whitespace, markdown bold or
+#: italic, an inline-code backtick, a bullet, a blockquote arrow, a heading
+#: hash. Defined ONCE and shared by all three marker patterns below, because
+#: it was hand-written three times and the backtick went missing from every
+#: copy — so ```ANSWER:` chart`` was read as a wrong answer, re-asked, and
+#: returned as an ``error`` at twice the cost. Three copies of a character
+#: class is three chances to forget the next character somebody's model likes.
+_MARKER_EDGE = r"[\s*_`#>\-]"
+
 #: A model that has been asked for two labelled lines writes them with markdown
-#: bold, a bullet, a heading hash or a full-width colon about as often as
-#: plainly. ``REASON`` is accepted beside ``WHY`` because it is what a model
-#: reaches for when the question already contains the word "why".
-_ANSWER_LINE = re.compile(r"(?im)^[\s*_#>\-]*answer[\s*_]*[:：]\s*(.+?)\s*$")
-_WHY_LINE = re.compile(r"(?im)^[\s*_#>\-]*(?:why|reason)[\s*_]*[:：]\s*(.+?)\s*$")
+#: bold, inline code, a bullet, a heading hash or a full-width colon about as
+#: often as plainly. ``REASON`` is accepted beside ``WHY`` because it is what a
+#: model reaches for when the question already contains the word "why".
+_ANSWER_LINE = re.compile(rf"(?im)^{_MARKER_EDGE}*answer{_MARKER_EDGE}*[:：]\s*(.+?)\s*$")
+_WHY_LINE = re.compile(rf"(?im)^{_MARKER_EDGE}*(?:why|reason){_MARKER_EDGE}*[:：]\s*(.+?)\s*$")
 
 #: The same two markers where they appear MID-LINE. A model that was asked for
 #: two lines writes them on one often enough that treating it as a wrong answer
@@ -233,7 +242,10 @@ _WHY_LINE = re.compile(r"(?im)^[\s*_#>\-]*(?:why|reason)[\s*_]*[:：]\s*(.+?)\s*
 #: marker, and underscore bold slipped through the one pattern meant to catch
 #: emphasis. Requiring a real separator in front also keeps ``somewhy: x`` from
 #: being split in half, which is what ``\b`` was there for.
-_INLINE_WHY = re.compile(r"(?:^|[\s*_#>\-])[\s*_#>\-]*(?:why|reason)[\s*_]*[:：]\s*", re.IGNORECASE)
+_INLINE_WHY = re.compile(
+    rf"(?:^|{_MARKER_EDGE}){_MARKER_EDGE}*(?:why|reason){_MARKER_EDGE}*[:：]\s*",
+    re.IGNORECASE,
+)
 
 #: A reasoning model's scratchpad, and a fenced block. Both wrap a perfectly
 #: good reply in characters the markers are then looked for inside.

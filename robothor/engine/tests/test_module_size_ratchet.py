@@ -188,7 +188,13 @@ CAPS = {
     # feature being added to it. This module is ONE readable subject at 385
     # lines; splitting it would produce two files neither of which can be read
     # alone, which is the opposite of what the ratchet is for.
-    "robothor/engine/vision_contract.py": 385,
+    # 385 -> 397: R2-1. The three marker patterns each carried a hand-written
+    # character class and the backtick was missing from all three, so a model
+    # writing `ANSWER:` as inline code had every row rejected and re-asked.
+    # The class is now ONE named constant the three share — which is why this
+    # costs twelve lines instead of three characters, and why the next
+    # character somebody's model likes cannot go missing from two of them.
+    "robothor/engine/vision_contract.py": 397,
     # 277 -> 314: the approval budget. A proxied call passes the same approval
     # gate a turn's call does, which is right and which is also how a loop
     # could queue two hundred prompts at the operator. The check belongs where

@@ -1903,3 +1903,62 @@ class TestMarkdownEmphasisNeverReachesTheRow:
         row = out["results"][0]
         assert row["answer"] == "a bar chart"
         assert row["reason"] == "bars and an axis"
+
+
+class TestBacktickedMarkersAreStillMarkers:
+    """Re-check R2-1. The three marker patterns each carried a hand-written
+    prefix class — `[\\s*_#>\\-]` — that listed asterisk and underscore but not
+    the backtick, so a model that writes its markers as inline code got the
+    whole reply rejected, re-asked, and turned into an `error` at twice the
+    cost. Backtick is as ordinary a way to write `ANSWER:` as bold is.
+
+    The same drift is why this now comes from ONE constant: three copies of a
+    character class is three chances to forget the next character."""
+
+    SHAPES = [
+        "`ANSWER:` chart `WHY:` bars and an axis",
+        "`ANSWER`: chart `WHY`: bars and an axis",
+        "**`ANSWER:`** chart **`WHY:`** bars and an axis",
+        "ANSWER: chart `WHY:` bars and an axis",
+        "```\n`ANSWER:` chart\n`WHY:` bars and an axis\n```",
+    ]
+
+    @pytest.mark.parametrize("reply", SHAPES)
+    async def test_the_choices_path_reads_them_in_one_call(self, tmp_path, scripted, reply):
+        fake = scripted(reply)
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["chart", "photo"])
+        row = out["results"][0]
+        assert row["choice"] == "chart", row
+        assert len(fake.prompts) == 1, "a marker style must never cost a re-ask"
+
+    @pytest.mark.parametrize("reply", SHAPES)
+    async def test_the_free_text_path_reads_them_too(self, tmp_path, scripted, reply):
+        scripted(reply)
+        out = await _analyze(tmp_path, _images(tmp_path, 1))
+        row = out["results"][0]
+        assert row["answer"] == "chart", row
+        assert row["reason"] == "bars and an axis", row
+
+    async def test_a_backticked_batch_is_not_a_batch_of_errors(self, tmp_path, scripted):
+        """The shape of the defect: it was never one row, it was all of them."""
+        fake = scripted("`ANSWER:` chart `WHY:` bars and an axis")
+        out = await _analyze(tmp_path, _images(tmp_path, 10), choices=["chart", "photo"])
+        assert out["analyzed"] == 10
+        assert out["failed"] == 0
+        assert len(fake.prompts) == 10
+
+    def test_one_constant_feeds_every_marker_pattern(self):
+        """Three copies of a character class is three chances to forget the
+        next character, which is exactly how the backtick went missing."""
+        from robothor.engine import vision_contract as vc
+
+        for pattern in (vc._ANSWER_LINE, vc._WHY_LINE, vc._INLINE_WHY):
+            assert vc._MARKER_EDGE in pattern.pattern
+
+    def test_a_marker_word_inside_a_sentence_is_still_not_a_marker(self):
+        """The prefix class widening must not turn prose into a split."""
+        from robothor.engine.vision_contract import Contract, parse_reply
+
+        parsed = parse_reply("somewhy: not a marker", Contract())
+        assert parsed.answer == "somewhy: not a marker"
+        assert parsed.reason == ""

@@ -267,6 +267,14 @@ key called `answer`, `label` or `category`, while `{"answer": "42", "why": "the
 big number"}` is still read as an answer and its reason. Without that shape
 test a transcription would silently come back as one of its own fields.
 
+The two-key test is a shape test, not a mind-reader: an object that carries
+*both* key kinds is read as a reply whatever it was meant to be. A quiz-shaped
+payload — `{"question": "2+2?", "answer": "4", "explanation": "basic sum"}` —
+therefore folds to `answer: "4"` with `reason: "basic sum"`, and the `question`
+field is not in the row. If you are transcribing structured data rather than
+asking a question about it, say so in the question and read the row as a
+transcription, or ask for a field at a time.
+
 **Every answered row carries a `reason`** — one short sentence (capped at 120
 characters) of what the model saw. That is what makes a batch auditable:
 `{"answer": "1"}` is a bare token you can talk yourself out of believing, and
