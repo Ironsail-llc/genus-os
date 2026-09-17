@@ -3,7 +3,11 @@
 Extracted from ``verdict_commitment`` so that module can stay the LADDER — the
 task gate, the re-ask, the guardrail row — while the reading of a document
 lives here. The split is the one the ratchet asks for: this file grows when a
-new document shape is recognised, and the ladder does not grow at all.
+new document shape is recognised, and the ladder does not grow at all. Two of
+its neighbours came out of it on the same rule: ``verdict_sections`` for how
+far a verdict reaches from the heading that assigns it, ``override_reasons``
+for whether an override names what outranks a marker. Each is one question with
+its own vocabulary; what is left here is the vocabulary itself.
 
 Everything here is deliberately structural. A verdict is read only from a
 LABEL position (a heading, a bolded lead, a ``Severity:`` field) because prose
@@ -24,10 +28,11 @@ from __future__ import annotations
 
 import re
 
+from robothor.engine.override_reasons import names_a_reason
+
 __all__ = [
     "MAX_SCAN_CHARS",
     "VERDICTS",
-    "blocks",
     "hands_the_verdict_back",
     "hedges_the_verdict",
     "item_id_spans",
@@ -56,11 +61,25 @@ _ITEM_ID = re.compile(
 #: The verdict vocabulary. A closed list, because an open one would read a
 #: paragraph's adjectives as verdicts. Each entry is a label a triage
 #: deliverable puts at the head of a section.
+#:
+#: Every alternative is fenced by ``(?<![-\w])`` / ``(?![-\w])`` rather than by
+#: ``\b``, because a hyphen is a word boundary and a compound is one word.
+#: ``## High-level findings`` read as a *high* section and filed every item
+#: under it a second time (review, round 3); ``non-critical``, ``lower-priority``
+#: and ``high-touch`` are the same mistake waiting.
 VERDICTS: dict[str, re.Pattern[str]] = {
-    "critical": re.compile(r"\b(?:critical|p0|sev\s*0|sev\s*1|highest)\b", re.IGNORECASE),
-    "high": re.compile(r"\b(?:high(?:\s+priority)?|p1|urgent)\b", re.IGNORECASE),
-    "medium": re.compile(r"\b(?:medium(?:\s+priority)?|moderate|p2)\b", re.IGNORECASE),
-    "low": re.compile(r"\b(?:low(?:\s+priority)?|p3|p4|minor)\b", re.IGNORECASE),
+    "critical": re.compile(
+        r"(?<![-\w])(?:critical|p0|sev\s*0|sev\s*1|highest)(?![-\w])", re.IGNORECASE
+    ),
+    # `high[-\s]priority`, not `high\s+priority`: the fence is about compounds
+    # that mean something else, and `High-priority` is the same label spelled
+    # with a dash. It cannot re-open `High-level`, because the optional group
+    # only matches when the word after the hyphen is `priority`.
+    "high": re.compile(r"(?<![-\w])(?:high(?:[-\s]priority)?|p1|urgent)(?![-\w])", re.IGNORECASE),
+    "medium": re.compile(
+        r"(?<![-\w])(?:medium(?:[-\s]priority)?|moderate|p2)(?![-\w])", re.IGNORECASE
+    ),
+    "low": re.compile(r"(?<![-\w])(?:low(?:[-\s]priority)?|p3|p4|minor)(?![-\w])", re.IGNORECASE),
     # Every alternative here is a PHRASE, not a word. The bare word `test`
     # used to be one, so `**Priority: High** — this is a test-infrastructure
     # item` read as two verdicts, High and no-action (hostile review I7). A
@@ -68,9 +87,9 @@ VERDICTS: dict[str, re.Pattern[str]] = {
     # vocabulary that reports noise into the one table this flag's promotion
     # depends on.
     "no-action": re.compile(
-        r"\b(?:no\s+action(?:\s+required)?|not\s+escalated|false\s+positive|"
+        r"(?<![-\w])(?:no\s+action(?:\s+required)?|not\s+escalated|false\s+positive|"
         r"routing\s+test|test\s+message|automated\s+test|"
-        r"dismissed|duplicate|drill)\b",
+        r"dismissed|duplicate|drill)(?![-\w])",
         re.IGNORECASE,
     ),
 }
@@ -175,20 +194,6 @@ def item_ids(chunk: str) -> set[str]:
     return {item for _offset, item in item_id_spans(chunk)}
 
 
-def blocks(text: str) -> list[str]:
-    """The document cut into item-sized pieces.
-
-    On markdown headings where there are any, on blank lines where there are
-    not. The cut only decides how far a verdict reaches from its item; every
-    detector below re-anchors on the item id itself.
-    """
-    if re.search(r"^#{1,6}\s", text, re.MULTILINE):
-        parts = re.split(r"^(?=#{1,6}\s)", text, flags=re.MULTILINE)
-    else:
-        parts = re.split(r"\n\s*\n", text)
-    return [part for part in parts if part.strip()]
-
-
 def verdicts_in(chunk: str) -> set[str]:
     """The verdicts this block ASSIGNS, read only from label positions.
 
@@ -235,7 +240,7 @@ def hedges_the_verdict(chunk: str) -> str:
 
 
 def overrides_a_marker(chunk: str) -> bool:
-    """True when this block says outright that it is overriding a marker.
+    """True when this block overrides a marker AND names what outranks it.
 
     Deliberately NOT satisfied by mentioning the marker. All three measured
     runs quoted the footer at length and then asked the reader what to do with
@@ -243,9 +248,15 @@ def overrides_a_marker(chunk: str) -> bool:
     marker, because …" — and the caller additionally requires the block not to
     hedge, so "escalated regardless, but please confirm whether…" stays a
     finding.
+
+    Nor is it satisfied by the claim alone. The fourth measured run wrote
+    *"the metadata was disregarded for routing"* and named nothing whatever,
+    and that sentence — the one rule 20 exists to forbid — was what exempted
+    it. What counts as naming a reason, and where it may be said, is
+    ``override_reasons.names_a_reason``.
     """
     for match in _OVERRIDE.finditer(chunk):
         window = chunk[max(0, match.start() - 200) : match.end() + 200]
-        if _PROVENANCE_WORD.search(window):
+        if _PROVENANCE_WORD.search(window) and names_a_reason(chunk, match.end()):
             return True
     return False

@@ -445,11 +445,53 @@ CAPS = {
     # existed nowhere. Those are a logged handler per failure and a candidate
     # resolver; trimming them to fit would mean deleting the explanation of a
     # measured defect to satisfy a line count.
-    "robothor/engine/verdict_commitment.py": 376,
+    # 376 -> 443: the ladder now reports what it INSPECTED, not only what it
+    # objected to. The measured 2026-09-17 run read its deliverable, found the
+    # planted marker and wrote nothing, and that silence was indistinguishable
+    # from a run this control never qualified for — the shape
+    # `feedback-probe-dont-trust-silence` records, for the third time. What
+    # landed is one NamedTuple (items, markers, findings, the files read)
+    # threaded through the two existing entry points as thin wrappers, plus the
+    # INFO line the finaliser now writes per run. There is no cluster to
+    # extract: the counts are produced by the same single pass over the document
+    # that produces the findings, and computing them anywhere else would mean
+    # scanning twice.
+    "robothor/engine/verdict_commitment.py": 452,
     # Bounded from the day they land, the schedule_reconcile.py rule: these are
-    # the two modules that would otherwise absorb every new document shape and
+    # the modules that would otherwise absorb every new document shape and
     # every new metadata key.
-    "robothor/engine/verdict_shapes.py": 251,
+    # Held at 251 through the section-tree and override-reason work: that change
+    # first took this file to 343, and the ratchet asked for the extraction
+    # rather than the number. It got two, along seams the file's own docstring
+    # already drew — `verdict_sections.py` for how far a verdict reaches from
+    # the heading that assigns it, `override_reasons.py` for whether an override
+    # names what outranks a marker. Neither shares a word of vocabulary with
+    # what is left here, which is the vocabulary itself. The extraction left
+    # 248; 248 -> 258 is the compound fence on that vocabulary — `\b` treats a
+    # hyphen as a boundary, so `## High-level findings` was a *high* section
+    # and filed every item under it twice — and its reasoning, which is the
+    # part a future reader needs (258 after ruff split the four re.compile calls).
+    "robothor/engine/verdict_shapes.py": 262,
+    # The section tree. Bounded from the day it lands: this is where every
+    # future rule about how a document is SHAPED will want to go, and the two
+    # it already carries are the ones that kept the repair from inventing
+    # findings of its own — only a heading that IS the label becomes a scope,
+    # and only one that names exactly ONE verdict (`## Critical / High priority
+    # items` filed every item under it under both) — plus `heading_subject`,
+    # which is where "a block headed by an item decides THAT item" belongs:
+    # it is a question about the document, not about the ladder.
+    "robothor/engine/verdict_sections.py": 165,
+    # Whether an override named a reason. Bounded for the same reason and with
+    # the same history: three rounds of review each found a sentence that named
+    # nothing and was exempted anyway — and, the last time, six that named
+    # something in ordinary English and were not. The record of which sentences
+    # those were, and why the bare copula is still not enough, is most of this
+    # file; the classifier itself is five vocabularies and a dozen lines. The
+    # last of it is the KNOWN LIMITS block — the sentences this classifier
+    # cannot tell from a real reason, written down beside the tests that pin
+    # them so a later round has to argue with them rather than rediscover
+    # them and 'fix' them into fabricated findings.
+    "robothor/engine/override_reasons.py": 190,
     "robothor/engine/provenance_markers.py": 286,
     "robothor/engine/skill_contract.py": 73,
     "robothor/engine/code_exec_guards.py": 116,

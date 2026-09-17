@@ -40,11 +40,12 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
+from typing import NamedTuple
 
 from robothor.engine.provenance_markers import markers_by_item, tool_result_text
+from robothor.engine.verdict_sections import blocks, heading_subject
 from robothor.engine.verdict_shapes import (
     MAX_SCAN_CHARS,
-    blocks,
     hands_the_verdict_back,
     hedges_the_verdict,
     item_ids,
@@ -53,13 +54,34 @@ from robothor.engine.verdict_shapes import (
 )
 
 __all__ = [
+    "Inspection",
     "asks_for_verdicts",
     "findings_for_run",
     "hedged_items",
     "hold_for_hedged_verdicts",
+    "inspect_report",
+    "inspect_run",
     "record_verdict_findings",
     "verdict_note",
 ]
+
+
+class Inspection(NamedTuple):
+    """What one pass over a deliverable SAW, not only what it objected to.
+
+    The counts exist because zero findings used to look exactly like a run this
+    control never qualified for — the silence described in the module docstring
+    above, `feedback-probe-dont-trust-silence`. ``read`` names every deliverable
+    this run's task declared and this control could open; ``path`` is the one
+    the findings are about.
+    """
+
+    path: str
+    items: int
+    marked: int
+    findings: list[tuple[str, str]]
+    read: tuple[str, ...] = ()
+
 
 #: The task must ASK for a decision per item. Every verb here takes the items
 #: as its object; "summarise", "list" and "report on" are deliberately absent,
@@ -106,6 +128,14 @@ def asks_for_verdicts(task_text: str | None) -> bool:
 def hedged_items(report_text: str | None, results_text: str | None = None) -> list[tuple[str, str]]:
     """``(item id, why)`` for every item this deliverable failed to decide.
 
+    The findings half of :func:`inspect_report`.
+    """
+    return inspect_report(report_text, results_text).findings
+
+
+def inspect_report(report_text: str | None, results_text: str | None = None) -> Inspection:
+    """Everything one pass over a deliverable saw: items, markers, findings.
+
     Four shapes, all anchored on an explicit identifier: the item under two
     DIFFERENT verdict labels; its own metadata (as the run's tools returned it)
     saying it is not a real report of a real event while the verdict files it
@@ -119,7 +149,7 @@ def hedged_items(report_text: str | None, results_text: str | None = None) -> li
     """
     text = (report_text or "")[:MAX_SCAN_CHARS]
     if not text:
-        return []
+        return Inspection("", 0, 0, [])
     markers = markers_by_item(results_text)
     per_item: dict[str, set[str]] = {}
     handback: dict[str, bool] = {}
@@ -130,8 +160,17 @@ def hedged_items(report_text: str | None, results_text: str | None = None) -> li
         asks_reader = hands_the_verdict_back(block)
         hedge = hedges_the_verdict(block)
         override = overrides_a_marker(block)
+        # A block headed by an item decides THAT item; the other identifiers in
+        # it are references. `### 4. msg_3104 — duplicate of msg_3101` under
+        # `## No action required` filed msg_3101 — Critical in its own section —
+        # under a second verdict it never received. A block whose heading names
+        # no item (a severity section with a bullet per item, the flat layout
+        # this control already caught) still assigns to every id in it.
+        subject = heading_subject(block)
         for item in item_ids(block):
-            per_item.setdefault(item, set()).update(found)
+            per_item.setdefault(item, set())
+            if not subject or item == subject:
+                per_item[item].update(found)
             if asks_reader:
                 handback[item] = True
             if hedge:
@@ -169,7 +208,7 @@ def hedged_items(report_text: str | None, results_text: str | None = None) -> li
             findings.append((item, "asks the reader to decide rather than deciding"))
         elif hedges.get(item):
             findings.append((item, f'states a verdict and takes it back: "{hedges[item]}"'))
-    return findings
+    return Inspection("", len(per_item), len(set(per_item) & set(markers)), findings)
 
 
 def verdict_note(findings: list[tuple[str, str]], path: str = "") -> str:
@@ -220,6 +259,16 @@ def findings_for_run(
 ) -> tuple[str, list[tuple[str, str]]]:
     """``(deliverable path, findings)`` for this run, or ``("", [])``.
 
+    The two fields of :func:`inspect_run` that decide whether anything happens;
+    a run with nothing to say names no file.
+    """
+    inspected = inspect_run(session, workspace)
+    return (inspected.path, inspected.findings) if inspected.findings else ("", [])
+
+
+def inspect_run(session: object, workspace: object = None) -> Inspection:
+    """What this run's deliverable said, counts and all.
+
     The task gate first, always: a run whose task never asked for a decision
     per item is not this module's business and its artefact is never read.
 
@@ -243,20 +292,21 @@ def findings_for_run(
         logger.warning(
             "verdict commitment: run %s could not read its own task contract", run_id, exc_info=True
         )
-        return "", []
+        return Inspection("", 0, 0, [])
     if not declared_paths:
-        return "", []
+        return Inspection("", 0, 0, [])
 
     root = resolve_workspace(session, str(workspace) if workspace else None)
     results = tool_result_text(session)
     unresolved: list[str] = []
+    read = Inspection("", 0, 0, [])
     for declared in declared_paths:
         try:
             found = next((c for c in _candidate_paths(root, declared) if c.is_file()), None)
             if found is None:
                 unresolved.append(declared)
                 continue
-            findings = hedged_items(found.read_text(encoding="utf-8", errors="replace"), results)
+            seen = inspect_report(found.read_text(encoding="utf-8", errors="replace"), results)
         except OSError as exc:
             logger.warning(
                 "verdict commitment: run %s could not read the deliverable it was asked for "
@@ -275,8 +325,15 @@ def findings_for_run(
                 exc_info=True,
             )
             continue
-        if findings:
-            return declared, findings
+        read = Inspection(
+            declared,
+            read.items + seen.items,
+            read.marked + seen.marked,
+            seen.findings,
+            (*read.read, declared),
+        )
+        if seen.findings:
+            return read
     if unresolved:
         logger.warning(
             "verdict commitment: run %s was asked for %s and no such file exists under %s — "
@@ -285,7 +342,7 @@ def findings_for_run(
             ", ".join(unresolved[:3]),
             root or "no resolved workspace",
         )
-    return "", []
+    return read
 
 
 def hold_for_hedged_verdicts(session: object, workspace: object = None) -> bool:
@@ -341,20 +398,39 @@ def record_verdict_findings(run: object, session: object, workspace: object = No
 
     A FRESH read, like ``record_deliverable_verdicts``: the re-ask exists so
     the agent can fix the file, and it may have done exactly that.
+
+    One INFO line per run that READ a deliverable, findings or none, naming
+    every file the counts are over: the run that went silent had read its
+    deliverable and found its marker, and nothing said so.
     """
     from robothor.engine.feature_flags import verdict_commitment_mode
 
+    logger = logging.getLogger(__name__)
     mode = verdict_commitment_mode()
     if mode == "off":
         return
-    path, findings = findings_for_run(session, workspace)
+    inspected = inspect_run(session, workspace)
+    path, findings = inspected.path, inspected.findings
+    if inspected.read:
+        named = ", ".join(inspected.read[:3])
+        extra = len(inspected.read) - 3
+        logger.info(
+            "verdict commitment %s: run %s inspected %d item(s) in %s — %d carried a "
+            "provenance marker, %d finding(s)",
+            mode,
+            getattr(run, "id", "?"),
+            inspected.items,
+            f"{named} (+{extra} more)" if extra > 0 else named,
+            inspected.marked,
+            len(findings),
+        )
     if not findings:
         return
     detail = "; ".join(f"{item} {why}" for item, why in findings[:3])
     summary = (
         f"{len(findings)} item(s) in {path or 'the deliverable'} carry no single verdict: {detail}"
     )
-    logging.getLogger(__name__).warning(
+    logger.warning(
         "verdict commitment %s: run %s — %s", mode, getattr(run, "id", "?"), summary[:500]
     )
     try:
@@ -368,7 +444,7 @@ def record_verdict_findings(run: object, session: object, workspace: object = No
             mode=mode,
         )
     except Exception:
-        logging.getLogger(__name__).warning(
+        logger.warning(
             "verdict commitment: run %s found %d item(s) but its guardrail row was not written",
             getattr(run, "id", "?"),
             len(findings),
