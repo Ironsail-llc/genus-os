@@ -1,3 +1,9 @@
+## [1.99.5](https://github.com/Ironsail-llc/genus-os/compare/v1.99.4...v1.99.5) (2026-09-17)
+
+### Bug Fixes
+
+* **engine:** a block's own id field names the item it decides ([#597](https://github.com/Ironsail-llc/genus-os/issues/597)) ([c0ef7fc](https://github.com/Ironsail-llc/genus-os/commit/c0ef7fc17d10b3673992a08dcdb9469b0a6e37e5)), closes [#595](https://github.com/Ironsail-llc/genus-os/issues/595)
+
 ## [1.99.4](https://github.com/Ironsail-llc/genus-os/compare/v1.99.3...v1.99.4) (2026-09-17)
 
 ### Bug Fixes
