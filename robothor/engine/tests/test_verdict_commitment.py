@@ -433,3 +433,145 @@ class TestAReferenceNumberIsNotAnItem:
             "## No action required\n- TASK-7 is a duplicate of an earlier ticket.\n"
         )
         assert [item for item, _why in hedged_items(report)] == ["TASK-7"]
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The ladder, on every rung
+# ──────────────────────────────────────────────────────────────────────
+
+
+LADDER_TASK = (
+    "Go through the support inbox and route each message to the right owner. "
+    "Write the escalation report to results/results.md."
+)
+
+
+class _Run:
+    id = "run-under-test"
+    task_text = LADDER_TASK
+
+
+class _Session:
+    """The two attributes this control reads off a live run."""
+
+    def __init__(self, results: str = "") -> None:
+        self.run = _Run()
+        self.messages: list[dict[str, str]] = (
+            [{"role": "tool", "content": results}] if results else []
+        )
+
+
+@pytest.fixture
+def workspace(tmp_path):
+    (tmp_path / "results").mkdir()
+    return tmp_path
+
+
+@pytest.fixture
+def rows(monkeypatch):
+    written: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "robothor.engine.tracking.log_guardrail_event",
+        lambda **kwargs: written.append(kwargs),
+    )
+    return written
+
+
+def _rung(monkeypatch, mode: str) -> None:
+    monkeypatch.setattr(
+        "robothor.engine.feature_flags.verdict_commitment_mode", lambda: mode, raising=True
+    )
+
+
+def _write(workspace, report: str) -> None:
+    (workspace / "results" / "results.md").write_text(report, encoding="utf-8")
+
+
+class TestTheLadderIsNotInert:
+    """A `verdict_commitment` ladder that fires zero times on a classification
+    deliverable carrying a hedge is a failed test — that is exactly what three
+    measured runs produced, and it is what `feedback-probe-dont-trust-silence`
+    says an empty table must never be allowed to mean."""
+
+    def test_observe_writes_a_row_and_changes_nothing(self, workspace, rows, monkeypatch) -> None:
+        from robothor.engine.verdict_commitment import (
+            hold_for_hedged_verdicts,
+            record_verdict_findings,
+        )
+
+        _rung(monkeypatch, "observe")
+        _write(workspace, RECORDED_HEDGE_IF_THIS_IS)
+        session = _Session()
+
+        assert hold_for_hedged_verdicts(session, workspace) is False
+        assert session.messages == []
+        record_verdict_findings(session.run, session, workspace)
+        assert [row["action"] for row in rows] == ["observed"]
+        assert rows[0]["guardrail_name"] == "verdict_commitment"
+        assert "msg_2209" in str(rows[0]["reason"])
+
+    def test_observe_records_a_contradicted_marker_too(self, workspace, rows, monkeypatch) -> None:
+        from robothor.engine.verdict_commitment import record_verdict_findings
+
+        _rung(monkeypatch, "observe")
+        _write(
+            workspace,
+            "## Critical\n### msg_2209 — outage\n**Severity: Critical** Routed to @owner-a.\n",
+        )
+        session = _Session(RESULTS_WITH_MARKER)
+
+        record_verdict_findings(session.run, session, workspace)
+        assert len(rows) == 1
+        assert "classification: routing-test" in str(rows[0]["reason"])
+
+    def test_enforce_asks_once_and_quotes_the_marker(self, workspace, rows, monkeypatch) -> None:
+        from robothor.engine.session import ENGINE_CONTEXT_ROLE
+        from robothor.engine.verdict_commitment import hold_for_hedged_verdicts
+
+        _rung(monkeypatch, "enforce")
+        _write(
+            workspace,
+            "## Critical\n### msg_2209 — outage\n**Severity: Critical** Routed to @owner-a.\n",
+        )
+        session = _Session(RESULTS_WITH_MARKER)
+
+        assert hold_for_hedged_verdicts(session, workspace) is True
+        assert len(session.messages) == 2
+        note = session.messages[-1]
+        assert note["role"] == ENGINE_CONTEXT_ROLE
+        assert "classification: routing-test" in note["content"]
+        assert "overrides" in note["content"]
+        # Bounded: the budget is one re-ask, whatever the file still says.
+        assert hold_for_hedged_verdicts(session, workspace) is False
+        assert len(session.messages) == 2
+
+    def test_a_committed_deliverable_costs_nothing_on_either_rung(
+        self, workspace, rows, monkeypatch
+    ) -> None:
+        from robothor.engine.verdict_commitment import (
+            hold_for_hedged_verdicts,
+            record_verdict_findings,
+        )
+
+        _write(workspace, COMMITTED_WITH_MARKER)
+        for mode in ("observe", "enforce"):
+            _rung(monkeypatch, mode)
+            session = _Session(RESULTS_WITH_MARKER)
+            assert hold_for_hedged_verdicts(session, workspace) is False
+            assert session.messages == [{"role": "tool", "content": RESULTS_WITH_MARKER}]
+            record_verdict_findings(session.run, session, workspace)
+        assert rows == []
+
+    def test_off_computes_nothing(self, workspace, rows, monkeypatch) -> None:
+        from robothor.engine.verdict_commitment import (
+            hold_for_hedged_verdicts,
+            record_verdict_findings,
+        )
+
+        _rung(monkeypatch, "off")
+        _write(workspace, RECORDED_HEDGE_IF_THIS_IS)
+        session = _Session()
+
+        assert hold_for_hedged_verdicts(session, workspace) is False
+        record_verdict_findings(session.run, session, workspace)
+        assert rows == []
