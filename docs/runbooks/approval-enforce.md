@@ -119,12 +119,28 @@ on its own it changes nothing. `genus doctor --category agents` reports it as
 `agents.approval_gate_not_armed` (`info`) whenever a manifest has declared an
 approval gate this engine will not apply.
 
-## Status 2026-09-16: the gate has its first real user
+## Status 2026-09-17: no shipped template declares a gate
 
-Superseding the 2026-07-13 note below: `crm-steward` now declares
+Superseding a 2026-09-16 note that said `crm-steward` declared
 `v2.guardrails: [human_approval]` and `v2.human_approval_tools:
-[delete_person]`, so the "nothing can escalate" condition no longer holds and
-promoting the mode is no longer a no-op.
+[delete_person]`. It did, and that was the defect: arming the gate in a SHIPPED
+template made one instance's policy choice the default for everyone who
+installed it, on an agent that runs nightly and unattended. The template now
+carries the gate as a commented example headed "opt-in; the default is
+autonomous", and `genus doctor` reports nothing to promote on a clean install.
+
+An instance that wants a gate adds it to its own manifest — two keys, per
+agent, for the tools that agent chooses:
+
+```yaml
+v2:
+  guardrails: [human_approval]
+  human_approval_tools: [issue_refund]
+```
+
+Only then does anything below apply: with no manifest declaring the gate, the
+"nothing can escalate" condition still holds and promoting the mode is still a
+no-op.
 
 Both variables are set in
 `infra/systemd/robothor-engine.service.d/upgrade-rip-flags.conf` and, as of
@@ -191,12 +207,15 @@ That was a statement about adoption, not about the mechanism: probed directly,
 with the policy enabled and a pattern set, `delete_person` returns
 `allowed=False action='escalate'` while `list_people` stays allowed. The
 prerequisite it named — "real signal, not silence because nothing ever
-escalates" — is what `crm-steward` now supplies.
+escalates" — is still unmet on a default install, and that is the intended
+state, not a backlog.
 
-Before adding the next tool to a `human_approval_tools` list (candidates:
-outbound email/SMS, `exec`, payments, calendar writes on external attendees,
-destructive CRM mutations), verify one real escalation completes the Telegram
-approve/deny round-trip, then soak 48h.
+An instance adding a gate should verify one real escalation completes the
+Telegram approve/deny round-trip and then soak 48h. Which tools deserve one is
+that instance's decision and a short list — see "Autonomy first" above: an
+irreversible external action that moves money or cannot be taken back. This
+runbook does not nominate candidates; a list of "tools to gate next" read as a
+roadmap the last time it was here, and ordinary work belongs automated.
 
 Note that `human_approval_fail_open: true` on an agent defeats `enforce`
 entirely, per agent. The doctor check reports that too.
