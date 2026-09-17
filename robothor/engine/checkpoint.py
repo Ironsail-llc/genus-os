@@ -8,6 +8,7 @@ the conversation loop where it left off.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import time
@@ -164,3 +165,50 @@ class CheckpointManager:
         except Exception as e:
             logger.warning("Failed to load checkpoint: %s", e)
             return None
+
+
+async def save_iteration(
+    checkpoint: Any,
+    session: Any,
+    *,
+    agent_config: Any,
+    scratchpad: Any,
+    plan_result: Any,
+    hook_registry: Any,
+) -> None:
+    """Persist one iteration's state, if this is a checkpoint iteration.
+
+    Lifted out of ``_run_loop``: "what does a resumable run have to carry" is
+    this module's question, and nothing else in the loop reads the answer. The
+    TodoList goes with it — Phase 5 — because without it the checklist was
+    silently dropped on resume.
+    """
+    if not (checkpoint and checkpoint.should_checkpoint()):
+        return
+    todo_state: dict[str, Any] | None = None
+    if session.todo_list:
+        try:
+            todo_state = session.todo_list.to_dict()
+        except Exception:  # noqa: BLE001 - a checklist is never worth the run
+            todo_state = None
+    checkpoint.save(
+        step_number=session._step_counter,
+        messages=session.messages,
+        scratchpad=scratchpad.to_dict() if scratchpad else None,
+        plan=plan_result.raw if plan_result and hasattr(plan_result, "raw") else None,
+        todo_list=todo_state,
+    )
+    if not hook_registry:
+        return
+    from robothor.engine.hook_registry import HookContext, HookEvent
+
+    with contextlib.suppress(Exception):
+        await hook_registry.dispatch(
+            HookEvent.CHECKPOINT,
+            HookContext(
+                event=HookEvent.CHECKPOINT,
+                agent_id=agent_config.id,
+                run_id=session.run_id,
+                metadata={"step_number": session._step_counter},
+            ),
+        )

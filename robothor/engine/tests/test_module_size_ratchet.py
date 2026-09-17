@@ -144,6 +144,20 @@ CAPS = {
     # chaining and its `contextlib.suppress`, which is the job this file exists
     # for. A guard that raises here takes the runner's main loop with it.
     "robothor/engine/loop_guards.py": 368,
+    # The three modules the budget work landed in, bounded from the day they
+    # land — the rule this file states for anything that would otherwise
+    # absorb the next concern one branch at a time. `_run_loop` paid for the
+    # budget wiring by giving up its replanning block, its error-feedback
+    # block and its checkpoint block rather than by raising its own cap.
+    "robothor/engine/run_deadline.py": 534,
+    "robothor/engine/repeat_variants.py": 420,
+    "robothor/engine/run_replan.py": 127,
+    # Two that were uncapped and grew with the same work. Capped now at their
+    # measured size rather than left open: they are the modules a "one more
+    # rung on the ladder" change lands in, which is exactly the shape this
+    # ratchet exists to make an explicit decision.
+    "robothor/engine/run_pacing.py": 507,
+    "robothor/engine/repeat_guard.py": 651,
     # 937 (2026-09-13): every module the delivery path runs through was capped
     # except the one that decides delivery. It was uncapped when the
     # thin-announce fallback landed, so nothing but review stood between that

@@ -27,14 +27,109 @@ Context is **not** the problem — compaction works. `connect_the_dots_medium` i
 provider-throughput bound (675 output tokens/call at 25–85 tok/s) and out of
 scope for this control. `sam3_debug` is what it is for.
 
-## What the four controls do
+## What the controls do
 
 | Control | `off` | `observe` | `enforce` |
 |---|---|---|---|
 | Deadline notes | **exactly main**: one note at 80%, main's text with no pace sentence, main's `logger.info` line, no iteration-0 guard | the same note, at WARNING with the run id, plus a log line for the 50% and 95% notes it withholds | notes at 50%, 80% and 95%, each with pace |
+| **The budget ends the run** | nothing; the wallclock self-check ends it as a timeout | logs the rung it would have entered, with the run id | wrap-up at 90%, hard stop at 100% — see below |
 | Repeat-call guard | **no guard object is built at all** — no thread hops, no state | runs every call, logs and counts what it would have done | answers an unchanged repeated `read_file`, notes a 3rd identical `exec`, refuses a 5th that spoke |
+| **Varying-argument loops** | not tracked | tracked and logged | same ladder as an exact repeat, keyed on the command head / path / domain / query stem |
 | Tool timeout clamp | requested timeout stands | stands, and the clamp it would have applied is logged with the run id | `min(requested, remaining − 30s)`, floor 5s |
-| Progress check-in | only at `max_iterations`, main's wording | the same, plus a log line every 25 iterations | also every 25 iterations, asking what has been WRITTEN |
+| Progress check-in | only at `max_iterations`, main's wording | the same, plus a log line every 25 iterations | also every 25 iterations, asking what has been WRITTEN — and directive after two empty answers past halfway |
+
+## The budget ends the run
+
+`ROBOTHOR_RUN_BUDGET_SECONDS` · `ROBOTHOR_RUN_WRAPUP_FRACTION` (0.90) ·
+`ROBOTHOR_RUN_BUDGET_GRACE_SECONDS` (20)
+
+**The measurement.** 2026-09-17 Code Intelligence sweep,
+`connect_the_dots_hard`: the task declared a 1200s budget and the harness
+backstop was 1500s, but the engine resolved its own ceiling to **1600** — the
+manifest number multiplied by the model's tempo factor. Every clock the engine
+owned was aiming four hundred seconds past the point at which the container
+would be destroyed. `wd.log` shows `wait=llm_inflight` at every tick from
+`elapsed=1200` to `elapsed=1500`; `agent.log` holds one line, `HARNESS KILL
+after 1500s`; `transcript.jsonl` was never written and the grader scored
+**0.0** on a `FileNotFoundError`. The same task scored 0.545 the day before.
+Four more runs in the same sweep died the same way.
+
+**One resolver.** `run_deadline.resolve_run_budget` is the only derivation of a
+run's wall-clock budget, and `watchdog_budgets_for` reads it too, so the loop
+and the watchdog cannot disagree:
+
+1. `ROBOTHOR_RUN_BUDGET_SECONDS`, when set, taken **exactly** — an imposed
+   budget is never tempo-scaled, because whoever imposed it is counting the
+   same seconds. The bench harness exports it per task;
+2. otherwise the agent's `timeout_seconds`, tempo-scaled exactly as before;
+3. otherwise the fleet ceiling.
+
+**The ladder.** 50% / 80% / 95% notes as before, then:
+
+- **90% — WRAP-UP.** The tool schema narrows to `write_file`, `read_file`,
+  `list_directory`, `todo_write`; nothing that starts new work survives. The
+  agent is told how many seconds remain (a number, not a percentage) and asked
+  to write its best current answer to the path the task named and read it back
+  against the task's shape. Said once per run.
+- **100% — STOP.** No further LLM call is issued. A call already in flight is
+  bounded by `remaining + grace` and then cancelled. The run records
+  `budget_exhausted`, writes an honest closing summary naming what is and is
+  not on disk, lands a `run_budget` / `blocked` row in
+  `agent_guardrail_events`, and returns into the ordinary finalizer — which
+  runs the deliverable verdicts as it does for any other ending.
+
+The clock is read at the top of every iteration **and** again after each model
+call returns, before any tool runs: `asyncio.timeout` has nothing to raise if a
+callee swallows the `CancelledError` and returns normally, which this engine
+has measured before.
+
+**A run that finishes inside its budget is untouched** — no note, no narrowing,
+no flag.
+
+**The backstop must never fire.** A `harness_kills` row in the ledger is now an
+engine defect rather than a slow task, and the ledger records
+`harness_kill_reasons` beside the count.
+
+## Varying-argument loops
+
+The repeat guard keys on a canonical hash of the arguments, so it catches a
+call repeated exactly. The runs that burn a whole budget do not repeat exactly.
+Recorded shapes: `sam3_debug` re-ran `python test_sam3.py` after each
+incremental `pip install` and read one module thirteen times at eight
+`offset`/`limit` windows (two of them differing from an earlier window only in
+that the numbers arrived as strings, which the canonical key reads as different
+calls); it asked one question as twenty `search_files` patterns; `link_a_pix`
+rewrote the same script as `rescan.py`, `rescan2.py`, `rescan3.py`, …
+
+`robothor/engine/repeat_variants.py` groups calls into **families** by a coarse
+signature — the command head for `exec` (a leading `cd … &&` peeled, first
+pipeline segment, flags dropped, first two words), the path for `read_file` and
+`list_directory`, domain plus path for `web_fetch`, and a stopworded token set
+for `web_search` and `search_files` matched at Jaccard ≥ 0.6.
+
+A coarse signature is only safe because the **trigger is the absence of new
+information**, not the call count: a family climbs the ladder only while its
+results keep returning what the run already has (identical digest, or token
+overlap ≥ 0.85). Thirty different files read once each are thirty new results
+and escalate nothing. The ladder is the exact guard's: note at the third such
+call, refuse at the fifth, `exec` only, never a silent command, and a refusal
+carries no `error` key. A refusal spends the family's streak, so the next call
+runs — the exact guard's "any change to the arguments is a way out" is
+preserved in spirit even though this control closes the letter of it.
+
+## The directive check-in
+
+The check-in asks what has been WRITTEN. Measured across the 09-16 and 09-17
+sweeps, the runs that died at their budget answered it with a plan and kept
+exploring. Past `DIRECTIVE_FRACTION` (0.5) of the budget, the second check-in
+that finds **none** of the task's declared outputs on disk stops being a
+question: it names the paths and says the next action is `write_file` to them,
+before any further reading, searching, fetching or running.
+
+The trigger is the workspace, never the model's prose — an agent that says it
+has written the file and has not is the exact failure being caught. A task that
+declared no output path never escalates, because there is no evidence either
+way.
 
 ### `off` is the engine that shipped
 
@@ -50,6 +145,11 @@ install gets); and a note at iteration 0 is not suppressed.
 `robothor/engine/tests/test_step_efficiency_off_is_main.py` runs
 main's own `deadline_note` beside the pacer across a grid of inputs and pins the
 rest as snapshots taken from `origin/main`.
+
+The budget stop and the varying-argument families are on the same terms: under
+`off` a run past its budget is ended by the loop's wallclock self-check, as a
+TIMEOUT, exactly as before — no wrap-up, no narrowed tool schema, no
+`budget_exhausted` from this path — and no family is tracked at all.
 
 ### Deadline notes
 
@@ -243,7 +343,9 @@ Run it before reading a zero in the table as "the workload has no repeats".
 | Piece | File |
 |---|---|
 | Pace notes, check-in cadence, timeout clamp | `robothor/engine/run_pacing.py` |
+| Budget resolver, wrap-up, hard stop | `robothor/engine/run_deadline.py` |
 | Repeat-call guard | `robothor/engine/repeat_guard.py` |
+| Varying-argument families | `robothor/engine/repeat_variants.py` |
 | Guard decision point | `robothor/engine/tools/dispatch.py` (`_execute_tool`) |
 | Positive control | `robothor/doctor/checks/step_efficiency.py` |
 | Note text for the 80% rung | `robothor/engine/deliverables.py`, `robothor/engine/run_budget.py` |

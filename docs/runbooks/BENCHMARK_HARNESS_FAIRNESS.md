@@ -143,6 +143,16 @@ not to the second: see [step efficiency](STEP_EFFICIENCY.md) for the controls,
 the log lines to grep, and what has to be true before it is promoted past
 `observe`.
 
+**The task's budget also reaches the engine as a budget.** `_container_command`
+exports `ROBOTHOR_RUN_BUDGET_SECONDS` with the same value as
+`BENCH_TASK_TIMEOUT`, because an imposed budget must not be tempo-scaled the
+way an agent's own `timeout_seconds` is: on 2026-09-17 a 1200s task resolved to
+an engine ceiling of **1600** while the backstop destroyed the container at
+1500, and `connect_the_dots_hard` scored 0.0 with a model call still in flight.
+That makes the `timeout_seconds + 300` backstop below a genuine backstop — it
+must never fire, a fired one is an engine defect, and the rotation ledger now
+records `harness_kill_reasons` beside the count.
+
 **The harness runs that flag at `enforce` while the fleet runs it at
 `observe`,** and that asymmetry is deliberate in the same way
 `ROBOTHOR_COMPLETION_CONTRACTS_MODE` above it is: the harness exists to measure

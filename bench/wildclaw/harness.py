@@ -445,6 +445,15 @@ def _container_command(
         # land somewhere the loader actually reads.
         "ROBOTHOR_WORKSPACE": CONTAINER_WORKSPACE,
         "BENCH_TASK_TIMEOUT": str(task.get("timeout_seconds", 600)),
+        # The same number, under the name the ENGINE reads it by. The task's
+        # budget is imposed from outside the engine, so it must reach the run
+        # as a budget rather than as a manifest hint that tempo scaling may
+        # inflate: measured 2026-09-17, a 1200s task resolved to an engine
+        # ceiling of 1600 while the backstop below destroyed the container at
+        # 1500, and `connect_the_dots_hard` scored 0.0 with a model call still
+        # in flight. The engine now wraps up at 90% of this and ends itself at
+        # 100%, so the backstop is a backstop.
+        "ROBOTHOR_RUN_BUDGET_SECONDS": str(task.get("timeout_seconds", 600)),
         # Twice a run outlived every timeout layer and the evidence died with
         # its container. Both trace files land on the /out host mount, so the
         # next wedge carries its own post-mortem.
@@ -558,26 +567,44 @@ def _run_agent(
             timeout=int(task.get("timeout_seconds", 600)) + 300,
         )
     except subprocess.TimeoutExpired as exc:
-        # The backstop fired: the agent's own ceiling failed to end the run.
-        # Record it, tear down the orphan (--rm died with the client), and
-        # let the category continue — nine tasks died with the first
-        # unhandled one of these. Grading still runs: the workspace is a
-        # host mount, so partial artifacts earn the partial credit a
+        # THE BACKSTOP MUST NEVER FIRE. The engine carries the same budget
+        # (`ROBOTHOR_RUN_BUDGET_SECONDS` above), wraps up at 90% of it and
+        # ends itself at 100%, so a kill here is a DEFECT in the engine's
+        # deadline handling and not a slow task: the run was destroyed, its
+        # transcript was never written, and the grader scores 0.0 on a
+        # `FileNotFoundError` whatever is in the workspace. That is exactly
+        # what happened to `connect_the_dots_hard` on 2026-09-17.
+        #
+        # Record it with the reason, tear down the orphan (`--rm` died with
+        # the client), and let the category continue — nine tasks died with
+        # the first unhandled one of these. Grading still runs: the workspace
+        # is a host mount, so partial artifacts earn the partial credit a
         # competitor's timed-out run would earn.
         elapsed = time.perf_counter() - started
+        budget = int(task.get("timeout_seconds", 600))
+        reason = (
+            f"engine did not end the run at its {budget}s budget; the "
+            f"container was still alive {elapsed - budget:.0f}s past it"
+        )
         subprocess.run(["podman", "rm", "-f", name], capture_output=True, text=True)
         stdout = exc.stdout if isinstance(exc.stdout, str) else ""
         stderr = exc.stderr if isinstance(exc.stderr, str) else ""
         (out_dir / "agent.log").write_text(
             _scrub(
-                f"HARNESS KILL after {elapsed:.0f}s — the container outlived "
-                f"the task budget and the backstop, and was torn down.\n"
+                f"HARNESS KILL after {elapsed:.0f}s — {reason}. The backstop is "
+                "a backstop and must never fire; investigate the engine's "
+                "budget handling (robothor/engine/run_deadline.py).\n"
                 + stdout
                 + "\n--- stderr ---\n"
                 + stderr
             )
         )
-        return {"returncode": -9, "elapsed": elapsed, "harness_kill": True}
+        return {
+            "returncode": -9,
+            "elapsed": elapsed,
+            "harness_kill": True,
+            "harness_kill_reason": reason,
+        }
     finally:
         env_file.unlink(missing_ok=True)
     elapsed = time.perf_counter() - started

@@ -126,26 +126,24 @@ def declared_paths(text: str | None) -> list[str]:
     return found
 
 
-def missing_deliverables_note(
-    paths: list[str], remaining: int, workspace: str | Path | None = None
-) -> str | None:
-    """A note naming the declared files that are not on disk yet, or None.
+def missing_paths(paths: list[str], workspace: str | Path | None = None) -> list[str]:
+    """Which of the declared paths are not on disk, confined to `workspace`.
 
-    Returns None when nothing was declared or everything already exists — the
-    silent case has to be the common one, or the note stops being read.
+    Every path is confined before it is touched. Task text is untrusted input
+    in any deployment where someone else can file a task, and these paths reach
+    the filesystem; without a workspace to confine to, nothing is checked at
+    all. Confinement is also the more correct rule — a file outside the agent's
+    workspace is not the deliverable it is graded on.
 
-    Every path is confined to `workspace` before it is touched. Task text is
-    untrusted input in any deployment where someone else can file a task, and
-    these paths reach the filesystem; without a workspace to confine to,
-    nothing is checked at all. Confinement is also the more correct rule — a
-    file outside the agent's workspace is not the deliverable it is graded on.
+    One implementation, because three callers each re-deriving "is it there"
+    is three chances to disagree about what counts as delivered.
     """
     if not paths or not workspace:
-        return None
+        return []
     try:
         root = Path(workspace).resolve()
     except (OSError, ValueError):
-        return None
+        return []
     missing: list[str] = []
     for path in paths:
         try:
@@ -165,6 +163,18 @@ def missing_deliverables_note(
             # An unreadable path is not evidence of anything; skip it rather
             # than reporting a file the task never really named.
             continue
+    return missing
+
+
+def missing_deliverables_note(
+    paths: list[str], remaining: int, workspace: str | Path | None = None
+) -> str | None:
+    """A note naming the declared files that are not on disk yet, or None.
+
+    Returns None when nothing was declared or everything already exists — the
+    silent case has to be the common one, or the note stops being read.
+    """
+    missing = missing_paths(paths, workspace)
     if not missing:
         return None
     listed = ", ".join(missing)

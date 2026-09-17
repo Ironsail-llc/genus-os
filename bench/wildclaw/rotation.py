@@ -165,6 +165,13 @@ def ledger_entry(summary: dict[str, Any], baselines: dict[str, Any], when: str) 
         "tasks_without_workspace": summary.get("tasks_without_workspace", 0),
         "tasks_executed": executed,
         "harness_kills": sum(1 for r in results if r.get("harness_kill")),
+        # WHY the backstop fired, not just that it did. It must never fire —
+        # the engine carries the same budget and ends itself at it — so a row
+        # here is an engine defect, and a bare count leaves the next reader
+        # rediscovering which one.
+        "harness_kill_reasons": sorted(
+            {str(r["harness_kill_reason"]) for r in results if r.get("harness_kill_reason")}
+        ),
         "per_task": {r["task_id"]: r["score"] for r in results if "task_id" in r},
     }
 

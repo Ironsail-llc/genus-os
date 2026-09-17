@@ -13,7 +13,9 @@ notices a repeated (tool, args, result) triple and puts a line in its summary,
 which is narration rather than a decision and arrives after the repeats have
 been paid for. ``dedup.py`` is cross-RUN agent dedup and unrelated.
 
-Two rules, both narrow, and the narrowness is the design:
+Three rules. The first two are narrow, and the narrowness is the design; the
+third is deliberately coarse, because the narrowness is what a loop walks
+around — see ``repeat_variants`` for the shapes that did.
 
 * **Reads.** ``read_file`` and ``list_directory`` name a single stat-able
   target, so an identical call whose target has the same mtime and size as at
@@ -34,8 +36,16 @@ Two rules, both narrow, and the narrowness is the design:
   change something. Any change to the arguments is a different key and runs
   immediately, so nothing is trapped.
 
-Everything else — ``write_file``, ``web_fetch``, ``web_search``, ``view_image``,
-every tool not named here — is untouched.
+* **Varying arguments.** ``robothor/engine/repeat_variants.py``, wired in at
+  ``_decide_variant`` and ``after``. Everything above keys on a canonical hash
+  of the arguments, which a loop escapes by changing one flag, one offset or
+  one word of a query. That guard groups calls by a coarse signature and
+  escalates only while their RESULTS stop carrying anything new — and an exact
+  decision here spends its streak, so the escape hatch above ("any change to
+  the arguments runs immediately") is never closed by both at once.
+
+Everything else — ``write_file``, ``view_image``, every tool named in neither
+list — is untouched.
 
 Observe logs what enforce would have done, at WARNING. That level is not a
 style choice: the benchmark container installs no logging configuration, so
@@ -46,6 +56,7 @@ exactly that reason.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -53,6 +64,8 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from robothor.engine.repeat_variants import VARIANT_TOOLS, VariantTracker
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +97,12 @@ GUARDED_TOOLS: frozenset[str] = SHORT_CIRCUIT_TOOLS | OUTPUT_COUNTED_TOOLS
 #: The only tool a refusal may ever apply to. A search is cheap; refusing one
 #: buys a second and costs a capability.
 REFUSABLE_TOOLS: frozenset[str] = frozenset({"exec"})
+
+#: Every tool this guard looks at at all — the exact rules above plus the
+#: varying-argument families in ``repeat_variants``. The variant set is wider
+#: (``web_search``, ``web_fetch``): a reworded search is one of the three
+#: recorded loop shapes, and it has no exact rule to be caught by.
+_WATCHED_TOOLS: frozenset[str] = GUARDED_TOOLS | VARIANT_TOOLS
 
 #: Occurrence at which an identical-output call is noted (and still runs).
 NOTE_AT: int = 3
@@ -260,6 +279,11 @@ class RepeatGuard:
     reads: dict[str, _Read] = field(default_factory=dict)
     counted: dict[str, _Counted] = field(default_factory=dict)
     counters: Counter[str] = field(default_factory=Counter)
+    #: Families of one question asked with varying arguments. Held here rather
+    #: than beside it because the two guards share a ladder, a vocabulary and
+    #: an evidence table, and an agent told about a repeat twice by two
+    #: controls learns nothing the second time.
+    variants: VariantTracker = field(default_factory=VariantTracker)
     #: Notes raised mid-iteration, drained by the runner AFTER the tool results
     #: for that iteration are in the conversation. Appending a developer turn
     #: between an assistant's tool_calls message and its tool results would be
@@ -273,7 +297,7 @@ class RepeatGuard:
         self, tool_name: str, args: dict[str, Any] | None, *, workspace: Any = None
     ) -> GuardDecision | None:
         """The decision for a call about to be made, or None to just run it."""
-        if self.mode == "off" or tool_name not in GUARDED_TOOLS:
+        if self.mode == "off" or tool_name not in _WATCHED_TOOLS:
             return None
         from robothor.engine.exec_spill import is_spill_readback
 
@@ -315,9 +339,42 @@ class RepeatGuard:
         return decision
 
     def _decide(self, tool_name: str, args: dict[str, Any], workspace: Any) -> GuardDecision | None:
+        """Exact repeats first, then the variants of one question.
+
+        Order is load-bearing. The exact rules can ANSWER a call from what the
+        run already holds, which is strictly better than noting it, and a
+        variant verdict would otherwise shadow that saving — the short circuit
+        is the only rung here that gives the model something back.
+        """
         if tool_name in SHORT_CIRCUIT_TOOLS:
-            return self._decide_read(tool_name, args, workspace)
-        return self._decide_counted(tool_name, args)
+            decision = self._decide_read(tool_name, args, workspace)
+        elif tool_name in OUTPUT_COUNTED_TOOLS:
+            decision = self._decide_counted(tool_name, args)
+        else:
+            decision = None
+        if decision is not None:
+            # The agent has just been told. The variant ladder must not say it
+            # again — not on this call, and not on the next changed argument,
+            # or the exact guard's "any change to the arguments runs
+            # immediately" stops being true and a refusal becomes the trap it
+            # was designed not to be. Two controls saying the same sentence
+            # twice teaches nothing the second time.
+            with contextlib.suppress(Exception):
+                self.variants.spend(tool_name, args)
+            return decision
+        return self._decide_variant(tool_name, args)
+
+    def _decide_variant(self, tool_name: str, args: dict[str, Any]) -> GuardDecision | None:
+        """The same question asked again with different arguments.
+
+        robothor/engine/repeat_variants.py. Its ladder and vocabulary are this
+        one's, so the decision converts straight across and lands in the same
+        `agent_guardrail_events` rows.
+        """
+        verdict = self.variants.verdict(tool_name, args)
+        if verdict is None:
+            return None
+        return GuardDecision(verdict.action, tool_name, verdict.note, verdict.result)
 
     def _decide_read(
         self, tool_name: str, args: dict[str, Any], workspace: Any
@@ -459,10 +516,17 @@ class RepeatGuard:
         *,
         workspace: Any = None,
     ) -> None:
-        """Record what a call returned, so the next identical one can be judged."""
-        if self.mode == "off" or tool_name not in GUARDED_TOOLS:
+        """Record what a call returned, so the next similar one can be judged."""
+        if self.mode == "off" or tool_name not in _WATCHED_TOOLS:
             return
         if not isinstance(result, dict):
+            return
+        if not ("error" in result and tool_name in SHORT_CIRCUIT_TOOLS):
+            # A failed READ is not remembered anywhere — see the branch below,
+            # whose rule this shares rather than reinvents.
+            with contextlib.suppress(Exception):  # bookkeeping never breaks a run
+                self.variants.observe(tool_name, args or {}, result)
+        if tool_name not in GUARDED_TOOLS:
             return
         if "error" in result and tool_name in SHORT_CIRCUIT_TOOLS:
             # A failed READ taught the run nothing about the file, and the short

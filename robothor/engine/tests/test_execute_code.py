@@ -69,17 +69,27 @@ async def _serve(proxy, tmp_path, *, session: int | None = None):
 
 
 def _request(server, payload: dict) -> dict:
-    """One raw request over the socket, as the sandboxed client makes it."""
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-        sock.connect(str(server.socket_path))
-        sock.sendall(json.dumps(payload).encode() + b"\n")
-        chunks = b""
-        while not chunks.endswith(b"\n"):
-            piece = sock.recv(65536)
-            if not piece:
-                break
-            chunks += piece
-    return json.loads(chunks.decode() or "{}")
+    """One raw request over the socket, as the sandboxed client makes it.
+
+    A refused connection reaches the client as a broken pipe or a reset just
+    as often as it does as an empty reply — the server can close before this
+    thread has finished writing — so all three shapes are one answer here.
+    """
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.connect(str(server.socket_path))
+            sock.sendall(json.dumps(payload).encode() + b"\n")
+            chunks = b""
+            while not chunks.endswith(b"\n"):
+                piece = sock.recv(65536)
+                if not piece:
+                    break
+                chunks += piece
+    except (BrokenPipeError, ConnectionResetError):
+        return {"ok": False, "error": "connection refused by server"}
+    if not chunks.strip():
+        return {"ok": False, "error": "connection refused by server"}
+    return json.loads(chunks.decode())
 
 
 class TestTheClientModuleIsShippable:
