@@ -670,7 +670,9 @@ def test_secrets_unit_exists_and_runs_the_secrets_loader():
         for line in directives((UNIT_DIR / "robothor-engine.service").read_text()).splitlines()
         if line.startswith("ExecStartPre=") and "secrets" in line
     ]
-    assert len(engine_pre) == 1, f"expected one secrets ExecStartPre on the engine, got {engine_pre}"
+    assert len(engine_pre) == 1, (
+        f"expected one secrets ExecStartPre on the engine, got {engine_pre}"
+    )
     loader = engine_pre[0].split("=", 1)[1]
     assert f"ExecStart={loader}" in text, (
         f"the oneshot must run the SAME script the engine's ExecStartPre runs ({loader})"
@@ -1007,3 +1009,136 @@ def test_every_unit_runs_python_from_the_workspace_venv():
     assert not offenders, "units running a Python other than the workspace venv:\n" + "\n".join(
         offenders
     )
+
+
+def test_success_exit_status_names_the_signal_rather_than_its_number():
+    """SuccessExitStatus=15 does not mean SIGTERM.
+
+    systemd reads a bare number in this list as an EXIT STATUS and a name as a
+    SIGNAL. So 15 whitelists a process that *exited* 15 and leaves the one
+    *killed by* SIGTERM — the case the paged always-on units declare it for
+    (tests/test_pager_hardening.py) — still filed as a failure, with nothing in
+    the unit to say the directive is not doing what it looks like it does.
+    Signal names need systemd 240+; this fleet runs 255.
+
+    SuccessExitStatus=143 is left alone: a Node process exits 128+15 on
+    SIGTERM, which really is an exit status (robothor-app.service).
+    """
+    signal_numbers = {"2": "SIGINT", "9": "SIGKILL", "15": "SIGTERM"}
+    offenders = []
+    for unit in sorted(UNIT_DIR.glob("robothor-*.service")) + sorted(
+        UNIT_DIR.glob("robothor-*.service.d/*.conf")
+    ):
+        for line in directives(unit.read_text()).splitlines():
+            if not line.startswith("SuccessExitStatus="):
+                continue
+            offenders.extend(
+                f"{unit.name}: {line}  (did you mean {signal_numbers[token]}?)"
+                for token in line.split("=", 1)[1].split()
+                if token in signal_numbers
+            )
+    assert not offenders, (
+        "SuccessExitStatus= entries read as exit statuses, not signals:\n" + "\n".join(offenders)
+    )
+
+
+# ── One restart transaction per deploy ───────────────────────────────────────
+#
+# 2026-09-17 08:55, an ordinary deploy: `install-units.sh`, `daemon-reload`,
+# `systemctl restart robothor-secrets`, then `systemctl restart robothor-engine
+# robothor-bridge robothor-orchestrator robothor-app` 1.65 s later. The first
+# command propagated a restart to every unit that Requires= the secrets oneshot;
+# the second superseded those start jobs while the engine's and orchestrator's
+# ExecStartPre (load-secrets.sh) were 18 ms in. systemd judges a killed CONTROL
+# process by EXIT_CLEAN_COMMAND, where SIGTERM is not clean, so both units logged
+# `Control process exited, code=killed, status=15/TERM` → `Failed with result
+# 'signal'` → OnFailure= paged, for a deploy the operator had just asked for.
+# The main processes were "Deactivated successfully" one line earlier.
+#
+# The fix is to restart each unit ONCE: a single `systemctl restart` naming the
+# secrets unit and all its dependents is one transaction, inside which the
+# propagated and the explicit restart jobs merge. The installer therefore
+# derives that set from the rendered units and either prints it as one command
+# or, with --restart, runs it as one command.
+
+
+def install_fake_systemctl(tmp_path: Path) -> Path:
+    """A systemctl stand-in that records every invocation, one line per call."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    log = tmp_path / "systemctl.log"
+    fake = bindir / "systemctl"
+    fake.write_text(f'#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >> "{log}"\nexit 0\n')
+    fake.chmod(0o755)
+    return log
+
+
+def secrets_dependents() -> set[str]:
+    """Every repo unit that Requires= the secrets oneshot — the units a
+    `systemctl restart robothor-secrets` restarts by propagation."""
+    return {
+        unit.name
+        for unit in UNIT_DIR.glob("robothor-*.service")
+        if "Requires=robothor-secrets.service" in directives(unit.read_text())
+    }
+
+
+def test_the_secrets_unit_has_dependents_to_coalesce():
+    assert len(secrets_dependents()) >= 2, "the coalescing tests would be testing nothing"
+
+
+def test_installer_prints_exactly_one_restart_command(tmp_path: Path):
+    """Without --restart the installer still restarts nothing — but the
+    follow-up it prints is ONE command naming the secrets unit and every
+    dependent, never a secrets restart followed by a consumers restart."""
+    result = run_install(tmp_path / "root", base_env())
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    lines = [line for line in result.stdout.splitlines() if "systemctl restart" in line]
+    assert len(lines) == 1, f"expected one restart command, got:\n{result.stdout}"
+    named = set(lines[0].split("systemctl restart", 1)[1].split())
+    assert "robothor-secrets.service" in named
+    assert secrets_dependents() <= named, (
+        f"the printed restart omits dependents: {secrets_dependents() - named}"
+    )
+    assert "again" in result.stdout or "second" in result.stdout, (
+        "the installer must tell the caller not to issue a second restart"
+    )
+
+
+def test_installer_with_restart_flag_issues_one_transaction(tmp_path: Path):
+    """--restart: daemon-reload, then a SINGLE `systemctl restart` naming the
+    secrets unit and all its dependents, each exactly once."""
+    log = install_fake_systemctl(tmp_path)
+    env = base_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+
+    result = run_install(tmp_path / "root", env, "--restart")
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    calls = log.read_text().splitlines()
+    restarts = [c for c in calls if c.split()[0] == "restart"]
+    assert len(restarts) == 1, f"expected one restart transaction, systemctl saw:\n{calls}"
+    units = restarts[0].split()[1:]
+    assert len(units) == len(set(units)), f"a unit is named twice: {units}"
+    assert "robothor-secrets.service" in units
+    assert secrets_dependents() <= set(units)
+    assert calls.index("daemon-reload") < calls.index(restarts[0]), (
+        "the restart must follow the daemon-reload, or it starts the OLD units"
+    )
+    assert [c for c in calls if c.split()[0] in ("start", "stop", "try-restart")] == [], (
+        "nothing but the one restart may touch a unit"
+    )
+
+
+def test_installer_without_restart_flag_never_calls_systemctl(tmp_path: Path):
+    """The default is unchanged: the installer restarts nothing (test mode
+    also skips the tmpfiles apply, which is the one other systemctl-family
+    call it makes)."""
+    log = install_fake_systemctl(tmp_path)
+    env = base_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+
+    result = run_install(tmp_path / "root", env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not log.exists(), f"systemctl was called without --restart:\n{log.read_text()}"

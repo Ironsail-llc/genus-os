@@ -1709,3 +1709,119 @@ class TestAStuckSpoolMarksItself:
         stuck_note(tmp_path).write_text("2026-09-02T14:40:00+00:00 head page stuck\n")
         run_drain(tmp_path, base_env(tmp_path, **FAKE_TOKEN_ENV))
         assert not stuck_note(tmp_path).exists()
+
+
+# ── A superseded start job must not page ─────────────────────────────────────
+#
+# The deploy of 2026-09-17 08:55 — `install-units.sh`, `daemon-reload`,
+# `systemctl restart robothor-secrets`, then `systemctl restart robothor-engine
+# robothor-bridge robothor-orchestrator robothor-app` 1.65s later:
+#
+#   08:55:53.748  robothor-engine.service: Deactivated successfully.  <- main, CLEAN
+#   08:55:53.858  Starting robothor-engine.service...                 <- restart #1,
+#                                                                        propagated by
+#                                                                        Requires=secrets
+#   08:55:53.868  sudo ... systemctl restart robothor-engine ...      <- restart #2
+#   08:55:53.876  Control process exited, code=killed, status=15/TERM <- ExecStartPre,
+#                                                                        18ms in
+#   08:55:53.876  Failed with result 'signal'.
+#   08:55:53.876  Triggering OnFailure= dependencies.                 <- THE PAGE
+#
+# The main process was never the problem — it is logged "Deactivated
+# successfully" one line earlier. systemd's is_clean_exit() judges a service's
+# MAIN process by EXIT_CLEAN_DAEMON, where SIGTERM is clean (which is also why
+# uvicorn's deliberate re-raise of the signal has never paged), and CONTROL
+# processes by EXIT_CLEAN_COMMAND, where it is not. The page is
+# `ExecStartPre=load-secrets.sh` being killed when the second restart supersedes
+# the first one's start job. Of the units that page, exactly the two with an
+# ExecStartPre ever produced `result 'signal'`; the bridge and the app were
+# restarted twice in that same second and stayed clean.
+#
+# `SuccessExitStatus=SIGTERM` silences it and must never be used for that: to a
+# control process the directive means "this step SUCCEEDED", so systemd would
+# go on to run ExecStart with the secrets unwritten — the 2026-09-11 sign-in
+# outage (eight days of 403s: "the bridge booted before the secrets were
+# decrypted and failed closed silently") re-armed on every deploy race. The fix
+# is to stop restarting one unit twice: scripts/install-units.sh derives ONE
+# restart transaction (the secrets unit plus everything that Requires= it) and
+# prints or, with --restart, runs it (tests/test_install_units.py), and
+# infra/bin/robothor-restart-handler.sh coalesces agent requests into one
+# transaction, skipping a unit that already has a job queued
+# (tests/test_restart_without_sudo.py).
+
+#: Directives whose processes systemd judges by EXIT_CLEAN_COMMAND — i.e. every
+#: process of a unit EXCEPT ExecStart's.
+CONTROL_PROCESS_DIRECTIVES = (
+    "ExecStartPre=",
+    "ExecStartPost=",
+    "ExecCondition=",
+    "ExecStop=",
+    "ExecStopPost=",
+    "ExecReload=",
+)
+
+
+def unit_directives(text: str) -> str:
+    """Unit-file content minus comment lines — a comment may DISCUSS a
+    directive (these units are half prose) and must not be read as one."""
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith(("#", ";")))
+
+
+def unit_and_dropins(unit: Path) -> str:
+    """A unit's effective directives: the template plus its mirrored drop-ins,
+    because OnFailure= is installed as a drop-in (install_onfailure_alerts.sh)
+    and never appears in the unit file itself."""
+    parts = [unit_directives(unit.read_text())]
+    dropins = UNIT_DIR / f"{unit.name}.d"
+    if dropins.is_dir():
+        parts += [unit_directives(p.read_text()) for p in sorted(dropins.glob("*.conf"))]
+    return "\n".join(parts)
+
+
+def service_units() -> list[Path]:
+    units = sorted(UNIT_DIR.glob("robothor-*.service"))
+    assert units, "no unit templates found — the discovery is broken"
+    return units
+
+
+@pytest.mark.parametrize("unit", service_units(), ids=lambda p: p.name)
+def test_a_unit_with_a_control_process_never_whitelists_sigterm(unit: Path):
+    """SuccessExitStatus=SIGTERM on a unit with an ExecStartPre= is a disarmed
+    gate, not a quiet pager.
+
+    A control process killed by SIGTERM is how a superseded start job looks, and
+    the temptation is to declare it a success so the deploy stops paging. What
+    that actually declares is that the STEP succeeded: systemd proceeds to
+    ExecStart, and the engine and the orchestrator come up with
+    /run/robothor/secrets.env absent or half-written — failing closed, quietly,
+    which is the 2026-09-11 outage's exact shape.
+    """
+    text = unit_and_dropins(unit)
+    if not any(d in text for d in CONTROL_PROCESS_DIRECTIVES):
+        pytest.skip(f"{unit.name} has no control process")
+    offenders = [
+        line
+        for line in text.splitlines()
+        if line.startswith("SuccessExitStatus=") and "SIGTERM" in line.split("=", 1)[1].split()
+    ]
+    assert not offenders, (
+        f"{unit.name} runs a control process and whitelists SIGTERM: {offenders}. "
+        "That tells systemd the killed step SUCCEEDED and lets ExecStart run "
+        "without it — silence bought by disarming the gate."
+    )
+
+
+@pytest.mark.parametrize("unit", service_units(), ids=lambda p: p.name)
+def test_a_hard_kill_still_pages(unit: Path):
+    """SIGKILL and a stop timeout are real failures.
+
+    A unit that whitelists SIGKILL has stopped reporting the case the pager
+    exists for: a process that ignored SIGTERM until systemd killed it.
+    """
+    for line in unit_and_dropins(unit).splitlines():
+        if not line.startswith("SuccessExitStatus="):
+            continue
+        tokens = line.split("=", 1)[1].split()
+        assert "SIGKILL" not in tokens and "SIGABRT" not in tokens, (
+            f"{unit.name} treats a hard kill as success: {line}"
+        )

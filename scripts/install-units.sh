@@ -18,7 +18,7 @@
 # some deliberately tombstoned — and must never be resurrected by a platform
 # installer.
 #
-# Usage: install-units.sh [--root DIR] [--env-file FILE]
+# Usage: install-units.sh [--root DIR] [--env-file FILE] [--restart]
 #   --root DIR      filesystem root to install under (default /, so units land
 #                   at /etc/systemd/system; override for tests). Under --root,
 #                   `systemd-analyze verify` is skipped: verify checks that
@@ -26,19 +26,37 @@
 #                   target box. The renderer's structural gate still runs.
 #   --env-file FILE file to resolve unset ROBOTHOR_* vars from
 #                   (default /etc/robothor/robothor.env)
+#   --restart       after installing: `systemctl daemon-reload`, then ONE
+#                   `systemctl restart` naming the secrets oneshot and every
+#                   unit that Requires= it. One command is one transaction;
+#                   see "Restart each unit once" below.
 #
 # Environment: ROBOTHOR_WORKSPACE, ROBOTHOR_SERVICE_USER (required),
 # ROBOTHOR_SERVICE_HOME (optional) — see scripts/render-unit.sh.
 #
 # Idempotent: re-running reports "unchanged" for units that already match,
-# and only rewrites the ones that don't. Does not daemon-reload or restart
-# anything — it prints the follow-up commands instead.
+# and only rewrites the ones that don't. Without --restart it does not
+# daemon-reload or restart anything — it prints the follow-up command instead.
+#
+# RESTART EACH UNIT ONCE. `systemctl restart robothor-secrets` propagates a
+# restart to every unit that Requires= it (engine, bridge, app, orchestrator).
+# A second `systemctl restart` of those units arriving while that first one is
+# still starting them SUPERSEDES the running start job, and systemd kills
+# whatever the job was doing — on the engine and the orchestrator that is
+# ExecStartPre=load-secrets.sh, a control process, whose death by SIGTERM is
+# not a clean exit: `Control process exited, code=killed, status=15/TERM`,
+# `Failed with result 'signal'`, OnFailure= pages (2026-09-17 08:55, twice,
+# 1.65 s between the two commands). Named together in ONE command the
+# propagated and the explicit restart jobs merge into a single transaction and
+# each unit restarts once. So the follow-up is one command, printed below or
+# run by --restart — never a secrets restart followed by a consumers restart.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RENDER="${REPO_ROOT}/scripts/render-unit.sh"
 SRC_DIR="${REPO_ROOT}/infra/systemd"
 ROOT=""
+DO_RESTART=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -50,8 +68,12 @@ while [[ $# -gt 0 ]]; do
             export ROBOTHOR_ENV_FILE="${2:?--env-file requires a file}"
             shift 2
             ;;
+        --restart)
+            DO_RESTART=1
+            shift
+            ;;
         *)
-            echo "usage: install-units.sh [--root DIR] [--env-file FILE]" >&2
+            echo "usage: install-units.sh [--root DIR] [--env-file FILE] [--restart]" >&2
             exit 1
             ;;
     esac
@@ -217,7 +239,35 @@ if [[ ! -r "${ROOT}/etc/robothor/robothor.env" ]]; then
     log "WARNING: Copy infra/systemd/robothor.env.example there and fill it in."
 fi
 
-if [[ -z "$ROOT" ]]; then
-    log "next: sudo systemctl daemon-reload  (then restart the changed units)"
+# ── Restart each unit once ────────────────────────────────────────────────────
+# The set is DERIVED from the rendered units, not hardcoded: the secrets
+# oneshot plus every unit that Requires= it. Adding a consumer to the fleet
+# adds it here without anyone remembering to.
+SECRETS_UNIT="robothor-secrets.service"
+restart_set=()
+if [[ -f "${TMP_DIR}/${SECRETS_UNIT}" ]]; then
+    restart_set+=("$SECRETS_UNIT")
+    for svc in "$TMP_DIR"/robothor-*.service; do
+        name="$(basename "$svc")"
+        [[ "$name" == "$SECRETS_UNIT" ]] && continue
+        if grep -qxF "Requires=${SECRETS_UNIT}" "$svc"; then
+            restart_set+=("$name")
+        fi
+    done
+fi
+
+if [[ ${#restart_set[@]} -eq 0 ]]; then
+    log "WARNING: ${SECRETS_UNIT} is not among the templates — nothing to coalesce"
+elif [[ "$DO_RESTART" -eq 1 ]]; then
+    log "daemon-reload, then one restart transaction: ${restart_set[*]}"
+    systemctl daemon-reload
+    systemctl restart "${restart_set[@]}"
+    log "restarted (once each): ${restart_set[*]}"
+else
+    log "next, as ONE command — do not restart ${SECRETS_UNIT} separately or restart"
+    log "the consumers again afterwards; a second restart job supersedes the first"
+    log "and kills its ExecStartPre (Failed with result 'signal' — a page):"
+    log "  sudo systemctl daemon-reload && sudo systemctl restart ${restart_set[*]}"
+    log "or re-run with --restart to have this script do exactly that."
 fi
 log "done (${#rendered_rel[@]} units)"

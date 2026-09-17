@@ -22,12 +22,27 @@ WatchdogSec=300
 User=robothor
 Group=robothor
 EnvironmentFile=/etc/robothor/robothor.env
+# A CONTROL process. systemd judges a killed ExecStartPre by EXIT_CLEAN_COMMAND,
+# where SIGTERM is NOT a clean exit (a main process is judged by
+# EXIT_CLEAN_DAEMON, where it is). So a second `systemctl restart` of this unit
+# arriving while a first one is still in this step kills the script 18 ms in:
+# `Control process exited, code=killed, status=15/TERM`, `Failed with result
+# 'signal'`, OnFailure= pages — the 2026-09-17 deploy, where `restart
+# robothor-secrets` (which propagates through Requires=) was followed 1.65 s
+# later by `restart robothor-engine ...`. The fix is ONE restart transaction
+# (scripts/install-units.sh --restart; the restart broker coalesces), never
+# SuccessExitStatus=SIGTERM: to a control process that means "the step
+# SUCCEEDED", and ExecStart would run with secrets.env unwritten
+# (tests/test_pager_hardening.py forbids it).
 ExecStartPre=/opt/robothor/scripts/load-secrets.sh
 EnvironmentFile=-/run/robothor/secrets.env
 ExecStart=/opt/robothor/venv/bin/python -m robothor.engine.daemon
 WorkingDirectory=/opt/robothor
 Restart=always
 RestartSec=5
+# The daemon's stop path (announce, drain, dispatcher stop) is budgeted to fit
+# inside this with margin — robothor/engine/shutdown_budget.py, and a test that
+# reads this line. Past it systemd SIGKILLs and files result 'timeout' (a page).
 TimeoutStopSec=15
 KillMode=control-group
 Environment=ROBOTHOR_ENGINE_PORT=18800
