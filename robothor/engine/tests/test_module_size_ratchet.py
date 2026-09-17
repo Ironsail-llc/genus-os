@@ -152,7 +152,17 @@ CAPS = {
     # prefix") has to be readable in one screen. A cap set at the post-
     # extraction size is the only one that makes the extraction a one-way door.
     "robothor/engine/vision_batch.py": 1276,
-    "robothor/engine/vision_contract.py": 248,
+    # 248 -> 351: the reply parser. Review finding I1 measured three ordinary
+    # model formatting habits — both markers on one line, a JSON object, a
+    # parenthetical gloss — each turning a whole batch into `error` rows at
+    # twice the cost, because the matcher was tolerant and the PARSER was not.
+    # The fix is unwrapping (fence, <think>), a JSON-object reader and an
+    # inline-marker split, all of which is this module's own subject: what a
+    # model may answer and how the answer is read. This is the trade
+    # `code_exec_rpc.py`'s entry above already names — correcting a cap set
+    # hours earlier in the same PR for the thing that makes the module correct
+    # is not the same as bumping a long-standing one to dodge a refactor.
+    "robothor/engine/vision_contract.py": 351,
     # 277 -> 314: the approval budget. A proxied call passes the same approval
     # gate a turn's call does, which is right and which is also how a loop
     # could queue two hundred prompts at the operator. The check belongs where

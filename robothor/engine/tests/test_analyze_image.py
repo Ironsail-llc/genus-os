@@ -1451,3 +1451,123 @@ class TestTheMatcherIsEqualityNotResemblance:
         parsed = parse_reply("a cat on a sofa\nWHY: whiskers and a tail", Contract())
         assert parsed.answer == "a cat on a sofa"
         assert parsed.reason == "whiskers and a tail"
+
+
+class TestTheParserMeetsTheModelWhereItWrites:
+    """Hostile review I1. The matcher is tolerant and the PARSER was not, so
+    three ordinary formatting habits each turned a whole batch into `error`
+    rows at twice the cost — a strict regression on the exact workload this
+    change exists to fix, because before it every one of those rows returned a
+    usable `answer`.
+
+    The re-ask cannot recover any of them: it restates the same contract to a
+    model whose HABIT is the problem. These are parsing failures wearing a
+    wrong answer's clothes, and the fix is parsing. Nothing here relaxes
+    `Contract.match` — whatever is extracted still has to be a label, exactly.
+    """
+
+    #: Ten images per format, because the defect was a whole-batch one: the
+    #: measured failure is "20 backend calls, analyzed 0, failed 10".
+    BATCH = 10
+
+    @pytest.mark.parametrize(
+        ("label", "reply"),
+        [
+            ("both markers on one line", "ANSWER: chart WHY: it is a bar chart"),
+            ("a JSON object", '{"answer": "chart", "why": "bars and an axis"}'),
+            ("a JSON object under other keys", '{"choice": "chart", "reason": "bars"}'),
+            ("a parenthetical gloss", "ANSWER: chart (a bar chart with a titled axis)"),
+            ("a markdown fence", "```\nANSWER: chart\nWHY: bars and an axis\n```"),
+            ("a fenced JSON object", '```json\n{"answer": "chart", "why": "bars"}\n```'),
+            ("a <think> preamble", "<think>hmm, bars…</think>\nANSWER: chart\nWHY: bars"),
+            ("lowercase markers", "answer: chart\nwhy: bars and an axis"),
+            ("an inline REASON marker", "ANSWER: chart REASON: bars and an axis"),
+        ],
+    )
+    async def test_a_whole_batch_is_answered_at_one_call_each(
+        self, tmp_path, scripted, label, reply
+    ):
+        fake = scripted(reply)
+        out = await _analyze(tmp_path, _images(tmp_path, self.BATCH), choices=["photo", "chart"])
+        assert out["analyzed"] == self.BATCH, f"{label}: {out['results'][0]}"
+        assert out["failed"] == 0, label
+        assert len(fake.prompts) == self.BATCH, f"{label}: a re-ask cannot fix a format habit"
+        assert all(row["choice"] == "chart" for row in out["results"]), label
+
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            "ANSWER: chart WHY: bars and an axis",
+            '{"answer": "chart", "why": "bars and an axis"}',
+            "ANSWER: chart (bars and an axis)",
+            "```\nANSWER: chart\nWHY: bars and an axis\n```",
+            "<think>hmm</think>\nANSWER: chart\nWHY: bars and an axis",
+        ],
+    )
+    async def test_the_reason_survives_every_shape(self, tmp_path, scripted, reply):
+        scripted(reply)
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["photo", "chart"])
+        assert out["results"][0]["reason"] == "bars and an axis"
+
+    async def test_a_fence_does_not_become_part_of_a_free_text_answer(self, tmp_path, scripted):
+        scripted("```\nANSWER: a bar chart\nWHY: bars and an axis\n```")
+        out = await _analyze(tmp_path, _images(tmp_path, 1))
+        assert out["results"][0]["answer"] == "a bar chart"
+        assert out["results"][0]["reason"] == "bars and an axis"
+
+    async def test_a_think_block_is_never_the_answer(self, tmp_path, scripted):
+        scripted("<think>the filename says MRI but I see bars</think>\na bar chart")
+        out = await _analyze(tmp_path, _images(tmp_path, 1))
+        assert out["results"][0]["answer"] == "a bar chart"
+        assert "think" not in out["results"][0]["answer"]
+
+    async def test_a_lone_why_line_does_not_keep_its_marker(self, tmp_path, scripted):
+        """M2. `WHY: a cat on a sofa` used to answer `WHY: a cat on a sofa` —
+        the sentence twice, once with the marker still stuck to it."""
+        scripted("WHY: a cat on a sofa")
+        out = await _analyze(tmp_path, _images(tmp_path, 1))
+        row = out["results"][0]
+        assert row["answer"] == "a cat on a sofa"
+        assert "WHY" not in row["answer"]
+
+    async def test_a_gloss_is_only_read_when_the_head_is_a_real_label(self, tmp_path, scripted):
+        """The parenthetical split is a last resort, not a licence to trim
+        until something matches. `banana (a chart)` names no choice."""
+        fake = scripted("ANSWER: banana (a chart)")
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["photo", "chart"])
+        assert "choice" not in out["results"][0]
+        assert "not one of the choices" in out["results"][0]["error"]
+        assert len(fake.prompts) == 2
+
+    async def test_free_text_keeps_its_parentheses(self, tmp_path, scripted):
+        """Without `choices` there is no way to tell a gloss from the answer,
+        so nothing is split off and nothing is lost."""
+        scripted("ANSWER: a red square (with a black border)\nWHY: I can see it")
+        out = await _analyze(tmp_path, _images(tmp_path, 1))
+        assert out["results"][0]["answer"] == "a red square (with a black border)"
+
+    async def test_a_json_reply_that_names_no_choice_is_still_off_list(self, tmp_path, scripted):
+        fake = scripted('{"answer": "banana", "why": "a banana"}')
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["photo", "chart"])
+        assert "choice" not in out["results"][0]
+        assert len(fake.prompts) == 2, "one re-ask, as for any other off-list answer"
+
+    async def test_a_json_array_is_not_an_object_and_is_read_as_text(self, tmp_path, scripted):
+        """Only a JSON OBJECT carries named keys. A list is just a reply."""
+        scripted('["chart"]')
+        out = await _analyze(tmp_path, _images(tmp_path, 1))
+        assert out["results"][0]["answer"] == '["chart"]'
+
+    def test_the_correction_shows_the_shape_once_with_a_real_label(self):
+        from robothor.engine.vision_contract import build_contract, correction_suffix
+
+        contract, _ = build_contract(["photo", "chart"])
+        correction = correction_suffix(contract, "banana")
+        assert correction.count("ANSWER:") == 1, "one worked example, not two contracts"
+        assert correction.count("WHY:") == 1
+        assert "ANSWER: photo" in correction, "show a real label, not a placeholder"
+        assert "banana" in correction, "quote what was rejected"
+        assert "Reply in exactly two lines" not in correction, (
+            "restating the contract a model has already ignored is the least likely "
+            "thing to change its mind; showing the exact bytes is the most"
+        )

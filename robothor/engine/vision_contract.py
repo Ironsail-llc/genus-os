@@ -34,6 +34,7 @@ one.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -187,7 +188,7 @@ def contract_suffix(contract: Contract) -> str:
 
 
 def correction_suffix(contract: Contract, rejected: str) -> str:
-    """The one re-ask. Quotes what was rejected, and says what was wrong.
+    """The one re-ask. Quotes what was rejected, and SHOWS the shape once.
 
     One, not three. Each re-ask is another whole vision call with the image
     attached, so a batch of 200 that retried twice would cost three times what
@@ -195,14 +196,24 @@ def correction_suffix(contract: Contract, rejected: str) -> str:
     the formatting slip that is the common failure; a model that has been shown
     the list twice and answered outside it is telling the agent something, and
     reporting that as the row's error is more useful than a third attempt.
+
+    It shows a worked example using a REAL label rather than restating the
+    two-line contract a second time. Repeating an instruction a model has
+    already read once and not followed is the least likely thing to change its
+    mind; showing it the exact bytes expected, with the shapes it must not use
+    named, is the most. What the parser now forgives (a fence, an inline
+    marker, JSON) does not need a re-ask at all, so this is what is left.
     """
     quoted = rejected[:MAX_QUOTED_REPLY_CHARS].replace("\n", " ")
+    example = contract.labels[0] if contract.labels else "your answer"
     return (
-        f"\n\nYour previous reply, {quoted!r}, is not one of the allowed answers. Look "
-        "at the image again and answer with one of these, copied character for "
-        "character — "
-        + " | ".join(contract.labels)
-        + _CONTRACT_TEMPLATE.format(answer_line="exactly one of the labels above")
+        f"\n\nYour previous reply, {quoted!r}, is not one of the allowed answers. Look at "
+        "the image again and reply in exactly this shape — two lines, nothing before or "
+        "after them:\n"
+        f"ANSWER: {example}\n"
+        "WHY: one short sentence naming what you SEE in this image.\n"
+        "The ANSWER line must hold one of these and nothing else, copied character for "
+        "character: " + " | ".join(contract.labels)
     )
 
 
@@ -212,6 +223,26 @@ def correction_suffix(contract: Contract, rejected: str) -> str:
 #: reaches for when the question already contains the word "why".
 _ANSWER_LINE = re.compile(r"(?im)^[\s*_#>\-]*answer[\s*_]*[:：]\s*(.+?)\s*$")
 _WHY_LINE = re.compile(r"(?im)^[\s*_#>\-]*(?:why|reason)[\s*_]*[:：]\s*(.+?)\s*$")
+
+#: The same two markers where they appear MID-LINE. A model that was asked for
+#: two lines writes them on one often enough that treating it as a wrong answer
+#: turned whole batches into errors — at twice the cost, because the re-ask
+#: restated the contract to a model whose habit was the problem.
+_INLINE_WHY = re.compile(r"[\s*_#>\-]*\b(?:why|reason)[\s*_]*[:：]\s*", re.IGNORECASE)
+
+#: A reasoning model's scratchpad, and a fenced block. Both wrap a perfectly
+#: good reply in characters the markers are then looked for inside.
+_THINK_BLOCK = re.compile(r"(?is)<(think|thinking|reasoning)>.*?</\1>")
+_FENCE = re.compile(r"(?s)\A\s*```[a-zA-Z0-9_-]*\s*\n?(.*?)\n?\s*```\s*\Z")
+
+#: A gloss the model could not resist adding after the label it was asked for:
+#: ``chart (a bar chart with a titled axis)``. Only read when the head is a
+#: real label — see :func:`parse_reply`.
+_TRAILING_PARENTHETICAL = re.compile(r"(?s)\A(.*?)\s*[(（]([^()（）]*)[)）]\s*\Z")
+
+#: Keys a model reaches for when it decides the reply should be JSON.
+_JSON_ANSWER_KEYS = ("answer", "choice", "label", "category", "classification")
+_JSON_REASON_KEYS = ("why", "reason", "because", "justification", "explanation")
 
 
 @dataclass(frozen=True)
@@ -225,24 +256,96 @@ class Reply:
     rejected: str = ""
 
 
-def parse_reply(text: str, contract: Contract) -> Reply:
-    """Pull the answer and the evidence out of whatever came back.
+def _unwrap(text: str) -> str:
+    """The reply with a reasoning scratchpad and a code fence taken off.
+
+    Both are wrappers a model adds around a reply that is otherwise exactly
+    what was asked for, and both used to hide the markers from the
+    line-anchored patterns below.
+    """
+    return _FENCE.sub(r"\1", _THINK_BLOCK.sub("", text).strip()).strip()
+
+
+def _from_json(text: str) -> tuple[str, str] | None:
+    """``(answer, reason)`` when the whole reply is a JSON OBJECT, else None.
+
+    An object is the only shape that carries named keys. A bare string, a
+    number or a list is just a reply and is read as text — trying to be clever
+    about a list would be guessing which element was meant.
+    """
+    if not text.startswith("{"):
+        return None
+    try:
+        loaded = json.loads(text)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(loaded, dict):
+        return None
+    folded = {str(key).strip().casefold(): value for key, value in loaded.items()}
+
+    def first(keys: tuple[str, ...]) -> str:
+        for key in keys:
+            value = folded.get(key)
+            if isinstance(value, (str, int, float, bool)):
+                return str(value).strip()
+        return ""
+
+    answer = first(_JSON_ANSWER_KEYS)
+    return (answer, first(_JSON_REASON_KEYS)) if answer else None
+
+
+def _from_markers(text: str) -> tuple[str, str]:
+    """``(answer, reason)`` from whatever ``ANSWER:``/``WHY:`` markers are there.
 
     The LAST marked line wins: a model that restates the instruction before
-    obeying it puts the instruction first. With no marker at all the whole
-    reply is the answer, which is the #581 behaviour and the reason a weak
-    backend that ignores the contract still returns something usable.
+    obeying it puts the instruction first. An ``ANSWER:`` line is split at an
+    inline ``WHY:``/``REASON:``, so both-on-one-line reads the same as the two
+    lines that were asked for. With no marker at all the whole reply is the
+    answer, which is the #581 behaviour and the reason a weak backend that
+    ignores the contract still returns something usable.
     """
     answers = _ANSWER_LINE.findall(text)
     reasons = _WHY_LINE.findall(text)
+    inline = ""
     if answers:
-        stated = answers[-1].strip()
+        parts = _INLINE_WHY.split(answers[-1].strip(), maxsplit=1)
+        stated = parts[0].strip()
+        inline = parts[1].strip() if len(parts) > 1 else ""
     else:
-        stated = _WHY_LINE.sub("", text).strip() or text.strip()
-    reason = reasons[-1].strip() if reasons else ""
+        # A reply that is nothing but a WHY line used to answer with the marker
+        # still stuck to it — the sentence twice, once spoiled.
+        stated = _WHY_LINE.sub("", text).strip()
+    reason = reasons[-1].strip() if reasons else inline
+    return (stated or reason or text.strip()), reason
+
+
+def parse_reply(text: str, contract: Contract) -> Reply:
+    """Pull the answer and the evidence out of whatever came back.
+
+    Three layers, each of which only ever RE-SHAPES the reply: the wrappers
+    come off, a JSON object is read by its keys, and the markers are found
+    wherever they sit. What falls out still has to pass :meth:`Contract.match`
+    unchanged, so none of this loosens the equality rule — a reply that names
+    no label is still off-list, still re-asked once, still an error.
+
+    The last resort, and only when a choice is required, is a trailing
+    parenthetical: ``chart (a bar chart)`` becomes the label plus its reason,
+    but ONLY if the head is a real label. It is not a licence to trim until
+    something matches — ``banana (a chart)`` names nothing and stays off-list.
+    Free text keeps its parentheses, because there is no way to tell a gloss
+    from part of the answer and nothing is lost by leaving it alone.
+    """
+    body = _unwrap(text)
+    parsed = _from_json(body)
+    stated, reason = parsed if parsed is not None else _from_markers(body)
     if not contract.labels:
         return Reply(stated, reason)
     matched = contract.match(stated)
     if matched is None:
+        gloss = _TRAILING_PARENTHETICAL.match(stated)
+        if gloss:
+            head = contract.match(gloss.group(1))
+            if head is not None:
+                return Reply(head, reason or gloss.group(2).strip())
         return Reply("", reason, text.strip() or "(an empty reply)")
     return Reply(matched, reason)
