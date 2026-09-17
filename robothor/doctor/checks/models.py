@@ -387,6 +387,32 @@ async def _local_fallback_ready(ctx: DoctorContext) -> Result:
     return ok("; ".join(healthy))
 
 
+def _registry_model(name: str) -> str | None:
+    """The REGISTRY's own spelling of this model, or None if it has no entry.
+
+    Two jobs, and both are the probe's. The first is honest sizing: this check
+    compares the registry's window against what the server allocates, so a
+    model the registry has never heard of has no window to compare — `fit_for`
+    would hand back the conservative 128K fallback and the probe would be
+    testing that number instead of this instance's.
+
+    The second is a taint the probe created. `ctx.run_blocking` is one generic
+    helper shared by every check, so CodeQL cannot tell one caller's return
+    from another's: the secrets check passes `secret_source()` through it, and
+    on PR #582 that made a MODEL ID "sensitive data (secret)" all the way into
+    the engine's own log lines. Returning the registry's key — a literal in
+    this repository — is what the probe should be dialling anyway, and it ends
+    that flow at its source rather than arguing about it three modules later.
+    """
+    from robothor.engine.model_registry import _MODEL_REGISTRY, _registry_candidates
+
+    wanted = set(_registry_candidates(name))
+    for key in _MODEL_REGISTRY:
+        if key in wanted:
+            return key
+    return None
+
+
 #: A conversation this many times the model's window, so the probe is testing
 #: the shrink and not the estimate's rounding.
 _PROBE_OVERSHOOT = 1.5
@@ -422,7 +448,12 @@ async def _local_fallback_probe(ctx: DoctorContext) -> Result:
             f"`--timeout {int(_PROBE_MIN_TIMEOUT_S * 2)}`"
         )
 
-    model = models[-1]
+    model = _registry_model(models[-1])
+    if model is None:
+        return skip(
+            f"{models[-1]} has no entry in the engine's model registry, so there is no "
+            "window to probe against — add one to `model_registry._MODEL_REGISTRY`"
+        )
     fit = fit_for(model)
     filler = "the quick brown fox jumps over the lazy dog. " * 200
     messages: list[dict[str, Any]] = [

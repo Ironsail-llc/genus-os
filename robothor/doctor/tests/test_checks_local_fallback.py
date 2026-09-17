@@ -133,6 +133,17 @@ class TestTheProbeIsOptIn:
         result = _run("models.local_fallback_probe", make_ctx(offline=True))
         assert result.status == "skip"
 
+    def test_a_model_the_registry_does_not_know_is_skipped(self, monkeypatch):
+        """The probe compares the REGISTRY's window against the server. With no
+        entry there is no window to compare — `fit_for` would hand back the
+        conservative 128K fallback and the probe would be testing that."""
+        monkeypatch.setattr(
+            model_checks, "_fleet_models", lambda: ["ollama_chat/nobody-has-this:1b"]
+        )
+        result = _run("models.local_fallback_probe", make_ctx(timeout_s=300.0))
+        assert result.status == "skip"
+        assert "model registry" in result.detail
+
     def test_it_skips_when_the_budget_is_too_short_to_be_honest(self, local_chain):
         result = _run("models.local_fallback_probe", make_ctx(timeout_s=2.0))
         assert result.status == "skip"
