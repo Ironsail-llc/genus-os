@@ -72,7 +72,13 @@ KNOWN_LARGE: dict[str, int] = {
     # tool_turn.py. That extraction is what paid for parallel execution and
     # the tool proxy rather than growing the largest loop in the engine by
     # another 120 lines.
-    "runner.py::_run_loop": 529,
+    # 529 -> 519: the budget ladder (wrap-up rung, hard stop, bounded model
+    # call) went in and three blocks came out — replanning to run_replan.py,
+    # the error-feedback injection to error_actions.py beside the recovery
+    # that suppresses it, and the checkpoint save to checkpoint.py beside the
+    # loader that reads it. The cap follows the function DOWN rather than
+    # banking the difference, which is the point of a ratchet.
+    "runner.py::_run_loop": 519,
     # 473 -> 346. The Gmail and Calendar branches left for functions of their
     # own (_gmail_search/_gmail_get, _calendar_list/_calendar_create/
     # _calendar_delete) when each of them grew a real body: decoding a MIME

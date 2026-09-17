@@ -302,7 +302,11 @@ class TestTheRunnerWiring:
         import robothor.engine.runner as m
 
         body = Path(m.__file__).read_text(encoding="utf-8")
-        assert "DeadlinePacer(mode=mode_for_run(session.run_id))" in body
+        # One read, kept in `_mode` and handed to every control that needs the
+        # rung — the pacer, the repeat guard's cache, and the budget stop.
+        assert "_mode = mode_for_run(session.run_id)" in body
+        assert "DeadlinePacer(mode=_mode)" in body
+        assert body.count("mode_for_run(") == 1, "the rung is resolved once per run"
         assert "step_efficiency_mode()" not in body, (
             "the runner resolves the rung through mode_for_run, which seeds the cache"
         )

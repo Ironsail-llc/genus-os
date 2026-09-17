@@ -35,6 +35,7 @@ import litellm
 
 from robothor.db.connection import current_tenant_scope
 from robothor.engine.cancel_outcome import _cancel_outcome, terminal_run
+from robothor.engine.checkpoint import save_iteration
 from robothor.engine.config import (
     EngineConfig,
     _prompt_cache,
@@ -51,7 +52,7 @@ from robothor.engine.context_budget import keep_context_within_budget
 # deliberately re-exported; a plain import reads to mypy as a private detail,
 # which is the right default and the wrong one here.
 from robothor.engine.deliverables import task_text_from  # noqa: E402
-from robothor.engine.error_actions import apply_error_recovery
+from robothor.engine.error_actions import apply_error_recovery, inject_error_feedback
 from robothor.engine.finalization_budget import FinalizationBudget  # noqa: E402
 from robothor.engine.injection_screen import screen_run_prompt
 from robothor.engine.journal_resume import maybe_prepend_journal_resume
@@ -82,19 +83,28 @@ from robothor.engine.prompts import (
 from robothor.engine.run_budget import (  # noqa: E402
     DEADLINE_WARNING_FRACTION as DEADLINE_WARNING_FRACTION,
 )
-from robothor.engine.run_budget import chain_for, effective_wallclock_ceiling, watchdog_budgets_for
 from robothor.engine.run_budget import (
     deadline_warning as deadline_warning,
 )
 from robothor.engine.run_budget import (
     proactive_compaction_threshold as proactive_compaction_threshold,
 )
+from robothor.engine.run_budget import watchdog_budgets_for
 from robothor.engine.run_context import mark_benchmark_run
+from robothor.engine.run_deadline import (
+    BudgetStop,
+    RunBudgetError,
+    begin_wrapup,
+    end_run_at_budget,
+    wrapup_note,
+    wrapup_schemas,
+)
 from robothor.engine.run_finalizer import RunFinalizationMixin
 from robothor.engine.run_identity import resolve_run_identity
 from robothor.engine.run_lifecycle import RunLifecycleMixin, spawn_post_stall_autodream
 from robothor.engine.run_llm_calls import LLMCallMixin  # noqa: E402
 from robothor.engine.run_pacing import DeadlinePacer, checkin_note, mode_for_run  # noqa: E402
+from robothor.engine.run_replan import maybe_replan  # noqa: E402
 from robothor.engine.sandbox_policy import agent_holds_exec, resolve_sandbox_decision
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.session import ENGINE_CONTEXT_ROLE, AgentSession
@@ -1815,17 +1825,54 @@ class AgentRunner(
         _pre_iteration_msg_idx = len(session.messages)
         _tool_failures: dict[str, int] = {}  # per-tool failure count for circuit breaker
         _guard_state = GuardState()  # carries the 500K alert's one-shot latch
-        _pacer = DeadlinePacer(mode=mode_for_run(session.run_id))  # reads once, seeds the cache
+        _mode = mode_for_run(session.run_id)  # reads once, seeds the cache
+        _pacer = DeadlinePacer(mode=_mode)
         # ── [WALLCLOCK] the loop's own deadline — computed once, checked
         # every iteration. See the self-check below for why this exists.
-        _wallclock_ceiling = effective_wallclock_ceiling(
-            agent_config.timeout_seconds, chain_for(agent_config)
+        # ONE resolver, shared with the stall watchdog: a task-imposed budget
+        # scaled to 1600 while the container was destroyed at 1500 is how a
+        # graded run died mid-LLM-call (robothor/engine/run_deadline.py).
+        _stop = BudgetStop.for_run(
+            agent_config, mode=_mode, watchdog=self._active_watchdog, session=session
         )
+        _wallclock_ceiling = _stop.budget.seconds
         _wallclock_deadline = (
             time.monotonic() + _wallclock_ceiling if _wallclock_ceiling > 0 else None
         )
 
+        _workspace = getattr(agent_config, "workspace", "") or self.config.workspace
+
         while True:
+            # ── [BUDGET] Wrap up at 90%, and END at 100% ──
+            # BEFORE the guards below, and that order is load-bearing: the
+            # wallclock self-check fires at the same instant and ends the run
+            # as a TIMEOUT holding whatever the conversation had. This is the
+            # graceful form of the same deadline (run_deadline.py), so it
+            # looks first; the self-check is untouched at `off`/`observe`.
+            _phase = _stop.due()
+            if _phase == "expired":
+                end_run_at_budget(
+                    session,
+                    _stop.budget,
+                    elapsed=_stop.elapsed,
+                    task_text=task_text_from(session.messages),
+                    workspace=_workspace,
+                )
+                return
+            if _phase == "wrapup" and _stop.announce("wrapup"):
+                tool_schemas = wrapup_schemas(tool_schemas)
+                begin_wrapup(session, _stop)  # admission enforces what the schema drops
+                append_engine_note(
+                    session,
+                    wrapup_note(
+                        elapsed=_stop.elapsed,
+                        budget_seconds=_stop.budget.seconds,
+                        task_text=task_text_from(session.messages),
+                        workspace=_workspace,
+                    ),
+                    _workspace,
+                )
+
             # ── [GUARDS] May the loop take another iteration? ──
             # wallclock -> steer -> interrupt -> watchdog -> runaway, in that
             # order, in robothor/engine/loop_guards.py. The order is
@@ -1850,7 +1897,6 @@ class AgentRunner(
             # ── [DEADLINE] Tell the agent while it can still act ──
             # Rungs, wording and ladder: robothor/engine/run_pacing.py. Here is
             # the only place with the live watchdog, task text and workspace.
-            _workspace = getattr(agent_config, "workspace", "") or self.config.workspace
             _dl_note = _pacer.note_for(
                 self._active_watchdog,
                 iteration=_iteration,
@@ -1876,7 +1922,14 @@ class AgentRunner(
             # ── [SOFT CHECK-IN] Nudge LLM to self-assess progress ──
             # Cadence and wording in robothor/engine/run_pacing.py.
             _ci_note = checkin_note(
-                _iteration, _checkin_interval, _pacer.mode, run_id=session.run.id
+                _iteration,
+                _checkin_interval,
+                _pacer.mode,
+                run_id=session.run.id,
+                session=session,
+                task_text=task_text_from(session.messages),
+                workspace=_workspace,
+                fraction=_stop.fraction_spent(),
             )
             append_engine_note(session, _ci_note, _workspace)
 
@@ -1962,16 +2015,29 @@ class AgentRunner(
             # it needs.  The stall watchdog (touches on every stream chunk and
             # tool completion) is the correct guard against stuck runs.
             # The litellm HTTP timeout (600 s) handles truly dead connections.
-            response, model_used, elapsed_ms, msg_dict = await self._llm_call_and_record(
-                session,
-                models,
-                tool_schemas,
-                on_content,
-                broken_models,
-                agent_config.temperature,
-                trace,
-                on_stream_event=on_stream_event,
-            )
+            # The one exception is the budget window: a call still in flight
+            # when the budget ends loses the whole run, so it is cancelled.
+            try:
+                async with _stop.call_window():
+                    response, model_used, elapsed_ms, msg_dict = await self._llm_call_and_record(
+                        session,
+                        models,
+                        tool_schemas,
+                        on_content,
+                        broken_models,
+                        agent_config.temperature,
+                        trace,
+                        on_stream_event=on_stream_event,
+                    )
+            except RunBudgetError:
+                end_run_at_budget(
+                    session,
+                    _stop.budget,
+                    elapsed=_stop.elapsed,
+                    task_text=task_text_from(session.messages),
+                    workspace=_workspace,
+                )
+                return
 
             if response is None:
                 raise all_models_failed(session, models, broken_models)
@@ -2014,6 +2080,19 @@ class AgentRunner(
 
                 if nudge_for_missing_deliverable(session, _workspace):  # owes an artifact
                     continue
+                return
+
+            # ── [BUDGET] The clock again, after the call, before the work ──
+            # A belt as well as a brace: the window has nothing to raise if
+            # the callee swallows its CancelledError (measured 2026-08-22).
+            if _stop.due() == "expired":
+                end_run_at_budget(
+                    session,
+                    _stop.budget,
+                    elapsed=_stop.elapsed,
+                    task_text=task_text_from(session.messages),
+                    workspace=_workspace,
+                )
                 return
 
             # ── Execute tool calls ──
@@ -2065,28 +2144,14 @@ class AgentRunner(
             recovery_applied = _recovery.applied
             _helper_spawns_used = _recovery.helper_spawns_used
 
-            # ── [ERROR FEEDBACK] Inject analysis prompt on errors ──
-            if iteration_errors and agent_config.error_feedback and not recovery_applied:
-                error_lines = "\n".join(
-                    f"- {name}: {msg}" for name, msg, _etype in iteration_errors
-                )
-                # Inject STOP RETRYING hints for error types repeated >= 2 times
-                stop_hints = escalation.get_repeated_error_hints(threshold=2) if escalation else []
-                stop_hints_text = ("\n\n" + "\n".join(stop_hints)) if stop_hints else ""
-                session.messages.append(
-                    {
-                        "role": ENGINE_CONTEXT_ROLE,
-                        "content": (
-                            f"[SYSTEM] The following tool calls failed:\n{error_lines}\n\n"
-                            "Analyze why these failed. Consider:\n"
-                            "1. Were the arguments correct?\n"
-                            "2. Is there an alternative approach or different tool?\n"
-                            "3. Should you skip this step and continue?\n"
-                            "Do NOT retry the exact same call with the same arguments."
-                            f"{stop_hints_text}"
-                        ),
-                    }
-                )
+            # ── [ERROR FEEDBACK] error_actions.py, beside its suppressor ──
+            inject_error_feedback(
+                session,
+                agent_config,
+                iteration_errors=iteration_errors,
+                escalation=escalation,
+                recovery_applied=recovery_applied,
+            )
 
             # ── [ESCALATION] Check thresholds ──
             if escalation:
@@ -2106,95 +2171,30 @@ class AgentRunner(
                 if esc_msg:
                     session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": esc_msg})
 
-            # ── [REPLANNING] Check if mid-run replan is needed ──
-            if (
-                plan_result
-                and scratchpad
-                and escalation
-                and agent_config.planning_enabled
-                and not readonly_mode
-            ):
-                from robothor.engine.planner import should_replan as _should_replan
+            # ── [REPLANNING] Is the plan still the plan? (run_replan.py) ──
+            _replanned = await maybe_replan(
+                session,
+                agent_config,
+                plan_result=plan_result,
+                scratchpad=scratchpad,
+                escalation=escalation,
+                models=models,
+                replan_count=_replan_count,
+                readonly_mode=readonly_mode,
+                hook_registry=hook_registry,
+            )
+            plan_result = _replanned.plan_result
+            _replan_count = _replanned.replan_count
 
-                budget_pct = 0.0
-                if session.run.token_budget > 0:
-                    used = session.run.input_tokens + session.run.output_tokens
-                    budget_pct = used / session.run.token_budget
-
-                if _should_replan(scratchpad, plan_result, escalation, _replan_count, budget_pct):
-                    from robothor.engine.planner import format_plan_context, replan
-
-                    new_plan = await replan(
-                        plan_result,
-                        scratchpad,
-                        models[0],
-                        fallback_models=models[1:],  # [1:2] missed the offline tier
-                    )
-                    if new_plan.success and new_plan.plan:
-                        plan_result = new_plan
-                        _replan_count += 1
-                        scratchpad.set_plan(new_plan.plan)
-                        # Non-fatal: replan formatting must not abort the run.
-                        try:
-                            plan_context = format_plan_context(new_plan)
-                        except Exception as e:
-                            plan_context = ""
-                            logger.warning(
-                                "Replan context formatting failed (non-fatal, "
-                                "continuing without revised plan context): %s",
-                                _sanitize(e),
-                            )
-                        # Dispatch REPLAN hook
-                        if hook_registry:
-                            with contextlib.suppress(Exception):
-                                await hook_registry.dispatch(
-                                    HookEvent.REPLAN,
-                                    HookContext(
-                                        event=HookEvent.REPLAN,
-                                        agent_id=agent_config.id,
-                                        run_id=session.run_id,
-                                        metadata={"replan_count": _replan_count},
-                                    ),
-                                )
-                        if plan_context:
-                            session.messages.append(
-                                {
-                                    "role": ENGINE_CONTEXT_ROLE,
-                                    "content": (
-                                        f"[REVISED PLAN — attempt {_replan_count}]\n{plan_context}"
-                                    ),
-                                }
-                            )
-
-            # ── [CHECKPOINT] Save state ──
-            if checkpoint and checkpoint.should_checkpoint():
-                # Phase 5: pass the TodoList through so resume can rebuild it.
-                # Without this the checklist was silently dropped on resume.
-                todo_state: dict[str, Any] | None = None
-                if session.todo_list:
-                    try:
-                        todo_state = session.todo_list.to_dict()
-                    except Exception:
-                        todo_state = None
-                checkpoint.save(
-                    step_number=session._step_counter,
-                    messages=session.messages,
-                    scratchpad=scratchpad.to_dict() if scratchpad else None,
-                    plan=plan_result.raw if plan_result and hasattr(plan_result, "raw") else None,
-                    todo_list=todo_state,
-                )
-                # Dispatch CHECKPOINT hook
-                if hook_registry:
-                    with contextlib.suppress(Exception):
-                        await hook_registry.dispatch(
-                            HookEvent.CHECKPOINT,
-                            HookContext(
-                                event=HookEvent.CHECKPOINT,
-                                agent_id=agent_config.id,
-                                run_id=session.run_id,
-                                metadata={"step_number": session._step_counter},
-                            ),
-                        )
+            # ── [CHECKPOINT] Save state (checkpoint.py, beside the loader) ──
+            await save_iteration(
+                checkpoint,
+                session,
+                agent_config=agent_config,
+                scratchpad=scratchpad,
+                plan_result=plan_result,
+                hook_registry=hook_registry,
+            )
 
             # Update boundary for next iteration's eager compression
             _pre_iteration_msg_idx = len(session.messages)

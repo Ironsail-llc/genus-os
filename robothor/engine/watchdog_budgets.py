@@ -98,8 +98,15 @@ def watchdog_budgets_for(agent_config: Any) -> WatchdogBudgets:
     A 0 budget means "disabled" and stays 0: ``_defaults.yaml`` sets
     ``stall_timeout_seconds: 0`` fleet-wide, and scaling that into a live
     timeout would kill every agent on the fleet.
+
+    The hard ceiling comes from ``run_deadline.resolve_run_budget``, which the
+    loop uses too. Measured 2026-09-17: a task imposed a 1200s budget, the
+    manifest number was tempo-scaled to 1600, and the container was destroyed
+    at 1500 with a model call in flight. Two derivations of one ceiling is how
+    that happens; there is now one.
     """
     from robothor.engine.model_registry import chain_tempo_factor
+    from robothor.engine.run_deadline import resolve_run_budget
 
     chain = chain_for(agent_config)
     factor = chain_tempo_factor(chain)
@@ -110,7 +117,5 @@ def watchdog_budgets_for(agent_config: Any) -> WatchdogBudgets:
     return WatchdogBudgets(
         stall=_scale(int(getattr(agent_config, "stall_timeout_seconds", 0) or 0)),
         early_stall=_scale(int(getattr(agent_config, "early_stall_timeout_seconds", 0) or 0)),
-        hard=effective_wallclock_ceiling(
-            int(getattr(agent_config, "timeout_seconds", 0) or 0), models=chain
-        ),
+        hard=resolve_run_budget(agent_config).seconds,
     )

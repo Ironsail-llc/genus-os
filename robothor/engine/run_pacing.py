@@ -395,19 +395,111 @@ _DELIVERABLE_CHECKIN = (
 )
 
 
+#: Where in the budget a check-in stops being a question. Before halfway,
+#: "nothing written yet" is what working looks like; past it, on a run that
+#: has already been asked once, it is the shape that ends at zero.
+DIRECTIVE_FRACTION: float = 0.5
+
+#: How many check-ins may find an empty workspace before the engine stops
+#: asking. Two, because one is a snapshot and two is a trend — and because the
+#: measured runs answered the first one with a plan and kept exploring.
+DIRECTIVE_AFTER: int = 2
+
+#: The third rung. It names the path, because "the deliverable path" is what
+#: the agent has been inventing; and it forbids the next tool call rather than
+#: recommending against it, because the recommendation has demonstrably been
+#: read as advice twice already.
+_DIRECTIVE_CHECKIN = (
+    "[SYSTEM] STOP. You have been asked twice what you have written and the "
+    "task's output does not exist: {listed}. More than half this run's time "
+    "budget is gone, and anything unwritten when it expires is lost.\n"
+    "Your NEXT action is `write_file` to that exact path, with your best "
+    "current answer — however incomplete, and saying plainly inside it what is "
+    "missing. Do not read, search, fetch or run anything else first.\n"
+    "Give it the SHAPE the task asked for, not your own: quote the task's "
+    "required format back — the exact filename, the exact header or field "
+    "names, the exact section headings — and match it. A file at the right "
+    "path in the wrong shape scores the same as no file at all. Once it "
+    "exists you may keep improving it by overwriting."
+)
+
+
+def _nothing_written(task_text: str | None, workspace: str | Path | None) -> list[str]:
+    """The declared outputs that are absent, or [] when there is no evidence.
+
+    Evidence-driven on purpose. The trigger could have been the model's own
+    answer to the check-in, and that answer is the thing under test: an agent
+    that SAYS it has written the file and has not is the exact failure being
+    caught. A task that declared no path gives no evidence either way, so it
+    never escalates.
+    """
+    from robothor.engine.deliverables import declared_paths, missing_paths
+
+    paths = declared_paths(task_text)
+    if not paths or not workspace:
+        return []
+    missing = missing_paths(paths, workspace)
+    return missing if len(missing) == len(paths) else []
+
+
+def _remember_checkins(session: Any, count: int) -> None:
+    """Carry the count on the session, and SAY SO if the session refuses it.
+
+    The write was inside a bare ``contextlib.suppress(AttributeError)``. It
+    works today, and if ``AgentSession`` ever grows ``__slots__`` the counter
+    would stop advancing and this rung would go inert with no signal at all —
+    the shape this repo has shipped four times (hostile review 2026-09-17,
+    finding 7). A control that cannot record its own state should say so.
+    """
+    try:
+        session.empty_checkins = count
+    except AttributeError:
+        logger.debug(
+            "directive check-in cannot keep its count on %s; the rung is inert for this run",
+            type(session).__name__,
+        )
+
+
+def _directive_or_ask(
+    iteration: int,
+    session: Any,
+    task_text: str | None,
+    workspace: str | Path | None,
+    fraction: float,
+) -> str:
+    """The deliverable check-in, escalated if this run keeps writing nothing."""
+    missing = _nothing_written(task_text, workspace)
+    if not missing or fraction < DIRECTIVE_FRACTION:
+        _remember_checkins(session, 0)
+        return _DELIVERABLE_CHECKIN.format(iteration=iteration)
+    seen = int(getattr(session, "empty_checkins", 0) or 0) + 1
+    _remember_checkins(session, seen)
+    if seen < DIRECTIVE_AFTER:
+        return _DELIVERABLE_CHECKIN.format(iteration=iteration)
+    logger.warning(
+        "Directive check-in issued at iteration %d: %d asks, nothing written", iteration, seen
+    )
+    return _DIRECTIVE_CHECKIN.format(listed=", ".join(missing))
+
+
 def checkin_note(
     iteration: int,
     checkin_interval: int,
     mode: str,
     *,
     run_id: str = "",
+    session: Any = None,
+    task_text: str | None = None,
+    workspace: str | Path | None = None,
+    fraction: float = 0.0,
 ) -> str | None:
     """The progress check-in for this iteration, or None.
 
     The shipped cadence fires at ``max_iterations`` on every rung of the ladder,
     unchanged. ``enforce`` adds one every ``CHECKIN_EVERY`` iterations, because
     the bench agent's ``max_iterations`` is 80 and the run this exists for took
-    79 — the shipped check-in never fired once on the run that needed it.
+    79 — the shipped check-in never fired once on the run that needed it. Past
+    half the budget it also escalates: see ``_directive_or_ask``.
     """
     if iteration < 1:
         return None
@@ -422,7 +514,7 @@ def checkin_note(
         logger.warning(
             "Deliverable check-in issued at iteration %d, run %s", iteration, run_id or "?"
         )
-        return _DELIVERABLE_CHECKIN.format(iteration=iteration)
+        return _directive_or_ask(iteration, session, task_text, workspace, fraction)
     if cadence_due:
         logger.warning(
             "step-efficiency observe: run %s would inject a deliverable check-in at iteration %d",

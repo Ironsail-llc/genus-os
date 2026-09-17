@@ -1,11 +1,11 @@
 """Admission control: everything that stands between a model asking for a
 tool and the tool running.
 
-Five gates, in a fixed order — plan mode, the agent's built tool set, the
-PRE_TOOL_USE lifecycle hook, the guardrail engine (including human approval),
-and the system-run RBAC check. Order is a security property: the cheapest and
-most absolute answers first, and a later gate never gets the chance to
-approve what an earlier one refused.
+Six gates, in a fixed order — plan mode, the agent's built tool set, the run's
+wrap-up rung, the PRE_TOOL_USE lifecycle hook, the guardrail engine (including
+human approval), and the system-run RBAC check. Order is a security property:
+the cheapest and most absolute answers first, and a later gate never gets the
+chance to approve what an earlier one refused.
 
 These lived inline in ``_run_loop`` as ~310 lines, and the reason to pull them
 out is not line count. Every gate ended with the same five-statement refusal
@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from robothor.constants import GUARDRAIL_BLOCKED_ERROR_TYPE
+from robothor.engine.run_deadline import wrapup_refusal
 from robothor.engine.sanitize import sanitize_log as _sanitize
 
 if TYPE_CHECKING:
@@ -140,6 +141,23 @@ class ToolAdmissionMixin:
                 allowed=False,
                 message=f"Tool '{tool_name}' is not available to this agent.",
                 output={"guard": "tools_allowed"},
+                tool_args=tool_args,
+            )
+
+        # ── [WRAP-UP GUARD] Runtime enforcement ──
+        # Belt-and-suspenders for the same reason the two gates above are: the
+        # budget's wrap-up rung withdraws every tool but writing and checking
+        # from the SCHEMA, and a model that asks anyway was still being served
+        # (hostile review 2026-09-17). Not counted as an iteration error and
+        # never escalated — a run in its last tenth being redirected to write
+        # is the control working, not the agent failing.
+        _wrapup = wrapup_refusal(session, tool_name)
+        if _wrapup:
+            return ToolVerdict(
+                allowed=False,
+                message=_wrapup,
+                output={"guard": "run_wrapup"},
+                count_as_iteration_error=False,
                 tool_args=tool_args,
             )
 

@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-404 settings in 13 groups.
+407 settings in 13 groups.
 
 ## paths
 
@@ -213,6 +213,9 @@ The agent execution layer: bind address, concurrency, pacing, sandbox.
 | `ROBOTHOR_RESERVED_INTERACTIVE_SLOTS` | int | `1` | no | no | legacy | Concurrency slots held back for interactive chat so background work cannot starve the operator's own conversation. |
 | `ROBOTHOR_RESUME_IN_FLIGHT` | bool | `false` | `robothor-engine` | no | legacy | Resume runs that were in flight when the engine restarted. Verify it from a recovered run, never from the log line it prints itself. |
 | `ROBOTHOR_RIP_1_AGENTS` | str | _(empty)_ | `robothor-engine` | no | legacy | Comma-separated soak allowlist for the background-review rip: when set, only these agents take the new path. |
+| `ROBOTHOR_RUN_BUDGET_GRACE_SECONDS` | int | `20` | no | no | unreleased | How long a model call already in flight when the budget expires may still take before it is cancelled. A grace, not an extension: at the end of it the call is cancelled and the run finishes with whatever is on disk. Keep it well under the margin whatever kills the run from outside allows. |
+| `ROBOTHOR_RUN_BUDGET_SECONDS` | int | `0` | no | no | unreleased | Wall-clock seconds one run gets, imposed from outside the engine -- by a harness, an orchestrator or a queue that will itself act when the clock runs out. Taken EXACTLY: unlike an agent's own `timeout_seconds` it is never scaled by the model's tempo, because whoever set it is counting the same seconds. It also caps the stall watchdog, so the engine and the imposer cannot disagree about when the run is over. 0 means nobody imposed one and each agent's manifest decides. |
+| `ROBOTHOR_RUN_WRAPUP_FRACTION` | float | `0.9` | no | no | unreleased | How far into its wall-clock budget a run switches from working to SAVING. Past this point the agent keeps only the tools that write the deliverable and read it back, is told how many seconds remain, and is asked to write its best current answer to the path the task named. Clamped to 0.5-1.0; only acts under `ROBOTHOR_STEP_EFFICIENCY_MODE=enforce`. |
 | `ROBOTHOR_SANDBOX_BINARY` | str | _(empty)_ | `robothor-engine` | no | legacy | Container runtime used for sandboxed exec. Empty prefers rootless podman, then docker. |
 | `ROBOTHOR_SANDBOX_DEFAULT_MODE` | str | _(empty)_ | `robothor-engine` | no | legacy | **governed.** Fleet default sandbox mode for agents whose manifest names none. Empty leaves exec unrouted, which is sandboxing in name only. |
 | `ROBOTHOR_SANDBOX_IMAGE` | str | `robothor-sandbox:latest` | `robothor-engine` | no | legacy | Image sandboxed exec runs agent commands inside. |

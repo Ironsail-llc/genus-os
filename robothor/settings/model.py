@@ -876,6 +876,43 @@ class EngineSettings(SettingsGroup):
         restart_required=False,
         since="unreleased",
     )
+    run_budget_seconds: int = declare(
+        0,
+        "ROBOTHOR_RUN_BUDGET_SECONDS",
+        "Wall-clock seconds one run gets, imposed from outside the engine -- "
+        "by a harness, an orchestrator or a queue that will itself act when "
+        "the clock runs out. Taken EXACTLY: unlike an agent's own "
+        "`timeout_seconds` it is never scaled by the model's tempo, because "
+        "whoever set it is counting the same seconds. It also caps the stall "
+        "watchdog, so the engine and the imposer cannot disagree about when "
+        "the run is over. 0 means nobody imposed one and each agent's "
+        "manifest decides.",
+        restart_required=False,
+        since="unreleased",
+    )
+    run_wrapup_fraction: float = declare(
+        0.90,
+        "ROBOTHOR_RUN_WRAPUP_FRACTION",
+        "How far into its wall-clock budget a run switches from working to "
+        "SAVING. Past this point the agent keeps only the tools that write "
+        "the deliverable and read it back, is told how many seconds remain, "
+        "and is asked to write its best current answer to the path the task "
+        "named. Clamped to 0.5-1.0; only acts under "
+        "`ROBOTHOR_STEP_EFFICIENCY_MODE=enforce`.",
+        restart_required=False,
+        since="unreleased",
+    )
+    run_budget_grace_seconds: int = declare(
+        20,
+        "ROBOTHOR_RUN_BUDGET_GRACE_SECONDS",
+        "How long a model call already in flight when the budget expires may "
+        "still take before it is cancelled. A grace, not an extension: at the "
+        "end of it the call is cancelled and the run finishes with whatever "
+        "is on disk. Keep it well under the margin whatever kills the run "
+        "from outside allows.",
+        restart_required=False,
+        since="unreleased",
+    )
     max_spawn_batch: int = declare(
         10,
         "ROBOTHOR_MAX_SPAWN_BATCH",

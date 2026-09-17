@@ -105,3 +105,36 @@ async def apply_error_recovery(
 
 def _say(session: Any, content: str) -> None:
     session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": content})
+
+
+def inject_error_feedback(
+    session: Any,
+    agent_config: Any,
+    *,
+    iteration_errors: list[tuple[str, str, Any]],
+    escalation: Any,
+    recovery_applied: bool,
+) -> None:
+    """Tell the agent WHY this iteration's tool calls failed, or say nothing.
+
+    Lifted out of ``_run_loop`` where it was inline: it belongs beside the
+    recovery above, because the two are mutually exclusive by design —
+    ``recovery_applied`` suppresses it, since doing both asks the agent to
+    analyse a failure the platform has just handled.
+    """
+    if not (iteration_errors and agent_config.error_feedback) or recovery_applied:
+        return
+    listed = "\n".join(f"- {name}: {msg}" for name, msg, _etype in iteration_errors)
+    # STOP RETRYING hints for error types repeated >= 2 times.
+    hints = escalation.get_repeated_error_hints(threshold=2) if escalation else []
+    suffix = ("\n\n" + "\n".join(hints)) if hints else ""
+    _say(
+        session,
+        f"[SYSTEM] The following tool calls failed:\n{listed}\n\n"
+        "Analyze why these failed. Consider:\n"
+        "1. Were the arguments correct?\n"
+        "2. Is there an alternative approach or different tool?\n"
+        "3. Should you skip this step and continue?\n"
+        "Do NOT retry the exact same call with the same arguments."
+        f"{suffix}",
+    )
