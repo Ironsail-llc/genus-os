@@ -4,12 +4,41 @@ Skills in `agents/skills/<name>/` follow the [agentskills.io](https://agentskill
 frontmatter convention so they're portable across the broader ecosystem
 (Hermes Agent, Claude marketplace, lobehub, skills.sh, etc).
 
+## Two trees: the platform's skills and this instance's
+
+`agents/skills/` is PLATFORM code — tracked, the skills every instance
+gets. The engine reads it and never writes to it.
+
+Everything an agent creates at runtime (`create_skill`, `update_skill`,
+`skill_archive`) goes to the INSTANCE directory instead:
+`<workspace>/brain/skills`, gitignored like the rest of `brain/`, or
+wherever `ROBOTHOR_INSTANCE_SKILLS_DIR` points. What an instance learns
+is its own: a platform upgrade never touches it, and a clean checkout
+never deletes it.
+
+Reads walk the bundled tree first and the instance tree second, so an
+instance skill of the same name **shadows** the bundled one. Updating a
+bundled skill is therefore copy-on-write: the tracked file is left
+exactly as it was and the revised body lands in the instance tree.
+
+Because a shadow is invisible on disk, it is never accidental:
+`create_skill` and `update_skill` refuse a name the platform ships
+unless you pass `shadow_bundled=true`; `list_skills` and `skill_view`
+report `origin` and `shadows_bundled` per skill; the loader logs the
+override at INFO; `genus doctor --only skills.shadowed` lists them all;
+and `skill_archive` on an overlay reports `unshadowed_bundled` — the
+bundled skill is live again, nothing was retired.
+
+Skills agents created before this split are moved out of the platform
+tree, once, by `genus skills migrate-instance` (idempotent; `--dry-run`
+reports without moving anything).
+
 ## Canonical layout
 
 ```
-agents/skills/<kebab-name>/
+<skills-root>/<kebab-name>/     # agents/skills (platform) or brain/skills (instance)
   SKILL.md          # YAML frontmatter + markdown body (this file)
-  meta.json         # static, tracked metadata — created_by, write_origin, …
+  meta.json         # static metadata — origin, created_by, write_origin, …
   state.json        # gitignored runtime telemetry — usage_count, last_used
   references/       # optional: long-form supporting notes
   templates/        # optional: starter files to copy + edit
@@ -45,7 +74,7 @@ compatibility while Rip 3 rolls out.
 
 ## meta.json (static metadata) + state.json (runtime telemetry)
 
-meta.json is tracked in git and stays byte-stable at runtime. All mutable
+A bundled skill's meta.json is tracked and stays byte-stable at runtime. All mutable
 telemetry lives in a gitignored `state.json` sidecar next to it, and the
 lifecycle `state` is derived on the fly (never persisted). Read skills
 through `robothor.engine.skills.read_skill_view` — it merges both files
@@ -58,10 +87,11 @@ state.json (gitignored, written atomically):
 | `usage_count` | `skill_view`, `invoke_skill` | Curator ranks stale skills |
 | `last_used` | `skill_view`, `invoke_skill` | Lifecycle staleness anchor |
 
-meta.json (tracked, static):
+meta.json (static):
 
 | Key | Set by | Used for |
 |---|---|---|
+| `origin` | `create_skill` / `update_skill` | `"instance"` for anything the engine wrote, `"platform"` for a skill the platform ships. The boundary guard fails if a tracked skill carries `"instance"`; the migration moves only those. |
 | `created_by` | `create_skill` | Audit trail |
 | `write_origin` | `create_skill` (Rip 4) | `"foreground"` or `"background_review"` |
 | `is_agent_created` | `create_skill` (Rip 4) | `True` only for background-review-fork writes; curator only touches these |

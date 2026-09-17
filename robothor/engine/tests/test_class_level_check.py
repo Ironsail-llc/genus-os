@@ -130,5 +130,8 @@ class TestHandlerIntegration:
         # happens next (write_skill_file path errors, etc.) is fine
         # for this test; we only assert the rejection didn't trigger.
         assert result.get("rejected_by") != "class_level_check"
-        # And the write landed inside the isolated workspace, not the repo.
-        assert (tmp_path / "agents" / "skills" / "fix-broken-typecheck" / "SKILL.md").exists()
+        # And the write landed inside the isolated workspace, not the repo --
+        # in its INSTANCE skills directory, which is where every runtime write
+        # goes now; agents/skills/ is the platform's own, read-only tree.
+        assert (tmp_path / "brain" / "skills" / "fix-broken-typecheck" / "SKILL.md").exists()
+        assert not (tmp_path / "agents" / "skills" / "fix-broken-typecheck").exists()

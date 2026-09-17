@@ -171,7 +171,9 @@ class TestSkillArchive:
         result = self._run("cold-one", tmp_path)
         assert result.get("archived") == "cold-one"
         assert not (tmp_path / "agents/skills/cold-one").exists()
-        assert (tmp_path / "agents/skills/.archive/cold-one/SKILL.md").exists()
+        # Retirement moves the skill OUT of the platform tree: the archive
+        # lives with the instance's own skills, never under agents/skills/.
+        assert (tmp_path / "brain/skills/.archive/cold-one/SKILL.md").exists()
 
     def test_refuses_pinned(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))

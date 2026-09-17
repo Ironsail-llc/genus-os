@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-408 settings in 13 groups.
+409 settings in 13 groups.
 
 ## paths
 
@@ -58,6 +58,7 @@ Where the instance keeps its files. Every path defaults under the workspace.
 | `ROBOTHOR_CODEX_BIN` | str | `codex` | `robothor-engine`, `robothor-bridge` | no | legacy | Name or path of the codex binary the codex provider executes. |
 | `ROBOTHOR_CODEX_HOME` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | CODEX_HOME for the codex subscription provider — the directory holding its auth state. Empty falls back to CODEX_HOME. Also read from `CODEX_HOME`. |
 | `ROBOTHOR_DROPIN_DIR` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | Directory of systemd drop-in fragments the instance-env reader reconciles against the running units. |
+| `ROBOTHOR_INSTANCE_SKILLS_DIR` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | unreleased | Directory the engine writes agent-created skills to, and reads them back from after the bundled ones. Empty means <workspace>/brain/skills -- instance-land, gitignored, so a skill an agent writes is never committed into the platform tree and survives a clean checkout. The skills the platform ships stay read-only at <workspace>/agents/skills; a skill here with the same name wins. |
 | `ROBOTHOR_LIVENESS_STATE_DIR` | str | `/run/robothor/fleet-guard` | `robothor-engine`, `robothor-bridge` | no | legacy | Directory the fleet liveness guard counts consecutive failures in. |
 | `ROBOTHOR_LOG_DIR` | str | `/var/log/robothor` | `robothor-engine`, `robothor-bridge` | no | legacy | Directory the service units write log files to. |
 | `ROBOTHOR_MANIFEST_DIR` | str | _(empty)_ | `robothor-engine`, `robothor-bridge` | no | legacy | Directory of agent manifests (docs/agents/*.yaml). These are the source of truth for the fleet. Empty means <workspace>/docs/agents. |

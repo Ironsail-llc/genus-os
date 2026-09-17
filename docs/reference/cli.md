@@ -759,13 +759,23 @@ Usage: `genus secrets migrate [--from-env] [--dry-run] [--only NAME] [--overwrit
 
 Skill library maintenance.
 
-Usage: `genus skills {migrate-state}`
+Usage: `genus skills {migrate-state,migrate-instance}`
 
 ### `genus skills migrate-state`
 
 Move runtime keys (usage_count, last_used, state) out of tracked meta.json files into gitignored state.json sidecars (idempotent).
 
 Usage: `genus skills migrate-state`
+
+### `genus skills migrate-instance`
+
+Move skills agents created out of the tracked agents/skills/ tree into this instance's own skills directory (idempotent).
+
+Usage: `genus skills migrate-instance [--dry-run]`
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--dry-run` | — | off | Report what would move without touching anything |
 
 ## `genus agent`
 

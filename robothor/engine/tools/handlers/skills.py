@@ -84,6 +84,38 @@ def _resolve_content(
     return "\n".join(parts)
 
 
+def _shadow_refusal(name: str, args: dict[str, Any], verb: str) -> dict[str, Any] | None:
+    """Refuse to start shadowing a bundled skill unless asked to, by name.
+
+    Writing ``<name>`` into the instance tree while the platform ships a skill
+    of the same name does not change the platform's file — it stands in front
+    of it. Every agent then reads the instance's procedure while the tracked
+    one still looks live to anyone reading the repository. That is a decision
+    an operator should be able to find, so it is taken explicitly:
+    ``shadow_bundled=true``. The same shape as the archive refusal.
+
+    Returns an error dict to hand straight back, or None when the write may
+    proceed (the name is not bundled, an overlay already exists, or the caller
+    asked for it).
+    """
+    from robothor.engine.skills import bundled_skill_exists, instance_skill_exists
+
+    if args.get("shadow_bundled") is True:
+        return None
+    if not bundled_skill_exists(name) or instance_skill_exists(name):
+        return None
+    return {
+        "error": (
+            f"'{name}' is a skill the platform ships. {verb} it here would write an "
+            f"instance copy that shadows the bundled one for every agent, while the "
+            f"bundled file stays untouched on disk. Pass shadow_bundled=true to do "
+            f"that deliberately, or choose a different name."
+        ),
+        "refused_by": "shadow_gate",
+        "bundled_skill": name,
+    }
+
+
 @_handler("invoke_skill")
 async def _invoke_skill(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Return the full content of a skill for the LLM to follow."""
@@ -107,41 +139,53 @@ async def _invoke_skill(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
 
 @_handler("list_skills")
 async def _list_skills(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    """Return catalog of available skills."""
-    from robothor.engine.skills import load_skills, read_skill_view
+    """Return catalog of available skills.
+
+    Every row says which layer it came from. ``origin`` is ``instance`` for a
+    skill this instance wrote and ``platform`` for one the platform ships;
+    ``shadows_bundled`` marks the rows where the instance's copy is being read
+    INSTEAD of a bundled skill of the same name, which is otherwise invisible —
+    the platform's file is untouched on disk.
+    """
+    from robothor.engine.skills import (
+        INSTANCE_ORIGIN,
+        load_skills,
+        read_skill_view,
+        shadows_bundled,
+        skill_origin,
+    )
 
     skills = load_skills()
-    return {
-        "skills": [
-            {
-                "name": s.name,
-                "description": s.description,
-                "tags": list(s.tags),
-                "parameters": [
-                    {
-                        "name": p.name,
-                        "type": p.type,
-                        "description": p.description,
-                        "required": p.required,
-                        **({"default": p.default} if p.default is not None else {}),
-                    }
-                    for p in s.parameters
-                ],
-                "output_format": s.output_format,
-                **(
-                    {
-                        "usage_count": view.get("usage_count", 0),
-                        "auto_generated": bool(
-                            view.get("auto_generated") or view.get("is_agent_created")
-                        ),
-                    }
-                    if (view := read_skill_view(s.name)) is not None
-                    else {}
-                ),
-            }
-            for s in skills.values()
-        ]
-    }
+    rows: list[dict[str, Any]] = []
+    for s in skills.values():
+        view = read_skill_view(s.name)
+        origin = skill_origin(view)
+        row: dict[str, Any] = {
+            "name": s.name,
+            "description": s.description,
+            "tags": list(s.tags),
+            "parameters": [
+                {
+                    "name": p.name,
+                    "type": p.type,
+                    "description": p.description,
+                    "required": p.required,
+                    **({"default": p.default} if p.default is not None else {}),
+                }
+                for p in s.parameters
+            ],
+            "output_format": s.output_format,
+            "origin": origin,
+            "shadows_bundled": shadows_bundled(s.name),
+            # Kept for callers that read it, but derived from the origin marker
+            # rather than the legacy flag: an overlay written by update_skill
+            # carries no `auto_generated` and is still the instance's.
+            "auto_generated": origin == INSTANCE_ORIGIN,
+        }
+        if view is not None:
+            row["usage_count"] = view.get("usage_count", 0)
+        rows.append(row)
+    return {"skills": rows}
 
 
 @_handler("skill_view")
@@ -155,10 +199,13 @@ async def _skill_view(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     counter so the curator (Rip 5) can rank stale skills.
     """
     from robothor.engine.skills import (
+        INSTANCE_ORIGIN,
         get_skill_content,
         increment_usage,
         load_skills,
         read_skill_view,
+        shadows_bundled,
+        skill_origin,
     )
 
     name = (args.get("name") or "").strip()
@@ -172,6 +219,7 @@ async def _skill_view(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     skills = load_skills()
     defn = skills[name]
     view = read_skill_view(name) or {}
+    origin = skill_origin(view)
 
     # Side effect: bump the usage counter so the curator can
     # distinguish hot skills (don't archive) from cold ones
@@ -199,8 +247,15 @@ async def _skill_view(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         "trigger_phrases": list(defn.trigger_phrases),
         "tools_required": list(defn.tools_required),
         "output_format": defn.output_format,
+        # Which layer this body came from, and whether it is standing in front
+        # of a bundled skill of the same name.
+        "origin": origin,
+        "shadows_bundled": shadows_bundled(name),
         "write_origin": view.get("write_origin", "foreground"),
-        "is_agent_created": view.get("is_agent_created", False),
+        # Derived from the same marker as `origin`, not from the legacy flag:
+        # a payload that says `origin: instance` and `is_agent_created: False`
+        # answers the one question twice, differently.
+        "is_agent_created": origin == INSTANCE_ORIGIN,
         "usage_count": view.get("usage_count", 0),
     }
 
@@ -213,8 +268,10 @@ async def _create_skill(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
         _content_hash,
         create_skill_meta,
         create_skill_state,
-        load_skills,
+        instance_skill_exists,
+        is_instance_skill_meta,
         read_skill_meta,
+        shadows_bundled,
         validate_skill_name,
         write_skill_file,
         write_skill_meta,
@@ -258,25 +315,33 @@ async def _create_skill(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
 
     overwrite = args.get("overwrite", False)
 
-    # Check for collisions with hand-authored skills
-    existing = load_skills()
-    if name in existing:
+    # A name the platform ships is not a collision to overwrite — the write
+    # would shadow it. That decision goes through the one gate.
+    refusal = _shadow_refusal(name, args, "Creating")
+    if refusal is not None:
+        return refusal
+
+    # Check for collisions with what is already AT THE WRITE TARGET. A bundled
+    # skill of the same name is not a collision to overwrite — the write would
+    # shadow it, which the gate above has already settled. Whose the existing
+    # skill is comes from the origin marker, not the legacy `auto_generated`
+    # flag: an overlay written by update_skill carries no such flag and is
+    # still the instance's own.
+    if instance_skill_exists(name) and not overwrite:
         existing_meta = read_skill_meta(name)
-        is_auto = existing_meta and existing_meta.get("auto_generated")
-        if not is_auto and not overwrite:
+        if is_instance_skill_meta(existing_meta):
             return {
                 "error": (
-                    f"Skill '{name}' already exists and was hand-authored. "
-                    "Set overwrite=true to replace it."
-                ),
-            }
-        if is_auto and not overwrite:
-            return {
-                "error": (
-                    f"Skill '{name}' already exists (auto-generated). "
+                    f"Skill '{name}' already exists and belongs to this instance. "
                     "Use update_skill to revise it, or set overwrite=true to replace."
                 ),
             }
+        return {
+            "error": (
+                f"Skill '{name}' already exists and was hand-authored. "
+                "Set overwrite=true to replace it."
+            ),
+        }
 
     # Build frontmatter
     tags = args.get("tags") or []
@@ -337,44 +402,75 @@ async def _create_skill(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
         "path": str(path),
         "write_origin": origin,
         "is_agent_created": meta["is_agent_created"],
+        "shadows_bundled": shadows_bundled(name),
     }
 
 
 @_handler("skill_archive")
 async def _skill_archive(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-    """Move an agent-created skill to agents/skills/.archive/ — reversible retirement.
+    """Move an agent-created skill to the instance's ``.archive/`` — reversible.
 
-    The curator's only destructive action (Rip 5). Refuses pinned and operator-
-    authored skills. Content-preserving (a move, not a delete), so a wrongly
-    archived skill is recovered by moving it back.
+    The curator's only destructive action (Rip 5). Refuses pinned skills and
+    anything the platform ships, so retirement can never delete a tracked
+    file. Content-preserving (a move, not a delete), so a wrongly archived
+    skill is recovered by moving it back. A stray still sitting in the
+    platform tree from before the instance split is archived OUT of it.
     """
     import shutil
 
     import robothor.engine.skills as _skills_mod
-    from robothor.engine.skills import _skills_dir, read_skill_view
+    from robothor.engine.skills import (
+        instance_skills_dir,
+        is_instance_skill_meta,
+        read_skill_view,
+        resolve_skill_dir,
+    )
 
     name = (args.get("name") or "").strip()
     if not name:
         return {"error": "name is required"}
 
-    skills_dir = _skills_dir()
-    src = (skills_dir / name).resolve()
-    if not src.is_relative_to(skills_dir.resolve()) or not src.is_dir():
+    try:
+        src = resolve_skill_dir(name)
+    except ValueError:
+        return {"error": f"Skill '{name}' not found"}
+    if src is None:
         return {"error": f"Skill '{name}' not found"}
 
     meta = read_skill_view(name) or {}
     if meta.get("pinned"):
         return {"error": f"Skill '{name}' is pinned — archive refused"}
-    if not (meta.get("is_agent_created") or meta.get("auto_generated")):
-        return {"error": f"Skill '{name}' is operator-authored — archive refused"}
+    if not is_instance_skill_meta(meta):
+        return {
+            "error": (f"Skill '{name}' is operator-authored or platform-bundled — archive refused")
+        }
 
-    archive_dir = skills_dir / ".archive"
+    unshadowing = _skills_mod.shadows_bundled(name)
+
+    archive_dir = instance_skills_dir() / ".archive"
     archive_dir.mkdir(parents=True, exist_ok=True)
     dest = archive_dir / name
     if dest.exists():
         shutil.rmtree(dest)
     shutil.move(str(src), str(dest))
     _skills_mod._skills_cache = None  # hot-reload picks up the removal
+    if unshadowing:
+        # Nothing was retired: the bundled skill of the same name is simply
+        # live again, and saying "archived" would read as one fewer skill.
+        logger.info(
+            "Skill '%s' un-shadowed by '%s'; the bundled skill is live again (overlay at %s)",
+            name,
+            ctx.agent_id,
+            dest,
+        )
+        return {
+            "unshadowed_bundled": name,
+            "path": str(dest),
+            "note": (
+                f"The instance's copy of '{name}' was moved aside, so agents now read the "
+                f"skill the platform ships. Nothing was retired."
+            ),
+        }
     logger.info("Skill '%s' archived to %s by '%s'", name, dest, ctx.agent_id)
     return {"archived": name, "path": str(dest)}
 
@@ -384,10 +480,12 @@ async def _update_skill(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     """Update an existing skill with an improved version."""
     from robothor.engine.skills import (
         _MAX_CONTENT_LEN,
+        INSTANCE_ORIGIN,
         RUNTIME_STATE_KEYS,
         _content_hash,
         load_skills,
         read_skill_meta,
+        shadows_bundled,
         validate_skill_name,
         write_skill_file,
         write_skill_meta,
@@ -402,6 +500,12 @@ async def _update_skill(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     existing = load_skills()
     if name not in existing:
         return {"error": f"Skill '{name}' not found. Use create_skill to create it."}
+
+    # Revising a bundled skill writes an instance copy that shadows it; the
+    # platform's file is never rewritten. That is a decision, not a side effect.
+    refusal = _shadow_refusal(name, args, "Updating")
+    if refusal is not None:
+        return refusal
 
     content = args.get("content", "").strip()
     if not content:
@@ -458,8 +562,12 @@ async def _update_skill(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
 
     path = write_skill_file(name, frontmatter, content)
 
+    # The write lands in the instance tree — a bundled skill is shadowed by an
+    # overlay, never rewritten in place — so the copy is instance data whatever
+    # the platform's own meta.json said.
     meta.update(
         {
+            "origin": INSTANCE_ORIGIN,
             "revision": revision,
             "content_hash": _content_hash(content),
             "last_revised_by": ctx.agent_id,
@@ -469,8 +577,21 @@ async def _update_skill(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     )
     write_skill_meta(name, meta)
 
-    logger.info("Skill '%s' updated to revision %d by '%s'", name, revision, ctx.agent_id)
-    return {"updated": True, "name": name, "revision": revision, "path": str(path)}
+    shadowing = shadows_bundled(name)
+    logger.info(
+        "Skill '%s' updated to revision %d by '%s'%s",
+        name,
+        revision,
+        ctx.agent_id,
+        " (shadowing the bundled skill of the same name)" if shadowing else "",
+    )
+    return {
+        "updated": True,
+        "name": name,
+        "revision": revision,
+        "path": str(path),
+        "shadows_bundled": shadowing,
+    }
 
 
 @_handler("get_accretion_ledger")

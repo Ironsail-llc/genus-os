@@ -85,14 +85,16 @@ class HermesImporter(PlatformImporter):
 
     def _import_skills(self, skills_dir: Path, result: ImportResult) -> int:
         from robothor.engine.skills import (
-            _skills_dir,
             create_skill_meta,
             create_skill_state,
+            instance_skills_dir,
             write_skill_meta,
             write_skill_state,
         )
 
-        target = _skills_dir()
+        # Imported skills are this instance's, not the platform's — they land
+        # beside the ones its own agents write, never in the tracked tree.
+        target = instance_skills_dir()
         count = 0
         for skill_dir in sorted(skills_dir.iterdir()):
             skill_md = skill_dir / "SKILL.md"

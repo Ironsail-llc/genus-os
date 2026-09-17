@@ -7,7 +7,7 @@ Genus OS separates **platform code** (what ships to everyone) from **instance co
 | Layer | What | Tracked in git? | Examples |
 |-------|------|-----------------|----------|
 | **Platform** | Core engine, tools, migrations, dashboard, docs | Yes | `robothor/`, `crm/`, `infra/`, `app/`, `docs/*.md` |
-| **Instance** | Identity, agent configs, memory, secrets | No | `brain/`, `docs/agents/*.yaml`, `local/`, `.env` |
+| **Instance** | Identity, agent configs, learned skills, memory, secrets | No | `brain/`, `brain/skills/`, `docs/agents/*.yaml`, `local/`, `.env` |
 | **Runtime** | Session state, assembled prompts, tenant context | No (in-memory) | System prompts, warmup blocks, scratchpad |
 
 A platform upgrade — a new wheel, or a new image tag — only touches Layer 1. Layers 2 and 3 are untouched.
@@ -50,6 +50,10 @@ Is it an agent configuration (schedule, model, tools)?
 Is it an agent instruction (behavior, procedures)?
   → brain/agents/<name>.md (instance)
 
+Is it a skill an agent wrote for itself?
+  → brain/skills/<name>/ (instance) — written there by the engine,
+    never by hand. agents/skills/ is the platform's own library.
+
 Is it a platform tool, migration, or engine feature?
   → robothor/ or crm/ or infra/ (platform)
 
@@ -67,7 +71,7 @@ Is it a test fixture?
 
 Three mechanisms prevent instance data from leaking into platform code:
 
-1. **`.gitignore`** — `brain/*.md`, `docs/agents/*.yaml`, `local/`, `.robothor/`, `.env*` are all excluded from tracking.
+1. **`.gitignore`** — `brain/*.md`, `brain/skills/`, `docs/agents/*.yaml`, `local/`, `.robothor/`, `.env*` are all excluded from tracking — every instance keeps them local.
 
 2. **Pre-commit hook** (`check-instance-leak`) — Scans staged files for hardcoded user home directory paths, personal email addresses, phone numbers, and street addresses. Blocks the commit with clear messages.
 
@@ -119,6 +123,76 @@ Two sub-directories of `docs/agents/` are instance-owned and gitignored too:
 Neither is visible to the engine: `load_manifest_dir` globs `*.yaml` one level
 deep and non-recursively, so a retired or historical manifest can never be
 loaded as a live agent.
+
+## Skills
+
+Skills split the same way, and for the same reason: an agent writes them while
+it works, so they are instance data even though the platform ships a library of
+its own.
+
+| Directory | Layer | Tracked | Written by |
+|-----------|-------|---------|------------|
+| `agents/skills/` | Platform | Yes | Humans, in a pull request. The engine only ever reads it. |
+| `brain/skills/` (`ROBOTHOR_INSTANCE_SKILLS_DIR`) | Instance | No | `create_skill`, `update_skill`, `skill_archive`, `genus import` |
+
+The engine reads the bundled directory first and the instance directory second,
+so a skill in the instance **shadows** a bundled one of the same name. That makes
+`update_skill` on a bundled skill copy-on-write: the tracked file is never
+rewritten, and the revision lands in the instance tree. Retirement
+(`skill_archive`) moves a skill into the instance's `brain/skills/.archive/`,
+so it can never delete a tracked file.
+
+### Shadowing is deliberate, and it is reported
+
+An instance may override a skill it was given — but a shadow is invisible on
+disk (the platform's file is untouched, so a checkout looks clean) while every
+agent reads something else. So it is never a side effect:
+
+- `create_skill` and `update_skill` **refuse** a name the platform ships unless
+  they are passed `shadow_bundled=true`. The refusal names the bundled skill.
+  Once the overlay exists, later revisions need no flag — the decision was
+  already taken.
+- `list_skills` and `skill_view` report `origin` and `shadows_bundled` on every
+  row, so an agent can see which layer the body in front of it came from.
+- The loader logs at INFO, naming both paths, the first time it reads an
+  override.
+- `genus doctor --only skills.shadowed` lists every bundled skill this instance
+  has replaced. It never fails; it is the reading nothing else gives you.
+- `skill_archive` on an overlay reports `unshadowed_bundled` rather than
+  `archived`: nothing was retired, the platform's skill is simply live again.
+
+`genus doctor --only skills.instance_dir` is the one with teeth. It fails if
+`ROBOTHOR_INSTANCE_SKILLS_DIR` points back inside `agents/skills/` (which would
+recreate this whole defect), outside the workspace (where no snapshot would
+carry it), or — when the workspace is a checkout — at a directory the checkout
+does not ignore, which `<workspace>/docs/skills` would be: inside the
+workspace, outside `agents/`, and still one `add -A` from the repository. It
+asks the checkout with `check-ignore` rather than re-reading the ignore rules,
+and says nothing when the workspace is not a checkout. `.gitignore` covers the
+default instance directory, `brain/skills/`; that check is what covers an
+override.
+
+Which layer a skill belongs to is recorded in its `meta.json` as
+`"origin": "instance" | "platform"`. Two things read it:
+
+- `tests/test_no_tracked_instance_files.py` fails if a tracked skill under
+  `agents/skills/` carries an instance origin — the leak this boundary exists to
+  stop.
+- `genus skills migrate-instance` moves exactly those out of the platform tree
+  and into the instance one. It is idempotent, takes `--dry-run`, reports a
+  name that already exists in the instance as a conflict rather than
+  overwriting it, and leaves every platform-origin skill alone.
+
+  It walks `SKILL.md`, not `meta.json`, so nothing is invisible to it, and it
+  moves only what says whose it is:
+
+  | Bucket | What it means |
+  |--------|---------------|
+  | `moved` | `origin: instance`, or a pre-marker skill carrying `auto_generated` / `write_origin` / `is_agent_created`. |
+  | `skipped` | `origin: platform`. The platform's own. |
+  | `unmarked` | A `meta.json` with no origin and no legacy marker — left in place; nothing says whose it is. |
+  | `needs-review` | A `SKILL.md` with no `meta.json` at all — left in place, for the operator to place by hand. Most bundled skills are here; so would be a stray written before `meta.json` existed, which is why the pass will not decide for you. |
+  | `conflicts` | The instance already has that name. Nothing is overwritten. |
 
 ## Upgrade Path
 

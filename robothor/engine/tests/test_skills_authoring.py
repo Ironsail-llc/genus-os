@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from unittest.mock import patch
@@ -86,6 +87,11 @@ class TestSkillMeta:
     def test_increment_usage(self, tmp_path: Path):
         meta = create_skill_meta(created_by="main")
         write_skill_meta("test-skill", meta, base=tmp_path)
+        # A directory holding only sidecars is not a skill — the counter is
+        # bumped for something an agent can actually invoke.
+        write_skill_file(
+            "test-skill", {"name": "test-skill", "description": "d"}, "body", base=tmp_path
+        )
         meta_bytes = (tmp_path / "test-skill" / "meta.json").read_bytes()
 
         increment_usage("test-skill", base=tmp_path)
@@ -184,11 +190,23 @@ def skills_dir(tmp_path: Path):
     _mod._skills_cache = None
 
 
+@contextmanager
 def _patch_skills_dir(skills_dir: Path):
-    """Context manager to patch _skills_dir and invalidate cache."""
+    """Point BOTH skill trees at one tmp directory.
+
+    Reads walk the bundled tree and then the instance tree, and writes go to
+    the instance one -- so a helper that patched only ``_skills_dir`` would
+    send every write to the real workspace's ``brain/skills``. These tests
+    are about write/read behaviour, not about the split; the split has its
+    own suite in ``test_skills_instance_dir.py``.
+    """
     import robothor.engine.skills as _mod
 
-    return patch.object(_mod, "_skills_dir", return_value=skills_dir)
+    with (
+        patch.object(_mod, "_skills_dir", return_value=skills_dir),
+        patch.object(_mod, "instance_skills_dir", return_value=skills_dir),
+    ):
+        yield skills_dir
 
 
 class TestCreateSkillHandler:

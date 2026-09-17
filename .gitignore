@@ -26,6 +26,10 @@ brain/*.bak
 brain/*.bak.*
 !brain/README.md
 brain/agents/
+# Skills agents write at runtime (create_skill / update_skill / skill_archive).
+# The 18 bundled skills under agents/skills/ are platform code; everything an
+# instance's own agents learn lands here and is never committed.
+brain/skills/
 brain/delphi/
 # Instance research and analysis write-ups. These quote live corpus counts,
 # tenant ids, filesystem paths and open security findings — instance data by
