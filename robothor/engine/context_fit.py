@@ -292,7 +292,17 @@ def next_reachable_model(models: list[str], broken_models: set[str] | None = Non
             if pool is not None and pool.exhausted():
                 continue
         except Exception as exc:  # noqa: BLE001 — sizing must never break a call
-            logger.debug("reachability check for %s failed (%s); assuming reachable", model, exc)
+            # The CLASS, never the message. This `try` covers `pool.exhausted()`,
+            # which reaches `KeyPool.current()` and the credentials themselves —
+            # and an exception raised in there can carry key material in its
+            # text. `key_pool` exists because an OpenRouter key reached a log
+            # through an exception repr once (2026-08); CodeQL raised this as
+            # `py/clear-text-logging-sensitive-data` on PR #582 and was right.
+            logger.debug(
+                "reachability check for %s failed (%s); assuming reachable",
+                model,
+                type(exc).__name__,
+            )
         return model
     return models[0] if models else ""
 
@@ -312,6 +322,20 @@ def fit_for(model: str) -> ContextFit:
     threshold = proactive_compaction_threshold(window)
     reserved = int(get_output_tokens(model, threshold))
     return ContextFit(model=model, window=window, threshold=threshold, reserved_output=reserved)
+
+
+def _log_overflow(headline: str, model: str, before: int, after: int) -> None:
+    """Say what the shrink did, in a scope that holds nothing but numbers.
+
+    The same move ``robothor.secrets.trace`` makes, and for the same reason: a
+    log line about message content is only ever allowed to carry counts, and
+    the way to prove that is a function with no message, no outcome and no
+    conversation in scope to get it wrong with. ``int()`` at the call sites is
+    part of the contract — what arrives here is a token count, not a field read
+    off an object that also holds the conversation (CodeQL flagged exactly that
+    attribute read on PR #582).
+    """
+    logger.warning(headline, model, before, after)
 
 
 def _message_tokens(message: dict[str, Any], model: str | None = None) -> int:
@@ -649,13 +673,14 @@ def shrink_after_overflow(messages: list[dict[str, Any]], model: str) -> bool:
     # the shrink could not move the total, so the caller decremented its one
     # permitted retry and re-sent bytes the server had already refused
     # (hostile review, probe p17).
-    if not outcome.fits or outcome.tokens_after >= outcome.tokens_before:
-        logger.warning(
+    before, after = int(outcome.tokens_before), int(outcome.tokens_after)
+    if not outcome.fits or after >= before:
+        _log_overflow(
             "Context overflow on %s and nothing could be dropped (~%d → ~%d tokens) — "
             "advancing instead of re-sending the same request",
             model,
-            outcome.tokens_before,
-            outcome.tokens_after,
+            before,
+            after,
         )
         return False
 
@@ -675,14 +700,15 @@ def shrink_after_overflow(messages: list[dict[str, Any]], model: str) -> bool:
                 run_id,
                 "context_overflow",
                 "context_overflow",
-                reason=f"{model}: ~{outcome.tokens_before} -> ~{outcome.tokens_after} tokens",
+                reason=f"{model}: ~{before} -> ~{after} tokens",
                 mode="enforce",
             )
         except Exception as exc:  # noqa: BLE001 — telemetry never breaks a call
             logger.debug("context_overflow event not recorded: %s", exc)
-    logger.warning(
-        "Context overflow on %s — shrank to ~%d tokens, retrying the same model once",
+    _log_overflow(
+        "Context overflow on %s — shrank ~%d → ~%d tokens, retrying the same model once",
         model,
-        outcome.tokens_after,
+        before,
+        after,
     )
     return True

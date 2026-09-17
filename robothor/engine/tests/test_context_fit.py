@@ -30,6 +30,8 @@ the credential pool dies rather than only when a model errors.
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from robothor.engine.context import estimate_tokens
@@ -266,3 +268,95 @@ class TestShrinkingToFit:
         assert outcome.note is not None
         assert LOCAL in outcome.note
         assert "tool result" in outcome.note
+
+
+class TestNothingFromAMessageReachesALog:
+    """SEC1: nothing derived from a user or tool message reaches a log except
+    through the redactor — and the ceiling handles the likeliest carrier of a
+    pasted credential there is, a tool result.
+
+    CodeQL raised three `py/clear-text-logging-sensitive-data` alerts on this
+    module (PR #582). Two were the shrink's own summary lines, which carry
+    counts and a model id; one was an exception out of the credential pool,
+    whose text really can hold key material — `key_pool` exists because an
+    OpenRouter key reached a log through an exception repr once. This is the
+    behaviour behind all three: run a credential through the ceiling and read
+    every record it produced.
+    """
+
+    #: A long opaque token that is deliberately NOT shaped like any real
+    #: provider's key. The first draft used the real OpenRouter prefix and
+    #: GitHub's push protection refused the branch — correctly: a string that
+    #: matches the pattern is indistinguishable from a live key, and a test
+    #: fixture is not a reason to teach anyone to click "allow the secret".
+    #: What the test needs is a long value that must not appear in a log.
+    SECRET = "FAKE-CREDENTIAL-DO-NOT-SCAN-" + "d4c3b2a1" * 6
+
+    def _conversation(self) -> list[dict]:
+        return [
+            {"role": "system", "content": "You are the main agent."},
+            {"role": "user", "content": "Read the env file and summarise it."},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": '{"path": ".env"}'},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "c1",
+                "content": f"OPENROUTER_API_KEY={self.SECRET}\n" + ("filler line\n" * 40_000),
+            },
+            {"role": "user", "content": "So what does it hold?"},
+        ]
+
+    def test_the_shrink_logs_no_slice_of_a_tool_result(self, caplog):
+        fit = fit_for(LOCAL)
+        with caplog.at_level(logging.DEBUG):
+            shrink_to_fit(self._conversation(), fit)
+
+        assert caplog.records, "the test proves nothing if nothing was logged"
+        assert self.SECRET not in caplog.text
+        assert "FAKE-CREDENTIAL" not in caplog.text
+
+    def test_enforce_ceiling_logs_no_slice_of_a_tool_result(self, caplog):
+        from robothor.engine.context_fit import enforce_ceiling
+
+        messages = self._conversation()
+        with caplog.at_level(logging.DEBUG):
+            enforce_ceiling(messages, fit_for(LOCAL))
+
+        assert self.SECRET not in caplog.text
+        assert "FAKE-CREDENTIAL" not in caplog.text
+
+    def test_the_overflow_retry_logs_no_slice_of_a_tool_result(self, caplog, monkeypatch):
+        from robothor.engine import context_fit
+
+        monkeypatch.setattr(context_fit, "_current_run_id", lambda: None)
+        messages = self._conversation()
+        with caplog.at_level(logging.DEBUG):
+            context_fit.shrink_after_overflow(messages, LOCAL)
+
+        assert self.SECRET not in caplog.text
+        assert "FAKE-CREDENTIAL" not in caplog.text
+
+    def test_a_credential_in_an_exception_from_the_pool_is_not_logged(self, caplog, monkeypatch):
+        """The one alert that was not a false positive: `pool.exhausted()`
+        reaches `KeyPool.current()`, and an exception from there can carry key
+        material in its text."""
+        from robothor.engine import context_fit, key_pool
+
+        def _boom(_var):
+            raise RuntimeError(f"connection failed while using {self.SECRET}")
+
+        monkeypatch.setattr(key_pool, "pool_if_built", _boom)
+        with caplog.at_level(logging.DEBUG):
+            assert context_fit.next_reachable_model([CLOUD, LOCAL], set()) == CLOUD
+
+        assert self.SECRET not in caplog.text, "an exception's text reached the log"
+        assert "RuntimeError" in caplog.text, "the failure must still be visible as a CLASS"
