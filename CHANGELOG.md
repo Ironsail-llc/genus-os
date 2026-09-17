@@ -1,3 +1,9 @@
+## [1.99.4](https://github.com/Ironsail-llc/genus-os/compare/v1.99.3...v1.99.4) (2026-09-17)
+
+### Bug Fixes
+
+* **skills:** agent-created skills live in the instance, not the platform ([#596](https://github.com/Ironsail-llc/genus-os/issues/596)) ([5c3c7f4](https://github.com/Ironsail-llc/genus-os/commit/5c3c7f401edf418c04a4705e7598a238c510217a))
+
 ## [1.99.3](https://github.com/Ironsail-llc/genus-os/compare/v1.99.2...v1.99.3) (2026-09-17)
 
 ### Bug Fixes
