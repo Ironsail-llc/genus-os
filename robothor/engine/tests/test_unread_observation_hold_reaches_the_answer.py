@@ -190,7 +190,7 @@ async def test_both_notes_were_in_front_of_the_model(runner, agent_config, tmp_p
 
     assert "part of what you asked for was never shown to you" in notes
     assert "say in it what you did not read" in notes
-    assert "12,431 chars" in notes
+    assert "4000 of 12431 chars shown" in notes
 
 
 @pytest.mark.asyncio

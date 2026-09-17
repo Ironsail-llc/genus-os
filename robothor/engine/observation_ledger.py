@@ -92,8 +92,12 @@ class Truncation:
             else "the rest was not written anywhere, so re-run it narrower"
         )
         return (
-            f"step {self.step}'s `{self.tool}` output was cut: {self.chars_shown:,} of "
-            f"{self.chars_total:,} chars shown; {where}. If your answer depends on it, "
+            # Plain digits, deliberately: the marker in the tool result says
+            # "4000 of 12431 chars shown" and these two strings are read side
+            # by side. A thousands separator here makes one cut look like two
+            # numbers.
+            f"step {self.step}'s `{self.tool}` output was cut: {self.chars_shown} of "
+            f"{self.chars_total} chars shown; {where}. If your answer depends on it, "
             "read it before you finish."
         )
 
@@ -171,10 +175,17 @@ class ObservationLedger:
             if not output.get(f"{stream}_truncated"):
                 continue
             total = int(output.get(f"{stream}_chars") or 0)
-            shown = max(0, total - 1)
-            text = output.get(stream)
-            if isinstance(text, str):
-                shown = len(text)
+            # The handler's own count of DATA characters, not the length of the
+            # visible string — which includes the marker, and measuring it gave
+            # the run "4,303 of 12,431" beside a marker reading "4000 of 12431"
+            # (hostile review I8). A wrong number inside the one control whose
+            # whole job is an honest account of what was seen.
+            declared = output.get(f"{stream}_shown_chars")
+            if isinstance(declared, int):
+                shown = declared
+            else:
+                text = output.get(stream)
+                shown = len(text) if isinstance(text, str) else max(0, total - 1)
             self.truncations.append(
                 Truncation(
                     step=step,

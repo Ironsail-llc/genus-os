@@ -324,8 +324,42 @@ class TestTheTruncationLedger:
         ledger.record(11, "exec", {"command": f"curl {API}"}, _cut())
         sentence = ledger.unresolved()[0].sentence()
         assert "step 11" in sentence
-        assert "4,000 of 12,431" in sentence
+        assert "4000 of 12431" in sentence
         assert _cut()["stdout_path"] in sentence
+
+    def test_the_count_is_data_characters_and_agrees_with_the_marker(self, tmp_path: Path) -> None:
+        """Hostile review I8. `shown` was the length of the VISIBLE string,
+        which includes the marker — so the note said "4,303 of 12,431" beside a
+        marker in the same result saying "4000 of 12431". Two numbers for one
+        cut, inside the one control whose whole job is an honest account of
+        what was seen."""
+        from robothor.engine.exec_spill import STDOUT_LIMIT, shape_exec_result
+
+        out = shape_exec_result(
+            {"stdout": "x" * 12_431, "stderr": "", "exit_code": 0},
+            workspace=tmp_path,
+            run_id="run-1",
+        )
+        ledger = ObservationLedger()
+        ledger.record(11, "exec", {"command": f"curl {API}"}, out)
+        entry = ledger.unresolved()[0]
+
+        assert entry.chars_shown == STDOUT_LIMIT
+        assert entry.chars_shown < len(out["stdout"])  # the marker is not data
+        assert f"{entry.chars_shown} of {entry.chars_total} chars shown" in out["stdout"]
+        assert f"{entry.chars_shown} of {entry.chars_total} chars shown" in entry.sentence()
+
+    def test_a_handler_that_declares_no_count_still_registers(self) -> None:
+        """Nothing outside `exec` sets `*_shown_chars` today; a tool that
+        starts flagging truncation without it must still land on the ledger."""
+        ledger = ObservationLedger()
+        ledger.record(
+            11,
+            "some_tool",
+            {"url": API},
+            {"stdout": "y" * 100, "stdout_truncated": True, "stdout_chars": 900},
+        )
+        assert ledger.unresolved()[0].chars_shown == 100
 
     def test_an_entry_is_quoted_at_most_once(self) -> None:
         ledger = ObservationLedger()

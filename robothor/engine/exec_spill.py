@@ -295,6 +295,13 @@ def shape_exec_result(
         shaped[stream] = truncate_stream(text, limit, path, len(kept) if capped else 0)
         shaped[f"{stream}_truncated"] = True
         shaped[f"{stream}_chars"] = len(text)
+        # How many characters of DATA are above — the marker's first number,
+        # in a field. Without it a reader of the result has to measure the
+        # visible string, which includes the marker, and the ledger did exactly
+        # that: it reported "4,303 of 12,431 shown" beside a marker saying
+        # "4000 of 12431", so the run was handed two numbers for one cut
+        # (hostile review I8).
+        shaped[f"{stream}_shown_chars"] = limit
         if path:
             shaped[f"{stream}_path"] = path
             # What the FILE holds, when it is not everything. An agent told
