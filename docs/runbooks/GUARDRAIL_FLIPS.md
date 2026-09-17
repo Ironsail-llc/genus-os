@@ -93,6 +93,17 @@ If you are adding a guardrail flag, it goes in the drop-in and in
 `infra/flags.yaml`, in the same PR. The env file is for instance data —
 secrets, tenant ids, paths — not for posture.
 
+**Every flag `flags.yaml` records at `enforce` must be SET in the drop-in**, and
+`tests/test_flag_manifest.py::test_enforced_flags_are_pinned_in_the_versioned_dropin`
+fails the build if one is not. "The code already defaults to enforce" is not a
+substitute: a code default is the platform's opinion about a fresh install, not
+this instance's recorded posture, and it leaves the rung free for an unversioned
+layer to take. That is how `ROBOTHOR_PER_USER_SESSIONS` came to be governed by
+the env file alone — `SHADOW-LAYER:envfile` every morning until 2026-09-17.
+Adding the line to the drop-in only half-fixes it: the env file is applied
+*after* the drop-in, so the env-file line must be deleted in the same
+maintenance window, then `scripts/install_units.sh` and a restart.
+
 **Before trusting a flip, confirm the running process actually changed:**
 
 ```sh
@@ -215,7 +226,8 @@ fails if one is re-dated without a reason.
 | `ROBOTHOR_ACT_OBSERVE_MODE` | observe (2026-10-15) | new entry 2026-09-16. Ships at observe. BLOCKER: a re-measured WildClawBench 03_Social sweep in the sandbox (task_5, two runs), plus `agent_guardrail_events` rows with `guardrail_name = 'act_observe'` from an act-then-write run, checked against the run's own step ledger — the shell heuristic is deliberately narrow, so a zero could mean it is too narrow rather than that nothing acted. `docs/runbooks/OBSERVATION_CONTROLS.md` |
 | `ROBOTHOR_VERDICT_COMMITMENT_MODE` | observe, `n/a-on-this-instance` | new entry 2026-09-16. The one ladder here that touches model judgement rather than information the run already has. Read-only probe already run against 60 real WildClawBench task specs: 4 open the gate, all four genuinely "classify each into exactly one category". No promotion date until it is probed with a real double-verdict artefact through `enforce` — see `docs/runbooks/OBSERVATION_CONTROLS.md` |
 | `ROBOTHOR_PLUGIN_MANIFEST_MODE` | observe, permanent | `promotion: n/a-on-this-instance` — zero plugins installed, so enforce is a no-op here |
-| `ROBOTHOR_DNC_MODE` | enforce | shipped enforcing — **no ladder**, see below |
+| `ROBOTHOR_DNC_MODE` | enforce | shipped enforcing — **no ladder**, see below. Pinned in the drop-in 2026-09-17; it had only ever had a code default |
+| `ROBOTHOR_PER_USER_SESSIONS` | enforce | isolation control, three rungs, no `planned_promotion`. Pinned in the drop-in 2026-09-17 — until then the only live setter was the env file (`SHADOW-LAYER:envfile`). `docs/runbooks/IDENTITY_ROLLOUT.md` |
 
 ### `ROBOTHOR_DNC_MODE` — the one flag with no ladder
 

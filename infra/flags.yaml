@@ -602,6 +602,12 @@ flags:
       says so, so the Controls dashboard cannot offer a rung the engine would
       silently map onto another.
 
+      2026-09-17: pinned in the versioned drop-in. Nothing in git had ever set
+      it — the rung came from the code default, and the only live setter was
+      /etc/robothor/robothor.env, which systemd applies after the drop-in. That
+      is the SHADOW-LAYER:envfile flag_audit reported every morning; delete the
+      env-file line in the same window as the install, or it keeps winning.
+
   - name: ROBOTHOR_DNC_MODE
     owner: ops
     mode: enforce

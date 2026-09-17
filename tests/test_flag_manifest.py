@@ -184,3 +184,47 @@ def test_manifest_modes_match_dropin_mirror():
             )
             checked += 1
     assert checked >= 5, "expected several *_MODE flags in the drop-in"
+
+
+def dropin_environment() -> dict[str, str]:
+    """Every ``Environment=NAME=VALUE`` in the versioned drop-in mirror."""
+    text = (
+        REPO_ROOT / "infra" / "systemd" / "robothor-engine.service.d" / "upgrade-rip-flags.conf"
+    ).read_text()
+    out: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line.startswith("Environment="):
+            continue
+        name, sep, value = line.removeprefix("Environment=").partition("=")
+        if sep:
+            out[name.strip()] = value.strip()
+    return out
+
+
+def test_enforced_flags_are_pinned_in_the_versioned_dropin():
+    """A flag the manifest records at ``enforce`` must be SET in the drop-in.
+
+    The manifest records intent and sets nothing at runtime, so a posture that
+    exists nowhere versioned is governed by whatever unversioned layer happens
+    to carry it — ``/etc/robothor/robothor.env``, which systemd applies AFTER
+    the drop-in. A flip applied to the drop-in then does nothing, a rebuilt box
+    comes up without the control, and ``flag_audit.py`` tags it
+    ``SHADOW-LAYER:envfile`` every morning. That is exactly what
+    ``ROBOTHOR_PER_USER_SESSIONS`` did from the day it shipped until 2026-09-17.
+
+    A matching code default is not a substitute: it is the platform's opinion
+    about a fresh install, not this instance's recorded posture, and a later
+    refactor can move it without touching the manifest.
+    """
+    data = yaml.safe_load(MANIFEST.read_text())
+    dropin = dropin_environment()
+    enforced = [e["name"] for e in data["flags"] if str(e["mode"]) == "enforce"]
+    missing = [name for name in enforced if name not in dropin]
+    assert not missing, (
+        f"manifest says enforce but the drop-in sets nothing: {missing}. Add "
+        "Environment=<FLAG>=enforce to "
+        "infra/systemd/robothor-engine.service.d/upgrade-rip-flags.conf"
+    )
+    disagree = {name: dropin[name] for name in enforced if dropin[name] != "enforce"}
+    assert not disagree, f"drop-in value != the manifest's enforce: {disagree}"
