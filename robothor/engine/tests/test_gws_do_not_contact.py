@@ -713,37 +713,67 @@ class TestTheRunnerAlwaysNamesATenant:
     def test_every_runner_dispatch_site_passes_the_tenant(self):
         """Source-level, because that is the mistake being guarded against.
 
-        runner.py calls `self.registry.execute(...)` twice — once inside the
-        trace span, once without — and a kwarg is easy to add to one and
-        forget on the other. Reading the calls catches a dropped
-        `tenant_id=` that no mocked dispatch test would notice, since a
-        missing kwarg just falls back to the parameter default of "".
+        The engine dispatches tools from more than one place — the trace-span
+        and no-trace branches of a turn, and the proxy a code snippet calls
+        through — and a kwarg is easy to add to one and forget on another.
+        Reading every call site catches a dropped `tenant_id=` that no mocked
+        dispatch test would notice, since a missing kwarg just falls back to
+        the parameter default of "".
+
+        The list of modules is the point of maintenance: a NEW dispatch site
+        in a new module is invisible to this walk, so add the module here when
+        one appears. (The alternative — walking the whole package — flags
+        every test stub that happens to spell `self.registry.execute`.)
         """
         import ast
         import inspect
         from pathlib import Path
 
-        from robothor.engine import runner as runner_mod
+        from robothor.engine import tool_proxy as proxy_mod
+        from robothor.engine import tool_turn as turn_mod
 
-        tree = ast.parse(Path(inspect.getfile(runner_mod)).read_text())
-        sites = [
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "execute"
-            and isinstance(node.func.value, ast.Attribute)
-            and node.func.value.attr == "registry"
-        ]
+        sites = []
+        for module in (turn_mod, proxy_mod):
+            tree = ast.parse(Path(inspect.getfile(module)).read_text())
+            sites += [
+                (module.__name__, node)
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "execute"
+                and isinstance(node.func.value, ast.Attribute)
+                and node.func.value.attr == "registry"
+            ]
 
-        assert sites, "no self.registry.execute(...) call found — did the dispatch move?"
-        for site in sites:
+        assert sites, "no registry.execute(...) call found — did the dispatch move?"
+        for module_name, site in sites:
             names = {kw.arg for kw in site.keywords}
+            if None in names:
+                # `registry.execute(name, args, **kwargs)` — the dict is built
+                # above the call, and `test_the_turns_dispatch_kwargs_name_the_tenant`
+                # reads it there. Skipping it HERE rather than passing it is the
+                # point: a splat that this walk silently accepted would be a
+                # dispatch site nothing checks.
+                continue
             assert "tenant_id" in names, (
-                f"runner.py:{site.lineno} dispatches a tool without tenant_id — "
+                f"{module_name}:{site.lineno} dispatches a tool without tenant_id — "
                 "the do-not-contact guard refuses a tenant-less call, so dropping "
                 "this kwarg takes out all outbound email"
             )
+
+    def test_the_turns_dispatch_kwargs_name_the_tenant(self):
+        """`tool_turn` builds its kwargs as a dict literal and splats it, so
+        the walk above cannot read them off the call. Read the dict."""
+        import inspect
+        from pathlib import Path
+
+        from robothor.engine import tool_turn as turn_mod
+
+        body = Path(inspect.getfile(turn_mod)).read_text()
+        assert '"tenant_id": req.session.run.tenant_id,' in body, (
+            "tool_turn dispatches without naming the tenant — the do-not-contact "
+            "guard refuses a tenant-less call, so this takes out all outbound email"
+        )
 
     @pytest.mark.asyncio
     async def test_the_dispatched_tool_context_has_a_non_empty_tenant(self):

@@ -104,6 +104,14 @@ tools_allowed:
   # plan does not. See `v2.todo_list_enabled` above for why this is parity
   # rather than a hint: nothing here is task-specific.
   - todo_write
+  # Python that can call these same tools. The competing harness imported its
+  # tool library inside a code sandbox 52 / 13 / 7 times on Productivity tasks
+  # 1 / 3 / 4 — the three we scored 0.000 on — turning a 130-paper research
+  # loop into one model turn instead of 130 that no context window holds.
+  # Genus ships the tool; measuring the platform without it would measure a
+  # weaker platform than the one under test. It needs `exec`, which is granted
+  # above. Capability parity, not a hint: nothing here is task-specific.
+  - execute_code
 
 instructions: |
   You are a capable autonomous agent working on a task in a Linux container.

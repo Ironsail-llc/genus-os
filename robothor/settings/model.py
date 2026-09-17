@@ -800,6 +800,69 @@ class EngineSettings(SettingsGroup):
         "How many sub-agent spawns may be in flight at once.",
         restart_required=False,
     )
+    parallel_tool_calls: int = declare(
+        4,
+        "ROBOTHOR_PARALLEL_TOOL_CALLS",
+        "How many of ONE turn's tool calls run at the same time. Only calls "
+        "the platform has classified read-only are ever grouped, and the "
+        "first call that is not -- a write, `exec`, `execute_code`, a "
+        "`send_*`/`spawn_*`, or anything under this agent's "
+        "`human_approval_tools` -- runs alone and forces the rest of that turn "
+        "sequential in the model's order. 1 restores fully sequential "
+        "execution; the platform ceiling is 16.",
+        restart_required=False,
+        since="unreleased",
+    )
+    execute_code_max_calls: int = declare(
+        200,
+        "ROBOTHOR_EXECUTE_CODE_MAX_CALLS",
+        "How many tools one `execute_code` snippet may call through "
+        "`genus_tools` before the proxy refuses the rest. Every proxied call "
+        "still passes the same admission gates a direct call does; this bounds "
+        "a runaway loop, not what the code is allowed to reach.",
+        restart_required=False,
+        since="unreleased",
+    )
+    execute_code_max_approvals: int = declare(
+        1,
+        "ROBOTHOR_EXECUTE_CODE_MAX_APPROVALS",
+        "How many human-approval escalations ONE `execute_code` snippet may "
+        "raise. A proxied call passes the same approval gate a turn's call "
+        "does -- a snippet can never bypass one -- so without a cap a loop "
+        "could queue one prompt per proxied call at the operator, each holding "
+        "the engine for `human_approval_timeout`. Counted as requests, not "
+        "grants: a refused prompt cost the same attention. 0 refuses them all "
+        "and tells the agent to call the tool from a turn instead.",
+        restart_required=False,
+        since="unreleased",
+    )
+    execute_code_timeout: int = declare(
+        300,
+        "ROBOTHOR_EXECUTE_CODE_TIMEOUT",
+        "Wall-clock seconds one `execute_code` snippet gets. The agent may ask "
+        "for less and never for more, and the run's own remaining budget still "
+        "clamps it. On expiry the snippet's process group is killed, along with "
+        "every descendant the engine has seen it start. A snippet can DEFEAT "
+        "both deliberately -- a child started in its own session, then "
+        "`os._exit` to skip the snippet's own cleanup -- so this is a budget "
+        "for honest work, not a containment boundary for hostile code. Only a "
+        "delegated cgroup (`Delegate=yes` on the engine's unit) would close "
+        "that; until then, grant `execute_code` to agents you would grant "
+        "`exec`.",
+        restart_required=False,
+        since="unreleased",
+    )
+    execute_code_max_output: int = declare(
+        50_000,
+        "ROBOTHOR_EXECUTE_CODE_MAX_OUTPUT",
+        "Characters of a snippet's stdout that reach the model. Past this the "
+        "output is cut with a marker saying how much was cut, and the FULL "
+        "text is written to a file under the workspace whose path comes back "
+        "in the result -- truncation becomes pagination rather than invisible "
+        "data loss.",
+        restart_required=False,
+        since="unreleased",
+    )
     max_spawn_batch: int = declare(
         10,
         "ROBOTHOR_MAX_SPAWN_BATCH",

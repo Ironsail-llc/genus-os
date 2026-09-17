@@ -1051,16 +1051,49 @@ async def _start_channels(runner: Any, config: Any, tasks: list[asyncio.Task[Any
     return slack_bot
 
 
+def _log_pending_migrations() -> None:
+    """Name the migrations this database has not taken. Never raises.
+
+    The engine runs fine against a database one migration behind, right up to
+    the point where a writer names a column that is not there — and the failure
+    is quiet: ``flush_new_steps_sync`` catches the ``ProgrammingError``, logs
+    per step, and advances its counter, so runs keep completing while the run
+    viewer fills with nothing. ``tracking`` now degrades to the older insert
+    rather than losing the trail, but degrading silently is how a migration
+    stays unapplied for a month. One line at startup, naming what is pending,
+    is what turns that into something an operator can act on.
+
+    Deliberately not a refusal to start: an instance that will not boot because
+    of an additive column is a worse failure than the one it is reporting.
+    """
+    try:
+        from robothor.db.migrate import status
+
+        pending = [row["migration_id"] for row in status() if row.get("status") == "pending"]
+    except Exception as exc:  # noqa: BLE001 - a status probe must not stop the engine
+        logger.debug("migration status unavailable at startup: %s", type(exc).__name__)
+        return
+    if pending:
+        logger.warning(
+            "%d migration(s) pending on this database: %s. Run `genus migrate` "
+            "(or `genus doctor --only db.migrations --fix`). Until then, features "
+            "that write new columns degrade to the older shape.",
+            len(pending),
+            ", ".join(pending[:10]) + ("" if len(pending) <= 10 else f" (+{len(pending) - 10})"),
+        )
+
+
 def _harden_and_state_posture() -> None:
     """Apply the process-level defences, then say what this process's are.
 
-    Two statements of the same kind, so they live together. ``harden_process``
+    Three statements of the same kind, so they live together. ``harden_process``
     makes this process's ``/proc`` entries root-only — an ``exec`` child is a
     same-uid process with the engine as its parent, and could otherwise read
     ``/proc/$PPID/environ`` straight back out; ``log_security_posture`` prints
     the guardrail rungs, because the flags come from systemd ``Environment=``
     lines on one unit and a second daemon running this code inherits none of
-    them, which happened here for four days silently.
+    them, which happened here for four days silently; and the migration line
+    names a schema this process is about to write against.
 
     Extracted rather than inlined because ``main`` is on a size ratchet, and
     the rule in that file is that a new step pays for itself.
@@ -1070,6 +1103,7 @@ def _harden_and_state_posture() -> None:
 
     harden_process()
     log_security_posture()
+    _log_pending_migrations()
 
 
 async def main() -> int:

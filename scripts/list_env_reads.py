@@ -96,13 +96,32 @@ TS_ENV_RE = re.compile(
 )
 
 
+#: Trees whose Python is SHIPPED but never RUN by the engine, so a name read
+#: there is not a platform setting an operator could configure.
+#:
+#: ``robothor/engine/sandbox_runtime`` holds the files copied into an
+#: ``execute_code`` sandbox — ``genus_tools.py`` and nothing else so far. That
+#: module runs inside the snippet's own isolated interpreter, where
+#: ``robothor.settings`` is neither importable nor meaningful; the one name it
+#: reads (``GENUS_TOOLS_DIR``) is a per-call handoff the engine writes into the
+#: child environment, not configuration. Declaring it would put an internal
+#: handle in ``genus config`` and invite an operator to set it, which is worse
+#: than leaving it undeclared.
+_NON_ENGINE_ROOTS: tuple[str, ...] = ("robothor/engine/sandbox_runtime",)
+
+
 def _is_test_path(path: Path) -> bool:
-    """True when ``path`` is test scaffolding rather than shipped platform code.
+    """True when ``path`` is not shipped, running platform code.
 
     A name only a test reads configures the test run, not the product, so it
     is out of scope for the declaration ratchet. Covers both layouts in this
-    repo: top-level ``tests/`` trees and package-local ``robothor/*/tests/``.
+    repo: top-level ``tests/`` trees and package-local ``robothor/*/tests/``,
+    plus :data:`_NON_ENGINE_ROOTS` — code that ships but executes somewhere the
+    settings package does not exist.
     """
+    posix = path.as_posix()
+    if any(posix.startswith(root) for root in _NON_ENGINE_ROOTS):
+        return True
     parts = path.parts
     if "tests" in parts or "test" in parts:
         return True

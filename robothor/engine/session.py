@@ -501,6 +501,10 @@ class AgentSession:
         tool_call_id: str,
         duration_ms: int = 0,
         error_message: str | None = None,
+        *,
+        batch_id: str = "",
+        batch_position: int = 0,
+        append_message: bool = True,
     ) -> RunStep:
         """Record a tool call + result step.
 
@@ -528,8 +532,18 @@ class AgentSession:
             completed_at=datetime.now(UTC),
             duration_ms=duration_ms,
             error_message=error_message,
+            batch_id=batch_id or None,
+            batch_position=batch_position,
         )
         self.run.steps.append(step)
+
+        # A proxied call — one a snippet made through `genus_tools` inside
+        # `execute_code` — is a STEP but not a TURN: it earns its row in the
+        # ledger and its audit entry, and it must not put a `tool` message in
+        # front of the model, because the whole point of the code path is that
+        # fifty lookups cost one turn's context rather than fifty.
+        if not append_message:
+            return step
 
         # Append tool result to conversation.
         #

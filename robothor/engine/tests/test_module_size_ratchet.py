@@ -54,7 +54,18 @@ CAPS = {
     # run_pacing.py, so the cap follows the file DOWN rather than banking the
     # difference as headroom — the whole point of a ratchet, and this one had
     # quietly consumed its last line before the cap was re-read.
-    "robothor/engine/runner.py": 2512,
+    # 2512 -> 2268: the tool-call block — admission, execution and recording
+    # for one assistant message — left for tool_turn.py. The ratchet asked for
+    # an extraction rather than a bigger number when parallel execution and
+    # the tool proxy needed somewhere to live, and got one; the cap follows
+    # the file DOWN rather than banking 244 lines of headroom.
+    # 2268 -> 2224: the per-tool wall-clock tables and the rule that reads
+    # them left for tool_timeouts.py, taking three DEAD verbatim copies in
+    # run_llm_calls / run_lifecycle / run_finalizer with them (three of the
+    # four had already drifted -- `ask_user` was in this one alone). That is
+    # what paid for teaching the resolver about self-timed tools, instead of
+    # raising this number for it.
+    "robothor/engine/runner.py": 2224,
     # 2545: a concurrent session ratcheted this to 2539 by lifting injection
     # screening and journal resume out of execute(); the deliverable guard's call
     # site adds the rest. Its 25 lines of logic went to loop_guards.py, so what
@@ -83,7 +94,7 @@ CAPS = {
     # lines here; it paid for itself by taking the ~100 that were already there.
     # The ratchet asked for an extraction rather than a bigger number, by this
     # file's own header, and got one.
-    "robothor/engine/run_finalizer.py": 1048,
+    "robothor/engine/run_finalizer.py": 992,  # -69: dead copy of the tool-timeout tables
     # The deliverable-contract cluster, capped at the size it was split to.
     # Hostile review 2026-09-16 (I6): `deliverable_contract.py` had reached
     # 1,354 lines and none of the three new modules was listed here, so "the
@@ -115,9 +126,76 @@ CAPS = {
     # why the fallback and the send are both helpers now rather than more
     # inline branches.
     "robothor/engine/delivery.py": 950,
-    "robothor/engine/run_lifecycle.py": 800,
-    "robothor/engine/run_llm_calls.py": 450,
+    "robothor/engine/run_lifecycle.py": 709,  # -69: dead copy of the tool-timeout tables
+    "robothor/engine/run_llm_calls.py": 381,  # -69: dead copy of the tool-timeout tables
     "robothor/engine/tool_admission.py": 400,
+    # One assistant message's tool calls, from admission to the ledger.
+    # Bounded from the day it lands, like schedule_reconcile.py: this is the
+    # module that would otherwise absorb every per-turn concern the runner
+    # used to, one branch at a time — which is exactly how runner.py became
+    # the 4,660-line god-object this file's header blames.
+    "robothor/engine/tool_turn.py": 549,  # +21: the snippet approval budget, read beside the call cap
+    # The code-sandbox cluster, each piece capped at the size it was written
+    # to. They are deliberately four small modules rather than one: the
+    # POLICY (which calls may share a batch) is a table of names with no
+    # runtime behind it, the PROXY is admission plus the ledger, the SERVER
+    # is a wire format, and the HANDLER is a subprocess. A single
+    # `code_execution.py` holding all four would be untestable in exactly
+    # the place it matters most.
+    "robothor/engine/parallel_tools.py": 173,
+    # 277 -> 314: the approval budget. A proxied call passes the same approval
+    # gate a turn's call does, which is right and which is also how a loop
+    # could queue two hundred prompts at the operator. The check belongs where
+    # the reach is decided, not in the socket.
+    "robothor/engine/tool_proxy.py": 314,
+    # 209 -> 283: the peer-session check. Not a feature, a control: the token
+    # alone could not tell one run's snippet from another's, and a probe drove
+    # a second run's proxy with a stolen token. Correcting a cap set hours
+    # earlier in the same PR for the thing that makes the module correct is
+    # not the same as bumping a long-standing one to dodge a refactor.
+    "robothor/engine/code_exec_rpc.py": 316,  # +33: aclose cancels its handlers instead of waiting them out
+    # 523 -> 388: spawning a snippet, reading its pipes without deadlocking
+    # it, detecting its exit and killing its descendants is one subject and
+    # the handler's admission/staging/shaping is another. The split is what
+    # paid for the cancellation fix rather than a bigger cap, and it is where
+    # the descendant walk lands.
+    # 351 -> 281: the result shaping and the stdout spill left for
+    # code_exec_result.py. "Given what the process produced, what goes into the
+    # context and what goes to disk" is its own question, and it is the one the
+    # escape-disclosure wording lives in — so it belongs where a reader looking
+    # for that sentence would go. The ratchet caught this file three lines over
+    # after a style commit; the answer is the extraction, not the number.
+    # 395 -> 351: the pre-spawn refusals and the process hardening left for
+    # code_exec_guards.py — "may this run at all, and is the engine ready" is a
+    # different question from staging, spawning and shaping, and it is what
+    # paid for teaching this tool to harden its own process rather than trust
+    # that some entry point remembered.
+    # 413 -> 395: the in-sandbox boot source left for
+    # sandbox_runtime/boot_template.py, beside the client it loads. Ninety
+    # lines of code that runs somewhere else was the shape `genus_tools.py`
+    # was deliberately not written in; the reaper it grew made that obvious.
+    "robothor/engine/tools/handlers/code_exec.py": 281,
+    "robothor/engine/code_exec_result.py": 103,
+    "robothor/engine/code_exec_guards.py": 116,
+    # 122 -> 129: the same disclosure, said where the reaper is, because this
+    # is the `finally` that `os._exit` skips and a reader here is the one who
+    # would otherwise conclude the reaper is complete.
+    "robothor/engine/sandbox_runtime/boot_template.py": 129,
+    # 211 -> 341: the descendant census. `killpg` alone reached neither a
+    # `setsid` child nor a double-forked daemon, and a probe left 16 of 16
+    # running after the call returned. This is the module that owns "nothing
+    # survives", so the census belongs here and nowhere else.
+    # 350 -> 355. Nine of those lines were MAX_TIMEOUT_SECONDS joining the
+    # other two clocks; the last five are the disclosure the re-check
+    # required — that a snippet can FORCE the escape (a `setsid` child, then
+    # `os._exit` to skip its own reaper) rather than merely win a race. That
+    # is the `deliverable_extract.py` case: splitting a file to hide a comment
+    # would be the ratchet working against its own purpose, and a limit
+    # rediscovered by the next reviewer costs more than five lines.
+    "robothor/engine/code_exec_process.py": 355,
+    # The per-tool wall-clock rule, with one definition instead of four.
+    "robothor/engine/tool_timeouts.py": 144,
+    "robothor/engine/tools/read_only.py": 87,
     "robothor/engine/run_budget.py": 120,
     # Live host state for the warmup preamble (2026-09-13). Bounded from the
     # day it lands, like schedule_reconcile.py: this is the module that would

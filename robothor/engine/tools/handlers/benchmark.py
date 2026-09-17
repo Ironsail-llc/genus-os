@@ -208,35 +208,24 @@ _BENCHMARK_WITHHELD_READS: frozenset[str] = frozenset(DESKTOP_TOOLS | BENCHMARK_
 def _adapter_declared_read_only_tools() -> frozenset[str]:
     """Adapter tools their own bundle DECLARED read-only. Absent means WRITE.
 
-    Adapter tools are registered dynamically from an MCP server's
-    ``tools/list`` (see ``ToolRegistry.register_adapter_tools``), so they never
-    appear in the static schema registry, cannot be enumerated at import time,
-    and never reach ``test_every_registered_tool_is_classified``. Until
-    2026-09-10 core carried one operator's four adapter tool names hardcoded
-    into the benchmark allow-list, which shipped a stranger's vendor and
-    silently denied every other instance's adapters in benchmarks.
+    The implementation moved to ``robothor.engine.tools.read_only`` when the
+    parallel-execution planner became a second caller. A safety classification
+    with two copies is the drift `hardcoded-names-drift` records, and here the
+    drift would decide both what a graded sub-agent may touch AND whether two
+    tool calls run at the same time — two different wrong answers from one
+    divergence.
 
-    The name says the enforced property on purpose. ``tools_allowed`` is a
-    REACH list, not a safety classification: it bounds what the server may
-    expose, and says nothing about whether ``acme_delete_patient`` writes.
-    Every core deny-set is a list of literal core tool names, so none of them
-    can catch an adapter's write tool — deriving read-only from
-    ``tools_allowed`` would hand it to a graded sub-agent the moment the
-    benchmarked agent's manifest granted it. That is the 2026-05-28 boundary
-    (an agent reached a real recipient through a tool nobody had classified),
-    so the rule is the plugin seam's: an adapter that declares nothing
-    contributes nothing.
-
-    ``read_only`` is validated at load — a list of strings, a subset of
-    ``tools_allowed``, or the adapter is refused outright — so nothing here
-    has to re-check it.
+    The reasoning that put it there in the first place is worth keeping in
+    front of this caller: ``tools_allowed`` is a REACH list, not a safety
+    classification. It bounds what an MCP server may expose and says nothing
+    about whether ``acme_delete_patient`` writes, so deriving read-only from it
+    would hand that tool to a graded sub-agent the moment the benchmarked
+    agent's manifest granted it — the 2026-05-28 boundary, where an agent
+    reached a real recipient through a tool nobody had classified.
     """
-    from robothor.engine.adapters import get_loaded_adapters
+    from robothor.engine.tools.read_only import adapter_read_only_tools
 
-    names: set[str] = set()
-    for adapter in get_loaded_adapters():
-        names.update(adapter.read_only)
-    return frozenset(names)
+    return adapter_read_only_tools()
 
 
 def benchmark_readonly_tools() -> frozenset[str]:
@@ -298,6 +287,14 @@ _BENCHMARK_EXCLUDED_TOOLS: frozenset[str] = _BENCHMARK_WITHHELD_READS | frozense
         # handler's own trigger gate would refuse, but a tool the harness never
         # offers cannot be attempted in the first place.
         "ask_user",
+        # Arbitrary code that can call tools. `exec` is withheld from a graded
+        # sub-agent for the 2026-05-28 reason — it reached a real recipient
+        # through a skill that shelled out — and this is the same capability
+        # with a tool proxy attached, so it is withheld for the same reason and
+        # not one line later. (The agent the harness GRADES may hold it; its
+        # manifest says so. This set is what a sub-agent spawned mid-benchmark
+        # is cut down to.)
+        "execute_code",
         "delete_task",
         "list_agent_tasks",
         "list_tasks_summary",

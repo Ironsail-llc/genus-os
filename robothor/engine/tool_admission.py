@@ -360,14 +360,24 @@ class ToolAdmissionMixin:
         scratchpad: Any,
         escalation: Any,
         iteration_errors: list[tuple[str, str, Any]],
+        batch_id: str = "",
+        batch_position: int = 0,
     ) -> None:
-        """The refusal tail every gate used to carry its own copy of."""
+        """The refusal tail every gate used to carry its own copy of.
+
+        ``batch_id``/``batch_position`` are the turn's fan-out coordinates. A
+        refused call keeps its position: the step trail has to show that the
+        model asked for five things and one of them was refused, in the order
+        it asked, or "a refusal did not block the others" is unverifiable.
+        """
         session.record_tool_call(
             tool_name=tool_name,
             tool_input=verdict.tool_args,
             tool_output={"error": verdict.message, **verdict.output},
             tool_call_id=tc.id,
             error_message=verdict.message,
+            batch_id=batch_id,
+            batch_position=batch_position,
         )
         if verdict.count_as_iteration_error:
             iteration_errors.append((tool_name, verdict.message, None))

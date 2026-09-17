@@ -451,14 +451,16 @@ class TestItIsWiredIntoDispatch:
         handler_call = body.index("await handler(args, ctx)")
         assert before < handler_call, "the guard must decide before the tool runs"
 
-    def test_the_runner_drains_the_queued_notes(self) -> None:
-        """A note the model never sees is a log line."""
+    def test_the_turn_drains_the_queued_notes(self) -> None:
+        """A note the model never sees is a log line. The drain moved to
+        `tool_turn` with the rest of the tool-call block; it still has to run
+        after every result and never between them."""
         import pathlib
 
-        import robothor.engine.runner as m
+        import robothor.engine.tool_turn as m
 
         body = pathlib.Path(m.__file__).read_text(encoding="utf-8")
-        assert "drain_repeat_notes(session)" in body
+        assert "drain_repeat_notes(req.session)" in body
 
     def test_a_run_with_no_live_session_is_simply_unguarded(self) -> None:
         from robothor.engine.repeat_guard import guard_for_run
@@ -1184,17 +1186,20 @@ class TestARefusalIsNotProgressEither:
     record progress for a tool call that never ran.
     """
 
-    def test_the_runner_treats_a_refusal_as_neither(self) -> None:
+    def test_the_turn_treats_a_refusal_as_neither(self) -> None:
+        """Moved to `tool_turn` with the rest of the tool-call block. The
+        property is unchanged: a refused call never ran, so it counts as
+        neither an error nor a success."""
         import pathlib
 
-        import robothor.engine.runner as m
+        import robothor.engine.tool_turn as m
 
         body = pathlib.Path(m.__file__).read_text(encoding="utf-8")
         start = body.index("# ── [ESCALATION] Record error/success ──")
-        block = body[start : body.index("# Track errors for this iteration", start)]
-        assert "_refused" in block
-        assert "elif not _refused:" in block
-        assert "not error_msg and not _refused" in block
+        block = body[start : body.index("iteration_errors.append(", start)]
+        assert "refused_by_guard" in block
+        assert "elif not refused_by_guard:" in block
+        assert "not error_msg and not refused_by_guard" in block
 
     def test_the_marker_the_runner_keys_on_is_on_every_refusal(self, tmp_path: Path) -> None:
         """The runner reads `repeat_guard`; the guard must always set it."""

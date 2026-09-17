@@ -293,6 +293,112 @@ failure `view_image` was fixed for: a provider 404 one layer down and an agent
 that believes it looked. It is worth being strict here rather than optimistic,
 because one misconfigured setting is 200 of those 404s in a single call.
 
+### Several calls in one turn
+
+A model turn may carry more than one tool call, and the engine runs the
+independent ones at the same time.
+
+The rule is narrow on purpose:
+
+* a call is eligible for concurrency only when the platform has **classified**
+  it read-only — core's `READONLY_TOOLS` table, plus whatever an installed MCP
+  adapter or plugin declared in its own `read_only` list. Absent means write,
+  in every one of those three sources, so a capability nobody classified is
+  never treated as safe;
+* below that classification sits a hard list: `exec`, `execute_code`,
+  `browser`, `ask_user`, and anything spelled `send_*`, `spawn_*` or
+  `desktop_*` are never concurrent whatever a table says about them;
+* a tool matching the agent's `human_approval_tools` patterns is never
+  concurrent either — that gate blocks on a person, and a batch waiting on a
+  person is not a batch;
+* **the first ineligible call ends grouping for the rest of the turn.** It runs
+  alone, and so does everything after it, in the order the model asked. A write
+  is never reordered relative to anything, including relative to a read that
+  might observe what it wrote.
+
+Admission is untouched: plan mode, `tools_allowed`, the `PRE_TOOL_USE` hook,
+the guardrail engine (including human approval) and the RBAC check all run one
+call at a time, in the model's order, before anything executes. Results come
+back with their own `tool_call_id`s in the model's order, a refused call does
+not hold up its siblings, and per-call timeouts and the run watchdog apply
+exactly as before.
+
+**A turn is one iteration, whatever it carries.** Three calls in one turn cost
+one check-in, not three — which is the point: the accounting has to reward
+asking for three things at once.
+
+`ROBOTHOR_PARALLEL_TOOL_CALLS` sets how many run at once (default 4, platform
+ceiling 16). **1 restores fully sequential execution**, which is the
+before-picture for a differential measurement.
+
+Step rows record `batch_id` and `batch_position`, so the ledger can answer
+"which turns fanned out, and did the results come back in the order asked?"
+Timestamps cannot: two calls that overlapped look identical to two that queued.
+
+### `execute_code` — calling tools from inside Python
+
+`execute_code` runs a Python snippet that can call the agent's own tools:
+
+```python
+from genus_tools import web_fetch, read_file
+import genus_tools
+
+for paper_id in ids:                      # one model turn, not fifty
+    page = web_fetch(url=f"https://example.org/{paper_id}")
+    ...
+genus_tools.call("list_people", query="acme")
+print(summary)                            # only stdout comes back
+```
+
+**Why it exists.** Measured 2026-09-16: on the three WildClawBench Productivity
+tasks this engine scored 0.000 on, a competing harness imported its tool
+library inside a code sandbox 52, 13 and 7 times. One of those tasks needs 130
+papers classified. `web_fetch` is a turn-level tool, so that loop costs 130
+turns here and one there — and 130 turns is not a thing a context window holds.
+
+**The module.** Any tool name is importable (`from genus_tools import
+gws_gmail_get`), `genus_tools.call(name, **args)` takes a computed name, and
+`genus_tools.tools()` lists what this run may reach. A call returns the tool's
+own result dictionary, **errors included**, so one bad item does not end a loop
+over fifty. `genus_tools.ToolError` is raised only when the call could not be
+made at all — the per-snippet limit is spent, the tool may not be reached from
+code, or the channel to the engine is gone.
+
+**The contract, exactly.**
+
+| | |
+|---|---|
+| Reach | Every tool the agent could call from a turn, and nothing else. Each proxied call passes the same admission gates in the same order, then `registry.execute` — so the repeat guard, the benchmark sandbox, the audit row and post-condition verification all apply. |
+| Never reachable | `execute_code` (no recursion), `spawn_agent`/`spawn_agents` (a spawn runs a whole child runner inline), `ask_user` (it blocks on a person). |
+| Requires | `exec` in the agent's `tools_allowed`. An agent that can run commands already has this process capability; what is new is the tool proxy. |
+| Transport | A unix socket in a 0700 directory, authenticated by a token in a 0600 file. The wire carries a tool name and arguments — there is no `tool_call_id` field, so there is nothing for a snippet to forge. One call at a time, so two writes cannot race. |
+| Environment | The scrubbed child environment at **`enforce`**, always — whatever `ROBOTHOR_EXEC_ENV_MODE` the instance is on. The snippet gets the process essentials, the declared non-secret `ROBOTHOR_*` settings and this agent's own `secrets:` grants: no database password, no provider key, no channel token. Scrubbing removes INHERITANCE, though, not the credentials from the engine — and the snippet's parent IS the engine, whose `/proc/<pid>/environ` a same-uid process may read. So the handler also calls `harden_process()` (`PR_SET_DUMPABLE=0`) before spawning, which makes those entries root-only. That is a **mitigation, not a boundary**: the remedy is the engine's environment ceasing to hold application credentials at all (see the SOPS bootstrap runbook), after which procfs leaks only bootstrap values. `exec` has the same exposure and the same mitigation. |
+| Interpreter | Isolated (`-I`: no `PYTHONPATH`, no user site) with an import guard that refuses `robothor`, `crm`, `psycopg2`, `litellm` and `redis`. The guard is defence in depth, not the boundary — the boundary is that the environment holds nothing worth importing the engine for. |
+| Lifetime | Its own process group **and a census of its descendants**, killed when the call returns — whether it finished, timed out, or was cancelled. Two kills, because neither alone is enough: the snippet reaps its own children on the way out (where the parent chain is intact, so a `setsid` child or a double-forked daemon is still reachable), and the engine kills the group plus everything its census saw (which is what catches a timeout, a cancellation, or a snippet that skipped its own cleanup). **A snippet can defeat both deliberately**, and this is reproducible rather than a race: start a child with `start_new_session=True` (outside the process group) and then call `os._exit` (skipping the snippet's own reaper), and it survives every time. So treat this as a budget for honest work, not a containment boundary for hostile code — which is the same footing `exec` is on, and why `execute_code` requires it. The closure is a cgroup the engine can kill as a unit, which needs `Delegate=yes` on the engine's unit: an operator change. |
+| Iterations | One. A snippet that makes two hundred proxied calls still costs the run a single turn — while each proxied call is still seen by the repeat guard and still earns its own step row. |
+
+**Bounds.** `ROBOTHOR_EXECUTE_CODE_MAX_CALLS` (default 200) caps proxied calls
+per snippet; past it `genus_tools` raises and the result says
+`tool_call_limit_reached`. `ROBOTHOR_EXECUTE_CODE_MAX_APPROVALS` (default 1)
+caps how many of those may need a person: a proxied call passes the same
+approval gate a turn's call does — a snippet can never bypass one — so without
+this a loop could queue one prompt per call at the operator, each holding the
+engine for `human_approval_timeout`. Past the cap the call is refused with a
+sentence telling the agent to make it from a turn instead. `ROBOTHOR_EXECUTE_CODE_TIMEOUT` (default 300, ceiling
+900, and the run's own remaining budget clamps it further) caps wall clock.
+`ROBOTHOR_EXECUTE_CODE_MAX_OUTPUT` (default 50,000 characters) caps the stdout
+that reaches the model; past it the output is cut **with a marker saying how
+much was cut** and the whole of it is written under
+`<workspace>/.robothor/execute_code/`, whose path comes back as `stdout_file`.
+Truncation is pagination, not amputation — the same trade `analyze_image`
+makes.
+
+**Not available to a container-sandboxed agent.** An agent declaring
+`sandbox: docker` runs with `--network none` and no host environment, so a
+snippet there has no route to the tool proxy. The tool refuses and says so
+rather than quietly running on the host, which would undo the isolation the
+manifest asked for.
+
 ### Everything else
 
 The full registry is large and changes with the release; `tool_search` over the
@@ -300,7 +406,7 @@ agent's own allow-set is the authoritative answer. The families:
 
 | Family | Examples |
 |---|---|
-| Files and shell | `read_file`, `write_file`, `list_directory`, `exec` |
+| Files and shell | `read_file`, `write_file`, `list_directory`, `exec`, [`execute_code`](#execute_code-calling-tools-from-inside-python) |
 | Web | `web_fetch`, `web_search`, `browser` |
 | Memory | `search_memory`, `memory_block_read`, `memory_block_write`, `store_memory` |
 | CRM | `search_records`, `get_person`, `create_task`, `list_my_tasks`, `resolve_task` |
