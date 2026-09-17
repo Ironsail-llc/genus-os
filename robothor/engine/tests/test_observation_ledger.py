@@ -299,26 +299,38 @@ class TestTheLadder:
         assert "step 11" in first
         assert observation_notes(session) == ""
 
-    def test_enforce_holds_the_run_exactly_once_then_completes_honestly(
+    def test_both_holds_are_real_holds_and_then_the_run_ends(
         self, session: _Session, monkeypatch
     ) -> None:
-        """Driven into a run that can never resolve its entry. It must finish
-        saying what it did not read, not loop — the failure being corrected is
-        a confident wrong answer, and a stuck run is not an improvement."""
+        """Driven into a run that can never resolve its entry.
+
+        BOTH holds return True. The runner's stop branch is `if nudge(...):
+        continue / return`, so a False ends the run with no further LLM call
+        and `get_final_text` walks back past anything appended afterwards — the
+        first cut returned False on the second hold and its "honest completion"
+        reached nothing but the transcript (hostile review C1).
+
+        This is the unit-level shape. That the run's ANSWER changes is asserted
+        through the real loop in
+        `test_unread_observation_hold_reaches_the_answer.py`, which is where a
+        control like this has to be proved.
+        """
         _set_modes(monkeypatch, truncation="enforce", act="off")
         ledger = ledger_for(session)
         assert ledger is not None
         ledger.record(11, "exec", {"command": f"curl {API}"}, _cut())
 
         assert unread_observation_hold(session) is True
-        assert "Before you finish" in session.messages[-1]["content"]
+        assert "never shown to you" in session.messages[-1]["content"]
 
-        assert unread_observation_hold(session) is False
-        assert "still unread" in session.messages[-1]["content"]
+        assert unread_observation_hold(session) is True
+        assert "say in it what you did not read" in session.messages[-1]["content"]
         assert "step 11" in session.messages[-1]["content"]
 
         assert unread_observation_hold(session) is False
-        assert len(session.messages) == 3  # one more honest note, never a loop
+        assert len(session.messages) == 2  # bounded: two turns, never a loop
+        assert unread_observation_hold(session) is False
+        assert len(session.messages) == 2
 
     def test_a_resolved_entry_never_holds_the_run(self, session: _Session, monkeypatch) -> None:
         _set_modes(monkeypatch, truncation="enforce", act="off")

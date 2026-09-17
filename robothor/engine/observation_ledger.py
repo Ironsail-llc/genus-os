@@ -58,11 +58,15 @@ __all__ = [
 #: repeat guard, so a session that never makes a tool call never builds one.
 LEDGER_ATTR = "_observation_ledger"
 
-#: How many re-asks an unresolved truncation is worth. One. An unbounded "you
-#: are not done" is a loop, and the run that can never resolve its entry —
-#: because the spill file is gone, or because the source no longer exists — has
-#: to be able to finish and say so.
-MAX_HOLDS = 1
+#: How many model turns an unresolved truncation is worth. TWO, and each one
+#: is a different sentence: "go and read it", then — if the run still tries to
+#: stop with the entry outstanding — "then say in your answer what you did not
+#: read". Both have to be real holds, because the runner's stop branch returns
+#: on a False and `get_final_text` then walks back past anything appended after
+#: the last assistant message. Two and no more: an unbounded "you are not done"
+#: is a loop, and a run whose entry can never be resolved — the spill gone, the
+#: source gone — has to be able to finish.
+MAX_HOLDS = 2
 
 #: How many entries a single note quotes. Beyond this the note stops being read.
 MAX_QUOTED = 3
@@ -334,10 +338,31 @@ def unread_observation_hold(session: Any) -> bool:
     """The run wants to stop. Does it still owe itself a read?
 
     True means "do not end this iteration": a note has been appended and the
-    loop should continue. Only at ``enforce``, only once per run, and only for
-    a truncation the run could still resolve — after the budget is spent the
-    run completes with an honest sentence naming what it never read, which is
-    the outcome this whole control exists to produce.
+    loop runs another model turn with it in context. Only at ``enforce``, at
+    most :data:`MAX_HOLDS` times, and only for a truncation the run could still
+    resolve.
+
+    Two holds, and the second one is the point. Hold 1 says "go and read it".
+    Hold 2 — spent when the run tries to stop again with the entry STILL
+    unresolved — says "then say so in your answer", and it must return True as
+    well, because of how the runner's stop branch is written::
+
+        if nudge_for_missing_deliverable(session, _workspace):
+            continue
+        return
+
+    A False there returns immediately, no further LLM call happens, and
+    ``session.get_final_text`` walks back to the last message whose role is
+    ``assistant`` — which is the answer produced BEFORE the note. The first cut
+    of this function appended the honest-completion text and returned False, so
+    the note reached nothing but the transcript and the run's output was
+    byte-identical to what ``observe`` would have produced. A control that
+    appends a string to itself and calls it an honest completion is
+    `controls-were-armed-but-aimed-at-nothing` with a better name.
+
+    After both holds the run ends whatever the ledger still says. The failure
+    being corrected is a confident wrong answer; a stuck run is not an
+    improvement on it.
     """
     from robothor.engine.feature_flags import truncation_ledger_mode
     from robothor.engine.session import ENGINE_CONTEXT_ROLE
@@ -359,39 +384,39 @@ def unread_observation_hold(session: Any) -> bool:
         )
         return False
     if ledger.holds_used >= MAX_HOLDS:
-        session.messages.append(
-            {
-                "role": ENGINE_CONTEXT_ROLE,
-                "content": (
-                    "[SYSTEM] Finishing with these observations still unread:\n"
-                    + "\n".join(f"- {entry.sentence()}" for entry in outstanding[:MAX_QUOTED])
-                    + "\nSay so in your answer — name what you did not read and what it "
-                    "would have changed — rather than presenting it as complete."
-                ),
-            }
-        )
         logger.warning(
-            "truncation ledger enforce: run %s completes with %d unread observation(s)",
+            "truncation ledger enforce: run %s ends with %d unread observation(s)",
             _run_id(session),
             len(outstanding),
         )
         return False
+    quoted = "\n".join(f"- {entry.sentence()}" for entry in outstanding[:MAX_QUOTED])
+    if ledger.holds_used == MAX_HOLDS - 1:
+        body = (
+            "[SYSTEM] You are about to finish with these observations still unread:\n"
+            f"{quoted}\n"
+            "Give your final answer now, and say in it what you did not read and what it "
+            "would have changed. Do not present the answer as complete."
+        )
+    else:
+        body = (
+            "[SYSTEM] Before you finish: part of what you asked for was never shown to you.\n"
+            f"{quoted}\n"
+            "Read it now if your answer depends on it. If it does not, say why in your "
+            "answer and finish."
+        )
     ledger.holds_used += 1
     session.messages.append(
         {
             "role": ENGINE_CONTEXT_ROLE,
-            "content": (
-                "[SYSTEM] Before you finish: part of what you asked for was never shown to "
-                "you.\n"
-                + "\n".join(f"- {entry.sentence()}" for entry in outstanding[:MAX_QUOTED])
-                + "\nRead it now if your answer depends on it. If it does not, say why in "
-                "your answer and finish."
-            ),
+            "content": body,
         }
     )
     logger.warning(
-        "truncation ledger enforce: run %s held once for %d unread observation(s)",
+        "truncation ledger enforce: run %s held (%d/%d) for %d unread observation(s)",
         _run_id(session),
+        ledger.holds_used,
+        MAX_HOLDS,
         len(outstanding),
     )
     return True

@@ -217,7 +217,12 @@ CAPS = {
     # ladder or a session in with it.
     "robothor/engine/exec_spill.py": 275,
     "robothor/engine/act_observe.py": 232,
-    "robothor/engine/observation_ledger.py": 469,
+    # 469 -> 494: the second hold. `enforce`'s honest completion used to be
+    # appended after the runner had already returned, so it reached the
+    # transcript and nothing else (hostile review C1). Both holds are real
+    # holds now, with a sentence each, and the reasoning for why a False there
+    # is inert is written where the next reader will need it.
+    "robothor/engine/observation_ledger.py": 494,
     # 265 -> 322: the guardrail row this control writes at finalization on
     # `observe` as well as `enforce`. Without it `flags/evidence.py` would
     # report the one ladder whose promotion depends on watching the evidence as
