@@ -145,6 +145,15 @@ def heading_subject(block: str) -> str:
 
     The block may arrive with its inherited scope line in front of it, so the
     block's own heading is the LAST of the leading heading lines.
+
+    KNOWN LIMIT, pinned by a test marked as such: a heading that decides two
+    items at once — ``## msg_2209 and msg_2210 — both outages`` over one
+    ``**Severity: Critical**`` — attributes the verdict to the first alone, so
+    a marker contradicting the second goes unreported. It fails CLOSED, which
+    is the right side of this trade: the alternative is the cross-reference bug
+    this rule exists to fix, where *"duplicate of msg_3101"* files somebody
+    else's item under a verdict it never received. Telling a conjunction from a
+    reference needs vocabulary this module deliberately does not have.
     """
     heading = ""
     for line in block.splitlines():

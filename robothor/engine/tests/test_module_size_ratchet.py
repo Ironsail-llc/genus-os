@@ -480,14 +480,18 @@ CAPS = {
     # items` filed every item under it under both) — plus `heading_subject`,
     # which is where "a block headed by an item decides THAT item" belongs:
     # it is a question about the document, not about the ladder.
-    "robothor/engine/verdict_sections.py": 156,
+    "robothor/engine/verdict_sections.py": 165,
     # Whether an override named a reason. Bounded for the same reason and with
     # the same history: three rounds of review each found a sentence that named
     # nothing and was exempted anyway — and, the last time, six that named
     # something in ordinary English and were not. The record of which sentences
     # those were, and why the bare copula is still not enough, is most of this
-    # file; the classifier itself is five vocabularies and a dozen lines.
-    "robothor/engine/override_reasons.py": 171,
+    # file; the classifier itself is five vocabularies and a dozen lines. The
+    # last of it is the KNOWN LIMITS block — the sentences this classifier
+    # cannot tell from a real reason, written down beside the tests that pin
+    # them so a later round has to argue with them rather than rediscover
+    # them and 'fix' them into fabricated findings.
+    "robothor/engine/override_reasons.py": 190,
     "robothor/engine/provenance_markers.py": 286,
     "robothor/engine/skill_contract.py": 73,
     "robothor/engine/code_exec_guards.py": 116,

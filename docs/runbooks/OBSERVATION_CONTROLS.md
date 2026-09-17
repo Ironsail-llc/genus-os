@@ -213,7 +213,7 @@ that IS a label, and the rule is deliberately narrow in both directions
 | The verdict must BE the heading — the text with the verdict phrase removed is nothing but filler (a count, an enumerator, or a word like *Issues*, *Items*, *Priority*) | `## Critical`, `## Critical Issues (3)` and `## No action required` are sections. `# Critical Incident Review — Week 38` and `# P1 escalation log` are titles: inheriting from those filed every item in the report under that severity as well as its own, so an item named again under `## Next steps` came back "under two verdicts" — a contradiction the report never made |
 | The heading must name **exactly one** verdict | `## Critical / High priority items` is an index of two categories, not a decision about the items beneath it, and reading it as a scope filed every one of them under both |
 | A verdict word welded into a **compound** is not a verdict: the vocabulary is fenced against hyphens rather than by `\b`, with `high-priority` / `medium-priority` / `low-priority` spelled out as the same label with a dash | A hyphen is a word boundary, so `## High-level findings` was a *high* section and filed every item under it a second time. `non-critical`, `lower-priority` and `high-touch` are the same mistake waiting — while `## High-priority items` is simply that priority |
-| A block **headed by an item** decides that item; the other identifiers in it are references | `### 4. msg_3104 — duplicate of msg_3101` under `## No action required` filed msg_3101, decided Critical in its own section, under a second verdict it never received. A block whose heading names no item — a severity section with a bullet per item — still assigns its verdict to every id in it |
+| A block **headed by an item** decides that item; the other identifiers in it are references | `### 4. msg_3104 — duplicate of msg_3101` under `## No action required` filed msg_3101, decided Critical in its own section, under a second verdict it never received. A block whose heading names no item — a severity section with a bullet per item — still assigns its verdict to every id in it. **Known limit:** a heading that decides two items at once (`## msg_2209 and msg_2210 — both outages`) attributes to the first alone, so a marker contradicting the second goes unreported. It fails closed, which is the right side of this trade, and telling a conjunction from a reference needs vocabulary this rule does not have |
 | Only the **nearest** such heading | A `## Low` section inside a `# Critical …` report resolves to *low*, not to both |
 | Not at all when the block states its **own** verdict | `### 3. … — upgraded to Critical` under `## High` is one decision, and reading it as two would invent a disagreement |
 | The section reaches the block as the **label**, never as the heading's own words | Prepending the heading verbatim would feed its every word — a marker field, an identifier, an override phrase — to every other detector for every item in the section |
@@ -284,6 +284,21 @@ evidence for it. That is deliberate: judging the argument would put the control
 in the business of second-guessing a decision the operator can now see, while
 judging its absence keeps it to the one thing a detector can be right about,
 which is that the reader was left with nothing to weigh at all.
+
+**Known limits**, measured and left alone — each is pinned by a test marked as
+such, because "fixing" one buys a fabricated finding on an honest report, which
+costs more than the miss:
+
+| Sentence | Why it exempts |
+|---|---|
+| *"; the ticket is INC-4412."* | A source beside a referent with nothing claimed about either. The pointing-at rule cannot tell a citation from a mention |
+| *"because it was escalated at 14:02."* / *"because I opened it at 14:02."* | The agent narrating its own action: the verb and the time are there, and no source outside the report is |
+| *"because the message id is msg_2209."* | The item's own identifier, restated as though it corroborated something |
+| *"although the dashboard showed the service healthy at 14:02"* | Polarity: evidence cited against the override is still a disclosed reason |
+
+If the table is quieter than a set of deliverables deserves, these are the
+shapes to read for first — the miss is in the classifier's vocabulary, not in
+the ladder.
 
 #### The rule the model is given
 

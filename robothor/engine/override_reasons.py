@@ -31,6 +31,25 @@ decision the operator can now see and weigh; judging its absence keeps it to
 the one thing a detector can be right about, which is that a reader was left
 with nothing to weigh at all.
 
+KNOWN LIMITS, measured, and left alone on purpose (see the tests marked as
+such — a later round "fixing" any of them buys a fabricated finding, which
+costs more than the miss):
+
+* *"; the ticket is INC-4412."* — a source beside a referent, with nothing
+  claimed about either. The pointing-at rule cannot tell a citation from a
+  mention;
+* *"because it was escalated at 14:02."* and *"because I opened it at 14:02."*
+  — the agent narrating its own action. The verb and the time are there and no
+  source outside the report is;
+* *"because the message id is msg_2209."* — the item's own identifier restated
+  as though it were corroboration;
+* the polarity case above: *"although the dashboard showed the service healthy
+  at 14:02"* overrides a marker by citing evidence against itself, and exempts.
+
+Every one of them is a sentence a reader can see and argue with, which is what
+this control is for. Telling them from a real reason needs the semantics this
+module deliberately does not have.
+
 Where it may be said is as much of the rule as what it says:
 
 * AFTER the override phrase. A reason found before it is usually the marker
