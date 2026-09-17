@@ -1797,3 +1797,109 @@ class TestTheSpillNoteDescribesWhatIsActuallyThere:
         out = await _analyze(tmp_path, _images(tmp_path, 60), choices=["chart", "photo"])
         assert "choice, reason" in out["note"], out["note"]
         assert "answer, reason" not in out["note"]
+
+
+class TestAFreeTextReplyIsNeverSilentlyTruncated:
+    """Re-check O1. The I1 parser ran `_from_json` before it knew whether a
+    choice was even required, so on a FREE-TEXT question a transcribed JSON
+    payload that happened to carry an `answer` key collapsed to that one
+    value — three fields gone, and the row said nothing about it.
+
+    Two near-identical screenshots must not transcribe differently depending
+    on whether the payload happens to use one of the parser's key names. So
+    the JSON reader is gated on SHAPE: with no `choices`, its result is taken
+    only when the object looks like a reply to the two-line contract — an
+    answer key AND a reason key — and otherwise the whole reply comes back as
+    text. The `choices` path is untouched: there, an extracted string still
+    has to be a label, so there was never any exposure.
+    """
+
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            '{"question_id": 7, "answer": "42", "asked_by": "kiosk"}',
+            '{"answer": "42"}',
+            '{"total": 19.5, "vendor": "kiosk"}',
+            '{"category": "produce", "sku": "A-1", "qty": 3}',
+            '{"label": "urgent", "ticket": 88}',
+        ],
+    )
+    async def test_a_transcribed_json_payload_comes_back_whole(self, tmp_path, scripted, reply):
+        scripted(reply)
+        out = await _analyze(tmp_path, _images(tmp_path, 1), question="transcribe the JSON shown")
+        assert out["results"][0]["answer"] == reply, "every field the image showed"
+
+    @pytest.mark.parametrize(
+        ("reply", "answer", "reason"),
+        [
+            ('{"answer": "42", "why": "the big number"}', "42", "the big number"),
+            ('{"choice": "42", "reason": "the big number"}', "42", "the big number"),
+            ('{"label": "42", "explanation": "the big number"}', "42", "the big number"),
+        ],
+    )
+    async def test_an_answer_plus_reason_object_is_still_read_as_a_reply(
+        self, tmp_path, scripted, reply, answer, reason
+    ):
+        """This is a real reply to the contract and must keep working — it is
+        why the gate is on shape rather than on the `choices` path."""
+        scripted(reply)
+        out = await _analyze(tmp_path, _images(tmp_path, 1), question="what number is shown?")
+        row = out["results"][0]
+        assert row["answer"] == answer
+        assert row["reason"] == reason
+
+    async def test_the_choices_path_still_reads_a_bare_answer_object(self, tmp_path, scripted):
+        """No exposure there, so no gate there: the extracted string still has
+        to be one of the labels, and a data object simply fails to be one."""
+        scripted('{"answer": "chart"}')
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["chart", "photo"])
+        assert out["results"][0]["choice"] == "chart"
+
+    async def test_a_data_object_on_the_choices_path_is_off_list_not_a_label(
+        self, tmp_path, scripted
+    ):
+        fake = scripted('{"question_id": 7, "answer": "42", "asked_by": "kiosk"}')
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["chart", "photo"])
+        assert "choice" not in out["results"][0]
+        assert len(fake.prompts) == 2
+
+    async def test_a_json_transcription_keeps_its_reason_when_the_model_gives_one(
+        self, tmp_path, scripted
+    ):
+        """Markers outside the object still work — the object is the answer."""
+        scripted('{"total": 19.5}\nWHY: a receipt total in the corner')
+        out = await _analyze(tmp_path, _images(tmp_path, 1), question="transcribe it")
+        row = out["results"][0]
+        assert row["answer"] == '{"total": 19.5}'
+        assert row["reason"] == "a receipt total in the corner"
+
+
+class TestMarkdownEmphasisNeverReachesTheRow:
+    """Re-check F1. `_INLINE_WHY` strips markdown before the marker word and
+    between it and the colon, but not the `**` that closes the bold AFTER the
+    colon — so `**ANSWER:** chart **WHY:** bars` yielded `'** chart'` and
+    `'** bars'`. The choice survived (the matcher strips emphasis on both
+    sides) but the free-text answer and every reason carried the leftovers."""
+
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            "**ANSWER:** chart **WHY:** bars and an axis",
+            "**ANSWER:** chart\n**WHY:** bars and an axis",
+            "*ANSWER:* chart *WHY:* bars and an axis",
+            "__ANSWER:__ chart __WHY:__ bars and an axis",
+        ],
+    )
+    async def test_bold_markers_leave_nothing_behind(self, tmp_path, scripted, reply):
+        scripted(reply)
+        out = await _analyze(tmp_path, _images(tmp_path, 1), choices=["chart", "photo"])
+        row = out["results"][0]
+        assert row["choice"] == "chart"
+        assert row["reason"] == "bars and an axis"
+
+    async def test_a_free_text_answer_is_not_left_holding_the_asterisks(self, tmp_path, scripted):
+        scripted("**ANSWER:** a bar chart **WHY:** bars and an axis")
+        out = await _analyze(tmp_path, _images(tmp_path, 1))
+        row = out["results"][0]
+        assert row["answer"] == "a bar chart"
+        assert row["reason"] == "bars and an axis"

@@ -159,9 +159,15 @@ CAPS = {
     # key the rows actually carry so it stops promising "answer" to a batch
     # whose rows say "choice". Both are corrections to what this module
     # REPORTS, which is its own subject; there is no cohesive cluster to lift
-    # out of a 20-line ledger helper and a threaded argument. The spill/budget
-    # cluster is the extraction this file will want next, and it is a change
-    # of its own rather than one made in a review round.
+    # out of a 20-line ledger helper and a threaded argument.
+    #
+    # THIS CAP CARRIES A DEBT: **FU-VIS2-SPILL** — extract the spill/budget
+    # cluster (`_spill`, `_spill_sentence`, `_spill_path`, `_fit`,
+    # `_pick_sample`, `_sample_row`, `prune_spill_files` and the budget
+    # constants) into a module of its own. Filed in the P4-VIS2 report's
+    # follow-up list; the next change that needs room in this file pays it
+    # rather than raising this number again. An intention is not a commitment,
+    # so it is named here where the raise has to be argued for.
     "robothor/engine/vision_batch.py": 1342,
     # 248 -> 351: the reply parser. Review finding I1 measured three ordinary
     # model formatting habits — both markers on one line, a JSON object, a
@@ -173,7 +179,16 @@ CAPS = {
     # `code_exec_rpc.py`'s entry above already names — correcting a cap set
     # hours earlier in the same PR for the thing that makes the module correct
     # is not the same as bumping a long-standing one to dodge a refactor.
-    "robothor/engine/vision_contract.py": 351,
+    # 351 -> 385: re-check O1 and F1, same PR, same argument. The JSON reader
+    # the I1 fix added was eating a free-text transcription — an object with an
+    # `answer` key came back as that one field, silently — so it is now gated
+    # on SHAPE, and the inline-marker pattern learned that `_` is a word
+    # character so `\b` never fired inside `__WHY:__`. Both are this module's
+    # own subject, and both are the parser being made correct rather than a
+    # feature being added to it. This module is ONE readable subject at 385
+    # lines; splitting it would produce two files neither of which can be read
+    # alone, which is the opposite of what the ratchet is for.
+    "robothor/engine/vision_contract.py": 385,
     # 277 -> 314: the approval budget. A proxied call passes the same approval
     # gate a turn's call does, which is right and which is also how a loop
     # could queue two hundred prompts at the operator. The check belongs where

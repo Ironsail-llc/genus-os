@@ -255,9 +255,17 @@ exactly one of the labels you gave.
 
 The tool also reads the shapes models actually write, without loosening that
 rule: `ANSWER: chart WHY: bars` on one line, `{"answer": "chart", "why":
-"bars"}`, a ```` ``` ```` fence, a `<think>` preamble, and `chart (bars)` all
-yield the label plus its reason. What is extracted still has to *be* a label —
-`banana (a chart)` names nothing and is off-list like anything else.
+"bars"}`, a ```` ``` ```` fence, a `<think>` preamble, `**ANSWER:** chart`, and
+`chart (bars)` all yield the label plus its reason. What is extracted still has
+to *be* a label — `banana (a chart)` names nothing and is off-list like anything
+else.
+
+**Without `choices`, a JSON reply is kept whole** unless it looks like a reply
+to that contract — an answer key *and* a reason key. So asking "transcribe the
+JSON on this screen" returns the whole object even when it happens to contain a
+key called `answer`, `label` or `category`, while `{"answer": "42", "why": "the
+big number"}` is still read as an answer and its reason. Without that shape
+test a transcription would silently come back as one of its own fields.
 
 **Every answered row carries a `reason`** — one short sentence (capped at 120
 characters) of what the model saw. That is what makes a batch auditable:

@@ -228,7 +228,12 @@ _WHY_LINE = re.compile(r"(?im)^[\s*_#>\-]*(?:why|reason)[\s*_]*[:：]\s*(.+?)\s*
 #: two lines writes them on one often enough that treating it as a wrong answer
 #: turned whole batches into errors — at twice the cost, because the re-ask
 #: restated the contract to a model whose habit was the problem.
-_INLINE_WHY = re.compile(r"[\s*_#>\-]*\b(?:why|reason)[\s*_]*[:：]\s*", re.IGNORECASE)
+#: The boundary is spelled out rather than left to ``\b``: underscore is a WORD
+#: character, so ``\b`` never fires between the ``__`` of ``__WHY:__`` and the
+#: marker, and underscore bold slipped through the one pattern meant to catch
+#: emphasis. Requiring a real separator in front also keeps ``somewhy: x`` from
+#: being split in half, which is what ``\b`` was there for.
+_INLINE_WHY = re.compile(r"(?:^|[\s*_#>\-])[\s*_#>\-]*(?:why|reason)[\s*_]*[:：]\s*", re.IGNORECASE)
 
 #: A reasoning model's scratchpad, and a fenced block. Both wrap a perfectly
 #: good reply in characters the markers are then looked for inside.
@@ -294,6 +299,19 @@ def _from_json(text: str) -> tuple[str, str] | None:
     return (answer, first(_JSON_REASON_KEYS)) if answer else None
 
 
+#: Markdown emphasis left over once a marker has been found. ``**ANSWER:**``
+#: closes its bold AFTER the colon, so the marker patterns cannot eat it and it
+#: used to ride into the row: ``'** chart'``, ``'** bars'``. The matcher strips
+#: these on both sides so a CHOICE still matched, which is exactly why it went
+#: unnoticed — the damage was to free-text answers and to every reason.
+_EMPHASIS = " \t*_`"
+
+
+def _strip_emphasis(text: str) -> str:
+    """One captured field with its leftover markdown taken off both ends."""
+    return text.strip().strip(_EMPHASIS).strip()
+
+
 def _from_markers(text: str) -> tuple[str, str]:
     """``(answer, reason)`` from whatever ``ANSWER:``/``WHY:`` markers are there.
 
@@ -309,13 +327,13 @@ def _from_markers(text: str) -> tuple[str, str]:
     inline = ""
     if answers:
         parts = _INLINE_WHY.split(answers[-1].strip(), maxsplit=1)
-        stated = parts[0].strip()
-        inline = parts[1].strip() if len(parts) > 1 else ""
+        stated = _strip_emphasis(parts[0])
+        inline = _strip_emphasis(parts[1]) if len(parts) > 1 else ""
     else:
         # A reply that is nothing but a WHY line used to answer with the marker
         # still stuck to it — the sentence twice, once spoiled.
         stated = _WHY_LINE.sub("", text).strip()
-    reason = reasons[-1].strip() if reasons else inline
+    reason = _strip_emphasis(reasons[-1]) if reasons else inline
     return (stated or reason or text.strip()), reason
 
 
@@ -334,9 +352,25 @@ def parse_reply(text: str, contract: Contract) -> Reply:
     something matches — ``banana (a chart)`` names nothing and stays off-list.
     Free text keeps its parentheses, because there is no way to tell a gloss
     from part of the answer and nothing is lost by leaving it alone.
+
+    On the FREE-TEXT path the JSON reader is gated on shape, and that gate is
+    the difference between reading a reply and eating an answer. "Transcribe
+    the JSON on this screen" is an ordinary question, and its honest answer is
+    an object — one that may well carry a key called ``answer``, ``label`` or
+    ``category``, because real payloads do. Reading one key out of it returned
+    a fragment with nothing to say it was a fragment: two near-identical
+    screenshots transcribed differently depending on a key name, which is not
+    a property an agent can reason about. So with no ``choices`` the object is
+    accepted only when it looks like a reply to the two-line contract — an
+    answer key AND a reason key — and otherwise the whole reply comes back as
+    text. ``{"answer": "42", "why": "the big number"}`` is still read as the
+    reply it is. On the ``choices`` path there is nothing to gate: whatever is
+    extracted still has to BE a label, and a data object simply is not one.
     """
     body = _unwrap(text)
     parsed = _from_json(body)
+    if parsed is not None and not contract.labels and not parsed[1]:
+        parsed = None  # data, not an answer to the question we asked
     stated, reason = parsed if parsed is not None else _from_markers(body)
     if not contract.labels:
         return Reply(stated, reason)
