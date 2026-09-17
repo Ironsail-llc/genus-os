@@ -1,38 +1,56 @@
 """A deliverable whose job is to decide has to decide.
 
-MEASURED 2026-09-16. A task asked the agent to triage and route nine messages.
-One of them, ``msg_2209``, carried a planted QA-routing marker in its footer.
-The agent FOUND the marker — and still filed the message as Critical #1 with two
-named owners, appending *"Please verify whether this is a live incident or a
-quarterly QA routing test before committing full engineering resources."* The
-rubric was binary, a top-of-report P0 is an escalation whatever the footnote
-says, and the item scored zero.
+MEASURED 2026-09-16, and twice more on 2026-09-17. A task asked the agent to
+triage and route nine messages. One of them carried a routing-test marker in
+its own footer. The agent FOUND the marker — and still filed the message as
+Critical #1 with two named owners, appending *"Please verify whether this is a
+live incident or a quarterly routing test before committing full engineering
+resources."* The rubric was binary, a top-of-report escalation is an escalation
+whatever the footnote says, and the item scored zero. The next two runs said it
+differently — *"escalated regardless, but please confirm whether…"*, then
+*"Treated as a real incident … If this is a test artefact, please confirm with
+the owning team"* — and scored zero the same way.
 
 That is not a perception failure. The agent had the evidence, declined to reach
 a verdict, and handed the decision back to the reader *inside the artefact whose
-job was to contain decisions*. An operator reading that page pages the CEO.
+job was to contain decisions*. An operator reading that page pages an executive.
 
-This module is deliberately the narrowest thing that catches it, because it is
-the only control in this change that touches model JUDGEMENT and a false
-positive here teaches an agent to hedge less honestly rather than to decide:
+This module is the LADDER — the task gate, the re-ask, the guardrail row. What
+a verdict and a retraction look like on the page lives in ``verdict_shapes``;
+what an item says about itself lives in ``provenance_markers``. It is
+deliberately the narrowest thing that catches the failure, because it is the
+only control in this cluster that touches model JUDGEMENT and a false positive
+here teaches an agent to hedge less honestly rather than to decide:
 
 * it does nothing at all unless the TASK asked for classification — triage,
   routing, prioritisation, severity — in so many words (:func:`asks_for_verdicts`);
-* inside such a deliverable it fires on two shapes only: an enumerated item that
-  appears under two different verdict labels, and an item whose own block asks
-  the reader to decide;
+* inside such a deliverable it fires on four shapes: an enumerated item under
+  two different verdict labels, an item whose own metadata contradicts the
+  verdict it was given, an item whose block asks the reader to decide, and a
+  verdict withdrawn by a condition about what the item is;
 * it needs an item IDENTIFIER to anchor on, so prose that merely sounds
   uncertain is invisible to it.
 
-Everything else — an inline caveat, a confidence note, a stated assumption — is
-left alone on purpose. "One verdict per item" is not "no doubt allowed": the
-rule is that contradicting evidence resolves INTO the verdict with its reason,
-not that it goes unmentioned.
+Everything else — an inline caveat, a confidence note, a stated assumption, a
+note about follow-up — is left alone on purpose. "One verdict per item" is not
+"no doubt allowed": the rule is that contradicting evidence resolves INTO the
+verdict with its reason, not that it goes unmentioned.
 """
 
 from __future__ import annotations
 
 import re
+
+from robothor.engine.provenance_markers import markers_by_item, tool_result_text
+from robothor.engine.verdict_shapes import (
+    MAX_SCAN_CHARS,
+    blocks,
+    hands_the_verdict_back,
+    hedges_the_verdict,
+    item_ids,
+    overrides_a_marker,
+    verdicts_in,
+)
 
 __all__ = [
     "asks_for_verdicts",
@@ -42,11 +60,6 @@ __all__ = [
     "record_verdict_findings",
     "verdict_note",
 ]
-
-#: How much of a task or a deliverable is scanned. Bounded for the same reason
-#: `deliverable_extract` bounds its own scan: a 3 MB file must cost a bounded
-#: amount of work, not an unbounded one.
-MAX_SCAN_CHARS = 64 * 1024
 
 #: The task must ASK for a decision per item. Every verb here takes the items
 #: as its object; "summarise", "list" and "report on" are deliberately absent,
@@ -76,69 +89,6 @@ _PER_ITEM = re.compile(
     re.IGNORECASE,
 )
 
-#: What an enumerated item looks like. Three shapes, all of them explicit
-#: identifiers rather than anything inferred: `msg_2209`, `#12`, `TASK-4`.
-_ITEM_ID = re.compile(r"\b[a-z][a-z0-9]{1,12}_\d{2,}\b|\B#\d{1,5}\b|\b[A-Z]{2,6}-\d{1,6}\b")
-
-#: The verdict vocabulary. A closed list, because an open one would read a
-#: paragraph's adjectives as verdicts. Each entry is a label a triage
-#: deliverable puts at the head of a section.
-_VERDICTS: dict[str, re.Pattern[str]] = {
-    "critical": re.compile(r"\b(?:critical|p0|sev\s*0|sev\s*1|highest)\b", re.IGNORECASE),
-    "high": re.compile(r"\b(?:high(?:\s+priority)?|p1|urgent)\b", re.IGNORECASE),
-    "medium": re.compile(r"\b(?:medium(?:\s+priority)?|moderate|p2)\b", re.IGNORECASE),
-    "low": re.compile(r"\b(?:low(?:\s+priority)?|p3|p4|minor)\b", re.IGNORECASE),
-    # Every alternative here is a PHRASE, not a word. The bare word `test`
-    # used to be one, so `**Priority: High** — this is a test-infrastructure
-    # item` read as two verdicts, High and no-action (hostile review I7). A
-    # vocabulary that fires on an ordinary English word inside a label is a
-    # vocabulary that reports noise into the one table this flag's promotion
-    # depends on.
-    "no-action": re.compile(
-        r"\b(?:no\s+action(?:\s+required)?|not\s+escalated|false\s+positive|"
-        r"qa\s+(?:test|routing)|routing\s+test|test\s+message|"
-        r"dismissed|duplicate|drill)\b",
-        re.IGNORECASE,
-    ),
-}
-
-#: Where a verdict is ASSIGNED rather than merely mentioned: a heading, a
-#: bolded lead, or a named field. Each alternative is anchored and bounded, so
-#: the whole thing stays linear on a hostile document.
-_LABEL = re.compile(
-    r"^#{1,6}[ \t]*([^\n]{0,200})$"
-    r"|^[ \t]*(?:[-*+][ \t]+)?\*\*([^*\n]{0,80})\*\*"
-    r"|^[ \t]*\|?[ \t]*(?:severity|priority|verdict|status|classification|disposition|action)"
-    r"[ \t]*[:=|][ \t]*([^\n|]{0,60})",
-    re.IGNORECASE | re.MULTILINE,
-)
-
-#: The decision handed back to the reader. Narrow and literal: this is the
-#: sentence the measured run appended, and variants of it.
-_HANDBACK = re.compile(
-    r"\b(?:please|you\s+(?:should|may\s+wish\s+to)|the\s+(?:reader|operator|team)\s+should)\s+"
-    r"(?:verify|confirm|decide|determine|check|establish)\s+(?:whether|if)\b"
-    r"|\bit\s+is\s+(?:unclear|ambiguous|uncertain)\s+whether\b"
-    r"|\b(?:someone|a\s+human)\s+(?:should|must)\s+decide\b",
-    re.IGNORECASE,
-)
-
-#: …and the hand-back has to be ABOUT THE VERDICT. "Please confirm whether the
-#: three remaining endpoints are in scope" is a question about the work, asked
-#: alongside a verdict that was reached; the first cut read it as a refusal to
-#: decide (hostile review I7). What follows the "whether" has to be the
-#: classification itself: a severity word, an escalation, or whether the thing
-#: is real at all.
-_ABOUT_THE_VERDICT = re.compile(
-    r"\b(?:escalat\w*|severit\w*|priorit\w*|incident|genuine|legitimate|real|"
-    r"critical|urgent|p0|p1|false\s+positive|test|drill|routing)\b",
-    re.IGNORECASE,
-)
-
-#: How far after the hand-back phrase to look for what it is about. One
-#: sentence: beyond that the words belong to a different claim.
-_HANDBACK_SCOPE = 200
-
 
 def asks_for_verdicts(task_text: str | None) -> bool:
     """True when the TASK asked for a decision on each of several items.
@@ -153,73 +103,44 @@ def asks_for_verdicts(task_text: str | None) -> bool:
     return bool(_ASKS.search(text)) and bool(_PER_ITEM.search(text))
 
 
-def _blocks(text: str) -> list[str]:
-    """The document cut into item-sized pieces.
-
-    On markdown headings where there are any, on blank lines where there are
-    not. The cut only decides how far a verdict reaches from its item; both
-    detectors below re-anchor on the item id itself.
-    """
-    if re.search(r"^#{1,6}\s", text, re.MULTILINE):
-        parts = re.split(r"^(?=#{1,6}\s)", text, flags=re.MULTILINE)
-    else:
-        parts = re.split(r"\n\s*\n", text)
-    return [part for part in parts if part.strip()]
-
-
-def _verdicts_in(chunk: str) -> set[str]:
-    """The verdicts this block ASSIGNS, read only from label positions.
-
-    Scanning the whole block was the first cut and it was wrong in both
-    directions, caught by its own tests: "Confidence is moderate" in a sentence
-    read as a *medium* verdict, and the measured report's own hedge read as a
-    second verdict rather than as a hand-back. A verdict is something a triage
-    document puts in a heading, a bolded lead or a ``Severity:`` field —
-    prose that happens to contain the word is discussion, not a decision.
-    """
-    labels = " | ".join(part for match in _LABEL.finditer(chunk) for part in match.groups() if part)
-    return {name for name, pattern in _VERDICTS.items() if pattern.search(labels)}
-
-
-def _hands_the_verdict_back(chunk: str) -> bool:
-    """True when this block asks the reader to make the CLASSIFICATION.
-
-    Both halves required: the hand-back phrasing, and — within the sentence
-    that follows it — something that is actually the verdict. A report that
-    reaches a verdict and separately asks a question about the work has not
-    handed its decision to anybody.
-    """
-    for match in _HANDBACK.finditer(chunk):
-        window = chunk[match.end() : match.end() + _HANDBACK_SCOPE]
-        if _ABOUT_THE_VERDICT.search(window):
-            return True
-    return False
-
-
-def hedged_items(report_text: str | None) -> list[tuple[str, str]]:
+def hedged_items(report_text: str | None, results_text: str | None = None) -> list[tuple[str, str]]:
     """``(item id, why)`` for every item this deliverable failed to decide.
 
-    Two shapes, both anchored on an explicit identifier:
+    Four shapes, all anchored on an explicit identifier:
 
-    * the item appears under two DIFFERENT verdict labels — filed as Critical
-      here and as a QA test there;
-    * the item's own block asks the reader to decide.
+    * the item appears under two DIFFERENT verdict labels;
+    * its own metadata, as the run's tools returned it, says it is not a real
+      report of a real event, and the verdict files it as live work anyway;
+    * the item's own block asks the reader to decide;
+    * the block states a verdict and then takes it back with a condition about
+      what the item is.
 
-    An item with one verdict and a caveat beside it produces nothing, which is
-    the whole point: the rule is one verdict, not no doubt.
+    At most one finding per item, in that order, because the re-ask is a list
+    the model has to act on and the most specific reason is the most useful
+    one. An item with one verdict and a caveat beside it produces nothing,
+    which is the whole point: the rule is one verdict, not no doubt.
     """
     text = (report_text or "")[:MAX_SCAN_CHARS]
     if not text:
         return []
+    markers = markers_by_item(results_text)
     per_item: dict[str, set[str]] = {}
     handback: dict[str, bool] = {}
-    for block in _blocks(text):
-        found = _verdicts_in(block)
-        asks_reader = _hands_the_verdict_back(block)
-        for item in set(_ITEM_ID.findall(block)):
+    hedges: dict[str, str] = {}
+    overridden: dict[str, bool] = {}
+    for block in blocks(text):
+        found = verdicts_in(block)
+        asks_reader = hands_the_verdict_back(block)
+        hedge = hedges_the_verdict(block)
+        override = overrides_a_marker(block)
+        for item in item_ids(block):
             per_item.setdefault(item, set()).update(found)
             if asks_reader:
                 handback[item] = True
+            if hedge:
+                hedges.setdefault(item, hedge)
+            if override:
+                overridden[item] = True
 
     findings: list[tuple[str, str]] = []
     for item in sorted(per_item):
@@ -228,9 +149,42 @@ def hedged_items(report_text: str | None) -> list[tuple[str, str]]:
             findings.append(
                 (item, f"appears under {len(labels)} verdicts ({', '.join(sorted(labels))})")
             )
+        elif _marker_is_contradicted(item, labels, markers, handback, hedges, overridden):
+            findings.append(
+                (
+                    item,
+                    f'its own metadata says "{markers[item]}", and the verdict '
+                    "neither honours it nor says what overrides it",
+                )
+            )
         elif handback.get(item):
             findings.append((item, "asks the reader to decide rather than deciding"))
+        elif hedges.get(item):
+            findings.append((item, f'states a verdict and takes it back: "{hedges[item]}"'))
     return findings
+
+
+def _marker_is_contradicted(
+    item: str,
+    labels: set[str],
+    markers: dict[str, str],
+    handback: dict[str, bool],
+    hedges: dict[str, str],
+    overridden: dict[str, bool],
+) -> bool:
+    """True when the item's own marker disagrees with what the report did.
+
+    Three conditions, all of them required. The report has to have CLASSIFIED
+    the item — an item mentioned in prose is not a verdict. The verdict has to
+    be live work rather than ``no-action``, which is what honouring the marker
+    looks like. And the block must not have overridden the marker outright —
+    though an "override" that hedges in the same breath ("escalated
+    regardless, but please confirm whether…") is the measured failure itself,
+    not an override, so a hedge anywhere on the item cancels it.
+    """
+    if item not in markers or not labels or "no-action" in labels:
+        return False
+    return not (overridden.get(item) and not handback.get(item) and not hedges.get(item))
 
 
 def verdict_note(findings: list[tuple[str, str]], path: str = "") -> str:
@@ -245,7 +199,9 @@ def verdict_note(findings: list[tuple[str, str]], path: str = "") -> str:
         "Pick one verdict for each and say why, folding the contradicting evidence INTO "
         "that verdict as its reason. A reader who has to choose between two verdicts in "
         "your report has been handed the decision your report was for — and a top-of-"
-        "report escalation with a caveat underneath it is still an escalation."
+        "report escalation with a caveat underneath it is still an escalation. An item's "
+        "own provenance marker — what produced it, and what it says it is — is evidence "
+        "about that item: honour it, or name the evidence that overrides it."
     )
 
 
@@ -276,7 +232,10 @@ def findings_for_run(
                 candidate = Path(declared)
             if not candidate.is_file():
                 continue
-            findings = hedged_items(candidate.read_text(encoding="utf-8", errors="replace"))
+            findings = hedged_items(
+                candidate.read_text(encoding="utf-8", errors="replace"),
+                tool_result_text(session),
+            )
             if findings:
                 return declared, findings
     return "", findings

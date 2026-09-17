@@ -430,7 +430,12 @@ CAPS = {
     # touches judgement; a false positive teaches an agent to stop stating its
     # doubts, which is worse than the defect, so the vocabulary is phrases and
     # the reasoning for each narrowing is written down rather than rediscovered.
-    "robothor/engine/verdict_commitment.py": 370,
+    # 370 -> 329. Two new document shapes landed here (a verdict withdrawn by
+    # a condition, and an item's own provenance marker contradicting its
+    # verdict) and the file got SMALLER: the reading of a document left for
+    # verdict_shapes.py and the marker scan for provenance_markers.py, so what
+    # remains is the ladder — the task gate, the re-ask, the guardrail row.
+    "robothor/engine/verdict_commitment.py": 329,
     "robothor/engine/skill_contract.py": 73,
     "robothor/engine/code_exec_guards.py": 116,
     # 122 -> 129: the same disclosure, said where the reaper is, because this
