@@ -95,21 +95,6 @@ def _log_guardrail_event(**kwargs: Any) -> None:
         logger.error("guardrail event could not be recorded: %s", _sanitize(exc))
 
 
-#: Appended to every human-approval denial the model reads.
-#:
-#: Genus OS runs agents autonomously; the gate is an opt-in some instances want
-#: for particular tools. From inside a turn the old message ("Denied by
-#: operator") read as a transient refusal, so an unattended run retried, was
-#: denied again, and spent its budget asking a person who was not there. The
-#: agent cannot see its own manifest, so the denial has to name the key —
-#: otherwise the only recovery it can imagine is another prompt.
-_GATE_IS_INSTANCE_CONFIG = (
-    "This gate is instance configuration — `v2.human_approval_tools` in this agent's "
-    "manifest, not a platform rule — so a retry will be denied the same way: reach the "
-    "goal by another route, or report this tool as unavailable and move on."
-)
-
-
 class ToolAdmissionMixin:
     """Tool-call admission control for AgentRunner."""
 
@@ -295,65 +280,18 @@ class ToolAdmissionMixin:
             return None
 
         # ── [HUMAN APPROVAL] Escalation for opt-in agents ──
+        # In approval_gate.py, which is reached only when this agent's own
+        # manifest declared the gate. Nothing on a default install gets here.
         if gr.action == "escalate":
-            from robothor.engine.permission_escalation import get_permission_manager
+            from robothor.engine.approval_gate import resolve_escalation
 
-            mgr = get_permission_manager()
-            if mgr:
-                approved = await mgr.request_approval(
-                    agent_id=agent_config.id,
-                    run_id=session.run_id,
-                    tool_name=tool_name,
-                    tool_args=tool_args,
-                    guardrail_name=gr.guardrail_name,
-                    reason=gr.reason,
-                    timeout_seconds=agent_config.human_approval_timeout,
-                )
-                if approved:
-                    return None
-                # An operator saying no is not the agent erring: this denial
-                # counts toward neither escalation nor error feedback.
-                return ToolVerdict(
-                    allowed=False,
-                    message=(
-                        f"Denied by operator ({gr.guardrail_name}): {gr.reason}. "
-                        f"{_GATE_IS_INSTANCE_CONFIG}"
-                    ),
-                    count_as_iteration_error=False,
-                    tool_args=tool_args,
-                )
-            if agent_config.human_approval_fail_open:
-                return None  # opted-in unattended autonomy: auto-approve
-
-            # No approver reachable. Legacy behavior auto-approves;
-            # ROBOTHOR_APPROVAL_* makes this fail closed (observe logs the
-            # would-deny; enforce denies the tool).
-            from robothor.engine.feature_flags import approval_mode
-            from robothor.engine.permission_escalation import fail_closed_on_missing_manager
-
-            appr_mode = approval_mode()
-            if appr_mode != "off":
-                _log_guardrail_event(
-                    run_id=session.run.id,
-                    guardrail_name=gr.guardrail_name,
-                    action="blocked" if appr_mode == "enforce" else "observed",
-                    tool_name=tool_name,
-                    reason="human approval required but no approver reachable",
-                    mode=appr_mode,
-                    step_number=len(session.run.steps),
-                )
-            if fail_closed_on_missing_manager():
-                return ToolVerdict(
-                    allowed=False,
-                    message=(
-                        f"Denied — human approval required for "
-                        f"{gr.guardrail_name} but no approver is reachable. "
-                        f"{_GATE_IS_INSTANCE_CONFIG}"
-                    ),
-                    count_as_iteration_error=False,
-                    tool_args=tool_args,
-                )
-            return None  # otherwise auto-approve (legacy) and fall through
+            return await resolve_escalation(
+                gr=gr,
+                tool_name=tool_name,
+                tool_args=tool_args,
+                session=session,
+                agent_config=agent_config,
+            )
 
         # Plain block.
         _log_guardrail_event(
