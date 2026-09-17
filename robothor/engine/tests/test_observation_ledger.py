@@ -141,6 +141,31 @@ class TestClassification:
     def test_a_local_or_meta_call_is_neither(self, tool: str, args: dict) -> None:
         assert classify(tool, args, READ_ONLY) == NEITHER
 
+    def test_a_post_to_a_url_held_in_a_variable_still_changes(self) -> None:
+        """Caught by re-running the reviewer's own classification table after
+        the I1 fix. Requiring a literal host in the command made
+        `requests.post(u, json=m)` — the normal way such a loop is written, and
+        the shape the measured run used — classify as `neither`. An HTTP write
+        verb is unambiguous on its own."""
+        for command in (
+            'python3 -c "import requests; requests.post(url, json=m)"',
+            'curl -X POST "$ENDPOINT" -d @message.json',
+            'python3 -c "httpx.delete(target)"',
+        ):
+            assert classify("exec", {"command": command}, READ_ONLY) == CHANGE, command
+
+    def test_a_body_flag_on_its_own_needs_a_source(self) -> None:
+        """`--data` is the weak signal: other programs take that flag too."""
+        assert classify("exec", {"command": "grep -- --data notes.txt"}, READ_ONLY) == NEITHER
+        assert (
+            classify(
+                "exec",
+                {"command": "curl -s localhost:9110/inbox/send --data @m.json"},
+                READ_ONLY,
+            )
+            == CHANGE
+        )
+
     def test_a_local_shell_command_naming_a_path_is_neither(self) -> None:
         """`wc -l /tmp_workspace/results/results.md` reaches nothing."""
         args = {"command": "wc -l /tmp_workspace/results/results.md"}

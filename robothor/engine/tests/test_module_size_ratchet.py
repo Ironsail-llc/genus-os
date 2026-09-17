@@ -233,7 +233,7 @@ CAPS = {
     # (hostile review I1). The added lines are three tables and the reasoning
     # for each; the alternative was a target-only rule that misses every CRM
     # write, which names no host at all.
-    "robothor/engine/act_observe.py": 331,
+    "robothor/engine/act_observe.py": 347,
     # 469 -> 494: the second hold. `enforce`'s honest completion used to be
     # appended after the runner had already returned, so it reached the
     # transcript and nothing else (hostile review C1). Both holds are real

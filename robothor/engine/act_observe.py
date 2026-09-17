@@ -60,20 +60,28 @@ NEITHER = "neither"
 #: else is classified by name.
 _SHELL_TOOLS = frozenset({"exec", "execute_code"})
 
-#: A shell command or snippet that CHANGES something at the other end. Narrow
-#: on purpose — an HTTP method that is not a read, or a client call spelled for
-#: one. `curl --data` is here because curl with a body is a POST whether or not
-#: `-X` says so, which is exactly how the measured run sent nineteen messages
-#: without the string "POST" appearing near some of them.
-_MUTATING_SHELL = re.compile(
+#: An HTTP write VERB, spelled out. This is unambiguous on its own: nobody
+#: writes `-X POST` or `requests.post(` about a local file, so a command
+#: carrying one is a remote change whether or not the URL is visible in the
+#: command text. That last clause is the point — the target is very often a
+#: variable (`requests.post(url, json=m)`, `curl -X POST "$ENDPOINT"`), and
+#: requiring a literal host in the string would make the control blind to
+#: exactly the loop the measured run wrote.
+_MUTATING_VERB = re.compile(
     r"(?:-X|--request)\s+[\"']?(?:POST|PUT|PATCH|DELETE)\b"
-    r"|--data(?:-raw|-binary|-urlencode)?\b"
     r"|\brequests\.(?:post|put|patch|delete)\s*\("
     r"|\bsession\.(?:post|put|patch|delete)\s*\("
     r"|\bhttpx\.(?:post|put|patch|delete)\s*\("
     r"|\bmethod\s*=\s*[\"'](?:POST|PUT|PATCH|DELETE)[\"']",
     re.IGNORECASE,
 )
+
+#: And the weak signal: curl with a body is a POST whether or not `-X` says so,
+#: which is how the measured run sent nineteen messages without the string
+#: "POST" appearing near some of them. Weak because `--data` is a flag other
+#: programs also take, so this one needs a source in the command before it
+#: counts.
+_MUTATING_BODY_FLAG = re.compile(r"--data(?:-raw|-binary|-urlencode)?\b", re.IGNORECASE)
 
 #: A shell command that READS something at the other end. A command with no
 #: source token at all reads nothing this module has an opinion about.
@@ -232,9 +240,17 @@ def classify(tool_name: str, tool_input: dict[str, Any], read_only: frozenset[st
         program = " ".join(
             str(v) for v in (tool_input or {}).values() if isinstance(v, (str, int, float))
         )
+        # The verb first, and without requiring a visible host: a command that
+        # says `-X POST` or `requests.post(` is a remote write even when the
+        # URL it targets is a variable, which is how such a loop is normally
+        # written. Asking for a literal host here made `requests.post(u, ...)`
+        # classify as `neither` — the control blind to the exact shape it
+        # exists for.
+        if _MUTATING_VERB.search(program):
+            return CHANGE
         if not remote_tokens(program):
             return NEITHER
-        if _MUTATING_SHELL.search(program):
+        if _MUTATING_BODY_FLAG.search(program):
             return CHANGE
         return READ if _FETCHING_SHELL.search(program) else NEITHER
     if tool_name in read_only:
