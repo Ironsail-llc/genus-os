@@ -43,6 +43,7 @@ from __future__ import annotations
 import argparse
 import ast
 import datetime as dt
+import functools
 import json
 import shlex
 import subprocess
@@ -295,6 +296,61 @@ def mode_gate_map(source: Path | None = None) -> dict[str, ModeGate]:
     return gates
 
 
+@functools.lru_cache(maxsize=4)
+def _panic_disabled(source: Path | None = None) -> frozenset[str]:
+    """Cached :func:`panic_disabled_flags` — read once per source, not per flag."""
+    return panic_disabled_flags(source)
+
+
+def panic_disabled_flags(source: Path | None = None) -> frozenset[str]:
+    """Every flag ``ROBOTHOR_DISABLE_ALL_RIPS=1`` actually forces off.
+
+    Derived from the readers, never hand-listed — the same rule
+    :func:`mode_gate_map` follows, and for the same reason: a name list here
+    would drift the day a flag stopped consulting the switch, and the audit
+    would go on reporting it dark.
+
+    The panic switch is NOT global, whatever its name suggests. Two governed
+    flags deliberately ignore it: ``do_not_contact_mode`` says so in its
+    docstring (a compliance opt-out is not new behaviour, and a panic state
+    that mails the people who asked not to be mailed is not a safe state to
+    panic into) and ``calendar_send_updates`` never consults it. Reporting
+    those ``off`` printed a rung neither can hold — and, once the manifest was
+    right, a MISMATCH with it.
+
+    A flag is panic-disabled when it is read either through
+    ``_enforcement_mode`` (whose own body starts ``if _disabled_all() or ...``)
+    or inside a function that consults the switch itself.
+    """
+    path = source or FEATURE_FLAGS_SOURCE
+    tree = ast.parse(path.read_text())
+    out: set[str] = set()
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        consults = False
+        read_here: list[str] = []
+        for call in ast.walk(node):
+            if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
+                continue
+            literals = [a.value for a in call.args if isinstance(a, ast.Constant)]
+            literals = [a for a in literals if isinstance(a, str)]
+            name = call.func.id
+            if name == "_disabled_all":
+                consults = True
+            elif name == "_enforcement_mode" and len(literals) == 2:
+                out.update(literals)  # the helper panics on behalf of its caller
+            elif name in ("_env_bool", "_resolve_raw") and literals:
+                if literals[0] == PANIC_KEY:
+                    consults = True
+                else:
+                    read_here.append(literals[0])
+        if consults:
+            out.update(read_here)
+    return frozenset(out)
+
+
 # ── Effective value ─────────────────────────────────────────────────────────
 
 
@@ -370,8 +426,16 @@ def effective_value(
     same default rather than to ``observe``, which is a value it cannot hold.
     Reading one through the ladder is what made a correctly-defaulted setting
     report ``observe`` and MISMATCH against the manifest every morning.
+
+    The panic switch reaches only the flags the engine panic-disables
+    (:func:`panic_disabled_flags`), and an UN-GATED flag — no ``*_ENABLED``
+    companion, and so no entry in the ``*_MODE``-keyed gate map — falls back to
+    its own code default rather than to the generic ladder's ``observe``.
+    ``ROBOTHOR_PER_USER_SESSIONS`` defaults to ``enforce`` in
+    ``feature_flags.per_user_sessions_mode``; printing ``observe`` for it was
+    printing a rung this instance has never run.
     """
-    if _truthy(resolved.get(PANIC_KEY)):
+    if _truthy(resolved.get(PANIC_KEY)) and flag in _panic_disabled():
         return "off"
     if flag.endswith("_ENABLED"):
         return "true" if _truthy(resolved.get(flag)) else "false"
@@ -387,10 +451,7 @@ def effective_value(
     raw = (resolved.get(flag) or "").strip()
     if not value_set:
         raw = raw.lower()
-    if value_set:
-        fallback = _code_default(flag)
-    else:
-        fallback = gate.default if gate is not None else "observe"
+    fallback = gate.default if gate is not None and not value_set else _code_default(flag)
     if not raw:
         return fallback
     valid = _valid_values_for(flag)

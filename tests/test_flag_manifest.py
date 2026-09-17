@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import datetime as dt
 import importlib.util
+import sys
 from pathlib import Path
 
 import yaml
@@ -24,6 +25,18 @@ spec = importlib.util.spec_from_file_location(
 )
 guardrail_watch = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(spec and guardrail_watch)
+
+# The audit's own drop-in parser, reused rather than re-implemented: it splits a
+# directive the way systemd does (shlex), so a quoted or multi-assignment pin
+# cannot walk past the mirror test below.
+_fa_spec = importlib.util.spec_from_file_location(
+    "flag_audit", REPO_ROOT / "scripts" / "flag_audit.py"
+)
+flag_audit = importlib.util.module_from_spec(_fa_spec)
+# Registered before exec: @dataclass resolves its own module out of sys.modules,
+# and a spec-loaded script that never lands there raises on the first one.
+sys.modules["flag_audit"] = flag_audit
+_fa_spec.loader.exec_module(flag_audit)
 
 
 def test_manifest_exists_and_parses():
@@ -194,20 +207,36 @@ def test_manifest_modes_match_dropin_mirror():
     assert checked >= 5, "expected several *_MODE flags in the drop-in"
 
 
-def dropin_environment() -> dict[str, str]:
-    """Every ``Environment=NAME=VALUE`` in the versioned drop-in mirror."""
-    text = (
-        REPO_ROOT / "infra" / "systemd" / "robothor-engine.service.d" / "upgrade-rip-flags.conf"
-    ).read_text()
-    out: dict[str, str] = {}
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line.startswith("Environment="):
-            continue
-        name, sep, value = line.removeprefix("Environment=").partition("=")
-        if sep:
-            out[name.strip()] = value.strip()
-    return out
+#: The engine's versioned drop-in directory — every ``*.conf`` systemd loads,
+#: not just the flags file, because that is what reaches the process.
+DROPIN_DIR = REPO_ROOT / "infra" / "systemd" / "robothor-engine.service.d"
+
+
+def dropin_environment(path: Path = DROPIN_DIR) -> dict[str, str]:
+    """Every ``Environment=NAME=VALUE`` in the versioned drop-in mirror.
+
+    Parsed by ``scripts/flag_audit.py::parse_dropin_dir`` rather than by a
+    second parser here. systemd splits a directive with shell-like word
+    splitting, so ``Environment=A=1 B=2`` and ``Environment="A=1" "B=2"`` each
+    set TWO variables; a ``partition("=")`` of the line reads the first as one
+    flag whose value is ``1 B=2`` and never sees the second. A mirror test that
+    cannot see a pin is a mirror test a pin can walk past.
+    """
+    return flag_audit.parse_dropin_dir(path)
+
+
+def test_dropin_environment_reads_systemd_assignments_the_way_systemd_does(tmp_path):
+    (tmp_path / "flags.conf").write_text(
+        "[Service]\n"
+        "Environment=ROBOTHOR_A_MODE=enforce ROBOTHOR_B_MODE=observe\n"
+        'Environment="ROBOTHOR_C_MODE=enforce" "ROBOTHOR_D_MODE=off"\n'
+    )
+    assert dropin_environment(tmp_path) == {
+        "ROBOTHOR_A_MODE": "enforce",
+        "ROBOTHOR_B_MODE": "observe",
+        "ROBOTHOR_C_MODE": "enforce",
+        "ROBOTHOR_D_MODE": "off",
+    }
 
 
 def test_enforced_flags_are_pinned_in_the_versioned_dropin():
