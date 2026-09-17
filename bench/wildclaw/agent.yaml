@@ -5,9 +5,17 @@
 # safety coaching, and nothing that names the benchmark. Whatever Genus's
 # defaults do is what gets measured.
 #
-# The model is pinned to one WildClawBench publishes head-to-head numbers for
-# (MiMo V2 Pro: OpenClaw 40.2 / Claude Code 29.9 / Codex 35.3 / Hermes 48.1),
-# so the comparison holds the model constant and varies only the harness.
+# The model is pinned to the line WildClawBench publishes head-to-head numbers
+# for (MiMo V2 Pro: OpenClaw 40.2 / Claude Code 29.9 / Codex 35.3 / Hermes
+# 48.1), so the comparison holds the model constant and varies only the
+# harness. `openrouter/xiaomi/mimo-v2-pro` itself was withdrawn from
+# OpenRouter (verified against the live catalog 2026-09-11), and a pin on a
+# withdrawn id is not a weaker measurement — it is no measurement at all: a
+# sweep without `--model` failed every task in seconds with "no answer from
+# any model". This follows the registry's own `replaced_by` for that entry,
+# which keeps the pin in the same model line the published row names and the
+# ledger still compares against (`ledger.BENCH_MODEL`). The published numbers
+# are the predecessor's; treat them as the nearest row, not the same silicon.
 # Override with ROBOTHOR_BENCH_MODEL to measure a different row.
 
 id: wildclaw
@@ -15,7 +23,7 @@ name: WildClawBench Agent
 description: Plain Genus agent used to measure the harness against WildClawBench.
 
 model:
-  primary: openrouter/xiaomi/mimo-v2-pro
+  primary: openrouter/xiaomi/mimo-v2.5-pro
   fallbacks: []
 
 schedule:
