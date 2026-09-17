@@ -424,7 +424,9 @@ CAPS = {
     # literals and never on its raw head; the origin is rebuilt from the
     # parsed hostname and refused when it is not one; a call URL is stripped
     # of control characters before it is quoted.
-    "robothor/engine/act_observe.py": 457,
+    # 457 -> 461: underscores are hostname characters here (compose service
+    # names), and the reason is written beside the pattern.
+    "robothor/engine/act_observe.py": 461,
     # 469 -> 505 -> 285 -> 385 across one review round. The middle number is
     # the one that matters: at 505 the DELIVERY half left for
     # observation_notes.py, because "what happened" and "what the run is told
@@ -445,7 +447,9 @@ CAPS = {
     # (`_answers`), and the hold latched separately from the note.
     # 451 -> 460 (review round): the recorder outranks the text heuristic on
     # any witnessed non-safe attempt, refused included, and reads counts.
-    "robothor/engine/observation_ledger.py": 460,
+    # 460 -> 467: a non-safe call with no parseable origin is a sourceless
+    # change, not a dropped one (round-2 review).
+    "robothor/engine/observation_ledger.py": 467,
     # The delivery half, capped at what it was split to plus the second hold and
     # the stop-path nudge. `enforce`'s honest completion used to be appended
     # after the runner had already returned, so it reached the transcript and

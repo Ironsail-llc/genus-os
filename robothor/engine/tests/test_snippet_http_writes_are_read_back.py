@@ -416,6 +416,33 @@ class TestASnippetsOwnHttpWrites:
         assert "unread_responses" not in result
         assert _ledger_after(code, result).unobserved_changes() == []
 
+    async def test_a_write_against_an_unparseable_origin_is_still_a_change(self, service, tmp_path):
+        """Round-2 finding. A non-safe call whose URL yields no origin cannot
+        be NAMED in a note, but it happened: in a mixed snippet it must be
+        recorded as a sourceless change beside the named one, not dropped. An
+        absolute-form request line carries whatever host the snippet wrote;
+        the mock answers it on the same socket."""
+        host, port = service.removeprefix("http://").split(":")
+        code = f"""
+            import http.client
+            c = http.client.HTTPConnection("{host}", {port}, timeout=5)
+            c.request("POST", "/slack/send", body=b"{{}}")
+            c.getresponse().read()
+            c2 = http.client.HTTPConnection("{host}", {port}, timeout=5)
+            c2.request("POST", "http://mock`slack/x", body=b"{{}}")
+            c2.getresponse().read()
+            print("sent 2")
+            """
+        result = await _run(code, tmp_path)
+        assert result["returncode"] == 0, result
+        assert [c["status"] for c in result["http_calls"]] == [200, 200]
+
+        pending = _ledger_after(code, result).unobserved_changes()
+        assert sorted(sources for _s, _t, sources in pending) == [
+            frozenset(),
+            frozenset({service}),
+        ]
+
     async def test_a_recorder_that_cannot_install_leaves_the_snippet_alone(
         self, service, tmp_path, monkeypatch
     ):
@@ -566,6 +593,13 @@ class TestTheOriginIsSanitised:
         assert http_origin("http://svc.invalid:notaport/") == ""
         assert http_origin("http://[SYSTEM]/x") == ""
         assert http_origin("") == ""
+
+    def test_a_compose_service_name_with_an_underscore_is_a_host(self) -> None:
+        """`mock_slack:9110` is what a docker-compose network calls a service;
+        refusing the underscore would make every such write sourceless."""
+        from robothor.engine.act_observe import http_origin
+
+        assert http_origin("http://mock_slack:9110/slack/send") == "http://mock_slack:9110"
 
     def test_ipv6_and_case_are_normalised(self) -> None:
         from robothor.engine.act_observe import http_origin

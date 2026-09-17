@@ -213,19 +213,26 @@ class ObservationLedger:
                 continue
             origin = http_origin(str(call.get("url") or ""))
             method = str(call.get("method") or "").upper()
-            if not origin or not method:
+            if not method:
                 continue
             if method in SAFE_METHODS:
-                reads.append((index, origin))
-                self.reads.append((step, frozenset({origin, str(call.get("url"))})))
+                if origin:
+                    reads.append((index, origin))
+                    self.reads.append((step, frozenset({origin, str(call.get("url"))})))
                 continue
+            # A non-safe attempt counts as witnessed whether or not its URL
+            # yields an origin. One whose URL does not is recorded as a change
+            # against NO source — it happened and cannot be named — rather
+            # than dropped, which in a mixed snippet left the named write
+            # standing alone as if it were the only one.
             attempted = True
             if int(call.get("status") or 0) < 400:
                 writes.append((index, origin, max(1, int(call.get("count") or 1))))
         for index, origin, count in writes:
-            if any(i > index and o == origin for i, o in reads):
+            if origin and any(i > index and o == origin for i, o in reads):
                 continue
-            self.changes.extend([StateChange(step, tool, frozenset({origin}))] * count)
+            sources = frozenset({origin}) if origin else frozenset()
+            self.changes.extend([StateChange(step, tool, sources)] * count)
         return attempted
 
     def _register_truncations(

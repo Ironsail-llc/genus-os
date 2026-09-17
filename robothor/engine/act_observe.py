@@ -343,8 +343,12 @@ def unread_proxy_responses(
 #: What a host may look like once it is going to be quoted in a note: a DNS
 #: name or IPv4 literal, or a bracketed IPv6 literal. The URL came from a
 #: process the snippet controlled; a netloc is not allowed to carry a
-#: `[SYSTEM]`, a backtick or a space into the model's context.
-_HOSTNAME = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,62}\.?)+|\[[0-9a-f:.]{2,45}\])$", re.IGNORECASE)
+#: `[SYSTEM]`, a backtick or a space into the model's context. Underscores
+#: are allowed: `mock_slack:9110` is what a docker-compose network calls a
+#: service, and refusing it would make every such write sourceless.
+_HOSTNAME = re.compile(
+    r"^(?:[a-z0-9_](?:[a-z0-9_-]{0,62}\.?)+|\[[0-9a-f:.]{2,45}\])$", re.IGNORECASE
+)
 
 
 def http_origin(url: str) -> str:
