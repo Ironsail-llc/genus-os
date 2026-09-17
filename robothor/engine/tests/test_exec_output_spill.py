@@ -214,6 +214,89 @@ class TestTheSpillStaysInsideTheWorkspace:
         assert "narrower command" in shaped["stdout"]
 
 
+class TestTheSpillIsBounded:
+    """Hostile review I6.
+
+    Before this change nothing from a command reached the disk at all. Now one
+    `exec` under the 900-second ceiling can write whatever it printed, and a
+    killed run's orphan survives for the retention window — so a 50 MB command
+    produced a 50,000,000-byte file under the workspace.
+    """
+
+    def test_a_giant_stream_is_cut_at_the_ceiling(self, tmp_path: Path) -> None:
+        from robothor.engine.exec_spill import max_spill_bytes
+
+        shaped = shape_exec_result(
+            {"stdout": _big(200_000), "stderr": "", "exit_code": 0},
+            workspace=tmp_path,
+        )
+        # The default ceiling is far above this; pin the mechanism instead.
+        kept = Path(shaped["stdout_path"]).stat().st_size
+        assert kept <= max_spill_bytes()
+
+    def test_the_cap_is_honoured_and_reported(self, tmp_path: Path, monkeypatch) -> None:
+        import robothor.engine.exec_spill as mod
+
+        monkeypatch.setattr(mod, "max_spill_bytes", lambda: 5_000)
+        shaped = mod.shape_exec_result(
+            {"stdout": _big(50_000), "stderr": "", "exit_code": 0}, workspace=tmp_path
+        )
+        assert Path(shaped["stdout_path"]).stat().st_size == 5_000
+        assert shaped["stdout_spill_capped"] is True
+        assert shaped["stdout_spill_chars"] == 5_000
+        assert shaped["stdout_chars"] == 50_000
+
+    def test_the_marker_does_not_promise_a_whole_the_file_lacks(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """An agent told "the rest is at <path>" and handed a capped file would
+        read the second amputation as the whole of the first."""
+        import robothor.engine.exec_spill as mod
+
+        monkeypatch.setattr(mod, "max_spill_bytes", lambda: 5_000)
+        shaped = mod.shape_exec_result(
+            {"stdout": _big(50_000), "stderr": "", "exit_code": 0}, workspace=tmp_path
+        )
+        assert "the full output is at" not in shaped["stdout"]
+        assert "the first 5000 chars are at" in shaped["stdout"]
+        assert "the spill is capped" in shaped["stdout"]
+
+    def test_an_uncapped_stream_says_nothing_about_a_cap(self, tmp_path: Path) -> None:
+        shaped = shape_exec_result(
+            {"stdout": _big(12_000), "stderr": "", "exit_code": 0}, workspace=tmp_path
+        )
+        assert "stdout_spill_capped" not in shaped
+        assert "the full output is at" in shaped["stdout"]
+
+    def test_a_multibyte_stream_is_never_cut_mid_character(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A byte-exact cut inside a character would be a second amputation
+        inside the fix for the first."""
+        import robothor.engine.exec_spill as mod
+
+        monkeypatch.setattr(mod, "max_spill_bytes", lambda: 5_001)
+        shaped = mod.shape_exec_result(
+            {"stdout": "\u00e9" * 20_000, "stderr": "", "exit_code": 0}, workspace=tmp_path
+        )
+        recovered = Path(shaped["stdout_path"]).read_text(encoding="utf-8")
+        assert recovered  # decodes cleanly, so nothing was cut through a char
+        assert len(recovered.encode("utf-8")) <= 5_001
+
+    def test_a_spill_that_would_fill_the_disk_is_refused(self, tmp_path: Path, monkeypatch) -> None:
+        """Filling the disk the engine, the database and the operator's own
+        work share is not a trade a convenience gets to make."""
+        import robothor.engine.exec_spill as mod
+
+        monkeypatch.setattr(mod, "_has_room", lambda root, needed: False)
+        shaped = mod.shape_exec_result(
+            {"stdout": _big(12_000), "stderr": "", "exit_code": 0}, workspace=tmp_path
+        )
+        assert shaped["stdout_truncated"] is True
+        assert "stdout_path" not in shaped
+        assert "narrower command" in shaped["stdout"]
+
+
 class TestTheFilesAreReaped:
     def test_a_run_takes_its_own_spills_with_it(self, tmp_path: Path) -> None:
         mine = Path(spill(tmp_path, "a" * 10, stream="stdout", run_id="run-a"))

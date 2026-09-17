@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-403 settings in 13 groups.
+404 settings in 13 groups.
 
 ## paths
 
@@ -188,6 +188,7 @@ The agent execution layer: bind address, concurrency, pacing, sandbox.
 | `ROBOTHOR_EXECUTE_CODE_MAX_OUTPUT` | int | `50000` | no | no | unreleased | Characters of a snippet's stdout that reach the model. Past this the output is cut with a marker saying how much was cut, and the FULL text is written to a file under the workspace whose path comes back in the result -- truncation becomes pagination rather than invisible data loss. |
 | `ROBOTHOR_EXECUTE_CODE_TIMEOUT` | int | `300` | no | no | unreleased | Wall-clock seconds one `execute_code` snippet gets. The agent may ask for less and never for more, and the run's own remaining budget still clamps it. On expiry the snippet's process group is killed, along with every descendant the engine has seen it start. A snippet can DEFEAT both deliberately -- a child started in its own session, then `os._exit` to skip the snippet's own cleanup -- so this is a budget for honest work, not a containment boundary for hostile code. Only a delegated cgroup (`Delegate=yes` on the engine's unit) would close that; until then, grant `execute_code` to agents you would grant `exec`. |
 | `ROBOTHOR_EXECUTION_MODE` | str | `auto` | `robothor-engine` | no | legacy | Which tier runs agents: auto, cloud, or local. 'local' switches the budgets as well as the model — cloud-era wall-clock budgets were 78% of local-tier failures. |
+| `ROBOTHOR_EXEC_SPILL_MAX_BYTES` | int | `8388608` | no | no | unreleased | Largest `exec` spill file, in bytes (default 8 MiB). A command whose output is bigger has its spill cut at this size with a marker saying so, and the result says how much the file holds. Before the spill existed nothing from a command reached the disk at all, so a single `exec` under the 900-second ceiling could otherwise fill the workspace. A spill is also refused outright when writing it would leave the filesystem with less than 64 MiB free. |
 | `ROBOTHOR_IMPORTANCE_THRESHOLD` | float | `0.3` | `robothor-engine` | no | legacy | Minimum importance score for an extracted fact to be stored. |
 | `ROBOTHOR_LOCAL_GATE_WAIT_SECONDS` | int | `120` | no | no | legacy | How long a local-tier run waits for a GPU slot before giving up. |
 | `ROBOTHOR_LOCAL_MAX_CONCURRENT` | int | `0` | no | no | legacy | Concurrency ceiling while on the local tier. 0 lets the host profile derive one from VRAM and core count. |

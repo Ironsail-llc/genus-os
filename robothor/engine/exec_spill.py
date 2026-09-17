@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 import time
 import uuid
 from pathlib import Path
@@ -45,12 +46,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "DEFAULT_MAX_SPILL_BYTES",
     "DEFAULT_SPILL_RETENTION_DAYS",
+    "MIN_FREE_BYTES",
     "READBACK_TOOLS",
     "SPILL_DIRNAME",
     "STDERR_LIMIT",
     "STDOUT_LIMIT",
+    "cap_for_spill",
     "is_spill_readback",
+    "max_spill_bytes",
     "prune_run_spills",
     "prune_spill_files",
     "shape_exec_result",
@@ -67,6 +72,17 @@ STDERR_LIMIT = 2_000
 
 #: Where the whole stream goes. Relative to the workspace; see the header.
 SPILL_DIRNAME = ".robothor/exec"
+
+#: Largest spill file when the operator has not said otherwise, and the
+#: headroom a spill must leave behind it. Before this existed nothing from a
+#: command reached the disk at all; now one `exec` under the 900-second ceiling
+#: can write whatever it printed, and a killed run's orphan survives for the
+#: retention window. Its sibling `code_execution.MAX_STDOUT_BYTES` is 50,000 —
+#: this is far larger because the whole point is to hold what the window could
+#: not, and still bounded because "whatever a runaway loop printed" is not a
+#: size.
+DEFAULT_MAX_SPILL_BYTES = 8 * 1024 * 1024
+MIN_FREE_BYTES = 64 * 1024 * 1024
 
 #: How long an orphaned spill is kept. These are working files — an agent pages
 #: one back in the run that wrote it and never again — and the run reaps its own
@@ -105,16 +121,24 @@ _PATH_TOKEN = re.compile(r"[^\s'\"`(),;\[\]{}=]{4,4096}")
 READBACK_TOOLS = frozenset({"read_file", "exec", "execute_code"})
 
 
-def truncate_stream(text: str, limit: int, path: str = "") -> str:
+def truncate_stream(text: str, limit: int, path: str = "", spilled: int = 0) -> str:
     """One stream, cut visibly, and — when it was spilled — recoverably.
 
-    Without *path* this is exactly #583's marker, which is what a failed spill
-    degrades to: still honest about the cut, just with nothing better to offer
-    than narrowing the command.
+    Without *path* this is exactly #583's marker, which is what a failed or
+    refused spill degrades to: still honest about the cut, just with nothing
+    better to offer than narrowing the command. With *spilled* non-zero the
+    file itself is capped, and the marker says so rather than promising a whole
+    the file does not hold.
     """
     if len(text) <= limit:
         return text
-    if path:
+    if path and spilled:
+        tail = (
+            f"[truncated: {limit} of {len(text)} chars shown — the first {spilled} "
+            f"chars are at {path} (the spill is capped); read_file it, or re-run "
+            "with a narrower command]"
+        )
+    elif path:
         tail = (
             f"[truncated: {limit} of {len(text)} chars shown — the full output is at "
             f"{path}; read_file it, or re-run with a narrower command]"
@@ -170,12 +194,55 @@ def _stem(run_id: str) -> str:
     return cleaned or "adhoc"
 
 
-def spill(workspace: str | Path | None, text: str, *, stream: str, run_id: str = "") -> str:
-    """The whole stream to a file the agent can page back, or "" if it cannot.
+def max_spill_bytes() -> int:
+    """The configured ceiling on one spill file. Never raises."""
+    try:
+        from robothor.settings import get_settings
 
-    Never raises. A disk that will not take the file degrades the result to
-    #583's marker; turning a working command into a tool error because the
-    spill failed would be a worse trade than the one this replaces.
+        configured = int(get_settings().engine.exec_spill_max_bytes)
+    except Exception:  # noqa: BLE001 - a missing config is the default, not a crash
+        return DEFAULT_MAX_SPILL_BYTES
+    return configured if configured > 0 else DEFAULT_MAX_SPILL_BYTES
+
+
+def cap_for_spill(text: str, limit: int | None = None) -> tuple[str, bool]:
+    """``(what goes in the file, whether anything was dropped)``.
+
+    Cut at a character count rather than a byte count, and the file is then
+    checked against the byte ceiling by the caller: the agent reads characters,
+    and a multi-byte cut in the middle of one would be a second amputation
+    inside the fix for the first.
+    """
+    ceiling = max_spill_bytes() if limit is None else limit
+    if len(text.encode("utf-8", "surrogateescape")) <= ceiling:
+        return text, False
+    kept = text[:ceiling]
+    while len(kept.encode("utf-8", "surrogateescape")) > ceiling and kept:
+        kept = kept[: len(kept) - 1024] if len(kept) > 1024 else ""
+    return kept, True
+
+
+def _has_room(root: Path, needed: int) -> bool:
+    """False when writing *needed* bytes would leave the filesystem short.
+
+    A spill is a convenience. Filling the disk the engine, the database and
+    the operator's own work share is not a trade this makes, and refusing here
+    degrades the result to #583's marker rather than failing the command.
+    """
+    try:
+        return shutil.disk_usage(root).free - needed >= MIN_FREE_BYTES
+    except OSError:  # noqa: BLE001 - an unanswerable filesystem is not a refusal
+        return True
+
+
+def spill(workspace: str | Path | None, text: str, *, stream: str, run_id: str = "") -> str:
+    """The stream to a file the agent can page back, or "" if it cannot.
+
+    Never raises, and never unbounded: the text is capped by
+    :func:`cap_for_spill` and refused outright when the filesystem cannot
+    afford it. A disk that will not take the file degrades the result to #583's
+    marker; turning a working command into a tool error because the spill
+    failed would be a worse trade than the one this replaces.
     """
     if stream not in _STREAMS:
         return ""
@@ -184,6 +251,13 @@ def spill(workspace: str | Path | None, text: str, *, stream: str, run_id: str =
         return ""
     try:
         root.mkdir(parents=True, exist_ok=True)
+        if not _has_room(root, len(text.encode("utf-8", "surrogateescape"))):
+            logger.warning(
+                "exec did not spill %s: writing it would leave under %d bytes free",
+                stream,
+                MIN_FREE_BYTES,
+            )
+            return ""
         path = root / f"{_stem(run_id)}{_SEP}{stream}{_SEP}{uuid.uuid4().hex[:12]}.txt"
         # `errors="surrogateescape"` because `subprocess.run(text=True)` on a
         # command emitting raw bytes hands us lone surrogates, and a spill that
@@ -216,12 +290,19 @@ def shape_exec_result(
         text = shaped.get(stream)
         if not isinstance(text, str) or len(text) <= limit:
             continue
-        path = spill(workspace, text, stream=stream, run_id=run_id)
-        shaped[stream] = truncate_stream(text, limit, path)
+        kept, capped = cap_for_spill(text)
+        path = spill(workspace, kept, stream=stream, run_id=run_id)
+        shaped[stream] = truncate_stream(text, limit, path, len(kept) if capped else 0)
         shaped[f"{stream}_truncated"] = True
         shaped[f"{stream}_chars"] = len(text)
         if path:
             shaped[f"{stream}_path"] = path
+            # What the FILE holds, when it is not everything. An agent told
+            # "the rest is at <path>" and handed a capped file would read the
+            # second amputation as the whole of the first.
+            if capped:
+                shaped[f"{stream}_spill_chars"] = len(kept)
+                shaped[f"{stream}_spill_capped"] = True
     return shaped
 
 

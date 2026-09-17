@@ -221,7 +221,11 @@ CAPS = {
     # rest of the run (hostile review I3); qualifying now takes a token outside
     # a comment, the filename this module writes, the right directory, and a
     # file that exists.
-    "robothor/engine/exec_spill.py": 339,
+# 339 -> 420: the size ceiling and the free-space check. A 50 MB command
+    # wrote a 50,000,000-byte file under the workspace (hostile review I6) —
+    # before this branch nothing from a command reached the disk at all, so the
+    # ceiling is new surface this change is responsible for.
+    "robothor/engine/exec_spill.py": 420,
     # 232 -> 331: classification by tool KIND and TARGET. The first cut asked
     # only "does this call name something with a slash in it", so every
     # `write_file` to an absolute path — which is every WildClaw deliverable —
