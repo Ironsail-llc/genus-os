@@ -445,7 +445,7 @@ CAPS = {
     # existed nowhere. Those are a logged handler per failure and a candidate
     # resolver; trimming them to fit would mean deleting the explanation of a
     # measured defect to satisfy a line count.
-    # 376 -> 439: the ladder now reports what it INSPECTED, not only what it
+    # 376 -> 440: the ladder now reports what it INSPECTED, not only what it
     # objected to. The measured 2026-09-17 run read its deliverable, found the
     # planted marker and wrote nothing, and that silence was indistinguishable
     # from a run this control never qualified for — the shape
@@ -455,11 +455,11 @@ CAPS = {
     # finaliser now writes per run. There is no cluster to extract: the counts
     # are produced by the same single pass over the document that produces the
     # findings, and computing them anywhere else would mean scanning twice.
-    "robothor/engine/verdict_commitment.py": 439,
+    "robothor/engine/verdict_commitment.py": 440,
     # Bounded from the day they land, the schedule_reconcile.py rule: these are
     # the two modules that would otherwise absorb every new document shape and
     # every new metadata key.
-    # 251 -> 326: the two gates the measured run walked through. `blocks()`
+    # 251 -> 343: the two gates the measured run walked through. `blocks()`
     # cut at every heading level, so `## Critical` / `### 1. <item>` — the
     # commonest triage layout there is — filed every item under no verdict at
     # all and three of the four shapes were inert on the whole class; and the
@@ -469,7 +469,7 @@ CAPS = {
     # job IS the document model, and both are ~15 lines of code under the
     # measurement that justifies them. Splitting the section tree away from the
     # shapes it feeds would put the reading of a document in two files.
-    "robothor/engine/verdict_shapes.py": 326,
+    "robothor/engine/verdict_shapes.py": 343,
     "robothor/engine/provenance_markers.py": 286,
     "robothor/engine/skill_contract.py": 73,
     "robothor/engine/code_exec_guards.py": 116,

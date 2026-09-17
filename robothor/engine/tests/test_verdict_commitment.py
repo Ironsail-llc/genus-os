@@ -941,6 +941,21 @@ class TestAnOverrideMustNameItsReason:
         findings = self._findings("The routing-test metadata was disregarded.")
         assert [item for item, _why in findings] == ["msg_2209"]
 
+    @pytest.mark.parametrize(
+        "note",
+        [
+            "The routing-test metadata was disregarded for this message.",
+            "The routing-test metadata was disregarded in this report.",
+            "The routing-test metadata was disregarded and the item was routed to @owner-a.",
+        ],
+        ids=["for-this-message", "in-this-report", "and-routed-to"],
+    )
+    def test_a_source_a_preposition_away_from_nothing_is_not_a_reason(self, note: str) -> None:
+        """A noun is not a claim. Each of these names something a reader could
+        go and look at and says nothing about it — which is the sentence
+        "disregarded" was always one preposition away from becoming."""
+        assert [item for item, _why in self._findings(note)] == ["msg_2209"]
+
     def test_an_override_that_names_its_evidence_is_silent(self) -> None:
         findings = self._findings(
             "The routing-test metadata was disregarded because the incident "
