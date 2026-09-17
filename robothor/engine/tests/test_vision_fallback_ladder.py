@@ -665,3 +665,228 @@ class TestTheEvidenceSentenceIsAboutTheSameItem:
         for name in ("view_image", "analyze_image"):
             description = schemas[name]["function"]["description"]
             assert len(description) <= ToolRegistry._SEARCH_DESC_MAX, (name, len(description))
+
+
+# ── round 2: the re-check's findings ────────────────────────────────────────
+
+
+class TestASubstitutedFileIsJudgedOnItsRealLocation:
+    """Re-check C-2. The round-1 guard asked `path_refusal` about the
+    substituted file — but `_same_stem_images` hands back `iterdir()` entries
+    UNRESOLVED, so a symlink whose literal path sits inside the workspace
+    passed containment and `prepare_image_bytes` then followed it. One symlink
+    under a different extension walked both tools round the guard and put a
+    file from outside the workspace on a third-party provider.
+
+    The direct-symlink case was caught because that is the test that was
+    written. This is the same hop with a substitution in the middle.
+    """
+
+    def _trap(self, tmp_path):
+        """A workspace, an outside file, and a symlink under another extension.
+
+        The agent asks for `holiday.png`, which does not exist; the only image
+        sharing that stem is `holiday.jpg`, a symlink pointing out of the tree.
+        """
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        real = _png(outside, name="board_deck.png", size=(123, 45))
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        (workspace / "holiday.jpg").symlink_to(real)
+        return workspace, workspace / "holiday.png"
+
+    async def test_view_image_refuses_the_substituted_symlink(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from robothor.engine import vision_fallback
+
+        async def local(data: bytes, prompt: str = "", **kw: Any) -> str:
+            raise AssertionError("a refused file must never reach a backend")
+
+        async def remote(**kwargs: Any):
+            raise AssertionError("a refused file must never reach a provider")
+
+        monkeypatch.setattr("robothor.engine.tools.handlers.images.describe_image_bytes", local)
+        monkeypatch.setattr(vision_fallback, "pooled_acompletion", remote)
+        monkeypatch.setattr(
+            vision_fallback, "configured_remote_model", lambda: DECLARED_VISION_MODEL
+        )
+        workspace, asked = self._trap(tmp_path)
+
+        token = mr.note_active_model(TEXT_ONLY_PRIMARY)
+        try:
+            out = await _view({"path": str(asked)}, _ctx(workspace))
+        finally:
+            mr.reset_active_model(token)
+
+        assert "outside the workspace" in out.get("error", ""), out
+        assert "image_base64" not in out
+        assert "description" not in out
+        assert "width" not in out, "the file was decoded before it was judged"
+
+    async def test_analyze_image_refuses_the_substituted_symlink(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from robothor.engine import vision_batch
+        from robothor.engine.tools.dispatch import _collect_handlers
+
+        async def local(data: bytes, prompt: str = "", **kw: Any) -> str:
+            raise AssertionError("a refused file must never reach a backend")
+
+        monkeypatch.setattr(vision_batch, "describe_image_bytes", local)
+        monkeypatch.setattr(
+            vision_batch, "resolve_backend", lambda: (vision_batch.Backend("local", "test-vlm"), "")
+        )
+        workspace, asked = self._trap(tmp_path)
+
+        out = await _collect_handlers()["analyze_image"](
+            {"paths": [str(asked)], "question": "what is this?"}, _ctx(workspace)
+        )
+
+        assert "outside the workspace" in out["results"][0].get("error", ""), out
+
+    def test_the_sibling_finder_answers_with_resolved_paths(self, tmp_path) -> None:
+        """The contract the two call sites rely on, pinned where it is made.
+
+        Fixing this at the call sites alone would leave the next caller of
+        `_same_stem_images` to rediscover it — which is how the substitution
+        path got a guard that did not guard in the first place.
+        """
+        from robothor.engine.tools.handlers.images import _same_stem_images
+
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        real = _png(outside, name="real.png")
+        here = tmp_path / "here"
+        here.mkdir()
+        (here / "figure.jpg").symlink_to(real)
+
+        found = _same_stem_images(here / "figure.png")
+
+        assert found == [real.resolve()], found
+
+
+class TestABackendsOwnWordsAreRedacted:
+    """Re-check C-1. `_why` quoted the provider's exception into the tool
+    result, the model's context and the run ledger, and logged it untruncated.
+    A litellm/OpenRouter `AuthenticationError` carries the request headers and
+    the api_key, so a 401 put this instance's key in all three places.
+
+    The precedent is in the same tree: `dispatch.py` redacts an audit row's
+    `error` for exactly this shape — an exception somebody else raised, where a
+    credential arrives from outside and the process holds nothing to compare it
+    against.
+    """
+
+    #: The shape litellm actually produces on a 401, trimmed.
+    LEAKY = (
+        "AuthenticationError: OpenRouter returned 401 for "
+        "api_key=sk-or-v1-deadbeefdeadbeefdeadbeefdeadbeef with "
+        "headers {'Authorization': 'Bearer sk-or-v1-deadbeefdeadbeefdeadbeefdeadbeef'}"
+    )
+
+    async def test_a_leaky_local_failure_reaches_neither_result_nor_log(
+        self, tmp_path, monkeypatch, caplog, no_remote_model
+    ) -> None:
+        from robothor.engine import vision_fallback
+
+        async def leaky(data: bytes, prompt: str = "", **kw: Any) -> str:
+            raise RuntimeError(self.LEAKY)
+
+        monkeypatch.setattr("robothor.engine.tools.handlers.images.describe_image_bytes", leaky)
+        monkeypatch.setattr(vision_fallback, "configured_local_model", lambda: "a-local-vlm")
+
+        token = mr.note_active_model(TEXT_ONLY_PRIMARY)
+        with caplog.at_level("DEBUG"):
+            try:
+                out = await _view({"path": str(_png(tmp_path))}, _ctx(tmp_path))
+            finally:
+                mr.reset_active_model(token)
+
+        blob = out["error"] + "\n" + caplog.text
+        assert "sk-or-v1-" not in blob, blob
+        assert "deadbeef" not in blob
+        assert "Bearer" not in blob
+
+    async def test_a_leaky_remote_failure_reaches_neither_result_nor_log(
+        self, tmp_path, monkeypatch, caplog, no_local_vlm
+    ) -> None:
+        from robothor.engine import vision_fallback
+
+        async def leaky(**kwargs: Any):
+            raise RuntimeError(self.LEAKY)
+
+        monkeypatch.setattr(vision_fallback, "pooled_acompletion", leaky)
+        monkeypatch.setattr(
+            vision_fallback, "configured_remote_model", lambda: DECLARED_VISION_MODEL
+        )
+
+        token = mr.note_active_model(TEXT_ONLY_PRIMARY)
+        with caplog.at_level("DEBUG"):
+            try:
+                out = await _view({"path": str(_png(tmp_path))}, _ctx(tmp_path))
+            finally:
+                mr.reset_active_model(token)
+
+        blob = out["error"] + "\n" + caplog.text
+        assert "sk-or-v1-" not in blob, blob
+        assert "deadbeef" not in blob
+        assert "Bearer" not in blob
+
+    async def test_the_rest_of_the_message_still_reaches_the_agent(
+        self, tmp_path, monkeypatch, no_remote_model
+    ) -> None:
+        """Redaction takes the value, not the diagnosis. A 401 that reads as a
+        bare type name is the finding this whole rung was fixed for."""
+        from robothor.engine import vision_fallback
+
+        async def leaky(data: bytes, prompt: str = "", **kw: Any) -> str:
+            raise RuntimeError(self.LEAKY)
+
+        monkeypatch.setattr("robothor.engine.tools.handlers.images.describe_image_bytes", leaky)
+        monkeypatch.setattr(vision_fallback, "configured_local_model", lambda: "a-local-vlm")
+
+        token = mr.note_active_model(TEXT_ONLY_PRIMARY)
+        try:
+            out = await _view({"path": str(_png(tmp_path))}, _ctx(tmp_path))
+        finally:
+            mr.reset_active_model(token)
+
+        assert "401" in out["error"]
+        assert "AuthenticationError" in out["error"]
+
+    def test_redaction_happens_before_the_cap(self) -> None:
+        """Order matters: cap first and a 200-character cut can slice a token
+        in half, leaving a prefix the redactor no longer recognises."""
+        from robothor.engine.vision_fallback import MAX_RUNG_MESSAGE_CHARS, _why
+
+        # Sized so the 200-character cut would land INSIDE the key: cap first
+        # and what survives is `sk-or-v1-deadbe…`, a prefix no redactor run
+        # afterwards would still recognise as a whole credential.
+        padding = "context " * 18
+        reason = _why("the remote vision model failed", RuntimeError(padding + self.LEAKY))
+
+        assert "sk-or-v1-" not in reason
+        assert len(reason) < MAX_RUNG_MESSAGE_CHARS + 120
+
+
+class TestAMalformedPathRefusesRatherThanRaises:
+    """Re-check M-8. The round-1 `path.resolve()` raises `ValueError: embedded
+    null byte` where `Path.is_file()` used to swallow it, so a NUL in the path
+    left the handler as an exception the dispatcher had to classify. A bad path
+    is a refusal, like every other bad path.
+    """
+
+    async def test_a_nul_byte_is_refused(self, tmp_path) -> None:
+        out = await _view({"path": f"{tmp_path}/a\x00b.png"}, _ctx(tmp_path))
+        assert "error" in out
+        assert "image_base64" not in out
+
+    async def test_a_nul_byte_is_refused_by_the_batch_too(self, tmp_path) -> None:
+        from robothor.engine.tools.dispatch import _collect_handlers
+
+        out = await _collect_handlers()["analyze_image"](
+            {"paths": [f"{tmp_path}/a\x00b.png"], "question": "what?"}, _ctx(tmp_path)
+        )
+        assert "error" in out["results"][0]
