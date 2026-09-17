@@ -953,8 +953,10 @@ def _request_stop(stop: asyncio.Event, sig: signal.Signals) -> None:
     second one during the drain is a human insisting — a developer at a hung
     drain, an operator's repeated ``kill`` — and ends the process now (130 for
     SIGINT, as a shell reports a Ctrl-C death; 1 otherwise) rather than setting
-    an already-set event and going quiet. systemd never sends a second SIGTERM
-    (it SIGKILLs at TimeoutStopSec), so this never changes a unit's result."""
+    an already-set event and going quiet. Under systemd exit 1 is a failure
+    and OnFailure= pages — deliberately: systemd itself never sends a second
+    SIGTERM (it SIGKILLs at TimeoutStopSec), so a second signal means someone
+    insisted on cutting a drain short, and that should be seen."""
     if stop.is_set():
         logger.warning("Received %s again during shutdown — second signal — exiting now", sig.name)
         _force_exit(130 if sig == signal.SIGINT else 1)

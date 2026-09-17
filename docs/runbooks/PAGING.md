@@ -165,8 +165,11 @@ restarts once:
 
 ```bash
 sudo scripts/install-units.sh --restart
-# = daemon-reload, then ONE `systemctl restart robothor-secrets.service <every
-#   unit that Requires= it>`, the set derived from the rendered units.
+# = take the restart broker's lock, daemon-reload, then ONE `systemctl restart
+#   robothor-secrets.service <every unit that Requires= it>`, the set derived
+#   from the rendered units; a unit that already has a job queued is left to
+#   that job and named in the output; every unit's state is printed afterwards
+#   and the exit code is 1 if any is not active.
 # Without --restart the installer prints that one command instead. Run it as
 # printed — never `restart robothor-secrets` and then the consumers again.
 ```
@@ -174,7 +177,9 @@ sudo scripts/install-units.sh --restart
 The agent-side restart broker (`infra/bin/robothor-restart-handler.sh`) is held
 to the same rule: every request in a pass is issued as one `systemctl restart`,
 a unit that already has a job queued (`systemctl show -p Job <unit>`) is left
-to that job, and a lock serialises two handlers.
+to that job, and the same lock (`/run/lock/robothor-restart.lock`) serialises
+the broker and the deploy — so a deploy cannot supersede a broker restart the
+engine asked for a second earlier, or the other way round.
 
 **`SuccessExitStatus=SIGTERM` is not the fix, and is dangerous here.** It does
 silence the page — and on a unit with an `ExecStartPre` it does so by telling
@@ -190,7 +195,9 @@ until systemd kills it is a real failure and must page.
 needs two.
 
 ```bash
-# Before the fix (two transactions, the deploy's exact shape):
+# Before the fix (two transactions, the deploy's exact shape). The first step
+# also bounces app, bridge and orchestrator via Requires= propagation — this is
+# a full fleet restart, do it in a window:
 sudo systemctl restart robothor-secrets && sleep 1.5 && sudo systemctl restart robothor-engine
 journalctl -u robothor-engine --since '-1 min' | grep -E "Control process exited|Failed with result"
 # expect: "Control process exited, code=killed, status=15/TERM" and

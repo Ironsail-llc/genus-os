@@ -134,7 +134,7 @@ the rendered units:
 
 ```bash
 sudo scripts/install-units.sh --restart
-# daemon-reload, then ONE
+# under the restart broker's lock: daemon-reload, then ONE
 #   systemctl restart robothor-secrets.service robothor-app.service \
 #     robothor-bridge.service robothor-engine.service robothor-orchestrator.service
 # Without --restart the installer prints that command; run it as printed.

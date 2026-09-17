@@ -26,10 +26,12 @@
 #                   target box. The renderer's structural gate still runs.
 #   --env-file FILE file to resolve unset ROBOTHOR_* vars from
 #                   (default /etc/robothor/robothor.env)
-#   --restart       after installing: `systemctl daemon-reload`, then ONE
-#                   `systemctl restart` naming the secrets oneshot and every
-#                   unit that Requires= it. One command is one transaction;
-#                   see "Restart each unit once" below.
+#   --restart       after installing: take the restart broker's lock,
+#                   `systemctl daemon-reload`, then ONE `systemctl restart`
+#                   naming the secrets oneshot and every unit that Requires=
+#                   it, leaving out any unit that already has a job queued.
+#                   One command is one transaction; see "Restart each unit
+#                   once" below. Exits 1 if a unit is not active afterwards.
 #
 # Environment: ROBOTHOR_WORKSPACE, ROBOTHOR_SERVICE_USER (required),
 # ROBOTHOR_SERVICE_HOME (optional) — see scripts/render-unit.sh.
@@ -259,10 +261,53 @@ fi
 if [[ ${#restart_set[@]} -eq 0 ]]; then
     log "WARNING: ${SECRETS_UNIT} is not among the templates — nothing to coalesce"
 elif [[ "$DO_RESTART" -eq 1 ]]; then
-    log "daemon-reload, then one restart transaction: ${restart_set[*]}"
+    # The SAME lock the restart broker (infra/bin/robothor-restart-handler.sh)
+    # takes, spelled identically — tests/test_install_units.py keeps the two
+    # lines equal. Held from here to exit: neither side can enqueue a restart
+    # while the other is deciding its transaction.
+    LOCK_FILE="${ROBOTHOR_RESTART_LOCK:-/run/lock/robothor-restart.lock}"
+    exec 9>"$LOCK_FILE"
+    flock 9
+
     systemctl daemon-reload
-    systemctl restart "${restart_set[@]}"
-    log "restarted (once each): ${restart_set[*]}"
+
+    # A unit that already has a job queued or running (`Job=` non-empty) is
+    # left to that job: it starts the unit with the code now on disk, and a
+    # restart on top of it is exactly the superseding job that kills
+    # ExecStartPre. The broker applies the same rule.
+    targets=()
+    for unit in "${restart_set[@]}"; do
+        job="$(systemctl show -p Job --value "$unit" 2>/dev/null || true)"
+        if [[ -n "$job" ]]; then
+            log "skipping ${unit} — a job is already queued for it (${job}); it will come up on that job"
+            continue
+        fi
+        targets+=("$unit")
+    done
+
+    if [[ ${#targets[@]} -eq 0 ]]; then
+        log "every unit already has a job queued — nothing to restart"
+    else
+        log "one restart transaction: ${targets[*]}"
+        # Not under set -e: a unit that fails to start after the transaction
+        # is enqueued must not abort this script mid-report. Every unit's
+        # state is printed, and the exit code says whether any failed.
+        restart_rc=0
+        systemctl restart "${targets[@]}" || restart_rc=$?
+        failed_units=0
+        for unit in "${targets[@]}"; do
+            state="$(systemctl is-active "$unit" 2>/dev/null || true)"
+            log "  ${unit}: ${state:-unknown}"
+            [[ "$state" == "active" || "$state" == "activating" ]] || failed_units=$((failed_units + 1))
+        done
+        if [[ "$restart_rc" -ne 0 || "$failed_units" -gt 0 ]]; then
+            log "ERROR: restart transaction exited ${restart_rc}; ${failed_units} unit(s) not active —"
+            log "ERROR: journalctl -u <unit> -n 50 for each one above"
+            log "done (${#rendered_rel[@]} units)"
+            exit 1
+        fi
+        log "restarted (once each): ${targets[*]}"
+    fi
 else
     log "next, as ONE command — do not restart ${SECRETS_UNIT} separately or restart"
     log "the consumers again afterwards; a second restart job supersedes the first"

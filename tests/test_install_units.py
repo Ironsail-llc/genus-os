@@ -1063,14 +1063,44 @@ def test_success_exit_status_names_the_signal_rather_than_its_number():
 
 
 def install_fake_systemctl(tmp_path: Path) -> Path:
-    """A systemctl stand-in that records every invocation, one line per call."""
+    """A systemctl stand-in. Records every invocation, one line per call;
+    answers `show -p Job --value <unit>` from <tmp>/jobs (one `<unit> <id>`
+    line per queued job); `restart` exits 1 when <tmp>/fail-restart exists;
+    `is-active <unit>` prints `active`, or `failed` when the unit is named in
+    <tmp>/failed-units."""
     bindir = tmp_path / "bin"
     bindir.mkdir(exist_ok=True)
     log = tmp_path / "systemctl.log"
-    fake = bindir / "systemctl"
-    fake.write_text(f'#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >> "{log}"\nexit 0\n')
-    fake.chmod(0o755)
+    jobs = tmp_path / "jobs"
+    jobs.touch()
+    (bindir / "systemctl").write_text(
+        "#!/usr/bin/env bash\n"
+        f'printf \'%s\\n\' "$*" >> "{log}"\n'
+        'case "$1" in\n'
+        f'    show) awk -v u="${{*: -1}}" \'$1 == u {{ print $2 }}\' "{jobs}" ;;\n'
+        f'    restart) [ -e "{tmp_path / "fail-restart"}" ] && exit 1 ;;\n'
+        f'    is-active) if grep -qxF "$2" "{tmp_path / "failed-units"}" 2>/dev/null; '
+        "then echo failed; exit 3; else echo active; fi ;;\n"
+        "esac\n"
+        "exit 0\n"
+    )
+    (bindir / "systemctl").chmod(0o755)
     return log
+
+
+def restart_env(tmp_path: Path) -> dict[str, str]:
+    env = base_env()
+    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
+    env["ROBOTHOR_RESTART_LOCK"] = str(tmp_path / "restart.lock")
+    return env
+
+
+def restart_calls(log: Path) -> list[list[str]]:
+    if not log.exists():
+        return []
+    return [
+        line.split()[1:] for line in log.read_text().splitlines() if line.startswith("restart ")
+    ]
 
 
 def secrets_dependents() -> set[str]:
@@ -1110,10 +1140,8 @@ def test_installer_with_restart_flag_issues_one_transaction(tmp_path: Path):
     """--restart: daemon-reload, then a SINGLE `systemctl restart` naming the
     secrets unit and all its dependents, each exactly once."""
     log = install_fake_systemctl(tmp_path)
-    env = base_env()
-    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
 
-    result = run_install(tmp_path / "root", env, "--restart")
+    result = run_install(tmp_path / "root", restart_env(tmp_path), "--restart")
     assert result.returncode == 0, result.stdout + result.stderr
 
     calls = log.read_text().splitlines()
@@ -1136,9 +1164,96 @@ def test_installer_without_restart_flag_never_calls_systemctl(tmp_path: Path):
     also skips the tmpfiles apply, which is the one other systemctl-family
     call it makes)."""
     log = install_fake_systemctl(tmp_path)
-    env = base_env()
-    env["PATH"] = f"{tmp_path / 'bin'}:{env['PATH']}"
 
-    result = run_install(tmp_path / "root", env)
+    result = run_install(tmp_path / "root", restart_env(tmp_path))
     assert result.returncode == 0, result.stdout + result.stderr
     assert not log.exists(), f"systemctl was called without --restart:\n{log.read_text()}"
+
+
+def test_restart_leaves_a_unit_with_a_queued_job_to_that_job(tmp_path: Path):
+    """The restart broker may have a restart of the engine in flight (the
+    engine writes the legacy trigger itself). A deploy restart on top of it
+    is the superseding job that kills ExecStartPre — so the unit is left to
+    the job it already has, loudly, and the rest go in the one transaction."""
+    log = install_fake_systemctl(tmp_path)
+    (tmp_path / "jobs").write_text("robothor-engine.service 4242\n")
+
+    result = run_install(tmp_path / "root", restart_env(tmp_path), "--restart")
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    calls = restart_calls(log)
+    assert len(calls) == 1, calls
+    assert "robothor-engine.service" not in calls[0]
+    assert "robothor-secrets.service" in calls[0]
+    assert "robothor-engine.service" in result.stdout and "4242" in result.stdout, (
+        "a skipped unit must be reported, not silently left out"
+    )
+
+
+def test_restart_with_every_unit_queued_restarts_nothing(tmp_path: Path):
+    log = install_fake_systemctl(tmp_path)
+    units = ["robothor-secrets.service", *secrets_dependents()]
+    (tmp_path / "jobs").write_text("".join(f"{u} 7\n" for u in units))
+
+    result = run_install(tmp_path / "root", restart_env(tmp_path), "--restart")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert restart_calls(log) == []
+
+
+def test_restart_holds_the_brokers_lock(tmp_path: Path):
+    """The deploy and the broker take the SAME lock, so neither can enqueue
+    a restart while the other's transaction is being decided."""
+    import fcntl
+    import time
+
+    log = install_fake_systemctl(tmp_path)
+    env = restart_env(tmp_path)
+    lock = Path(env["ROBOTHOR_RESTART_LOCK"]).open("w")  # noqa: SIM115 - released explicitly below
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    try:
+        proc = subprocess.Popen(
+            ["bash", str(INSTALL), "--root", str(tmp_path / "root"), "--restart"],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline:
+                assert proc.poll() is None, "the installer finished while the lock was held"
+                time.sleep(0.05)
+            assert restart_calls(log) == [], "a restart was issued while the broker held the lock"
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+        out, err = proc.communicate(timeout=60)
+    finally:
+        lock.close()
+    assert proc.returncode == 0, out + err
+    assert len(restart_calls(log)) == 1
+
+
+def test_a_failed_restart_is_reported_per_unit_and_exits_nonzero(tmp_path: Path):
+    """`set -e` must not abort the report mid-way: after the transaction is
+    enqueued every unit's state is printed, and the exit code says failure."""
+    install_fake_systemctl(tmp_path)
+    (tmp_path / "fail-restart").touch()
+    (tmp_path / "failed-units").write_text("robothor-engine.service\n")
+
+    result = run_install(tmp_path / "root", restart_env(tmp_path), "--restart")
+
+    assert result.returncode != 0
+    for unit in ["robothor-secrets.service", *secrets_dependents()]:
+        assert unit in result.stdout, f"no status line for {unit}:\n{result.stdout}"
+    assert "robothor-engine.service: failed" in result.stdout
+    assert "robothor-secrets.service: active" in result.stdout
+
+
+def test_installer_and_broker_share_the_lock_line():
+    """One lock, spelled identically in both scripts: the broker is installed
+    outside the repo and cannot source a shared file at runtime, so the test
+    is what keeps the two defaults from drifting apart."""
+    handler = (REPO_ROOT / "infra" / "bin" / "robothor-restart-handler.sh").read_text()
+    installer = INSTALL.read_text()
+    line = 'LOCK_FILE="${ROBOTHOR_RESTART_LOCK:-/run/lock/robothor-restart.lock}"'
+    assert line in handler and line in installer

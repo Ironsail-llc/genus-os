@@ -127,7 +127,7 @@ HANDLER = REPO_ROOT / "infra/bin/robothor-restart-handler.sh"
 
 def install_fake_systemctl(tmp_path: Path) -> Path:
     """A systemctl stand-in. Records every call; answers `show -p Job --value
-    <unit>` from <tmp>/jobs, one `<unit> <job>` line per queued job."""
+    <unit>` from <tmp>/jobs, one `<unit> <id>` line per queued job."""
     bindir = tmp_path / "bin"
     bindir.mkdir(exist_ok=True)
     log = tmp_path / "systemctl.log"
@@ -210,7 +210,7 @@ def test_a_unit_with_a_queued_job_is_left_alone(tmp_path: Path):
     """The job already queued for it will start it with the new code; a
     second restart on top would kill that job's ExecStartPre and page."""
     log = install_fake_systemctl(tmp_path)
-    (tmp_path / "jobs").write_text("robothor-engine.service 4242 restart\n")
+    (tmp_path / "jobs").write_text("robothor-engine.service 4242\n")
     request(tmp_path, "robothor-engine")
     request(tmp_path, "robothor-bridge")
 
@@ -218,7 +218,7 @@ def test_a_unit_with_a_queued_job_is_left_alone(tmp_path: Path):
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert restart_calls(log) == [["robothor-bridge.service"]]
-    assert "robothor-engine.service" in result.stderr and "4242 restart" in result.stderr, (
+    assert "robothor-engine.service" in result.stderr and "4242" in result.stderr, (
         "a skipped unit must be reported, not silently dropped"
     )
     assert not list((tmp_path / "requests").iterdir()), "requests are consumed either way"
@@ -226,7 +226,7 @@ def test_a_unit_with_a_queued_job_is_left_alone(tmp_path: Path):
 
 def test_nothing_to_restart_calls_nothing(tmp_path: Path):
     log = install_fake_systemctl(tmp_path)
-    (tmp_path / "jobs").write_text("robothor-engine.service 7 start\n")
+    (tmp_path / "jobs").write_text("robothor-engine.service 7\n")
     request(tmp_path, "robothor-engine")
 
     result = run_handler(tmp_path)

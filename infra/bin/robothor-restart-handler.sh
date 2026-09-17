@@ -46,8 +46,11 @@ set -euo pipefail
 
 REQUEST_DIR="${ROBOTHOR_RESTART_REQUEST_DIR:-/run/robothor/restart-requests}"
 
-# One handler at a time. The lock is taken BEFORE any request is consumed, so
+# One restarter at a time. The lock is taken BEFORE any request is consumed, so
 # a handler that waits here leaves the requests for itself, not for nobody.
+# scripts/install-units.sh --restart takes the SAME lock, spelled identically
+# (tests/test_install_units.py keeps the lines equal), so a deploy cannot
+# enqueue a restart while this broker is deciding its own transaction.
 LOCK_FILE="${ROBOTHOR_RESTART_LOCK:-/run/lock/robothor-restart.lock}"
 exec 9>"$LOCK_FILE"
 flock 9
@@ -118,7 +121,7 @@ done
 [ ${#wanted[@]} -gt 0 ] || exit 0
 
 # Leave out any unit that already has a job queued or running. `Job=` is empty
-# when there is none, and "<id> <type>" (e.g. "4242 restart") when there is.
+# when there is none and non-empty (the job id) when there is.
 targets=()
 for name in "${wanted[@]}"; do
     job="$(systemctl show -p Job --value "${name}.service" 2>/dev/null || true)"
