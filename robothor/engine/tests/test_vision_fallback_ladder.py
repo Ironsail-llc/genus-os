@@ -247,9 +247,7 @@ class TestEveryVisionResultSaysWhereItCameFrom:
         assert out["provenance"] == PROVENANCE
         assert PROVENANCE_NOTE in out["provenance_note"]
 
-    async def test_view_image_says_so_on_the_fallback_ladder(
-        self, tmp_path, monkeypatch
-    ) -> None:
+    async def test_view_image_says_so_on_the_fallback_ladder(self, tmp_path, monkeypatch) -> None:
         from robothor.engine.vision_fallback import PROVENANCE
 
         async def local(data: bytes, prompt: str = "", **kw: Any) -> str:
@@ -264,9 +262,7 @@ class TestEveryVisionResultSaysWhereItCameFrom:
 
         assert out["provenance"] == PROVENANCE
 
-    async def test_analyze_image_says_so_for_the_whole_batch(
-        self, tmp_path, monkeypatch
-    ) -> None:
+    async def test_analyze_image_says_so_for_the_whole_batch(self, tmp_path, monkeypatch) -> None:
         from robothor.engine import vision_batch
         from robothor.engine.tools.dispatch import _collect_handlers
         from robothor.engine.vision_fallback import PROVENANCE, PROVENANCE_NOTE
@@ -310,7 +306,7 @@ class TestObservedEvidenceOutranksNames:
         from robothor.engine.prompts import EVIDENCE_OUTRANKS_NAMES
         from robothor.engine.tools.schemas import get_engine_schemas
 
-        schemas = {s["function"]["name"]: s for s in get_engine_schemas()}
+        schemas = get_engine_schemas()
         for name in ("view_image", "analyze_image"):
             description = schemas[name]["function"]["description"]
             assert EVIDENCE_OUTRANKS_NAMES in description, name
@@ -318,7 +314,7 @@ class TestObservedEvidenceOutranksNames:
     def test_analyze_image_points_at_choices_as_the_way_to_classify(self) -> None:
         from robothor.engine.tools.schemas import get_engine_schemas
 
-        schemas = {s["function"]["name"]: s for s in get_engine_schemas()}
+        schemas = get_engine_schemas()
         description = schemas["analyze_image"]["function"]["description"]
         assert "choices" in description
         assert "reason" in description
@@ -327,7 +323,7 @@ class TestObservedEvidenceOutranksNames:
         from robothor.engine.tools.schemas import get_engine_schemas
         from robothor.engine.vision_fallback import PROVENANCE_NOTE
 
-        schemas = {s["function"]["name"]: s for s in get_engine_schemas()}
+        schemas = get_engine_schemas()
         for name in ("view_image", "analyze_image"):
             blob = str(schemas[name]["function"])
             assert PROVENANCE_NOTE in blob, name

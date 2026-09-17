@@ -47,6 +47,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from robothor.engine.vision_fallback import PROVENANCE, PROVENANCE_NOTE
+
 logger = logging.getLogger(__name__)
 
 #: Longest edge, in pixels, that reaches the model. Provider payload limits
@@ -287,6 +289,62 @@ def prepare_image_bytes(path: Path) -> PreparedImage:
         )
 
 
+async def _describe_instead(
+    result: dict[str, Any],
+    data: bytes,
+    mime: str,
+    model: str,
+    path: Path,
+    args: dict[str, Any],
+) -> dict[str, Any]:
+    """Fill *result* from the vision ladder, for a primary that cannot see.
+
+    Extracted from ``view_image`` when the remote rung arrived: the branch is
+    now two outcomes with three reasons between them, and a handler that ends
+    in a nested try is a handler nobody reads to the bottom.
+
+    ``seen_by`` stays ``vision-model`` on either rung — rule 18 of the
+    instruction contract names those three values and an agent reading
+    ``seen_by`` is asking "did I look, or was I told", not "which GPU". Which
+    model answered is ``backend`` plus ``model``, in the same spelling
+    ``analyze_image`` uses.
+    """
+    from robothor.engine.vision_fallback import NoVisionBackendError, describe_with_fallback
+
+    try:
+        described = await describe_with_fallback(data, mime, str(args.get("prompt") or ""))
+    except NoVisionBackendError as exc:
+        logger.warning("no vision backend could describe %s: %s", path.name, exc)
+        result["seen_by"] = "nobody"
+        result["error"] = (
+            f"{model or 'this model'} cannot accept images and no vision model could "
+            f"look instead ({'; '.join(exc.reasons)}). Nobody has looked at "
+            f"{path.name}. Inspect it programmatically — e.g. Pillow via exec — "
+            "or say plainly that you could not see it."
+        )
+        return result
+
+    result["seen_by"] = "vision-model"
+    result["backend"] = described.backend
+    result["model"] = described.model
+    result["description"] = described.text
+    if described.tokens:
+        result["tokens"] = described.tokens
+    if described.cost_usd:
+        # The runner adds a tool result's `cost_usd` to the run total, so a
+        # paid fallback that reported nothing would spend money invisibly.
+        result["cost_usd"] = round(described.cost_usd, 6)
+    result["note"] = (
+        f"{model or 'this model'} cannot accept images, so this is the "
+        f"{described.backend} vision model"
+        + (f" ({described.model})" if described.model else "")
+        + "'s description rather than the picture itself. Treat it as a second-hand "
+        "account: if a detail decides the task, read the file programmatically to "
+        "confirm it."
+    )
+    return result
+
+
 async def view_image(args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
     """Return an image file as content the agent's own model can see.
 
@@ -338,31 +396,20 @@ async def view_image(args: dict[str, Any], ctx: Any = None) -> dict[str, Any]:
         "height": prepared.height,
         "path": str(path),
         "resolved_from": resolved_from,
+        # Said on every rung, including the one where the agent looks itself:
+        # a result whose provenance appears only sometimes is one an agent
+        # learns to read as decoration.
+        "provenance": PROVENANCE,
+        "provenance_note": PROVENANCE_NOTE,
     }
     if capability == "rejects":
         # No blocks. The client would strip them and the agent would be
         # told it looked at something it never saw.
-        result["model"] = model
-        try:
-            result["description"] = await describe_image_bytes(data, str(args.get("prompt") or ""))
-            result["seen_by"] = "vision-model"
-            result["note"] = (
-                f"{model or 'this model'} cannot accept images, so this is the local "
-                "vision model's description rather than the picture itself. Treat it "
-                "as a second-hand account: if a detail decides the task, read the "
-                "file programmatically to confirm it."
-            )
-        except Exception as exc:  # noqa: BLE001 - reported, never invented
-            logger.warning("local vision model could not describe %s: %s", path.name, exc)
-            result["seen_by"] = "nobody"
-            result["error"] = (
-                f"{model or 'this model'} cannot accept images and the local vision "
-                f"model is unavailable ({type(exc).__name__}). Nobody has looked at "
-                f"{path.name}. Inspect it programmatically — e.g. Pillow via exec — "
-                "or say plainly that you could not see it."
-            )
-        return result
+        result["primary_model"] = model
+        return await _describe_instead(result, data, prepared.mime, model, path, args)
 
+    result["primary_model"] = model
+    result["model"] = model
     result["image_base64"] = base64.b64encode(data).decode("ascii")
     result["image_mime"] = prepared.mime
     result["seen_by"] = "primary"

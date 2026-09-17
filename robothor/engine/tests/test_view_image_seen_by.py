@@ -80,7 +80,11 @@ class TestRejectingModel:
         assert "image_base64" not in out, "a block the client will only strip is a lie"
         assert out["seen_by"] == "vision-model"
         assert out["description"] == "a red rectangle"
-        assert out["model"]
+        # `model` is whichever vision model answered and is empty when the
+        # local rung is faked away; `primary_model` is the one that could not
+        # look, which is what this test is about.
+        assert out["primary_model"]
+        assert out["backend"] == "local"
 
     @pytest.mark.asyncio
     async def test_a_runtime_discovery_switches_the_answer(self, tmp_path, monkeypatch) -> None:

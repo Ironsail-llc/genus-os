@@ -229,7 +229,19 @@ CAPS = {
     # follow-up list; the next change that needs room in this file pays it
     # rather than raising this number again. An intention is not a commitment,
     # so it is named here where the raise has to be argued for.
-    "robothor/engine/vision_batch.py": 1342,
+    #
+    # 1342 -> 1174. Part of that debt is PAID: the backend ladder (`Backend`,
+    # `resolve_backend`, the two configured-model readers, the remote call and
+    # its pricing) left for `vision_fallback.py`, because `view_image` needed
+    # the same rungs and had half of one. The spill/budget cluster
+    # (FU-VIS2-SPILL) is still owed.
+    "robothor/engine/vision_batch.py": 1174,
+    # Which model looks at a picture, for BOTH image tools. Capped at what it
+    # was written to. Not folded back into either caller: `vision_batch.py` is
+    # the module this repo has an open extraction debt against, and
+    # `handlers/images.py` would make a tool handler the owner of the ladder
+    # its sibling tool depends on.
+    "robothor/engine/vision_fallback.py": 365,
     # 248 -> 351: the reply parser. Review finding I1 measured three ordinary
     # model formatting habits — both markers on one line, a JSON object, a
     # parenthetical gloss — each turning a whole batch into `error` rows at
