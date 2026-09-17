@@ -15,10 +15,12 @@ collision and a bundled skill is never overwritten in place.
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from unittest.mock import patch
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class _FakeCtx:
@@ -368,17 +370,26 @@ class TestMigration:
         assert (workspace / "brain" / "skills" / "stray" / "SKILL.md").exists()
 
 
-# ── Nothing writes to the real workspace ─────────────────────────────
+# ── No write helper can fall back to the platform tree ───────────────
 
 
-def test_no_write_helper_defaults_to_the_platform_tree(workspace):
-    """Every write helper resolves to the instance dir when base is None."""
+def test_every_write_helper_resolves_into_the_instance(workspace):
+    """With no explicit base, a write path is an instance path — always.
+
+    The handlers are covered above; this pins the helpers themselves, which
+    is where a future caller would reintroduce the leak.
+    """
     from robothor.engine.skills import (
+        _meta_write_path,
         _skill_write_path,
         _state_write_path,
         instance_skills_dir,
     )
 
-    with patch.object(Path, "mkdir"):
-        assert _skill_write_path("x").parent.parent == instance_skills_dir()
-        assert _state_write_path("x").parent.parent == instance_skills_dir()
+    root = instance_skills_dir().resolve()
+    for helper, filename in (
+        (_skill_write_path, "SKILL.md"),
+        (_meta_write_path, "meta.json"),
+        (_state_write_path, "state.json"),
+    ):
+        assert helper("some-skill") == root / "some-skill" / filename
