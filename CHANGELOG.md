@@ -1,3 +1,9 @@
+## [1.97.0](https://github.com/Ironsail-llc/genus-os/compare/v1.96.0...v1.97.0) (2026-09-17)
+
+### Features
+
+* **engine:** parallel tool calls per turn and tool access from code ([#583](https://github.com/Ironsail-llc/genus-os/issues/583)) ([db027de](https://github.com/Ironsail-llc/genus-os/commit/db027de926778e2d5e2b0269c6a1091db18c5b09))
+
 ## [1.96.0](https://github.com/Ironsail-llc/genus-os/compare/v1.95.0...v1.96.0) (2026-09-17)
 
 ### Features
