@@ -277,6 +277,19 @@ def record_observation_verdicts(run: Any, session: Any, workspace: Any = None) -
         for root in roots:
             prune_run_spills(root, run_id)
 
+    # The third ladder's row, ABOVE the ledger guard below and not after it:
+    # it sat after, so the verdict control wrote nothing whenever the OTHER two
+    # flags were both off — no ledger is built then, the guard returned, and a
+    # flag reported a permanent zero because of somebody else's setting
+    # (hostile review, Critical 2). A failed write is logged, never swallowed.
+    try:
+        from robothor.engine.verdict_commitment import record_verdict_findings
+
+        record_verdict_findings(run, session, workspace)
+    except Exception:
+        row_run = getattr(run, "id", "?")
+        logger.warning("verdict commitment: run %s wrote no guardrail row", row_run, exc_info=True)
+
     if ledger is None:
         return
     truncation_mode = truncation_ledger_mode()
@@ -300,14 +313,6 @@ def record_observation_verdicts(run: Any, session: Any, workspace: Any = None) -
                 act_mode,
                 act_observe_note(pending),
             )
-    # The third ladder's row, written here rather than beside its own check so
-    # the finalizer has ONE call site for the observation cluster. Without it
-    # `flags/evidence.py` would report the verdict control permanently inert —
-    # the failure mode this repo keeps rediscovering.
-    with contextlib.suppress(Exception):
-        from robothor.engine.verdict_commitment import record_verdict_findings
-
-        record_verdict_findings(run, session, workspace)
 
 
 #: Controls that can HOLD a run at `enforce`, and so may honestly write a

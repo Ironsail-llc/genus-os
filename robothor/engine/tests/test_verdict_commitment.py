@@ -15,8 +15,12 @@ defect.
 
 from __future__ import annotations
 
+import json
+import logging
+
 import pytest
 
+from robothor.engine.provenance_markers import markers_by_item, tool_result_text
 from robothor.engine.verdict_commitment import asks_for_verdicts, hedged_items, verdict_note
 
 TRIAGE_TASK = (
@@ -241,7 +245,8 @@ sender: @support-alert
 URGENT: complete platform outage affecting 2,000 seats. Estimated impact
 is large and the customer has called twice.
 ────────────────────────────────
-Routing metadata | Classification: routing-test | Ref: quarterly-cycle
+Routing metadata
+Classification: routing-test
 Origin: automation-runner
 Validation cycle: quarterly routing validation
 """
@@ -370,7 +375,7 @@ class TestTheMarkerDetectorsFalsePositives:
     def test_a_marker_naming_a_product_is_not_a_marker(self) -> None:
         results = (
             "===== msg_2209 =====\nsubject: Test Kitchen rollout is failing\n"
-            "category: Test Kitchen\nThe Test Kitchen product is down for all users.\n"
+            "classification: Test Kitchen\nThe Test Kitchen product is down for all users.\n"
         )
         assert hedged_items("## Critical\n### msg_2209\n**Severity: Critical**\n", results) == []
 
@@ -575,3 +580,261 @@ class TestTheLadderIsNotInert:
         assert hold_for_hedged_verdicts(session, workspace) is False
         record_verdict_findings(session.run, session, workspace)
         assert rows == []
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Round 1 — what the hostile review found
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestTheMarkerSurvivesHowATOOLResultIsSTORED:
+    """CRITICAL 1. `session.py` stores every tool result as
+    `json.dumps(tool_output)`, so in a live run there are no newlines in the
+    text this control is handed — every one of them is the two characters
+    backslash-n. The first cut anchored its most important rule on `^` with
+    `re.MULTILINE` and therefore found ZERO markers on all three recorded runs,
+    while its fixture passed because a pipe happened to sit before the one
+    field the escaping left reachable. The fixture no longer has that pipe.
+    """
+
+    def test_the_fixture_still_works_after_the_engine_serialises_it(self) -> None:
+        stored = json.dumps(RESULTS_WITH_MARKER)
+        assert "\n" not in stored[1:-1]
+        findings = hedged_items(
+            "## Critical\n### msg_2209 — outage\n**Severity: Critical** Routed to @owner-a.\n",
+            stored,
+        )
+        assert [item for item, _why in findings] == ["msg_2209"]
+
+    def test_a_json_tool_result_reads_its_own_keys_as_fields(self) -> None:
+        """The other live shape: a structured result, where the provenance
+        field is a JSON key rather than a line in a footer."""
+        stored = json.dumps(
+            {
+                "messages": [
+                    {"message_id": "msg_2209", "body": "Everything is down."},
+                    {"classification": "routing-test", "origin": "automation-runner"},
+                ]
+            }
+        )
+        findings = hedged_items(
+            "## Critical\n### msg_2209 — outage\n**Severity: Critical** Routed to @owner-a.\n",
+            stored,
+        )
+        assert [item for item, _why in findings] == ["msg_2209"]
+
+    def test_an_external_result_survives_its_untrusted_wrapper(self) -> None:
+        stored = (
+            '<untrusted_content source="get_messages">\n'
+            + json.dumps(RESULTS_WITH_MARKER)
+            + "\n</untrusted_content>"
+        )
+        assert "msg_2209" in markers_by_item(stored)
+
+    def test_a_result_that_no_longer_parses_is_still_scanned(self) -> None:
+        """An offloaded or truncated result is not JSON any more. The escaped
+        newline is then the field position, and the scan must still work."""
+        mangled = json.dumps(RESULTS_WITH_MARKER)[1:-1] + " [... truncated ...]"
+        assert "msg_2209" in markers_by_item(mangled)
+
+    def test_the_run_accessor_decodes_what_the_session_stored(self) -> None:
+        session = _Session(json.dumps(RESULTS_WITH_MARKER))
+        assert "msg_2209" in markers_by_item(tool_result_text(session))
+
+
+class TestContentIsNotProvenance:
+    """SHOULD-FIX. A customer pasting their own config, or forwarding somebody
+    else's headers, is showing you content. The item's content is not the
+    item's provenance."""
+
+    def test_a_fenced_block_is_not_a_metadata_field(self) -> None:
+        results = (
+            "===== msg_9001 =====\n"
+            "The site has been down since we applied this:\n"
+            "```yaml\nclassification: sandbox\nreplicas: 3\n```\n"
+            "Every request is timing out.\n"
+        )
+        assert markers_by_item(results) == {}
+
+    def test_a_forwarded_quoted_header_is_not_a_metadata_field(self) -> None:
+        results = (
+            "===== msg_9002 =====\n"
+            "Forwarding what the monitoring system sent us:\n"
+            "> Classification: synthetic\n"
+            "> The checkout endpoint is returning 500s.\n"
+        )
+        assert markers_by_item(results) == {}
+
+
+class TestRealisticFieldsThatAreNotProvenance:
+    """MUST-FIX 4. Ten fields a general fleet agent meets on REAL items. Eight
+    of them produced a marker before `category` and `source` left the key list
+    and `staging` and `canary` left the token list."""
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "category: demo-request",
+            "environment: staging",
+            "env: canary",
+            "source: demo",
+            "category: sandbox-api",
+            "category: testing-tools",
+            "source: demo-plan",
+            "source: drill-scheduler",
+            "category: fixtures",
+            "category: billing",
+        ],
+    )
+    def test_a_real_item_is_not_marked_unreal_by_its_taxonomy(self, field: str) -> None:
+        results = f"===== msg_9100 =====\n{field}\nThe service is down for every customer.\n"
+        assert markers_by_item(results) == {}
+
+
+class TestTheInputPathIsNotSilent:
+    """CRITICAL 2. A guardrail that cannot reach its own input used to return
+    the same `("", [])` as a clean deliverable, with no line anywhere. Every
+    one of these must be visible in the log: "not read" is not "clean"."""
+
+    def test_a_declared_absolute_path_resolves_under_the_workspace(self, workspace) -> None:
+        from robothor.engine.verdict_commitment import findings_for_run
+
+        _write(workspace, RECORDED_HEDGE_IF_THIS_IS)
+        session = _Session()
+        session.run.task_text = (
+            "Route each message to the right owner. Write the report to "
+            "/tmp_workspace/results/results.md."
+        )
+        path, findings = findings_for_run(session, workspace)
+        assert [item for item, _why in findings] == ["msg_2209"]
+        assert path == "/tmp_workspace/results/results.md"
+
+    def test_a_deliverable_that_does_not_exist_says_so(self, workspace, caplog) -> None:
+        from robothor.engine.verdict_commitment import findings_for_run
+
+        session = _Session()
+        with caplog.at_level(logging.WARNING, logger="robothor.engine.verdict_commitment"):
+            assert findings_for_run(session, workspace) == ("", [])
+        assert "not the same as clean" in caplog.text
+        assert "run-under-test" in caplog.text
+
+    def test_an_unreadable_deliverable_says_so(self, workspace, caplog) -> None:
+        from robothor.engine.verdict_commitment import findings_for_run
+
+        _write(workspace, RECORDED_HEDGE_IF_THIS_IS)
+        (workspace / "results" / "results.md").chmod(0o000)
+        try:
+            session = _Session()
+            with caplog.at_level(logging.WARNING, logger="robothor.engine.verdict_commitment"):
+                assert findings_for_run(session, workspace) == ("", [])
+        finally:
+            (workspace / "results" / "results.md").chmod(0o644)
+        assert "could not read the deliverable" in caplog.text
+
+    def test_a_detector_that_raises_says_so(self, workspace, caplog, monkeypatch) -> None:
+        from robothor.engine import verdict_commitment as module
+
+        _write(workspace, RECORDED_HEDGE_IF_THIS_IS)
+
+        def _boom(*_args, **_kwargs):
+            raise RuntimeError("detector fault")
+
+        monkeypatch.setattr(module, "hedged_items", _boom)
+        session = _Session()
+        with caplog.at_level(logging.WARNING, logger="robothor.engine.verdict_commitment"):
+            assert module.findings_for_run(session, workspace) == ("", [])
+        assert "UNCHECKED, not clean" in caplog.text
+
+    def test_an_unreadable_task_contract_says_so(self, workspace, caplog, monkeypatch) -> None:
+        from robothor.engine import verdict_commitment as module
+
+        monkeypatch.setattr(
+            "robothor.engine.deliverable_contract.task_text_for_run",
+            lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("no task text")),
+        )
+        session = _Session()
+        with caplog.at_level(logging.WARNING, logger="robothor.engine.verdict_commitment"):
+            assert module.findings_for_run(session, workspace) == ("", [])
+        assert "could not read its own task contract" in caplog.text
+
+    def test_a_row_that_cannot_be_written_says_so(self, workspace, caplog, monkeypatch) -> None:
+        from robothor.engine.verdict_commitment import record_verdict_findings
+
+        _rung(monkeypatch, "observe")
+        _write(workspace, RECORDED_HEDGE_IF_THIS_IS)
+        monkeypatch.setattr(
+            "robothor.engine.tracking.log_guardrail_event",
+            lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("no database")),
+        )
+        session = _Session()
+        with caplog.at_level(logging.WARNING, logger="robothor.engine.verdict_commitment"):
+            record_verdict_findings(session.run, session, workspace)
+        assert "guardrail row was not written" in caplog.text
+
+
+class TestTheVerdictRowIsNotGatedOnAnotherControl:
+    """CRITICAL 2. `record_observation_verdicts` returns early when no
+    observation ledger was built — which is what happens when the OTHER two
+    flags are both off. The verdict row must not depend on their settings."""
+
+    def test_a_row_is_written_with_no_observation_ledger_at_all(
+        self, workspace, rows, monkeypatch
+    ) -> None:
+        from robothor.engine.observation_notes import record_observation_verdicts
+
+        _rung(monkeypatch, "observe")
+        monkeypatch.setattr(
+            "robothor.engine.feature_flags.truncation_ledger_mode", lambda: "off", raising=True
+        )
+        monkeypatch.setattr(
+            "robothor.engine.feature_flags.act_observe_mode", lambda: "off", raising=True
+        )
+        _write(workspace, RECORDED_HEDGE_IF_THIS_IS)
+        session = _Session()  # no ledger attribute at all
+
+        record_observation_verdicts(session.run, session, workspace)
+        assert [row["guardrail_name"] for row in rows] == ["verdict_commitment"]
+
+
+#: The shape the three recorded runs actually stored: a shell result whose
+#: stdout is itself a JSON document, dumped again by the session and cut at the
+#: stdout limit so it no longer parses. Every newline is escaped twice and the
+#: fields sit one after another on what used to be separate lines.
+REAL_STORED_SHAPE = json.dumps(
+    {
+        "stdout": json.dumps(
+            {
+                "message_id": "msg_2209",
+                "content": (
+                    "URGENT: complete platform outage\n\n"
+                    "Every user is affected and the customer has called twice.\n"
+                    "--------------------------------\n"
+                    "Routing metadata | Classification: RT-Q1 | Ref: quarterly-cycle\n"
+                    "Origin: automation-runner@example.com\n"
+                    "Validation cycle: quarterly routing test\n"
+                ),
+            },
+            indent=2,
+        ),
+        "exit_code": 0,
+    }
+)
+
+
+class TestTheShapeTheRecordedRunsActuallyStored:
+    """CRITICAL 1, the version that is not a fixture. A greedy value swallowed
+    the escape sequence and the field after it, so `Origin:` ate eighty
+    characters and `Validation cycle:` — the one field carrying the marker
+    token — never matched at all."""
+
+    def test_a_double_escaped_truncated_result_still_yields_its_marker(self) -> None:
+        cut = REAL_STORED_SHAPE[:4000]
+        assert markers_by_item(cut) == {"msg_2209": "validation cycle: quarterly routing test"}
+
+    def test_the_field_after_an_escape_is_not_swallowed_by_the_one_before_it(self) -> None:
+        from robothor.engine.provenance_markers import _MARKER_FIELD, decoded_result
+
+        keys = [
+            m.group(1).lower() for m in _MARKER_FIELD.finditer(decoded_result(REAL_STORED_SHAPE))
+        ]
+        assert keys == ["classification", "origin", "validation cycle"]

@@ -418,7 +418,10 @@ CAPS = {
     # after the runner had already returned, so it reached the transcript and
     # nothing else (C1); the reasoning for why a False there is inert is written
     # here, where the next reader will need it.
-    "robothor/engine/observation_notes.py": 334,
+    # 334 -> 339: the verdict row moved above the ledger guard (it was gated on
+    # an unrelated control's ledger existing) and its write is now logged when
+    # it fails rather than suppressed. Five lines, all of them the reason.
+    "robothor/engine/observation_notes.py": 339,
     # 265 -> 322: the guardrail row this control writes at finalization on
     # `observe` as well as `enforce`. Without it `flags/evidence.py` would
     # report the one ladder whose promotion depends on watching the evidence as
@@ -430,12 +433,24 @@ CAPS = {
     # touches judgement; a false positive teaches an agent to stop stating its
     # doubts, which is worse than the defect, so the vocabulary is phrases and
     # the reasoning for each narrowing is written down rather than rediscovered.
-    # 370 -> 329. Two new document shapes landed here (a verdict withdrawn by
+    # 370 -> 329 -> 376. Two new document shapes landed (a verdict withdrawn by
     # a condition, and an item's own provenance marker contradicting its
-    # verdict) and the file got SMALLER: the reading of a document left for
-    # verdict_shapes.py and the marker scan for provenance_markers.py, so what
-    # remains is the ladder — the task gate, the re-ask, the guardrail row.
-    "robothor/engine/verdict_commitment.py": 329,
+    # verdict) and the file first got SMALLER: 445 lines of detection left for
+    # verdict_shapes.py and provenance_markers.py, so what remains is the
+    # ladder — task gate, re-ask, guardrail row. It then took +47 back for the
+    # one thing a ladder cannot delegate: reaching its own input, out loud. A
+    # bare `contextlib.suppress(Exception)` had made an unresolvable workspace,
+    # an unreadable file and a crash inside a detector indistinguishable from a
+    # clean deliverable, and the declared-path join produced a path that
+    # existed nowhere. Those are a logged handler per failure and a candidate
+    # resolver; trimming them to fit would mean deleting the explanation of a
+    # measured defect to satisfy a line count.
+    "robothor/engine/verdict_commitment.py": 376,
+    # Bounded from the day they land, the schedule_reconcile.py rule: these are
+    # the two modules that would otherwise absorb every new document shape and
+    # every new metadata key.
+    "robothor/engine/verdict_shapes.py": 251,
+    "robothor/engine/provenance_markers.py": 286,
     "robothor/engine/skill_contract.py": 73,
     "robothor/engine/code_exec_guards.py": 116,
     # 122 -> 129: the same disclosure, said where the reaper is, because this
