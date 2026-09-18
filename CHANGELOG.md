@@ -1,3 +1,9 @@
+## [1.99.6](https://github.com/Ironsail-llc/genus-os/compare/v1.99.5...v1.99.6) (2026-09-18)
+
+### Bug Fixes
+
+* **systemd:** a deploy restarts each unit once; the engine stops cleanly ([#598](https://github.com/Ironsail-llc/genus-os/issues/598)) ([a3adcc4](https://github.com/Ironsail-llc/genus-os/commit/a3adcc4d4dda5ecb233e8aa897afcc5d2bc4e0a5)), closes [#1](https://github.com/Ironsail-llc/genus-os/issues/1) [#2](https://github.com/Ironsail-llc/genus-os/issues/2)
+
 ## [1.99.5](https://github.com/Ironsail-llc/genus-os/compare/v1.99.4...v1.99.5) (2026-09-17)
 
 ### Bug Fixes
