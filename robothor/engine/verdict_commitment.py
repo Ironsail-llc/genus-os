@@ -51,7 +51,7 @@ from robothor.engine.verdict_shapes import (
     hedges_the_verdict,
     item_ids,
     overrides_a_marker,
-    verdicts_in,
+    verdict_spans,
 )
 
 __all__ = [
@@ -159,23 +159,26 @@ def inspect_report(report_text: str | None, results_text: str | None = None) -> 
     for block in blocks(text):
         # Who each of the four shapes is ABOUT, rather than which block it was
         # written in. A block that names itself decides that item and merely
-        # mentions the others; a block that names no subject — a recap, a
-        # severity section with a bullet per item — attributes a verdict to
-        # every id in it and a CLAIM to the ids on the claim's own line.
-        # Measured twice on 2026-09-17: without the first rule a summary item's
-        # cross-reference filed two others under its verdict, and without the
-        # second one sentence about one item was reported against all six ids
-        # in a `## Notes & Recommendations` recap.
+        # mentions the others. A block that names no subject — a recap, a
+        # severity section with a bullet per item, an executive summary —
+        # attributes a HEADING's verdict to every id in it (the heading is the
+        # section's decision) and everything else to the ids in its own
+        # bullet, row or paragraph: a bolded lead's verdict, a hedge, a
+        # hand-back. Measured three times on 2026-09-17/18: a summary item's
+        # cross-reference filed two others under its verdict; one recap
+        # sentence about one item was reported against all six ids in the
+        # recap; and an executive summary's "**2 High** … **3 Low** items"
+        # filed the one item it went on to mention under three verdicts.
         ids = item_ids(block)
         subject = block_subject(block)
-        found = verdicts_in(block)
         asks_at = hands_the_verdict_back(block)
         hedge_at = hedges_the_verdict(block)
         override = overrides_a_marker(block)
         for item in ids:
             per_item.setdefault(item, set())
-        for item in claim_owners(block, subject, ids, -1) if found else ():
-            per_item[item].update(found)
+        for offset, in_heading, verdict in verdict_spans(block):
+            for item in claim_owners(block, subject, ids, -1 if in_heading else offset):
+                per_item[item].add(verdict)
         for item in claim_owners(block, subject, ids, asks_at) if asks_at >= 0 else ():
             handback[item] = True
         if hedge_at >= 0:
