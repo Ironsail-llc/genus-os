@@ -1,3 +1,9 @@
+## [1.100.1](https://github.com/Ironsail-llc/genus-os/compare/v1.100.0...v1.100.1) (2026-09-18)
+
+### Bug Fixes
+
+* **engine:** a second stop signal within the drain is the same stop, not a failure ([#600](https://github.com/Ironsail-llc/genus-os/issues/600)) ([ade9e58](https://github.com/Ironsail-llc/genus-os/commit/ade9e58780ec8cdfdcdbbca19c00b31dedbcca1c)), closes [#598](https://github.com/Ironsail-llc/genus-os/issues/598) [#598](https://github.com/Ironsail-llc/genus-os/issues/598)
+
 ## [1.100.0](https://github.com/Ironsail-llc/genus-os/compare/v1.99.6...v1.100.0) (2026-09-18)
 
 ### Features
