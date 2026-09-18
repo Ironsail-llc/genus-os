@@ -303,11 +303,8 @@ async def _execute_code(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     # its writes, the bodies it never printed are attached rather than
     # counted: the process that held them is dead, and a re-send is a
     # duplicate. Never both for the same call.
-    from robothor.engine.act_observe import (
-        lost_responses,
-        raw_http_responses,
-        unread_proxy_responses,
-    )
+    from robothor.engine.act_observe import unread_proxy_responses
+    from robothor.engine.http_evidence import lost_responses, raw_http_responses
 
     proxied = list(getattr(proxy, "responses", ()))[responses_from:]
     if result.timed_out or result.returncode != 0:

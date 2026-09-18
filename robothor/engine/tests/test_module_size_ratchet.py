@@ -393,7 +393,8 @@ CAPS = {
     # file is `OTHER` unless it is three to ten capitals, every URL goes
     # through `clean_url`, a program name is reduced to its safe characters,
     # and the recorder's `{"dropped": N}` marker is read (I3, M1).
-    "robothor/engine/code_exec_result.py": 312,
+    # 312 -> 318 (round 2, N4): that marker is bounded engine-side too.
+    "robothor/engine/code_exec_result.py": 318,
     # The observation cluster (2026-09-16), each piece capped at the size it was
     # written to and each one a separate question, for the reason the code-
     # sandbox cluster above is four modules: what the model SEES of a command's
@@ -458,7 +459,18 @@ CAPS = {
     # that is not one; `lost_responses` names a write whose body it never
     # had instead of saying nothing (M2). The extraction named above is now
     # overdue and is the next change here, not more lines.
-    "robothor/engine/act_observe.py": 629,
+    # 629 -> 379: and it was. At the second review round (N1-N3 all landed
+    # in the same forty lines) the raw-HTTP evidence cluster — `http_origin`,
+    # `clean_url`, `accepted_write`, `raw_http_responses`, `lost_responses`
+    # — left for http_evidence.py. What stays is what the module's docstring
+    # always said it was: a classification by name and text, with no payload
+    # behind it. The cap follows the file DOWN.
+    "robothor/engine/act_observe.py": 379,
+    # The evidence in a snippet's own HTTP, as the two sandbox recorders saw
+    # it, split from act_observe.py at review round 2 of #602 and pinned at
+    # the size it arrived. Every function here reads a record a hostile
+    # snippet can forge, and each probe the two rounds found is a test.
+    "robothor/engine/http_evidence.py": 325,
     # 469 -> 505 -> 285 -> 385 across one review round. The middle number is
     # the one that matters: at 505 the DELIVERY half left for
     # observation_notes.py, because "what happened" and "what the run is told
@@ -650,7 +662,13 @@ CAPS = {
     # rest is the hooks, the wrapper unwrapping (`sh -c`, `env`, `timeout`,
     # …), the redaction of credential-carrying values, and the reasons. If
     # it has to grow, the option tables leave for `_cli_options.py` first.
-    "robothor/engine/sandbox_runtime/spawn_recorder.py": 983,
+    # 983 -> 1038 (round 2, N5-N7): `bash -lc` and the other bundled `-c`
+    # spellings are unwrapped; a `>`/`>>`/`1>`/`&>` inside a shell segment
+    # marks the body as sent to a file (and `2>` does not); only argv[0]
+    # after unwrapping decides `unclassified`, with the runner list that
+    # says which programs execute their arguments. Fifty-five lines, each
+    # one a reviewer's probe; the option-table move stands as the next step.
+    "robothor/engine/sandbox_runtime/spawn_recorder.py": 1038,
     # The engine-side merge and summary of the spawn record: two pure
     # functions and the refusal/unobserved rules. Pinned at merge (M5).
     "robothor/engine/code_exec_spawns.py": 159,

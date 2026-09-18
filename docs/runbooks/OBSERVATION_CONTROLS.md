@@ -234,10 +234,17 @@ Two kinds of call, one rule:
   classification only; the string is what is recorded. **Wrappers are looked
   through**: `sh|bash|dash|zsh -c "…"` is split like a shell string, and a
   leading `env [VAR=…]`, `timeout [-k N] N`, `nice [-n N]`, `nohup`, `stdbuf`,
-  `sudo`, `setsid`, `ionice` is skipped, eight layers deep. `xargs curl`,
-  `find -exec curl` and anything else that names an HTTP CLI where its
-  arguments cannot be read are `unclassified` and surface under
-  `egress_unobserved` (the wrapper's name). Values of `-H`/`-u`/`-d`/`-F`/
+  `sudo`, `setsid`, `ionice`, `busybox` is skipped, eight layers deep;
+  `bash -lc`, `-ec`, `-euxc` (any bundle ending in `c`) count as `-c`. A
+  `>`, `>>`, `1>` or `&>` inside a curl's shell segment sends the body to a
+  file — `curl URL >/dev/null` credits no read — while `2>` is stderr and
+  does not. **Only argv[0] after unwrapping decides the program**: a `curl`
+  that is merely an argument (`true curl …`, a here-document fed to `cat`)
+  is nothing, and only a program that EXECUTES its arguments — `xargs`,
+  `find`, `parallel`, `watch`, `flock`, `chroot`, `nsenter`, `unshare`,
+  `script`, `strace`, `ltrace`, `su`, `runuser`, `fakeroot` — naming an HTTP
+  CLI is `unclassified` and surfaces under `egress_unobserved` (the runner's
+  name). Values of `-H`/`-u`/`-d`/`-F`/
   `--json`/`-b`/`--oauth2-bearer` and friends are replaced with `<redacted>`
   in the recorded argv head — an `Authorization` header never reaches the
   file. Record file `spawned.json`, per-thread tmp + atomic replace on every
@@ -283,7 +290,7 @@ Two kinds of call, one rule:
   wget's default file output, or a pipe that yielded nothing). From there
   `raw_http_responses`, the unread count, `ObservationLedger.
   _record_recorded_http` and "the recorder outranks the heuristic" apply
-  unchanged. **Acceptance** is one rule, `act_observe.accepted_write`: a
+  unchanged. **Acceptance** is one rule, `http_evidence.accepted_write`: a
   well-formed method (`^[A-Z]{3,10}$` — anything else the record file
   carries becomes `OTHER`, which is neither read nor write and is quoted to
   nobody), not `refused`, and either `status < 400` or — for a spawned call,
@@ -293,9 +300,17 @@ Two kinds of call, one rule:
   only to a `GET` whose body reached the snippet — not to a curl that exited
   non-zero, wrote to a file or yielded an empty pipe, and not to a `HEAD` or
   `OPTIONS`, which carry no content to have observed. Every URL entering
-  `http_calls` or a note goes through `act_observe.clean_url` (control
-  characters and whitespace removed, `[ ] \` " < > { } | \ ^` percent-
-  encoded, cut at 2,048), and a note quotes at most 200 characters of it.
+  `http_calls` or a note goes through `http_evidence.clean_url`: control
+  characters removed; for an `http(s)` URL with a hostname the netloc is
+  **rebuilt** from the parsed hostname and port — no userinfo (`alice:
+  hunter2@` never reaches the result), an IPv6 literal kept in its brackets
+  (`http://[::1]:9110/…` keeps its origin) — and only the path, query and
+  fragment are percent-encoded (`[ ] \` " < > { } | \ ^` and spaces);
+  anything without a valid hostname is quoted whole and yields no origin.
+  Cut at 2,048; a note quotes at most 200 characters of it. `OTHER` is
+  excluded from `raw_http_responses`, `unread_response_tools` and
+  `lost_responses` alike, and `spawned.dropped` is capped at 100 × the
+  recorder's own limit.
   Other spawns are summarised as `spawned: {count, programs}` (≤ 12 names,
   each reduced to `[A-Za-z0-9._+-]`), and when one is on the egress list —
   `ssh scp sftp rsync nc ncat socat sendmail mail mutt git openssl telnet ftp
@@ -776,7 +791,7 @@ does not apply to it because it carries no date to go stale.
 | Act-vs-observe classification, source tokens, unread-response rule (proxied and raw HTTP) | `robothor/engine/act_observe.py` |
 | In-sandbox recorder of the snippet's own HTTP (copied beside `genus_tools`) | `robothor/engine/sandbox_runtime/http_recorder.py`; loaded by `code_exec_result.recorded_http_calls` |
 | In-sandbox recorder of the snippet's child processes, the HTTP-CLI argv classifier | `robothor/engine/sandbox_runtime/spawn_recorder.py`; loaded by `code_exec_result.recorded_spawns`, merged and summarised by `robothor/engine/code_exec_spawns.py` |
-| `lost_responses` (a crash after writes keeps the bodies), `accepted_write` | `robothor/engine/act_observe.py`; called from `tools/handlers/code_exec.py` on a non-zero exit or timeout |
+| Evidence in the snippet's own HTTP: `accepted_write`, `http_origin`, `clean_url`, `raw_http_responses`, `lost_responses` (a crash after writes keeps the bodies) | `robothor/engine/http_evidence.py`; called from `tools/handlers/code_exec.py` and `observation_ledger.py` |
 | One-verdict-per-item ladder (task gate, re-ask, guardrail row) | `robothor/engine/verdict_commitment.py` |
 | What a verdict, a hand-back and a retraction look like on the page | `robothor/engine/verdict_shapes.py` |
 | How far a verdict reaches from the heading that assigns it | `robothor/engine/verdict_sections.py` |

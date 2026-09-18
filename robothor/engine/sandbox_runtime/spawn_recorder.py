@@ -121,8 +121,33 @@ EGRESS_TOOLS = frozenset(
 
 _HTTP_VERBS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"})
 _SHELL_SEPARATORS = frozenset({";", "&&", "||", "|", "&"})
-#: Shells whose `-c <string>` is looked through.
-_SHELLS = frozenset({"sh", "bash", "dash", "zsh", "ksh", "ash", "busybox"})
+#: Shells whose `-c <string>` is looked through — `-c` alone or bundled
+#: with other short flags and last (`-lc`, `-ec`, `-euxc`).
+_SHELLS = frozenset({"sh", "bash", "dash", "zsh", "ksh", "ash"})
+_SHELL_C = re.compile(r"^-[a-zA-Z]*c$")
+#: Programs that EXECUTE their arguments in a way this module cannot read
+#: (`xargs curl`, `find -exec curl`). Such a spawn is `unclassified` and the
+#: engine names it under `egress_unobserved`. Only argv[0] after unwrapping
+#: decides this: a `curl` that is merely an ARGUMENT (`true curl …`, a
+#: here-document fed to `cat`) is nothing (review N7).
+_RUNNERS = frozenset(
+    {
+        "xargs",
+        "find",
+        "parallel",
+        "watch",
+        "flock",
+        "chroot",
+        "nsenter",
+        "unshare",
+        "script",
+        "strace",
+        "ltrace",
+        "su",
+        "runuser",
+        "fakeroot",
+    }
+)
 #: Prefix programs that run the rest of their argv as a command. Each maps to
 #: the short flags that TAKE A VALUE (so the value is skipped too).
 _WRAPPERS: dict[str, str] = {
@@ -138,6 +163,7 @@ _WRAPPERS: dict[str, str] = {
     "setsid": "",
     "unbuffer": "",
     "time": "fo",
+    "busybox": "",
 }
 #: Flags whose VALUE is redacted from the argv head: credentials, cookies,
 #: request bodies. Matched on the flag's spelling; `--data=…` too.
@@ -624,53 +650,81 @@ def _to_file(program: str, args: list[str]) -> bool:
     return False
 
 
-def _shell_words(command: str) -> list[list[str]]:
-    """The simple commands of a shell string, best effort. A string that
-    ``shlex`` cannot split (an unbalanced quote) yields nothing."""
+#: Punctuation `shlex` hands back as its own tokens. `>`-family sends the
+#: command's stdout somewhere other than the pipe (review N6); `<`-family
+#: takes a target token this module drops; `(`/`)` are noise.
+_STDOUT_REDIRECTS = frozenset({">", ">>", "&>", ">&", "&>>", ">|"})
+_STDIN_REDIRECTS = frozenset({"<", "<<", "<<<", "<>"})
+
+
+def _shell_words(command: str) -> list[tuple[list[str], bool]]:
+    """The simple commands of a shell string, best effort, each with whether
+    its STDOUT was redirected. A string that ``shlex`` cannot split (an
+    unbalanced quote) yields nothing. ``2>/dev/null`` is stderr and does
+    not count; ``1>out``, ``>out``, ``>>out`` and ``&>out`` do."""
     try:
         lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
         tokens = list(lexer)
     except ValueError:
         return []
-    segments: list[list[str]] = [[]]
+    segments: list[tuple[list[str], bool]] = []
+    words: list[str] = []
+    redirected = False
+    skip_target = False
     for tok in tokens:
+        if skip_target:
+            skip_target = False
+            continue
         if tok in _SHELL_SEPARATORS:
-            segments.append([])
-        elif tok.startswith((">", "<", "2>")):
+            if words:
+                segments.append((words, redirected))
+            words, redirected = [], False
+        elif tok in _STDOUT_REDIRECTS:
+            fd = words.pop() if words and words[-1] in ("1", "2") else "1"
+            if fd == "1":
+                redirected = True
+            skip_target = True
+        elif tok in _STDIN_REDIRECTS:
+            skip_target = True
+        elif tok in ("(", ")"):
             continue
         else:
-            segments[-1].append(tok)
-    return [s for s in segments if s]
+            words.append(tok)
+    if words:
+        segments.append((words, redirected))
+    return segments
 
 
-def _unwrap(argv: list[str]) -> list[list[str]]:
+def _unwrap(argv: list[str], redirected: bool = False) -> list[tuple[list[str], bool]]:
     """The simple commands *argv* would run, looking through one layer of
-    wrapper at a time: ``sh -c "…"`` is split as a shell string; a leading
-    ``env``/``timeout``/``nice``/``nohup``/``stdbuf``/``sudo`` (with its own
-    flags and ``VAR=value`` assignments) is skipped. Bounded at eight layers;
-    ``xargs``, ``find -exec``, ``parallel`` and the like are not read."""
-    commands = [list(argv)]
-    out: list[list[str]] = []
+    wrapper at a time: ``sh -c "…"`` (``-c`` alone or bundled last, as in
+    ``bash -lc``) is split as a shell string; a leading ``env``/``timeout``/
+    ``nice``/``nohup``/``stdbuf``/``sudo``/``busybox`` (with its own flags
+    and ``VAR=value`` assignments) is skipped. Bounded at eight layers;
+    ``xargs``, ``find -exec``, ``parallel`` and the like are not read. Each
+    command carries whether its stdout was redirected inside a shell."""
+    commands = [(list(argv), redirected)]
+    out: list[tuple[list[str], bool]] = []
     depth = 0
     while commands and depth < 8:
         depth += 1
-        nxt: list[list[str]] = []
-        for command in commands:
+        nxt: list[tuple[list[str], bool]] = []
+        for command, redir in commands:
             if not command:
                 continue
             head = _program(command[0])
-            if head in _SHELLS and "-c" in command[1:3]:
-                at = command.index("-c")
-                if at + 1 < len(command):
-                    nxt.extend(_shell_words(command[at + 1]))
+            if head in _SHELLS:
+                at = next((i for i, t in enumerate(command[1:], 1) if _SHELL_C.match(t)), None)
+                if at is not None and at + 1 < len(command):
+                    nxt.extend((words, redir or r) for words, r in _shell_words(command[at + 1]))
                     continue
             if head in _WRAPPERS:
                 rest = _strip_wrapper(command[1:], _WRAPPERS[head])
                 if rest:
-                    nxt.append(rest)
+                    nxt.append((rest, redir))
                     continue
-            out.append(command)
+            out.append((command, redir))
         commands = nxt
     return out + commands
 
@@ -735,21 +789,21 @@ def _describe(argv: Any, shell: bool) -> dict[str, Any]:
     if isinstance(argv, (str, bytes, os.PathLike)):
         text = argv if isinstance(argv, str) else os.fsdecode(argv)
         tokens = [_redact_string(text)]
-        words = _shell_words(text) if shell else [[text]]
+        words = _shell_words(text) if shell else [([text], False)]
     else:
         raw = [a if isinstance(a, str) else os.fsdecode(a) for a in list(argv or [])]
         tokens = _redact_argv(raw)
-        words = [raw]
-    commands = [c for w in words for c in _unwrap(w)]
-    program, method, url, matched = "", "", "", []
-    for command in commands:
+        words = [(raw, False)]
+    commands = [c for w, r in words for c in _unwrap(w, r)]
+    program, method, url, matched, redirected = "", "", "", [], False
+    for command, redir in commands:
         cli, rest = _http_command(command)
         if cli:
-            program, matched = cli, rest
+            program, matched, redirected = cli, rest, redir
             method, url = classify(command)
             break
-    if not program and commands and commands[0]:
-        program = _program(commands[0][0])
+    if not program and commands and commands[0][0]:
+        program = _program(commands[0][0][0])
     rec: dict[str, Any] = {
         "argv_head": [t[:MAX_ARGV_TOKEN_CHARS] for t in tokens[:MAX_ARGV_HEAD]],
         "program": program[:64],
@@ -760,7 +814,7 @@ def _describe(argv: Any, shell: bool) -> dict[str, Any]:
         "body": b"",
         "shell": bool(shell),
         "http": program in HTTP_CLIS,
-        "to_file": bool(program in HTTP_CLIS and _to_file(program, matched)),
+        "to_file": bool(program in HTTP_CLIS and (redirected or _to_file(program, matched))),
         "fail_flag": False,
         "t": time.monotonic(),
     }
@@ -769,12 +823,13 @@ def _describe(argv: Any, shell: bool) -> dict[str, Any]:
         rec["fail_flag"] = bool({"-f", "--fail", "--fail-with-body"} & set(flags))
     if program in HTTP_CLIS and not url:
         rec["unclassified"] = True
-    elif program not in HTTP_CLIS and any(
-        _program(tok) in HTTP_CLIS for command in commands for tok in command[1:]
+    elif program in _RUNNERS and any(
+        _program(tok) in HTTP_CLIS for command, _r in commands for tok in command[1:]
     ):
-        # `xargs curl …`, `find -exec curl …`: an HTTP CLI is named where
-        # this module cannot read its arguments. It happened; it cannot be
-        # classified — and the engine says so rather than nothing.
+        # `xargs curl …`, `find -exec curl …`: a program that executes its
+        # arguments names an HTTP CLI whose arguments this module cannot
+        # read. It happened; it cannot be classified — and the engine says
+        # so rather than nothing. Only argv[0] decides (review N7).
         rec["unclassified"] = True
     return rec
 

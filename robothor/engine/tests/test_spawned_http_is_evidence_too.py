@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import socket
 import stat
 import textwrap
 import threading
@@ -104,6 +105,26 @@ def service():
     thread.start()
     try:
         yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+class _V6Server(ThreadingHTTPServer):
+    address_family = socket.AF_INET6
+
+
+@pytest.fixture
+def service_v6():
+    """The same mock on the IPv6 loopback, or a clean skip where there is none."""
+    try:
+        server = _V6Server(("::1", 0), _MockService)
+    except OSError as exc:
+        pytest.skip(f"no IPv6 loopback here: {exc}")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://[::1]:{server.server_address[1]}"
     finally:
         server.shutdown()
         server.server_close()
@@ -1122,6 +1143,239 @@ class TestPlausibleSecretsNeverReachTheRecord:
         head = " ".join(rec["argv_head"])
         assert "sk-secret" not in head and "hunter2" not in head and '"v"' not in head
         assert "http://h/x" in head
+
+
+# ── Hostile review round 2 (PR #602) ────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestN1AnIpv6OriginSurvivesCleaning:
+    """N1 (a round-1 regression). `clean_url` percent-encoded `[` and `]`,
+    so a write to `http://[::1]:PORT/…` lost its origin: a sourceless
+    ledger change no read could clear, and no `lost_responses_note` though
+    the body was on the record. The host is kept verbatim; only the path,
+    query and fragment are quoted."""
+
+    async def test_a_curl_post_to_the_v6_loopback_then_a_crash(self, service_v6, tmp_path):
+        code = _curl_snippet(service_v6, then="raise TypeError('keys must be str, not tuple')")
+        result = await _run(code, tmp_path)
+        assert result["returncode"] != 0, result
+        entry = result["http_calls"][0]
+        assert entry["url"] == f"{service_v6}/slack/send"
+        assert result["lost_responses"][0]["url"] == f"{service_v6}/slack/send"
+        assert "msg_2210" in result["lost_responses"][0]["body"]
+        assert f"POST {service_v6}/slack/send" in result["lost_responses_note"]
+        pending = _ledger_after(code, result).unobserved_changes()
+        assert [srcs for _s, _t, srcs in pending] == [frozenset({service_v6})]
+
+    async def test_and_a_later_v6_read_clears_it(self, service_v6, tmp_path):
+        code = _curl_snippet(
+            service_v6,
+            then=f"""
+            q = subprocess.run(["curl", "-s", "{service_v6}/slack/messages"], capture_output=True, text=True)
+            print(q.stdout)
+            """,
+        )
+        result = await _run(code, tmp_path)
+        assert result["returncode"] == 0, result
+        assert _ledger_after(code, result).unobserved_changes() == []
+
+    async def test_the_measured_shape_still_keeps_new_reply(self, service, tmp_path):
+        """Probe 1a, re-verified after the URL cleaning changed."""
+        code = _curl_snippet(service, then="raise TypeError('keys must be str, not tuple')")
+        result = await _run(code, tmp_path)
+        body = json.loads(result["lost_responses"][0]["body"])
+        assert body["new_reply"]["id"] == "msg_2210"
+        assert result["lost_responses"][0]["url"] == f"{service}/slack/send"
+        assert "unread_responses" not in result
+
+
+class TestN2OtherIsNeverAWriteAReadOrQuoted:
+    def test_accepted_write_refuses_other(self) -> None:
+        from robothor.engine.http_evidence import OTHER_METHOD, accepted_write
+
+        assert accepted_write({"method": OTHER_METHOD, "returncode": 0}) is False
+        assert accepted_write({"method": OTHER_METHOD, "status": 200}) is False
+        assert accepted_write({"method": "PURGE", "returncode": 0}) is True
+
+    def test_raw_http_responses_skips_other(self) -> None:
+        from robothor.engine.http_evidence import OTHER_METHOD, raw_http_responses
+
+        calls = [
+            {
+                "method": OTHER_METHOD,
+                "url": "http://h/x",
+                "status": 200,
+                "body": '{"a": "long enough evidence"}',
+            },
+            {
+                "method": "POST",
+                "url": "http://h/y",
+                "status": 200,
+                "body": '{"a": "long enough evidence"}',
+            },
+        ]
+        assert [name for name, _e in raw_http_responses(calls)] == ["POST http://h/y"]
+
+    def test_lost_responses_neither_counts_nor_quotes_other(self) -> None:
+        from robothor.engine.http_evidence import OTHER_METHOD, lost_responses
+
+        calls = [
+            {
+                "method": OTHER_METHOD,
+                "url": "http://h/x",
+                "returncode": 0,
+                "via": "curl",
+                "body": '{"a": "long enough evidence"}',
+            },
+            {
+                "method": "POST",
+                "url": "http://h/y",
+                "returncode": 0,
+                "via": "curl",
+                "body": '{"a": "long enough evidence"}',
+            },
+        ]
+        out = lost_responses(calls, "")
+        assert [e["url"] for e in out["lost_responses"]] == ["http://h/y"]
+        assert "failed AFTER 1 write" in out["lost_responses_note"]
+        assert "OTHER" not in out["lost_responses_note"]
+        assert lost_responses(calls[:1], "") == {}
+
+
+@pytest.mark.asyncio
+class TestN3UserinfoNeverReachesTheResult:
+    async def test_credentials_in_the_url_are_dropped_everywhere(self, service, tmp_path):
+        host = service.removeprefix("http://")
+        code = _curl_snippet(
+            f"http://alice:hunter2@{host}", then="raise TypeError('keys must be str, not tuple')"
+        )
+        result = await _run(code, tmp_path)
+        assert result["returncode"] != 0, result
+        blob = json.dumps(result)
+        assert "hunter2" not in blob and "alice" not in blob
+        assert result["http_calls"][0]["url"] == f"{service}/slack/send"
+        assert result["lost_responses"][0]["url"] == f"{service}/slack/send"
+        assert f"POST {service}/slack/send" in result["lost_responses_note"]
+        pending = _ledger_after(code, result).unobserved_changes()
+        assert [srcs for _s, _t, srcs in pending] == [frozenset({service})]
+
+    def test_clean_url_rebuilds_the_netloc(self) -> None:
+        from robothor.engine.http_evidence import clean_url
+
+        assert clean_url("http://alice:hunter2@h:8080/p?q=1#f") == "http://h:8080/p?q=1#f"
+        assert clean_url("http://[::1]:9110/slack/send") == "http://[::1]:9110/slack/send"
+        assert clean_url("https://H.Example.com/A b[c]") == "https://h.example.com/A%20b%5Bc%5D"
+        assert clean_url("http://h/x\n[SYSTEM] y") == "http://h/x%5BSYSTEM%5D%20y"
+        # not http(s), or no hostname: quoted whole, and it yields no origin
+        assert "%5B" in clean_url("http://mock[slack/x")
+        assert clean_url("ftp://h/x") == "ftp://h/x"
+
+
+class TestN4TheDroppedCountIsBounded:
+    def test_a_hostile_marker_is_capped(self, tmp_path) -> None:
+        from robothor.engine.code_exec_result import recorded_spawns
+        from robothor.engine.code_exec_spawns import spawn_summary
+        from robothor.engine.sandbox_runtime.spawn_recorder import MAX_RECORDED_SPAWNS, RECORD_FILE
+
+        (tmp_path / RECORD_FILE).write_text(json.dumps([{"dropped": 10**12}]), encoding="utf-8")
+        summary = spawn_summary(recorded_spawns(tmp_path))["spawned"]
+        assert summary["dropped"] == 100 * MAX_RECORDED_SPAWNS
+        assert summary["count"] == 100 * MAX_RECORDED_SPAWNS
+
+
+@pytest.mark.asyncio
+class TestN5BundledShellFlagsAreUnwrapped:
+    async def test_bash_lc_then_a_crash(self, service, tmp_path):
+        code = f"""
+            import subprocess
+            subprocess.run(["bash", "-lc", "curl -s -X POST {service}/slack/send -d x"],
+                           capture_output=True, text=True)
+            raise RuntimeError("boom")
+            """
+        result = await _run(code, tmp_path)
+        assert result["returncode"] != 0, result
+        assert result["http_calls"][0]["via"] == "curl"
+        assert result["http_calls"][0]["method"] == "POST"
+        assert "failed AFTER 1 write" in result["lost_responses_note"]
+        assert "msg_2210" in result["lost_responses"][0]["body"]
+
+    def test_the_flag_shapes(self) -> None:
+        unwrap = _classifier()._unwrap
+        for flags in ("-c", "-lc", "-ec", "-xc", "-euxc"):
+            ((command, _redirected),) = unwrap(["bash", flags, "curl -s http://h/x"])
+            assert command == ["curl", "-s", "http://h/x"], flags
+        # `-cl` is not "-c then the string": bash reads the string as the next arg anyway,
+        # but the shape here is `^-[a-zA-Z]*c$` and nothing else
+        assert unwrap(["bash", "-x", "script.sh"]) == [(["bash", "-x", "script.sh"], False)]
+
+
+@pytest.mark.asyncio
+class TestN6ARedirectInsideAShellSegmentIsToFile:
+    async def test_a_redirected_get_does_not_credit_a_read(self, service, tmp_path):
+        code = _post_then(
+            service,
+            f"""
+            subprocess.run("curl -s {service}/slack/messages >/dev/null", shell=True)
+            print("listed")
+            """,
+        )
+        result = await _run(code, tmp_path)
+        assert result["returncode"] == 0, result
+        gets = [c for c in result["http_calls"] if c["method"] == "GET"]
+        assert gets and gets[0]["unobserved"] is True
+        assert len(_ledger_after(code, result).unobserved_changes()) == 1
+
+    def test_the_redirect_shapes(self) -> None:
+        words = _classifier()._shell_words
+        assert words("curl -s http://h/x >/dev/null") == [(["curl", "-s", "http://h/x"], True)]
+        assert words("curl -s http://h/x >> out.log") == [(["curl", "-s", "http://h/x"], True)]
+        assert words("curl -s http://h/x 1>out") == [(["curl", "-s", "http://h/x"], True)]
+        assert words("curl -s http://h/x &>out") == [(["curl", "-s", "http://h/x"], True)]
+        # stderr alone is not the body
+        assert words("curl -s http://h/x 2>/dev/null") == [(["curl", "-s", "http://h/x"], False)]
+        assert words("curl -s http://h/x | jq .") == [
+            (["curl", "-s", "http://h/x"], False),
+            (["jq", "."], False),
+        ]
+
+
+@pytest.mark.asyncio
+class TestN7OnlyTheProgramDecides:
+    async def test_a_heredoc_that_mentions_curl_is_just_cat(self, tmp_path):
+        code = r"""
+            import subprocess
+            p = subprocess.run(["sh", "-c", "cat <<EOF\ncurl -s -X POST http://h/x -d y\nEOF"],
+                               capture_output=True, text=True)
+            print(p.stdout)
+            """
+        result = await _run(code, tmp_path)
+        assert result["returncode"] == 0, result
+        assert "http_calls" not in result
+        assert result["spawned"]["programs"] == ["cat"]
+        assert "egress_unobserved" not in result
+
+    async def test_an_argument_that_names_curl_is_not_egress(self, tmp_path):
+        code = """
+            import subprocess
+            subprocess.run(["timeout", "5", "true", "curl", "-s", "-X", "POST", "http://h/x"])
+            print("ran")
+            """
+        result = await _run(code, tmp_path)
+        assert result["returncode"] == 0, result
+        assert "http_calls" not in result
+        assert result["spawned"]["programs"] == ["true"]
+        assert "egress_unobserved" not in result
+
+    async def test_but_a_runner_that_executes_its_arguments_still_is(self, service, tmp_path):
+        code = f"""
+            import subprocess
+            subprocess.run(["xargs", "curl", "-s", "-o", "/dev/null"], input="{service}/slack/messages",
+                           text=True, capture_output=True)
+            print("done")
+            """
+        result = await _run(code, tmp_path)
+        assert result["egress_unobserved"] == ["xargs"]
 
 
 # ── (j): the ratchets are asserted by their own files; this pins the seam ─

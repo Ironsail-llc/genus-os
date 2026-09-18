@@ -24,9 +24,9 @@ import re
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from robothor.engine.act_observe import OTHER_METHOD, clean_url
 from robothor.engine.code_exec_process import MAX_TIMEOUT_SECONDS
 from robothor.engine.code_execution import MAX_STDERR_BYTES, SandboxResult, truncate_with_marker
+from robothor.engine.http_evidence import OTHER_METHOD, clean_url
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -82,6 +82,10 @@ MAX_RECORD_BYTES = 1_048_576
 #: How many distinct `(method, url, status)` lines the result lists. Past
 #: this the most recent are kept and one marker says how many were elided.
 MAX_HTTP_CALL_ENTRIES = 50
+
+#: The largest `spawned.dropped` the result will repeat from the record, as
+#: a multiple of the recorder's own cap.
+MAX_DROPPED_MULTIPLIER = 100
 
 
 def _read_record(tools_dir: Path, name: str) -> list[Any] | None:
@@ -162,8 +166,10 @@ def recorded_spawns(tools_dir: Path) -> list[dict[str, Any]] | None:
         if not isinstance(item, dict):
             continue
         if "dropped" in item and len(item) == 1:
-            # The recorder's own marker: how many spawns fell past its cap.
-            spawns.append({"dropped": max(0, _integer(item["dropped"]) or 0)})
+            # The recorder's own marker: how many spawns fell past its cap —
+            # bounded here too, because the file could say anything (N4).
+            dropped = max(0, _integer(item["dropped"]) or 0)
+            spawns.append({"dropped": min(dropped, MAX_DROPPED_MULTIPLIER * MAX_RECORDED_SPAWNS)})
             continue
         argv = item.get("argv_head")
         spawns.append(

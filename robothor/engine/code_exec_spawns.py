@@ -86,7 +86,7 @@ def merge_spawned_http(
 
     A spawned entry carries ``via`` (the program), ``returncode`` and — when
     it exited 0 with no status line to read but its body says the service
-    refused — ``refused: True``, which :func:`act_observe.accepted_write`
+    refused — ``refused: True``, which :func:`http_evidence.accepted_write`
     reads. Its ``status`` stays ``None``: a 200 is never invented from an
     exit code. One whose exit the recorder never learned is ``outcome:
     "unknown"`` — witnessed as an attempt, not as a result, so it neither

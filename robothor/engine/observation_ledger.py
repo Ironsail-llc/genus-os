@@ -42,16 +42,14 @@ from typing import Any
 
 from robothor.engine.act_observe import (
     CHANGE,
-    OTHER_METHOD,
     READ,
     SAFE_METHODS,
-    accepted_write,
     classify,
-    http_origin,
     remote_tokens,
     source_tokens,
 )
 from robothor.engine.exec_spill import READBACK_TOOLS, spill_paths_in
+from robothor.engine.http_evidence import OTHER_METHOD, accepted_write, http_origin
 
 logger = logging.getLogger(__name__)
 
