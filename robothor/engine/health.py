@@ -7,6 +7,7 @@ and last run per agent.
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 import logging
 import os
@@ -18,6 +19,8 @@ from robothor.engine.models import TriggerType
 from robothor.engine.sanitize import sanitize_log
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from fastapi import FastAPI
 
     from robothor.engine.config import EngineConfig
@@ -1709,6 +1712,39 @@ def create_health_app(
     return app
 
 
+def _health_server_class() -> type:
+    """The ``uvicorn.Server`` this process serves on: one that never touches
+    the process's signal dispositions.
+
+    ``Server.serve`` wraps itself in ``capture_signals()``: a ``signal.signal``
+    handler for SIGTERM/SIGINT installed over whatever was there, and — on the
+    way out — every signal it caught re-raised with ``signal.raise_signal``.
+    In a process whose stop is owned by the daemon's loop handler
+    (``daemon._install_shutdown_signals``) that is a second delivery of the
+    same signal: one SIGTERM from systemd trips the loop's wakeup fd AND
+    uvicorn's handler, and ~100 ms later, as ``serve()`` unwinds, uvicorn
+    raises it again. On 2026-09-17 the daemon read that echo as a human
+    insisting, exited 1 and paged (tests/test_daemon_signal_echo.py).
+
+    uvicorn has no configuration switch for this; overriding the method is the
+    supported seam. With it inert the daemon's handler is the process's only
+    disposition — the health server keeps answering during the drain and is
+    cancelled with the other subsystem tasks at the end of it, exactly like
+    the Telegram poller since ``handle_signals=False``.
+
+    Built lazily because ``uvicorn`` is imported lazily here, and a module-level
+    subclass would move that import to every reader of this module.
+    """
+    import uvicorn
+
+    class _HealthServer(uvicorn.Server):
+        @contextlib.contextmanager
+        def capture_signals(self) -> Iterator[None]:
+            yield
+
+    return _HealthServer
+
+
 async def serve_health(
     config: EngineConfig,
     runner: AgentRunner | None = None,
@@ -1734,5 +1770,5 @@ async def serve_health(
         port=config.port,
         log_level="warning",
     )
-    server = uvicorn.Server(uvi_config)
+    server = _health_server_class()(uvi_config)
     await server.serve()

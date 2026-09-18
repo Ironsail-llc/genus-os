@@ -21,6 +21,7 @@ import signal
 import socket
 import sys
 import time
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -40,6 +41,8 @@ from robothor.engine.workflow import WorkflowEngine
 from robothor.plugins import reload_plugins
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from robothor.engine.resume import ResumeCandidate
     from robothor.engine.schedule_reconcile import ReconcileResult
 
@@ -948,21 +951,69 @@ def _force_exit(code: int) -> None:
     os._exit(code)
 
 
-def _request_stop(stop: asyncio.Event, sig: signal.Signals) -> None:
-    """Two strikes. The first signal records the stop and nothing else; a
-    second one during the drain is a human insisting — a developer at a hung
-    drain, an operator's repeated ``kill`` — and ends the process now (130 for
-    SIGINT, as a shell reports a Ctrl-C death; 1 otherwise) rather than setting
-    an already-set event and going quiet. Under systemd exit 1 is a failure
-    and OnFailure= pages — deliberately: systemd itself never sends a second
-    SIGTERM (it SIGKILLs at TimeoutStopSec), so a second signal means someone
-    insisted on cutting a drain short, and that should be seen."""
-    if stop.is_set():
-        logger.warning("Received %s again during shutdown — second signal — exiting now", sig.name)
-        _force_exit(130 if sig == signal.SIGINT else 1)
+#: A second stop signal this soon after the first is the first one again,
+#: echoed through the process — not a human insisting. 2026-09-17, one deploy
+#: after the two-strikes handler shipped: systemd sent ONE SIGTERM, uvicorn's
+#: ``capture_signals`` had recorded it with a ``signal.signal`` handler of its
+#: own and re-raised it 138 ms later as ``serve()`` unwound, the handler saw
+#: "a second signal", ``_force_exit(1)`` ran, OnFailure paged
+#: (tests/test_daemon_signal_echo.py). Humans do not repeat a ``kill`` inside
+#: two seconds; a library, a process group or a ``killpg`` can deliver the same
+#: stop twice inside a few hundred milliseconds. Short, because the whole
+#: drain has TimeoutStopSec=15 and a developer at a hung drain must not wait
+#: long for the second strike to count.
+STOP_SIGNAL_ECHO_WINDOW_SECONDS = 2.0
+
+
+@dataclass
+class _StopRequest:
+    """What ``_request_stop`` is bound to: the stop flag ``main`` waits on, when
+    the first signal landed (monotonic), and the clock that says so — a field
+    so a test can move time rather than sleep through the window."""
+
+    event: asyncio.Event
+    first_at: float | None = None
+    clock: Callable[[], float] = field(default=time.monotonic)
+
+
+def _request_stop(req: _StopRequest, sig: signal.Signals) -> None:
+    """Record the stop; decide what a repeat means.
+
+    The first signal sets the event and nothing else — ``main`` turns it into
+    the ordinary drain. A repeat within ``STOP_SIGNAL_ECHO_WINDOW_SECONDS`` is
+    the same stop arriving again (see the constant) and is a debug line. A
+    repeat later than that, during a drain that is still running, is a human
+    insisting — a developer at a hung drain, an operator's second ``kill`` —
+    and ends the process now rather than setting an already-set event and
+    going quiet. It exits 0 for SIGTERM: a deliberate second kill is not a
+    service failure, and exit 1 under systemd is OnFailure and a page. The
+    page is for crashes; a drain that outlives TimeoutStopSec is still
+    SIGKILLed by systemd and still pages on its own. SIGINT exits 130, the
+    code a shell reports for a Ctrl-C death — a shell convention, kept.
+    """
+    now = req.clock()
+    if not req.event.is_set():
+        req.first_at = now
+        logger.info("Received %s — stopping", sig.name)
+        req.event.set()
         return
-    logger.info("Received %s — stopping", sig.name)
-    stop.set()
+    since_first = now - (req.first_at if req.first_at is not None else now)
+    if since_first < STOP_SIGNAL_ECHO_WINDOW_SECONDS:
+        logger.debug(
+            "Received %s again %.0f ms after the first — the same stop echoing "
+            "through the process, not a second one; ignored",
+            sig.name,
+            since_first * 1000,
+        )
+        return
+    code = 130 if sig == signal.SIGINT else 0
+    logger.warning(
+        "Received %s again %.1f s into the drain — second signal — exiting now (%d)",
+        sig.name,
+        since_first,
+        code,
+    )
+    _force_exit(code)
 
 
 def _install_shutdown_signals() -> asyncio.Event:
@@ -983,6 +1034,14 @@ def _install_shutdown_signals() -> asyncio.Event:
     which it does anything. ``TelegramBot.start_polling`` now passes
     ``handle_signals=False`` and this is the process's only disposition.
 
+    uvicorn was the same disease one layer down: ``Server.serve`` wraps itself
+    in ``capture_signals``, a ``signal.signal`` handler over the top of this
+    one that re-raises what it caught when the server unwinds — so one SIGTERM
+    reached ``_request_stop`` twice, 138 ms apart, on 2026-09-17. The health
+    server now runs on ``health._health_server_class()``, whose ``capture_signals`` is
+    inert, and ``_request_stop`` treats a repeat inside
+    ``STOP_SIGNAL_ECHO_WINDOW_SECONDS`` as the echo it is either way.
+
     The handler does the least a handler can: it sets an event. ``main`` waits
     on that event alongside the subsystem tasks, so a signal takes the ordinary
     shutdown path — drain, stop, exit 0 — and nothing runs in signal context.
@@ -990,17 +1049,17 @@ def _install_shutdown_signals() -> asyncio.Event:
     ``run``'s handler for that stays for the two cases that still can raise it
     — a Ctrl-C before this runs, and a loop that cannot install handlers.
     """
-    stop = asyncio.Event()
+    req = _StopRequest(event=asyncio.Event())
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:  # no loop (a test, the CLI): nothing to install on
-        return stop
+        return req.event
     for sig in (signal.SIGTERM, signal.SIGINT):
         # Not every platform implements add_signal_handler. A daemon with no
         # handler is what we had; it must not be a daemon that fails to start.
         with contextlib.suppress(NotImplementedError, RuntimeError, ValueError):
-            loop.add_signal_handler(sig, _request_stop, stop, sig)
-    return stop
+            loop.add_signal_handler(sig, _request_stop, req, sig)
+    return req.event
 
 
 async def _announce_shutdown(config: Any) -> None:
@@ -2405,7 +2464,8 @@ def run() -> None:
     except KeyboardInterrupt:
         # Reachable only before _install_shutdown_signals owns SIGINT, or on a
         # loop that cannot install handlers; afterwards a Ctrl-C is a clean
-        # stop and a second one is _force_exit. Either way: quiet, and zero.
+        # stop and a second one past the echo window is _force_exit(130).
+        # Either way: quiet, and zero.
         return
     except Exception as e:
         logger.error("Engine crashed: %s", e, exc_info=True)

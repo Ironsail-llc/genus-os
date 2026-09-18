@@ -217,9 +217,19 @@ sudo systemctl kill -s SIGKILL robothor-vision
 
 The engine's own stop path is separately budgeted to fit inside its
 `TimeoutStopSec=15` (`robothor/engine/shutdown_budget.py`): announce 2 s, drain
-7 s, dispatcher stop 3 s, 3 s margin for the rest. A second SIGTERM or Ctrl-C
-during that drain forces the exit (`second signal — exiting now`) instead of
-being swallowed.
+7 s, dispatcher stop 3 s, 3 s margin for the rest. A stop signal that arrives
+again within 2 s of the first (`STOP_SIGNAL_ECHO_WINDOW_SECONDS`,
+`robothor/engine/daemon.py`) is the same stop echoing through the process and
+is ignored at debug level — the 2026-09-17 deploy page after the two-strikes
+handler shipped was exactly that: systemd sent one SIGTERM, uvicorn's
+`capture_signals` re-raised it 138 ms later, and the engine exited 1. The
+health server no longer captures signals at all
+(`robothor/engine/tests/test_daemon_signal_echo.py`). A second SIGTERM or
+Ctrl-C **later** than that window, during a drain that is still running, is a
+human insisting and forces the exit (`second signal — exiting now`) — with exit
+0 for SIGTERM, so a deliberate repeated `kill` does not page, and 130 for
+Ctrl-C. A drain that outlives `TimeoutStopSec` is still SIGKILLed by systemd
+and still pages.
 
 ## Reading `reap_category` on a reaped run
 
