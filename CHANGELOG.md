@@ -1,3 +1,9 @@
+## [1.100.2](https://github.com/Ironsail-llc/genus-os/compare/v1.100.1...v1.100.2) (2026-09-18)
+
+### Bug Fixes
+
+* **engine:** a summary that counts categories is not a verdict on an item ([#601](https://github.com/Ironsail-llc/genus-os/issues/601)) ([0ba9410](https://github.com/Ironsail-llc/genus-os/commit/0ba94106fe80c61deff3ce3da313d841f7031e04)), closes [#597](https://github.com/Ironsail-llc/genus-os/issues/597) [#597](https://github.com/Ironsail-llc/genus-os/issues/597)
+
 ## [1.100.1](https://github.com/Ironsail-llc/genus-os/compare/v1.100.0...v1.100.1) (2026-09-18)
 
 ### Bug Fixes
