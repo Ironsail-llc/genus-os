@@ -44,6 +44,7 @@ from robothor.engine.act_observe import (
     CHANGE,
     READ,
     SAFE_METHODS,
+    accepted_write,
     classify,
     http_origin,
     remote_tokens,
@@ -153,14 +154,22 @@ class ObservationLedger:
         is the false positive that gets a control ignored.
         """
         if isinstance(output, dict) and output.get("error"):
+            # Unless a recorder WATCHED the call change something before it
+            # failed. An `execute_code` that timed out after its `curl` POSTs
+            # completed carries `error` for the timeout and `http_calls` for
+            # the writes; a crash is not a rollback (measured 2026-09-18: the
+            # snippet failed one line after eighteen writes took effect).
+            self._record_recorded_http(step, tool, output)
             return
         sources = source_tokens(args)
         # What the sandbox recorder SAW outranks what the snippet's text
         # suggests: a snippet whose writes went through `urllib` is classified
         # from its actual requests, against their origin, not from a regex
-        # over its source. The heuristic still speaks when the recorder saw no
-        # write — a `subprocess.run(["curl", "-X", "POST", …])` is invisible
-        # to an `http.client` hook and visible to the verb regex.
+        # over its source — and a `subprocess.run(["curl", "-X", "POST", …])`
+        # is classified from the spawn recorder's reading of that argv, merged
+        # into the same `http_calls`. The heuristic still speaks when neither
+        # recorder saw a write: a recorder that failed to install, or an HTTP
+        # client neither hooks (`httpx`, a child `python3 -c`).
         if self._record_recorded_http(step, tool, output):
             self._resolve(tool, args, sources, output)
             self._register_truncations(step, tool, sources, output)
@@ -226,7 +235,7 @@ class ObservationLedger:
             # than dropped, which in a mixed snippet left the named write
             # standing alone as if it were the only one.
             attempted = True
-            if int(call.get("status") or 0) < 400:
+            if accepted_write(call):
                 writes.append((index, origin, max(1, int(call.get("count") or 1))))
         for index, origin, count in writes:
             if origin and any(i > index and o == origin for i, o in reads):

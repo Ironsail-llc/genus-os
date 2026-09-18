@@ -16,7 +16,11 @@ Where it hooks: ``http.client``, the one layer ``urllib`` and ``requests``
 (through ``urllib3``) both go through, and the lowest one that still knows the
 method and the URL. ``httpx`` speaks ``h11`` over its own sockets and is not
 seen here; a snippet using it is recorded by nothing, which fails in the
-direction of silence rather than a false report.
+direction of silence rather than a false report. A ``curl`` the snippet SPAWNS
+never enters this interpreter's HTTP stack at all — that is
+``spawn_recorder.py``'s subject, installed right after this one, and the
+engine merges the two records into one ``http_calls`` list ordered by the
+``t`` each entry carries.
 
 What it records: ``(method, url, status, body head, truncated)`` per
 exchange, the body as the snippet consumed it THROUGH THIS LAYER — a body the
@@ -39,6 +43,7 @@ import atexit
 import contextlib
 import http.client
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -123,6 +128,10 @@ def flush() -> None:
                     # although it was printed in full.
                     "truncated": len(text) > MAX_RECORDED_BODY_CHARS
                     or len(rec["body"]) >= MAX_RECORDED_BODY_CHARS * 4,
+                    # When the response arrived, on the same clock the spawn
+                    # recorder stamps a finished child with, so the engine can
+                    # merge the two records in the order things completed.
+                    "t": rec.get("t", 0.0),
                 }
             )
         tmp = _path.with_suffix(".tmp")
@@ -199,7 +208,13 @@ def install(path: str) -> None:
         with contextlib.suppress(Exception):
             pending = getattr(self, "_genus_pending", None)
             if pending is not None and len(_records) < MAX_RECORDED_CALLS:
-                rec = {"method": pending[0], "url": pending[1], "status": 0, "body": b""}
+                rec = {
+                    "method": pending[0],
+                    "url": pending[1],
+                    "status": 0,
+                    "body": b"",
+                    "t": time.monotonic(),
+                }
                 _records.append(rec)
                 _attach(response, rec)
                 flush()

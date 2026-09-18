@@ -546,6 +546,7 @@ code, or the channel to the engine is gone.
 | Interpreter | Isolated (`-I`: no `PYTHONPATH`, no user site) with an import guard that refuses `robothor`, `crm`, `psycopg2`, `litellm` and `redis`. The guard is defence in depth, not the boundary — the boundary is that the environment holds nothing worth importing the engine for. |
 | Lifetime | Its own process group **and a census of its descendants**, killed when the call returns — whether it finished, timed out, or was cancelled. Two kills, because neither alone is enough: the snippet reaps its own children on the way out (where the parent chain is intact, so a `setsid` child or a double-forked daemon is still reachable), and the engine kills the group plus everything its census saw (which is what catches a timeout, a cancellation, or a snippet that skipped its own cleanup). **A snippet can defeat both deliberately**, and this is reproducible rather than a race: start a child with `start_new_session=True` (outside the process group) and then call `os._exit` (skipping the snippet's own reaper), and it survives every time. So treat this as a budget for honest work, not a containment boundary for hostile code — which is the same footing `exec` is on, and why `execute_code` requires it. The closure is a cgroup the engine can kill as a unit, which needs `Delegate=yes` on the engine's unit: an operator change. |
 | Iterations | One. A snippet that makes two hundred proxied calls still costs the run a single turn — while each proxied call is still seen by the repeat guard and still earns its own step row. |
+| Result fields | `stdout`, `stderr`, `returncode`, `timed_out`, `tool_call_count`, `stdout_truncated`/`stderr_truncated` (+ `stdout_file`, `note` when cut), `error` (timeout), `tool_call_limit_reached`; the HTTP evidence fields `http_calls` (each `{method, url, status, count}`, plus `via`, `returncode` and `refused` for a spawned CLI), `http_recorder`, `spawn_recorder`, `spawned`, `egress_unobserved`, `unread_responses` / `unread_response_tools` / `unread_response_note`, `lost_responses` / `lost_responses_note` — see [Calling an API from code](#calling-an-api-from-code-genus_tools-not-curl). |
 
 **Bounds.** `ROBOTHOR_EXECUTE_CODE_MAX_CALLS` (default 200) caps proxied calls
 per snippet; past it `genus_tools` raises and the result says
@@ -637,7 +638,7 @@ Both work. They differ in what survives the call.
 | | What the run keeps |
 |---|---|
 | `genus_tools.call("x", …)` inside `execute_code` | The **whole response**, on this run's step ledger, whatever the snippet printed — plus the audit row, the guardrail pass and the post-condition check a turn's call gets. |
-| `urllib` / `requests` / `curl` inside `exec` or a snippet | **Only what you printed.** Everything else is gone the moment the process exits. |
+| `urllib` / `requests` / `curl` inside `exec` or a snippet | **Only what you printed.** Everything else is gone the moment the process exits — except that a snippet which *fails* after its writes gets the response bodies back under `lost_responses` (below). |
 
 **The step ledger is not your context.** A proxied call earns a durable row
 that the run viewer, the verification pass and an operator can read afterwards
@@ -670,6 +671,34 @@ is the request line always and the body only for an uncompressed
 `Content-Length` reply — a gzip or chunked reply is recorded empty, which is
 never counted as unread. `httpx` is not seen. `http_recorder: "absent"` in a
 result means the recorder did not run, not that you made no requests.
+
+**A `curl` you spawn is held to the same rule.** The task was lost a third
+time by `subprocess.run(["curl", "-s", "-X", "POST", url, "-d", body],
+capture_output=True)` in a loop: nothing inside the interpreter's HTTP stack
+sees a child process. The sandbox now records what your snippet spawns
+(`subprocess.Popen` and everything built on it, `os.system`) and reads a
+`curl`/`wget`/`http`/`xh` command line for its method and URL, so those
+calls appear in `http_calls` with `via: "curl"` (and the exit code as
+`returncode`; `status` stays `null` unless the exit code proved a refusal,
+e.g. `curl -f` exiting 22 → `400`). A curl that exited 0 and handed you a
+JSON body with a top-level `"error"` is marked `refused: true` and is not a
+change. Other children are summarised as `spawned: {count, programs}`; when
+one of them is a tool the recorder cannot see through (`ssh`, `scp`,
+`rsync`, `git`, `nc`, `openssl`, a child `python3`, …) the result adds
+`egress_unobserved: [names]` — the honest statement that the run may have
+changed something nothing witnessed. `spawn_recorder: "absent"` /
+`"unreadable"` mean what they mean for `http_recorder`. Not recorded:
+`os.exec*` (replaces the interpreter) and `os.posix_spawn` / `os.fork`.
+
+**A crash after your writes does not undo them.** If the snippet ends with
+a non-zero exit or a timeout AFTER a write took effect, and the response to
+that write is not in your stdout, the result carries `lost_responses` — a
+list of `{method, url, status, via?, body}` with the recorded body head
+(2,000 characters, newest last, at most 20) — and `lost_responses_note`.
+Read them before re-sending: a re-send is a duplicate, and anything one-shot
+in those replies (a follow-up message, an approval token) will not come
+back. On a clean exit the same calls are reported through `unread_responses`
+instead; never both for one call.
 
 ### After you change something, look again
 

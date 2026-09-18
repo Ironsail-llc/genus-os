@@ -126,7 +126,9 @@ admitted call as a read, a change, or neither — tool names come from
 `tools/read_only.declared_read_only_tools()`, the same table the parallel
 planner already trusts, so the two controls can never disagree about whether a
 tool writes. `exec` and `execute_code` get a narrow shell heuristic: an HTTP
-method that is not a read, `curl --data`, `requests.post`-and-friends. A false
+method that is not a read — spelled `-X POST` or, inside an argv list,
+`"-X", "POST"` — `curl --data`/`--json`/`--form`, a bare `-d`/`-F` beside
+`curl` or `wget` (a `-d` alone is `date -d`), `requests.post`-and-friends. A false
 "you changed something" teaches an agent to ignore the note, so an
 unrecognised call classifies as neither — conservative in the direction that
 costs a missed note, not a mistrusted one.
@@ -210,6 +212,80 @@ Two kinds of call, one rule:
   the cut and never on its raw head, because `print(resp)` shows a repr the
   raw head is not in. Follow-up (not in this change): record
   `Content-Encoding` and raw bytes and gunzip engine-side.
+
+* the HTTP the snippet's **child processes** made (the third: 2026-09-18,
+  0.495 — every write through `subprocess.run(["curl", "-s", "-X", "POST",
+  url, "-H", …, "-d", json.dumps(body)], capture_output=True, text=True)`,
+  every result `http_recorder: absent`, the argv-list spelling invisible to
+  the heuristic, ten `slack/send` and eight `drafts/save` classified
+  NEITHER). `sandbox_runtime/spawn_recorder.py` is copied beside the HTTP
+  recorder and installed right after it. It hooks `subprocess.Popen.__init__`
+  (`run`, `call`, `check_output` and a context-managed `Popen` all pass
+  through it) for the argv and whether stdout was a pipe, `Popen.communicate`
+  and `Popen.wait` for the exit code and — for a known HTTP CLI (`curl`,
+  `wget`, `http`, `https`, `xh`) whose stdout was piped — the stdout head as
+  the snippet received it (2,000 characters, raw cap 4×), and `os.system` for
+  the string it ran (`shell: true`, no body). A `shell=True` string is split
+  with `shlex` for classification only; the string is what is recorded.
+  Record file `spawned.json`, atomic tmp+replace on every completion and at
+  exit, 200 entries, an empty list written at install so `spawn_recorder:
+  "absent"` means "never installed" and not "saw nothing".
+
+  **Classification is conservative.** curl: the URL is the first token that
+  is neither a flag nor a flag's value and that starts with `http(s)://` or
+  looks like `host[:port]/…` (given `http://`, as curl does); method =
+  `-X/--request` if present, else `HEAD` for `-I`, `GET` for `-G`, `POST`
+  when any of `-d --data* --json -F --form*` is present, `PUT` for `-T`, else
+  `GET`. wget: `--method=`, `--post-data/--post-file/--body-*` ⇒ POST, else
+  GET. httpie/xh: the first positional if it is a verb, else GET, or POST when
+  a data item (`a=b`, `a:=1`, `a@f`) follows. A shape it cannot read is kept
+  as `unclassified: true` and surfaces under `egress_unobserved` — it
+  happened; it cannot be named.
+
+  **What the engine does with it.** `code_exec_result.recorded_spawns`
+  re-bounds every field (the file was written by a process the snippet
+  controlled; size checked by `stat` first, same 1 MiB cap).
+  `code_exec_spawns.merge_spawned_http` folds the HTTP-CLI entries into
+  `http_calls` with `via: "curl"` (or the program), `returncode`, and —
+  when the exit was 0 and the JSON body carries a top-level `error` —
+  `refused: true`; the two records are merged in the order things
+  completed (both stamp `t` on one monotonic clock). From there
+  `raw_http_responses`, the unread count, `ObservationLedger.
+  _record_recorded_http` and "the recorder outranks the heuristic" apply
+  unchanged. **Acceptance** is one rule, `act_observe.accepted_write`: a
+  non-safe method, not `refused`, and either `status < 400` or — for a
+  spawned call, which has no status line — `returncode == 0`. `status` is
+  `null` for a spawned call unless the exit code proved a refusal (`curl -f`
+  exiting 22, `wget` exiting 8 ⇒ `400`); a 200 is never invented. Other
+  spawns are summarised as `spawned: {count, programs}` (≤ 12 names), and
+  when one is on the egress list — `ssh scp sftp rsync nc ncat socat sendmail
+  mail mutt git openssl telnet ftp python python3 node ruby perl php` (a
+  versioned `python3.12` counts as `python`) — the result adds
+  `egress_unobserved: [names]`. The ledger records **no** change for those:
+  the note is the control, and the conservative direction is unchanged.
+  **Not hooked**, deliberately: `os.exec*` replaces the interpreter and its
+  hooks with it; `os.posix_spawn` and `os.fork` bypass `Popen`. The engine's
+  descendant census is the witness there.
+
+* **A crash after writes keeps the evidence.** The same run's snippet
+  consumed its responses (`json.loads(p.stdout)`) and crashed at
+  `print(json.dumps(results))` (`TypeError: keys must be str`). Three of
+  those responses carried a one-shot `new_reply`; the bodies existed only in
+  the dead process, the agent re-sent (duplicates), and three graded items
+  scored 0.0. Now: when the snippet ends `returncode != 0` or `timed_out`
+  AND the merged `http_calls` hold at least one accepted non-safe call whose
+  evidence (chunk F's exact rule) is not in stdout, the result carries
+  `lost_responses: [{method, url, status, via?, body}]` (recorded head,
+  ≤ 2,000 chars each, ≤ 20, newest last) and `lost_responses_note` ("This
+  snippet failed AFTER N write(s) took effect (…). Their responses, which
+  the code consumed but never printed, are attached under lost_responses.
+  Read them before re-sending: a re-send is a duplicate, …"). The recorder
+  flushed on each completion, so a timeout after the write still has it.
+  The ledger treats those calls exactly as recorded writes — `record()` no
+  longer skips a result that carries `error` when it also carries
+  recorder-witnessed `http_calls`; a crash is not a rollback. On a clean
+  exit `unread_responses` is the message; the two are never emitted for the
+  same call. Both rungs, like the unread count: diagnostic, not gated.
 
 ### Verdict commitment
 
@@ -651,6 +727,8 @@ does not apply to it because it carries no date to go stale.
 | Truncation and act-observe ledgers, the finalization row | `robothor/engine/observation_ledger.py` |
 | Act-vs-observe classification, source tokens, unread-response rule (proxied and raw HTTP) | `robothor/engine/act_observe.py` |
 | In-sandbox recorder of the snippet's own HTTP (copied beside `genus_tools`) | `robothor/engine/sandbox_runtime/http_recorder.py`; loaded by `code_exec_result.recorded_http_calls` |
+| In-sandbox recorder of the snippet's child processes, the HTTP-CLI argv classifier | `robothor/engine/sandbox_runtime/spawn_recorder.py`; loaded by `code_exec_result.recorded_spawns`, merged and summarised by `robothor/engine/code_exec_spawns.py` |
+| `lost_responses` (a crash after writes keeps the bodies), `accepted_write` | `robothor/engine/act_observe.py`; called from `tools/handlers/code_exec.py` on a non-zero exit or timeout |
 | One-verdict-per-item ladder (task gate, re-ask, guardrail row) | `robothor/engine/verdict_commitment.py` |
 | What a verdict, a hand-back and a retraction look like on the page | `robothor/engine/verdict_shapes.py` |
 | How far a verdict reaches from the heading that assigns it | `robothor/engine/verdict_sections.py` |

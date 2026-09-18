@@ -369,14 +369,27 @@ CAPS = {
     # count an honest zero, three follow-ups discarded).
     # 319 -> 328: the result says "absent" or "unreadable" when the record is
     # missing or refused, so no http_calls never reads as no HTTP.
-    "robothor/engine/tools/handlers/code_exec.py": 328,
+    # 328 -> 366: the spawn recorder is staged beside the HTTP one, its record
+    # read before the directory goes, the two merged into one `http_calls`,
+    # and a snippet that FAILED after its writes gets `lost_responses` instead
+    # of the unread count (measured 2026-09-18: eighteen `subprocess.run(
+    # ["curl", …])` writes, `http_recorder: absent`, a crash one line later).
+    # The merge and the summary live in code_exec_spawns.py; what is here is
+    # the second loader call, the branch, and the reasons.
+    "robothor/engine/tools/handlers/code_exec.py": 366,
     # 103 -> 150: `recorded_http_calls`, the loader that re-bounds what a
     # process the snippet controlled wrote, and the `http_calls` field on the
     # result — requests without bodies, for the model and for the ledger.
     # 150 -> 198 (review round): the record is refused by `stat` size before
     # it is read, identical requests collapse into counted lines in last-seen
     # order with an elision cap, and the recorder state is reported.
-    "robothor/engine/code_exec_result.py": 198,
+    # 198 -> 283: `recorded_spawns`, the second loader, re-bounding eleven
+    # fields a snippet-controlled process wrote; the size/list check shared
+    # with the first (`_read_record`) rather than copied; `via`/`returncode`/
+    # `refused` carried through the collapsed lines so a curl write and a
+    # urllib write never merge into one; `spawn_recorder` reported like
+    # `http_recorder`. The merge itself went to code_exec_spawns.py.
+    "robothor/engine/code_exec_result.py": 283,
     # The observation cluster (2026-09-16), each piece capped at the size it was
     # written to and each one a separate question, for the reason the code-
     # sandbox cluster above is four modules: what the model SEES of a command's
@@ -426,7 +439,16 @@ CAPS = {
     # of control characters before it is quoted.
     # 457 -> 461: underscores are hostname characters here (compose service
     # names), and the reason is written beside the pattern.
-    "robothor/engine/act_observe.py": 461,
+    # 461 -> 568: the argv-list spellings of the verb (`"-X", "POST"`) and the
+    # short body flags beside curl/wget (measured 2026-09-18: eighteen writes
+    # classified as nothing); `accepted_write`, one rule for "did the service
+    # take it" that a spawned call with no status line can answer from its
+    # exit code and its body; the evidence rule extracted from
+    # `raw_http_responses` so `lost_responses` — the bodies a crashed snippet
+    # never printed, attached rather than counted — applies exactly it. Still
+    # a table and pure functions; no session. The next ratchet-shaped move
+    # here is the raw-HTTP evidence cluster leaving for its own module.
+    "robothor/engine/act_observe.py": 568,
     # 469 -> 505 -> 285 -> 385 across one review round. The middle number is
     # the one that matters: at 505 the DELIVERY half left for
     # observation_notes.py, because "what happened" and "what the run is told
@@ -449,7 +471,11 @@ CAPS = {
     # any witnessed non-safe attempt, refused included, and reads counts.
     # 460 -> 467: a non-safe call with no parseable origin is a sourceless
     # change, not a dropped one (round-2 review).
-    "robothor/engine/observation_ledger.py": 467,
+    # 467 -> 476: a failed call whose result carries recorder-witnessed HTTP
+    # still records those writes (a timeout after the curl completed is not a
+    # rollback), and acceptance is asked of `accepted_write` rather than of
+    # `status < 400`, so a spawned write's exit code and body are read too.
+    "robothor/engine/observation_ledger.py": 476,
     # The delivery half, capped at what it was split to plus the second hold and
     # the stop-path nudge. `enforce`'s honest completion used to be appended
     # after the runner had already returned, so it reached the transcript and
@@ -601,7 +627,9 @@ CAPS = {
     # would otherwise conclude the reaper is complete.
     # 129 -> 143: installing the outbound-HTTP recorder before the snippet,
     # fail-open, and the bullet that says so.
-    "robothor/engine/sandbox_runtime/boot_template.py": 143,
+    # 143 -> 160: installing the spawn recorder right after it, same
+    # contract, and the bullet that says what it sees that the first cannot.
+    "robothor/engine/sandbox_runtime/boot_template.py": 160,
     # 211 -> 341: the descendant census. `killpg` alone reached neither a
     # `setsid` child nor a double-forked daemon, and a probe left 16 of 16
     # running after the call returned. This is the module that owns "nothing

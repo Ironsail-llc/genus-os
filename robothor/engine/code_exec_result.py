@@ -31,7 +31,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["HARD_CAP_MULTIPLIER", "WORKDIR_NAME", "recorded_http_calls", "shape", "spill"]
+__all__ = [
+    "HARD_CAP_MULTIPLIER",
+    "WORKDIR_NAME",
+    "recorded_http_calls",
+    "recorded_spawns",
+    "shape",
+    "spill",
+]
 
 #: How much more than the model's stdout budget is kept for the spill file.
 #: The spill exists so the agent can page the whole output back, so it has to
@@ -75,6 +82,25 @@ MAX_RECORD_BYTES = 1_048_576
 MAX_HTTP_CALL_ENTRIES = 50
 
 
+def _read_record(tools_dir: Path, name: str) -> list[Any] | None:
+    """A recorder's file as a list, ``None`` when it was never written.
+
+    Raises on a file that is too large or not a list; the handler turns that
+    into ``"unreadable"``. The SIZE is checked before a byte of it is read:
+    the file was written by a process the snippet controlled.
+    """
+    path = tools_dir / name
+    if not path.is_file():
+        return None
+    size = path.stat().st_size
+    if size > MAX_RECORD_BYTES:
+        raise ValueError(f"{name} is {size} bytes; the cap is {MAX_RECORD_BYTES}")
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, list):
+        raise ValueError(f"{name} is not a list")
+    return raw
+
+
 def recorded_http_calls(tools_dir: Path) -> list[dict[str, Any]] | None:
     """What the in-sandbox recorder saw the snippet do over HTTP, bounded again.
 
@@ -83,8 +109,7 @@ def recorded_http_calls(tools_dir: Path) -> list[dict[str, Any]] | None:
     nothing", so the result can say which. ``[]`` when it ran and the snippet
     made no request. Raises on a file that is too large or not the shape the
     recorder writes; the handler turns that into ``"unreadable"``. Re-bounded
-    here rather than trusted: the file was written by a process the snippet
-    controlled, and its SIZE is checked before a byte of it is read.
+    here rather than trusted.
     """
     from robothor.engine.sandbox_runtime.http_recorder import (
         MAX_RECORDED_BODY_CHARS,
@@ -92,15 +117,9 @@ def recorded_http_calls(tools_dir: Path) -> list[dict[str, Any]] | None:
         RECORD_FILE,
     )
 
-    path = tools_dir / RECORD_FILE
-    if not path.is_file():
+    raw = _read_record(tools_dir, RECORD_FILE)
+    if raw is None:
         return None
-    size = path.stat().st_size
-    if size > MAX_RECORD_BYTES:
-        raise ValueError(f"HTTP record is {size} bytes; the cap is {MAX_RECORD_BYTES}")
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, list):
-        raise ValueError("HTTP record is not a list")
     calls: list[dict[str, Any]] = []
     for item in raw[:MAX_RECORDED_CALLS]:
         if not isinstance(item, dict) or not item.get("method") or not item.get("url"):
@@ -112,9 +131,61 @@ def recorded_http_calls(tools_dir: Path) -> list[dict[str, Any]] | None:
                 "status": int(item.get("status") or 0),
                 "body": str(item.get("body") or "")[:MAX_RECORDED_BODY_CHARS],
                 "truncated": bool(item.get("truncated")),
+                "t": _number(item.get("t")),
             }
         )
     return calls
+
+
+def recorded_spawns(tools_dir: Path) -> list[dict[str, Any]] | None:
+    """What the in-sandbox spawn recorder saw the snippet start, bounded again.
+
+    The same three answers as :func:`recorded_http_calls` — ``None`` (no
+    record), ``[]`` (ran, nothing spawned), a list — and the same refusal of
+    an oversized or malformed file. Every field is re-bounded: a process the
+    snippet controlled wrote it.
+    """
+    from robothor.engine.sandbox_runtime.spawn_recorder import (
+        MAX_ARGV_HEAD,
+        MAX_RECORDED_BODY_CHARS,
+        MAX_RECORDED_SPAWNS,
+        RECORD_FILE,
+    )
+
+    raw = _read_record(tools_dir, RECORD_FILE)
+    if raw is None:
+        return None
+    spawns: list[dict[str, Any]] = []
+    for item in raw[:MAX_RECORDED_SPAWNS]:
+        if not isinstance(item, dict):
+            continue
+        argv = item.get("argv_head")
+        spawns.append(
+            {
+                "argv_head": [str(a)[:200] for a in (argv if isinstance(argv, list) else [])][
+                    :MAX_ARGV_HEAD
+                ],
+                "program": str(item.get("program") or "")[:64],
+                "method": str(item.get("method") or "")[:16].upper(),
+                "url": str(item.get("url") or "")[:2048],
+                "returncode": _integer(item.get("returncode")),
+                "status": _integer(item.get("status")),
+                "body": str(item.get("body") or "")[:MAX_RECORDED_BODY_CHARS],
+                "truncated": bool(item.get("truncated")),
+                "shell": bool(item.get("shell")),
+                "unclassified": bool(item.get("unclassified")),
+                "t": _number(item.get("t")),
+            }
+        )
+    return spawns
+
+
+def _integer(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _number(value: Any) -> float:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0.0
 
 
 def _http_call_entries(calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -122,12 +193,18 @@ def _http_call_entries(calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ``(method, url, status)`` collapsed into one line with a count, ordered by
     LAST occurrence. That order is load-bearing, not cosmetic: the ledger's
     "was this origin read after its last write" is answered by a read entry
-    sitting after a write entry, with no index to carry. Capped, with the
-    most recent kept and one marker for the rest."""
-    grouped: dict[tuple[str, str, int], dict[str, Any]] = {}
+    sitting after a write entry, with no index to carry. A spawned call also
+    carries ``via``, ``returncode`` and, when its body said so, ``refused``,
+    and collapses only with its own kind. Capped, with the most recent kept
+    and one marker for the rest."""
+    grouped: dict[tuple[Any, ...], dict[str, Any]] = {}
     for call in calls:
-        key = (call["method"], call["url"], call["status"])
-        entry = grouped.pop(key, None) or {**{k: call[k] for k in ("method", "url", "status")}}
+        extra = {k: call[k] for k in ("via", "returncode", "refused") if k in call}
+        key = (call["method"], call["url"], call["status"], tuple(sorted(extra.items())))
+        entry = grouped.pop(key, None) or {
+            **{k: call[k] for k in ("method", "url", "status")},
+            **extra,
+        }
         entry["count"] = int(entry.get("count", 0)) + 1
         grouped[key] = entry  # re-inserted, so dict order is last-seen order
     entries = list(grouped.values())
@@ -145,12 +222,16 @@ def shape(
     stdout_cap: int,
     http_calls: list[dict[str, Any]] | None = None,
     http_recorder: str = "",
+    spawns: list[dict[str, Any]] | None = None,
+    spawn_recorder: str = "",
 ) -> dict[str, Any]:
     """The result the model reads: bounded, marked, and never silently cut.
 
-    ``http_calls`` is the recorder's list (``None`` when there was no record);
-    ``http_recorder`` is a state to report instead of the list — ``"absent"``
-    or ``"unreadable"`` — so nobody reads "no ``http_calls``" as "no HTTP".
+    ``http_calls`` is the merged list of what both recorders saw over HTTP
+    (``None`` when neither left a record); ``spawns`` is what the spawn
+    recorder saw start. ``http_recorder`` and ``spawn_recorder`` are states to
+    report about each record — ``"absent"`` or ``"unreadable"`` — so nobody
+    reads "no ``http_calls``" as "no HTTP", or "no ``spawned``" as "no child".
     """
     full_stdout = result.stdout
     stdout, stdout_cut = truncate_with_marker(full_stdout, stdout_cap)
@@ -187,12 +268,16 @@ def shape(
         shaped["tool_call_limit_reached"] = True
     if http_recorder:
         shaped["http_recorder"] = http_recorder
-    elif http_calls is None:
-        shaped["http_recorder"] = "absent"
-    elif http_calls:
+    if spawn_recorder:
+        shaped["spawn_recorder"] = spawn_recorder
+    if http_calls:
         # The requests, not the bodies: what the snippet did over the network
         # on its own, so the model and the observation ledger both see the
         # writes. The bodies stay out of the context — the point of the
         # unread-response count is that the snippet should have printed them.
         shaped["http_calls"] = _http_call_entries(http_calls)
+    if spawns:
+        from robothor.engine.code_exec_spawns import spawn_summary
+
+        shaped.update(spawn_summary(spawns))
     return shaped

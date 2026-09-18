@@ -1,0 +1,695 @@
+"""A snippet's SPAWNED HTTP is evidence too, and a crash after writes keeps it.
+
+MEASURED 2026-09-18 (`03_Social` task_5, enforce, the 0.495 run). Every write
+the agent made went through ``subprocess.run(["curl", "-s", "-X", "POST", url,
+"-H", …, "-d", json.dumps(body)], capture_output=True, text=True)`` inside
+``execute_code``. Chunk F's recorder hooks ``http.client`` and saw nothing;
+the text heuristic knew ``-X POST`` but not ``"-X","POST"``, nor a bare
+``-d``. Ten ``slack/send`` and eight ``drafts/save`` calls classified NEITHER.
+Then the snippet that made them consumed every response and crashed on a
+``TypeError`` before printing — three one-shot replies existed only in the
+dead process, the agent re-sent (duplicates), and three graded items scored
+0.0.
+
+Three parts, one flag (`ROBOTHOR_ACT_OBSERVE_MODE`, unchanged):
+
+* **F2-1** — an in-sandbox spawn recorder (``sandbox_runtime/spawn_recorder.py``)
+  hooks ``subprocess.Popen`` and ``os.system``, classifies a known HTTP CLI's
+  argv into ``(method, url)`` and keeps the stdout head the snippet received.
+  The engine merges those into ``http_calls`` with ``via``, so the unread rule,
+  the ledger and "the recorder outranks the heuristic" all apply unchanged;
+* **F2-2** — a snippet that ends non-zero or times out AFTER accepted writes
+  whose responses it never printed carries ``lost_responses`` with the bodies;
+* **F2-3** — the text heuristic accepts the argv-list spellings.
+
+Real sandbox subprocess against a real loopback ``http.server``, as chunk F's
+tests do: the recorder lives inside the child interpreter, and a mock of the
+child would test the mock. Skipped, with the reason, where ``curl`` is absent.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import stat
+import textwrap
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import TYPE_CHECKING, Any
+
+import pytest
+
+from robothor.engine.act_observe import CHANGE, NEITHER, READ, classify
+from robothor.engine.observation_ledger import ObservationLedger
+from robothor.engine.tool_proxy import clear_tool_proxy, set_tool_proxy
+from robothor.engine.tools.dispatch import ToolContext
+from robothor.engine.tools.handlers.code_exec import _execute_code
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+pytestmark = pytest.mark.skipif(
+    shutil.which("curl") is None,
+    reason="the spawn recorder's HTTP-CLI path is exercised with the real curl binary",
+)
+
+REPLY_TEXT = "Following up on the DPA: legal needs the signed addendum by Friday, msg_2210."
+
+
+class _MockService(BaseHTTPRequestHandler):
+    """A service that answers a write with new information, like the graded one."""
+
+    def log_message(self, *_args: Any) -> None:  # quiet
+        return
+
+    def _json(self, status: int, payload: Any) -> None:
+        body = json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self) -> None:
+        self._json(200, {"messages": [{"id": "msg_2201", "text": "hello there, this is long"}]})
+
+    def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length") or 0)
+        self.rfile.read(length)
+        if self.path == "/slack/limited":
+            self._json(429, {"error": "rate_limit_exceeded", "retry_after_seconds": 2})
+        elif self.path == "/slack/ack":
+            self._json(200, {"ok": True})
+        else:
+            self._json(200, {"status": "sent", "new_reply": {"id": "msg_2210", "text": REPLY_TEXT}})
+
+
+@pytest.fixture
+def service():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _MockService)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+class _StubProxy:
+    def __init__(self) -> None:
+        self.allowed = frozenset({"exec", "read_file"})
+        self.max_calls = 10
+        self.calls_made = 0
+
+    async def call(self, name: str, args: dict) -> dict:
+        self.calls_made += 1
+        return {"echo": name}
+
+
+async def _run(code: str, workspace, timeout: int | None = None) -> dict[str, Any]:
+    token = set_tool_proxy(_StubProxy())
+    try:
+        ctx = ToolContext(agent_id="probe-agent", run_id="", workspace=str(workspace))
+        args: dict[str, Any] = {"code": textwrap.dedent(code)}
+        if timeout is not None:
+            args["timeout"] = timeout
+        return await _execute_code(args, ctx)
+    finally:
+        clear_tool_proxy(token)
+
+
+def _ledger_after(code: str, result: dict[str, Any], step: int = 7) -> ObservationLedger:
+    """The ledger as production feeds it: the REAL snippet text as the step's
+    arguments, so the text heuristic sees the argv list exactly as it would in
+    a run, and the result exactly as the handler returned it."""
+    ledger = ObservationLedger()
+    ledger.record(step, "execute_code", {"code": textwrap.dedent(code)}, result)
+    return ledger
+
+
+def _curl_snippet(
+    base: str, path: str = "/slack/send", show: str = "'OK'", then: str = "", flags: str = ""
+) -> str:
+    """The measured shape: an argv-list curl POST whose stdout is parsed and dropped."""
+    tail = textwrap.indent(textwrap.dedent(then), "        ") if then else ""
+    extra = f"{flags}, " if flags else ""
+    return f"""
+        import json, subprocess
+        p = subprocess.run(
+            ["curl", "-s", {extra}"-X", "POST", "{base}{path}",
+             "-H", "Content-Type: application/json", "-d", json.dumps({{"to": "@x"}})],
+            capture_output=True, text=True,
+        )
+        try:
+            resp = json.loads(p.stdout)
+        except ValueError:
+            resp = p.stdout
+        print("routed msg_2202 -> @x:", {show})
+{tail}
+    """
+
+
+# ── F2-1: what a snippet's child processes did ──────────────────────────
+
+
+@pytest.mark.asyncio
+class TestASpawnedCurlIsRecordedLikeUrllib:
+    async def test_a_a_curl_post_whose_body_was_never_printed_is_counted(self, service, tmp_path):
+        code = _curl_snippet(service)
+        result = await _run(code, tmp_path)
+
+        assert result["returncode"] == 0, result
+        assert result["http_calls"] == [
+            {
+                "method": "POST",
+                "url": f"{service}/slack/send",
+                "status": None,
+                "count": 1,
+                "via": "curl",
+                "returncode": 0,
+            }
+        ]
+        assert result["unread_responses"] == 1
+        assert result["unread_response_tools"] == [f"POST {service}/slack/send"]
+        assert "http_recorder" not in result
+        assert "spawn_recorder" not in result
+        assert "lost_responses" not in result
+
+        pending = _ledger_after(code, result).unobserved_changes()
+        assert len(pending) == 1
+        assert pending[0][2] == frozenset({service})
+
+    async def test_b_the_same_snippet_printing_the_body_is_not_flagged(self, service, tmp_path):
+        result = await _run(_curl_snippet(service, show="p.stdout"), tmp_path)
+
+        assert result["returncode"] == 0, result
+        assert "msg_2210" in result["stdout"]
+        assert "unread_responses" not in result
+        assert "lost_responses" not in result
+        assert result["http_calls"][0]["via"] == "curl"
+
+    async def test_f_a_curl_get_is_a_read_against_the_origin(self, service, tmp_path):
+        code = f"""
+            import subprocess
+            p = subprocess.run(["curl", "-s", "{service}/slack/messages"],
+                               capture_output=True, text=True)
+            print(p.stdout)
+            """
+        result = await _run(code, tmp_path)
+
+        assert result["returncode"] == 0, result
+        assert result["http_calls"][0]["method"] == "GET"
+        assert result["http_calls"][0]["url"] == f"{service}/slack/messages"
+        assert result["http_calls"][0]["via"] == "curl"
+        assert "unread_responses" not in result
+        ledger = _ledger_after(code, result)
+        assert ledger.unobserved_changes() == []
+        assert ledger.reads, "a GET is a read of that origin"
+        assert any(service in srcs for _s, srcs in ledger.reads)
+
+    async def test_f_a_non_http_spawn_is_summarised_and_not_an_http_call(self, tmp_path):
+        result = await _run(
+            """
+            import subprocess
+            print(subprocess.run(["ls", "/"], capture_output=True, text=True).returncode)
+            """,
+            tmp_path,
+        )
+        assert result["returncode"] == 0, result
+        assert result["spawned"] == {"count": 1, "programs": ["ls"]}
+        assert "http_calls" not in result
+        assert "egress_unobserved" not in result
+
+    async def test_f_an_egress_tool_the_recorder_cannot_see_through_is_named(self, tmp_path):
+        fake_ssh = tmp_path / "bin" / "ssh"
+        fake_ssh.parent.mkdir()
+        fake_ssh.write_text("#!/bin/sh\necho connected\n", encoding="utf-8")
+        fake_ssh.chmod(fake_ssh.stat().st_mode | stat.S_IXUSR)
+        code = f"""
+            import subprocess
+            print(subprocess.run(["{fake_ssh}", "host", "true"], capture_output=True, text=True).stdout)
+            """
+        result = await _run(code, tmp_path)
+
+        assert result["returncode"] == 0, result
+        assert result["spawned"] == {"count": 1, "programs": ["ssh"]}
+        assert result["egress_unobserved"] == ["ssh"]
+        assert "http_calls" not in result
+        # the note is the control: the ledger records no change it cannot name
+        assert _ledger_after(code, result).unobserved_changes() == []
+
+    async def test_g_a_shell_string_command_is_classified(self, service, tmp_path, monkeypatch):
+        seen = _capture_spawn_records(monkeypatch)
+        code = f"""
+            import subprocess
+            p = subprocess.run("curl -s -X POST {service}/slack/send -d '{{}}'",
+                               shell=True, capture_output=True, text=True)
+            print("sent")
+            """
+        result = await _run(code, tmp_path)
+
+        assert result["returncode"] == 0, result
+        assert result["http_calls"][0]["method"] == "POST"
+        assert result["http_calls"][0]["url"] == f"{service}/slack/send"
+        assert result["http_calls"][0]["via"] == "curl"
+        assert result["unread_responses"] == 1
+        assert seen and seen[-1][0]["shell"] is True
+
+    async def test_g_os_system_is_recorded_with_shell_true(self, service, tmp_path, monkeypatch):
+        seen = _capture_spawn_records(monkeypatch)
+        code = f"""
+            import os
+            os.system("curl -s -X POST {service}/slack/send -d '{{}}' > /dev/null")
+            print("sent")
+            """
+        result = await _run(code, tmp_path)
+
+        assert result["returncode"] == 0, result
+        assert seen, "the spawn record was read"
+        entry = seen[-1][0]
+        assert entry["shell"] is True
+        assert entry["program"] == "curl"
+        assert (entry["method"], entry["url"]) == ("POST", f"{service}/slack/send")
+        assert entry["body"] == ""  # os.system hands the snippet no stdout
+        assert result["http_calls"][0]["via"] == "curl"
+        # no body was ever in the snippet's hands, so nothing is "unread"
+        assert "unread_responses" not in result
+        # but the write happened, and the ledger says so
+        assert len(_ledger_after(code, result).unobserved_changes()) == 1
+
+
+def _capture_spawn_records(monkeypatch) -> list[list[dict[str, Any]]]:
+    """What `recorded_spawns` handed the handler, entry by entry."""
+    from robothor.engine.tools.handlers import code_exec
+
+    real = code_exec.recorded_spawns
+    seen: list[list[dict[str, Any]]] = []
+
+    def capture(tools_dir):
+        out = real(tools_dir)
+        if out:
+            seen.append(out)
+        return out
+
+    monkeypatch.setattr(code_exec, "recorded_spawns", capture)
+    return seen
+
+
+# ── F2-1 (e): refused writes are witnessed, not changes, not lost ───────
+
+
+@pytest.mark.asyncio
+class TestARefusedSpawnedWriteIsWitnessedOnly:
+    async def test_e_an_error_body_with_exit_zero_is_refused(self, service, tmp_path):
+        """curl without `-f` exits 0 on a 429 and hands the snippet the
+        service's `{"error": …}` body. The exit code cannot say refused, so
+        the body's shape does — and the text still says `"-X", "POST"`, which
+        the recorder must outrank."""
+        code = _curl_snippet(service, path="/slack/limited", then="raise SystemExit(3)")
+        result = await _run(code, tmp_path)
+
+        assert result["returncode"] == 3, result
+        entry = result["http_calls"][0]
+        assert (entry["method"], entry["via"], entry["returncode"]) == ("POST", "curl", 0)
+        assert entry["status"] is None
+        assert entry["refused"] is True
+        assert "lost_responses" not in result
+        assert "unread_responses" not in result
+        assert _ledger_after(code, result).unobserved_changes() == []
+
+    async def test_e_exit_22_under_dash_f_is_a_4xx(self, service, tmp_path):
+        code = _curl_snippet(
+            service, path="/slack/limited", flags='"-f"', then="raise SystemExit(3)"
+        )
+        result = await _run(code, tmp_path)
+
+        assert result["returncode"] == 3, result
+        entry = result["http_calls"][0]
+        assert (entry["status"], entry["returncode"]) == (400, 22)
+        assert "lost_responses" not in result
+        assert _ledger_after(code, result).unobserved_changes() == []
+
+
+# ── F2-2: a crash after writes keeps the evidence ───────────────────────
+
+
+@pytest.mark.asyncio
+class TestACrashAfterWritesKeepsTheEvidence:
+    async def test_c_a_curl_post_then_a_crash_attaches_the_body(self, service, tmp_path):
+        code = _curl_snippet(service, then="raise TypeError('keys must be str, not tuple')")
+        result = await _run(code, tmp_path)
+
+        assert result["returncode"] != 0, result
+        assert "TypeError" in result["stderr"]
+        assert result["lost_responses"] == [
+            {
+                "method": "POST",
+                "url": f"{service}/slack/send",
+                "status": None,
+                "via": "curl",
+                "body": json.dumps(
+                    {"status": "sent", "new_reply": {"id": "msg_2210", "text": REPLY_TEXT}}
+                ),
+            }
+        ]
+        note = result["lost_responses_note"]
+        assert "failed AFTER 1 write" in note
+        assert f"POST {service}/slack/send" in note
+        assert "lost_responses" in note and "duplicate" in note
+        assert "unread_responses" not in result
+        # a crash is not a rollback
+        pending = _ledger_after(code, result).unobserved_changes()
+        assert [srcs for _s, _t, srcs in pending] == [frozenset({service})]
+
+    async def test_c_the_urllib_variant_is_attached_the_same_way(self, service, tmp_path):
+        code = f"""
+            import json, urllib.request
+            req = urllib.request.Request(
+                "{service}/slack/send", data=b"{{}}",
+                headers={{"Content-Type": "application/json"}}, method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5) as r:
+                resp = json.loads(r.read().decode())
+            results = {{("a", "b"): resp}}
+            print(json.dumps(results))
+            """
+        result = await _run(code, tmp_path)
+
+        assert result["returncode"] != 0, result
+        assert len(result["lost_responses"]) == 1
+        lost = result["lost_responses"][0]
+        assert (lost["method"], lost["url"], lost["status"]) == (
+            "POST",
+            f"{service}/slack/send",
+            200,
+        )
+        assert "via" not in lost
+        assert "msg_2210" in lost["body"]
+        assert "unread_responses" not in result
+        assert len(_ledger_after(code, result).unobserved_changes()) == 1
+
+    async def test_c_a_body_the_crashing_snippet_did_print_is_not_lost(self, service, tmp_path):
+        code = _curl_snippet(service, show="p.stdout", then="raise SystemExit(2)")
+        result = await _run(code, tmp_path)
+
+        assert result["returncode"] == 2, result
+        assert "lost_responses" not in result
+        assert "lost_responses_note" not in result
+
+    async def test_c_a_clean_exit_uses_the_unread_path_and_never_both(self, service, tmp_path):
+        result = await _run(_curl_snippet(service), tmp_path)
+        assert result["returncode"] == 0
+        assert "unread_responses" in result
+        assert "lost_responses" not in result
+
+    async def test_c_several_writes_are_listed_newest_last(self, service, tmp_path):
+        code = _curl_snippet(
+            service,
+            then=f"""
+            for i in range(2):
+                subprocess.run(["curl", "-s", "-X", "POST", "{service}/drafts/save", "-d", "{{}}"],
+                               capture_output=True, text=True)
+            raise RuntimeError("boom")
+            """,
+        )
+        result = await _run(code, tmp_path)
+        assert result["returncode"] != 0
+        assert [e["url"] for e in result["lost_responses"]] == [
+            f"{service}/slack/send",
+            f"{service}/drafts/save",
+            f"{service}/drafts/save",
+        ]
+        assert "failed AFTER 3 write" in result["lost_responses_note"]
+        assert f"POST {service}/drafts/save ×2" in result["lost_responses_note"]
+
+    async def test_d_a_timeout_after_a_write_keeps_it(self, service, tmp_path):
+        """The recorder flushed when the curl completed, before the kill."""
+        code = _curl_snippet(service, then="import time; time.sleep(30)")
+        result = await _run(code, tmp_path, timeout=1)
+
+        assert result["timed_out"] is True, result
+        assert len(result["lost_responses"]) == 1
+        assert result["lost_responses"][0]["via"] == "curl"
+        assert "msg_2210" in result["lost_responses"][0]["body"]
+        assert "failed AFTER 1 write" in result["lost_responses_note"]
+        # the result carries `error` for the timeout, and the write still lands
+        assert result["error"]
+        assert len(_ledger_after(code, result).unobserved_changes()) == 1
+
+
+# ── (h): fail-open ──────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestTheSpawnRecorderFailsOpen:
+    async def test_h_a_recorder_that_cannot_install_leaves_the_snippet_alone(
+        self, service, tmp_path, monkeypatch
+    ):
+        from robothor.engine.tools.handlers import code_exec
+
+        real_stage = code_exec._stage
+
+        def broken_stage(tools_dir, code):
+            real_stage(tools_dir, code)
+            (tools_dir / code_exec.SPAWN_RECORDER_MODULE).write_text(
+                "raise RuntimeError('recorder broken on purpose')\n", encoding="utf-8"
+            )
+
+        monkeypatch.setattr(code_exec, "_stage", broken_stage)
+        code = _curl_snippet(service)
+        result = await _run(code, tmp_path)
+
+        assert result["returncode"] == 0, result
+        assert "routed msg_2202 -> @x: OK" in result["stdout"]
+        assert result["stderr"] == ""
+        assert "http_calls" not in result
+        assert result["spawn_recorder"] == "absent"
+        assert "http_recorder" not in result
+        # with no witness, the (repaired) text heuristic speaks
+        assert len(_ledger_after(code, result).unobserved_changes()) == 1
+
+    async def test_h_a_hook_that_raises_leaves_stdout_and_stderr_identical(
+        self, service, tmp_path, monkeypatch
+    ):
+        from robothor.engine.tools.handlers import code_exec
+
+        real_stage = code_exec._stage
+
+        def sabotage(tools_dir, code):
+            real_stage(tools_dir, code)
+            path = tools_dir / code_exec.SPAWN_RECORDER_MODULE
+            path.write_text(
+                path.read_text(encoding="utf-8")
+                + "\n\ndef classify(*a, **k):\n    raise RuntimeError('hook broken')\n"
+                + "\n\ndef _finish(*a, **k):\n    raise RuntimeError('hook broken')\n"
+                + "\n\ndef flush(*a, **k):\n    raise RuntimeError('flush broken')\n",
+                encoding="utf-8",
+            )
+
+        clean = await _run(_curl_snippet(service, show="p.stdout"), tmp_path)
+        monkeypatch.setattr(code_exec, "_stage", sabotage)
+        broken = await _run(_curl_snippet(service, show="p.stdout"), tmp_path)
+
+        assert broken["returncode"] == 0, broken
+        assert broken["stdout"] == clean["stdout"]
+        assert broken["stderr"] == clean["stderr"] == ""
+
+    async def test_h_a_malformed_record_reads_as_unreadable(self, service, tmp_path):
+        """`os._exit` skips the recorder's exit flush, so what the snippet
+        wrote over the record file is what the engine finds."""
+        code = _curl_snippet(
+            service,
+            then="""
+            import os
+            with open(os.path.join(os.environ["GENUS_TOOLS_DIR"], "spawned.json"), "w") as fh:
+                fh.write("{not json")
+            os._exit(0)
+            """,
+        )
+        result = await _run(code, tmp_path)
+
+        assert result["returncode"] == 0, result
+        assert result["spawn_recorder"] == "unreadable"
+        assert "http_calls" not in result
+
+    async def test_h_a_loader_that_raises_reads_as_unreadable(self, service, tmp_path, monkeypatch):
+        from robothor.engine.tools.handlers import code_exec
+
+        def boom(_tools_dir):
+            raise OSError("cannot read the record")
+
+        monkeypatch.setattr(code_exec, "recorded_spawns", boom)
+        result = await _run(_curl_snippet(service), tmp_path)
+
+        assert result["returncode"] == 0, result
+        assert result["spawn_recorder"] == "unreadable"
+        assert "http_calls" not in result
+
+    async def test_h_an_oversized_record_is_refused_before_it_is_read(
+        self, service, tmp_path, monkeypatch
+    ):
+        from robothor.engine import code_exec_result
+
+        monkeypatch.setattr(code_exec_result, "MAX_RECORD_BYTES", 64)
+        result = await _run(_curl_snippet(service), tmp_path)
+
+        assert result["returncode"] == 0, result
+        assert result["spawn_recorder"] == "unreadable"
+
+
+# ── F2-3: the text heuristic and the measured spellings ─────────────────
+
+
+MEASURED_ROW_58 = """
+import subprocess, json
+ids = ["msg_2201", "msg_2202"]
+out = {}
+for mid in ids:
+    p = subprocess.run(["curl","-s","-X","POST","http://localhost:9110/slack/messages/get","-H","Content-Type: application/json","-d",json.dumps({"message_id":mid})], capture_output=True, text=True)
+    out[mid] = json.loads(p.stdout)
+print(json.dumps(out, indent=2))
+"""
+
+MEASURED_ROW_66_HELPER = """
+import subprocess, json, time
+
+def post(url, body):
+    p = subprocess.run(["curl","-s","-X","POST",url,"-H","Content-Type: application/json","-d",json.dumps(body)], capture_output=True, text=True)
+    try: return json.loads(p.stdout)
+    except: return p.stdout
+
+results = {}
+for url, body in routing:
+    results[(url, body["to"])] = post(url, body)
+print(json.dumps(results))
+"""
+
+
+class TestTheHeuristicReadsArgvLists:
+    @pytest.mark.parametrize(
+        "code",
+        [
+            MEASURED_ROW_58,
+            MEASURED_ROW_66_HELPER,
+            'subprocess.run(["curl", "-X", "POST", url, "-d", body])',
+            "subprocess.run(['curl', '-X', 'POST', url, '-d', body])",
+            'subprocess.run(["curl", "--request", "DELETE", url])',
+            'subprocess.run(["curl",\n    "-X",\n    "PUT", url])',
+            # the pre-F2 spellings still classify
+            "curl -X POST http://localhost:9110/slack/send -d '{}'",
+            "requests.post(url, json=m)",
+        ],
+    )
+    def test_i_every_measured_spelling_is_a_change(self, code: str) -> None:
+        assert classify("execute_code", {"code": code}, frozenset()) == CHANGE
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            'subprocess.run(["curl", "-s", "http://localhost:9110/slack/send", "-d", "{}"])',
+            'subprocess.run(["curl", "--json", "{}", "http://localhost:9110/slack/send"])',
+            'subprocess.run(["curl", "-F", "file=@x", "http://localhost:9110/upload"])',
+            "wget --post-data='{}' http://localhost:9110/slack/send",
+            "curl http://localhost:9110/slack/send --form a=b",
+        ],
+    )
+    def test_i_a_short_body_flag_counts_beside_curl_or_wget(self, code: str) -> None:
+        assert classify("execute_code", {"code": code}, frozenset()) == CHANGE
+
+    @pytest.mark.parametrize(
+        ("tool", "args", "expected"),
+        [
+            ("exec", {"command": "date -d yesterday"}, NEITHER),
+            ("exec", {"command": "date -d yesterday http://example.org/x"}, NEITHER),
+            (
+                "execute_code",
+                {"code": "subprocess.run(['ls', '-d', 'http://example.org/'])"},
+                NEITHER,
+            ),
+            ("exec", {"command": "curl -s http://localhost:9110/slack/messages"}, READ),
+            ("exec", {"command": "curl -X GET http://localhost:9110/slack/messages"}, READ),
+        ],
+    )
+    def test_i_a_bare_dash_d_is_still_a_date(self, tool: str, args: dict, expected: str) -> None:
+        assert classify(tool, args, frozenset()) == expected
+
+
+# ── The in-sandbox classifier, directly ─────────────────────────────────
+
+
+def _classifier():
+    """The recorder's argv classifier, imported the way the engine imports the
+    HTTP recorder — for its pure functions and constants; `install` is never
+    called here."""
+    from robothor.engine.sandbox_runtime import spawn_recorder
+
+    return spawn_recorder
+
+
+class TestTheArgvClassifier:
+    @pytest.mark.parametrize(
+        ("argv", "expected"),
+        [
+            (["curl", "-s", "-X", "POST", "http://h/x", "-d", "{}"], ("POST", "http://h/x")),
+            (["curl", "-s", "http://h/x", "-d", "{}"], ("POST", "http://h/x")),
+            (["curl", "--data-binary", "@f", "https://h:8443/y"], ("POST", "https://h:8443/y")),
+            (["curl", "-H", "X: y", "-o", "out", "http://h/z"], ("GET", "http://h/z")),
+            (["curl", "-I", "http://h/z"], ("HEAD", "http://h/z")),
+            (["curl", "-G", "-d", "a=b", "http://h/z"], ("GET", "http://h/z")),
+            (["curl", "-T", "file", "http://h/up"], ("PUT", "http://h/up")),
+            (
+                ["curl", "--json", "{}", "localhost:9110/slack/send"],
+                ("POST", "http://localhost:9110/slack/send"),
+            ),
+            (["curl", "-sfX", "DELETE", "http://h/r"], ("DELETE", "http://h/r")),
+            (
+                ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "http://h/x"],
+                ("GET", "http://h/x"),
+            ),
+            (["wget", "-qO-", "http://h/x"], ("GET", "http://h/x")),
+            (["wget", "--post-data", "{}", "http://h/x"], ("POST", "http://h/x")),
+            (["wget", "--method=PUT", "http://h/x"], ("PUT", "http://h/x")),
+            (["http", "POST", "http://h/x", "a=b"], ("POST", "http://h/x")),
+            (["http", "http://h/x", "a=b"], ("POST", "http://h/x")),
+            (["xh", "http://h/x"], ("GET", "http://h/x")),
+            (["curl", "-s"], ("", "")),
+        ],
+    )
+    def test_the_conservative_reading(self, argv: list[str], expected: tuple[str, str]) -> None:
+        method, url = _classifier().classify(argv)
+        assert (method, url) == expected
+
+    def test_a_flag_value_is_never_mistaken_for_the_url(self) -> None:
+        method, url = _classifier().classify(
+            ["curl", "-d", "http://h/not-the-target", "http://h/x"]
+        )
+        assert (method, url) == ("POST", "http://h/x")
+
+    def test_importing_the_module_has_no_side_effect(self) -> None:
+        """The engine imports this module for its constants and classifier;
+        nothing may be hooked in the engine's own interpreter by doing so.
+        (The conftest wraps `Popen` itself, so the check is the module's
+        state and `os.system`, not `Popen.__init__`'s identity.)"""
+        module = _classifier()
+        assert module.RECORD_FILE == "spawned.json"
+        assert module._installed is False
+        assert module._path is None
+        assert os.system.__module__ in ("posix", "nt")
+
+
+# ── (j): the ratchets are asserted by their own files; this pins the seam ─
+
+
+def test_the_spawn_recorder_is_staged_beside_the_http_recorder(tmp_path: Path) -> None:
+    from robothor.engine.tools.handlers import code_exec
+
+    code_exec._stage(tmp_path, "print(1)")
+    staged = sorted(p.name for p in tmp_path.iterdir())
+    assert code_exec.SPAWN_RECORDER_MODULE in staged
+    assert code_exec.HTTP_RECORDER_MODULE in staged
+    boot = (tmp_path / "_boot.py").read_text(encoding="utf-8")
+    assert boot.index(code_exec.HTTP_RECORDER_MODULE.removesuffix(".py")) < boot.index(
+        code_exec.SPAWN_RECORDER_MODULE.removesuffix(".py")
+    )
