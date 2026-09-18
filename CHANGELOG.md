@@ -1,3 +1,9 @@
+## [1.100.0](https://github.com/Ironsail-llc/genus-os/compare/v1.99.6...v1.100.0) (2026-09-18)
+
+### Features
+
+* **engine:** a snippet's own HTTP writes must be read back too ([#599](https://github.com/Ironsail-llc/genus-os/issues/599)) ([acf8abb](https://github.com/Ironsail-llc/genus-os/commit/acf8abb7a6adf622a9a1bc51bf756015ae6f6562))
+
 ## [1.99.6](https://github.com/Ironsail-llc/genus-os/compare/v1.99.5...v1.99.6) (2026-09-18)
 
 ### Bug Fixes
