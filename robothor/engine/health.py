@@ -1730,7 +1730,10 @@ def _health_server_class() -> type:
     supported seam. With it inert the daemon's handler is the process's only
     disposition — the health server keeps answering during the drain and is
     cancelled with the other subsystem tasks at the end of it, exactly like
-    the Telegram poller since ``handle_signals=False``.
+    the Telegram poller since ``handle_signals=False``. Stop-by-cancel means
+    ``Server.shutdown()`` and the ASGI lifespan shutdown never run: a future
+    shutdown hook for the health app must be wired into the daemon's drain,
+    not registered on the app.
 
     Built lazily because ``uvicorn`` is imported lazily here, and a module-level
     subclass would move that import to every reader of this module.

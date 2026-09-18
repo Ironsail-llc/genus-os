@@ -220,7 +220,7 @@ The engine's own stop path is separately budgeted to fit inside its
 7 s, dispatcher stop 3 s, 3 s margin for the rest. A stop signal that arrives
 again within 2 s of the first (`STOP_SIGNAL_ECHO_WINDOW_SECONDS`,
 `robothor/engine/daemon.py`) is the same stop echoing through the process and
-is ignored at debug level — the 2026-09-17 deploy page after the two-strikes
+is ignored (one info line) — the 2026-09-17 deploy page after the two-strikes
 handler shipped was exactly that: systemd sent one SIGTERM, uvicorn's
 `capture_signals` re-raised it 138 ms later, and the engine exited 1. The
 health server no longer captures signals at all

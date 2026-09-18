@@ -201,7 +201,7 @@ class TestADeliberateStopExitsZero:
         uvicorn re-raising the signal it had captured (test_daemon_signal_echo
         .py). A repeat this soon after the first is that stop echoing through
         the process, never a human insisting — humans do not repeat a kill
-        inside two seconds. It is a debug line and nothing else."""
+        inside two seconds. It is one info line and nothing else."""
         registered, exits, now = self._armed(monkeypatch)
         callback, args = registered[signal.SIGTERM]
         stop = args[0].event
@@ -211,7 +211,7 @@ class TestADeliberateStopExitsZero:
         assert exits == [], "the first signal is a clean stop, not an exit"
 
         now[0] += 0.138
-        with caplog.at_level("DEBUG", logger=daemon.logger.name):
+        with caplog.at_level("INFO", logger=daemon.logger.name):
             callback(*args)
         assert exits == [], "an echo of the first signal must not end the process"
         assert stop.is_set()

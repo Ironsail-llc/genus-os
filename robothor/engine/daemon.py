@@ -981,7 +981,8 @@ def _request_stop(req: _StopRequest, sig: signal.Signals) -> None:
 
     The first signal sets the event and nothing else — ``main`` turns it into
     the ordinary drain. A repeat within ``STOP_SIGNAL_ECHO_WINDOW_SECONDS`` is
-    the same stop arriving again (see the constant) and is a debug line. A
+    the same stop arriving again (see the constant): one info line, at most
+    once per stop, and nothing else. A
     repeat later than that, during a drain that is still running, is a human
     insisting — a developer at a hung drain, an operator's second ``kill`` —
     and ends the process now rather than setting an already-set event and
@@ -997,9 +998,11 @@ def _request_stop(req: _StopRequest, sig: signal.Signals) -> None:
         logger.info("Received %s — stopping", sig.name)
         req.event.set()
         return
-    since_first = now - (req.first_at if req.first_at is not None else now)
+    if req.first_at is None:  # the event was set by someone else: the window starts now
+        req.first_at = now
+    since_first = now - req.first_at
     if since_first < STOP_SIGNAL_ECHO_WINDOW_SECONDS:
-        logger.debug(
+        logger.info(
             "Received %s again %.0f ms after the first — the same stop echoing "
             "through the process, not a second one; ignored",
             sig.name,
