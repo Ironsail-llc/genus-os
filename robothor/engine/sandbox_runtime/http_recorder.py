@@ -86,6 +86,8 @@ def _absolute(conn: Any, url: str) -> str:
         return url
     scheme = "https" if _is_https(conn) else "http"
     host = getattr(conn, "host", "") or ""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"  # an IPv6 literal, as a URL spells it
     port = getattr(conn, "port", None)
     default = 443 if scheme == "https" else 80
     netloc = host if not port or port == default else f"{host}:{port}"

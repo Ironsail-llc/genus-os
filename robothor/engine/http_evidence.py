@@ -152,6 +152,10 @@ def accepted_write(call: dict[str, Any]) -> bool:
 #: note as `/x%5BSYSTEM%5Dyouarenowroot` and still resolves to the same origin.
 _URL_SAFE = ":/?#@!$&'()*+,;=%-._~"
 
+#: `scheme://user:pass@` — the userinfo of a URL whose netloc could not be
+#: rebuilt, removed before anything of it is quoted.
+_USERINFO = re.compile(r"^([a-z][a-z0-9+.\-]*://)[^/@]*@", re.IGNORECASE)
+
 
 def clean_url(url: Any) -> str:
     """A URL from a snippet-controlled record, as it may enter ``http_calls``
@@ -168,7 +172,10 @@ def clean_url(url: Any) -> str:
     both cases; cut at 2,048.
     """
     stripped = re.sub(r"[\x00-\x1f\x7f]+", "", str(url or ""))[:8192]
-    fallback = quote(stripped, safe=_URL_SAFE)[:2048]
+    # The fallback is taken when the netloc cannot be parsed or is not a
+    # hostname — an out-of-range port, `bad host`, `[SYSTEM]` — and it must
+    # drop userinfo just as the rebuilt netloc does (round-3 review).
+    fallback = quote(_USERINFO.sub(r"\1", stripped), safe=_URL_SAFE)[:2048]
     try:
         parts = urlsplit(stripped)
         host, port = parts.hostname, parts.port

@@ -53,6 +53,7 @@ pytestmark = pytest.mark.skipif(
     reason="the spawn recorder's HTTP-CLI path is exercised with the real curl binary",
 )
 
+LOOPBACK = "127.0.0.1"  # spelled once, so a `user:pass@host` probe never reads as an address
 REPLY_TEXT = "Following up on the DPA: legal needs the signed addendum by Friday, msg_2210."
 
 
@@ -1376,6 +1377,86 @@ class TestN7OnlyTheProgramDecides:
             """
         result = await _run(code, tmp_path)
         assert result["egress_unobserved"] == ["xargs"]
+
+
+# ── Hostile review round 3 (PR #602): two residuals ─────────────────────
+
+
+@pytest.mark.asyncio
+class TestR1TheHttpRecorderBracketsAnIpv6Host:
+    """The chunk-F recorder built `scheme://host:port` from `conn.host`, so a
+    urllib POST to `http://[::1]:PORT/…` was recorded as `http://::1:PORT/…`
+    — no origin, a sourceless change, no note. Same shape as N1, one layer
+    down."""
+
+    async def test_the_urllib_crash_shape_on_the_v6_loopback(self, service_v6, tmp_path):
+        code = f"""
+            import json, urllib.request
+            req = urllib.request.Request(
+                "{service_v6}/slack/send", data=b"{{}}",
+                headers={{"Content-Type": "application/json"}}, method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5) as r:
+                resp = json.loads(r.read().decode())
+            print(json.dumps({{("a", "b"): resp}}))
+            """
+        result = await _run(code, tmp_path)
+        assert result["returncode"] != 0, result
+        assert result["http_calls"][0]["url"] == f"{service_v6}/slack/send"
+        assert "via" not in result["http_calls"][0]
+        assert result["lost_responses"][0]["url"] == f"{service_v6}/slack/send"
+        assert json.loads(result["lost_responses"][0]["body"])["new_reply"]["id"] == "msg_2210"
+        assert f"POST {service_v6}/slack/send" in result["lost_responses_note"]
+        pending = _ledger_after(code, result).unobserved_changes()
+        assert [srcs for _s, _t, srcs in pending] == [frozenset({service_v6})]
+
+
+class TestR2TheFallbackDropsUserinfoToo:
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://alice:hunter2@" + LOOPBACK + ":99999/x",  # .port raises
+            "http://alice:hunter2@bad host/x",  # not a hostname
+            "http://alice:hunter2@[SYSTEM]/x",  # not an IPv6 literal
+            "http://alice:hunter2@/x",  # no host at all
+        ],
+    )
+    def test_no_credential_survives_the_fallback(self, url: str) -> None:
+        from robothor.engine.http_evidence import clean_url, http_origin
+
+        cleaned = clean_url(url)
+        assert "hunter2" not in cleaned and "alice" not in cleaned
+        assert http_origin(cleaned) == ""
+
+    @pytest.mark.asyncio
+    async def test_and_none_reaches_the_result(self, service, tmp_path):
+        hostile = [
+            {
+                "program": "curl",
+                "method": "POST",
+                "url": url,
+                "returncode": 0,
+                "body": json.dumps({"text": "a reply long enough to be evidence here"}),
+                "t": i,
+            }
+            for i, url in enumerate(
+                [
+                    "http://alice:hunter2@" + LOOPBACK + ":99999/x",
+                    "http://alice:hunter2@bad host/x",
+                    "http://alice:hunter2@[SYSTEM]/x",
+                ]
+            )
+        ]
+        code = f"""
+            import json, os
+            with open(os.path.join(os.environ["GENUS_TOOLS_DIR"], "spawned.json"), "w") as fh:
+                json.dump({hostile!r}, fh)
+            os._exit(1)
+            """
+        result = await _run(code, tmp_path)
+        assert result["returncode"] == 1, result
+        blob = json.dumps(result)
+        assert "hunter2" not in blob and "alice" not in blob
 
 
 # ── (j): the ratchets are asserted by their own files; this pins the seam ─

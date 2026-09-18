@@ -470,7 +470,9 @@ CAPS = {
     # it, split from act_observe.py at review round 2 of #602 and pinned at
     # the size it arrived. Every function here reads a record a hostile
     # snippet can forge, and each probe the two rounds found is a test.
-    "robothor/engine/http_evidence.py": 325,
+    # 325 -> 332 (round 3): the fallback branch of `clean_url` drops userinfo
+    # too, and the pattern that does it is named beside the reason.
+    "robothor/engine/http_evidence.py": 332,
     # 469 -> 505 -> 285 -> 385 across one review round. The middle number is
     # the one that matters: at 505 the DELIVERY half left for
     # observation_notes.py, because "what happened" and "what the run is told
