@@ -1,4 +1,4 @@
-"""Records what a snippet's CHILD PROCESSES did, at the layer its own HTTP is recorded.
+r"""Records what a snippet's CHILD PROCESSES did, at the layer its own HTTP is recorded.
 
 Copied into the per-call directory beside ``http_recorder.py`` and installed
 by the boot script right after it. Standard library only, no import-time side
@@ -19,11 +19,19 @@ Where it hooks: ``subprocess.Popen.__init__`` — ``run``, ``call``,
 concrete argv and whether stdout was a pipe; ``Popen.communicate`` and
 ``Popen.wait`` for the exit code and, for a known HTTP CLI whose stdout was
 piped, the stdout head AS THE SNIPPET RECEIVED IT; and ``os.system`` for the
-string it ran. NOT hooked, deliberately: ``os.exec*`` replaces this
-interpreter (the hooks go with it) and ``os.posix_spawn`` / ``os.fork`` bypass
-``Popen``; the engine-side descendant census is the witness for those, and a
-program it saw that this recorder did not is reported as ``egress_unobserved``
-rather than as nothing.
+string it ran. A wrapper is looked through: ``sh -c "curl …"`` is split like
+a shell string, and a leading ``env [VAR=…]``, ``timeout N``, ``nice [-n N]``,
+``nohup``, ``stdbuf …`` or ``sudo`` is skipped. What this does NOT see:
+``os.exec*`` replaces this interpreter (the hooks go with it), and
+``os.posix_spawn`` / ``os.fork`` / ``os.spawn*`` bypass ``Popen`` — children
+started that way are invisible to this control, and nothing else in the
+engine reports them (the descendant census kills; it does not describe).
+``asyncio.create_subprocess_*`` goes through ``Popen``, so its argv is
+recorded and its exit code is learned at the exit flush, but its pipes are
+read by the event loop and its body is never seen. The stdout head is kept
+ONLY through ``communicate()`` — which is what ``run``, ``check_output`` and
+``capture_output=True`` use; a snippet that reads ``p.stdout`` by hand and
+then ``wait()``\ s records the exit code and an empty body.
 
 What it records, per spawn: the argv head, the program's basename, the
 conservative ``(method, url)`` reading of a ``curl``/``wget``/``http``/``xh``
@@ -31,9 +39,13 @@ command line, the exit code, a status only when the CLI's exit code proves one
 (``curl -f`` exiting 22 is a 4xx+; it is never invented from a 0), the stdout
 head, and whether the command was a shell string. A shell string is split with
 ``shlex`` for classification only; the string itself is what is recorded.
-Bounded in count and in bytes, written atomically to a file the engine reads
-once the process has exited, and fail-open at every hook: a recorder
-exception is swallowed and the snippet's call proceeds untouched.
+Bounded in count and in bytes — past the cap, an HTTP CLI evicts the oldest
+non-HTTP entry and the drop is counted, so a late ``curl`` after five hundred
+``true``\ s is still on the record — written atomically to a file the engine
+reads once the process has exited, and fail-open at every hook: a recorder
+exception is swallowed and the snippet's call proceeds untouched. Values of
+``-H``/``-u``/``-d``-family flags are redacted from the argv head at record
+time; an ``Authorization`` header never reaches the file.
 """
 
 from __future__ import annotations
@@ -42,10 +54,12 @@ import atexit
 import contextlib
 import json
 import os
+import re
 import shlex
 import subprocess
 import threading
 import time
+import weakref
 from pathlib import Path
 from typing import Any
 
@@ -107,6 +121,63 @@ EGRESS_TOOLS = frozenset(
 
 _HTTP_VERBS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"})
 _SHELL_SEPARATORS = frozenset({";", "&&", "||", "|", "&"})
+#: Shells whose `-c <string>` is looked through.
+_SHELLS = frozenset({"sh", "bash", "dash", "zsh", "ksh", "ash", "busybox"})
+#: Prefix programs that run the rest of their argv as a command. Each maps to
+#: the short flags that TAKE A VALUE (so the value is skipped too).
+_WRAPPERS: dict[str, str] = {
+    "env": "u",
+    "timeout": "ks",
+    "nice": "n",
+    "nohup": "",
+    "stdbuf": "ioe",
+    "sudo": "ugChpUrtT",
+    "doas": "u",
+    "chronic": "",
+    "ionice": "cnp",
+    "setsid": "",
+    "unbuffer": "",
+    "time": "fo",
+}
+#: Flags whose VALUE is redacted from the argv head: credentials, cookies,
+#: request bodies. Matched on the flag's spelling; `--data=…` too.
+_REDACTED_FLAGS = frozenset(
+    {
+        "-H",
+        "--header",
+        "-u",
+        "--user",
+        "-d",
+        "--data",
+        "--data-ascii",
+        "--data-raw",
+        "--data-binary",
+        "--data-urlencode",
+        "--json",
+        "-F",
+        "--form",
+        "--form-string",
+        "-b",
+        "--cookie",
+        "-U",
+        "--proxy-user",
+        "--proxy-header",
+        "--oauth2-bearer",
+        "--post-data",
+        "--body-data",
+        "--http-password",
+        "--proxy-password",
+        "--password",
+        "-a",
+        "--auth",
+        "--bearer",
+    }
+)
+_REDACTED = "<redacted>"
+#: The same redaction over a shell string: the flag, then one quoted or bare value.
+_REDACT_IN_STRING = re.compile(
+    r"""(?P<flag>(?<!\S)(?:-[HudFbUa]|--(?:header|user|data(?:-ascii|-raw|-binary|-urlencode)?|json|form(?:-string)?|cookie|proxy-user|proxy-header|oauth2-bearer|post-data|body-data|http-password|proxy-password|password|auth|bearer)))(?P<sep>[=\s]+)(?P<value>'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|\S+)"""
+)
 
 # ── curl ────────────────────────────────────────────────────────────────
 #: Short options that consume the next token (or the rest of a bundle).
@@ -433,8 +504,18 @@ def _split_flags(
     return flags, positionals, values
 
 
+def _first_request(args: list[str]) -> list[str]:
+    """curl runs one request per `--next` segment; only the first is read."""
+    for i, tok in enumerate(args):
+        if tok in ("--next", "-:"):
+            return args[:i]
+    return args
+
+
 def _classify_curl(args: list[str]) -> tuple[str, str]:
-    flags, positionals, values = _split_flags(args, _CURL_SHORT_VALUE, _CURL_LONG_VALUE)
+    flags, positionals, values = _split_flags(
+        _first_request(args), _CURL_SHORT_VALUE, _CURL_LONG_VALUE
+    )
     url = _looks_like_url(values.get("--url", ""))
     for tok in positionals:
         url = url or _looks_like_url(tok)
@@ -498,7 +579,8 @@ def _program(token: str) -> str:
 
 
 def _http_command(argv: list[str]) -> tuple[str, list[str]]:
-    """``(program, its argv)`` for the first HTTP CLI in *argv*, or ``("", [])``."""
+    """``(program, its argv)`` for the HTTP CLI at the head of *argv*, or
+    ``("", [])``."""
     if not argv:
         return "", []
     if _program(argv[0]) in HTTP_CLIS:
@@ -522,6 +604,26 @@ def classify(argv: list[str]) -> tuple[str, str]:
     return "", ""
 
 
+def _to_file(program: str, args: list[str]) -> bool:
+    """Did the response body go somewhere other than the CLI's stdout?
+
+    `curl -o out`, `curl -O`, plain `wget URL` (a file is its default; only
+    `-O -` is stdout), `http --download`. A body that went to a file never
+    reached the snippet's pipe or its stdout, so it is not an observation
+    this control can credit.
+    """
+    if program == "curl":
+        flags, _p, _v = _split_flags(_first_request(args), _CURL_SHORT_VALUE, _CURL_LONG_VALUE)
+        return bool({"-o", "--output", "-O", "--remote-name", "--remote-name-all"} & set(flags))
+    if program == "wget":
+        _f, _p, values = _split_flags(args, _WGET_SHORT_VALUE, _WGET_LONG_VALUE)
+        return (values.get("-O") or values.get("--output-document")) != "-"
+    if program in ("http", "https", "xh"):
+        flags, _p, _v = _split_flags(args, _HTTPIE_SHORT_VALUE, _HTTPIE_LONG_VALUE)
+        return bool({"-o", "--output", "-d", "--download"} & set(flags))
+    return False
+
+
 def _shell_words(command: str) -> list[list[str]]:
     """The simple commands of a shell string, best effort. A string that
     ``shlex`` cannot split (an unbalanced quote) yields nothing."""
@@ -542,24 +644,112 @@ def _shell_words(command: str) -> list[list[str]]:
     return [s for s in segments if s]
 
 
+def _unwrap(argv: list[str]) -> list[list[str]]:
+    """The simple commands *argv* would run, looking through one layer of
+    wrapper at a time: ``sh -c "…"`` is split as a shell string; a leading
+    ``env``/``timeout``/``nice``/``nohup``/``stdbuf``/``sudo`` (with its own
+    flags and ``VAR=value`` assignments) is skipped. Bounded at eight layers;
+    ``xargs``, ``find -exec``, ``parallel`` and the like are not read."""
+    commands = [list(argv)]
+    out: list[list[str]] = []
+    depth = 0
+    while commands and depth < 8:
+        depth += 1
+        nxt: list[list[str]] = []
+        for command in commands:
+            if not command:
+                continue
+            head = _program(command[0])
+            if head in _SHELLS and "-c" in command[1:3]:
+                at = command.index("-c")
+                if at + 1 < len(command):
+                    nxt.extend(_shell_words(command[at + 1]))
+                    continue
+            if head in _WRAPPERS:
+                rest = _strip_wrapper(command[1:], _WRAPPERS[head])
+                if rest:
+                    nxt.append(rest)
+                    continue
+            out.append(command)
+        commands = nxt
+    return out + commands
+
+
+def _strip_wrapper(args: list[str], value_flags: str) -> list[str]:
+    """What follows a wrapper's own options: its flags (and their values),
+    then `VAR=value` assignments (env, sudo), then for `timeout` the
+    duration — the one wrapper here with a positional of its own."""
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok == "--":
+            i += 1
+            break
+        if tok.startswith("--"):
+            i += 1
+            continue
+        if tok.startswith("-") and len(tok) > 1:
+            i += 1
+            if tok[1] in value_flags and len(tok) == 2:
+                i += 1
+            continue
+        name, eq, _v = tok.partition("=")
+        if eq and name.replace("_", "").isalnum():
+            i += 1
+            continue
+        break
+    if value_flags == _WRAPPERS["timeout"] and i < len(args) and args[i][:1].isdigit():
+        i += 1  # `timeout 5` / `timeout 5s`: the duration precedes the command
+    return args[i:]
+
+
+def _redact_argv(tokens: list[str]) -> list[str]:
+    """The argv head as it may be written to disk: credential- and
+    body-carrying values replaced, `--flag=value` included."""
+    out: list[str] = []
+    skip = False
+    for tok in tokens:
+        if skip:
+            out.append(_REDACTED)
+            skip = False
+            continue
+        name, eq, _value = tok.partition("=")
+        if eq and name in _REDACTED_FLAGS:
+            out.append(f"{name}={_REDACTED}")
+            continue
+        out.append(tok)
+        if tok in _REDACTED_FLAGS:
+            skip = True
+        elif len(tok) > 2 and tok[0] == "-" and tok[1] != "-" and tok[1] in "HudFbUa":
+            # a bundled short flag with its value attached: `-dfoo`, `-uA:B`
+            out[-1] = tok[:2] + _REDACTED
+    return out
+
+
+def _redact_string(command: str) -> str:
+    return _REDACT_IN_STRING.sub(lambda m: f"{m.group('flag')}{m.group('sep')}{_REDACTED}", command)
+
+
 def _describe(argv: Any, shell: bool) -> dict[str, Any]:
     """The record of one spawn, before its outcome is known."""
     if isinstance(argv, (str, bytes, os.PathLike)):
         text = argv if isinstance(argv, str) else os.fsdecode(argv)
-        tokens = [text]
+        tokens = [_redact_string(text)]
         words = _shell_words(text) if shell else [[text]]
     else:
-        tokens = [a if isinstance(a, str) else os.fsdecode(a) for a in list(argv or [])]
-        words = [tokens]
+        raw = [a if isinstance(a, str) else os.fsdecode(a) for a in list(argv or [])]
+        tokens = _redact_argv(raw)
+        words = [raw]
+    commands = [c for w in words for c in _unwrap(w)]
     program, method, url, matched = "", "", "", []
-    for command in words:
-        cli, _rest = _http_command(command)
+    for command in commands:
+        cli, rest = _http_command(command)
         if cli:
-            program, matched = cli, command
+            program, matched = cli, rest
             method, url = classify(command)
             break
-    if not program and words and words[0]:
-        program = _program(words[0][0])
+    if not program and commands and commands[0]:
+        program = _program(commands[0][0])
     rec: dict[str, Any] = {
         "argv_head": [t[:MAX_ARGV_TOKEN_CHARS] for t in tokens[:MAX_ARGV_HEAD]],
         "program": program[:64],
@@ -570,18 +760,27 @@ def _describe(argv: Any, shell: bool) -> dict[str, Any]:
         "body": b"",
         "shell": bool(shell),
         "http": program in HTTP_CLIS,
+        "to_file": bool(program in HTTP_CLIS and _to_file(program, matched)),
         "fail_flag": False,
         "t": time.monotonic(),
     }
     if program == "curl":
-        flags, _p, _v = _split_flags(matched[1:], _CURL_SHORT_VALUE, _CURL_LONG_VALUE)
+        flags, _p, _v = _split_flags(_first_request(matched), _CURL_SHORT_VALUE, _CURL_LONG_VALUE)
         rec["fail_flag"] = bool({"-f", "--fail", "--fail-with-body"} & set(flags))
     if program in HTTP_CLIS and not url:
+        rec["unclassified"] = True
+    elif program not in HTTP_CLIS and any(
+        _program(tok) in HTTP_CLIS for command in commands for tok in command[1:]
+    ):
+        # `xargs curl …`, `find -exec curl …`: an HTTP CLI is named where
+        # this module cannot read its arguments. It happened; it cannot be
+        # classified — and the engine says so rather than nothing.
         rec["unclassified"] = True
     return rec
 
 
 _records: list[dict[str, Any]] = []
+_dropped = 0
 _path: Path | None = None
 _installed = False
 
@@ -628,10 +827,14 @@ def flush() -> None:
                     "truncated": len(text) > MAX_RECORDED_BODY_CHARS
                     or len(body) >= MAX_RECORDED_BODY_CHARS * 4,
                     "shell": rec["shell"],
+                    "piped": bool(rec.get("piped")),
+                    "to_file": bool(rec.get("to_file")),
                     "unclassified": bool(rec.get("unclassified")),
                     "t": rec["t"],
                 }
             )
+        if _dropped:
+            out.append({"dropped": _dropped})
         # Per thread, so two children finishing at once cannot tear one tmp file.
         tmp = _path.with_name(f"{_path.name}.{threading.get_ident()}.tmp")
         tmp.write_text(json.dumps(out), encoding="utf-8")
@@ -639,10 +842,19 @@ def flush() -> None:
 
 
 def _begin(argv: Any, shell: bool, piped: bool) -> dict[str, Any] | None:
-    if len(_records) >= MAX_RECORDED_SPAWNS:
-        return None
+    global _dropped
     rec = _describe(argv, shell)
     rec["piped"] = bool(piped)
+    if len(_records) >= MAX_RECORDED_SPAWNS:
+        # Full. An HTTP CLI is the entry the engine needs most, so it takes
+        # the slot of the oldest entry that is not one; anything else past
+        # the cap is counted and dropped, and the count is on the record.
+        victim = next((i for i, r in enumerate(_records) if not r.get("http")), None)
+        if not rec.get("http") or victim is None:
+            _dropped += 1
+            return None
+        _records.pop(victim)
+        _dropped += 1
     _records.append(rec)
     flush()
     return rec
@@ -677,6 +889,7 @@ def install(path: str) -> None:
     original_init = popen.__init__
     original_communicate = popen.communicate
     original_wait = popen.wait
+    original_del = popen.__del__
     original_system = os.system
 
     def init(self: Any, *args: Any, **kwargs: Any) -> None:
@@ -688,6 +901,7 @@ def install(path: str) -> None:
             rec = _begin(argv, shell, stdout == subprocess.PIPE)
             if rec is not None:
                 self._genus_spawn = rec
+                rec["_proc"] = weakref.ref(self)
         original_init(self, *args, **kwargs)
 
     def communicate(self: Any, *args: Any, **kwargs: Any) -> Any:
@@ -707,6 +921,17 @@ def install(path: str) -> None:
                 _finish(rec, code, None)
         return code
 
+    def finalize(self: Any, *args: Any, **kwargs: Any) -> None:
+        # The last look at a Popen nobody waited for. An asyncio transport
+        # sets `returncode` on the Popen it owns, then drops it; this is
+        # where that exit code is learned without ever reaping a child out
+        # from under the event loop's watcher.
+        with contextlib.suppress(Exception):
+            rec = getattr(self, "_genus_spawn", None)
+            if rec is not None and rec.get("returncode") is None and self.returncode is not None:
+                _finish(rec, self.returncode, None)
+        original_del(self, *args, **kwargs)
+
     def system(command: Any) -> Any:
         rec = None
         with contextlib.suppress(Exception):
@@ -722,6 +947,7 @@ def install(path: str) -> None:
         popen.__init__ = init  # type: ignore[method-assign]
         popen.communicate = communicate  # type: ignore[method-assign]
         popen.wait = wait  # type: ignore[method-assign]
+        popen.__del__ = finalize  # type: ignore[method-assign]
         os.system = system  # type: ignore[assignment]
         atexit.register(_flush_at_exit)
         flush()  # an empty record, so "absent" means the recorder never ran
@@ -731,6 +957,27 @@ def install(path: str) -> None:
 def _flush_at_exit() -> None:
     """The exit flush, wrapped once more: an exception raised from an atexit
     callback is printed to the snippet's stderr, which is the one place a
-    recorder failure must never show."""
+    recorder failure must never show.
+
+    Before writing, learn what it still can about a child nobody waited for:
+    an asyncio transport has already set the Popen's ``returncode``; a
+    fire-and-forget ``Popen`` is polled here, once, at exit — never earlier,
+    because reaping a child out from under an asyncio child watcher would
+    change what the snippet's own ``await proc.wait()`` returns.
+    """
+    with contextlib.suppress(Exception):
+        for rec in _records:
+            if rec.get("returncode") is not None:
+                continue
+            ref = rec.get("_proc")
+            proc = ref() if ref is not None else None
+            if proc is None:
+                continue
+            with contextlib.suppress(Exception):
+                code = proc.returncode
+                if code is None:
+                    code = proc.poll()
+                if isinstance(code, int):
+                    rec["returncode"] = code
     with contextlib.suppress(Exception):
         flush()

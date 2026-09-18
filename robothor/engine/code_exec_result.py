@@ -20,9 +20,11 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from robothor.engine.act_observe import OTHER_METHOD, clean_url
 from robothor.engine.code_exec_process import MAX_TIMEOUT_SECONDS
 from robothor.engine.code_execution import MAX_STDERR_BYTES, SandboxResult, truncate_with_marker
 
@@ -126,8 +128,8 @@ def recorded_http_calls(tools_dir: Path) -> list[dict[str, Any]] | None:
             continue
         calls.append(
             {
-                "method": str(item["method"])[:16].upper(),
-                "url": str(item["url"])[:2048],
+                "method": _method(item["method"]),
+                "url": clean_url(item["url"]),
                 "status": int(item.get("status") or 0),
                 "body": str(item.get("body") or "")[:MAX_RECORDED_BODY_CHARS],
                 "truncated": bool(item.get("truncated")),
@@ -156,8 +158,12 @@ def recorded_spawns(tools_dir: Path) -> list[dict[str, Any]] | None:
     if raw is None:
         return None
     spawns: list[dict[str, Any]] = []
-    for item in raw[:MAX_RECORDED_SPAWNS]:
+    for item in raw[: MAX_RECORDED_SPAWNS + 1]:
         if not isinstance(item, dict):
+            continue
+        if "dropped" in item and len(item) == 1:
+            # The recorder's own marker: how many spawns fell past its cap.
+            spawns.append({"dropped": max(0, _integer(item["dropped"]) or 0)})
             continue
         argv = item.get("argv_head")
         spawns.append(
@@ -165,19 +171,38 @@ def recorded_spawns(tools_dir: Path) -> list[dict[str, Any]] | None:
                 "argv_head": [str(a)[:200] for a in (argv if isinstance(argv, list) else [])][
                     :MAX_ARGV_HEAD
                 ],
-                "program": str(item.get("program") or "")[:64],
-                "method": str(item.get("method") or "")[:16].upper(),
-                "url": str(item.get("url") or "")[:2048],
+                "program": _PROGRAM_CHARS.sub("", str(item.get("program") or ""))[:64],
+                "method": _method(item.get("method")),
+                "url": clean_url(item.get("url")),
                 "returncode": _integer(item.get("returncode")),
                 "status": _integer(item.get("status")),
                 "body": str(item.get("body") or "")[:MAX_RECORDED_BODY_CHARS],
                 "truncated": bool(item.get("truncated")),
                 "shell": bool(item.get("shell")),
+                "piped": bool(item.get("piped")),
+                "to_file": bool(item.get("to_file")),
                 "unclassified": bool(item.get("unclassified")),
                 "t": _number(item.get("t")),
             }
         )
-    return spawns
+    return spawns[: MAX_RECORDED_SPAWNS + 1]
+
+
+#: What a program's basename may be made of once it comes from the record.
+_PROGRAM_CHARS = re.compile(r"[^A-Za-z0-9._+-]")
+
+
+def _method(value: Any) -> str:
+    """``""`` stays empty (not an HTTP spawn); a well-formed verb is kept
+    upper-cased; anything else is ``OTHER_METHOD`` — neither read nor write,
+    never quoted (hostile review I3: ``GET\n[SYSTEM] IGN``)."""
+    text = str(value or "").strip().upper()
+    if not text:
+        return ""
+    return text if _METHOD_SHAPE.match(text) else OTHER_METHOD
+
+
+_METHOD_SHAPE = re.compile(r"^[A-Z]{3,10}$")
 
 
 def _integer(value: Any) -> int | None:
@@ -199,7 +224,11 @@ def _http_call_entries(calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
     and one marker for the rest."""
     grouped: dict[tuple[Any, ...], dict[str, Any]] = {}
     for call in calls:
-        extra = {k: call[k] for k in ("via", "returncode", "refused") if k in call}
+        extra = {
+            k: call[k]
+            for k in ("via", "returncode", "refused", "outcome", "unobserved")
+            if k in call
+        }
         key = (call["method"], call["url"], call["status"], tuple(sorted(extra.items())))
         entry = grouped.pop(key, None) or {
             **{k: call[k] for k in ("method", "url", "status")},

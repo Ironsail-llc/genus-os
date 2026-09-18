@@ -42,6 +42,7 @@ from typing import Any
 
 from robothor.engine.act_observe import (
     CHANGE,
+    OTHER_METHOD,
     READ,
     SAFE_METHODS,
     accepted_write,
@@ -153,15 +154,25 @@ class ObservationLedger:
         not looked since" would fire the note on a run that did nothing, which
         is the false positive that gets a control ignored.
         """
+        sources = source_tokens(args)
         if isinstance(output, dict) and output.get("error"):
             # Unless a recorder WATCHED the call change something before it
             # failed. An `execute_code` that timed out after its `curl` POSTs
             # completed carries `error` for the timeout and `http_calls` for
             # the writes; a crash is not a rollback (measured 2026-09-18: the
-            # snippet failed one line after eighteen writes took effect).
-            self._record_recorded_http(step, tool, output)
+            # snippet failed one line after eighteen writes took effect). And
+            # where the recorder saw an attempt START whose outcome it never
+            # learned — a `Popen` still un-waited when the timeout killed
+            # everything — it is no witness to the outcome, so the text
+            # heuristic speaks (review I2).
+            witnessed = self._record_recorded_http(step, tool, output)
+            if (
+                not witnessed
+                and _unknown_attempt(output)
+                and classify(tool, args, _read_only()) == CHANGE
+            ):
+                self.changes.append(StateChange(step, tool, remote_tokens(args)))
             return
-        sources = source_tokens(args)
         # What the sandbox recorder SAW outranks what the snippet's text
         # suggests: a snippet whose writes went through `urllib` is classified
         # from its actual requests, against their origin, not from a regex
@@ -222,12 +233,23 @@ class ObservationLedger:
                 continue
             origin = http_origin(str(call.get("url") or ""))
             method = str(call.get("method") or "").upper()
-            if not method:
+            if not method or method == OTHER_METHOD:
+                # `OTHER` is what the loader makes of a method token that is
+                # not one: neither a read nor a write, and no witness (I3).
                 continue
             if method in SAFE_METHODS:
-                if origin:
+                # A read is credited only when the response reached the
+                # snippet: a curl that exited non-zero, sent its body to a
+                # file, or yielded an empty pipe observed nothing — and a
+                # HEAD or OPTIONS carries no content to observe (I1).
+                if origin and method == "GET" and not call.get("unobserved"):
                     reads.append((index, origin))
                     self.reads.append((step, frozenset({origin, str(call.get("url"))})))
+                continue
+            if call.get("outcome") == "unknown":
+                # An attempt whose exit the recorder never saw: it happened,
+                # and nobody knows how it ended. Not a change, and not a
+                # witness that outranks the text (I2).
                 continue
             # A non-safe attempt counts as witnessed whether or not its URL
             # yields an origin. One whose URL does not is recorded as a change
@@ -395,6 +417,15 @@ def _observed_something(output: Any) -> bool:
         if isinstance(value, (list, dict)) and value:
             return True
     return False
+
+
+def _unknown_attempt(output: Any) -> bool:
+    """Did a recorder see a non-safe attempt start whose outcome it never
+    learned? Then the text heuristic is the better witness."""
+    calls = output.get("http_calls") if isinstance(output, dict) else None
+    return isinstance(calls, list) and any(
+        isinstance(c, dict) and c.get("outcome") == "unknown" for c in calls
+    )
 
 
 def _answers(read: frozenset[str], changed: frozenset[str]) -> bool:

@@ -220,16 +220,33 @@ Two kinds of call, one rule:
   the heuristic, ten `slack/send` and eight `drafts/save` classified
   NEITHER). `sandbox_runtime/spawn_recorder.py` is copied beside the HTTP
   recorder and installed right after it. It hooks `subprocess.Popen.__init__`
-  (`run`, `call`, `check_output` and a context-managed `Popen` all pass
-  through it) for the argv and whether stdout was a pipe, `Popen.communicate`
-  and `Popen.wait` for the exit code and — for a known HTTP CLI (`curl`,
-  `wget`, `http`, `https`, `xh`) whose stdout was piped — the stdout head as
-  the snippet received it (2,000 characters, raw cap 4×), and `os.system` for
-  the string it ran (`shell: true`, no body). A `shell=True` string is split
-  with `shlex` for classification only; the string is what is recorded.
-  Record file `spawned.json`, atomic tmp+replace on every completion and at
-  exit, 200 entries, an empty list written at install so `spawn_recorder:
-  "absent"` means "never installed" and not "saw nothing".
+  (`run`, `call`, `check_output`, a context-managed `Popen` and
+  `asyncio.create_subprocess_*` all pass through it) for the argv and whether
+  stdout was a pipe; `Popen.communicate` for the exit code **and the stdout
+  head** — for a known HTTP CLI (`curl`, `wget`, `http`, `https`, `xh`) whose
+  stdout was piped, 2,000 characters, raw cap 4× — which is the ONLY place a
+  body is captured: `run`, `check_output` and `capture_output=True` go
+  through it, a snippet that reads `p.stdout` by hand does not; `Popen.wait`
+  and `Popen.__del__` for the exit code alone (an asyncio transport reads its
+  own pipes, sets `returncode` on the Popen and drops it — argv and exit are
+  learned, the body never); and `os.system` for the string it ran (`shell:
+  true`, no body). A `shell=True` string is split with `shlex` for
+  classification only; the string is what is recorded. **Wrappers are looked
+  through**: `sh|bash|dash|zsh -c "…"` is split like a shell string, and a
+  leading `env [VAR=…]`, `timeout [-k N] N`, `nice [-n N]`, `nohup`, `stdbuf`,
+  `sudo`, `setsid`, `ionice` is skipped, eight layers deep. `xargs curl`,
+  `find -exec curl` and anything else that names an HTTP CLI where its
+  arguments cannot be read are `unclassified` and surface under
+  `egress_unobserved` (the wrapper's name). Values of `-H`/`-u`/`-d`/`-F`/
+  `--json`/`-b`/`--oauth2-bearer` and friends are replaced with `<redacted>`
+  in the recorded argv head — an `Authorization` header never reaches the
+  file. Record file `spawned.json`, per-thread tmp + atomic replace on every
+  completion and at exit, an empty list written at install so
+  `spawn_recorder: "absent"` means "never installed" and not "saw nothing".
+  **The cap is 200 entries**; past it an HTTP CLI evicts the oldest non-HTTP
+  entry and everything else is counted and dropped — the result then says
+  `spawned: {count, programs, truncated: true, dropped: N}`, where `count`
+  is the true total and `programs` the names that were kept.
 
   **Classification is conservative.** curl: the URL is the first token that
   is neither a flag nor a flag's value and that starts with `http(s)://` or
@@ -240,32 +257,59 @@ Two kinds of call, one rule:
   GET. httpie/xh: the first positional if it is a verb, else GET, or POST when
   a data item (`a=b`, `a:=1`, `a@f`) follows. A shape it cannot read is kept
   as `unclassified: true` and surfaces under `egress_unobserved` — it
-  happened; it cannot be named.
+  happened; it cannot be named. **One request per invocation**: curl's
+  `--next` splits the command line and only the first segment is read;
+  a second URL on one command line is not read; a lower-case `-X get` is
+  upper-cased here although curl sends it literally. The `curl` path is
+  exercised against the real binary in the tests; `wget`, `http`/`https` and
+  `xh` are table-tested only (`TestTheArgvClassifier`) — their argv
+  conventions were read from their manuals, not measured.
 
   **What the engine does with it.** `code_exec_result.recorded_spawns`
   re-bounds every field (the file was written by a process the snippet
   controlled; size checked by `stat` first, same 1 MiB cap).
   `code_exec_spawns.merge_spawned_http` folds the HTTP-CLI entries into
   `http_calls` with `via: "curl"` (or the program), `returncode`, and —
-  when the exit was 0 and the JSON body carries a top-level `error` —
+  when the exit was 0 and the body says the service refused (a JSON object
+  with a top-level `error`, or an HTML 5xx page: `<title>5xx`, `Internal
+  Server Error`, `Bad Gateway`, `Service Unavailable`, `Gateway Timeout`) —
   `refused: true`; the two records are merged in the order things
-  completed (both stamp `t` on one monotonic clock). From there
+  completed (both stamp `t` on one monotonic clock). Two more marks:
+  `outcome: "unknown"` when the recorder never learned the exit (a `Popen`
+  still un-waited when the timeout killed everything) — such an entry is
+  neither a change nor a witness, so the text heuristic speaks for that
+  step exactly as before this recorder existed; and `unobserved: true` when
+  the response never reached the snippet (non-zero exit, `-o file`/`-O`,
+  wget's default file output, or a pipe that yielded nothing). From there
   `raw_http_responses`, the unread count, `ObservationLedger.
   _record_recorded_http` and "the recorder outranks the heuristic" apply
   unchanged. **Acceptance** is one rule, `act_observe.accepted_write`: a
-  non-safe method, not `refused`, and either `status < 400` or — for a
-  spawned call, which has no status line — `returncode == 0`. `status` is
-  `null` for a spawned call unless the exit code proved a refusal (`curl -f`
-  exiting 22, `wget` exiting 8 ⇒ `400`); a 200 is never invented. Other
-  spawns are summarised as `spawned: {count, programs}` (≤ 12 names), and
-  when one is on the egress list — `ssh scp sftp rsync nc ncat socat sendmail
-  mail mutt git openssl telnet ftp python python3 node ruby perl php` (a
-  versioned `python3.12` counts as `python`) — the result adds
-  `egress_unobserved: [names]`. The ledger records **no** change for those:
-  the note is the control, and the conservative direction is unchanged.
-  **Not hooked**, deliberately: `os.exec*` replaces the interpreter and its
-  hooks with it; `os.posix_spawn` and `os.fork` bypass `Popen`. The engine's
-  descendant census is the witness there.
+  well-formed method (`^[A-Z]{3,10}$` — anything else the record file
+  carries becomes `OTHER`, which is neither read nor write and is quoted to
+  nobody), not `refused`, and either `status < 400` or — for a spawned call,
+  which has no status line — `returncode == 0`. `status` is `null` for a
+  spawned call unless the exit code proved a refusal (`curl -f` exiting 22,
+  `wget` exiting 8 ⇒ `400`); a 200 is never invented. **Read credit** goes
+  only to a `GET` whose body reached the snippet — not to a curl that exited
+  non-zero, wrote to a file or yielded an empty pipe, and not to a `HEAD` or
+  `OPTIONS`, which carry no content to have observed. Every URL entering
+  `http_calls` or a note goes through `act_observe.clean_url` (control
+  characters and whitespace removed, `[ ] \` " < > { } | \ ^` percent-
+  encoded, cut at 2,048), and a note quotes at most 200 characters of it.
+  Other spawns are summarised as `spawned: {count, programs}` (≤ 12 names,
+  each reduced to `[A-Za-z0-9._+-]`), and when one is on the egress list —
+  `ssh scp sftp rsync nc ncat socat sendmail mail mutt git openssl telnet ftp
+  python python3 node ruby perl php` (a versioned `python3.12` counts as
+  `python`) — or is `unclassified`, the result adds `egress_unobserved:
+  [names]`. The ledger records **no** change for those: the note is the
+  control, and the conservative direction is unchanged. **Not hooked, and
+  invisible to this control**: `os.exec*` replaces the interpreter and its
+  hooks with it; `os.posix_spawn`, `os.posix_spawnp`, `os.fork` and
+  `os.spawn*` bypass `Popen`. A child started that way produces no
+  `http_calls`, no `spawned` and no `egress_unobserved` — nothing in the
+  engine describes it (the descendant census kills; it does not report),
+  and `test_a_posix_spawn_curl_is_invisible_and_the_docs_say_so` pins that
+  gap so the docs cannot claim otherwise.
 
 * **A crash after writes keeps the evidence.** The same run's snippet
   consumed its responses (`json.loads(p.stdout)`) and crashed at
@@ -280,7 +324,11 @@ Two kinds of call, one rule:
   snippet failed AFTER N write(s) took effect (…). Their responses, which
   the code consumed but never printed, are attached under lost_responses.
   Read them before re-sending: a re-send is a duplicate, …"). The recorder
-  flushed on each completion, so a timeout after the write still has it.
+  flushed on each completion, so a timeout after the write still has it. A
+  write whose body the recorder never had — `-o file`, a pipe the snippet
+  read by hand, an asyncio transport — is still named in the note ("No
+  response body was captured for N of them …") with `lost_responses: []` if
+  nothing else was kept, so a crash after a blind write is never silent.
   The ledger treats those calls exactly as recorded writes — `record()` no
   longer skips a result that carries `error` when it also carries
   recorder-witnessed `http_calls`; a crash is not a rollback. On a clean
