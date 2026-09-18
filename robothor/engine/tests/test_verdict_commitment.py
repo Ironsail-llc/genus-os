@@ -2515,3 +2515,88 @@ class TestASubjectlessBlockAssignsVerdictsByUnit:
             "## Low\n\n- msg_4406 — actually a typo.\n"
         )
         assert [item for item, _why in hedged_items(report)] == ["msg_4406"]
+
+
+class TestANestedBulletBelongsToItsParent:
+    """An indented sub-bullet is a unit of its own, so `- msg_2101 — …` over
+    `  - **High** — …` named nobody in the unit that carried the verdict and
+    dropped it — fail-closed, but the answer was on the page one line up. A
+    claim whose unit names nobody now falls back ONCE, to the nearest preceding
+    bullet with a smaller indent, before the single-item-or-drop rule."""
+
+    NESTED = (
+        "# Triage\n\n## Notes\n\n"
+        "- msg_2101 — rate limits, third escalation\n"
+        "  - **High** — churn risk, owner paged\n"
+        "- msg_2102 — platform outage\n"
+        "  - **Critical** — 2,000 seats affected\n"
+    )
+
+    def test_the_sub_bullets_verdict_is_its_parents(self) -> None:
+        from robothor.engine.verdict_sections import blocks, claim_owners
+        from robothor.engine.verdict_shapes import item_ids, verdict_spans
+
+        notes = next(block for block in blocks(self.NESTED) if "## Notes" in block)
+        ids = item_ids(notes)
+        owners = {
+            verdict: claim_owners(notes, "", ids, offset)
+            for offset, _heading, verdict in verdict_spans(notes)
+        }
+        assert owners == {"high": {"msg_2101"}, "critical": {"msg_2102"}}
+
+    def test_a_nested_verdict_that_contradicts_the_section_is_a_finding(self) -> None:
+        """The other half: the attribution is real enough to catch a genuine
+        double-booking through it."""
+        report = self.NESTED + "\n## Low\n\n### msg_2102 — outage, downgraded\n"
+        assert [item for item, _why in hedged_items(report)] == ["msg_2102"]
+
+    def test_the_fallback_is_one_level_only(self) -> None:
+        """A grandparent is not consulted: two levels up is somebody else's
+        list, and the drop rule takes over."""
+        report = (
+            "# Triage\n\n## Notes\n\n"
+            "- msg_2103 — outage\n"
+            "  - details\n"
+            "    - **Low** — actually cosmetic\n"
+            "- msg_2104 — typo\n\n"
+            "## Critical\n\n### msg_2103 — outage\n"
+        )
+        assert hedged_items(report) == []
+
+
+class TestABoldKeyWithAPlainValueIsALabel:
+    """`- **Severity:** High` — the key bolded, the value not — is how many
+    reports write their fields, and it was not a label at all: the bold lead
+    swallowed `Severity:` and the value was prose."""
+
+    @pytest.mark.parametrize(
+        "line",
+        ["- **Severity:** High", "**Severity:** High", "- **Severity: High**", "Severity: High"],
+        ids=["bullet-bold-key", "bold-key", "bold-all", "bare"],
+    )
+    def test_every_spelling_of_the_field_is_read(self, line: str) -> None:
+        from robothor.engine.verdict_shapes import verdicts_in
+
+        assert verdicts_in(line) == {"high"}
+
+    def test_a_bold_key_whose_value_is_a_tally_still_is_not(self) -> None:
+        from robothor.engine.verdict_shapes import verdicts_in
+
+        assert verdicts_in("- **Severity:** 2 High") == set()
+
+
+class TestVerdictsInIsTheSpansCollapsed:
+    @pytest.mark.parametrize(
+        "chunk",
+        [
+            MEASURED_REPORT,
+            LIVE_REPORT_B,
+            LIVE_REPORT_C,
+            "## Critical\n- **Severity:** High\n**Disposition: no action required**\n",
+        ],
+        ids=["measured", "live-b", "live-c", "mixed"],
+    )
+    def test_one_reading(self, chunk: str) -> None:
+        from robothor.engine.verdict_shapes import verdict_spans, verdicts_in
+
+        assert verdicts_in(chunk) == {name for _o, _h, name in verdict_spans(chunk)}

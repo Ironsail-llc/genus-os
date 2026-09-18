@@ -106,11 +106,17 @@ VERDICTS: dict[str, re.Pattern[str]] = {
 #: Where a verdict is ASSIGNED rather than merely mentioned: a heading, a
 #: bolded lead, or a named field. Each alternative is anchored and bounded, so
 #: the whole thing stays linear on a hostile document.
+#:
+#: The FIELD alternative comes before the bolded lead and admits `**` around
+#: its key, because `- **Severity:** High` — the key bolded, the value not —
+#: is how many reports write their fields, and with the bold lead tried first
+#: it swallowed `Severity:` and left the value as prose: not a label at all.
 _LABEL = re.compile(
     r"^#{1,6}[ \t]*([^\n]{0,200})$"
-    r"|^[ \t]*(?:[-*+][ \t]+)?\*\*([^*\n]{0,80})\*\*"
-    r"|^[ \t]*\|?[ \t]*(?:severity|priority|verdict|status|classification|disposition|action)"
-    r"[ \t]*[:=|][ \t]*([^\n|]{0,60})",
+    r"|^[ \t]*(?:[-*+][ \t]+)?\|?[ \t]*\**[ \t]*"
+    r"(?:severity|priority|verdict|status|classification|disposition|action)"
+    r"[ \t]*\**[ \t]*[:=|][ \t]*\**[ \t]*([^\n|]{0,60})"
+    r"|^[ \t]*(?:[-*+][ \t]+)?\*\*([^*\n]{0,80})\*\*",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -264,11 +270,11 @@ def verdict_labels(chunk: str) -> list[tuple[int, bool, str]]:
     """
     out: list[tuple[int, bool, str]] = []
     for match in _LABEL.finditer(chunk):
-        heading, bold, field = match.groups()
+        heading, field, bold = match.groups()
         if heading is not None:
             out.append((match.start(), True, _unquoted(heading)))
         else:
-            text = bold if bold is not None else field
+            text = field if field is not None else bold
             out.append((match.start(), False, _untallied(_unquoted(text or ""))))
     return out
 
@@ -283,8 +289,7 @@ def verdicts_in(chunk: str) -> set[str]:
     document puts in a heading, a bolded lead or a ``Severity:`` field —
     prose that happens to contain the word is discussion, not a decision.
     """
-    labels = " | ".join(text for _offset, _heading, text in verdict_labels(chunk))
-    return {name for name, pattern in VERDICTS.items() if pattern.search(labels)}
+    return {name for _offset, _heading, name in verdict_spans(chunk)}
 
 
 def verdict_spans(chunk: str) -> list[tuple[int, bool, str]]:
