@@ -248,6 +248,13 @@ def claim_owners(block: str, subject: str, ids: set[str], offset: int) -> set[st
         return ids
     start, end = claim_span(block, offset)
     named = {item for _at, item in item_id_spans(block[start:end])}
+    if not named:
+        # Once, to the parent. An indented sub-bullet is a unit of its own,
+        # so `- msg_2101 — …` over `  - **High** — …` named nobody in the unit
+        # that carried the verdict and dropped it: fail-closed, but the answer
+        # was on the page one line up. One level only — two levels up is
+        # somebody else's list.
+        named = _parent_ids(block, start)
     if named:
         return named
     if len(ids) == 1:
@@ -258,6 +265,21 @@ def claim_owners(block: str, subject: str, ids: set[str], offset: int) -> set[st
         len(ids),
     )
     return set()
+
+
+def _parent_ids(block: str, start: int) -> set[str]:
+    """The ids named by the nearest preceding bullet with a smaller indent."""
+    indent = _indent(block, start)
+    for match in reversed(list(_UNIT_START.finditer(block, 0, start))):
+        if _indent(block, match.start()) < indent:
+            return {item for _at, item in item_id_spans(block[match.start() : start])}
+    return set()
+
+
+def _indent(block: str, at: int) -> int:
+    """How far the line beginning at ``at`` is indented."""
+    line = block[at : block.find("\n", at) if block.find("\n", at) >= 0 else len(block)]
+    return len(line) - len(line.lstrip(" \t"))
 
 
 def claim_span(block: str, offset: int) -> tuple[int, int]:

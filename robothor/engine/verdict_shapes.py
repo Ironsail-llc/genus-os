@@ -41,6 +41,8 @@ __all__ = [
     "item_id_spans",
     "item_ids",
     "overrides_a_marker",
+    "verdict_labels",
+    "verdict_spans",
     "verdicts_in",
 ]
 
@@ -104,11 +106,17 @@ VERDICTS: dict[str, re.Pattern[str]] = {
 #: Where a verdict is ASSIGNED rather than merely mentioned: a heading, a
 #: bolded lead, or a named field. Each alternative is anchored and bounded, so
 #: the whole thing stays linear on a hostile document.
+#:
+#: The FIELD alternative comes before the bolded lead and admits `**` around
+#: its key, because `- **Severity:** High` — the key bolded, the value not —
+#: is how many reports write their fields, and with the bold lead tried first
+#: it swallowed `Severity:` and left the value as prose: not a label at all.
 _LABEL = re.compile(
     r"^#{1,6}[ \t]*([^\n]{0,200})$"
-    r"|^[ \t]*(?:[-*+][ \t]+)?\*\*([^*\n]{0,80})\*\*"
-    r"|^[ \t]*\|?[ \t]*(?:severity|priority|verdict|status|classification|disposition|action)"
-    r"[ \t]*[:=|][ \t]*([^\n|]{0,60})",
+    r"|^[ \t]*(?:[-*+][ \t]+)?\|?[ \t]*\**[ \t]*"
+    r"(?:severity|priority|verdict|status|classification|disposition|action)"
+    r"[ \t]*\**[ \t]*[:=|][ \t]*\**[ \t]*([^\n|]{0,60})"
+    r"|^[ \t]*(?:[-*+][ \t]+)?\*\*([^*\n]{0,80})\*\*",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -228,6 +236,49 @@ def item_ids(chunk: str) -> set[str]:
     return {item for _offset, item in item_id_spans(chunk)}
 
 
+#: A TALLY: a category counted, not an item classified. MEASURED 2026-09-18:
+#: an executive summary read "**2 Critical** issues … **2 High** … **3 Low**
+#: items" and then mentioned one item by id, and that item came back "under 3
+#: verdicts". Every triage report has a summary that counts its categories.
+#: In a non-heading label a verdict word with a count in front of it, or a
+#: plural count noun after it, is that tally; a HEADING keeps its count,
+#: because `## Critical Issues (3)` is a section and stays a scope.
+_COUNT = (
+    r"(?:\d{1,4}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+    r"several|multiple|many|all)"
+)
+_TALLY_BEFORE = re.compile(rf"^\W*{_COUNT}\b", re.IGNORECASE)
+_TALLY_AFTER = re.compile(
+    r"\b(?:issues|items|messages|tickets|alerts|incidents|findings|cases|escalations)\b"
+    r"|\(\s*\d{1,4}\s*\)",
+    re.IGNORECASE,
+)
+
+
+def _untallied(label: str) -> str:
+    """A non-heading label, or ``""`` when it counts a category."""
+    if _TALLY_BEFORE.match(label) or _TALLY_AFTER.search(label):
+        return ""
+    return label
+
+
+def verdict_labels(chunk: str) -> list[tuple[int, bool, str]]:
+    """``(offset, is_heading, text)`` for every label position in this block.
+
+    Quoted titles are blanked in all of them and tallies in the non-heading
+    ones, so what comes back is the text a verdict may be READ from.
+    """
+    out: list[tuple[int, bool, str]] = []
+    for match in _LABEL.finditer(chunk):
+        heading, field, bold = match.groups()
+        if heading is not None:
+            out.append((match.start(), True, _unquoted(heading)))
+        else:
+            text = field if field is not None else bold
+            out.append((match.start(), False, _untallied(_unquoted(text or ""))))
+    return out
+
+
 def verdicts_in(chunk: str) -> set[str]:
     """The verdicts this block ASSIGNS, read only from label positions.
 
@@ -238,10 +289,22 @@ def verdicts_in(chunk: str) -> set[str]:
     document puts in a heading, a bolded lead or a ``Severity:`` field —
     prose that happens to contain the word is discussion, not a decision.
     """
-    labels = " | ".join(
-        _unquoted(part) for match in _LABEL.finditer(chunk) for part in match.groups() if part
-    )
-    return {name for name, pattern in VERDICTS.items() if pattern.search(labels)}
+    return {name for _offset, _heading, name in verdict_spans(chunk)}
+
+
+def verdict_spans(chunk: str) -> list[tuple[int, bool, str]]:
+    """``(offset, is_heading, verdict)`` for each verdict a label assigns.
+
+    The same reading as :func:`verdicts_in`, kept apart by label so the caller
+    can decide how far each one reaches: a heading's verdict is the section's,
+    and a bolded lead's is its own bullet's.
+    """
+    return [
+        (offset, heading, name)
+        for offset, heading, text in verdict_labels(chunk)
+        for name, pattern in VERDICTS.items()
+        if pattern.search(text)
+    ]
 
 
 def hands_the_verdict_back(chunk: str) -> int:

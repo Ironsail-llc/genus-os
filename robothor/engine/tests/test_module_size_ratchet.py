@@ -507,7 +507,11 @@ CAPS = {
     # block, a claim to its own bullet or row — plus the bounded quote for the
     # re-ask. Six lines here; the attribution rule is in verdict_sections.py
     # and the quoting in verdict_shapes.py, which is why this stayed small.
-    "robothor/engine/verdict_commitment.py": 462,
+    # 462 -> 465: in a subject-less block a heading's verdict reaches every id
+    # and a bolded lead's reaches only its own bullet — the fail-closed rule
+    # #597 applied to hedges, applied to verdicts. Three lines: the loop over
+    # `verdict_spans` replaces the one over `verdicts_in`.
+    "robothor/engine/verdict_commitment.py": 465,
     # Bounded from the day they land, the schedule_reconcile.py rule: these are
     # the modules that would otherwise absorb every new document shape and
     # every new metadata key.
@@ -534,7 +538,19 @@ CAPS = {
     # second alternation there had diverged by one flag, which is what crashed
     # the whole inspection; one definition cannot drift from itself. (314 with
     # the note that says so, which is the part that keeps it one.)
-    "robothor/engine/verdict_shapes.py": 314,
+    # 314 -> 372: a TALLY is not a verdict. The third live `enforce` run's
+    # executive summary read "**2 Critical** issues … **2 High** … **3 Low**
+    # items" and the one item it went on to mention came back "under 3
+    # verdicts". Every triage report counts its categories, so this is the
+    # standard shape, not an edge. `verdict_labels` / `verdict_spans` keep the
+    # labels apart so the ladder can decide how far each reaches, which is
+    # what the sibling rule in verdict_commitment.py needs; the vocabulary of
+    # counts and count nouns is a vocabulary, which is this file.
+    # 372 -> 377: the field alternative learned `- **Severity:** High` (bold
+    # key, plain value — not a label at all before, because the bold lead was
+    # tried first and swallowed the key), and `verdicts_in` became the spans
+    # collapsed, which took five lines back.
+    "robothor/engine/verdict_shapes.py": 377,
     # The section tree. Bounded from the day it lands: this is where every
     # future rule about how a document is SHAPED will want to go, and the two
     # it already carries are the ones that kept the repair from inventing
@@ -562,7 +578,10 @@ CAPS = {
     # their measurements. 272 -> 275: the identity field is now built by
     # interpolating `verdict_shapes.ITEM_ID` rather than restating it, so the
     # invariant the crash broke is structural rather than sampled.
-    "robothor/engine/verdict_sections.py": 275,
+    # 275 -> 297: a claim whose sub-bullet names nobody falls back once to its
+    # parent bullet — `- msg_2101 — …` over `  - **High** — …` was being
+    # dropped with the answer one line up on the page. One level only.
+    "robothor/engine/verdict_sections.py": 297,
     # Whether an override named a reason. Bounded for the same reason and with
     # the same history: three rounds of review each found a sentence that named
     # nothing and was exempted anyway — and, the last time, six that named
