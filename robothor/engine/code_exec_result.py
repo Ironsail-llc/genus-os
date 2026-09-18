@@ -18,6 +18,7 @@ silently gone.
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -30,7 +31,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["HARD_CAP_MULTIPLIER", "WORKDIR_NAME", "shape", "spill"]
+__all__ = ["HARD_CAP_MULTIPLIER", "WORKDIR_NAME", "recorded_http_calls", "shape", "spill"]
 
 #: How much more than the model's stdout budget is kept for the spill file.
 #: The spill exists so the agent can page the whole output back, so it has to
@@ -63,10 +64,94 @@ def spill(workspace: Path, stdout: str) -> str:
         return ""
 
 
+#: The record file is refused unread past this. Generous for what the recorder
+#: itself will write (200 exchanges x 2,000 body chars is under half of it) and
+#: small enough that a same-uid snippet which replaced the file with a
+#: gigabyte cannot park the event loop in `read_text`.
+MAX_RECORD_BYTES = 1_048_576
+
+#: How many distinct `(method, url, status)` lines the result lists. Past
+#: this the most recent are kept and one marker says how many were elided.
+MAX_HTTP_CALL_ENTRIES = 50
+
+
+def recorded_http_calls(tools_dir: Path) -> list[dict[str, Any]] | None:
+    """What the in-sandbox recorder saw the snippet do over HTTP, bounded again.
+
+    ``None`` when there is no record at all — a recorder that failed to
+    install writes nothing, and "absent" is a different answer from "saw
+    nothing", so the result can say which. ``[]`` when it ran and the snippet
+    made no request. Raises on a file that is too large or not the shape the
+    recorder writes; the handler turns that into ``"unreadable"``. Re-bounded
+    here rather than trusted: the file was written by a process the snippet
+    controlled, and its SIZE is checked before a byte of it is read.
+    """
+    from robothor.engine.sandbox_runtime.http_recorder import (
+        MAX_RECORDED_BODY_CHARS,
+        MAX_RECORDED_CALLS,
+        RECORD_FILE,
+    )
+
+    path = tools_dir / RECORD_FILE
+    if not path.is_file():
+        return None
+    size = path.stat().st_size
+    if size > MAX_RECORD_BYTES:
+        raise ValueError(f"HTTP record is {size} bytes; the cap is {MAX_RECORD_BYTES}")
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, list):
+        raise ValueError("HTTP record is not a list")
+    calls: list[dict[str, Any]] = []
+    for item in raw[:MAX_RECORDED_CALLS]:
+        if not isinstance(item, dict) or not item.get("method") or not item.get("url"):
+            continue
+        calls.append(
+            {
+                "method": str(item["method"])[:16].upper(),
+                "url": str(item["url"])[:2048],
+                "status": int(item.get("status") or 0),
+                "body": str(item.get("body") or "")[:MAX_RECORDED_BODY_CHARS],
+                "truncated": bool(item.get("truncated")),
+            }
+        )
+    return calls
+
+
+def _http_call_entries(calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The requests as the model and the ledger read them: identical
+    ``(method, url, status)`` collapsed into one line with a count, ordered by
+    LAST occurrence. That order is load-bearing, not cosmetic: the ledger's
+    "was this origin read after its last write" is answered by a read entry
+    sitting after a write entry, with no index to carry. Capped, with the
+    most recent kept and one marker for the rest."""
+    grouped: dict[tuple[str, str, int], dict[str, Any]] = {}
+    for call in calls:
+        key = (call["method"], call["url"], call["status"])
+        entry = grouped.pop(key, None) or {**{k: call[k] for k in ("method", "url", "status")}}
+        entry["count"] = int(entry.get("count", 0)) + 1
+        grouped[key] = entry  # re-inserted, so dict order is last-seen order
+    entries = list(grouped.values())
+    if len(entries) > MAX_HTTP_CALL_ENTRIES:
+        elided = len(entries) - MAX_HTTP_CALL_ENTRIES
+        entries = entries[-MAX_HTTP_CALL_ENTRIES:] + [{"elided": elided}]
+    return entries
+
+
 def shape(
-    result: SandboxResult, *, server: Any, workspace: Path, stdout_cap: int
+    result: SandboxResult,
+    *,
+    server: Any,
+    workspace: Path,
+    stdout_cap: int,
+    http_calls: list[dict[str, Any]] | None = None,
+    http_recorder: str = "",
 ) -> dict[str, Any]:
-    """The result the model reads: bounded, marked, and never silently cut."""
+    """The result the model reads: bounded, marked, and never silently cut.
+
+    ``http_calls`` is the recorder's list (``None`` when there was no record);
+    ``http_recorder`` is a state to report instead of the list — ``"absent"``
+    or ``"unreadable"`` — so nobody reads "no ``http_calls``" as "no HTTP".
+    """
     full_stdout = result.stdout
     stdout, stdout_cut = truncate_with_marker(full_stdout, stdout_cap)
     stderr, stderr_cut = truncate_with_marker(result.stderr, MAX_STDERR_BYTES)
@@ -100,4 +185,14 @@ def shape(
         )
     if server.calls_served >= server.max_calls:
         shaped["tool_call_limit_reached"] = True
+    if http_recorder:
+        shaped["http_recorder"] = http_recorder
+    elif http_calls is None:
+        shaped["http_recorder"] = "absent"
+    elif http_calls:
+        # The requests, not the bodies: what the snippet did over the network
+        # on its own, so the model and the observation ledger both see the
+        # writes. The bodies stay out of the context — the point of the
+        # unread-response count is that the snippet should have printed them.
+        shaped["http_calls"] = _http_call_entries(http_calls)
     return shaped

@@ -43,6 +43,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "MAX_HOLDS",
+    "observation_note_parts",
     "observation_notes",
     "record_observation_verdicts",
     "unobserved_change_nudge",
@@ -57,18 +58,33 @@ MAX_HOLDS = 2
 
 
 def observation_notes(session: Any) -> str:
-    """What to add to the next engine note, or "" when there is nothing.
+    """The observation notes due now, joined — or "" when there is nothing.
+
+    Kept for callers that want one string; the runner's path is
+    :func:`observation_note_parts`, which keeps each note its own message.
+    """
+    return "\n".join(observation_note_parts(session))
+
+
+def observation_note_parts(session: Any) -> list[str]:
+    """What the model is due to hear at the next engine note, one item each.
 
     Called from ``loop_guards.append_engine_note``, so every deliverable
-    check-in and every deadline rung carries it. Each truncation is quoted at
+    check-in and every deadline rung carries them. Each truncation is quoted at
     most once and the act→observe sentence at most once per run, because a
     control that repeats itself is a control that gets skimmed.
+
+    A LIST, not a string, because of what the measured run was handed: one
+    ``[SYSTEM]`` message that opened "Decide NOW what the smallest complete
+    deliverable is" and, three sentences in, said "read it again before you
+    write your answer". Two instructions in one message is one instruction,
+    and it was the first — the model went straight to ``write_file``.
     """
     from robothor.engine.feature_flags import act_observe_mode, truncation_ledger_mode
 
     ledger = ledger_for(session)
     if ledger is None:
-        return ""
+        return []
     parts: list[str] = []
 
     truncation_mode = truncation_ledger_mode()
@@ -101,7 +117,7 @@ def observation_notes(session: Any) -> str:
                 len(pending),
                 note.replace("\n", " ")[:300],
             )
-    return "\n".join(parts)
+    return parts
 
 
 def unread_observation_hold(session: Any) -> bool:
@@ -205,13 +221,19 @@ def unobserved_change_nudge(session: Any) -> bool:
     crossed neither (hostile review I2) — the one moment it was certain to
     reach is the moment it tried to stop.
 
-    One turn, not a hold. The flag's promise is that it never FAILS a run, and
+    One turn, not a loop. The flag's promise is that it never FAILS a run, and
     it does not: the run always completes, and the worst case is one extra
     model call. Appending the note and returning False would have been the
     cheaper-looking option and it is the one C1 records — the runner returns on
     a False and ``get_final_text`` walks back past anything appended after the
     last assistant message, so the note would reach the transcript and nothing
     else.
+
+    Regardless of whether the mid-run note was shown. MEASURED 2026-09-17: the
+    note was delivered once, folded into the 50 % deadline blob, the model went
+    straight to ``write_file``, and this function — then gated on
+    ``change_note_given`` — said nothing at the stop. A note is a nudge; the
+    hold is the guarantee, and they are latched separately.
     """
     from robothor.engine.feature_flags import act_observe_mode
     from robothor.engine.session import ENGINE_CONTEXT_ROLE
@@ -220,7 +242,7 @@ def unobserved_change_nudge(session: Any) -> bool:
     if mode == "off":
         return False
     ledger = ledger_for(session)
-    if ledger is None or ledger.change_note_given:
+    if ledger is None or ledger.change_hold_used:
         return False
     pending = ledger.unobserved_changes()
     note = act_observe_note(pending)
@@ -235,6 +257,7 @@ def unobserved_change_nudge(session: Any) -> bool:
             note.replace("\n", " ")[:300],
         )
         return False
+    ledger.change_hold_used = True
     ledger.change_note_given = True
     session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": note})
     logger.warning(

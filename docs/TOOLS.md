@@ -656,9 +656,20 @@ for quality and 0.0 for accuracy.
 
 So: **route API calls through `genus_tools` where the tool exists**, and where
 you must use HTTP directly, print the response rather than a status field.
-`execute_code` now counts what you skipped — a result carrying
-`unread_responses` is telling you that many proxied calls returned a body your
-snippet never showed itself.
+`execute_code` counts what you skipped, on both paths — a result carrying
+`unread_responses` is telling you that many calls, proxied *or* made with
+`urllib`/`requests` inside the snippet, returned a body your snippet never
+showed itself. `unread_response_tools` names them (`POST http://host/path` for
+a raw one). The same task was lost a second time by a `urllib` loop that
+printed `OK` per send while the proxied count read an honest zero; the sandbox
+now records the snippet's own HTTP (method, URL, status and a count — listed
+under `http_calls`, most recent last), so a raw POST is held to the same rule.
+A rejected write (4xx, 5xx) and a response with nothing substantial in it are
+never counted. Coverage is exact for `urllib` (every body); for `requests` it
+is the request line always and the body only for an uncompressed
+`Content-Length` reply — a gzip or chunked reply is recorded empty, which is
+never counted as unread. `httpx` is not seen. `http_recorder: "absent"` in a
+result means the recorder did not run, not that you made no requests.
 
 ### After you change something, look again
 
@@ -666,8 +677,14 @@ A call that changed remote state invalidates what you knew about that source.
 Sending a message, creating a record or POSTing to an endpoint can cause the
 other side to produce something new — and it very often does. If a run makes
 state-changing calls and then writes its deliverable with no read in between,
-the engine says so once at a check-in. Treat that note as what it is: the
-report you are about to write is about the world as it was *before* you acted.
+the engine says so as its own `[SYSTEM]` message — once mid-run if a check-in
+or deadline rung comes round, and, at `enforce`, once more at the moment you
+try to finish if you still have not looked. That second one is a hold: the
+run gets one more turn with the note in front of it, then ends whatever you
+do. Treat the note as what it is: the report you are about to write is about
+the world as it was *before* you acted. A write your snippet made itself is
+answered by any later read of the same host — list the inbox, not the send
+endpoint.
 
 ### Everything else
 

@@ -43,7 +43,9 @@ from typing import Any
 from robothor.engine.act_observe import (
     CHANGE,
     READ,
+    SAFE_METHODS,
     classify,
+    http_origin,
     remote_tokens,
     source_tokens,
 )
@@ -131,7 +133,12 @@ class ObservationLedger:
     quoted: set[tuple[int, str]] = field(default_factory=set)
     #: Step numbers of reads, with what they read, newest last.
     reads: list[tuple[int, frozenset[str]]] = field(default_factory=list)
+    #: The mid-run NOTE (a nudge, at most once) and the stop-time HOLD (the
+    #: guarantee, at most once) are separate latches. One latch for both is
+    #: how the measured run was told once, inside a deadline blob, and then
+    #: allowed to finish without looking.
     change_note_given: bool = False
+    change_hold_used: bool = False
     holds_used: int = 0
 
     # ── recording ───────────────────────────────────────────────────────
@@ -148,6 +155,16 @@ class ObservationLedger:
         if isinstance(output, dict) and output.get("error"):
             return
         sources = source_tokens(args)
+        # What the sandbox recorder SAW outranks what the snippet's text
+        # suggests: a snippet whose writes went through `urllib` is classified
+        # from its actual requests, against their origin, not from a regex
+        # over its source. The heuristic still speaks when the recorder saw no
+        # write — a `subprocess.run(["curl", "-X", "POST", …])` is invisible
+        # to an `http.client` hook and visible to the verb regex.
+        if self._record_recorded_http(step, tool, output):
+            self._resolve(tool, args, sources, output)
+            self._register_truncations(step, tool, sources, output)
+            return
         kind = classify(tool, args, _read_only())
         if kind == READ:
             self.reads.append((step, sources))
@@ -166,6 +183,57 @@ class ObservationLedger:
         # manufactures a false statement is worse than one that is silent.
         self._resolve(tool, args, sources, output)
         self._register_truncations(step, tool, sources, output)
+
+    def _record_recorded_http(self, step: int, tool: str, output: Any) -> bool:
+        """The HTTP a snippet made on its own, as its `execute_code` result
+        reports it (`http_calls`, from the in-sandbox recorder). True when the
+        recorder witnessed ANY non-safe attempt, accepted or refused — the
+        caller then skips the text heuristic for this step, because the
+        recorder is the better witness. Refused too, deliberately: a snippet
+        whose every POST came back 429 still says `method="POST"` in its text,
+        and letting the heuristic speak there recorded a change that never
+        happened and held the run for it (review finding 2).
+
+        The entries are collapsed `(method, url, status, count)` lines in
+        LAST-SEEN order. Reads are recorded against the origin AND the URL. An
+        accepted write is recorded against the origin only, `count` times, and
+        not at all when a read of that origin sits after it in the list — a
+        read whose last occurrence follows the write's last occurrence, which
+        is what "read it back inside the same snippet" means when both share
+        one step number and the cross-step rule below cannot see the order.
+        """
+        calls = output.get("http_calls") if isinstance(output, dict) else None
+        if not isinstance(calls, list) or not calls:
+            return False
+        attempted = False
+        writes: list[tuple[int, str, int]] = []
+        reads: list[tuple[int, str]] = []
+        for index, call in enumerate(calls):
+            if not isinstance(call, dict):
+                continue
+            origin = http_origin(str(call.get("url") or ""))
+            method = str(call.get("method") or "").upper()
+            if not method:
+                continue
+            if method in SAFE_METHODS:
+                if origin:
+                    reads.append((index, origin))
+                    self.reads.append((step, frozenset({origin, str(call.get("url"))})))
+                continue
+            # A non-safe attempt counts as witnessed whether or not its URL
+            # yields an origin. One whose URL does not is recorded as a change
+            # against NO source — it happened and cannot be named — rather
+            # than dropped, which in a mixed snippet left the named write
+            # standing alone as if it were the only one.
+            attempted = True
+            if int(call.get("status") or 0) < 400:
+                writes.append((index, origin, max(1, int(call.get("count") or 1))))
+        for index, origin, count in writes:
+            if origin and any(i > index and o == origin for i, o in reads):
+                continue
+            sources = frozenset({origin}) if origin else frozenset()
+            self.changes.extend([StateChange(step, tool, sources)] * count)
+        return attempted
 
     def _register_truncations(
         self, step: int, tool: str, sources: frozenset[str], output: Any
@@ -264,7 +332,7 @@ class ObservationLedger:
             if not later:
                 out.append((change.step, change.tool, change.sources))
                 continue
-            if change.sources and not any(src & change.sources for _s, src in later):
+            if change.sources and not any(_answers(src, change.sources) for _s, src in later):
                 out.append((change.step, change.tool, change.sources))
         return out
 
@@ -318,6 +386,20 @@ def _observed_something(output: Any) -> bool:
         if isinstance(value, (list, dict)) and value:
             return True
     return False
+
+
+def _answers(read: frozenset[str], changed: frozenset[str]) -> bool:
+    """Does a later read answer a change against these sources?
+
+    The same token, or a read anywhere UNDER a changed origin: a write the
+    recorder saw is keyed to ``http://host:port``, and a later
+    ``curl http://host:port/inbox/messages`` is a read of that source in the
+    only sense that matters. A change keyed to a full URL (the `exec`
+    heuristic's) still needs that URL read back, as before.
+    """
+    if read & changed:
+        return True
+    return any(token.startswith(origin.rstrip("/") + "/") for origin in changed for token in read)
 
 
 def _targets(tokens: frozenset[str]) -> frozenset[str]:

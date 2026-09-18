@@ -73,7 +73,7 @@ from robothor.engine.code_exec_process import (
     PR_SET_CHILD_SUBREAPER,
     run_snippet,
 )
-from robothor.engine.code_exec_result import HARD_CAP_MULTIPLIER, shape
+from robothor.engine.code_exec_result import HARD_CAP_MULTIPLIER, recorded_http_calls, shape
 from robothor.engine.code_execution import (
     DEFAULT_MAX_TOOL_CALLS,
     DEFAULT_TIMEOUT_SECONDS,
@@ -109,6 +109,10 @@ GUARDED_IMPORTS: tuple[str, ...] = (
     "litellm",
     "redis",
 )
+
+#: The module name the outbound-HTTP recorder is staged under, beside
+#: `genus_tools`. Underscored so it shadows nothing a snippet would import.
+HTTP_RECORDER_MODULE = "_genus_http_recorder.py"
 
 
 def resolve_timeout(args: dict[str, Any], default: int) -> int:
@@ -225,6 +229,8 @@ async def _execute_code(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     responses_from = len(getattr(proxy, "responses", ()))
     tools_dir = Path(tempfile.mkdtemp(prefix="code-", dir=_run_scratch_root(ctx)))
     server = ToolRpcServer(directory=tools_dir, proxy=proxy, max_calls=max_calls)
+    http_calls: list[dict[str, Any]] | None = None
+    http_recorder = ""
     try:
         await server.start()
         _stage(tools_dir, code)
@@ -236,6 +242,15 @@ async def _execute_code(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
             hard_cap=stdout_cap * HARD_CAP_MULTIPLIER,
             on_spawn=server.bind_to_session,
         )
+        # Read before the `finally` removes the directory. Best effort in the
+        # same sense as the recorder: a record that cannot be read is no
+        # record, the snippet's own result is unchanged by it, and the result
+        # SAYS so rather than looking like a snippet that made no request.
+        try:
+            http_calls = recorded_http_calls(tools_dir)
+        except Exception as exc:  # noqa: BLE001 - diagnostics never fail the call
+            logger.warning("execute_code: the HTTP record could not be read: %r", exc)
+            http_recorder = "unreadable"
     except OSError as exc:
         return {"error": f"execute_code could not start: {exc}"}
     finally:
@@ -250,18 +265,25 @@ async def _execute_code(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
             logger.warning("execute_code: closing the tool socket failed: %r", exc)
         shutil.rmtree(tools_dir, ignore_errors=True)
 
-    shaped = shape(result, server=server, workspace=workspace, stdout_cap=stdout_cap)
-    # A proxied call's response is EVIDENCE, not a receipt. The measured run
-    # printed only each send's `status` and threw away the three follow-up
-    # messages the service handed back in those same responses; nothing
-    # anywhere said so. This is that, counted.
-    from robothor.engine.act_observe import unread_proxy_responses
-
-    shaped.update(
-        unread_proxy_responses(
-            list(getattr(proxy, "responses", ()))[responses_from:], result.stdout
-        )
+    shaped = shape(
+        result,
+        server=server,
+        workspace=workspace,
+        stdout_cap=stdout_cap,
+        http_calls=http_calls,
+        http_recorder=http_recorder,
     )
+    # A call's response is EVIDENCE, not a receipt — a proxied call's, and
+    # equally one the snippet made on its own. The first measured run printed
+    # only each proxied send's `status`; the rerun sent everything through
+    # `urllib`, printed `OK`, and the proxied count was an honest zero while
+    # three follow-up messages went unread in exactly the same way. Both kinds
+    # are counted here, under one rule.
+    from robothor.engine.act_observe import raw_http_responses, unread_proxy_responses
+
+    proxied = list(getattr(proxy, "responses", ()))[responses_from:]
+    raw = raw_http_responses(http_calls or [])
+    shaped.update(unread_proxy_responses(proxied + raw, result.stdout))
     return shaped
 
 
@@ -278,20 +300,29 @@ def _resolved_timeout(args: dict[str, Any], ctx: ToolContext) -> int:
 
 
 def _stage(tools_dir: Path, code: str) -> None:
-    """Write the three files the snippet runs from.
+    """Write the four files the snippet runs from.
 
     The client is located by PATH, not imported: ``sandbox_runtime`` holds code
     that runs inside a sandbox, and importing it here would execute its
     module-level environment read in the ENGINE — which is exactly what its own
-    docstring says it never does.
+    docstring says it never does. The recorder is copied the same way; only its
+    three constants are ever imported engine-side.
     """
     from robothor.engine.sandbox_runtime.boot_template import BOOT_TEMPLATE
+    from robothor.engine.sandbox_runtime.http_recorder import RECORD_FILE
 
     runtime = Path(__file__).resolve().parents[2] / "sandbox_runtime"
     client_source = (runtime / "genus_tools.py").read_text(encoding="utf-8")
     (tools_dir / "genus_tools.py").write_text(client_source, encoding="utf-8")
+    recorder_source = (runtime / "http_recorder.py").read_text(encoding="utf-8")
+    (tools_dir / HTTP_RECORDER_MODULE).write_text(recorder_source, encoding="utf-8")
     (tools_dir / "snippet.py").write_text(code, encoding="utf-8")
     (tools_dir / "_boot.py").write_text(
-        BOOT_TEMPLATE.format(guarded=GUARDED_IMPORTS, subreaper=PR_SET_CHILD_SUBREAPER),
+        BOOT_TEMPLATE.format(
+            guarded=GUARDED_IMPORTS,
+            subreaper=PR_SET_CHILD_SUBREAPER,
+            recorder=HTTP_RECORDER_MODULE.removesuffix(".py"),
+            record_file=RECORD_FILE,
+        ),
         encoding="utf-8",
     )

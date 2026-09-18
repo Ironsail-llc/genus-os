@@ -43,7 +43,7 @@ did.
 | Control | `off` | `observe` (default) | `enforce` |
 |---|---|---|---|
 | `truncation_ledger` | no ledger built at all | the ledger is kept; unresolved entries are logged at WARNING with the run id; unresolved entries at finalization write an `agent_guardrail_events` row (`action='observed'`); nothing is shown to the model | each unresolved entry is quoted to the model once; a run trying to finish with one outstanding is held for up to TWO more model turns — "go and read it", then "say in your answer what you did not read" — and then ends regardless; still-unresolved entries at finalization write the same row with `action='blocked'` |
-| `act_observe` | no ledger, no classification | pending unread state-changes are logged at WARNING; unresolved changes at finalization write an `agent_guardrail_events` row (`action='observed'`) | one note, once per run, telling the agent what it changed and has not re-read — delivered at a check-in if one fires, otherwise at the run's stop, which costs one extra model turn; it never fails a run; still-pending changes at finalization write the same row, also `action='observed'` |
+| `act_observe` | no ledger, no classification | pending unread state-changes are logged at WARNING; unresolved changes at finalization write an `agent_guardrail_events` row (`action='observed'`) | the note, at most once, as its own message at a check-in or deadline rung if one fires; and the hold, at most once, at the run's stop while changes are still unobserved — whether or not the note was shown — which costs one extra model turn; it never fails a run; still-pending changes at finalization write the same row, also `action='observed'` |
 | `verdict_commitment` | nothing computed | an INFO line naming every deliverable it read, how many items it inspected, how many carried a provenance marker and how many findings came out; a WARNING naming the undecided items; plus an `agent_guardrail_events` row (`action='observed'`) from `record_verdict_findings` | the same INFO line, then one re-ask, at most once per run, quoting up to five findings — each with the sentence or the marker that produced it — and asking for one verdict each; findings that survive it write the same row with `action='blocked'` |
 
 Three things about this table are easy to misread:
@@ -141,17 +141,75 @@ with a path, or a bare `host:port/path` — or a name shaped like one (`send_*`,
 classified when its arguments name no host at all.
 
 A run that made at least one state-changing call against a source and has not
-read that source since gets told so once, at `enforce` only. Delivery is at a
-deliverable check-in if one fires, and **otherwise at the moment the run tries
-to stop**. That second path matters more than it looks: the check-in cadence is
-every 25 iterations and the deadline rungs are at 50/80/95% of the budget, and
-the run this control was built for made 21 requests in 85.9 s of a 300 s
-budget, crossing neither. Separately — and on **both** rungs, since it is diagnostic
-rather than gated the same way — `execute_code`'s result carries
-`unread_responses` / `unread_response_tools` / `unread_response_note`, counting
-proxied `genus_tools` calls whose response body the snippet's own stdout never
-printed. That is the exact shape of the measured failure: nineteen `genus_tools`
-calls, twelve of them printing nothing but `status`.
+read that source since gets told so, at `enforce` only, through two separately
+latched deliveries:
+
+* **the note** — a nudge, at most once, at a deliverable check-in or a
+  deadline rung if one comes round, appended as **its own `[SYSTEM]`
+  message** rather than folded into the pacing text;
+* **the hold** — the guarantee, at most once, **at the moment the run tries
+  to stop** with unobserved changes still on the ledger, *whether or not the
+  note was shown earlier*. One more model turn with the note in front of it,
+  then the run ends whatever it does.
+
+Both halves were measured. The stop path exists because the check-in cadence
+is every 25 iterations and the deadline rungs are at 50/80/95% of the budget,
+and the run this control was built for made 21 requests in 85.9 s of a 300 s
+budget, crossing neither. The two latches exist because of the rerun
+(2026-09-17, task_5 at 0.42): the note fired once, inside the 50% deadline
+blob under "decide NOW what the smallest complete deliverable is", the model
+went straight to `write_file`, and the stop-time delivery — then gated on the
+same `change_note_given` flag — said nothing.
+
+**The snippet's own HTTP.** Separately — and on **both** rungs, since it is
+diagnostic rather than gated the same way — `execute_code`'s result carries
+`unread_responses` / `unread_response_tools` / `unread_response_note`,
+counting calls whose response body the snippet's own stdout never printed.
+Two kinds of call, one rule:
+
+* proxied `genus_tools` calls, from the step ledger (the first measured
+  failure: nineteen calls, twelve printing nothing but `status`);
+* the HTTP the snippet made **on its own** through `urllib`, `requests` or
+  `http.client` (the second: seventeen `urllib` sends printing `OK`, proxied
+  count an honest zero). `sandbox_runtime/http_recorder.py` is copied into
+  the sandbox beside `genus_tools.py` and hooks `http.client` — the one layer
+  `urllib` and `urllib3` share — recording `(method, url, status, body head,
+  truncated)` per exchange, at most 200 exchanges and 2,000 body characters
+  each, and fail-open at every hook. The result lists the requests (not the
+  bodies) under `http_calls` — identical `(method, url, status)` collapsed
+  into one line with a `count`, in last-seen order, at most 50 lines plus an
+  `{"elided": N}` marker — and names a raw call as `POST http://host:port/path`.
+  When there is no record at all the result says `http_recorder: "absent"`
+  (the recorder failed to install); when the record is oversized (1 MiB cap,
+  checked by `stat` before it is read) or malformed, `"unreadable"`. Neither
+  looks like a snippet that made no request. The ledger records each accepted
+  non-`GET`/`HEAD`/`OPTIONS` call as a change **against its origin**
+  (`scheme://host:port`, rebuilt from the parsed hostname — no userinfo, and
+  nothing that is not a hostname ever reaches a note), so a later read
+  anywhere on that host answers it. A 4xx/5xx changed nothing and is not a
+  change; a body with nothing substantial (`{"ok": true}`, an empty 204) is
+  never counted as unread; a write the same snippet read back (POST then GET
+  the same origin) is already observed. Where the recorder witnessed **any**
+  non-safe attempt — accepted or refused — it outranks the text heuristic for
+  that step, so a snippet whose every POST came back 429 is not held for a
+  change that never happened.
+
+  **What the recorder sees, precisely.** The request line always, for every
+  library on `http.client`. The body only when it is consumed through the
+  wrapped reader: `urllib` reads every body that way, uncompressed or
+  chunked, and is fully seen; `requests`/`urllib3` reads an uncompressed
+  `Content-Length` reply that way and is seen, but decodes a gzip or chunked
+  reply through its own stream and is recorded with an **empty body** —
+  and `requests` asks for gzip by default, so against a server that
+  compresses, `requests` coverage is the request line only. An empty body is
+  "nothing to look for", never "unread": the gap costs a missed count, not a
+  false one (pinned by `test_the_documented_requests_gap_fails_toward_silence`).
+  `httpx` speaks `h11` over its own sockets and is not seen at all;
+  `aiohttp` likewise. A body the recorder **cut** at 2,000 characters no
+  longer parses as JSON; it is matched on the string literals that survived
+  the cut and never on its raw head, because `print(resp)` shows a repr the
+  raw head is not in. Follow-up (not in this change): record
+  `Content-Encoding` and raw bytes and gunzip engine-side.
 
 ### Verdict commitment
 
@@ -589,14 +647,16 @@ does not apply to it because it carries no date to go stale.
 |---|---|
 | `exec` output shaping, the spill, the marker | `robothor/engine/exec_spill.py` |
 | Truncation and act-observe ledgers, the finalization row | `robothor/engine/observation_ledger.py` |
-| Act-vs-observe classification, source tokens, unread-proxy-response note | `robothor/engine/act_observe.py` |
+| Act-vs-observe classification, source tokens, unread-response rule (proxied and raw HTTP) | `robothor/engine/act_observe.py` |
+| In-sandbox recorder of the snippet's own HTTP (copied beside `genus_tools`) | `robothor/engine/sandbox_runtime/http_recorder.py`; loaded by `code_exec_result.recorded_http_calls` |
 | One-verdict-per-item ladder (task gate, re-ask, guardrail row) | `robothor/engine/verdict_commitment.py` |
 | What a verdict, a hand-back and a retraction look like on the page | `robothor/engine/verdict_shapes.py` |
 | How far a verdict reaches from the heading that assigns it | `robothor/engine/verdict_sections.py` |
 | Whether an override names what outranks the marker | `robothor/engine/override_reasons.py` |
 | An item's own provenance marker, and what contradicts a verdict | `robothor/engine/provenance_markers.py` |
 | The fleet-wide rule behind it (rule 20) | `robothor/engine/prompts.py` |
-| In-loop hold (deliverable check-in) | `robothor/engine/loop_guards.py` (`unread_observation_hold`, `hold_for_hedged_verdicts`) |
+| Stop-time holds and nudges | `robothor/engine/loop_guards.py` → `observation_notes.py` (`unread_observation_hold`, `unobserved_change_nudge`), `verdict_commitment.hold_for_hedged_verdicts` |
+| Mid-run notes, each its own message | `loop_guards.append_engine_note` → `observation_notes.observation_note_parts` |
 | Finalization call site, spill reaping | `robothor/engine/run_finalizer.py` |
 | Retention backstop for orphaned spills | `robothor/engine/retention.py` (`run_retention_cleanup`, key `"exec"`) |
 | Flag readers | `robothor/engine/feature_flags.py`: `truncation_ledger_mode`, `act_observe_mode`, `verdict_commitment_mode` |

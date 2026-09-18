@@ -143,7 +143,10 @@ CAPS = {
     # (observation_notes.py, verdict_commitment.py); what this file gains is the
     # chaining and its `contextlib.suppress`, which is the job this file exists
     # for. A guard that raises here takes the runner's main loop with it.
-    "robothor/engine/loop_guards.py": 368,
+    # 368 -> 369: the observation notes are appended as their own messages
+    # rather than folded into the pacing note (measured 2026-09-17: folded, the
+    # act->observe sentence was read as part of "decide NOW what to deliver").
+    "robothor/engine/loop_guards.py": 369,
     # The three modules the budget work landed in, bounded from the day they
     # land — the rule this file states for anything that would otherwise
     # absorb the next concern one branch at a time. `_run_loop` paid for the
@@ -359,8 +362,21 @@ CAPS = {
     # 281 -> 297: the count of proxied responses this snippet never printed.
     # The computation is in act_observe.py; this is the bracket that says which
     # of the turn's proxied calls belong to THIS snippet, plus the call.
-    "robothor/engine/tools/handlers/code_exec.py": 297,
-    "robothor/engine/code_exec_result.py": 103,
+    # 297 -> 319: the snippet's OWN HTTP is read back too. The recorder is
+    # staged beside genus_tools, its record is read before the directory goes,
+    # and the raw writes join the proxied ones under the one unread-response
+    # rule (measured 2026-09-17: a urllib send loop, `OK` per call, proxied
+    # count an honest zero, three follow-ups discarded).
+    # 319 -> 328: the result says "absent" or "unreadable" when the record is
+    # missing or refused, so no http_calls never reads as no HTTP.
+    "robothor/engine/tools/handlers/code_exec.py": 328,
+    # 103 -> 150: `recorded_http_calls`, the loader that re-bounds what a
+    # process the snippet controlled wrote, and the `http_calls` field on the
+    # result — requests without bodies, for the model and for the ledger.
+    # 150 -> 198 (review round): the record is refused by `stat` size before
+    # it is read, identical requests collapse into counted lines in last-seen
+    # order with an elision cap, and the recorder state is reported.
+    "robothor/engine/code_exec_result.py": 198,
     # The observation cluster (2026-09-16), each piece capped at the size it was
     # written to and each one a separate question, for the reason the code-
     # sandbox cluster above is four modules: what the model SEES of a command's
@@ -398,7 +414,19 @@ CAPS = {
     # `--data` flag: requiring a literal host made `requests.post(url, json=m)`
     # classify as `neither`, blind to the shape the control exists for. A
     # target-only rule would miss every CRM write, which names no host at all.
-    "robothor/engine/act_observe.py": 347,
+    # 347 -> 411: the raw-HTTP half of the unread-response rule. `http_origin`
+    # (a write is keyed to its service, not its path), `raw_http_responses`
+    # (the recorder's `(method, url, status, body)` turned into the same
+    # `(name, evidence)` pairs the proxied path produces, a 4xx refusing to be
+    # a change, a JSON body with no substantial leaf refusing to be evidence),
+    # and `SAFE_METHODS`. Still a table and pure functions; no session.
+    # 411 -> 457 (review round): a cut body is matched on its surviving JSON
+    # literals and never on its raw head; the origin is rebuilt from the
+    # parsed hostname and refused when it is not one; a call URL is stripped
+    # of control characters before it is quoted.
+    # 457 -> 461: underscores are hostname characters here (compose service
+    # names), and the reason is written beside the pattern.
+    "robothor/engine/act_observe.py": 461,
     # 469 -> 505 -> 285 -> 385 across one review round. The middle number is
     # the one that matters: at 505 the DELIVERY half left for
     # observation_notes.py, because "what happened" and "what the run is told
@@ -412,7 +440,16 @@ CAPS = {
     # path, a re-run compared on the TARGET with the query stripped, a call that
     # observed nothing no longer counting, entries keyed by `(step, stream)`,
     # and the run able to say which workspaces its spills went to. I4, I5, M2.
-    "robothor/engine/observation_ledger.py": 385,
+    # 385 -> 451: what the sandbox recorder saw outranks the text heuristic
+    # for a snippet's step (`_record_recorded_http`: reads and accepted writes
+    # against their origin, a write read back inside the same snippet already
+    # observed), a later read anywhere under a changed origin answering it
+    # (`_answers`), and the hold latched separately from the note.
+    # 451 -> 460 (review round): the recorder outranks the text heuristic on
+    # any witnessed non-safe attempt, refused included, and reads counts.
+    # 460 -> 467: a non-safe call with no parseable origin is a sourceless
+    # change, not a dropped one (round-2 review).
+    "robothor/engine/observation_ledger.py": 467,
     # The delivery half, capped at what it was split to plus the second hold and
     # the stop-path nudge. `enforce`'s honest completion used to be appended
     # after the runner had already returned, so it reached the transcript and
@@ -421,7 +458,10 @@ CAPS = {
     # 334 -> 339: the verdict row moved above the ledger guard (it was gated on
     # an unrelated control's ledger existing) and its write is now logged when
     # it fails rather than suppressed. Five lines, all of them the reason.
-    "robothor/engine/observation_notes.py": 339,
+    # 339 -> 362: `observation_note_parts` (each note its own message — folded
+    # into the deadline blob, the measured run read two instructions as one)
+    # and the stop-time hold firing on its own latch rather than the note's.
+    "robothor/engine/observation_notes.py": 362,
     # 265 -> 322: the guardrail row this control writes at finalization on
     # `observe` as well as `enforce`. Without it `flags/evidence.py` would
     # report the one ladder whose promotion depends on watching the evidence as
@@ -540,7 +580,9 @@ CAPS = {
     # 122 -> 129: the same disclosure, said where the reaper is, because this
     # is the `finally` that `os._exit` skips and a reader here is the one who
     # would otherwise conclude the reaper is complete.
-    "robothor/engine/sandbox_runtime/boot_template.py": 129,
+    # 129 -> 143: installing the outbound-HTTP recorder before the snippet,
+    # fail-open, and the bullet that says so.
+    "robothor/engine/sandbox_runtime/boot_template.py": 143,
     # 211 -> 341: the descendant census. `killpg` alone reached neither a
     # `setsid` child nor a double-forked daemon, and a probe left 16 of 16
     # running after the call returned. This is the module that owns "nothing
