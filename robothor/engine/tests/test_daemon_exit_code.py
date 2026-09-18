@@ -100,8 +100,10 @@ class TestADeliberateStopExitsZero:
     The handler only sets an event. The existing FIRST_COMPLETED wait turns
     that into the ordinary drain, and a task that completed without raising is
     a clean stop — so ``main`` returns 0 and ``run`` exits 0. A SECOND signal
-    during that drain is a human insisting, and forces the exit instead of
-    being swallowed by an already-set event.
+    within ``STOP_SIGNAL_ECHO_WINDOW_SECONDS`` of the first is the same stop
+    echoing through the process and is ignored; one later than that during
+    the drain is a human insisting, and forces the exit (0 for SIGTERM, 130
+    for SIGINT) instead of being swallowed by an already-set event.
     """
 
     @pytest.mark.asyncio
@@ -166,14 +168,14 @@ class TestADeliberateStopExitsZero:
 
         assert daemon._log_task_results(done) is False
 
-    @pytest.mark.asyncio
-    async def test_a_second_signal_forces_exit_instead_of_being_swallowed(
-        self, monkeypatch, caplog
-    ):
-        """Two strikes: the first signal starts the drain, the second one —
-        a developer hammering Ctrl-C at a hung drain, or an operator's
-        second `kill` — must end the process now, and say so, not set an
-        already-set event and go on draining."""
+    @staticmethod
+    def _armed(monkeypatch) -> tuple[dict[int, tuple], list[int], list[float]]:
+        """Install the handlers against a fake loop and a fake clock.
+
+        Returns the registered ``sig -> (callback, args)`` table, the list
+        ``_force_exit`` appends to instead of ending pytest, and a one-slot
+        list holding the fake monotonic time the stop state reads.
+        """
         registered: dict[int, tuple] = {}
         loop = asyncio.get_running_loop()
         monkeypatch.setattr(
@@ -183,38 +185,87 @@ class TestADeliberateStopExitsZero:
         )
         exits: list[int] = []
         monkeypatch.setattr(daemon, "_force_exit", exits.append)
+        now = [1000.0]
+        daemon._install_shutdown_signals()
+        for _callback, args in registered.values():
+            args[0].clock = lambda: now[0]
+        return registered, exits, now
 
-        stop = daemon._install_shutdown_signals()
+    @pytest.mark.asyncio
+    async def test_a_second_signal_inside_the_echo_window_is_the_same_stop(
+        self, monkeypatch, caplog
+    ):
+        """2026-09-17, one deploy after the two-strikes handler shipped: systemd
+        sent ONE SIGTERM, the daemon's handler saw it twice 138 ms apart,
+        ``_force_exit(1)`` ran, and OnFailure paged. The second delivery was
+        uvicorn re-raising the signal it had captured (test_daemon_signal_echo
+        .py). A repeat this soon after the first is that stop echoing through
+        the process, never a human insisting — humans do not repeat a kill
+        inside two seconds. It is one info line and nothing else."""
+        registered, exits, now = self._armed(monkeypatch)
         callback, args = registered[signal.SIGTERM]
+        stop = args[0].event
 
         callback(*args)
         assert stop.is_set()
         assert exits == [], "the first signal is a clean stop, not an exit"
 
-        with caplog.at_level("WARNING", logger=daemon.logger.name):
+        now[0] += 0.138
+        with caplog.at_level("INFO", logger=daemon.logger.name):
             callback(*args)
-        assert exits == [1], "the second SIGTERM must force exit 1"
-        assert "second signal" in caplog.text and "exiting now" in caplog.text
+        assert exits == [], "an echo of the first signal must not end the process"
+        assert stop.is_set()
+        assert "exiting now" not in caplog.text
+        assert not [r for r in caplog.records if r.levelname == "WARNING"], (
+            "an echo is not worth a warning"
+        )
+        assert "echo" in caplog.text or "same stop" in caplog.text
 
     @pytest.mark.asyncio
-    async def test_a_second_sigint_exits_130(self, monkeypatch):
-        """128 + SIGINT, the code a shell reports for a Ctrl-C death."""
-        registered: dict[int, tuple] = {}
-        loop = asyncio.get_running_loop()
-        monkeypatch.setattr(
-            loop,
-            "add_signal_handler",
-            lambda sig, callback, *args: registered.__setitem__(sig, (callback, args)),
-        )
-        exits: list[int] = []
-        monkeypatch.setattr(daemon, "_force_exit", exits.append)
+    async def test_a_second_signal_just_inside_the_window_edge_is_still_an_echo(self, monkeypatch):
+        registered, exits, now = self._armed(monkeypatch)
+        callback, args = registered[signal.SIGTERM]
+        callback(*args)
+        now[0] += daemon.STOP_SIGNAL_ECHO_WINDOW_SECONDS - 0.01
+        callback(*args)
+        assert exits == []
 
-        daemon._install_shutdown_signals()
+    @pytest.mark.asyncio
+    async def test_a_late_second_sigterm_forces_exit_zero_with_a_warning(self, monkeypatch, caplog):
+        """Two strikes still exist for a human at a hung drain: a second
+        SIGTERM AFTER the echo window ends the process now. But it exits 0 —
+        an operator's deliberate second ``kill`` is not a service failure, and
+        exit 1 under systemd is OnFailure and a page. The page is for crashes;
+        a drain that outlives TimeoutStopSec is still SIGKILLed by systemd and
+        still pages on its own."""
+        registered, exits, now = self._armed(monkeypatch)
+        callback, args = registered[signal.SIGTERM]
+        callback(*args)
+
+        now[0] += daemon.STOP_SIGNAL_ECHO_WINDOW_SECONDS + 0.5
+        with caplog.at_level("WARNING", logger=daemon.logger.name):
+            callback(*args)
+        assert exits == [0], "a deliberate repeated SIGTERM ends the drain, exit 0"
+        assert "exiting now" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_late_second_sigint_exits_130(self, monkeypatch):
+        """128 + SIGINT, the code a shell reports for a Ctrl-C death — a shell
+        convention, not a systemd one, so it stays."""
+        registered, exits, now = self._armed(monkeypatch)
         callback, args = registered[signal.SIGINT]
         callback(*args)
+        now[0] += daemon.STOP_SIGNAL_ECHO_WINDOW_SECONDS + 0.5
         callback(*args)
 
         assert exits == [130]
+
+    @pytest.mark.asyncio
+    async def test_the_echo_window_is_short_enough_to_be_an_echo_and_nothing_else(self):
+        """Seconds, not tens of seconds: a human at a hung drain must not
+        have to wait long for the second strike to count, and the budget the
+        whole drain has is TimeoutStopSec=15."""
+        assert 0.5 <= daemon.STOP_SIGNAL_ECHO_WINDOW_SECONDS <= 3.0
 
     def test_run_still_returns_quietly_on_keyboard_interrupt(self, monkeypatch):
         """With the handler installed a Ctrl-C never raises KeyboardInterrupt;
