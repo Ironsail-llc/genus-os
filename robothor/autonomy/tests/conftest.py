@@ -20,6 +20,7 @@ def store(identity):
     with conn:
         with conn.cursor() as cur:
             cur.execute(Path("crm/migrations/127_autonomous_execution.sql").read_text())
+            cur.execute(Path("crm/migrations/128_autonomy_resource_descriptors.sql").read_text())
     conn.close()
     store = AutonomyStore(lambda: psycopg2.connect(dsn), keys={"v1": b"x" * 32}, key_id="v1")
     store.configure(

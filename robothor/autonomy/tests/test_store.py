@@ -230,3 +230,54 @@ def test_concurrent_free_trial_reservations_cannot_overbook_renewals(store, iden
     assert (
         store.spending_projection(identity.model_copy(update={"owner_id": "bob"}))["months"] == {}
     )
+
+
+def test_resource_descriptors_expose_available_fields_and_provenance_without_values(
+    store, identity
+):
+    ref = store.put_resource(
+        identity,
+        ResourceInput(
+            kind="profile",
+            label="Owner profile",
+            payload=json.dumps(
+                {
+                    "first_name": "Alice",
+                    "email": "alice@example.com",
+                    "phone": "",
+                    "answers": {"membership_reason": "Private application answer"},
+                }
+            ),
+        ),
+        source="linked_contact",
+    )
+    expected = ["answers.membership_reason", "email", "first_name"]
+    assert ref["descriptor"]["fields"] == expected
+    assert ref["descriptor"]["source"] == "linked_contact"
+    listed = store.resources(identity)
+    assert listed[0]["descriptor"] == ref["descriptor"]
+    for value in ("Alice", "alice@example.com", "Private application answer"):
+        assert value not in json.dumps(listed)
+
+
+def test_legacy_descriptor_backfill_is_scoped_and_does_not_claim_unknown_provenance(
+    store, identity
+):
+    ref = store.put_resource(
+        identity,
+        ResourceInput(
+            kind="profile", label="Old profile", payload=json.dumps({"email": "alice@example.com"})
+        ),
+    )
+    with store.transaction() as cur:
+        cur.execute(
+            "UPDATE vault_resources SET descriptor='{}'::jsonb,created_at='2001-01-01T00:00:00Z' WHERE id=%s",
+            (ref["id"],),
+        )
+    assert store.refresh_resource_descriptors(identity.model_copy(update={"owner_id": "bob"})) == 0
+    assert store.refresh_resource_descriptors(identity) == 1
+    assert store.refresh_resource_descriptors(identity) == 0
+    descriptor = store.resources(identity)[0]["descriptor"]
+    assert descriptor["fields"] == ["email"]
+    assert descriptor["source"] == "legacy_enrollment"
+    assert descriptor["recorded_at"].startswith("2001-01-01")

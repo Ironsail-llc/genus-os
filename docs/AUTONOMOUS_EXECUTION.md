@@ -8,7 +8,8 @@ existing native vault; no external password manager is required.
 
 ## Setup
 
-1. Apply packaged migration `127_autonomous_execution.sql` through the normal
+1. Apply packaged migrations `127_autonomous_execution.sql` and
+   `128_autonomy_resource_descriptors.sql` through the normal
    upgrade process. Preserve the existing vault master key and encrypted backups.
    Install the `genusos[autonomy]` extra and either a system Chromium or the
    browser installed by `python -m playwright install chromium`.
@@ -27,7 +28,7 @@ existing native vault; no external password manager is required.
    select **Allow any public HTTPS website**, with an expiration and spending
    limits. The general website option retains agent, action, currency and budget
    checks; saved credentials remain bound to their own origins. Embedded payment
-   providers still require separately listed
+   providers on another origin still require separately listed
    frame origins. The UI currently uses USD; the broker also recognizes strict
    decimal EUR and GBP totals. Zero spending limits still permit account and
    application tasks.
@@ -86,7 +87,7 @@ Use the existing `browser` tool with `action="autonomy"` and `request`:
 | --- | --- |
 | `status` | Discover setup state, resource references, grants and recent operations. |
 | `prepare` | Reserve a proposal under `grant_id`; returns a durable operation ID. |
-| `inspect` | Read field labels and attributes, never field values, from an operation's website. |
+| `inspect` | Discover field selectors, labels, option labels, billing terms and authorized frame fields, never input values. |
 | `generate_credential` | Create an origin-bound username/password reference using an enrolled profile. |
 | `email_verification` | Obtain a short-lived code/link reference from the authorized owner's Gmail. |
 | `execute` | Fill resource references, upload documents, check required boxes and submit. |
@@ -121,6 +122,14 @@ before submitting. Date selectors must identify an ISO date or an unambiguous
 English month-name date; interval selectors identify monthly, quarterly, yearly
 or an explicit “every N months” label. Even a zero-charge checkout must show a
 matching zero total.
+For terms inside a direct child frame, set `terms_frame_selector` and
+`terms_frame_origin`; all price and renewal selectors then use that frame.
+Inspection returns these bindings with each frame field or term. Same-origin
+frames inherit website authority; foreign frames require a separately granted
+origin. Credentials must match the actual frame origin. Nested and originless
+frames are reported as unsupported. Protected frames cannot navigate to another
+origin during filling or submission. Inspection omits page HTML and general body
+text; returned terms are restricted to recognized prices, intervals and dates.
 The broker validates origin and totals again immediately before clicking.
 Multi-step applications use a separate operation for each meaningful step,
 with the saved account session carried forward. File upload accepts an enrolled
@@ -159,6 +168,14 @@ service-secret exports. `autonomy_grants`, `autonomy_operations`,
 `autonomy_events` and `autonomy_settings` provide authority, reservations,
 state transitions and owner-scoped status. Tenant RLS matches the platform's
 backstop; the DAL also requires tenant and person on every lookup.
+
+Resource descriptors expose available field names, enrollment source and timestamp
+without decrypting values during ordinary status reads. The dashboard shows saved
+fields and provenance. For preexisting resources, the owner can choose **Check saved
+information** (`POST /api/autonomy/resources/refresh-descriptions`, empty JSON body)
+to derive metadata inside the vault boundary. This retains the original enrollment
+timestamp and marks unknown historical provenance explicitly; it does not invent
+missing personal information.
 
 `genus vault rotate-resources` reencrypts personal resources transactionally
 under a new resource key wrapped by the existing vault master key. Old versions

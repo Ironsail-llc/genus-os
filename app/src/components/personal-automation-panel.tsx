@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 
-type Resource = { id: string; kind: string; label: string; origin?: string };
+type Resource = { id: string; kind: string; label: string; origin?: string;
+  descriptor?: { version?: number; fields?: string[]; source?: string } };
 type Grant = { id: string; revoked: boolean; policy: { origins: string[]; allow_any_website?: boolean;
   currency: string; per_purchase_minor: number; monthly_minor: number; recurring_minor: number; annual_minor: number } };
 type Settings = { enabled: boolean; managed_browser: boolean; payment_processing: boolean;
@@ -12,6 +13,11 @@ type Status = { resources: Resource[]; grants: Grant[]; settings: Settings;
 type Operation = { id: string; state: string; proposal: { purpose: string; origin: string } };
 const moneyDisplay = (minor: number, currency: string) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency }).format(minor / 100);
+const sources: Record<string, string> = {
+  secure_input: "Provided by you", linked_contact: "Imported from your linked contact",
+  generated: "Generated for this website", broker_session: "Saved website session",
+  mailbox_verification: "From a verified email", legacy_enrollment: "Previously saved; original source not recorded",
+};
 const inputClass = "w-full rounded border bg-background p-2";
 
 async function api(path: string, method = "GET", data?: unknown) {
@@ -146,8 +152,14 @@ export function PersonalAutomationPanel() {
         {kind === "payment_card" && <p className="text-sm">A bank or merchant may request verification when the card is used.</p>}
         <button className="rounded bg-primary px-4 py-2 text-primary-foreground" disabled={busy || !status}>Save information</button>
       </form>
+      {status?.resources.some(resource => resource.descriptor?.version !== 1) && <button type="button"
+        className="rounded border px-3 py-2" disabled={busy}
+        onClick={() => void act(() => api("resources/refresh-descriptions", "POST", {}))}>Check saved information</button>}
       {status?.resources.map(resource => <div className="flex justify-between gap-3 rounded border p-3" key={resource.id}>
-        <span>{resource.label} · {resource.kind.replaceAll("_", " ")}</span>
+        <div><p>{resource.label} · {resource.kind.replaceAll("_", " ")}</p>
+          {resource.descriptor?.fields && <p className="text-sm">Saved fields: {resource.descriptor.fields.map(field => field.replaceAll("_", " ")).join(", ") || "None"}</p>}
+          {resource.descriptor?.source && <p className="text-sm text-muted-foreground">{sources[resource.descriptor.source] || "Saved information"}</p>}
+        </div>
         <button disabled={busy} onClick={() => void act(() => api(`resources/${resource.id}`, "DELETE"))}>Revoke</button>
       </div>)}
     </section>

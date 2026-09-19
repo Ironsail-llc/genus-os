@@ -56,3 +56,18 @@ it("shows the saved limits and separates projected renewal charges from settled 
   expect(screen.getByText("2026-10")).toBeInTheDocument();
   expect(screen.getByText("$600.00")).toBeInTheDocument();
 });
+
+it("shows saved field names and provenance and can check older enrollments", async () => {
+  fetchMock.mockImplementation(async (url: string) => ({ ok: true, json: async () =>
+    url.endsWith("/status") ? { resources: [
+      {id:"profile",kind:"profile",label:"Contact",descriptor:{version:1,fields:["email","first_name"],source:"linked_contact"}},
+      {id:"older",kind:"document",label:"Photo"}], grants: [], settings: {
+      enabled:true,managed_browser:false,payment_processing:false,payment_assessment_reference:""} } :
+    url.endsWith("/operations") ? {operations:[]} : {updated:1} }));
+  render(<PersonalAutomationPanel />);
+  expect(await screen.findByText("Saved fields: email, first name")).toBeInTheDocument();
+  expect(screen.getByText("Imported from your linked contact")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button",{name:"Check saved information"}));
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+    "/api/bridge/api/autonomy/resources/refresh-descriptions",expect.objectContaining({method:"POST",body:"{}"})));
+});

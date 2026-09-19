@@ -51,4 +51,5 @@ def import_contact_profile(store: AutonomyStore, scope: Scope) -> dict[str, Any]
         ResourceInput(
             kind="profile", label="Saved contact profile", payload=SecretStr(json.dumps(profile))
         ),
+        source="linked_contact",
     )

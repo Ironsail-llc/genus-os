@@ -19,6 +19,7 @@ from psycopg2.extras import Json, RealDictCursor
 
 from robothor.autonomy.budget import monthly_projection, proposal_record
 from robothor.autonomy.crypto import open_resource, seal_resource
+from robothor.autonomy.descriptors import Source, describe, refresh_descriptors
 from robothor.autonomy.models import (
     Delegation,
     PaymentCard,
@@ -215,7 +216,12 @@ class AutonomyStore:
         )
 
     def put_resource(
-        self, scope: Scope, resource: ResourceInput, *, lifetime_seconds: int | None = None
+        self,
+        scope: Scope,
+        resource: ResourceInput,
+        *,
+        lifetime_seconds: int | None = None,
+        source: Source = "secure_input",
     ) -> dict[str, Any]:
         if lifetime_seconds is not None and not 1 <= lifetime_seconds <= 600:
             raise ValueError("invalid_verification_lifetime")
@@ -228,14 +234,15 @@ class AutonomyStore:
         ):
             raise ValueError("resource_label_contains_secret")
         value = _validated_payload(resource)
+        descriptor = describe(resource.kind, value, source)
         resource_id = str(uuid4())
         key_id, keys = self.resource_keyring()
         sealed = seal_resource(value, keys, key_id, scope, resource_id)
         with self.transaction() as cur:
             cur.execute(
                 "INSERT INTO vault_resources "
-                "(id,tenant_id,owner_id,kind,label,origin,encrypted_value,expires_at) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s,now() + %s::integer * interval '1 second')",
+                "(id,tenant_id,owner_id,kind,label,origin,encrypted_value,expires_at,descriptor) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,now() + %s::integer * interval '1 second',%s)",
                 (
                     resource_id,
                     scope.tenant_id,
@@ -245,6 +252,7 @@ class AutonomyStore:
                     resource.origin,
                     sealed,
                     lifetime_seconds,
+                    Json(descriptor),
                 ),
             )
             self._event(cur, scope, resource_id, "resource_created")
@@ -253,16 +261,20 @@ class AutonomyStore:
             "kind": resource.kind,
             "label": resource.label,
             "origin": resource.origin,
+            "descriptor": descriptor,
         }
 
     def resources(self, scope: Scope) -> list[dict[str, Any]]:
         with self.transaction() as cur:
             cur.execute(
-                "SELECT id::text,kind,label,origin FROM vault_resources "
+                "SELECT id::text,kind,label,origin,descriptor FROM vault_resources "
                 "WHERE tenant_id=%s AND owner_id=%s AND active AND (expires_at IS NULL OR expires_at>now()) ORDER BY created_at",
                 (scope.tenant_id, scope.owner_id),
             )
             return [dict(row) for row in cur.fetchall()]
+
+    def refresh_resource_descriptors(self, scope: Scope) -> int:
+        return refresh_descriptors(self, scope)
 
     def consume_resource(
         self, scope: Scope, resource_id: str, destination: str, *, kind: str | None = None
