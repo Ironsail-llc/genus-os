@@ -277,6 +277,15 @@ there is no fallback to live workspace manifests. Unpinned runs retain their
 normal manifest-loading behavior. Spawned model requests also inherit any active
 funded request-budget scope; delegation does not create a new allowance.
 
+Use `v2.max_spawn_total` (an integer from 0 to 100) to limit admitted child
+attempts across repeated batches and the whole descendant tree. Each attempt
+consumes one slot from every applicable ancestor allowance. Children may add a
+stricter allowance; zero adds no limit and never removes an inherited one.
+Admission is atomic across concurrent spawns. Failed, deduplicated, and cancelled
+attempts keep their slots, so retrying cannot replenish the allowance. Invalid
+targets or configurations are rejected before admission. This complements the
+per-batch, nesting-depth, concurrency, and funded request-budget limits.
+
 ### Pattern D: Cron Safety Net
 
 Python crons fetch data and publish events. Unit agents process the data. Crons are NOT the primary trigger — they catch anything the event hooks missed.

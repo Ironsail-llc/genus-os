@@ -1741,6 +1741,7 @@ class AgentRunner(
             # This is a top-level run that can spawn — create fresh context
             import uuid
 
+            from robothor.engine.spawn_limits import extend_limits
             from robothor.engine.tools import _current_spawn_context
 
             fresh_ctx = SpawnContext(
@@ -1755,6 +1756,7 @@ class AgentRunner(
                 max_spawn_batch=agent_config.max_spawn_batch,
                 allowed_agents=frozenset(agent_config.spawn_allowed_agents) or None,
                 fleet_release_id=agent_config.fleet_release_id,
+                spawn_limits=extend_limits((), agent_config.max_spawn_total),
                 remaining_token_budget=session.run.token_budget,
                 parent_trace_id=trace.trace_id if trace else "",
                 parent_span_id="",

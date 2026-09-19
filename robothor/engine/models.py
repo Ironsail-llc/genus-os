@@ -17,6 +17,7 @@ from robothor.constants import DEFAULT_TENANT
 if TYPE_CHECKING:
     from datetime import datetime
 
+    from robothor.engine.spawn_limits import SpawnAllowance
     from robothor.identity import IdentityContext
 
 
@@ -392,6 +393,7 @@ class AgentConfig:
     # Sub-agent spawning
     can_spawn_agents: bool = False
     spawn_allowed_agents: list[str] = field(default_factory=list)
+    max_spawn_total: int = 0  # 0 = no additional total-attempt limit
     #: Tell the agent what files are in its workspace during warmup.
     #: Off by default — an operator's workspace listing is neither small
     #: nor useful, so this is opted into per agent.
@@ -675,6 +677,7 @@ class SpawnContext:
     parent_task_id: str | None = None
     # Child manifests and knowledge must resolve from this same reviewed artifact.
     fleet_release_id: str | None = None
+    spawn_limits: tuple[SpawnAllowance, ...] = field(default_factory=tuple, repr=False)
 
 
 @dataclass

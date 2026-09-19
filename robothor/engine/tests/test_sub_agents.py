@@ -112,6 +112,44 @@ def test_narrowing_unrestricted_child_and_empty_override_are_unambiguous(
 
 class TestSpawnAgentTool:
     @pytest.mark.asyncio
+    async def test_total_limit_survives_repeated_parallel_batches(
+        self, spawn_context, child_agent_config
+    ):
+        import asyncio
+
+        from robothor.engine.spawn_limits import extend_limits
+        from robothor.engine.tools import _current_spawn_context, _handle_spawn_agent, set_runner
+
+        runner = MagicMock()
+        runner.execute = AsyncMock(return_value=_make_completed_run())
+        set_runner(runner)
+        spawn_context.spawn_limits = extend_limits((), 2)
+        token = _current_spawn_context.set(spawn_context)
+        try:
+            with (
+                patch("robothor.engine.config.load_agent_config", return_value=child_agent_config),
+                patch("robothor.engine.dedup.try_acquire", return_value=True),
+                patch("robothor.engine.dedup.release"),
+            ):
+
+                async def call(n):
+                    return await _handle_spawn_agent(
+                        {"agent_id": "email-classifier", "message": f"topic {n}"}, agent_id="parent"
+                    )
+
+                results = await asyncio.gather(*(call(n) for n in range(4)))
+                assert sum("error" not in result for result in results) == 2
+                assert "error" in await call(5)
+            assert runner.execute.await_count == 2
+            assert all(
+                call.kwargs["spawn_context"].spawn_limits == spawn_context.spawn_limits
+                for call in runner.execute.await_args_list
+            )
+        finally:
+            set_runner(None)
+            _current_spawn_context.reset(token)
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("allowed", [frozenset({"research-worker"}), frozenset()])
     async def test_spawn_target_denied_before_loading_manifest(self, spawn_context, allowed):
         from robothor.engine.tools import _current_spawn_context, _handle_spawn_agent, set_runner

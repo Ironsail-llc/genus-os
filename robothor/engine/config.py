@@ -657,6 +657,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         # v2 enhancements — sub-agent spawning
         can_spawn_agents=v2.get("can_spawn_agents", False),
         spawn_allowed_agents=list(v2.get("spawn_allowed_agents", [])),
+        max_spawn_total=int(v2.get("max_spawn_total", 0)),
         workspace_inventory=bool(v2.get("workspace_inventory", False)),
         max_nesting_depth=min(int(v2.get("max_nesting_depth", 2)), 3),  # cap at 3
         sub_agent_max_iterations=int(v2.get("sub_agent_max_iterations", 10)),

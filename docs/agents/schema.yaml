@@ -486,6 +486,10 @@ optional:
       type: list[string]
       default: []
       description: Allowed target IDs for this spawn tree. Empty adds no restriction; ancestor restrictions always apply.
+    max_spawn_total:
+      type: integer
+      default: 0
+      description: Total admitted child attempts across all batches and descendants (0 adds no limit; maximum 100).
     max_nesting_depth:
       type: integer
       default: 2

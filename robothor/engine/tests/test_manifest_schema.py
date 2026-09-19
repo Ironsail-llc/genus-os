@@ -69,9 +69,14 @@ class TestStructuralRules:
         from robothor.engine.config import manifest_to_agent_config
 
         data = _valid()
-        data["v2"] = {"can_spawn_agents": True, "spawn_allowed_agents": ["research-worker"]}
+        data["v2"] = {
+            "can_spawn_agents": True,
+            "spawn_allowed_agents": ["research-worker"],
+            "max_spawn_total": 3,
+        }
         assert _errors(validate(data, strict=True)) == []
         assert manifest_to_agent_config(data).spawn_allowed_agents == ["research-worker"]
+        assert manifest_to_agent_config(data).max_spawn_total == 3
         data["v2"]["spawn_allowed_agents"] = "research-worker"
         assert any(i.path == "v2.spawn_allowed_agents" for i in _errors(validate(data)))
 

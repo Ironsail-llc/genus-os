@@ -385,6 +385,7 @@ def _v2_keys_read_by_config() -> frozenset[str]:
         {
             "can_spawn_agents",
             "spawn_allowed_agents",
+            "max_spawn_total",
             "max_nesting_depth",
             "guardrails",
             "sandbox",
@@ -815,6 +816,7 @@ def _check_semantics(issues: list[ManifestIssue], data: dict[str, Any]) -> None:
 
         # Numeric ranges
         _check_range(issues, "v2", v2, "max_nesting_depth", 0, 3)
+        _check_range(issues, "v2", v2, "max_spawn_total", 0, 100)
         _check_range(issues, "v2", v2, "sub_agent_max_iterations", 1, 100)
         _check_range(issues, "v2", v2, "sub_agent_timeout_seconds", 1, 3600)
         _check_range(issues, "v2", v2, "safety_cap", 1, 10000)

@@ -214,6 +214,7 @@ async def _handle_spawn_agent(
     applies only to the spawned task and any tasks it inherits from.
     """
     from robothor.engine.models import TriggerType
+    from robothor.engine.spawn_limits import extend_limits, try_claim
     from robothor.engine.spawn_release import load_child_config
 
     # Support both ToolContext and direct agent_id kwarg
@@ -263,8 +264,11 @@ async def _handle_spawn_agent(
 
     try:
         _narrow_child_config(child_config, args, spawn_ctx, child_depth)
+        child_limits = extend_limits(spawn_ctx.spawn_limits, child_config.max_spawn_total)
     except ValueError as exc:
         return {"error": str(exc)}
+    if not try_claim(spawn_ctx.spawn_limits):
+        return {"error": "Total child-attempt allowance exhausted for this spawn tree"}
 
     # Every generation may narrow the ancestor's target set, never expand it.
     child_targets = frozenset(child_config.spawn_allowed_agents) or None
@@ -285,6 +289,7 @@ async def _handle_spawn_agent(
         max_spawn_batch=spawn_ctx.max_spawn_batch,
         allowed_agents=child_targets,
         fleet_release_id=spawn_ctx.fleet_release_id,
+        spawn_limits=child_limits,
         remaining_token_budget=spawn_ctx.remaining_token_budget,
         remaining_cost_budget_usd=spawn_ctx.remaining_cost_budget_usd,
         parent_trace_id=spawn_ctx.parent_trace_id,

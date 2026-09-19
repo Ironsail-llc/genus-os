@@ -68,11 +68,13 @@ class TestAgentRunnerExecute:
 
         sample_agent_config.can_spawn_agents = True
         sample_agent_config.spawn_allowed_agents = ["research-worker"]
+        sample_agent_config.max_spawn_total = 2
         sample_agent_config.fleet_release_id = "a" * 64
         seen = []
 
         async def provider(**kwargs):
             context = _current_spawn_context.get()
+            assert len(getattr(context, "spawn_limits", ())) == 1
             seen.append(
                 (
                     getattr(context, "allowed_agents", None),
