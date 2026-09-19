@@ -114,7 +114,7 @@ class ContactWorker(StructuredWorker):
     stage = "contacts"
     schema = ContactBatch
     switch = "enrichment_enabled"
-    instruction = "Find up to five relevant business decision-makers with public source URLs. Return ContactBatch JSON; verification must be unknown and verified_at null. Never guess an email address."
+    instruction = "Read the qualified business website and relevant team/contact pages. Find up to five relevant business contacts. Each email must occur literally in this run's fetched source page, not a search snippet or guessed pattern. Preserve unknown roles; do not assign a general mailbox to an individual without evidence. Return ContactBatch JSON; verification must be unknown and verified_at null. Return an empty contacts list if no public business address is supported."
 
     async def context(self, job):
         context = await super().context(job)
@@ -124,7 +124,23 @@ class ContactWorker(StructuredWorker):
         return context
 
     def commit(self, job, context, output, run_id):
+        from robothor.sales.contact_sources import validate_checkpoint
+
         with self.sales.ops.transaction() as cur:
+            cur.execute(
+                "SELECT config FROM sales_settings WHERE tenant_id=%s FOR UPDATE",
+                (self.sales.tenant,),
+            )
+            settings = SalesSettings.model_validate(cur.fetchone()["config"])
+            if not settings.enrichment_enabled:
+                raise Conflict("Contact research was paused during generation")
+            validate_checkpoint(
+                job.get("result") or {},
+                output,
+                self.sales.tenant,
+                settings.agents.get("contacts"),
+                settings.fleet_release_id,
+            )
             p = self.current(cur, context)
             ids = []
             for contact in output.contacts:
@@ -136,9 +152,10 @@ class ContactWorker(StructuredWorker):
                     {"prospect_id": str(p["id"]), "contact_id": contact_id, "email": contact.email},
                     cur=cur,
                 )
-            self.sales.ops.complete(
-                job["id"], job["lease_token"], {"contact_ids": ids, "run_id": str(run_id)}, cur=cur
-            )
+            receipt = {"contact_ids": ids, "run_id": str(run_id)}
+            if (job.get("result") or {}).get("provenance"):
+                receipt["provenance"] = job["result"]["provenance"]
+            self.sales.ops.complete(job["id"], job["lease_token"], receipt, cur=cur)
 
 
 class ConversationWorker(StructuredWorker):

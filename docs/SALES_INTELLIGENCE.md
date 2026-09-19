@@ -62,6 +62,23 @@ This enables review without requiring invented positive results. These
 checks establish observed URLs, not business fit, which still requires research
 and independent qualification.
 
+Native contact research similarly requires a successful `web_fetch`. Every
+returned email must appear as a whole address in that run's fetched source page;
+search snippets, failed fetches and guessed address patterns do not qualify.
+An empty contact list is valid after a page read. Collection turns retain tools,
+and final schema and source checks remain mandatory. The completion receipt
+keeps the source URL, retrieval time, content hash and selected paragraph for
+each address rather than copying the entire page into the contact record.
+
+Contact commit validates that proof against the current tenant, agent, release
+and exact output, including recovery from a checkpoint. Old checkpoints without
+proof hold for fresh research. Pausing enrichment during generation prevents
+contact creation and verification jobs; valid saved output can be reused after
+the operator resumes. This check establishes literal address provenance, **not
+person/role association or deliverability**. Review whether a shared business
+mailbox is appropriate; do not assume it belongs to a named decision-maker.
+The provider verifier still has to establish deliverability separately.
+
 When `agents.qualify` is configured, qualification runs that native agent before
 calculating a score. It receives the published policy definitions and captured
 passages without the researcher's boolean labels or earlier scores. Its strict

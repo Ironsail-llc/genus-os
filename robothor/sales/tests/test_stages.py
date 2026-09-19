@@ -6,6 +6,7 @@ import pytest
 
 from robothor.operations.store import Conflict
 from robothor.sales.stages import ActivationWorker, ContactWorker, ConversationWorker, ScoutWorker
+from robothor.sales.tests.test_contact_sources import ContactRunnerStub
 from robothor.sales.tests.test_guards import prepared
 from robothor.sales.tests.test_runtime import RunnerStub
 from robothor.sales.tests.test_service import researched
@@ -93,7 +94,7 @@ async def test_contact_research_cannot_assert_email_verification(sales):
             }
         ]
     }
-    assert await ContactWorker(sales, RunnerStub(output)).tick()
+    assert await ContactWorker(sales, ContactRunnerStub(output)).tick()
     assert sales.contacts(p["id"]) == []
     output["contacts"][0].update(verification="unknown", verified_at=None)
     with sales.ops.transaction() as cur:
@@ -101,7 +102,7 @@ async def test_contact_research_cannot_assert_email_verification(sales):
             "UPDATE operation_jobs SET available_at=now() WHERE tenant_id=%s AND kind='sales.contacts'",
             (sales.tenant,),
         )
-    assert await ContactWorker(sales, RunnerStub(output)).tick()
+    assert await ContactWorker(sales, ContactRunnerStub(output)).tick()
     assert sales.contacts(p["id"])[0]["data"]["verification"] == "unknown"
     assert sales.ops.claim("sales.verify") is not None
 
