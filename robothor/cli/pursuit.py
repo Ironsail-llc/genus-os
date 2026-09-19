@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import argparse
 
 
-def add_parser(subparsers):
+def add_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = subparsers.add_parser("goals", help="Manage durable short- and long-term goal pursuit")
     parser.add_argument("--tenant")
     commands = parser.add_subparsers(dest="goals_command", required=True)
@@ -32,7 +36,7 @@ def add_parser(subparsers):
     update.add_argument("--file", required=True, help="JSON file, or - for stdin")
 
 
-def cmd_goals(args) -> int:
+def cmd_goals(args: argparse.Namespace) -> int:
     import sys
     from pathlib import Path
 
