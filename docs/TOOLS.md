@@ -895,3 +895,8 @@ Prepare an operation, inspect its fields, execute the resource-bound plan, and
 check confirmation. An uncertain submission must be reconciled before any
 retry. See [Personal autonomous execution](AUTONOMOUS_EXECUTION.md) for setup,
 verification, plan fields, spending limits and current integration boundaries.
+
+Recurring `browser(action="autonomy")` proposals require `recurrence` dates and
+intervals, with corresponding visible-term selectors in the execution plan.
+`status.spending` reports calendar-month projections, including future free-trial
+renewals. See [Personal autonomous execution](AUTONOMOUS_EXECUTION.md).

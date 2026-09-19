@@ -40,3 +40,19 @@ describe("personal automation setup", () => {
     });
   });
 });
+
+it("shows the saved limits and separates projected renewal charges from settled payments", async () => {
+  fetchMock.mockImplementation(async (url: string) => ({ ok: true, json: async () =>
+    url.endsWith("/status") ? { resources: [], grants: [{ id: "grant", revoked: false, policy: {
+      origins: [], allow_any_website: true, currency: "USD", per_purchase_minor: 100000,
+      monthly_minor: 100000, recurring_minor: 100000, annual_minor: 1200000 } }],
+      spending: { state: "ready", months: { USD: { "2026-09": 0, "2026-10": 60000 } } },
+      settings: { enabled: true, managed_browser: false, payment_processing: false,
+        payment_assessment_reference: "" } } : { operations: [] } }));
+  render(<PersonalAutomationPanel />);
+  expect(await screen.findByText("Per purchase: $1,000.00 · Monthly total: $1,000.00")).toBeInTheDocument();
+  expect(screen.getByText("Per recurring charge: $1,000.00 · Annual commitment: $12,000.00")).toBeInTheDocument();
+  expect(screen.getByText("Projected charges")).toBeInTheDocument();
+  expect(screen.getByText("2026-10")).toBeInTheDocument();
+  expect(screen.getByText("$600.00")).toBeInTheDocument();
+});

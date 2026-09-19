@@ -177,3 +177,59 @@ async def test_zero_amount_proposal_still_requires_a_visible_zero_checkout_total
     )
     assert result["state"] == "reserved"
     page.locator.return_value.click.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "interval,date_text,error",
+    [
+        ("Monthly", "October 31, 2026", None),
+        ("Yearly", "October 31, 2026", "recurrence_changed"),
+        ("Monthly", "November 1, 2026", "renewal_date_changed"),
+    ],
+)
+async def test_recurring_terms_are_verified_against_visible_merchant_terms(
+    interval, date_text, error
+):
+    from robothor.autonomy.models import WebOperation
+
+    proposal = WebOperation(
+        origin="https://shop.example",
+        action="subscription",
+        purpose="Join membership",
+        idempotency_key="membership-1",
+        amount_minor=0,
+        recurring_minor=600,
+        annual_commitment_minor=7200,
+        recurrence={"interval_months": 1, "next_charge_on": "2026-10-31"},
+    )
+    execution = plan(
+        fields=[],
+        amount_selector="#total",
+        recurring_selector="#recurring",
+        annual_selector="#annual",
+        recurrence_interval_selector="#interval",
+        next_charge_selector="#next",
+    )
+    values = {
+        "#total": "$0.00",
+        "#recurring": "$6.00",
+        "#annual": "$72.00",
+        "#interval": interval,
+        "#next": date_text,
+    }
+    page = MagicMock()
+
+    def locator(selector):
+        return MagicMock(
+            count=AsyncMock(return_value=1),
+            is_visible=AsyncMock(return_value=True),
+            inner_text=AsyncMock(return_value=values[selector]),
+        )
+
+    page.locator.side_effect = locator
+    broker = BrowserBroker(MagicMock())
+    if error:
+        with pytest.raises(ValueError, match=error):
+            await broker._prices(page, proposal, execution)
+    else:
+        await broker._prices(page, proposal, execution)

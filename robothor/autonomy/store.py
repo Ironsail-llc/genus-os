@@ -11,11 +11,13 @@ import base64
 import hashlib
 import json
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from psycopg2.extras import Json, RealDictCursor
 
+from robothor.autonomy.budget import monthly_projection, proposal_record
 from robothor.autonomy.crypto import open_resource, seal_resource
 from robothor.autonomy.models import (
     Delegation,
@@ -336,23 +338,59 @@ class AutonomyStore:
         return Delegation.model_validate(row["policy"]), row["version"]
 
     @staticmethod
-    def _usage(cur: Any, scope: Scope, currency: str, exclude: str | None = None) -> int:
-        # Include unresolved reservations from earlier months. A stalled
-        # checkout must not free money merely because the calendar rolled over.
+    def _budget_decision(
+        cur: Any,
+        scope: Scope,
+        policy: Delegation,
+        proposal: WebOperation,
+        agent_id: str,
+        exclude: str | None = None,
+    ) -> str:
+        if proposal.action not in {"purchase", "subscription"}:
+            return policy.decision(proposal, agent_id=agent_id, used_minor=0)
+        if proposal.recurring_minor and not proposal.recurrence:
+            return "renewal_schedule_missing"
+        now = datetime.now(UTC)
+        if (
+            not exclude
+            and proposal.recurrence
+            and not (
+                now.date() <= proposal.recurrence.next_charge_on <= now.date() + timedelta(days=366)
+            )
+        ):
+            return "renewal_date_out_of_range"
         cur.execute(
-            "SELECT COALESCE(sum((proposal->>'amount_minor')::bigint),0) AS used "
-            "FROM autonomy_operations WHERE tenant_id=%s AND owner_id=%s "
-            "AND proposal->>'currency'=%s AND (%s IS NULL OR id::text<>%s) "
-            "AND (state IN ('reserved','submitting','reconciling','awaiting_input') OR "
-            "(state='completed' AND updated_at >= date_trunc('month',now())))",
-            (scope.tenant_id, scope.owner_id, currency, exclude, exclude),
+            "SELECT proposal,state,updated_at FROM autonomy_operations "
+            "WHERE tenant_id=%s AND owner_id=%s AND proposal->>'currency'=%s "
+            "AND (%s IS NULL OR id::text<>%s) "
+            "AND state IN ('reserved','submitting','reconciling','awaiting_input','completed')",
+            (scope.tenant_id, scope.owner_id, proposal.currency, exclude, exclude),
         )
-        return int(cur.fetchone()["used"])
+        try:
+            before = monthly_projection(list(cur.fetchall()), today=now.date())
+            added = monthly_projection(
+                [proposal_record(proposal.model_dump(mode="json"), now=now)], today=now.date()
+            )
+        except ValueError:
+            return "renewal_schedule_missing"
+        month = now.strftime("%Y-%m")
+        decision = policy.decision(
+            proposal,
+            agent_id=agent_id,
+            used_minor=before[month] + added[month] - proposal.amount_minor,
+        )
+        if decision != "allow":
+            return decision
+        if proposal.recurring_minor and any(
+            before[key] + amount > policy.monthly_minor for key, amount in added.items()
+        ):
+            return "monthly_commitment_limit"
+        return "allow"
 
     def reserve(
         self, scope: Scope, grant_id: str, agent_id: str, proposal: WebOperation
     ) -> dict[str, Any]:
-        payload = proposal.model_dump(mode="json")
+        payload = proposal.model_dump(mode="json", exclude_none=True)
         fingerprint = hashlib.sha256(
             json.dumps([grant_id, agent_id, payload], sort_keys=True).encode()
         ).hexdigest()
@@ -369,9 +407,7 @@ class AutonomyStore:
                     raise PermissionError("idempotency_conflict")
                 return {"id": existing["id"], "state": existing["state"]}
             policy, version = self._policy(cur, scope, grant_id)
-            decision = policy.decision(
-                proposal, agent_id=agent_id, used_minor=self._usage(cur, scope, proposal.currency)
-            )
+            decision = self._budget_decision(cur, scope, policy, proposal, agent_id)
             if decision != "allow":
                 raise PermissionError(decision)
             operation_id = str(uuid4())
@@ -423,11 +459,7 @@ class AutonomyStore:
                 raise PermissionError("grant_changed")
             proposal = WebOperation.model_validate(row["proposal"])
             self._check_settings(cur, scope, proposal)
-            decision = policy.decision(
-                proposal,
-                agent_id=agent_id,
-                used_minor=self._usage(cur, scope, proposal.currency, operation_id),
-            )
+            decision = self._budget_decision(cur, scope, policy, proposal, agent_id, operation_id)
             if decision != "allow":
                 raise PermissionError(decision)
             cur.execute(
@@ -447,11 +479,7 @@ class AutonomyStore:
                 raise PermissionError("grant_changed")
             proposal = WebOperation.model_validate(row["proposal"])
             self._check_settings(cur, scope, proposal)
-            result = policy.decision(
-                proposal,
-                agent_id=agent_id,
-                used_minor=self._usage(cur, scope, proposal.currency, operation_id),
-            )
+            result = self._budget_decision(cur, scope, policy, proposal, agent_id, operation_id)
             if result != "allow":
                 raise PermissionError(result)
             return policy
@@ -531,6 +559,28 @@ class AutonomyStore:
                 (scope.tenant_id, scope.owner_id, Json(settings.model_dump(mode="json"))),
             )
             self._event(cur, scope, str(uuid4()), "settings_changed")
+
+    def spending_projection(self, scope: Scope) -> dict[str, Any]:
+        with self.transaction() as cur:
+            cur.execute(
+                "SELECT proposal,state,updated_at FROM autonomy_operations "
+                "WHERE tenant_id=%s AND owner_id=%s "
+                "AND proposal->>'action' IN ('purchase','subscription') "
+                "AND state IN ('reserved','submitting','reconciling','awaiting_input','completed')",
+                (scope.tenant_id, scope.owner_id),
+            )
+            rows = list(cur.fetchall())
+        currencies = sorted({row["proposal"]["currency"] for row in rows})
+        result = {}
+        for currency in currencies:
+            try:
+                result[currency] = monthly_projection(
+                    [row for row in rows if row["proposal"]["currency"] == currency],
+                    today=datetime.now(UTC).date(),
+                )
+            except ValueError:
+                return {"state": "renewal_schedule_missing", "months": {}}
+        return {"state": "ready", "months": result}
 
     def recent_operations(self, scope: Scope) -> list[dict[str, Any]]:
         with self.transaction() as cur:

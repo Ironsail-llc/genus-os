@@ -229,3 +229,70 @@ async def test_personal_checkout_resumes_with_transient_code_and_one_charge(stor
         await broker.execute_on_page(identity, operation["id"], "main", plan, page)
         assert len(charges) == 1
         await browser.close()
+
+
+@pytest.mark.timeout(60)
+async def test_free_trial_enrollment_records_renewals_and_cannot_overbook_budget(store, identity):
+    next_charge = (datetime.now(UTC) + timedelta(days=40)).date().isoformat()
+    terms = {"interval_months": 1, "next_charge_on": next_charge}
+    grant = store.create_grant(
+        identity,
+        Delegation(
+            agent_ids={"main"},
+            origins={"https://shop.example"},
+            actions={"subscription"},
+            expires_at=datetime.now(UTC) + timedelta(days=1),
+            per_purchase_minor=1000,
+            monthly_minor=1000,
+            recurring_minor=1000,
+            annual_minor=12000,
+        ),
+    )
+    proposal = WebOperation(
+        origin="https://shop.example",
+        action="subscription",
+        purpose="Join membership",
+        idempotency_key="membership-trial",
+        recurring_minor=600,
+        annual_commitment_minor=7200,
+        recurrence=terms,
+    )
+    operation = store.reserve(identity, grant["id"], "main", proposal)
+    plan = ExecutionPlan(
+        url="https://shop.example/join",
+        fields=[],
+        submit_selector="#join",
+        success_selector="#confirmation",
+        success_text="Membership active",
+        amount_selector="#total",
+        recurring_selector="#recurring",
+        annual_selector="#annual",
+        recurrence_interval_selector="#interval",
+        next_charge_selector="#next",
+    )
+    html = f"""<div id="total">$0.00</div><div id="recurring">$6.00</div><div id="annual">$72.00</div>
+    <div id="interval">Monthly</div><div id="next">{next_charge}</div>
+    <button id="join" onclick="document.querySelector('#confirmation').hidden=false">Join</button>
+    <div id="confirmation" hidden>Membership active: RECEIPT-123</div>"""
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        page = await browser.new_page()
+        await page.route(
+            "https://shop.example/**",
+            lambda route: route.fulfill(body=html, content_type="text/html"),
+        )
+        result = await BrowserBroker(store).execute_on_page(
+            identity, operation["id"], "main", plan, page
+        )
+        assert result["state"] == "completed", result
+        saved = store.operation(identity, operation["id"])
+        assert saved["proposal"]["recurrence"]["next_charge_on"] == next_charge
+        assert saved["evidence"]["confirmation_sha256"]
+        with pytest.raises(PermissionError, match="monthly_commitment_limit"):
+            store.reserve(
+                identity,
+                grant["id"],
+                "main",
+                proposal.model_copy(update={"idempotency_key": "second-trial"}),
+            )
+        await browser.close()

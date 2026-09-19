@@ -1,6 +1,6 @@
 """Strict public reference, delegation and operation contracts."""
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
@@ -75,6 +75,18 @@ class PaymentCard(StrictModel):
         return SecretStr(digits)
 
 
+class Recurrence(StrictModel):
+    interval_months: Literal[1, 2, 3, 6, 12]
+    next_charge_on: date
+    ends_on: date | None = None
+
+    @model_validator(mode="after")
+    def ordered_dates(self) -> "Recurrence":
+        if self.ends_on is not None and self.ends_on < self.next_charge_on:
+            raise ValueError("recurrence end precedes next charge")
+        return self
+
+
 class WebOperation(StrictModel):
     origin: str
     action: Action
@@ -84,6 +96,7 @@ class WebOperation(StrictModel):
     currency: str = Field(default="USD", pattern=r"^[A-Z]{3}$")
     recurring_minor: Minor = 0
     annual_commitment_minor: Minor = 0
+    recurrence: Recurrence | None = None
 
     @field_validator("origin")
     @classmethod
@@ -98,6 +111,8 @@ class WebOperation(StrictModel):
             raise ValueError("nonpayment operation cannot spend")
         if self.recurring_minor and self.annual_commitment_minor < self.recurring_minor:
             raise ValueError("annual commitment must cover the recurring payment")
+        if self.recurrence and not self.recurring_minor:
+            raise ValueError("recurrence requires a recurring amount")
         if self.action == "subscription" and not self.annual_commitment_minor:
             raise ValueError("subscription requires an annual commitment")
         return self
