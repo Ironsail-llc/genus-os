@@ -152,3 +152,23 @@ def test_group_settlement_cannot_partially_commit_or_reauthorize_spend(ops):
     ops.settle_many(list(reversed(reservations)), 20)
     with pytest.raises(Conflict):
         ops.reserve_many(["day", "month"], "attempt", 40, active_only=True)
+
+
+def test_checkpoint_is_fenced_and_preserved_when_a_worker_is_replaced(ops):
+    job = ops.enqueue("research", "checkpoint", {})
+    first = ops.claim("research")
+    saved = {"output": {"summary": "Evidence saved"}, "run_id": "run-1"}
+    ops.checkpoint(job, first["lease_token"], saved)
+    with ops.transaction() as cur:
+        cur.execute(
+            "UPDATE operation_jobs SET lease_until=now()-interval '1 second' WHERE tenant_id=%s AND id=%s",
+            (ops.tenant, job),
+        )
+    replacement = ops.claim("research")
+    assert replacement["result"] == saved
+    with pytest.raises(Conflict):
+        ops.checkpoint(job, first["lease_token"], saved)
+    with pytest.raises(Conflict):
+        ops.checkpoint(job, replacement["lease_token"], {"output": "changed"})
+    ops.checkpoint(job, replacement["lease_token"], saved)
+    ops.complete(job, replacement["lease_token"], {"run_id": "run-1"})

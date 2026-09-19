@@ -50,3 +50,57 @@ def test_no_approval_send_or_configuration_tool():
         for name in HANDLERS
         for term in ("approve", "send", "configure", "publish", "decide")
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "identity",
+    [
+        {"agent_id": "researcher", "user_id": "service:researcher", "user_role": "service"},
+        {"agent_id": "workflow:sales-research", "user_id": "human-1", "user_role": "owner"},
+        {
+            "agent_id": "workflow:sales-research",
+            "user_id": "service:workflow:other",
+            "user_role": "service",
+        },
+        {
+            "agent_id": "workflow:sales-research",
+            "user_id": "service:workflow:sales-research",
+            "user_role": "sales_agent",
+        },
+    ],
+)
+async def test_queue_tool_cannot_be_invoked_by_agent_or_spoofed_workflow(identity):
+    ctx = SimpleNamespace(tenant_id="tenant-a", is_benchmark=False, **identity)
+    result = await HANDLERS["sales_process_queue"]({"stage": "research"}, ctx)
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_queue_tool_uses_service_workflow_context_not_arguments(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    import robothor.sales.queue as queue
+
+    run = AsyncMock(return_value={"worked": False})
+    tenants = []
+
+    def driver(service):
+        tenants.append(service.tenant)
+        return SimpleNamespace(tick=run)
+
+    monkeypatch.setattr(queue, "QueueDriver", driver)
+    ctx = SimpleNamespace(
+        tenant_id="tenant-a",
+        is_benchmark=False,
+        agent_id="workflow:sales-research",
+        user_id="service:workflow:sales-research",
+        user_role="service",
+    )
+    result = await HANDLERS["sales_process_queue"]({"stage": "research"}, ctx)
+    assert result == {"worked": False}
+    run.assert_awaited_once_with("research", "sales-research")
+    assert tenants == ["tenant-a"]
+    ctx.is_benchmark = True
+    assert "error" in await HANDLERS["sales_process_queue"]({"stage": "research"}, ctx)
+    assert run.await_count == 1

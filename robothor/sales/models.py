@@ -190,6 +190,28 @@ class Outcome(Contract):
         return value
 
 
+QueueStage = Literal[
+    "plan",
+    "scout",
+    "research",
+    "qualify",
+    "contacts",
+    "verify",
+    "promotion",
+    "draft",
+    "conversation",
+    "activation",
+    "delivery",
+    "stop",
+]
+
+
+class DiscoverySegment(Contract):
+    id: str = Field(min_length=1, max_length=80, pattern=r"^[a-z0-9_-]+$")
+    buying_case: str = Field(min_length=1, max_length=80)
+    query: str = Field(min_length=1, max_length=2000)
+
+
 class SalesSettings(Contract):
     research_enabled: StrictBool = False
     enrichment_enabled: StrictBool = False
@@ -198,6 +220,10 @@ class SalesSettings(Contract):
     outcomes_enabled: StrictBool = False
     review_backlog_limit: int = Field(default=100, ge=1, le=10000, strict=True)
     discovery_daily_limit: int = Field(default=20, ge=0, le=1000, strict=True)
+    discovery_segments: list[DiscoverySegment] = Field(default_factory=list, max_length=50)
+    discovery_start_hour: int = Field(default=2, ge=0, le=23, strict=True)
+    discovery_end_hour: int = Field(default=7, ge=1, le=24, strict=True)
+    workflow_bindings: dict[QueueStage, str] = Field(default_factory=dict)
     monthly_limit_units: int = Field(default=0, ge=0, strict=True)
     daily_limit_units: int = Field(default=0, ge=0, strict=True)
     verification_allowance_units: int = Field(default=0, ge=0, le=1_000_000, strict=True)
@@ -210,6 +236,16 @@ class SalesSettings(Contract):
     agents: dict[str, str] = Field(default_factory=dict)
     active_knowledge_version: str = ""
     active_policy_versions: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def discovery_configuration(self):
+        if self.discovery_start_hour >= self.discovery_end_hour:
+            raise ValueError("Discovery window must start before it ends")
+        if len({s.id for s in self.discovery_segments}) != len(self.discovery_segments):
+            raise ValueError("Discovery segment IDs must be unique")
+        if any(not value.strip() for value in self.workflow_bindings.values()):
+            raise ValueError("Workflow bindings require nonempty native workflow IDs")
+        return self
 
     @field_validator("senders")
     @classmethod

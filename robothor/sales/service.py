@@ -51,16 +51,24 @@ class Sales:
     def configure(self, config, actor):
         """Set explicit switches. Unconfigured instances have no active capabilities."""
         operator(actor)
-        config = SalesSettings.model_validate(config).model_dump(mode="json", exclude_unset=True)
         with self.ops.transaction() as cur:
+            # Row locks cannot serialize the first configuration when no row
+            # exists yet. Preserve concurrent partial operator changes as well.
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+                (self.tenant + ":sales-settings",),
+            )
             cur.execute(
                 "SELECT config FROM sales_settings WHERE tenant_id=%s FOR UPDATE", (self.tenant,)
             )
             previous = cur.fetchone()
+            merged = SalesSettings.model_validate(
+                {**(previous["config"] if previous else {}), **config}
+            ).model_dump(mode="json")
             cur.execute(
                 "INSERT INTO sales_settings(tenant_id,config) VALUES(%s,%s) "
-                "ON CONFLICT(tenant_id) DO UPDATE SET config=sales_settings.config || EXCLUDED.config,updated_at=now()",
-                (self.tenant, Json(config)),
+                "ON CONFLICT(tenant_id) DO UPDATE SET config=EXCLUDED.config,updated_at=now()",
+                (self.tenant, Json(merged)),
             )
             self.ops.audit(cur, self.tenant, "sales.configured", actor, {"fields": sorted(config)})
             if (

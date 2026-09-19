@@ -117,6 +117,54 @@ class ResearchWorker:
                 cur=cur,
             )
 
+    async def _generate(self, job, settings, stage, schema, context, instruction):
+        cached = job.get("result")
+        if cached:
+            if cached.get("checkpoint_version") != 1 or cached.get("stage") != stage:
+                raise Conflict("Unexpected stage checkpoint")
+            return schema.model_validate(cached["output"]), cached["context"], cached["run_id"]
+        agent = settings.agents.get(stage)
+        if not agent:
+            raise Conflict("Native stage agent not configured")
+        reservations = await asyncio.to_thread(self._reserve, settings, job)
+        try:
+            result = await asyncio.wait_for(
+                self.runner.run(
+                    agent_id=agent,
+                    tenant_id=self.sales.tenant,
+                    correlation_id=str(job["id"]),
+                    max_cost_usd=self.RUN_ALLOWANCE_UNITS / 1e6,
+                    message=json.dumps(
+                        {
+                            "task": instruction,
+                            "untrusted_business_data": context,
+                            "output_schema": schema.model_json_schema(),
+                        },
+                        default=str,
+                    ),
+                ),
+                300,
+            )
+        except (TimeoutError, Conflict):
+            raise Conflict("Stage did not finish; reserved cost requires reconciliation") from None
+        await asyncio.to_thread(
+            self.sales.ops.settle_many, reservations, max(0, math.ceil(result.total_cost_usd * 1e6))
+        )
+        if str(result.status) != "completed":
+            raise Conflict("Native stage run did not complete")
+        output = schema.model_validate_json(result.output_text or "")
+        checkpoint = {
+            "checkpoint_version": 1,
+            "stage": stage,
+            "run_id": str(result.id),
+            "output": output.model_dump(mode="json"),
+            "context": json.loads(json.dumps(context, default=str)),
+        }
+        await asyncio.to_thread(
+            self.sales.ops.checkpoint, job["id"], job["lease_token"], checkpoint
+        )
+        return output, context, str(result.id)
+
     async def tick(self):
         settings = SalesSettings.model_validate(await asyncio.to_thread(self.sales.settings))
         if not settings.research_enabled:
@@ -125,44 +173,18 @@ class ResearchWorker:
         if not job:
             return False
         try:
-            agent = settings.agents.get("research")
-            if not agent:
-                raise Conflict("Research agent not configured")
             context = await asyncio.to_thread(self.sales.context, job["payload"]["prospect_id"])
             if context["prospect"]["version"] != job["payload"]["version"]:
                 raise Conflict("Queued research version is stale")
-            reservations = await asyncio.to_thread(self._reserve, settings, job)
-            # If a process disappears mid-run the reserved allowance remains;
-            # recovery never assumes unknown provider usage was free.
-            message = json.dumps(
-                {
-                    "task": "Research this company and return only the exact dossier JSON contract.",
-                    "untrusted_business_data": context,
-                    "output_schema": Dossier.model_json_schema(),
-                },
-                default=str,
+            dossier, _, run_id = await self._generate(
+                job,
+                settings,
+                "research",
+                Dossier,
+                context,
+                "Research this company and return only the exact dossier JSON contract.",
             )
-            try:
-                result = await asyncio.wait_for(
-                    self.runner.run(
-                        agent_id=agent,
-                        tenant_id=self.sales.tenant,
-                        message=message,
-                        correlation_id=str(job["id"]),
-                        max_cost_usd=self.RUN_ALLOWANCE_UNITS / 1e6,
-                    ),
-                    300,
-                )
-            except (TimeoutError, Conflict):
-                raise Conflict(
-                    "Agent did not finish; reserved cost requires reconciliation"
-                ) from None
-            actual = max(0, math.ceil(result.total_cost_usd * 1e6))
-            await asyncio.to_thread(self.sales.ops.settle_many, reservations, actual)
-            if str(result.status) != "completed":
-                raise Conflict("Agent run did not complete successfully")
-            dossier = Dossier.model_validate_json(result.output_text or "")
-            await asyncio.to_thread(self._commit, job, dossier, result.id)
+            await asyncio.to_thread(self._commit, job, dossier, run_id)
         except (Conflict, BudgetExceeded, ValidationError) as exc:
             reason = (
                 "Invalid structured research output"
@@ -222,47 +244,20 @@ class DraftWorker(ResearchWorker):
         if not job:
             return False
         try:
-            agent = settings.agents.get("draft")
-            if not agent:
-                raise Conflict("SDR agent not configured")
             context = await asyncio.to_thread(self.sales.context, job["payload"]["prospect_id"])
             if context["prospect"]["owner"] != "agent":
                 raise Conflict("Prospect is under human ownership")
-            reservations = await asyncio.to_thread(self._reserve, settings, job)
-            message = json.dumps(
-                {
-                    "task": "Return one initial email Draft JSON for human review; use only active claims and evidence.",
-                    "untrusted_business_data": context,
-                    "output_schema": Draft.model_json_schema(),
-                },
-                default=str,
+            draft, context, run_id = await self._generate(
+                job,
+                settings,
+                "draft",
+                Draft,
+                context,
+                "Return one initial email Draft JSON for human review; use only active claims and evidence.",
             )
-            try:
-                result = await asyncio.wait_for(
-                    self.runner.run(
-                        agent_id=agent,
-                        tenant_id=self.sales.tenant,
-                        message=message,
-                        correlation_id=str(job["id"]),
-                        max_cost_usd=self.RUN_ALLOWANCE_UNITS / 1e6,
-                    ),
-                    300,
-                )
-            except (TimeoutError, Conflict):
-                raise Conflict(
-                    "SDR did not finish; reserved cost requires reconciliation"
-                ) from None
-            await asyncio.to_thread(
-                self.sales.ops.settle_many,
-                reservations,
-                max(0, math.ceil(result.total_cost_usd * 1e6)),
-            )
-            if str(result.status) != "completed":
-                raise Conflict("SDR run did not complete")
-            draft = Draft.model_validate_json(result.output_text or "")
             if draft.purpose != "initial" or draft.reply_to_uuid:
                 raise Conflict("Initial SDR work cannot originate a follow-up or reply")
-            await asyncio.to_thread(self._commit_draft, job, context, draft, result.id)
+            await asyncio.to_thread(self._commit_draft, job, context, draft, run_id)
         except (Conflict, BudgetExceeded, ValidationError) as exc:
             reason = (
                 "Invalid structured SDR output" if isinstance(exc, ValidationError) else str(exc)

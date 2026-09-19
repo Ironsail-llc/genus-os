@@ -18,12 +18,28 @@ def handler(name):
             parsed = CONTRACTS[name][0].model_validate(args)
         except ValidationError:
             return {"error": "Invalid sales tool arguments"}
-        if ctx.is_benchmark and name in {"sales_discover", "sales_propose_email"}:
+        if ctx.is_benchmark and name in {
+            "sales_discover",
+            "sales_propose_email",
+            "sales_process_queue",
+        }:
             return {"error": f"{SANDBOX_DENIAL_PREFIX} Sales writes disabled in benchmarks"}
         if not ctx.tenant_id:
             return {"error": "Authenticated tenant required"}
+        if name == "sales_process_queue" and (
+            not ctx.agent_id.startswith("workflow:")
+            or getattr(ctx, "user_id", "") != "service:" + ctx.agent_id
+            or getattr(ctx, "user_role", "") != "service"
+        ):
+            return {"error": "Sales queue execution requires a native service workflow identity"}
         service = Sales(ctx.tenant_id)
         try:
+            if name == "sales_process_queue":
+                from robothor.sales.queue import QueueDriver
+
+                return await QueueDriver(service).tick(
+                    parsed.stage, ctx.agent_id.removeprefix("workflow:")
+                )
             if name == "sales_discover":
                 return await asyncio.to_thread(service.discover, **parsed.model_dump())
             if name == "sales_get_prospect":

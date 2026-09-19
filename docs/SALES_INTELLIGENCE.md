@@ -14,9 +14,39 @@ Candidates already known to Genus do not consume another admission.
 **Implementation status:** the domain, review API, view, provider adapters and
 explicitly constructed workers are available as a foundation. Importing the
 package does not install a schedule, activate integrations or send email.
-Automated deployment, the complete stage runtime, provider event ingestion,
+Automated deployment, provider event ingestion,
 provider billing reconciliation, and the real pilot remain deployment
 gates. Keep integration switches off until those gates are satisfied.
+
+## Native workflow execution
+
+Instance workflow YAML calls `sales_process_queue` in a deterministic tool step.
+`workflow_bindings` explicitly maps each stage to its authorized native service
+workflow. No agent has this execution authority. Stages are `plan`, `scout`,
+`research`, `qualify`, `contacts`, `verify`, `promotion`, `draft`, `conversation`,
+`activation`, `delivery`, and `stop`. Each call handles at most one work item;
+the planner creates a bounded set of discovery jobs. There is no separate daemon.
+
+Use separate workflows for stop requests, inbound conversations, delivery, and
+research. The stop workflow remains scheduled when sending is paused. All other
+workers respect their stage switches. Set `tool_timeout_seconds` in the native
+workflow step to cover the worker's allowance and keep the enclosing workflow
+timeout larger. Research workers allow 300 seconds; a 330-second tool step inside
+a 360-second workflow leaves time for committing work.
+
+Discovery planning runs on weekdays in the configured local window (02:00–07:00
+by default). It rotates configured `discovery_segments`, queues batches of at most
+20, and checks the daily admission limit, review backlog, and outstanding scout
+jobs. Only segments with an active policy version are selected. A persisted daily
+plan is not recreated on restart, and unused scout work expires at window end.
+Candidate counts are enforced again when the scout commits; direct imports and
+other work may have filled the available capacity since planning.
+
+Validated model outputs are checkpointed under the work lease before domain
+commit. A replacement worker reuses that output instead of making another paid
+model request. Checkpoints preserve the original dossier/conversation context;
+stale output still fails the domain version checks. A crash before the checkpoint
+may require another request under a new funded work allowance.
 
 ## Records and responsibilities
 
