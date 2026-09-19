@@ -226,8 +226,14 @@ class AutonomyStore:
         lifetime_seconds: int | None = None,
         source: Source = "secure_input",
     ) -> dict[str, Any]:
-        if lifetime_seconds is not None and not 1 <= lifetime_seconds <= 600:
-            raise ValueError("invalid_verification_lifetime")
+        prepared = self.prepare_resource(scope, resource, source=source)
+        with self.transaction() as cur:
+            return self.insert_resource(cur, scope, prepared, lifetime_seconds=lifetime_seconds)
+
+    def prepare_resource(
+        self, scope: Scope, resource: ResourceInput, *, source: Source = "secure_input"
+    ) -> tuple[dict[str, Any], bytes]:
+        """Validate and seal before a caller's transaction; never return plaintext."""
         from robothor.entity.audit import redact_for_audit
         from robothor.secrets.redaction import redact
 
@@ -241,31 +247,44 @@ class AutonomyStore:
         resource_id = str(uuid4())
         key_id, keys = self.resource_keyring()
         sealed = seal_resource(value, keys, key_id, scope, resource_id)
-        with self.transaction() as cur:
-            cur.execute(
-                "INSERT INTO vault_resources "
-                "(id,tenant_id,owner_id,kind,label,origin,encrypted_value,expires_at,descriptor) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s,now() + %s::integer * interval '1 second',%s)",
-                (
-                    resource_id,
-                    scope.tenant_id,
-                    scope.owner_id,
-                    resource.kind,
-                    resource.label,
-                    resource.origin,
-                    sealed,
-                    lifetime_seconds,
-                    Json(descriptor),
-                ),
-            )
-            self._event(cur, scope, resource_id, "resource_created")
         return {
             "id": resource_id,
             "kind": resource.kind,
             "label": resource.label,
             "origin": resource.origin,
             "descriptor": descriptor,
-        }
+        }, sealed
+
+    def insert_resource(
+        self,
+        cur: Any,
+        scope: Scope,
+        prepared: tuple[dict[str, Any], bytes],
+        *,
+        lifetime_seconds: int | None = None,
+    ) -> dict[str, Any]:
+        """Insert a sealed resource in the same transaction as an enrollment receipt."""
+        if lifetime_seconds is not None and not 1 <= lifetime_seconds <= 600:
+            raise ValueError("invalid_verification_lifetime")
+        reference, sealed = prepared
+        cur.execute(
+            "INSERT INTO vault_resources "
+            "(id,tenant_id,owner_id,kind,label,origin,encrypted_value,expires_at,descriptor) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,now() + %s::integer * interval '1 second',%s)",
+            (
+                reference["id"],
+                scope.tenant_id,
+                scope.owner_id,
+                reference["kind"],
+                reference["label"],
+                reference["origin"],
+                sealed,
+                lifetime_seconds,
+                Json(reference["descriptor"]),
+            ),
+        )
+        self._event(cur, scope, reference["id"], "resource_created")
+        return reference
 
     def resources(self, scope: Scope) -> list[dict[str, Any]]:
         with self.transaction() as cur:

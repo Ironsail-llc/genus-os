@@ -27,6 +27,17 @@ async def handle(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         scope = await asyncio.to_thread(scope_for_actor, ctx.tenant_id, ctx.user_id)
         store = AutonomyStore()
         kind = args.get("kind", "status")
+        if kind == "enrollment_link":
+            from robothor.autonomy.enrollment import EnrollmentRequest, EnrollmentStore
+
+            spec = EnrollmentRequest.model_validate(args.get("enrollment", {}))
+            link = await asyncio.to_thread(EnrollmentStore(store).create, scope, spec)
+            # Only a scoped link reaches history; private inputs use the secure page.
+            return {
+                "setup_path": link["path"],
+                "setup_url": link["url"],
+                "expires_at": link["expires_at"],
+            }
         if kind in {
             "workflow_open",
             "workflow_inspect",

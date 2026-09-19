@@ -125,3 +125,45 @@ def test_owner_can_refresh_legacy_field_descriptions_without_choosing_another_pe
     store.refresh_resource_descriptors.assert_called_once_with(
         Scope(tenant_id="test", owner_id="alice")
     )
+
+
+def test_intake_endpoints_authenticate_and_never_echo_bad_values(api, monkeypatch):
+    client, identity, _ = api
+    intake = MagicMock()
+    intake.create.return_value = {"path": "/account/autonomy#enroll=opaque"}
+    intake.inspect.return_value = {"kind": "credential", "origin": "https://shop.example"}
+    intake.complete.return_value = {"id": "reference"}
+    monkeypatch.setattr(autonomy, "EnrollmentStore", lambda store: intake)
+    assert (
+        client.post(
+            "/api/autonomy/enrollments",
+            json={"kind": "credential", "origin": "https://shop.example"},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post("/api/autonomy/enrollments/inspect", json={"token": "x" * 43}).status_code
+        == 200
+    )
+    response = client.post(
+        "/api/autonomy/enrollments/complete",
+        json={
+            "token": "x" * 43,
+            "resource": {
+                "kind": "credential",
+                "origin": "https://shop.example",
+                "label": "Login",
+                "payload": '{"username":"alice","password":"private-password"}',
+            },
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert "private-password" not in response.text
+    assert intake.complete.call_args.args[0] == Scope(tenant_id="test", owner_id="alice")
+    intake.complete.side_effect = ValueError("private-password")
+    bad = client.post("/api/autonomy/enrollments/complete", json={"token": "private-password"})
+    assert bad.status_code == 422 and "private-password" not in bad.text
+    identity.is_service = True
+    for endpoint in ("enrollments", "enrollments/inspect", "enrollments/complete"):
+        assert client.post("/api/autonomy/" + endpoint, json={}).status_code == 403
