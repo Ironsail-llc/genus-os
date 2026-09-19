@@ -53,7 +53,7 @@ class Setup:
                 "providers/instantly/webhook_secret",
             ],
         }
-        if settings.email_provider == "none":
+        if settings.email_provider != "instantly":
             required.pop("instantly")
         sources = []
         for source in settings.business_sources:
@@ -145,6 +145,7 @@ def sender_context_hash(config, sender):
     return digest(
         {
             "sender": sender,
+            "email_provider": config.get("email_provider", "instantly"),
             "enabled": sender in config.get("senders", []),
             "postal_address": config.get("postal_address", ""),
             "unsubscribe_url": config.get("unsubscribe_url", ""),

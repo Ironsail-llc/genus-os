@@ -1094,3 +1094,53 @@ contact discovery, Genus CRM, Pipedrive and business outcomes remain independent
 For an already active provider, stop and reconcile its external campaigns before
 retiring the connection. A general mailbox connection is not a sales delivery
 adapter: receipts, approvals and reply/suppression handling must still be wired.
+
+### Direct Gmail integration (implementation in progress)
+
+The Gmail transport and approved-action delivery worker are implemented. This is
+not yet a complete alternative fleet: incoming-thread monitoring, opt-out/bounce
+intake, durable sent-copy reconciliation with operator controls, mailbox-error
+recovery and Gmail follow-up evidence remain unfinished. Keep deployed fleets at
+`email_provider: none` until these parts and the internal pilot pass. The native
+queue can route `delivery` to Gmail; unsupported Gmail provider stages return
+`gmail_stage_not_implemented` and never fall back to Instantly. Gmail is not an
+email-address verification service; the existing valid-contact requirement stays.
+
+The adapter reuses the host's Google Workspace CLI OAuth connection. Before use,
+explicitly bind that host connection with `ROBOTHOR_SALES_GMAIL_TENANT_ID` and
+`ROBOTHOR_SALES_GMAIL_MAILBOX`. There is no default tenant and no cross-tenant
+fallback. API calls name the bound mailbox; profile reads verify the same identity
+before preparation and immediately before sending. This initial adapter supports
+one primary mailbox per host, not aliases or shared global credentials for several
+tenants. The CLI raw API path was inspected at version 0.8.0: it issues one request
+without an application-level send retry. Recheck that behavior when upgrading it.
+
+The delivery worker shares the sales action ledger, exact-message approvals,
+current evidence/claim/contact checks, CRM do-not-contact list, suppression,
+operator mailbox-readiness review, sending window and daily quota. Provider
+selection is part of the approval's sender context: changing it invalidates an
+old draft. Gmail supplies no Instantly warmup score; successful OAuth is not
+reported as a fabricated health score. The final authorization check runs after
+the final account read and immediately before the write.
+
+MIME contains only the approved sender, recipient, subject and plain-text body.
+Replies use an independently fetched parent message, matching two-party identities,
+its thread ID, matching subject, and RFC reply/reference headers. An acknowledgement
+for another thread is held as unknown. Provider IDs are mailbox-scoped. Message-ID
+is deterministic per tenant/account/action/content so an uncertain write can be
+searched, but it is **not** a Gmail idempotency guarantee. No timeout triggers an
+automatic resend. Unresolved Gmail effects also block fleet deployment.
+
+`find_sent` is a read-only recovery primitive. A search hit alone is insufficient:
+it requires a single unpaginated result and independently fetched SENT message
+with the approved participants, Message-ID, subject, text and reply association.
+Absence, duplicates, changed content and unsupported MIME stay unresolved. Wiring
+this proof into durable human recovery and conversation ingestion is still required.
+An API receipt is `provider_accepted`; verified mailbox evidence is
+`sent_copy_verified`. Neither proves receipt by the destination or a customer sale.
+
+Contracts checked against the upstream [sending guide](https://developers.google.com/workspace/gmail/api/guides/sending),
+[thread guide](https://developers.google.com/workspace/gmail/api/guides/threads), and
+[error guidance](https://developers.google.com/workspace/gmail/api/guides/handle-errors).
+The installed CLI's [raw request executor](https://github.com/googleworkspace/cli/blob/v0.8.0/src/executor.rs)
+was checked separately from its mail helper commands.

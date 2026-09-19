@@ -138,7 +138,7 @@ def test_operator_change_invalidates_prepared_settings_and_abort_preserves_it(de
     assert sales.settings()["research_enabled"] is False
 
 
-@pytest.mark.parametrize("busy", ["job", "action", "effect"])
+@pytest.mark.parametrize("busy", ["job", "action", "effect", "gmail_effect"])
 def test_prepare_refuses_unfinished_work_even_when_the_advisory_gate_is_free(
     deployment, sales, busy
 ):
@@ -153,7 +153,8 @@ def test_prepare_refuses_unfinished_work_even_when_the_advisory_gate_is_free(
         sales.ops.decide(action, True, "operator:test")
         sales.ops.claim_action()
     else:
-        Effects(sales.tenant)._begin("pipedrive.organization", "active", {})
+        kind = "gmail.send" if busy == "gmail_effect" else "pipedrive.organization"
+        Effects(sales.tenant)._begin(kind, "active", {})
     with pytest.raises(Conflict, match="unfinished"):
         prepare(deployment)
     assert deployment[0].status()["pending"] is None

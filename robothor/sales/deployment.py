@@ -95,7 +95,7 @@ class DeploymentCoordinator:
         if cur.fetchone():
             raise Conflict("Deployment refused: unfinished sales action")
         cur.execute(
-            "SELECT 1 FROM operation_effects WHERE tenant_id=%s AND (kind LIKE 'sales.%%' OR kind LIKE 'pipedrive.%%' OR kind LIKE 'instantly.%%') AND status IN ('executing','unknown') LIMIT 1",
+            "SELECT 1 FROM operation_effects WHERE tenant_id=%s AND (kind LIKE 'sales.%%' OR kind LIKE 'pipedrive.%%' OR kind LIKE 'instantly.%%' OR kind LIKE 'gmail.%%') AND status IN ('executing','unknown') LIMIT 1",
             (self.sales.tenant,),
         )
         if cur.fetchone():

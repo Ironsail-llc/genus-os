@@ -15,6 +15,7 @@ from robothor.operations.gates import run_shared
 from robothor.operations.store import Conflict
 from robothor.sales.business_queue import BusinessWorker
 from robothor.sales.delivery import DeliveryWorker, StopWorker
+from robothor.sales.gmail_delivery import GmailDeliveryWorker
 from robothor.sales.ingestion import InstantlyInboxWorker
 from robothor.sales.models import SalesSettings
 from robothor.sales.promotion import PromotionWorker
@@ -53,6 +54,14 @@ class QueueDriver:
             "status",
         }:
             return {"stage": stage, "worked": False, "reason": "email_provider_not_configured"}
+        if settings.email_provider == "gmail" and stage in {
+            "verify",
+            "stop",
+            "inbox",
+            "reconcile",
+            "status",
+        }:
+            return {"stage": stage, "worked": False, "reason": "gmail_stage_not_implemented"}
         if stage == "plan":
             worked = await asyncio.to_thread(DiscoveryPlanner(self.sales).plan)
         else:
@@ -66,7 +75,10 @@ class QueueDriver:
                 "draft": (DraftWorker, "tick"),
                 "conversation": (ConversationWorker, "tick"),
                 "activation": (ActivationWorker, "tick"),
-                "delivery": (DeliveryWorker, "tick"),
+                "delivery": (
+                    GmailDeliveryWorker if settings.email_provider == "gmail" else DeliveryWorker,
+                    "tick",
+                ),
                 "stop": (StopWorker, "tick"),
                 "inbox": (InstantlyInboxWorker, "tick"),
                 "reconcile": (ReconciliationWorker, "drain"),
