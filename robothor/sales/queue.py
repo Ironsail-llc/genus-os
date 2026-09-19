@@ -15,6 +15,8 @@ from robothor.operations.gates import run_shared
 from robothor.operations.store import Conflict
 from robothor.sales.business_queue import BusinessWorker
 from robothor.sales.delivery import DeliveryWorker, StopWorker
+from robothor.sales.gmail_bounces import GmailBounceWorker
+from robothor.sales.gmail_controls import GmailStatusWorker, GmailStopWorker
 from robothor.sales.gmail_delivery import GmailDeliveryWorker
 from robothor.sales.gmail_sync import GmailThreadWorker
 from robothor.sales.ingestion import InstantlyInboxWorker
@@ -55,13 +57,8 @@ class QueueDriver:
             "status",
         }:
             return {"stage": stage, "worked": False, "reason": "email_provider_not_configured"}
-        if settings.email_provider == "gmail" and stage in {
-            "verify",
-            "stop",
-            "reconcile",
-            "status",
-        }:
-            return {"stage": stage, "worked": False, "reason": "gmail_stage_not_implemented"}
+        if settings.email_provider == "gmail" and stage == "verify":
+            return {"stage": stage, "worked": False, "reason": "email_verification_not_provided"}
         if stage == "plan":
             worked = await asyncio.to_thread(DiscoveryPlanner(self.sales).plan)
         else:
@@ -79,17 +76,24 @@ class QueueDriver:
                     GmailDeliveryWorker if settings.email_provider == "gmail" else DeliveryWorker,
                     "tick",
                 ),
-                "stop": (StopWorker, "tick"),
+                "stop": (
+                    GmailStopWorker if settings.email_provider == "gmail" else StopWorker,
+                    "tick",
+                ),
                 "inbox": (
                     GmailThreadWorker
                     if settings.email_provider == "gmail"
                     else InstantlyInboxWorker,
                     "tick",
                 ),
-                "reconcile": (ReconciliationWorker, "drain"),
+                "reconcile": (GmailBounceWorker, "tick")
+                if settings.email_provider == "gmail"
+                else (ReconciliationWorker, "drain"),
                 "business": (BusinessWorker, "tick"),
                 "analyst": (AnalystWorker, "tick"),
-                "status": (ProviderStatusWorker, "drain"),
+                "status": (GmailStatusWorker, "tick")
+                if settings.email_provider == "gmail"
+                else (ProviderStatusWorker, "drain"),
             }
             if stage not in workers:
                 raise Conflict("Unknown sales queue stage")

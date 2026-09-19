@@ -1097,14 +1097,15 @@ adapter: receipts, approvals and reply/suppression handling must still be wired.
 
 ### Direct Gmail integration (implementation in progress)
 
-The Gmail transport, approved-action delivery worker, owned-thread monitoring and
-human sent-copy recovery are implemented. This is not yet a complete alternative
-fleet: bounce intake outside the original thread, mailbox-error recovery, local
-stop-job handling and Gmail follow-up evidence remain unfinished. Keep deployed fleets at
-`email_provider: none` until these parts and the internal pilot pass. The native
-queue can route `delivery` and `inbox` to Gmail; unsupported Gmail provider stages return
-`gmail_stage_not_implemented` and never fall back to Instantly. Gmail is not an
-email-address verification service; the existing valid-contact requirement stays.
+The Gmail transport, approved-action delivery worker, owned-thread monitoring,
+human sent-copy recovery, delivery-report intake, mailbox readiness revocation,
+local stop handling and reviewed follow-up evidence are implemented. Fleet
+packaging and the native end-to-end internal pilot still need validation before
+rollout. Keep deployed fleets at `email_provider: none` until that preparation
+passes. The native queue routes `delivery`, `inbox`, `stop`, `reconcile` and
+`status` to Gmail workers without falling back to Instantly. Gmail is not an
+email-address verification service: `verify` returns
+`email_verification_not_provided`, and the existing valid-contact requirement stays.
 
 The adapter reuses the host's Google Workspace CLI OAuth connection. Before use,
 explicitly bind that host connection with `ROBOTHOR_SALES_GMAIL_TENANT_ID` and
@@ -1195,3 +1196,54 @@ Operator-only endpoints:
 
 Neither endpoint accepts a supplied provider receipt, actor or tenant. No API
 success or sent-copy observation is presented as recipient-delivery confirmation.
+
+
+#### Delivery reports, mailbox status and local stops
+
+The `reconcile` workflow runs `GmailBounceWorker` using durable
+`sales.gmail_bounces` jobs. It lists mailbox metadata within fixed time bounds,
+fetches raw bodies only for structured multipart delivery reports, and matches
+an original RFC Message-ID plus recipient to an owned, intact approved action.
+It parses machine status fields from RFC 3464/6533 reports, never diagnostic
+prose. A permanent failure suppresses further outreach; a delay or a mismatched
+recipient moves the prospect to human review. Unknown message IDs do not modify
+prospects. A sent-copy replay, human send recovery or concurrent API
+acknowledgement cannot erase a recorded permanent failure. Reports do not resolve
+unknown sends or prove customer engagement.
+
+The bounded scan processes 25 metadata records/page, at most 100 pages/scan,
+with ten page admissions/minute and up to five pages during one preflight. It
+tracks cursors, overlaps incremental scans by a day and schedules a daily full
+rescan from the first owned action. An incomplete/ambiguous scan stays visible
+in Provider read recovery; it never supplies complete coverage. Further sends
+require completed coverage through the last two minutes. This bounds observation
+freshness; it cannot eliminate provider indexing delay. The action inventory is
+capped at 10,000; larger mailboxes need an explicit archival/indexing upgrade.
+
+The `status` workflow checks the bound Gmail account using durable
+`sales.gmail_status` jobs (at most one planned check per sender per ten minutes).
+A failed account check revokes readiness and cancels pending approvals. A repaired
+connection does not restore the operator's readiness approval. Delivery also
+revokes readiness after account failure or an uncertain write. No Gmail warmup
+or deliverability score is fabricated from account access.
+
+The `stop` workflow completes local stop and suppression requests without needing
+provider credentials. It cancels only matching pending work created before the
+request, so an old pause cannot cancel later resumed work. Executing/unknown
+sends stay held for reconciliation. It cannot recall submitted email.
+
+#### Gmail follow-up evidence
+
+The shared opt-in cadence supports Gmail without creating external campaigns.
+Every preceding message needs a completed Gmail effect matching the exact approved
+payload and a verified sent copy in the same mailbox-scoped thread. The whole
+conversation must remain outbound, without failed/delayed delivery, unknown
+writes, unapproved manual sends, changed ownership or customer activity. Both
+thread observation and complete delivery-report coverage must be at most two
+minutes old, with full report coverage at most one day old. The schedule starts
+from the actual preceding send and retains the existing two-follow-up maximum.
+
+The immutable draft basis records the original action, ordinal, preceding
+message, mailbox, thread and due date; refreshing unchanged evidence does not
+change that basis. The SDR creates review work only. Every message requires its
+own approval, and final preflight scans and revalidates the conversation again.

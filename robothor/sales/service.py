@@ -1009,6 +1009,8 @@ class Sales:
             "sales.business",
             "sales.provider_status",
             "sales.gmail_sync",
+            "sales.gmail_status",
+            "sales.gmail_bounces",
         )
         if state not in {"attention", "all"} or (kind is not None and kind not in kinds):
             raise ValueError("Provider read inventory filter invalid")
@@ -1049,7 +1051,7 @@ class Sales:
             cur.execute(
                 "UPDATE operation_jobs SET status='pending',attempts=0,available_at=now(), "
                 "deadline=now()+interval '1 day',lease_token=NULL,lease_until=NULL,error='',updated_at=now() "
-                "WHERE tenant_id=%s AND id=%s AND kind IN ('sales.inbound','sales.reconcile','sales.business','sales.provider_status','sales.gmail_sync') "
+                "WHERE tenant_id=%s AND id=%s AND kind IN ('sales.inbound','sales.reconcile','sales.business','sales.provider_status','sales.gmail_sync','sales.gmail_status','sales.gmail_bounces') "
                 "AND status IN ('failed','pending')",
                 (self.tenant, job_id),
             )

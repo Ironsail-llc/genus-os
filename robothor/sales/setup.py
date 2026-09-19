@@ -98,7 +98,7 @@ class Setup:
         ]
         with self.sales.ops.transaction() as cur:
             cur.execute(
-                "SELECT id,status,error,result,updated_at FROM operation_jobs WHERE tenant_id=%s AND kind='sales.provider_status' ORDER BY updated_at DESC LIMIT 20",
+                "SELECT id,status,error,result,updated_at FROM operation_jobs WHERE tenant_id=%s AND kind IN ('sales.provider_status','sales.gmail_status') ORDER BY updated_at DESC LIMIT 20",
                 (self.tenant,),
             )
             checks = [dict(r) for r in cur.fetchall()]
