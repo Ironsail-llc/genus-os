@@ -24,6 +24,7 @@ class NativeStageRunner:
     async def run(self, *, agent_id, tenant_id, message, correlation_id, max_cost_usd):
         from robothor.engine.config import load_agent_config
         from robothor.engine.models import TriggerType
+        from robothor.engine.request_budget import RequestBudget, budget_scope
         from robothor.engine.tools.handlers.spawn import get_runner
 
         runner = get_runner()
@@ -39,8 +40,12 @@ class NativeStageRunner:
             or config.can_spawn_agents
         ):
             raise Conflict("Sales research requires a bounded read/research manifest")
-        if "write_file" in config.tools_allowed and not config.write_path_allowlist:
-            raise Conflict("Sales status writes require a path allowlist")
+        if "write_file" in config.tools_allowed and (
+            not config.write_path_allowlist
+            or "write_path_restrict" not in config.guardrails
+            or config.guardrails_opt_out
+        ):
+            raise Conflict("Sales status writes require an enforced path allowlist")
         bounded = replace(
             config,
             hard_budget=True,
@@ -51,17 +56,23 @@ class NativeStageRunner:
             auto_task=False,
             downstream_agents=[],
         )
-        return await runner.execute(
-            agent_id=agent_id,
-            message=message,
-            agent_config=bounded,
-            tenant_id=tenant_id,
-            trigger_type=TriggerType.WORKFLOW,
-            trigger_detail="durable_sales_work",
-            correlation_id=correlation_id,
-            user_id="service:" + agent_id,
-            user_role=bounded.service_role,
-        )
+        budget = RequestBudget(math.floor(bounded.max_cost_usd * 1e6))
+        with budget_scope(budget):
+            result = await runner.execute(
+                agent_id=agent_id,
+                message=message,
+                agent_config=bounded,
+                tenant_id=tenant_id,
+                trigger_type=TriggerType.WORKFLOW,
+                trigger_detail="durable_sales_work",
+                correlation_id=correlation_id,
+                user_id="service:" + agent_id,
+                user_role=bounded.service_role,
+            )
+        # Includes retries, failed attempts, finalizers and auxiliary model calls
+        # omitted from normal run token accounting. Unknown usage stays charged.
+        result.total_cost_usd = max(result.total_cost_usd, budget.charged_units / 1e6)
+        return result
 
 
 class ResearchWorker:
@@ -72,27 +83,39 @@ class ResearchWorker:
         self.runner = runner or NativeStageRunner()
 
     def _reserve(self, settings, job):
-        now = datetime.now(UTC)
-        scopes = {
-            f"sales:month:{now:%Y-%m}": settings.monthly_limit_units,
-            f"sales:day:{now:%Y-%m-%d}": settings.daily_limit_units,
-        }
-        reservations = []
-        try:
-            for scope, limit in scopes.items():
-                self.sales.ops.set_budget(scope, limit)
-                reservations.append(
-                    self.sales.ops.reserve(
-                        scope,
-                        str(job["id"]) + ":" + str(job["lease_token"]),
-                        self.RUN_ALLOWANCE_UNITS,
-                    )
-                )
-        except (BudgetExceeded, Conflict):
-            for reservation in reservations:
-                self.sales.ops.settle(reservation, 0)
-            raise
-        return reservations
+        # Settings and work authorization are checked under the same transaction
+        # as both allowances. A waiting worker cannot restore an old spending cap
+        # or start a new paid attempt after its lease was replaced.
+        with self.sales.ops.transaction() as cur:
+            cur.execute(
+                "SELECT config FROM sales_settings WHERE tenant_id=%s FOR UPDATE",
+                (self.sales.tenant,),
+            )
+            row = cur.fetchone()
+            current = SalesSettings.model_validate(row["config"] if row else {})
+            if current != settings:
+                raise Conflict("Sales settings changed before spending admission")
+            cur.execute(
+                "SELECT id FROM operation_jobs WHERE tenant_id=%s AND id=%s AND lease_token=%s "
+                "AND status='running' AND lease_until>clock_timestamp() AND deadline>clock_timestamp() FOR UPDATE",
+                (self.sales.tenant, job["id"], job["lease_token"]),
+            )
+            if not cur.fetchone():
+                raise Conflict("Work lease expired or replaced before spending admission")
+            now = datetime.now(UTC)
+            scopes = {
+                f"sales:month:{now:%Y-%m}": current.monthly_limit_units,
+                f"sales:day:{now:%Y-%m-%d}": current.daily_limit_units,
+            }
+            for scope in sorted(scopes):
+                self.sales.ops.set_budget(scope, scopes[scope], cur=cur)
+            return self.sales.ops.reserve_many(
+                scopes,
+                str(job["id"]) + ":" + str(job["lease_token"]),
+                self.RUN_ALLOWANCE_UNITS,
+                active_only=True,
+                cur=cur,
+            )
 
     async def tick(self):
         settings = SalesSettings.model_validate(await asyncio.to_thread(self.sales.settings))
@@ -135,8 +158,7 @@ class ResearchWorker:
                     "Agent did not finish; reserved cost requires reconciliation"
                 ) from None
             actual = max(0, math.ceil(result.total_cost_usd * 1e6))
-            for reservation in reservations:
-                await asyncio.to_thread(self.sales.ops.settle, reservation, actual)
+            await asyncio.to_thread(self.sales.ops.settle_many, reservations, actual)
             if str(result.status) != "completed":
                 raise Conflict("Agent run did not complete successfully")
             dossier = Dossier.model_validate_json(result.output_text or "")
@@ -230,12 +252,11 @@ class DraftWorker(ResearchWorker):
                 raise Conflict(
                     "SDR did not finish; reserved cost requires reconciliation"
                 ) from None
-            for reservation in reservations:
-                await asyncio.to_thread(
-                    self.sales.ops.settle,
-                    reservation,
-                    max(0, math.ceil(result.total_cost_usd * 1e6)),
-                )
+            await asyncio.to_thread(
+                self.sales.ops.settle_many,
+                reservations,
+                max(0, math.ceil(result.total_cost_usd * 1e6)),
+            )
             if str(result.status) != "completed":
                 raise Conflict("SDR run did not complete")
             draft = Draft.model_validate_json(result.output_text or "")

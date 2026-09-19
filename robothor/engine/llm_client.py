@@ -96,6 +96,7 @@ from robothor.engine.reasoning_replay import (
     redacted_history_digest,
     strip_reasoning_for_model,
 )
+from robothor.engine.request_budget import RequestBudgetError, bounded_completion
 from robothor.engine.retry import retry_async
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.stall_watchdog import _active_watchdog_var
@@ -345,14 +346,14 @@ async def _gated_acompletion(model: str, kwargs: dict[str, Any]) -> Any:
 
     model_registry.note_active_model(model)
     if not is_local_model(model):
-        return await litellm.acompletion(**kwargs)
+        return await bounded_completion(litellm.acompletion, **kwargs)
 
     from robothor.llm.local_gate import Lane, gate
 
     cm = gate().slot(lane=Lane.NORMAL)
     await cm.__aenter__()
     try:
-        stream = await litellm.acompletion(**kwargs)
+        stream = await bounded_completion(litellm.acompletion, **kwargs)
     except BaseException:
         await cm.__aexit__(None, None, None)
         raise
@@ -1195,7 +1196,7 @@ async def llm_call(
         t0 = _time.monotonic()
         try:
             call = codex_acompletion if is_codex_model(model) else litellm.acompletion
-            resp = await asyncio.wait_for(call(**kwargs), timeout=timeout)
+            resp = await asyncio.wait_for(bounded_completion(call, **kwargs), timeout=timeout)
             LLM_CALLS_TOTAL.labels(model=model, status="success").inc()
             LLM_CALL_DURATION.labels(model=model).observe(_time.monotonic() - t0)
             usage = getattr(resp, "usage", None)
@@ -1226,6 +1227,8 @@ async def llm_call(
                 retryable_exceptions=_RETRYABLE_EXCEPTIONS,
                 backoff_base=1.0,
             )
+        except RequestBudgetError:
+            raise
         except Exception as exc:  # noqa: BLE001 - the next model is the point
             last = exc
             # Judge, buddy review and the background legs never touch
@@ -2144,7 +2147,7 @@ class LLMClient:
         model_registry.note_active_model(model)
         async with _local_slot(model):
             try:
-                return await litellm.acompletion(**kwargs)
+                return await bounded_completion(litellm.acompletion, **kwargs)
             except Exception as e:
                 if not is_image_unsupported_error(e):
                     raise
@@ -2157,7 +2160,9 @@ class LLMClient:
                     "the agent is told to inspect the file programmatically",
                     _sanitize(model),
                 )
-                return await litellm.acompletion(**{**kwargs, "messages": stripped})
+                return await bounded_completion(
+                    litellm.acompletion, **{**kwargs, "messages": stripped}
+                )
 
     # ─── Non-streaming call ──────────────────────────────────────────
 
@@ -2296,7 +2301,7 @@ class LLMClient:
                     with self._watchdog_wait(f"llm_inflight:{model}", attempt_timeout):
                         async with asyncio.timeout(attempt_timeout):
                             if is_codex_model(model):
-                                result = await codex_acompletion(**kwargs)
+                                result = await bounded_completion(codex_acompletion, **kwargs)
                             else:
                                 result = await self._call_with_image_fallback(
                                     model=model,
@@ -2335,6 +2340,8 @@ class LLMClient:
                     # cost the wall clock this row exists to account for.
                     if not noted:
                         note_outcome(model, attempt_started, error=ce)
+                    raise
+                except RequestBudgetError:
                     raise
                 except Exception as e:
                     last_error = e
@@ -2499,7 +2506,7 @@ class LLMClient:
                     if is_codex_model(model):
                         with self._watchdog_wait(f"llm_inflight:{model}", per_call_timeout):
                             async with asyncio.timeout(per_call_timeout):
-                                result = await codex_acompletion(**kwargs)
+                                result = await bounded_completion(codex_acompletion, **kwargs)
                         content = str(result.choices[0].message.content or "")
                         if on_content and content:
                             await on_content(content)
@@ -2611,6 +2618,8 @@ class LLMClient:
                     get_model_breaker().record_success(model)
                     _record_execution_mode(model)
                     return rebuilt
+                except RequestBudgetError:
+                    raise
                 except TimeoutError as te:
                     note_outcome(model, attempt_started, error=te)
                     self._handle_model_error(te, model, broken_models, streaming=True)

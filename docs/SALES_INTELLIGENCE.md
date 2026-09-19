@@ -15,7 +15,7 @@ Candidates already known to Genus do not consume another admission.
 explicitly constructed workers are available as a foundation. Importing the
 package does not install a schedule, activate integrations or send email.
 Automated deployment, the complete stage runtime, provider event ingestion,
-strict per-request spending enforcement, and the real pilot remain deployment
+provider billing reconciliation, and the real pilot remain deployment
 gates. Keep integration switches off until those gates are satisfied.
 
 ## Records and responsibilities
@@ -115,9 +115,35 @@ the `write_path_restrict` guardrail and an explicit status-file allowlist.
 
 Migrations 126–127 add tenant-scoped work, budgets, event inbox, audit, immutable
 actions, external effects and sales records. Work leases are fenced; domain
-updates and follow-on jobs commit together. Unknown costs retain their reservation
-until reconciled. Run-level reservations do not yet provide a hard per-request
-spend ceiling, so autonomous scheduling remains gated on that engine upgrade.
+updates and follow-on jobs commit together. Daily and monthly spending admission
+and settlement are atomic across both scopes. Admission locks current settings
+and the current work lease; a waiting worker cannot restore an older cap. Budget
+periods use UTC and charge the period in which the work allowance was admitted.
+
+Native sales runs activate the engine's shared `request_budget` envelope. Every
+main, pooled auxiliary, retry and streaming model request reserves a worst-case
+allowance before dispatch. The initial policy supports text-only OpenRouter
+requests with current anonymous endpoint metadata: it reserves the full published
+input context plus capped output, pins one endpoint, sets provider price ceilings,
+and disables hidden SDK retries and provider fallback. Other providers, paid
+server tools, multimodal inputs, tiered pricing and explicit cache-write charges
+need a supported pricing policy before they can run within this envelope. See
+[OpenRouter provider routing](https://openrouter.ai/docs/guides/routing/provider-selection#max-price).
+
+Confirmed response costs release unused allowance; interrupted or unpriced
+responses retain their full request charge. A run that crashes retains its full
+durable run reservation. Reported run cost includes these conservative charges,
+not just confirmed billing. Provider charges above their declared bound are
+recorded as overruns and stop the envelope; the system cannot undo provider billing
+or spending through other applications. Production reconciliation is still a
+rollout requirement. See [provider usage accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting).
+
+The scope follows async helper work and closes when the run returns, preventing
+detached children from spending later. Paid Brave and Perplexity search have no
+pricing policy in this envelope yet; bounded research uses self-hosted search.
+Other engine runs retain their existing behavior unless explicitly placed inside
+a funded request-budget scope. Native scheduling remains inactive pending the
+remaining deployment gates.
 
 The automated tests exercise real isolated PostgreSQL transactions and synthetic
 HTTP transports. They cover tenant boundaries, concurrent budgets, stale reviews,

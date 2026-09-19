@@ -70,12 +70,11 @@ class StructuredWorker(ResearchWorker):
                 raise Conflict(
                     "Stage did not finish; reserved cost requires reconciliation"
                 ) from None
-            for reservation in reservations:
-                await asyncio.to_thread(
-                    self.sales.ops.settle,
-                    reservation,
-                    max(0, math.ceil(result.total_cost_usd * 1e6)),
-                )
+            await asyncio.to_thread(
+                self.sales.ops.settle_many,
+                reservations,
+                max(0, math.ceil(result.total_cost_usd * 1e6)),
+            )
             if str(result.status) != "completed":
                 raise Conflict("Native stage run did not complete")
             output = self.schema.model_validate_json(result.output_text or "")

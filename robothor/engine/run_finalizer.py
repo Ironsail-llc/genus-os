@@ -841,6 +841,13 @@ class RunFinalizationMixin:
 
     def _persist_run_sync(self, run: AgentRun) -> None:
         """Synchronous DB persistence — update run + batch-insert steps + CRM task."""
+        from robothor.engine.request_budget import active_budget
+
+        budget = active_budget()
+        if budget is not None:
+            # Context propagates into the persistence task and its worker thread.
+            # Keep auxiliary/uncertain attempts visible in the stored run too.
+            run.total_cost_usd = max(run.total_cost_usd, budget.charged_units / 1e6)
         # Assess outcome for interactive runs before persisting
         self._assess_outcome(run)
 
