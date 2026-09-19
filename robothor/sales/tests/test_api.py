@@ -23,6 +23,12 @@ def client(monkeypatch):
         def overview(self):
             return {"tenant": self.tenant}
 
+        def settings_snapshot(self):
+            return {"config": {"daily_limit_units": 0}, "revision": 3}
+
+        def configure(self, changes, actor, **review):
+            calls.append((self.tenant, changes, actor, review))
+
         def retry_provider_read(self, job_id, actor, reason):
             calls.append((self.tenant, job_id, actor, reason))
 
@@ -52,6 +58,43 @@ def client(monkeypatch):
 
     app.include_router(router)
     return TestClient(app), calls
+
+
+def test_reviewed_pilot_limits_require_human_revision_and_cannot_enable_integrations(client):
+    c, calls = client
+    path = "/api/sales/settings/review"
+    body = {
+        "changes": {"monthly_limit_units": 500_000_000},
+        "expected_revision": 3,
+        "reason": "Reviewed monthly pilot budget",
+    }
+    for headers in (
+        {},
+        {"x-test-role": "member"},
+        {"x-test-role": "admin", "x-test-service": "yes"},
+    ):
+        assert c.post(path, headers=headers, json=body).status_code == 403
+        assert c.get("/api/sales/settings", headers=headers).status_code == 403
+    headers = {"x-test-role": "admin"}
+    assert c.get("/api/sales/settings", headers=headers).json()["revision"] == 3
+    for extra in (
+        {"actor": "operator:forged"},
+        {"expected_revision": True},
+        {"changes": {}},
+        {"changes": {"sending_enabled": True}},
+        {"changes": {"agents": {"scout": "other"}}},
+        {"changes": {"active_knowledge_version": "unreviewed"}},
+    ):
+        assert c.post(path, headers=headers, json={**body, **extra}).status_code == 422
+    assert c.post(path, headers=headers, json=body).status_code == 200
+    assert calls == [
+        (
+            "tenant-a",
+            body["changes"],
+            "operator:user-1",
+            {"expected_revision": 3, "reason": body["reason"]},
+        )
+    ]
 
 
 def test_provider_read_inventory_is_human_only_and_filters_cannot_select_writes(client):
