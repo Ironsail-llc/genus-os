@@ -75,7 +75,7 @@ async def test_native_parent_commits_only_the_actual_child_merge_and_closes_scop
 
     parent, child, engine = fleet
 
-    async def spawn(args, ctx):
+    async def spawn(args, ctx, *, _child_scope):
         from robothor.engine.tool_observation import observe_tool_result
 
         children = response(args["agents"])
@@ -133,6 +133,7 @@ async def test_native_parent_commits_only_the_actual_child_merge_and_closes_scop
         "child_spawn",
         "child_continuous",
         "child_downstream",
+        "child_no_page_tool",
     ],
 )
 async def test_unsafe_delegation_refused_before_any_native_run(fleet, fault):
@@ -157,6 +158,8 @@ async def test_unsafe_delegation_refused_before_any_native_run(fleet, fault):
         child.can_spawn_agents = True
     if fault == "child_continuous":
         child.continuous = True
+    if fault == "child_no_page_tool":
+        child.tools_allowed = ["web_search"]
     if fault == "child_downstream":
         child.downstream_agents = ["other"]
     with pytest.raises(Conflict):

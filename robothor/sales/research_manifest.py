@@ -51,6 +51,9 @@ def prepare_research(config, snapshot, stage, tenant_id, message):
     except (ValueError, KeyError):
         raise Conflict("Research worker is missing from the selected release") from None
     validate_tools(child, READ_TOOLS)
+    retrieval_tools = [t for t in ("web_fetch", "web_render") if t in child.tools_allowed]
+    if not retrieval_tools:
+        raise Conflict("Research worker must have a page retrieval tool")
     if (
         child.can_spawn_agents
         or child.continuous
@@ -74,6 +77,7 @@ def prepare_research(config, snapshot, stage, tenant_id, message):
     except (KeyError, ValueError, TypeError):
         raise Conflict("Delegated research requires the native dossier request") from None
     fanout = ResearchFanout(config.id, child.id, tenant_id, context)
+    fanout.first_read_tool = retrieval_tools[0]
     request["delegation"] = {
         "tool": "sales_research_parallel",
         "arguments": "buying_case only",

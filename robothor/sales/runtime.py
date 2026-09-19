@@ -76,7 +76,7 @@ class NativeStageRunner:
             raise Conflict("Configured sales agent manifest is missing")
         fanout, message = prepare_research(config, snapshot, stage, tenant_id, message)
         if fanout is not None:
-            fanout.sources = ResearchSources(tenant_id, fanout.child_id)
+            fanout.sources = ResearchSources(tenant_id, fanout.child_id, fanout.first_read_tool)
         if fanout is not None and recovery is not None:
             await recovery.bind(fanout, release_id=release_id)
             if fanout.buying_case is not None:

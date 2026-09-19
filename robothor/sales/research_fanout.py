@@ -116,6 +116,8 @@ class ResearchFanout:
                 await self.record(missing[index], result)
 
             options = {"_on_result": capture} if self.recovery is not None else {}
+            if self.sources is not None:
+                options["_child_scope"] = self.sources.child_scope
             response = await _handle_spawn_agents({"agents": specs}, ctx=ctx, **options)
             results = response.get("results", [])
             if len(results) != len(missing):

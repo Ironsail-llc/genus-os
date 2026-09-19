@@ -403,6 +403,7 @@ async def _handle_spawn_agents(
     *,
     agent_id: str = "",
     _on_result: Any = None,
+    _child_scope: Any = None,
 ) -> dict[str, Any]:
     """Spawn multiple agents in parallel and wait for all results."""
     if ctx and not agent_id:
@@ -425,7 +426,10 @@ async def _handle_spawn_agents(
         return {"error": f"Max {max_batch} parallel sub-agents allowed, got {len(agents_list)}"}
 
     async def run_child(index, spawn_args):
-        result = await _handle_spawn_agent(spawn_args, ctx=ctx, agent_id=agent_id)
+        from contextlib import nullcontext
+
+        with _child_scope(index) if _child_scope is not None else nullcontext():
+            result = await _handle_spawn_agent(spawn_args, ctx=ctx, agent_id=agent_id)
         if _on_result is not None:
             await _on_result(index, result)
         return result
