@@ -46,7 +46,12 @@ cost, outputs and judge results. Synthetic business fixtures cannot establish re
 customer conversion or deployment readiness.
 
 Semantic judges accept only integer 0/1 scores with exactly one score per rubric
-item. Truthy strings, booleans and other numbers are grading errors. Each judge
+item. Each task retains the judge model, threshold, aggregate score and ordered
+`item_scores`, so a semantic rejection can be traced to its rubric item instead
+of appearing only as a failed overall case. A failed judge has a null score and
+no item decisions; `judge_error` remains separate. This diagnostic does not change
+grading or reproduce the evaluated output. Truthy strings, booleans and other
+numbers are grading errors. Each judge
 request and retry passes through the engine's opt-in `RequestBudget` when a funded
 scope is active. Unknown provider usage retains its reservation. Without that scope,
 legacy benchmark cost behavior is unchanged: suite task totals exclude judge spend

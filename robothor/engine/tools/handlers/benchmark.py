@@ -86,6 +86,7 @@ class JudgeOutcome:
 
     score: float | None
     error: str | None = None
+    item_scores: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1184,7 +1185,7 @@ async def _judge_output(output: str, rubric: list[str], model: str) -> JudgeOutc
                 )
             if any(type(score) is not int or score not in (0, 1) for score in scores):
                 return JudgeOutcome(score=None, error="judge scores must be integer 0 or 1")
-            return JudgeOutcome(score=sum(scores) / len(rubric))
+            return JudgeOutcome(score=sum(scores) / len(rubric), item_scores=tuple(scores))
         except Exception as e:
             detail = str(e).replace("\n", "\\n")
             # Retire a rejected credential before the next attempt, or all
@@ -1360,6 +1361,12 @@ async def _score_task_detailed(
         model = judge.get("model", "openrouter/xiaomi/mimo-v2.5-pro")
         outcome = await _judge_output(output, rubric, model)
         judge_error = outcome.error
+        detail["judge"] = {
+            "model": model,
+            "threshold": threshold,
+            "score": outcome.score,
+            "item_scores": list(outcome.item_scores),
+        }
         checks.append(outcome.score is not None and outcome.score >= threshold)
 
     # Environment read-backs (grade the environment, never the transcript).
