@@ -76,7 +76,18 @@ async def test_native_parent_commits_only_the_actual_child_merge_and_closes_scop
     parent, child, engine = fleet
 
     async def spawn(args, ctx):
-        return response(args["agents"])
+        from robothor.engine.tool_observation import observe_tool_result
+
+        children = response(args["agents"])
+        for item in children["results"]:
+            evidence = Dossier.model_validate_json(item["output_text"]).evidence[0]
+            observe_tool_result(
+                "web_fetch",
+                {},
+                {"url": evidence.url, "content": evidence.excerpt, "status": 200},
+                tool_context(agent_id="research-worker", run_id=item["run_id"]),
+            )
+        return children
 
     native = AsyncMock(side_effect=spawn)
     monkeypatch.setattr("robothor.engine.tools.handlers.spawn._handle_spawn_agents", native)

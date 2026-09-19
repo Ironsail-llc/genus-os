@@ -21,7 +21,7 @@ class ResearchRecovery:
             json.loads(
                 json.dumps(
                     {
-                        "version": 1,
+                        "version": 2,
                         "release_id": release_id,
                         "agent_id": agent_id,
                         "context": context,
@@ -51,7 +51,7 @@ class ResearchRecovery:
             fanout.buying_case = plan["buying_case"]
             for topic in TOPICS:
                 if topic in self.saved:
-                    await fanout.record(topic, self.saved[topic])
+                    await fanout.record(topic, self.saved[topic], restored=True)
         fanout.recovery = self
 
     async def begin(self, buying_case):

@@ -49,9 +49,11 @@ class NativeStageRunner:
         from robothor.engine.models import DeliveryMode, RunStatus, TriggerType
         from robothor.engine.request_budget import RequestBudget, budget_scope
         from robothor.engine.required_tool import required_tool_scope
+        from robothor.engine.tool_observation import tool_observation_scope
         from robothor.engine.tools.handlers.spawn import get_runner
         from robothor.sales.research_fanout import research_scope
         from robothor.sales.research_manifest import prepare_research
+        from robothor.sales.research_sources import ResearchSources
 
         runner = get_runner()
         if runner is None:
@@ -73,6 +75,8 @@ class NativeStageRunner:
         if config is None:
             raise Conflict("Configured sales agent manifest is missing")
         fanout, message = prepare_research(config, snapshot, stage, tenant_id, message)
+        if fanout is not None:
+            fanout.sources = ResearchSources(tenant_id, fanout.child_id)
         if fanout is not None and recovery is not None:
             await recovery.bind(fanout, release_id=release_id)
             if fanout.buying_case is not None:
@@ -94,6 +98,10 @@ class NativeStageRunner:
         with (
             budget_scope(budget),
             research_scope(fanout),
+            tool_observation_scope(
+                fanout.sources.observe if fanout is not None else None,
+                names={"web_fetch"} if fanout is not None else set(),
+            ),
             required_tool_scope(
                 "sales_research_parallel" if fanout is not None else None,
                 lambda: fanout is not None and not fanout.started,

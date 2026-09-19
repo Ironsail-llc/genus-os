@@ -14,9 +14,12 @@ from robothor.templates.tests.test_fleet_release import spec
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("ignore_requirement", [False, True])
+@pytest.mark.parametrize(
+    "ignore_requirement,citation_fault",
+    [(False, None), (True, None), (False, "no_fetch"), (False, "excerpt"), (False, "url")],
+)
 async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_children(
-    sales, source, tmp_path, monkeypatch, ignore_requirement
+    sales, source, tmp_path, monkeypatch, ignore_requirement, citation_fault
 ):
     from litellm import ModelResponse
 
@@ -96,7 +99,7 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
         assert ctx.user_role == "sales_research_agent"
         assert ctx.agent_id == "research-worker"
         fetched.append(args["url"])
-        return {"url": args["url"], "content": "Public business information"}
+        return {"url": args["url"], "content": "Public business information", "status": 200}
 
     async def quote(kwargs):
         return 2_000, kwargs
@@ -147,16 +150,23 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
                     tool = ("sales_research_parallel", {"buying_case": "network_access"})
             else:
                 assert kwargs["tool_choice"] == "auto"
-                assert "dossier" in json.loads(tool_result["content"]), tool_result
+                if citation_fault is None:
+                    assert "dossier" in json.loads(tool_result["content"]), tool_result
+
             content = '{"untrusted_parent_narrative": true}'
         else:
             assert kwargs["tool_choice"] == "auto"
             topic = request["topic"]
-            if tool_result is None:
+            if tool_result is None and citation_fault != "no_fetch":
                 tool = ("web_fetch", {"url": "https://clinic.example.com/" + topic})
-            else:
+            elif tool_result is not None:
                 assert "Public business information" in tool_result["content"]
-            content = fragment(topic).model_dump_json()
+            part = fragment(topic)
+            if citation_fault == "excerpt":
+                part.evidence[0].excerpt = "Made-up quotation"
+            elif citation_fault == "url":
+                part.evidence[0].url = "https://different.example.com/"
+            content = part.model_dump_json()
         message = {"role": "assistant", "content": content if tool is None else None}
         if tool is not None:
             message["tool_calls"] = [
@@ -219,6 +229,13 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
         assert result.stage_provenance == {}
         assert fetched == []
         assert recovery.store.read(job, recovery.input_hash) == {}
+        return
+    if citation_fault:
+        assert result.status == "failed"
+        assert result.output_text is None
+        assert result.stage_provenance == {}
+        assert set(recovery.store.read(job, recovery.input_hash)) == {"plan"}
+        assert len(fetched) == (0 if citation_fault == "no_fetch" else 3)
         return
     assert result.status == "completed", result.error_message
     assert len(Dossier.model_validate_json(result.output_text).evidence) == 3

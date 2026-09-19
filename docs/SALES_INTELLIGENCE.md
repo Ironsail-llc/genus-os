@@ -600,6 +600,30 @@ records. Child run IDs, output hashes, and the merged hash survive checkpointing
 and final job completion. An incomplete bundle is not qualified; completed whole
 stage checkpoints can be reused after a domain-commit failure.
 
+Native research also requires retrieval evidence from each child. A scoped engine
+observer captures successful `web_fetch` results after the permission gate and
+native handler, before verification annotations. It does not treat search snippets,
+model output, another child's fetches, or cached-repeat responses as new sources.
+Each citation must use the fetch's returned URL and quote its text verbatim
+(Unicode NFC and whitespace normalization are allowed). Genus sets `retrieved_at`
+from the observation time. Missing retrievals or unmatched citations refuse the
+child before its output is saved. Even a dossier with no citations requires at
+least one successful retrieval; an inaccessible site remains unresolved.
+
+The immutable child fragment retains up to 32 returned source texts of at most
+8,000 characters each, their hashes and retrieval times, and the tenant/agent/run
+identity. These business-source texts stay in the tenant-scoped operations store;
+the merged provenance carries only a source-proof hash. Recovery rechecks the
+texts, citations, timestamps and output hash. Legacy fragments without this proof
+cannot enter a native research stage. The input contract version is changed, so
+old fragments require review/new research rather than silent reuse. Raw failed
+agent output remains diagnostic material, not accepted sales evidence.
+
+Retrieval matching proves that quoted text was retrieved, not that a model's
+interpretation, summary, or criterion assignment is correct. Human qualification
+review is still required. JavaScript-only pages may return an unusable shell;
+that does not authorize invented quotations or a browser-permission bypass.
+
 Migration 133 adds immutable, tenant-scoped `operation_fragments`. Native research
 saves its selected buying case before spawning, then checkpoints each validated
 child as it finishes, without waiting for its siblings. A new attempt of the same

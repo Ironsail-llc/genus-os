@@ -596,6 +596,13 @@ async def _execute_tool(
             from robothor.crm.dal import reset_benchmark_sandbox
 
             reset_benchmark_sandbox(sandbox_token)
+    # Trusted workflow evidence sees the native handler's result, never a
+    # model-supplied claim or a later verification annotation. Cached repeats
+    # are not new retrievals; their original execution was already observed.
+    from robothor.engine.tool_observation import observe_tool_result
+
+    observe_tool_result(name, args, result, ctx)
+
     # ── Repeat-call guard: remember what this call returned ──
     # Deliberately BEFORE verification, so what the guard digests is the
     # handler's own output and not something a later control annotated onto it.

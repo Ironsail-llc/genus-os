@@ -63,6 +63,7 @@ class ResearchFanout:
         self.parts: dict[str, Dossier] = {}
         self.children: dict = {}
         self.recovery = None
+        self.sources = None
         self._record_lock = asyncio.Lock()
 
     async def run(self, buying_case, ctx):
@@ -99,7 +100,7 @@ class ResearchFanout:
                 "agent_id": self.child_id,
                 "message": json.dumps(
                     {
-                        "task": "Research only the assigned company and topic. Return the exact Dossier JSON. Preserve unknowns and cite public business evidence; do not calculate a score.",
+                        "task": "Research only the assigned company and topic. Use web_fetch to retrieve public business pages during this child run. Return the exact Dossier JSON. Every evidence URL must be a successful fetch's returned URL and every excerpt must quote its returned text verbatim. Internal background, search snippets and prior model knowledge are not retrieved evidence. Preserve unknowns; do not calculate a score.",
                         "topic": topic,
                         "buying_case": buying_case,
                         "untrusted_business_data": self.context,
@@ -130,7 +131,7 @@ class ResearchFanout:
         }
         return self.result()
 
-    async def record(self, topic, result):
+    async def record(self, topic, result, *, restored=False):
         """Validate and persist each successful result before siblings finish."""
         async with self._record_lock:
             run_id = result.get("run_id")
@@ -148,11 +149,22 @@ class ResearchFanout:
             part = Dossier.model_validate_json(result.get("output_text") or "")
             if part.buying_case != self.buying_case:
                 raise Conflict("Research child changed the approved buying case")
+            source_proof = None
+            if self.sources is not None:
+                if restored:
+                    part, source_proof = self.sources.restore(
+                        run_id, part, result.get("source_proof")
+                    )
+                else:
+                    # A live model result's claimed source_proof is ignored.
+                    part, source_proof = self.sources.attest(run_id, part)
             receipt = {
                 "run_id": run_id,
                 "agent_id": self.child_id,
                 "output_hash": digest(part.model_dump(mode="json")),
             }
+            if source_proof is not None:
+                receipt["source_hash"] = digest(source_proof)
             if topic in self.parts:
                 if receipt != self.children[topic]:
                     raise Conflict("Completed research topic cannot be replaced")
@@ -167,6 +179,7 @@ class ResearchFanout:
                         "agent_id": self.child_id,
                         "status": "completed",
                         "output_text": part.model_dump_json(),
+                        **({"source_proof": source_proof} if source_proof is not None else {}),
                     },
                 )
             self.parts[topic], self.children[topic] = part, receipt
