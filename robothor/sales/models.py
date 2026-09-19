@@ -74,7 +74,8 @@ class DossierFields(Contract, Generic[Fact]):
 
 
 class Dossier(DossierFields[Evidence]):
-    """Persisted CRM evidence includes materialized source URLs and quotations."""
+    # Keep the existing public schema, including its absence of a description.
+    pass
 
 
 class QualificationPolicy(Contract):
