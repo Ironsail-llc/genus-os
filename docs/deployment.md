@@ -903,6 +903,29 @@ plugin that was turned off is loading again. See
 | Dashboard | `GET /api/health` on :3004 | 200; `/api/ready` is what the compose healthcheck polls |
 | Vision | `GET /health` on :8600 | `{"status": "ok", "mode": "..."}` |
 
+## Verified fleet artifacts
+
+`robothor.templates.fleet_release.build_release(source, destination, specification)`
+compiles an explicit inventory of native agents, workflows, Markdown knowledge,
+plugin wheels and optional sales settings into a new artifact directory. It
+validates native contracts and references, inspects wheels without importing them,
+rejects credential literals in text members, and hashes every member. Source and
+platform Git revisions are required metadata; the caller must establish their
+provenance. Build into a trusted output directory with a unique destination.
+
+The returned `release_id` fingerprints the complete canonical metadata and member
+hashes. Retain it outside the artifact. Call
+`verify_release(artifact, expected_digest=release_id)` to detect changed, missing,
+additional or symlinked members. Reading the expected digest from the artifact
+itself would not establish the externally reviewed version.
+
+The artifact records `activation: not_installed`. Sales integration switches must
+be disabled in its settings. Artifact publication does not install plugins, change
+the workspace, reconcile schedules, migrate a database or enable integrations.
+Coordinated runtime cutover, rollback, plugin installation checks and readiness
+remain separate deployment requirements. Existing individual-agent installation
+must not be described as an atomic fleet cutover.
+
 ## Directory Structure (systemd install)
 
 The unit templates spell the workspace `/opt/robothor` and
