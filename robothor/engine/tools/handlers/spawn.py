@@ -402,6 +402,7 @@ async def _handle_spawn_agents(
     ctx: ToolContext | None = None,
     *,
     agent_id: str = "",
+    _on_result: Any = None,
 ) -> dict[str, Any]:
     """Spawn multiple agents in parallel and wait for all results."""
     if ctx and not agent_id:
@@ -423,8 +424,14 @@ async def _handle_spawn_agents(
     if len(agents_list) > max_batch:
         return {"error": f"Max {max_batch} parallel sub-agents allowed, got {len(agents_list)}"}
 
+    async def run_child(index, spawn_args):
+        result = await _handle_spawn_agent(spawn_args, ctx=ctx, agent_id=agent_id)
+        if _on_result is not None:
+            await _on_result(index, result)
+        return result
+
     coros = []
-    for spec in agents_list:
+    for index, spec in enumerate(agents_list):
         spawn_args = {
             "agent_id": spec.get("agent_id", ""),
             "message": spec.get("message", ""),
@@ -433,7 +440,7 @@ async def _handle_spawn_agents(
             spawn_args["tools_override"] = spec["tools_override"]
         if "parent_task_id" in spec:
             spawn_args["parent_task_id"] = spec["parent_task_id"]
-        coros.append(_handle_spawn_agent(spawn_args, ctx=ctx, agent_id=agent_id))
+        coros.append(run_child(index, spawn_args))
 
     raw_results = await asyncio.gather(*coros, return_exceptions=True)
 

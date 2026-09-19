@@ -182,6 +182,12 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
         "prospect": {"id": "synthetic", "domain": "clinic.example.com"},
         "policies": [{"kind": "qualification", "data": {"buying_case": "network_access"}}],
     }
+    from robothor.sales.research_recovery import ResearchRecovery
+
+    sales.ops.enqueue("sales.research", "native-recovery", {})
+    job = sales.ops.claim("sales.research", lease_seconds=360)
+    recovery = ResearchRecovery(sales.ops, job, document["release_id"], "ticket-router", context)
+    await recovery.load()
     with tenant_scope(sales.tenant):
         result = await NativeStageRunner().run(
             agent_id="ticket-router",
@@ -190,6 +196,7 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
             max_cost_usd=1,
             release_id=document["release_id"],
             stage="research",
+            recovery=recovery,
             message=json.dumps(
                 {"untrusted_business_data": context, "output_schema": Dossier.model_json_schema()}
             ),
@@ -214,3 +221,42 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
         row["tenant_id"] == sales.tenant and row["user_role"] == "sales_research_agent"
         for row in rows
     )
+
+    saved = recovery.store.read(job, recovery.input_hash)
+    assert set(saved) == {"plan", *TOPICS}
+    assert {saved[topic]["run_id"] for topic in TOPICS} == {str(row["id"]) for row in children}
+
+    # Simulate losing the parent-stage result after all three topics were saved.
+    # A fresh native parent must merge the saved children without fetching again.
+    from robothor.sales.tests.test_research_recovery import reclaim
+
+    next_job = reclaim(sales, job)
+    resumed = ResearchRecovery(
+        sales.ops, next_job, document["release_id"], "ticket-router", context
+    )
+    await resumed.load()
+    with tenant_scope(sales.tenant):
+        retry = await NativeStageRunner().run(
+            agent_id="ticket-router",
+            tenant_id=sales.tenant,
+            correlation_id=str(next_job["id"]),
+            max_cost_usd=1,
+            release_id=document["release_id"],
+            stage="research",
+            recovery=resumed,
+            message=json.dumps(
+                {"untrusted_business_data": context, "output_schema": Dossier.model_json_schema()}
+            ),
+        )
+        await get_task_registry().drain(timeout=10)
+    assert retry.status == "completed", retry.error_message
+    assert retry.id != result.id
+    assert retry.stage_provenance == result.stage_provenance
+    assert retry.output_text == result.output_text
+    assert len(fetched) == 3
+    with sales.ops.transaction() as cur:
+        cur.execute(
+            "SELECT count(*) AS n FROM agent_runs WHERE tenant_id=%s AND parent_run_id=%s",
+            (sales.tenant, retry.id),
+        )
+        assert cur.fetchone()["n"] == 0
