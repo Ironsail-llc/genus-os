@@ -6,6 +6,7 @@ from typing import Any
 
 from robothor.engine.prompts import EVIDENCE_OUTRANKS_NAMES
 from robothor.engine.vision_fallback import PROVENANCE_NOTE
+from robothor.sales.tool_schemas import SALES_SCHEMAS
 
 # Long descriptions live out here: get_engine_schemas is already one of the
 # engine's largest functions and the size ratchet only lets it shrink.
@@ -3959,4 +3960,4 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
-    return schemas
+    return schemas | SALES_SCHEMAS

@@ -52,6 +52,13 @@ PY
 
 ## Moving the fleet
 
+Migration 127 also provides `sales_agent`: explicit grants for `web_search`,
+`web_fetch`, `write_file`, `sales_discover`, `sales_get_prospect`,
+`sales_get_context` and `sales_propose_email`, followed by deny-all. Each sales
+manifest must narrow that set and constrain status-file writes. The role grants
+no human approval or provider sending capability. See
+[Sales intelligence](../SALES_INTELLIGENCE.md) for its deployment gates.
+
 Two levers. Prefer the second for anything you actually care about.
 
 **1. Fleet-wide default** — one env var, no manifest edits:

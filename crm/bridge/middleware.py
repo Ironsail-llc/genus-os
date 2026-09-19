@@ -250,6 +250,12 @@ def _authorization_denial(auth: AuthContext, method: str, path: str) -> str | No
     if not auth.has_scope(required_scope):
         return "insufficient scope"
 
+    if path == "/api/sales" or path.startswith("/api/sales/"):
+        # This console controls only the verified tenant's sales data. It is
+        # human-only even when a service token carries broad bridge scopes.
+        if auth.is_service or auth.role not in {"owner", "admin"}:
+            return "human tenant operator required"
+
     if path.startswith("/api/tenants"):
         if auth.is_service:
             if not auth.has_scope("tenant:admin"):

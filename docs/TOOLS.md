@@ -137,6 +137,21 @@ and report `kind: "own"` — they degrade honestly rather than pretending.
 
 ## The catalogue
 
+### Sales intelligence (`sales_*`)
+
+| Tool | Purpose |
+|---|---|
+| `sales_discover` | Deduplicate a candidate business in the CRM and queue research. |
+| `sales_get_prospect` | Read the tenant's current dossier and qualification. |
+| `sales_get_context` | Read contacts, conversation and active sales knowledge for drafting. |
+| `sales_propose_email` | Create an immutable draft for human review; never approves or sends. |
+
+Use these for the governed prospect workflow. Generic CRM edits do not substitute
+for evidence, qualification or sales review. Sales agents should not receive
+general mail-send tools. Writes are refused in benchmarks; tenant identity comes
+from the authenticated tool context. See [Sales intelligence](SALES_INTELLIGENCE.md)
+for deployment gates and provider ownership.
+
 ### Google Workspace (`gws_*`)
 
 Eleven tools, all shelling out to the `gws` CLI with the instance's Workspace
