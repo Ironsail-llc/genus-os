@@ -107,6 +107,7 @@ class Delegation(StrictModel):
     enabled: bool = True
     agent_ids: frozenset[Identifier]
     origins: frozenset[str]
+    allow_any_website: bool = False
     actions: frozenset[Action]
     expires_at: datetime
     currency: str = Field(default="USD", pattern=r"^[A-Z]{3}$")
@@ -141,7 +142,7 @@ class Delegation(StrictModel):
             (self.enabled, "grant_disabled"),
             (self.expires_at > (now or datetime.now(UTC)), "grant_expired"),
             (agent_id in self.agent_ids, "agent_not_allowed"),
-            (operation.origin in self.origins, "origin_not_allowed"),
+            (self.allow_any_website or operation.origin in self.origins, "origin_not_allowed"),
             (operation.action in self.actions, "action_not_allowed"),
             (operation.currency == self.currency, "currency_not_allowed"),
             (operation.amount_minor <= self.per_purchase_minor, "purchase_limit"),

@@ -54,7 +54,7 @@ def test_service_and_read_only_accounts_cannot_enroll_or_grant(api, service, rol
     client, identity, store = api
     identity.is_service = service
     identity.role = role
-    for path in ("resources", "grants", "settings"):
+    for path in ("resources", "profile-from-contact", "grants", "settings"):
         response = client.request(
             "PUT" if path == "settings" else "POST",
             f"/api/autonomy/{path}",
@@ -80,3 +80,27 @@ def test_invalid_payload_does_not_echo_input_or_accept_owner_override(api):
     assert response.status_code == 422
     assert "4242424242424242" not in response.text
     store.put_resource.assert_not_called()
+
+
+def test_contact_import_rejects_identity_override_and_returns_only_reference(api, monkeypatch):
+    client, _, _ = api
+    importer = MagicMock(return_value={"id": "reference", "kind": "profile"})
+    monkeypatch.setattr(autonomy, "import_contact_profile", importer)
+    response = client.post("/api/autonomy/profile-from-contact", json={"owner_id": "bob"})
+    assert response.status_code == 422
+    importer.assert_not_called()
+    response = client.post("/api/autonomy/profile-from-contact", json={})
+    assert response.status_code == 200
+    assert response.json() == {"id": "reference", "kind": "profile"}
+    assert response.headers["cache-control"] == "no-store"
+    assert importer.call_args.args[1] == Scope(tenant_id="test", owner_id="alice")
+
+
+def test_contact_import_failure_does_not_echo_contact_data(api, monkeypatch):
+    client, _, _ = api
+    monkeypatch.setattr(
+        autonomy, "import_contact_profile", MagicMock(side_effect=ValueError("private contact"))
+    )
+    response = client.post("/api/autonomy/profile-from-contact", json={})
+    assert response.status_code == 409
+    assert "private contact" not in response.text

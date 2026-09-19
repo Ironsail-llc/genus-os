@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 
 type Resource = { id: string; kind: string; label: string; origin?: string };
-type Grant = { id: string; revoked: boolean; policy: { origins: string[] } };
+type Grant = { id: string; revoked: boolean; policy: { origins: string[]; allow_any_website?: boolean } };
 type Settings = { enabled: boolean; managed_browser: boolean; payment_processing: boolean;
   payment_assessment_reference: string };
 type Status = { resources: Resource[]; grants: Grant[]; settings: Settings };
@@ -26,6 +26,7 @@ export function PersonalAutomationPanel() {
   const [busy, setBusy] = useState(false);
   const [kind, setKind] = useState("profile");
   const [answerCount, setAnswerCount] = useState(1);
+  const [anyWebsite, setAnyWebsite] = useState(false);
   const [operations, setOperations] = useState<Operation[]>([]);
 
   async function refresh() {
@@ -112,6 +113,8 @@ export function PersonalAutomationPanel() {
     <section className="space-y-3">
       <h2 className="text-lg font-medium">Your information</h2>
       <p className="text-sm text-muted-foreground">Saved values are private. Your assistant can use them for authorized tasks.</p>
+      <button type="button" className="rounded border px-3 py-2" disabled={busy || !status}
+        onClick={() => void act(() => api("profile-from-contact", "POST", {}))}>Use my saved contact details</button>
       <select aria-label="Information type" className={inputClass} value={kind} onChange={e => setKind(e.target.value)}>
         <option value="profile">Personal profile</option><option value="credential">Website login</option>
         <option value="payment_card">Payment card</option><option value="document">Photo or document</option>
@@ -151,7 +154,8 @@ export function PersonalAutomationPanel() {
         event.preventDefault(); const data = new FormData(event.currentTarget);
         const money = (key: string) => Math.round(Number(data.get(key) || 0) * 100);
         void act(() => api("grants", "POST", { agent_ids: String(data.get("agents")).split(",").map(s => s.trim()),
-          origins: String(data.get("origins")).split(/[,\n]/).map(s => s.trim()).filter(Boolean),
+          origins: String(data.get("origins") || "").split(/[,\n]/).map(s => s.trim()).filter(Boolean),
+          allow_any_website: anyWebsite,
           frame_origins: String(data.get("frames") || "").split(/[,\n]/).map(s => s.trim()).filter(Boolean),
           actions: ["account", "login", "application", "purchase", "subscription"], currency: "USD",
           expires_at: new Date(String(data.get("expires")) + "T23:59:59Z").toISOString(),
@@ -159,7 +163,10 @@ export function PersonalAutomationPanel() {
           recurring_minor: money("recurring"), annual_minor: money("annual") }));
       }}>
         <label className="block">Agent IDs<input name="agents" className={inputClass} defaultValue="main" required /></label>
-        <label className="block">Websites, one per line<textarea name="origins" className={inputClass} placeholder="https://example.com" required /></label>
+        <label className="flex gap-2"><input type="checkbox" checked={anyWebsite}
+          onChange={event => setAnyWebsite(event.target.checked)} />Allow any public HTTPS website</label>
+        <label className="block">Websites, one per line<textarea name="origins" className={inputClass}
+          placeholder="https://example.com" required={!anyWebsite} disabled={anyWebsite} /></label>
         <label className="block">Embedded payment providers, if needed<textarea name="frames" className={inputClass} placeholder="https://payments.example.com" /></label>
         <label className="block">Authority expires<input type="date" name="expires" className={inputClass} required /></label>
         {[["purchase", "Per purchase"], ["monthly", "Monthly total"], ["recurring", "Per recurring charge"], ["annual", "Annual commitment per membership"]].map(([key, title]) =>
@@ -167,7 +174,7 @@ export function PersonalAutomationPanel() {
         <button className="rounded bg-primary px-4 py-2 text-primary-foreground" disabled={busy || !status}>Grant authority</button>
       </form>
       {status?.grants.filter(grant => !grant.revoked).map(grant => <div className="flex justify-between rounded border p-3" key={grant.id}>
-        <span>{grant.policy.origins.join(", ")}</span><button disabled={busy} onClick={() => void act(() => api(`grants/${grant.id}`, "DELETE"))}>Revoke</button>
+        <span>{grant.policy.allow_any_website ? "Any public HTTPS website" : grant.policy.origins.join(", ")}</span><button disabled={busy} onClick={() => void act(() => api(`grants/${grant.id}`, "DELETE"))}>Revoke</button>
       </div>)}
     </section>
     {status && <section className="space-y-3">
