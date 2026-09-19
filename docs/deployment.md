@@ -926,6 +926,17 @@ Coordinated runtime cutover, rollback, plugin installation checks and readiness
 remain separate deployment requirements. Existing individual-agent installation
 must not be described as an atomic fleet cutover.
 
+`robothor.templates.fleet_snapshot.load_snapshot(artifact, expected_digest=...)`
+captures verified bytes in memory and checks member hashes again during capture.
+Its `agent(agent_id)` method returns a fresh native `AgentConfig` with immutable
+knowledge tuples. `build_system_prompt` and declared warmup-context loading use
+those captured files, bypassing workspace reads and the legacy prompt cache.
+They refuse references outside the snapshot. Changing or removing the artifact
+after admission cannot substitute knowledge in that admitted run; subsequent
+admissions reverify it. The [sales runtime](SALES_INTELLIGENCE.md#native-workflow-execution)
+supports selecting such a release explicitly. Other manifest-loading callers
+retain their existing behavior until a coordinated installer integrates them.
+
 ## Directory Structure (systemd install)
 
 The unit templates spell the workspace `/opt/robothor` and

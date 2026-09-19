@@ -421,6 +421,13 @@ feeds do not establish complete retention history. See
 [Sales Intelligence](SALES_INTELLIGENCE.md) for controls, contracts and remaining
 activation requirements.
 
+Sales stages can select an explicit fleet release fingerprint. The native runner
+then captures the verified manifest and knowledge bytes for that run, retaining
+its instructions across later artifact changes. Runtime status files remain
+mutable in the workspace. This provides run-level configuration/knowledge
+consistency; coordinated fleet installation, schedule cutover and rollback remain
+separate deployment requirements.
+
 ### General intelligence pipeline
 
 Three-tier architecture converts raw API data into structured knowledge:

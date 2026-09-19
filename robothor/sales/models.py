@@ -222,6 +222,7 @@ class BusinessSource(Contract):
 
 
 class SalesSettings(Contract):
+    fleet_release_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$", strict=True)
     research_enabled: StrictBool = False
     enrichment_enabled: StrictBool = False
     promotion_enabled: StrictBool = False

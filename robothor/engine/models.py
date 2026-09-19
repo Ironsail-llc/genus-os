@@ -313,6 +313,10 @@ class AgentConfig:
     # Instructions
     instruction_file: str = ""
     bootstrap_files: list[str] = field(default_factory=list)
+    # Set only by the verified fleet snapshot loader, never parsed from YAML.
+    # These tuples retain reviewed prompt bytes independently of mutable files.
+    fleet_release_id: str = ""
+    knowledge_snapshot: tuple[tuple[str, str], ...] | None = field(default=None, repr=False)
 
     # Metadata
     reports_to: str = ""
