@@ -6,6 +6,23 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 
+def test_rendered_pages_and_workflow_passages_remain_untrusted_in_model_context():
+    from robothor.engine.session import AgentSession
+
+    session = AgentSession("research-worker")
+    session.record_tool_call(
+        "web_render",
+        {"url": "https://clinic.example.com"},
+        {"content": "Page text", "_workflow_context": {"passages": []}},
+        duration_ms=1,
+        tool_call_id="read",
+    )
+    content = session.messages[-1]["content"]
+    assert content.startswith('<untrusted_content source="web_render">')
+    assert "_workflow_context" in content
+    assert content.endswith("</untrusted_content>")
+
+
 @pytest.mark.asyncio
 async def test_observation_closes_inherited_tasks_and_copies_handler_data():
     from robothor.engine.tool_observation import observe_tool_result, tool_observation_scope
@@ -36,7 +53,30 @@ async def test_observation_closes_inherited_tasks_and_copies_handler_data():
 
 
 @pytest.mark.asyncio
-async def test_dispatch_observes_native_result_after_permission_and_before_annotation(monkeypatch):
+async def test_annotations_are_copied_and_unavailable_to_detached_work():
+    from robothor.engine.tool_observation import observe_tool_result, tool_observation_scope
+
+    release = asyncio.Event()
+    annotation = {"passages": [{"ref": "p0"}]}
+
+    async def detached():
+        await release.wait()
+        return observe_tool_result("web_fetch", {}, {}, None)
+
+    with tool_observation_scope(lambda *args: annotation, names={"web_fetch"}, annotations=True):
+        visible = observe_tool_result("web_fetch", {}, {}, None)
+        visible["passages"].clear()
+        assert annotation["passages"] == [{"ref": "p0"}]
+        task = asyncio.create_task(detached())
+    release.set()
+    assert await task is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("annotations", [False, True])
+async def test_dispatch_observes_native_result_after_permission_and_before_annotation(
+    monkeypatch, annotations
+):
     from robothor.engine.tool_observation import tool_observation_scope
     from robothor.engine.tools import dispatch, verification
 
@@ -53,7 +93,12 @@ async def test_dispatch_observes_native_result_after_permission_and_before_annot
         verification, "verify_tool_result", AsyncMock(return_value={"annotated": True})
     )
     seen = []
-    with tool_observation_scope(lambda *args: seen.append(args), names={"web_fetch"}):
+
+    def capture(*args):
+        seen.append(args)
+        return {"source_ref": "captured-source"}
+
+    with tool_observation_scope(capture, names={"web_fetch"}, annotations=annotations):
         assert await dispatch._execute_tool("web_fetch", {}, run_id="child") == {"annotated": True}
         permission.return_value = "Denied"
         assert "error" in await dispatch._execute_tool("web_fetch", {}, run_id="denied")
@@ -61,3 +106,8 @@ async def test_dispatch_observes_native_result_after_permission_and_before_annot
     assert seen[0][2] == {"content": "Fetched", "status": 200}
     assert seen[0][3].run_id == "child"
     assert handler.await_count == 1
+    presented = verification.verify_tool_result.call_args.args[2]
+    assert presented.get("_workflow_context") == (
+        {"source_ref": "captured-source"} if annotations else None
+    )
+    assert handler.return_value == {"content": "Fetched", "status": 200}

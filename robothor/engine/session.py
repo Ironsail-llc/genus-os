@@ -175,6 +175,7 @@ ENGINE_CONTEXT_ROLE = "developer"
 EXTERNAL_DATA_TOOLS: frozenset[str] = frozenset(
     {
         "web_fetch",
+        "web_render",
         "web_search",
         "search_memory",
         "get_entity",

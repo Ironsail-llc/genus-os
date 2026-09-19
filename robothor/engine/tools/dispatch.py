@@ -603,11 +603,15 @@ async def _execute_tool(
     # are not new retrievals; their original execution was already observed.
     from robothor.engine.tool_observation import observe_tool_result
 
-    observe_tool_result(name, args, result, ctx)
+    workflow_context = observe_tool_result(name, args, result, ctx)
+    if workflow_context is not None:
+        if not isinstance(result, dict) or "_workflow_context" in result:
+            raise ValueError("Native result cannot accept reserved workflow context")
+        result = {**result, "_workflow_context": workflow_context}
 
     # ── Repeat-call guard: remember what this call returned ──
     # Deliberately BEFORE verification, so what the guard digests is the
-    # handler's own output and not something a later control annotated onto it.
+    # handler's output plus optional trusted workflow context, before verification.
     if guard is not None:
         await asyncio.to_thread(guard.after, name, args, result, workspace=workspace)
 
