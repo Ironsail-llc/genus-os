@@ -626,7 +626,19 @@ requests with current anonymous endpoint metadata: it reserves the full publishe
 input context plus capped output, pins one endpoint, sets provider price ceilings,
 and disables hidden SDK retries and provider fallback. JSON-mode calls filter out
 endpoints that do not advertise `response_format` before reserving or dispatching;
-an incompatible cheaper endpoint cannot displace a compatible one. Other providers, paid
+an incompatible cheaper endpoint cannot displace a compatible one.
+
+A funded run remembers endpoints that return HTTP 429/500/502/503/504 or a
+`TimeoutError`. Its next quote for that model excludes those endpoints while
+preserving the configured provider allowlist, exclusions, privacy constraints and
+price ceilings. An alternative needs its own full reservation; the failed
+request's unknown charge is not refunded. No extra retry loop or automatic
+provider-side fallback is introduced. Authentication errors and caller cancellation
+do not exclude endpoints, and health exclusions do not persist into a new run.
+Already in-flight concurrent requests cannot be recalled. Streaming failures apply
+the same exclusions while retaining uncertain costs.
+
+Other providers, paid
 server tools, multimodal inputs, tiered pricing and explicit cache-write charges
 need a supported pricing policy before they can run within this envelope. See
 [OpenRouter provider routing](https://openrouter.ai/docs/guides/routing/provider-selection#max-price).
