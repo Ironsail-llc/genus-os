@@ -70,6 +70,14 @@ def stop_at_budget(session: AgentSession) -> bool:
 
 
 def admit_tool(name: str, args: dict[str, Any], ctx: ToolContext) -> None:
+    # Deferred invocation must obey the underlying tool's read/write contract.
+    # The normal dispatcher still enforces its allow-list on the nested call.
+    if name == "tool_call":
+        nested = args.get("name")
+        arguments = args.get("arguments", {})
+        if not isinstance(nested, str) or nested == "tool_call" or not isinstance(arguments, dict):
+            raise ValueError("invalid deferred goal tool invocation")
+        name, args = nested, arguments
     current = binding.get()
     if current is None:
         from robothor.engine.session_registry import lookup

@@ -7,7 +7,7 @@ watches. Ongoing goals assess a target repeatedly instead of completing.
 
 ## Enable and use
 
-Apply the canonical migration chain, including `crm/126_goal_pursuit.sql`, before
+Apply the canonical migration chain, including `crm/migrations/126_goal_pursuit.sql`, before
 running the new engine or bridge. No existing session goal starts executing as a
 result of migration. The tenant switch starts disabled.
 

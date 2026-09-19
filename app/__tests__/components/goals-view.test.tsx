@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GoalsView } from "@/components/views/goals-view";
 
@@ -11,7 +11,7 @@ const goal = {
   tasks: [{ id: "t1", title: "Send report", status: "DONE" }], runs: [], history: [],
 };
 const response = (body: unknown, ok = true) => Promise.resolve({ ok, json: async () => body });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("GoalsView", () => {
   it("shows waiting goals, linked tasks and pause controls", async () => {
@@ -53,4 +53,28 @@ describe("GoalsView", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Pause" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("stale goal version");
   });
+});
+
+
+it("refreshes selected goal progress and uses its latest version for controls", async () => {
+  let poll: (() => void) | undefined;
+  vi.spyOn(globalThis, "setInterval").mockImplementation((callback) => {
+    poll = callback as () => void;
+    return 1 as unknown as ReturnType<typeof setInterval>;
+  });
+  let current = goal;
+  const fetch = vi.fn((path: string, options?: RequestInit) => options?.method === "PATCH"
+    ? response({ goal: current })
+    : path.endsWith("/g1") ? response({ goal: current }) : response({ goals: [current], enabled: true }));
+  vi.stubGlobal("fetch", fetch);
+  render(<GoalsView visible />);
+  fireEvent.click(await screen.findByRole("button", { name: /Deliver report/ }));
+  await screen.findByRole("button", { name: "Pause" });
+  current = { ...goal, version: 7, checkpoint: "Receipt checked by live agent" };
+  await act(async () => { poll?.(); });
+  expect(await screen.findByText("Receipt checked by live agent")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/bridge/api/goals/g1", expect.objectContaining({
+    method: "PATCH", body: JSON.stringify({ action: "pause", version: 7 }),
+  })));
 });

@@ -368,6 +368,11 @@ TOOLSEARCH_TOOLS = frozenset({"tool_search", "tool_describe", "tool_call"})
 # GOAL_TOOLS are force-added by the registry filter, so they're omitted here.
 CORE_TOOLS: frozenset[str] = frozenset(
     {
+        # Durable operator goal controls must remain directly reachable.
+        "create_pursuit_goal",
+        "get_pursuit_goal",
+        "list_pursuit_goals",
+        "update_pursuit_goal",
         # File / shell
         "read_file",
         "write_file",
