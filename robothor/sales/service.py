@@ -62,12 +62,15 @@ class Sales:
                 "SELECT config FROM sales_settings WHERE tenant_id=%s FOR UPDATE", (self.tenant,)
             )
             previous = cur.fetchone()
+            from robothor.sales.deployment import assert_structure_editable
+
+            assert_structure_editable(cur, self, previous["config"] if previous else {}, config)
             merged = SalesSettings.model_validate(
                 {**(previous["config"] if previous else {}), **config}
             ).model_dump(mode="json")
             cur.execute(
-                "INSERT INTO sales_settings(tenant_id,config) VALUES(%s,%s) "
-                "ON CONFLICT(tenant_id) DO UPDATE SET config=EXCLUDED.config,updated_at=now()",
+                "INSERT INTO sales_settings(tenant_id,config,revision) VALUES(%s,%s,1) "
+                "ON CONFLICT(tenant_id) DO UPDATE SET config=EXCLUDED.config,revision=sales_settings.revision+1,updated_at=now()",
                 (self.tenant, Json(merged)),
             )
             self.ops.audit(cur, self.tenant, "sales.configured", actor, {"fields": sorted(config)})

@@ -51,8 +51,17 @@ Queue admission also takes the tenant's shared `sales-fleet` maintenance gate.
 An exclusive maintenance transaction blocks new ticks and is refused while a tick
 is still active. Stop and inbox work continue independently alongside research
 when no exclusive maintenance is running. Caller cancellation drains the bounded
-worker before releasing its gate. This is a cutover primitive, not an installed
-deployment controller; durable leases and unresolved effects still need checking.
+worker before releasing its gate. The coordinator complements this primitive
+with durable lease and unresolved-effect checks.
+
+The [durable coordinator](deployment.md#durable-sales-deployment-transitions)
+adds a preparing/committed/aborted transition ledger. A preparing deployment blocks
+native queue admission until verified commit or restoration. Settings have a
+monotonic revision, and managed release selection, agents and workflow bindings
+can only change through this coordinator. Other operator settings remain editable;
+a newer revision makes the prepared selection stale. Deployment and rollback keep
+integration switches off. The native runtime verifier and public controls are
+still pending, so this ledger must not be presented as a live cutover capability.
 
 Instance workflow YAML calls `sales_process_queue` in a deterministic tool step.
 `workflow_bindings` explicitly maps each stage to its authorized native service

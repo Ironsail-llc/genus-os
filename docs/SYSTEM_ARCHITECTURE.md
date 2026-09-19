@@ -435,6 +435,13 @@ transaction. Gate cleanup follows actual worker completion even when its caller
 is cancelled. The deployment coordinator must combine this with durable lease
 and provider-effect checks before a cutover.
 
+Migration 130 adds the durable sales deployment ledger and settings revision.
+Preparation excludes active/unresolved work and blocks native queue admission
+until commit or verified restoration. Structural settings selection, transition
+completion and audit commit together; rollback is another prepared transition.
+The native runtime verifier for platform/plugin/schedule state remains a required
+integration, and no deployment endpoint is exposed before it exists.
+
 ### General intelligence pipeline
 
 Three-tier architecture converts raw API data into structured knowledge:

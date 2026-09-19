@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -22,6 +23,17 @@ class FleetSnapshot:
     _files: tuple[tuple[str, bytes], ...] = field(repr=False)
     _agents: tuple[str, ...] = field(repr=False)
     _knowledge: tuple[str, ...] = field(repr=False)
+    _metadata: bytes = field(repr=False)
+
+    def metadata(self):
+        """A fresh metadata document, independent of the captured snapshot."""
+        return json.loads(self._metadata)
+
+    def document(self, path):
+        """Parse a captured YAML member without returning a mutable shared object."""
+        if not path or path not in dict(self._files) or not path.endswith(".yaml"):
+            raise ReleaseError("Document is not part of the verified fleet snapshot")
+        return yaml.safe_load(dict(self._files)[path])
 
     def agent(self, agent_id):
         """Fresh native config with captured knowledge; no ambient config merge."""
@@ -53,4 +65,5 @@ def load_snapshot(root: Path, *, expected_digest: str) -> FleetSnapshot:
         _files=tuple(files),
         _agents=tuple(document["agents"]),
         _knowledge=tuple(document["knowledge"]),
+        _metadata=json.dumps(document, sort_keys=True).encode(),
     )
