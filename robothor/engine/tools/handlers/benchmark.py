@@ -269,6 +269,7 @@ _BENCHMARK_EXCLUDED_TOOLS: frozenset[str] = _BENCHMARK_WITHHELD_READS | frozense
         "sales_get_context",
         "sales_get_prospect",
         "sales_process_queue",
+        "sales_research_parallel",
         "sales_propose_email",
         # Notifications / inbox state.
         "ack_notification",

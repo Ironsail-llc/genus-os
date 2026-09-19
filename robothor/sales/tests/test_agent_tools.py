@@ -53,6 +53,47 @@ def test_no_approval_send_or_configuration_tool():
 
 
 @pytest.mark.asyncio
+async def test_research_tool_requires_a_native_scope_and_rejects_context_overrides():
+    ctx = SimpleNamespace(tenant_id="tenant-a", is_benchmark=False, agent_id="researcher")
+    handler = HANDLERS["sales_research_parallel"]
+    assert "error" in await handler({"buying_case": "network_access"}, ctx)
+    assert "error" in await handler({"buying_case": "network_access", "topic": "send_email"}, ctx)
+    ctx.is_benchmark = True
+    assert "error" in await handler({"buying_case": "network_access"}, ctx)
+
+
+def test_research_role_migration_allows_only_the_bounded_broker_and_research_reads(sales):
+    from pathlib import Path
+
+    from robothor.db.connection import get_connection
+    from robothor.engine.permissions import check_tool_permission
+
+    migration = Path(__file__).parents[3] / "crm/migrations/132_sales_research_delegation.sql"
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(migration.read_text())
+        conn.commit()
+    for name in (
+        "sales_research_parallel",
+        "web_search",
+        "web_fetch",
+        "write_file",
+        "sales_get_context",
+    ):
+        assert check_tool_permission("sales_research_agent", sales.tenant, name) is None
+    for name in (
+        "spawn_agent",
+        "spawn_agents",
+        "sales_process_queue",
+        "sales_discover",
+        "exec",
+        "vault_get",
+        "send_email",
+    ):
+        assert check_tool_permission("sales_research_agent", sales.tenant, name) is not None
+    assert check_tool_permission("sales_agent", sales.tenant, "sales_research_parallel") is not None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "identity",
     [

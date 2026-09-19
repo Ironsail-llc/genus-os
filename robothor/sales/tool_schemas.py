@@ -23,7 +23,15 @@ class QueueArgs(Contract):
     stage: QueueStage
 
 
+class ResearchArgs(Contract):
+    buying_case: str = Field(min_length=1, max_length=80)
+
+
 CONTRACTS = {
+    "sales_research_parallel": (
+        ResearchArgs,
+        "Research the current assigned company through three bounded native workers: services, providers/locations, and ownership/business signals. Select an active approved buying case; Genus supplies the company context. Returns a validated, deterministically merged dossier. Only available inside the bounded native research stage; never sends or qualifies.",
+    ),
     "sales_process_queue": (
         QueueArgs,
         "Native service-workflow operation: advance one configured sales queue stage. Requires a tenant workflow binding; agents cannot invoke it. Existing approval and spending boundaries still apply.",

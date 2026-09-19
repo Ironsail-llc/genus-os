@@ -556,6 +556,43 @@ grants web research, constrained file writes and the four sales tools; it has
 no approval, vault or provider-send capability. File writes additionally need
 the `write_path_restrict` guardrail and an explicit status-file allowlist.
 
+### Bounded research delegation
+
+A research parent may use `role: sales_research_agent` and the narrow
+`sales_research_parallel` tool after migration 132. It must run from a verified
+fleet release, permit exactly one research-worker agent, and declare
+`v2.can_spawn_agents: true`, `max_spawn_total: 3`, `max_spawn_batch: 3`, and
+`max_nesting_depth: 1`. Its allowed tools are the research broker and optionally
+constrained status writes; generic spawn tools are refused at stage admission.
+The broker is available only within the matching tenant's active native research
+stage. It accepts only a buying case from that stage's approved policy context.
+
+Genus supplies the company context and dispatches three native children for
+services, providers/locations, and ownership/business signals. The parent and
+children share one funded request envelope and the research job's 300-second
+deadline. Child manifests come from the same verified release and are checked
+before the parent starts: read tools, no spawning/continuous work/downstream
+agents, a hard cost cap of at most $1, timeout at most 180 seconds, and safety cap
+at most 20 iterations. The dedicated role grants research reads and the broker,
+but no generic spawn, CRM mutation, approval, credential, or send permissions.
+Child tool allowlists exclude the broker. Repeated broker calls return an already
+completed bundle or refuse; they never start a second bundle in that stage.
+
+All three children must complete with distinct native run IDs and valid Dossiers
+for the selected buying case. Code namespaces their evidence IDs, combines their
+criterion references, and preserves contradictions and unknowns in a fixed topic
+order. Conflicting parent domains become an explicit unresolved ownership issue.
+The aggregate must fit the existing 200-evidence dossier limit. Only this merge
+becomes the stage output; facts added in the parent's final narrative do not enter
+the committed dossier. The original parent and child outputs remain in native run
+records. Child run IDs, output hashes, and the merged hash survive checkpointing
+and final job completion. An incomplete bundle is not qualified; completed whole
+stage checkpoints can be reused after a domain-commit failure. Partial child
+bundles are not yet resumable across separate research jobs.
+
+This tool is withheld from offline benchmarks. Synthetic inline-evidence grades
+do not validate live tool use, delegated research quality, or the human pilot.
+
 ## Recovery and validation
 
 Migrations 126–129 add tenant-scoped work, budgets, event inbox, audit, immutable
