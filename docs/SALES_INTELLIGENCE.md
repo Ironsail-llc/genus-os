@@ -283,6 +283,12 @@ milestone invalidates older pending or claimed message authorizations, just as a
 new conversation revision does. Activation status derives from recorded fulfilled
 orders, independently of the agent's proposed onboarding explanation.
 
+An activation decision's `human_required` identifies a nonstandard issue requiring
+human judgment, such as custom terms, clinical questions or disputed records.
+Routine waiting for fulfillment remains pending, without becoming an exception.
+This flag is separate from the mandatory review of every outbound draft; false
+never grants sending permission. The output schema includes this distinction.
+
 Keep credentials in the tenant vault:
 
 | Provider | Keys |
