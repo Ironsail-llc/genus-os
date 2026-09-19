@@ -2022,7 +2022,13 @@ class LLMClient:
             # a backend emit plain JSON content instead of a native tool call.
             # Final-answer formatting resumes when the required tool is done.
             return kwargs
-        from robothor.engine.response_schema import response_format
+        from robothor.engine.response_schema import defers_tool_turns, response_format
+
+        if tools and defers_tool_turns():
+            # Some backends interpret a final JSON schema as the end of tool
+            # collection. Scoped research workflows keep tools available and
+            # validate every final response themselves, including corrections.
+            return kwargs
 
         schema_format = response_format()
         if schema_format is not None:

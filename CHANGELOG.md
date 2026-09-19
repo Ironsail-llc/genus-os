@@ -1909,6 +1909,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Native scouting and research defer provider final-answer formatting while tools remain available, permitting further page reads; final schema/source validation and ordinary agent behavior remain enforced.
 - Scouts explain empty batches when searches returned source URLs; durable discovery receipts retain the reason for operator review.
 - New research captures expose separate paragraph references so selecting a business heading does not also quote adjacent reviews; saved captures retain their original versioned boundaries during recovery.
 - Bounded native search can fund existing Brave API requests at the current published Search rate, with per-attempt reservations and auditable estimates; unavailable pricing or funding falls back without an unfunded API call.
