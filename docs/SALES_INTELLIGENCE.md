@@ -17,7 +17,10 @@ the native runner requests and validates the strict `CandidateBatch` schema.
 Each source URL and company website domain must occur in that run's captured
 search or successful page-read results. The supplied batch allowance and domain
 deduplication are validated before completion. A real empty search can return an
-empty batch; failed searches cannot fabricate successful discovery. The durable
+empty batch; failed searches cannot fabricate successful discovery. When the
+search tool marks results degraded, the scout must refine its query until one
+search is not degraded or three distinct queries have completed. Final-answer
+formatting remains deferred during those required search turns. The durable
 scout receipt retains source observations and the native run identity. These
 checks establish observed URLs, not business fit, which still requires research
 and independent qualification.

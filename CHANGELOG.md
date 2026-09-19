@@ -1909,6 +1909,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Scouts refine degraded search results with bounded distinct queries before returning a candidate batch or empty result.
 - Native scouts must search before answering, return a validated candidate batch and retain observed source URLs; plain search arguments and invented domains cannot create leads.
 - Planning and verification honor per-agent provider routing before funded requests; qualification timeouts retain their cost-reconciliation diagnostic instead of being labeled invalid assessments.
 - Configured sales qualifier agents independently assess captured passages before code calculates scores. Version-bound checkpoints preserve original researcher claims, reject stale assessments and prevent legacy scores from bypassing the new review stage.

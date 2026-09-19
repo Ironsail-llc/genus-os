@@ -81,6 +81,31 @@ def test_real_empty_search_allows_empty_batch_but_not_fabricated_candidates():
         sources.attest("run-1", candidate())
 
 
+def test_degraded_search_requires_bounded_distinct_query_refinement():
+    sources = ScoutSources("test", "scout", 1)
+    ctx = SimpleNamespace(tenant_id="test", agent_id="scout", run_id="run-1")
+    for query in ("TRT clinics", " TRT   clinics ", "TRT Florida"):
+        sources.observe(
+            "web_search", {"query": query}, {"results": [], "degraded": "low relevance"}, ctx
+        )
+        with pytest.raises(Conflict, match="Refine"):
+            sources.attest("run-1", '{"companies": []}')
+    sources.observe(
+        "web_search",
+        {"query": "testosterone clinic Texas"},
+        {"results": [], "degraded": "low relevance"},
+        ctx,
+    )
+    assert sources.attest("run-1", '{"companies": []}')[0].companies == []
+
+
+def test_useful_search_can_finish_before_retry_limit():
+    sources = ScoutSources("test", "scout", 1)
+    observed(sources, result={"results": [], "degraded": "low relevance"})
+    observed(sources)
+    assert sources.attest("run-1", candidate())[0].companies
+
+
 def test_batch_limit_and_duplicate_domain_checked_before_native_completion():
     sources = ScoutSources("test", "scout", 1)
     observed(sources)

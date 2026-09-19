@@ -61,16 +61,27 @@ class ScoutSources:
                 "urls": urls,
                 "query": str(args.get("query", ""))[:2000] if name == "web_search" else None,
                 "retrieved_at": datetime.now(UTC).isoformat(),
+                "degraded": bool(result.get("degraded")),
             }
         )
 
+    @staticmethod
+    def ready(rows):
+        searches = [o for o in rows if o["tool"] == "web_search"]
+        queries = {" ".join(o["query"].lower().split()) for o in searches}
+        return any(not o["degraded"] for o in searches) or len(queries) >= 3
+
     def searched(self):
-        return any(o["tool"] == "web_search" for rows in self.runs.values() for o in rows)
+        return any(self.ready(rows) for rows in self.runs.values())
 
     def attest(self, run_id, text):
         rows = self.runs.get(str(run_id), [])
         if not any(o["tool"] == "web_search" for o in rows):
             raise Conflict("Scout must complete an actual search before returning candidates")
+        if not self.ready(rows):
+            raise Conflict(
+                "Refine degraded results with shorter service-and-geography queries; up to three distinct searches are required when results remain degraded"
+            )
         batch = CandidateBatch.model_validate_json(text or "")
         if len(batch.companies) > self.limit:
             raise Conflict("Scout exceeded the supplied candidate allowance")
