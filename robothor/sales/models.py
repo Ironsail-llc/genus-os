@@ -360,7 +360,14 @@ class ConversationDecision(Contract):
 
 class ActivationDecision(Contract):
     next_step: str = Field(min_length=1, max_length=2000)
-    human_required: StrictBool
+    human_required: StrictBool = Field(
+        description=(
+            "Whether a nonstandard onboarding issue needs human judgment, such as custom terms, "
+            "clinical or patient-data questions, or disputed business records. Routine waiting "
+            "for verified fulfillment is not an exception. Approval of every outbound draft "
+            "is a separate requirement and does not by itself make this field true."
+        )
+    )
     draft: Draft | None = None
 
     @model_validator(mode="after")
