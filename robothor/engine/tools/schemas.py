@@ -2018,9 +2018,28 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                 "Full browser automation via Playwright. Manages a persistent Chromium session. "
                 "Actions: start (launch browser), stop (close), navigate (go to URL), "
                 "screenshot (capture page), snapshot (ARIA accessibility tree with element refs), "
-                "act (interact: click/fill/type/press/scroll/select using refs or selectors), "
+                "act (interact: click/fill/type/press/scroll/select/check/upload using refs or selectors), "
                 "tabs (list open tabs), pdf (export page), evaluate (run JavaScript), "
-                "console (read console), status (check session)."
+                "console (read console), status (check session). "
+                "For accounts, applications and purchases use action=autonomy with request.kind=status first. "
+                "This uses native-vault resource references and standing grants: do not request another approval "
+                "when a grant covers the action. request.kind=prepare accepts grant_id and proposal "
+                "{origin,action:account|login|application|purchase|subscription,purpose,idempotency_key,"
+                "amount_minor,currency,recurring_minor,annual_commitment_minor,recurrence?:{interval_months:1|2|3|6|12,next_charge_on:YYYY-MM-DD,ends_on?:YYYY-MM-DD}}. "
+                "Recurring charges require a merchant-verified renewal schedule; the first renewal must be within one year. "
+                "Then inspect {operation_id,url,session_resource_id?}; generate_credential "
+                "{operation_id,profile_id}; email_verification {operation_id,profile_id,mode:code|link,source_operation_id?} "
+                "returns a short-lived credential reference (field=password), never the code/link itself. "
+                "execute {operation_id,plan:{url,session_resource_id?,verification_link_id?,"
+                "fields:[{selector,resource_id,kind,field,method:fill|select|upload,frame_selector?,frame_origin?}],"
+                "check_selectors:[],submit_selector,success_selector,success_text,amount_selector?,"
+                "recurring_selector?,annual_selector?,recurrence_interval_selector?,next_charge_selector?,recurrence_end_selector?,challenge?:{selector,kind:card_code|one_time_code,frame_selector?,frame_origin?}}}. "
+                "Profile fields can use answers.<short_name> for enrolled application answers. "
+                "A verification_link_id is used only for a login operation and must be same-origin. "
+                "kind=reconcile checks a receipt-specific confirmation using plan url/success_selector/success_text/session_resource_id without submitting; kind=operation checks progress; kind=cancel "
+                "cancels only before submission. Uncertain submissions require reconciliation, never blind retry. "
+                "Use managed=true only when configured and local preflight fails. Never put card or credential "
+                "values in arguments. Setup is at /account/autonomy."
             ),
             "parameters": {
                 "type": "object",
@@ -2039,6 +2058,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                             "pdf",
                             "console",
                             "evaluate",
+                            "autonomy",
                         ],
                         "description": "Browser action to perform",
                     },
@@ -2062,8 +2082,8 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                         "type": "object",
                         "description": (
                             "Interaction request for act action. "
-                            "Fields: kind (click/fill/type/press/scroll/select), "
-                            "ref (element ref from snapshot), selector (CSS selector), "
+                            "Fields: kind (click/fill/type/press/scroll/select/check/upload), "
+                            "ref (element ref from snapshot), selector (CSS selector), path (workspace file for upload), checked (boolean for check), "
                             "value/text/key/fields/x/y as needed."
                         ),
                     },

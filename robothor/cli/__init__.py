@@ -829,6 +829,9 @@ def _build_parser() -> argparse.ArgumentParser:
     vault_import_p.add_argument("file", help="Path to .env file")
     vault_sub.add_parser("export-env", help="Export all secrets as KEY=VALUE")
     vault_sub.add_parser("audit", help="Audit secret usage across the codebase")
+    vault_sub.add_parser(
+        "rotate-resources", help="Rotate the encryption key for personal vault resources"
+    )
 
     # secrets — the two stores, and how to move between them. Distinct from
     # `vault`, which operates on rows: these answer "what does this instance

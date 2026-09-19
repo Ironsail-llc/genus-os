@@ -1654,3 +1654,16 @@ robothor/                                 Project root (git repo)
 ---
 
 *Updated 2026-07-13.*
+
+## Personal autonomous execution
+
+The native vault's personal-resource broker (`robothor/autonomy/`) consumes
+owner-scoped references in a separate browser process. The existing browser
+tool exposes preparation, execution and reconciliation under standing grants.
+Migration 127 adds encrypted `vault_resources`, wrapped `autonomy_key_versions`,
+`autonomy_grants`, `autonomy_operations`, `autonomy_events`, and
+`autonomy_settings`; service-secret exports exclude personal resources.
+The account dashboard enrolls information and grants authority through
+authenticated `/api/autonomy` endpoints. Existing organizational treasury stays
+separate. See [Personal autonomous execution](AUTONOMOUS_EXECUTION.md) for
+transaction state, revocation, key rotation and deployment requirements.

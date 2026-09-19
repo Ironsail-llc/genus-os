@@ -18,6 +18,9 @@ export default function AccountSecurityPage() {
           </p>
         </div>
         <AccountSecurityPanel />
+        <Link href="/account/autonomy" className="text-sm underline underline-offset-2">
+          Personal information and delegated tasks
+        </Link>
         <Link href="/" className="text-sm text-muted-foreground underline underline-offset-2">
           Back to the dashboard
         </Link>

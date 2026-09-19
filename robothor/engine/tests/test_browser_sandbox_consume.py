@@ -32,10 +32,10 @@ async def _run_start(monkeypatch, sandbox):
     pw, chromium = _fake_playwright()
     monkeypatch.setattr(browser_mod, "_get_playwright", AsyncMock(return_value=pw))
     monkeypatch.setattr(sandbox_mod, "get_current_sandbox", lambda: sandbox)
-    browser_mod._sessions.pop("default", None)
+    browser_mod._sessions.pop(browser_mod._session_key(SimpleNamespace(agent_id="default")), None)
     ctx = SimpleNamespace(agent_id="default")
     result = await browser_mod._action_start({}, ctx)
-    browser_mod._sessions.pop("default", None)
+    browser_mod._sessions.pop(browser_mod._session_key(SimpleNamespace(agent_id="default")), None)
     return result, chromium
 
 
@@ -74,7 +74,7 @@ async def test_same_sandbox_endpoint_reuses_session(monkeypatch):
     monkeypatch.setattr(browser_mod, "_get_playwright", AsyncMock(return_value=pw))
     sandbox = SimpleNamespace(browser_endpoint=lambda: "http://localhost:9222")
     monkeypatch.setattr(sandbox_mod, "get_current_sandbox", lambda: sandbox)
-    browser_mod._sessions.pop("default", None)
+    browser_mod._sessions.pop(browser_mod._session_key(SimpleNamespace(agent_id="default")), None)
     ctx = SimpleNamespace(agent_id="default")
     try:
         first = await browser_mod._action_start({}, ctx)
@@ -83,7 +83,9 @@ async def test_same_sandbox_endpoint_reuses_session(monkeypatch):
         assert second.get("status") == "already_running"
         chromium.connect_over_cdp.assert_awaited_once()  # not reconnected
     finally:
-        browser_mod._sessions.pop("default", None)
+        browser_mod._sessions.pop(
+            browser_mod._session_key(SimpleNamespace(agent_id="default")), None
+        )
 
 
 async def test_stale_session_from_destroyed_sandbox_is_replaced(monkeypatch):
@@ -98,7 +100,7 @@ async def test_stale_session_from_destroyed_sandbox_is_replaced(monkeypatch):
         "get_current_sandbox",
         lambda: SimpleNamespace(browser_endpoint=lambda: endpoints[0]),
     )
-    browser_mod._sessions.pop("default", None)
+    browser_mod._sessions.pop(browser_mod._session_key(SimpleNamespace(agent_id="default")), None)
     ctx = SimpleNamespace(agent_id="default")
     try:
         await browser_mod._action_start({}, ctx)  # binds to :9222
@@ -108,6 +110,27 @@ async def test_stale_session_from_destroyed_sandbox_is_replaced(monkeypatch):
         assert result.get("status") == "started"  # replaced, not reused
         first_browser.close.assert_awaited()  # stale session torn down
         assert chromium.connect_over_cdp.await_count == 2
-        assert browser_mod._sessions["default"].sandbox_endpoint == "http://localhost:9333"
+        assert (
+            browser_mod._sessions[browser_mod._session_key(ctx)].sandbox_endpoint
+            == "http://localhost:9333"
+        )
     finally:
-        browser_mod._sessions.pop("default", None)
+        browser_mod._sessions.pop(
+            browser_mod._session_key(SimpleNamespace(agent_id="default")), None
+        )
+
+
+async def test_cdp_always_creates_an_isolated_context(monkeypatch):
+    pw, chromium, remote = _fake_playwright_closable()
+    monkeypatch.setattr(browser_mod, "_get_playwright", AsyncMock(return_value=pw))
+    monkeypatch.setattr(
+        sandbox_mod,
+        "get_current_sandbox",
+        lambda: SimpleNamespace(browser_endpoint=lambda: "http://localhost:9222"),
+    )
+    ctx = SimpleNamespace(agent_id="isolation-test", tenant_id="test", user_id="alice", run_id="r1")
+    try:
+        await browser_mod._action_start({}, ctx)
+        remote.new_context.assert_awaited_once()
+    finally:
+        browser_mod._sessions.pop(browser_mod._session_key(ctx), None)
