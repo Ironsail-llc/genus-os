@@ -131,6 +131,16 @@ frames are reported as unsupported. Protected frames cannot navigate to another
 origin during filling or submission. Inspection omits page HTML and general body
 text; returned terms are restricted to recognized prices, intervals and dates.
 The broker validates origin and totals again immediately before clicking.
+Before entering protected values, the broker checks native form constraints in
+a separate offline browser context. Required fields, email formats, patterns,
+lengths, numeric bounds and unfillable controls return `validation_required`
+with field selectors and fixed constraint flags; values and browser error messages
+are omitted. The operation remains reserved and its plan is not bound yet, so the
+agent can correct field bindings or required checkboxes and execute the same
+operation. These checks do not run merchant scripts and do not replace server-side
+validation. Once actual protected filling starts, failures still require
+reconciliation rather than a blind retry.
+
 Multi-step applications use a separate operation for each meaningful step,
 with the saved account session carried forward. File upload accepts an enrolled
 document reference; ordinary nonsecret workspace uploads also work through

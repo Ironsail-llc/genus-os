@@ -326,14 +326,13 @@ class BrowserBroker:
             if renewal_date(value) != expected:
                 raise ValueError("renewal_date_changed")
 
-    async def _field(
+    async def _binding_root(
         self,
-        scope: Scope,
         page: Page,
         binding: FieldBinding,
         destination: str,
         allowed_frames: frozenset[str],
-    ) -> None:
+    ) -> tuple[Page | Frame, str]:
         if url_origin(page.url) != destination:
             raise PermissionError("destination_changed")
         root: Page | Frame = page
@@ -352,6 +351,29 @@ class BrowserBroker:
             guarded_frame = frame
             resource_destination = binding.frame_origin
         await self._guard_origin(page, guarded_frame, resource_destination)
+        return root, resource_destination
+
+    @staticmethod
+    def _binding_text(binding: FieldBinding, value: dict[str, Any]) -> str:
+        if binding.kind == "totp":
+            return totp(value["secret"])
+        if binding.kind == "profile" and binding.field.startswith("answers."):
+            return str(value["answers"][binding.field.removeprefix("answers.")])
+        if binding.field not in value:
+            raise ValueError("resource_field_missing")
+        return str(value[binding.field])
+
+    async def _field(
+        self,
+        scope: Scope,
+        page: Page,
+        binding: FieldBinding,
+        destination: str,
+        allowed_frames: frozenset[str],
+    ) -> None:
+        root, resource_destination = await self._binding_root(
+            page, binding, destination, allowed_frames
+        )
         value = await asyncio.to_thread(
             self.store.consume_resource,
             scope,
@@ -371,14 +393,7 @@ class BrowserBroker:
                 }
             )
             return
-        if binding.kind == "totp":
-            text = totp(value["secret"])
-        elif binding.kind == "profile" and binding.field.startswith("answers."):
-            text = value["answers"][binding.field.removeprefix("answers.")]
-        else:
-            if binding.field not in value:
-                raise ValueError("resource_field_missing")
-            text = str(value[binding.field])
+        text = self._binding_text(binding, value)
         if binding.method == "select":
             await locator.select_option(text, timeout=15000)
         elif binding.method == "fill":
@@ -412,15 +427,26 @@ class BrowserBroker:
         try:
             if url_origin(plan.url) != proposal.origin:
                 raise PermissionError("destination_mismatch")
-            await asyncio.to_thread(
-                self.store.bind_plan, scope, operation_id, agent_id, plan.model_dump(mode="json")
-            )
             await page.goto(plan.url, wait_until="domcontentloaded", timeout=30000)
             if url_origin(page.url) != proposal.origin:
                 raise PermissionError("destination_changed")
             if await page.locator(plan.success_selector).is_visible():
                 raise ValueError("confirmation_already_present")
             await self._prices(page, proposal, plan, allowed_frames=allowed_frames)
+            await asyncio.to_thread(self.store.check_authority, scope, operation_id, agent_id)
+            from robothor.autonomy.preflight import validate_plan
+
+            invalid = await validate_plan(self, scope, page, proposal, plan, allowed_frames)
+            if invalid:
+                return {
+                    "operation_id": operation_id,
+                    "state": "reserved",
+                    "reason": "validation_required",
+                    "fields": invalid,
+                }
+            await asyncio.to_thread(
+                self.store.bind_plan, scope, operation_id, agent_id, plan.model_dump(mode="json")
+            )
             challenge_locator = None
             if plan.challenge:
                 challenge = plan.challenge

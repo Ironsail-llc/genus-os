@@ -896,7 +896,9 @@ Inspection discovers fields, narrow billing terms and direct child frame binding
 foreign frames require explicit authority and credentials match the frame origin.
 Use `terms_frame_selector` and `terms_frame_origin` when all checkout terms are
 inside an authorized frame. Prepare an operation, inspect its fields, execute the resource-bound plan, and
-check confirmation. An uncertain submission must be reconciled before any
+check confirmation. A `validation_required` result provides native constraint
+flags before protected input; correct the plan and reuse the reserved operation.
+An uncertain submission must be reconciled before any
 retry. See [Personal autonomous execution](AUTONOMOUS_EXECUTION.md) for setup,
 verification, plan fields, spending limits and current integration boundaries.
 
