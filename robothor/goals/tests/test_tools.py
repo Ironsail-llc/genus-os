@@ -116,3 +116,32 @@ def test_pursuit_tools_advertised_with_deferred_discovery():
             AgentConfig(id="main", name="Main", tools_allowed=["read_file"])
         )
     assert {schema["function"]["name"] for schema in advertised} >= TOOL_NAMES
+
+
+@pytest.mark.asyncio
+async def test_durable_wait_ends_coordinator_iterations(db):  # noqa: F811
+    from robothor.engine.models import AgentRun
+    from robothor.goals.runtime import stop_pursuit
+
+    store.create(db, CreateGoal(objective="Report", success_criteria=["Delivered"]), "operator")
+    g, attempt = store.claim(db)
+    token = binding.set(Binding(db, g["id"], attempt, run_id="root"))
+    try:
+        result = await HANDLERS["update_pursuit_goal"](
+            {"action": "wait", "version": g["version"], "note": "Await external response"},
+            ToolContext(agent_id="main", run_id="root", tenant_id=db),
+        )
+        assert result["goal"]["status"] == "waiting"
+        session = SimpleNamespace(run=AgentRun(id="root"), record_error=lambda note: None)
+        assert stop_pursuit(session)
+        assert not session.run.budget_exhausted
+        from robothor.engine.models import AgentConfig
+        from robothor.engine.verifier import should_verify
+
+        assert not should_verify(
+            AgentConfig(id="main", name="Main", verification_enabled=True),
+            SimpleNamespace(verification=True),
+            session,
+        )
+    finally:
+        binding.reset(token)
