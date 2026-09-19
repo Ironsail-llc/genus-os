@@ -589,11 +589,9 @@ def _benchmark_spawn_context(ctx: ToolContext | None) -> SpawnContext | None:
         parent_run_id=parent_run_id,
         parent_agent_id=ctx.agent_id if ctx else "",
         correlation_id=(ambient.correlation_id if ambient else "") or parent_run_id,
-        # NOT +1: ``runner.py`` adds one of its own when it applies the context
-        # (``session.run.nesting_depth = spawn_context.nesting_depth + 1``).
-        # Incrementing here too recorded a depth-0 parent's benchmark child at
-        # depth 2 — invisible while the context was flag-gated, visible now.
-        nesting_depth=ambient.nesting_depth if ambient else 0,
+        # Contexts describe the executing child. The runner records this depth
+        # verbatim, matching ordinary spawn admission rather than adding twice.
+        nesting_depth=(ambient.nesting_depth if ambient else 0) + 1,
         max_nesting_depth=ambient.max_nesting_depth if ambient else 2,
     )
 

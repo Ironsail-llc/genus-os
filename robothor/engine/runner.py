@@ -628,7 +628,7 @@ class AgentRunner(
         # would sink this child's entire row.
         if spawn_context:
             session.run.parent_run_id = spawn_context.parent_run_id or None
-            session.run.nesting_depth = spawn_context.nesting_depth + 1
+            session.run.nesting_depth = spawn_context.nesting_depth
             if not session.run.user_id and spawn_context.user_id:
                 session.run.user_id = spawn_context.user_id
                 session.run.user_role = spawn_context.user_role

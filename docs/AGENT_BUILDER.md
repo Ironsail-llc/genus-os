@@ -287,6 +287,9 @@ targets or configurations are rejected before admission. This complements the
 per-batch, nesting-depth, concurrency, and funded request-budget limits.
 Automatic error-recovery helpers use the same admission path: they cannot load
 an unapproved helper from the live workspace or bypass an exhausted allowance.
+`SpawnContext.nesting_depth` is the executing run's depth: roots use zero and
+first children use one. The runner persists that value without incrementing it
+again; benchmark child contexts use the same convention.
 
 ### Pattern D: Cron Safety Net
 
