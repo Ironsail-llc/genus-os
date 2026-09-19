@@ -185,3 +185,7 @@ The repository's own [Reading Guide](../READING_GUIDE.md) is the wider map, for
 when the answer is in code rather than in a page.
 
 You have now done the whole guide. Back to [the overview](00-overview.md).
+
+Sales also accepts bounded research requests and provides **Review integration setup**
+for credential-name readiness and reviewed mailbox/source configuration. Measured
+reports keep incomplete or immature customer retention windows explicitly unknown.

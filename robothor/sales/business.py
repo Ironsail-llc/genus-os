@@ -335,18 +335,19 @@ class BusinessObservations:
                 after=page.next_cursor, seen_cursors=[*scan.seen_cursors, page.next_cursor]
             )
             self.ops.enqueue("sales.business", digest(following), following, cur=cur)
-        self.ops.complete(
-            job["id"],
-            job["lease_token"],
-            {
-                "records": len(page.items),
-                "next_cursor": page.next_cursor,
-                "observed_at": page.observed_at.isoformat(),
-                "scan_id": scan.scan_id,
-                "final": page.next_cursor is None,
-            },
-            cur=cur,
-        )
+        from robothor.sales.coverage import finish_scan
+
+        result = {
+            "records": len(page.items),
+            "next_cursor": page.next_cursor,
+            "observed_at": page.observed_at.isoformat(),
+            "scan_id": scan.scan_id,
+            "final": page.next_cursor is None,
+            "members": [[item.external_id, item.revision] for item in page.items],
+            "coverage": page.coverage.model_dump(mode="json") if page.coverage else None,
+        }
+        result["complete_history"] = finish_scan(cur, self.tenant, scan, page, result)
+        self.ops.complete(job["id"], job["lease_token"], result, cur=cur)
         return None
 
     def records(self, *, kind="practice", source=None, account_id=None, after=None):
@@ -391,12 +392,23 @@ class BusinessObservations:
                     "signed_up_at": None,
                 }
             dates, placed, signups, ready = [], [], [], False
+            complete, coverage_times = True, []
             for b in bindings:
                 cur.execute(
-                    "SELECT kind,data FROM sales_business_observations WHERE tenant_id=%s AND source=%s AND account_id=%s AND kind IN ('signup','order') AND data->>'practice_id'=%s",
+                    "SELECT kind,data,external_id,revision,observed_at FROM sales_business_observations WHERE tenant_id=%s AND source=%s AND account_id=%s AND kind IN ('signup','order') AND data->>'practice_id'=%s",
                     (self.tenant, b["source"], b["account_id"], b["external_id"]),
                 )
-                for item in cur.fetchall():
+                from robothor.sales.coverage import current_proof
+
+                observations = list(cur.fetchall())
+                orders = [o for o in observations if o["kind"] == "order"]
+                proof = current_proof(cur, self.tenant, b, orders)
+                if proof:
+                    coverage_times.append(proof["through"])
+                    orders = proof["orders"]
+                else:
+                    complete = False
+                for item in orders + [o for o in observations if o["kind"] == "signup"]:
                     data = item["data"]
                     if item["kind"] == "order":
                         if data["placed_at"]:
@@ -410,11 +422,14 @@ class BusinessObservations:
                             and b["practice_data"]["active"]
                             and data["business_unit_id"] == b["practice_data"]["business_unit_id"]
                         )
-            result = retention_metrics(min(placed) if placed else None, dates, now)
-            # Current pages prove individual observations, never a complete cohort.
-            result["coverage_complete"] = False
-            for window in ("repeat_within_30_days", "active_days_31_60", "active_days_61_90"):
-                result[window] = None
+            through = min(coverage_times) if complete and coverage_times else None
+            measured_at = min(now or datetime.now(UTC), through) if through else now
+            result = retention_metrics(min(placed) if placed else None, dates, measured_at)
+            result["coverage_complete"] = bool(through)
+            result["coverage_through"] = through.isoformat() if through else None
+            if not through:
+                for window in ("repeat_within_30_days", "active_days_31_60", "active_days_61_90"):
+                    result[window] = None
             return {
                 **result,
                 "signed_up_at": min(signups).isoformat() if signups else None,

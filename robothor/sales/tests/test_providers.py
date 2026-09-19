@@ -250,3 +250,27 @@ async def test_pipedrive_identity_inspection_uses_canonical_read_endpoints():
         "/api/v2/persons/22",
         "/api/v1/leads/00000000-0000-4000-8000-000000000001",
     ]
+
+
+@pytest.mark.asyncio
+async def test_lead_status_uses_owned_uuid_get_without_mutation():
+    from uuid import uuid4
+
+    lead_id = str(uuid4())
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        assert request.method == "GET"
+        assert request.url.path == f"/api/v2/leads/{lead_id}"
+        return httpx.Response(200, json={"id": lead_id, "status": -2})
+
+    provider = Instantly(
+        "tenant-a",
+        secret_get=lambda *a, **kw: "test-secret",
+        transport=httpx.MockTransport(respond),
+    )
+    assert (await provider.lead(lead_id))["status"] == -2
+    with pytest.raises(ValueError):
+        await provider.lead("../other")
+    assert len(calls) == 1

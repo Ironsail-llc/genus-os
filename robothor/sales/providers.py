@@ -175,6 +175,11 @@ class Instantly(Provider):
         token = await self.secret(provider_key(self.provider))
         return "https://api.instantly.ai", {"Authorization": "Bearer " + token}
 
+    async def lead(self, lead_id):
+        from uuid import UUID
+
+        return await self.request("GET", "/api/v2/leads/" + str(UUID(str(lead_id))))
+
     async def account(self, email):
         return await self.request("GET", "/api/v2/accounts/" + quote(email, safe=""))
 

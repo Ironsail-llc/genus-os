@@ -569,3 +569,37 @@ def test_contact_entry_cannot_assert_verification_or_caller_identity(client, mon
     assert c.post(path, headers=headers, json={**body, "actor": "forged"}).status_code == 422
     assert c.post(path, headers=headers, json=body).status_code == 200
     assert calls[0][:2] == ("tenant-a", "operator:user-1")
+
+
+def test_setup_api_accepts_reviewed_configuration_but_no_secrets_or_switches(client, monkeypatch):
+    from robothor.sales.setup import Setup
+
+    c, calls = client
+    monkeypatch.setattr(
+        Setup,
+        "save",
+        lambda self, changes, expected_revision, actor, reason: (
+            calls.append((self.tenant, changes, expected_revision, actor)) or {}
+        ),
+    )
+    path = "/api/sales/setup"
+    body = {
+        "changes": {"senders": ["sales@example.com"]},
+        "expected_revision": 3,
+        "reason": "Reviewed the sending mailbox identity",
+    }
+    for headers in (
+        {},
+        {"x-test-role": "member"},
+        {"x-test-role": "admin", "x-test-service": "yes"},
+    ):
+        assert c.post(path, headers=headers, json=body).status_code == 403
+    headers = {"x-test-role": "admin"}
+    for changes in (
+        {"api_key": "test-secret"},
+        {"sending_enabled": True},
+        {"agents": {"draft": "other"}},
+    ):
+        assert c.post(path, headers=headers, json={**body, "changes": changes}).status_code == 422
+    assert c.post(path, headers=headers, json=body).status_code == 200
+    assert calls == [("tenant-a", body["changes"], 3, "operator:user-1")]

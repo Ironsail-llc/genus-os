@@ -167,3 +167,20 @@ async def test_analyst_checkpoint_recovery_reuses_the_measured_dataset_without_r
     from robothor.sales.service import Sales
 
     assert reports(Sales("another-tenant")).latest() is None
+
+
+def test_native_analyst_manifest_admission_uses_report_permissions():
+    from robothor.engine.models import AgentConfig
+    from robothor.sales.research_manifest import prepare_research
+
+    config = AgentConfig(
+        id="analyst",
+        name="Analyst",
+        service_role="sales_analyst",
+        tools_allowed=["sales_get_report"],
+        can_spawn_agents=False,
+    )
+    assert prepare_research(config, None, "analyst", "fixture", "{}") == (None, "{}")
+    config.tools_allowed = ["web_fetch"]
+    with pytest.raises(Conflict):
+        prepare_research(config, None, "analyst", "fixture", "{}")

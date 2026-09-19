@@ -77,7 +77,7 @@ def receive_instantly(sales, raw, authorization, secret, workspace):
             ):
                 config.setdefault("mailbox_approved_until", {}).pop(sender, None)
                 cur.execute(
-                    "UPDATE sales_settings SET config=%s WHERE tenant_id=%s",
+                    "UPDATE sales_settings SET config=%s,revision=revision+1,updated_at=now() WHERE tenant_id=%s",
                     (Json(config), sales.tenant),
                 )
                 cur.execute(

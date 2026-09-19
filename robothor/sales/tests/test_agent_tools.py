@@ -201,6 +201,7 @@ async def test_coordinator_can_read_intake_configuration_without_changing_it(mon
 @pytest.mark.asyncio
 async def test_report_tool_uses_authenticated_scope_and_rejects_extra_authority(monkeypatch):
     from robothor.sales.reporting import Reports
+
     monkeypatch.setattr(Reports, "latest", lambda self: {"tenant": self.tenant})
     ctx = SimpleNamespace(tenant_id="tenant-a", is_benchmark=False, agent_id="analyst")
     assert await HANDLERS["sales_get_report"]({}, ctx) == {"tenant": "tenant-a"}

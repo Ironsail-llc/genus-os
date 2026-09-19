@@ -134,3 +134,9 @@ crm/128_sales_business_observations.sql
 crm/129_sales_binding_repair.sql
 crm/130_sales_deployments.sql
 crm/131_sales_calibration.sql
+crm/132_sales_research_delegation.sql
+crm/133_operation_fragments.sql
+crm/134_web_render_permission.sql
+crm/135_sales_requests.sql
+crm/136_sales_pipedrive_scope.sql
+crm/137_sales_analyst_permissions.sql

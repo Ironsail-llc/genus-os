@@ -15,6 +15,19 @@ class MailProvider:
         self.on_lead = None
         self.ambiguous = False
 
+    async def secret(self, key):
+        return "workspace-1"
+
+    async def lead(self, lead_id):
+        return {
+            "id": lead_id,
+            "email": "alice@example.com",
+            "campaign": "campaign-1",
+            "organization": "workspace-1",
+            "status": 1,
+            "lt_interest_status": None,
+        }
+
     async def account(self, email):
         return {
             "email": email,
@@ -158,3 +171,41 @@ async def test_stop_worker_pauses_previously_scheduled_campaigns(sales, reason):
     assert "pause" in provider.calls
     if reason == "opt_out":
         assert "suppress" in provider.calls
+
+
+@pytest.mark.asyncio
+async def test_canonical_negative_lead_status_blocks_activation_after_approval(sales):
+    p, provider, worker = setup(sales)
+    action = draft(sales, p)
+    sales.ops.decide(action, True, "operator:test")
+
+    async def secret(key):
+        return "workspace-1"
+
+    async def lead_status(lead_id):
+        return {
+            "id": lead_id,
+            "email": "alice@example.com",
+            "campaign": "campaign-1",
+            "organization": "workspace-1",
+            "status": -2,
+            "lt_interest_status": None,
+        }
+
+    provider.secret = secret
+    provider.lead = lead_status
+    await worker.tick()
+    assert "activate" not in provider.calls
+    assert "pause" in provider.calls
+    with sales.ops.transaction() as cur:
+        assert sales._suppressed("alice@example.com", cur)
+
+
+@pytest.mark.asyncio
+async def test_revoked_mailbox_readiness_during_preparation_blocks_activation(sales):
+    p, provider, worker = setup(sales)
+    action = draft(sales, p)
+    sales.ops.decide(action, True, "operator:test")
+    provider.on_lead = lambda: sales.configure({"mailbox_approved_until": {}}, "operator:test")
+    await worker.tick()
+    assert "activate" not in provider.calls
