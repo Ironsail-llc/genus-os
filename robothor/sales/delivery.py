@@ -59,6 +59,9 @@ class DeliveryWorker:
                     raise Conflict("Follow-up workspace changed since reconciliation")
             await asyncio.to_thread(self._reserve_slot, action, local.date())
             if payload.get("reply_to_uuid"):
+                from robothor.sales.provider_status import ProviderStatusWorker
+
+                await ProviderStatusWorker(self.sales, self.provider).check_before_send(action)
                 await asyncio.to_thread(self.sales.validate_send, action)
                 delivery_started = True
                 receipt = await self.effects.perform(
@@ -88,6 +91,9 @@ class DeliveryWorker:
                 )
                 # Review ownership, suppression, conversation and switches again
                 # after inert preparation, immediately before activation.
+                from robothor.sales.provider_status import ProviderStatusWorker
+
+                await ProviderStatusWorker(self.sales, self.provider).check_before_send(action)
                 latest = await asyncio.to_thread(self.sales.validate_send, action)
                 self._window(latest, self.clock())
                 if latest.timezone != settings.timezone:

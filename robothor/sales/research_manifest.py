@@ -30,6 +30,11 @@ def validate_tools(config, allowed):
 
 def prepare_research(config, snapshot, stage, tenant_id, message):
     """Check both reviewed manifests before admitting any paid native work."""
+    if stage == "analyst":
+        if config.can_spawn_agents or config.service_role != "sales_analyst":
+            raise Conflict("Sales analysis requires a non-spawning analyst manifest")
+        validate_tools(config, {"sales_get_report", "write_file"})
+        return None, message
     if not config.can_spawn_agents:
         validate_tools(config, READ_TOOLS)
         return None, message

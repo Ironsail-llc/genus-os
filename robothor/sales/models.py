@@ -219,6 +219,7 @@ QueueStage = Literal[
     "reconcile",
     "business",
     "analyst",
+    "status",
 ]
 
 
@@ -282,6 +283,16 @@ class SalesSettings(Contract):
     @classmethod
     def addresses(cls, values):
         return [Contact.email_address(v) for v in values]
+
+    @field_validator("mailbox_approved_until")
+    @classmethod
+    def mailbox_review_dates(cls, values):
+        result = {}
+        for sender, expiry in values.items():
+            if expiry.tzinfo is None:
+                raise ValueError("Mailbox readiness expiry must include its timezone")
+            result[Contact.email_address(sender)] = expiry
+        return result
 
     @field_validator("timezone")
     @classmethod

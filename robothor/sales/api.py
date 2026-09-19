@@ -34,6 +34,7 @@ from robothor.sales.recovery import Recovery, RecoveryChange  # noqa: TC001
 from robothor.sales.reporting import Reports
 from robothor.sales.requests import RequestChange, Requests, ResearchRequest  # noqa: TC001
 from robothor.sales.service import Sales
+from robothor.sales.setup import Setup, SetupChange  # noqa: TC001
 
 router = APIRouter(prefix="/api/sales", tags=["sales"])
 
@@ -249,7 +250,8 @@ def retry_read(job_id: UUID, body: ReadRepair, request: Request):
 def provider_reads(
     request: Request,
     state: Literal["attention", "all"] = "attention",
-    kind: Literal["sales.inbound", "sales.reconcile", "sales.business"] | None = None,
+    kind: Literal["sales.inbound", "sales.reconcile", "sales.business", "sales.provider_status"]
+    | None = None,
     after: UUID | None = None,
 ):
     service, _ = require_sales_operator(request)
@@ -547,6 +549,24 @@ def add_business_contact(prospect_id: UUID, body: ContactEntry, request: Request
 
 @router.post("/prospects/{prospect_id}/contacts/{contact_id}/review")
 @domain_errors
-def review_business_contact(prospect_id: UUID, contact_id: UUID, body: ContactReview, request: Request):
+def review_business_contact(
+    prospect_id: UUID, contact_id: UUID, body: ContactReview, request: Request
+):
     service, actor = require_sales_operator(request)
-    return Contacts(service).review(str(prospect_id), str(contact_id), actor=actor, **body.model_dump())
+    return Contacts(service).review(
+        str(prospect_id), str(contact_id), actor=actor, **body.model_dump()
+    )
+
+
+@router.get("/setup")
+@domain_errors
+def integration_setup(request: Request):
+    service, _ = require_sales_operator(request)
+    return Setup(service).snapshot()
+
+
+@router.post("/setup")
+@domain_errors
+def save_integration_setup(body: SetupChange, request: Request):
+    service, actor = require_sales_operator(request)
+    return Setup(service).save(actor=actor, **body.model_dump())

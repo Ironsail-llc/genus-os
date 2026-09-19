@@ -138,6 +138,17 @@ class BusinessPageItem(Contract):
     data: dict
 
 
+class HistoryCoverage(Contract):
+    fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
+    total: StrictInt = Field(ge=0, le=10000)
+    through: datetime
+
+    @field_validator("through")
+    @classmethod
+    def valid_time(cls, value):
+        return Outcome.aware(value)
+
+
 class BusinessPage(Contract):
     source: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,39}$")
     account_id: Identity
@@ -147,6 +158,7 @@ class BusinessPage(Contract):
     observed_at: datetime
     next_cursor: Identity | None
     items: list[BusinessPageItem] = Field(max_length=100)
+    coverage: HistoryCoverage | None = None
 
     @field_validator("observed_at")
     @classmethod
@@ -155,6 +167,8 @@ class BusinessPage(Contract):
 
     @model_validator(mode="after")
     def unique(self):
+        if self.coverage and (self.kind != "order" or self.coverage.through > self.observed_at):
+            raise ValueError("Order coverage must precede observation")
         ids = [item.external_id for item in self.items]
         if len(ids) != len(set(ids)):
             raise ValueError("Duplicate business observation identity")

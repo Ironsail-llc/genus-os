@@ -1044,3 +1044,42 @@ Drafts retain an identity hash which is rechecked before sending. Later automate
 contact research cannot overwrite a current human-reviewed identity. Missing
 contacts remain visible and can be handled through preparation recovery or manual
 entry; there is no requirement to buy an enrichment subscription.
+
+### Integration setup and provider status
+
+The operator's **Review integration setup** screen edits sender mailboxes, expiring
+mailbox readiness reviews, postal address, opt-out URL, business source scopes and
+scheduled discovery segments. A before/after review and revision check precede
+saving. Vault inspection returns required key names and presence only; it never
+returns secrets or equates key presence with authenticated account access. Setup
+cannot enable providers or publish policies. Sender-context changes cancel pending
+approvals, request provider stops and require a fresh draft.
+
+The native `status` queue reconciles configured mailboxes and owned Instantly leads
+at bounded intervals. It reads canonical status, validates workspace and identity,
+and recovers missed unsubscribes, bounces, mailbox errors and human-handled states.
+Provider errors remain visible in read recovery. Delivery repeats the canonical
+lead check before activation/reply and rechecks current approvals. Unknown codes
+hold delivery. Provider won/meeting statuses never prove business fulfillment.
+Lead codes follow the [official Instantly lead contract](https://developer.instantly.ai/api-reference/lead/get-lead).
+
+### Complete order history and retention windows
+
+Business adapters may return an exact revision manifest (`coverage.fingerprint`,
+`total`, `through`) on each order page. Native imports retain page membership and
+verify the entire finite cursor chain, every manifest, the total and a hash of
+sorted `[external_id, revision]` pairs before recording complete history. The hash
+is SHA-256 of compact JSON with ASCII escapes and unescaped slashes. The proof is
+bounded at 10,000 orders and 1,000 pages; larger imports retain individual evidence
+and explicitly leave cohort coverage unknown.
+
+Reporting uses only the proven snapshot membership, preserves orphaned observations
+for audit, and withdraws completeness after a revision change or a later unmatched
+observation. Indeterminate source fulfillment leaves retention unknown. A window
+matures at the earlier of the report date and the oldest complete source observation,
+so time passing alone cannot convert stale coverage into a negative retention result.
+
+Installation uses the canonical migration chain through 137; it includes native
+research permissions/fragments, bounded requests, account-scoped Pipedrive IDs and
+analyst permissions. Run the standard Genus migrator during the reviewed deployment.
+Copying only agent YAML files does not install the platform schema or roles.

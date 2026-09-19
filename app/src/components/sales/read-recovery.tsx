@@ -9,7 +9,7 @@ import { useSalesPages } from "./use-sales-pages";
 type ReadJob = { id: string; kind: string; status: string; error: string | null; attempts: number; max_attempts: number;
   updated_at: string; scope: Record<string, string> };
 const API = "/api/bridge/api/sales";
-const names: Record<string, string> = { "sales.business": "Business import", "sales.inbound": "Incoming message", "sales.reconcile": "Message reconciliation" };
+const names: Record<string, string> = { "sales.provider_status": "Provider status", "sales.business": "Business import", "sales.inbound": "Incoming message", "sales.reconcile": "Message reconciliation" };
 
 export function ReadRecovery() {
   const [state, setState] = useState("attention");

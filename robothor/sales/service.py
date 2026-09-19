@@ -81,6 +81,22 @@ class Sales:
             ).model_dump(mode="json")
             self._validate_library_selection(config, merged, cur)
             old = previous["config"] if previous else {}
+            from robothor.sales.setup import sender_context_hash
+
+            senders = set(old.get("senders", []) + merged.get("senders", []))
+            for sender in sorted(senders):
+                if sender_context_hash(old, sender) == sender_context_hash(merged, sender):
+                    continue
+                cur.execute(
+                    "SELECT 1 FROM operation_actions WHERE tenant_id=%s AND kind='sales.email' AND payload->>'sender'=%s LIMIT 1",
+                    (self.tenant, sender),
+                )
+                if cur.fetchone():
+                    cur.execute(
+                        "UPDATE operation_actions SET status='cancelled' WHERE tenant_id=%s AND kind='sales.email' AND payload->>'sender'=%s AND status IN ('review','approved')",
+                        (self.tenant, sender),
+                    )
+                    self.ops.enqueue("sales.stop", str(uuid4()), {"sender": sender}, cur=cur)
             library_changed = any(
                 key in config and old.get(key, default) != merged[key]
                 for key, default in (
@@ -784,6 +800,11 @@ class Sales:
         cur.execute("SELECT config FROM sales_settings WHERE tenant_id=%s", (self.tenant,))
         row = cur.fetchone()
         payload["library_revision"] = (row["config"] if row else {}).get("library_revision", 0)
+        from robothor.sales.setup import sender_context_hash
+
+        payload["sender_context_hash"] = sender_context_hash(
+            row["config"] if row else {}, draft.sender
+        )
         if followup_basis:
             payload["followup_basis"] = followup_basis
         return self.ops.propose("sales.email", str(uuid4()), payload, cur=cur)
@@ -822,6 +843,12 @@ class Sales:
         payload = live["payload"]
         if live["approved_hash"] != digest(payload) or digest(payload) != digest(action["payload"]):
             raise Conflict("Approved content changed")
+        from robothor.sales.setup import sender_context_hash
+
+        if payload.get("sender_context_hash") != sender_context_hash(
+            settings.model_dump(mode="json"), payload["sender"]
+        ):
+            raise Conflict("Sender configuration or mailbox readiness changed since approval")
         if payload.get("library_revision", 0) != settings.library_revision:
             raise Conflict("Sales knowledge or qualification selection changed")
         p = self.require(payload["prospect_id"], cur)
@@ -976,7 +1003,7 @@ class Sales:
             return [dict(r) for r in cur.fetchall()]
 
     def provider_reads(self, *, state="attention", kind=None, after=None):
-        kinds = ("sales.inbound", "sales.reconcile", "sales.business")
+        kinds = ("sales.inbound", "sales.reconcile", "sales.business", "sales.provider_status")
         if state not in {"attention", "all"} or (kind is not None and kind not in kinds):
             raise ValueError("Provider read inventory filter invalid")
         with self.ops.transaction() as cur:
@@ -993,7 +1020,7 @@ class Sales:
             cur.execute(
                 "SELECT id,kind,status,error,attempts,max_attempts,created_at,updated_at,available_at,deadline, "
                 "jsonb_strip_nulls(jsonb_build_object('source',payload->>'source','account_id',payload->>'account_id', "
-                "'kind',payload->>'kind','practice_id',payload->>'practice_id','campaign_id',payload->>'campaign_id')) AS scope "
+                "'kind',payload->>'kind','practice_id',payload->>'practice_id','campaign_id',payload->>'campaign_id','sender',payload->>'sender','status_scope',payload->>'scope')) AS scope "
                 "FROM operation_jobs WHERE tenant_id=%s AND kind=ANY(%s) "
                 "AND (%s::text IS NULL OR kind=%s) "
                 "AND (%s='all' OR (status IN ('failed','pending') AND (status='failed' OR COALESCE(error,'')<>''))) "
@@ -1016,7 +1043,7 @@ class Sales:
             cur.execute(
                 "UPDATE operation_jobs SET status='pending',attempts=0,available_at=now(), "
                 "deadline=now()+interval '1 day',lease_token=NULL,lease_until=NULL,error='',updated_at=now() "
-                "WHERE tenant_id=%s AND id=%s AND kind IN ('sales.inbound','sales.reconcile','sales.business') "
+                "WHERE tenant_id=%s AND id=%s AND kind IN ('sales.inbound','sales.reconcile','sales.business','sales.provider_status') "
                 "AND status IN ('failed','pending')",
                 (self.tenant, job_id),
             )

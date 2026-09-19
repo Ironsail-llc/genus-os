@@ -15,6 +15,7 @@ import { QualificationAssessment, type Assessment } from "@/components/sales/qua
 import { ContactReview } from "@/components/sales/contact-review";
 import { PipedriveIdentity } from "@/components/sales/pipedrive-identity";
 import { ProspectRecovery } from "@/components/sales/prospect-recovery";
+import { IntegrationSetup } from "@/components/sales/integration-setup";
 import { SalesReports } from "@/components/sales/sales-reports";
 import { ResearchRequests } from "@/components/sales/research-requests";
 
@@ -48,6 +49,7 @@ export function SalesView({ visible, role }: { visible: boolean; role?: string |
   const [showCalibration, setShowCalibration] = useState(false);
   const [showRequests, setShowRequests] = useState(false);
   const [showReports, setShowReports] = useState(false);
+  const [showSetup, setShowSetup] = useState(false);
   const permitted = isOperatorRole(role);
   const refresh = useCallback(async () => {
     const latest = await apiFetch<Overview>(API);
@@ -89,6 +91,7 @@ export function SalesView({ visible, role }: { visible: boolean; role?: string |
         </Button>)}</div>
       <p className="text-sm text-muted-foreground">Every outbound message requires individual approval. Provider acceptance and confirmed delivery are tracked separately.</p>
       <div className="flex flex-wrap gap-2">
+        <Button variant="outline" aria-expanded={showSetup} onClick={() => setShowSetup(!showSetup)}>Review integration setup</Button>
         <Button variant="outline" aria-expanded={showReports} onClick={() => setShowReports(!showReports)}>Sales intelligence reports</Button>
         <Button variant="outline" aria-expanded={showRequests} onClick={() => setShowRequests(!showRequests)}>Research requests</Button>
         <Button variant="outline" aria-expanded={showBusiness} onClick={() => setShowBusiness(!showBusiness)}>Review imported practices</Button>
@@ -105,6 +108,7 @@ export function SalesView({ visible, role }: { visible: boolean; role?: string |
       {showSettings && <PilotSettings onChanged={refresh} />}
       {showLibrary && <SalesLibrary onChanged={refresh} />}
       {showCalibration && <CalibrationReview />}
+      {showSetup && <IntegrationSetup onChanged={refresh} />}
       {showReports && <SalesReports />}
       {showRequests && <ResearchRequests buyingCases={Object.keys((data.settings.active_policy_versions as Record<string, string> | undefined) ?? {})} />}
       <div className="grid gap-5 xl:grid-cols-2">
