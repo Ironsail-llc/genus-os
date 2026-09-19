@@ -44,3 +44,15 @@ describe("Sales review", () => {
     expect(screen.getByText("Exact approved message")).toBeTruthy();
   });
 });
+
+it("loads deployment state only when the operator opens its controls", async () => {
+  const fetcher = vi.spyOn(global, "fetch").mockImplementation(async (url) => Response.json(String(url) === "/api/sales/deployment" ? {
+    configured: true, selected_release_id: null, settings_revision: 1, pending: null, history: [], rollback_candidate: null,
+    control_busy: false, runtime: { ready: true, reason: null },
+  } : data));
+  render(<SalesView visible role="admin" />);
+  await screen.findByText("Exact approved message");
+  expect(fetcher.mock.calls.every(([url]) => String(url) !== "/api/sales/deployment")).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Manage sales deployment" }));
+  expect(await screen.findByText("No fleet selected")).toBeVisible();
+});

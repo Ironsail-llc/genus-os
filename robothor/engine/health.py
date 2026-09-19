@@ -170,6 +170,10 @@ def _mount_subsystem_routers(
 
     register_admin_providers(app)
 
+    from robothor.engine.admin_sales_deployment import register as register_sales_deployment
+
+    register_sales_deployment(app, scheduler)
+
     # Channel status and verify. A channel is an object in THIS process holding
     # this process's credentials, so nothing outside it can ask one whether it
     # is configured or make it prove it works.

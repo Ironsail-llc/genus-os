@@ -442,8 +442,9 @@ completion and audit commit together; rollback is another prepared transition.
 The native source-checkout runtime integrates platform/plugin/schedule verification
 with daemon bootstrap and readiness. Managed queue admission rechecks these assets
 off-loop before work. Pending transitions stay closed after restart, and control
-cancellation drains the database transaction. Public deployment controls and
-non-Git build provenance remain separate work.
+cancellation drains the database transaction. Human-only engine control routes
+and Helm forward the actual verified operator identity; they cannot accept
+client-supplied readiness evidence. Non-Git build provenance remains separate work.
 
 ### General intelligence pipeline
 

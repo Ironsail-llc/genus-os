@@ -136,6 +136,15 @@ class NativeSalesRuntime:
                 )
             )
 
+    async def prepare_rollback(self, transition_id, *, expected_revision, actor, reason):
+        operator(actor)
+        async with self._lock:
+            return await _drain_thread(
+                lambda: self.coordinator.prepare_rollback(
+                    transition_id, expected_revision=expected_revision, actor=actor, reason=reason
+                )
+            )
+
     async def verify_admission(self, release_id, generation):
         self.schedules.verify(release_id, generation)
         snapshot = self._snapshot

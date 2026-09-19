@@ -1028,8 +1028,48 @@ Service factories must resolve through the native registry from declared files
 inside the governed installed distribution. Runtime inspection uses captured
 wheel bytes. Other plugin extension groups and non-Git build provenance need
 explicit support. Native preparation refuses an unsupported nonempty unmanaged
-sales baseline before creating a transition. Public deployment controls and
-production cutover remain separate work; no HTTP deployment endpoint exists yet.
+sales baseline before creating a transition. Production cutover remains separate
+from these implemented controls and their isolated validation.
+
+### Helm sales deployment controls
+
+Open **Sales → Manage sales deployment**. A new workspace can be initialized with
+all five integrations explicitly paused through the existing sales settings API.
+Inspect a separately retained staged-release fingerprint, review its source and
+platform revisions and agent/workflow/adapter inventory, and enter a change reason.
+Preparation uses the displayed settings revision. It closes queue admission but
+does not install or select the release. The pending panel shows the immutable
+target and the restoration target before commit or cancellation.
+
+The engine mounts human-only routes under `/api/admin/sales-deployment`:
+
+| Method | Suffix | Behavior |
+| --- | --- | --- |
+| GET | root | Selected release, settings revision, pending transition, readiness, control activity and up to 20 recent transitions |
+| GET | `/releases/{fingerprint}` | Verify and describe a staged artifact without selecting it or returning filesystem paths |
+| POST | `/prepare` | Prepare the exact release using `release_id`, `expected_revision` and `reason` |
+| POST | `/transitions/{id}/commit` | Reconcile and commit the exact pending transition; body is `{}` |
+| POST | `/transitions/{id}/abort` | Verify restoration before cancellation; requires `reason` |
+| POST | `/transitions/{id}/rollback` | Prepare rollback of the latest committed transition using `expected_revision` and `reason`; does not commit it |
+
+Every route requires a verified human owner/admin identity, `engine:control` and
+the engine's tenant. Service tokens and insecure development identities are
+refused. Request contracts reject caller-supplied tenants, actors, readiness proof
+and activation switches. Preparation attribution is shown as **Prepared by**;
+the actual committing/restoring human is independently recorded in the operation
+audit. Readiness responses report observed engine state, not client assertions.
+
+The narrow Next.js `/api/sales/deployment/[[...path]]` proxy forwards the verified
+human session token directly to the engine. It accepts only the listed operation
+shapes and typed identifiers, ignores caller authorization headers, refuses
+redirects and does not cache responses. It never substitutes a bridge service
+identity. UI initialization uses the existing human-scoped bridge settings API.
+
+The UI invalidates inspection when the fingerprint changes and disables mutations
+while another control operation runs. An uncertain response never causes an
+automatic retry: refresh authoritative status before another change. Successful
+commit and rollback leave integrations paused. A staged artifact or an installed
+fleet is not proof that provider connectivity or the customer pilot has succeeded.
 
 ### Managed workflow schedule generations
 
