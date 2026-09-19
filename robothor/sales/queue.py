@@ -16,6 +16,7 @@ from robothor.sales.delivery import DeliveryWorker, StopWorker
 from robothor.sales.ingestion import InstantlyInboxWorker
 from robothor.sales.models import SalesSettings
 from robothor.sales.promotion import PromotionWorker
+from robothor.sales.reconciliation import ReconciliationWorker
 from robothor.sales.runtime import DraftWorker, ResearchWorker
 from robothor.sales.stages import ActivationWorker, ContactWorker, ConversationWorker, ScoutWorker
 from robothor.sales.verification import VerificationWorker
@@ -45,6 +46,7 @@ class QueueDriver:
                 "delivery": (DeliveryWorker, "tick"),
                 "stop": (StopWorker, "tick"),
                 "inbox": (InstantlyInboxWorker, "tick"),
+                "reconcile": (ReconciliationWorker, "drain"),
             }
             if stage not in workers:
                 raise Conflict("Unknown sales queue stage")

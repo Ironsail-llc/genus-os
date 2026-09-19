@@ -14,6 +14,7 @@ from urllib.parse import quote
 import httpx
 
 from robothor import vault
+from robothor.operations.store import Operations
 from robothor.vault.naming import provider_key
 
 
@@ -168,13 +169,48 @@ class Instantly(Provider):
             params={"limit": 100, **({"starting_after": cursor} if cursor else {})},
         )
 
-    async def emails(self, *, cursor=None, campaign_id=None):
+    async def emails(
+        self,
+        *,
+        cursor=None,
+        campaign_id=None,
+        min_timestamp_created=None,
+        max_timestamp_created=None,
+        sort_order=None,
+        latest_of_thread=None,
+        workspace_id=None,
+    ):
         params = {"limit": 100}
         if cursor:
             params["starting_after"] = cursor
         if campaign_id:
             params["campaign_id"] = campaign_id
-        return await self.request("GET", "/api/v2/emails", params=params)
+        params.update(
+            {
+                key: value
+                for key, value in {
+                    "min_timestamp_created": min_timestamp_created,
+                    "max_timestamp_created": max_timestamp_created,
+                    "sort_order": sort_order,
+                    "latest_of_thread": latest_of_thread,
+                }.items()
+                if value is not None
+            }
+        )
+        if not await asyncio.to_thread(
+            Operations(self.tenant).admit_request, "instantly.emails", limit=20, window_seconds=60
+        ):
+            raise RateLimited(60)
+        # Pin credentials across identity check and page fetch. An empty page
+        # cannot prove workspace identity from its nonexistent message records.
+        connection = await self.connection()
+        expected = await self.secret("providers/instantly/workspace_id")
+        if workspace_id is not None and expected != workspace_id:
+            raise ProviderError("Instantly workspace configuration changed")
+        workspace = await self.request("GET", "/api/v2/workspaces/current", _connection=connection)
+        if not isinstance(workspace, dict) or workspace.get("id") != expected:
+            raise ProviderError("Instantly workspace identity mismatch")
+        return await self.request("GET", "/api/v2/emails", params=params, _connection=connection)
 
     async def get_email(self, email_id):
         return await self.request("GET", "/api/v2/emails/" + quote(email_id, safe=""))

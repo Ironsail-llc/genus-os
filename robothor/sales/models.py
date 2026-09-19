@@ -204,6 +204,7 @@ QueueStage = Literal[
     "delivery",
     "stop",
     "inbox",
+    "reconcile",
 ]
 
 

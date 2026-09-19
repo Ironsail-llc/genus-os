@@ -14,7 +14,7 @@ Candidates already known to Genus do not consume another admission.
 **Implementation status:** the domain, review API, view, provider adapters and
 explicitly constructed workers are available as a foundation. Importing the
 package does not install a schedule, activate integrations or send email.
-Automated deployment, periodic provider reconciliation,
+Automated deployment, provider-state and subscription reconciliation,
 provider billing reconciliation, and the real pilot remain deployment gates. Keep integration switches off until those gates are satisfied.
 
 ## Native workflow execution
@@ -23,11 +23,12 @@ Instance workflow YAML calls `sales_process_queue` in a deterministic tool step.
 `workflow_bindings` explicitly maps each stage to its authorized native service
 workflow. No agent has this execution authority. Stages are `plan`, `scout`,
 `research`, `qualify`, `contacts`, `verify`, `promotion`, `draft`, `conversation`,
-`activation`, `delivery`, `stop`, and `inbox`. Each call handles at most one work item;
-the planner creates a bounded set of discovery jobs. There is no separate daemon.
+`activation`, `delivery`, `stop`, `inbox`, and `reconcile`. Most calls handle one work
+item; reconciliation reads up to five pages, and the planner creates a bounded set
+of discovery jobs. There is no separate daemon.
 
 Use separate workflows for stop requests, inbound conversations, delivery, and
-research. Stop and inbox workflows remain scheduled when sending is paused. Other
+research. Stop, inbox and reconciliation workflows remain scheduled when sending is paused. Other
 workers respect their stage switches. Set `tool_timeout_seconds` in the native
 workflow step to cover the worker's allowance and keep the enclosing workflow
 timeout larger. Research workers allow 300 seconds; a 330-second tool step inside
@@ -138,8 +139,8 @@ an allowlisted event without attachments or unrelated contact fields.
 [Instantly documents custom webhook headers](https://help.instantly.ai/en/articles/6261906-webhooks),
 not an HMAC signature contract. Configure specific supported subscriptions, not
 “All events”: sent, replies (including automatic replies), bounce, unsubscribe,
-not interested, wrong person, campaign completed and account error. Registration,
-subscription-health checks and periodic backfill are still activation gates.
+not interested, wrong person, campaign completed and account error. Registration and
+subscription-health checks are still activation gates.
 
 A completed campaign-creation receipt binds each event to its original,
 single-recipient Genus action. Supplied addresses must agree; missing optional
@@ -162,9 +163,54 @@ Without an email UUID, one campaign-filtered page is checked for exactly one
 matching body, subject, participants and nearby timestamp. Ambiguous matches,
 additional pages, HTML-only bodies, missing campaign associations and unsupported
 identities remain pending and eventually fail visibly after bounded retries.
-Periodic paginated reconciliation and an operator repair workflow are still
-required. Provider pauses are asynchronous: intake invalidates local authority
+The periodic scanner recovers messages independently of these event lookup jobs.
+Ambiguous event-to-message identity still requires an operator repair interface.
+Provider pauses are asynchronous: intake invalidates local authority
 immediately, but an already in-flight provider request cannot be recalled.
+
+## Periodic message reconciliation
+
+The independent `reconcile` workflow scans only campaigns with completed Genus
+creation receipts. Each tick reads one page of at most 100 records; one native
+workflow invocation drains at most five pages. Schedule that workflow every minute
+with a 240-second tool timeout and a larger enclosing workflow deadline. Each
+individual page has its own fenced 120-second work lease. Sending can remain off.
+
+A scan fixes its lower/upper timestamps and sorts ascending without collapsing
+threads. Verified messages, stop/conversation work, provider observations, the
+next cursor and job completion commit together. Restarts resume the page chain;
+repeated cursors, conflicting identities, scheduled messages and malformed pages
+hold the page rather than silently skip it. There is a 1,000-page bound per scan.
+A campaign's next scan becomes eligible ten minutes after the prior scan's upper
+bound, with a day of overlap. Daily it becomes eligible to revisit the full campaign history
+to catch late indexing. This is eligibility, not a maximum recovery latency:
+actual lag depends on the campaign/page backlog and provider availability.
+
+The first attempt pins the workspace durably; a configuration change cannot
+retarget a resumed cursor or a later scan of that campaign.
+Every email-list request checks the configured workspace with the same credential
+snapshot used for the page fetch. A database-backed sliding window admits at most
+20 list attempts per 60 seconds across this tenant's workers, matching the
+[documented email-list limit](https://github.com/Instantly-ai/instantly-starter-kit/blob/main/docs/api/emails.md).
+Failed attempts count. Other applications or tenants sharing a provider account
+also consume its provider limit; 429 responses defer the job without consuming a
+processing attempt. No in-memory counter is treated as a global quota.
+
+Webhook and polling observations deduplicate on the real message ID. Recovered
+sent mail updates the matching initial or reply action receipt; unexpected
+outbound content hands the conversation to human review. Neither sent mail nor a
+completed campaign proves inbox delivery or customer activation.
+
+After correcting a provider-read problem, a tenant owner/admin can call
+`POST /api/sales/jobs/{job_id}/retry` with a 10–2,000-character `reason`. Only
+inactive `sales.inbound` and `sales.reconcile` jobs can be reset. The reason and
+actor are audited; delivery and CRM mutation jobs are excluded. This endpoint
+retries the same page and does not authorize a changed identity or message.
+
+Message backfill does not recover missed provider-only unsubscribe labels,
+account-status changes or disabled subscriptions. Reconciliation of those states,
+ambiguous thread/HTML handling, operator repair UI, and lag alerts remain
+activation requirements.
 
 ## Native agent deployment
 

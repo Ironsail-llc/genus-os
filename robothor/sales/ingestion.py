@@ -20,7 +20,7 @@ from robothor import vault
 from robothor.operations.store import Conflict
 from robothor.sales.inbound import AuthenticationError, instantly_event
 from robothor.sales.models import Contact, Message, Outcome
-from robothor.sales.providers import Instantly, ProviderError
+from robothor.sales.providers import Instantly, ProviderError, RateLimited
 from robothor.sales.service import Sales
 
 router = APIRouter()
@@ -247,7 +247,9 @@ class InstantlyInboxWorker:
                 else:
                     # One bounded page. Pagination or multiple matches is held,
                     # never resolved by choosing the newest message arbitrarily.
-                    page = await self.provider.emails(campaign_id=event["campaign_id"])
+                    page = await self.provider.emails(
+                        campaign_id=event["campaign_id"], workspace_id=event["workspace"]
+                    )
                     if page.get("next_starting_after"):
                         raise Conflict("Provider message lookup requires paginated reconciliation")
                     matches = []
@@ -274,6 +276,15 @@ class InstantlyInboxWorker:
             elif event["kind"] not in _NEGATIVE | {"campaign_completed"}:
                 raise Conflict("Provider event requires operator reconciliation")
             await asyncio.to_thread(self._commit, job, event, action, message)
+        except RateLimited as exc:
+            await asyncio.to_thread(
+                self.sales.ops.defer,
+                job["id"],
+                job["lease_token"],
+                "Provider read rate limited",
+                delay_seconds=exc.retry_after,
+                busy=True,
+            )
         except (ValueError, KeyError, TypeError, ProviderError):
             # No provider bodies, message content, tokens, or addresses in errors.
             await asyncio.to_thread(
@@ -291,22 +302,7 @@ class InstantlyInboxWorker:
             if not current or current["id"] != action["id"]:
                 raise Conflict("Provider campaign association changed")
             if message:
-                self.sales.record_message(message, cur=cur)
-                if message["direction"] == "outbound":
-                    cur.execute(
-                        "UPDATE operation_actions SET receipt=COALESCE(receipt,'{}'::jsonb)||%s "
-                        "WHERE tenant_id=%s AND id=%s AND status='completed'",
-                        (
-                            Json(
-                                {
-                                    "delivery_status": "sent",
-                                    "provider_message_id": message["provider_id"],
-                                }
-                            ),
-                            self.sales.tenant,
-                            action["id"],
-                        ),
-                    )
+                record_provider_message(self.sales, action, message, cur)
             cur.execute(
                 "UPDATE operation_inbox SET processed_at=now() WHERE tenant_id=%s AND provider='instantly' AND event_id=%s",
                 (self.sales.tenant, event["event_id"]),
@@ -314,3 +310,44 @@ class InstantlyInboxWorker:
             self.sales.ops.complete(
                 job["id"], job["lease_token"], {"event_id": event["event_id"]}, cur=cur
             )
+
+
+def record_provider_message(sales, action, message, cur):
+    """One verified observation and its matching action receipt, in one transaction."""
+    created = sales.record_message(message, cur=cur)
+    if message["direction"] == "outbound":
+        # Replies have their own approved action; do not replace the initial
+        # campaign's receipt with the UUID of a subsequent manual reply.
+        cur.execute(
+            "SELECT a.* FROM operation_effects e JOIN operation_actions a "
+            "ON a.tenant_id=e.tenant_id AND a.id::text=e.dedup_key "
+            "WHERE e.tenant_id=%s AND e.kind='instantly.reply' AND e.status='completed' "
+            "AND e.receipt->>'id'=%s AND a.kind='sales.email'",
+            (sales.tenant, message["provider_id"]),
+        )
+        replies = cur.fetchall()
+        target = dict(replies[0]) if len(replies) == 1 else action
+        draft = target["payload"]
+        if len(replies) > 1 or any(
+            message[field] != draft[field]
+            for field in ("sender", "recipient", "subject", "body", "prospect_id")
+        ):
+            if created:
+                sales.escalate(
+                    message["prospect_id"],
+                    "Observed outbound message differs from its recorded draft",
+                    cur=cur,
+                )
+        else:
+            cur.execute(
+                "UPDATE operation_actions SET receipt=COALESCE(receipt,'{}'::jsonb)||%s "
+                "WHERE tenant_id=%s AND id=%s AND status='completed'",
+                (
+                    Json(
+                        {"delivery_status": "sent", "provider_message_id": message["provider_id"]}
+                    ),
+                    sales.tenant,
+                    target["id"],
+                ),
+            )
+    return created

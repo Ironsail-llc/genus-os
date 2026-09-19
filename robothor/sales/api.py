@@ -7,6 +7,7 @@ is supplied by the bridge, and no request body may select a tenant or actor.
 from __future__ import annotations
 
 from functools import wraps
+from uuid import UUID  # noqa: TC003 — FastAPI resolves this annotation at runtime.
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import Field, StrictBool, ValidationError
@@ -70,10 +71,22 @@ class Customer(Contract):
     external_company_id: str = Field(min_length=1, max_length=200)
 
 
+class ReadRepair(Contract):
+    reason: str = Field(min_length=10, max_length=2000)
+
+
 @router.get("")
 def overview(request: Request):
     service, _ = require_sales_operator(request)
     return service.overview()
+
+
+@router.post("/jobs/{job_id}/retry")
+@domain_errors
+def retry_read(job_id: UUID, body: ReadRepair, request: Request):
+    service, actor = require_sales_operator(request)
+    service.retry_provider_read(str(job_id), actor, body.reason)
+    return {"ok": True}
 
 
 @router.patch("/settings")
