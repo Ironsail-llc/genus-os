@@ -407,3 +407,79 @@ def test_business_observation_list_is_bounded_and_operator_only(client, monkeypa
     )
     assert response.status_code == 200
     assert response.json()["tenant"] == "tenant-a"
+
+
+def test_research_request_routes_are_human_scoped_and_do_not_accept_authority(client, monkeypatch):
+    import robothor.sales.api as api
+
+    c, calls = client
+
+    class RequestsStub:
+        def __init__(self, service):
+            self.tenant = service.tenant
+
+        def create(self, data, actor):
+            calls.append((self.tenant, data.model_dump(), actor))
+            return {"id": "request-1"}
+
+        def change(self, request_id, **data):
+            calls.append((self.tenant, request_id, data))
+            return {"status": data["status"]}
+
+    monkeypatch.setattr(api, "Requests", RequestsStub)
+    from robothor.sales.tests.test_requests import request_data
+
+    path = "/api/sales/requests"
+    for headers in (
+        {},
+        {"x-test-role": "member"},
+        {"x-test-role": "admin", "x-test-service": "yes"},
+    ):
+        assert c.post(path, headers=headers, json=request_data()).status_code == 403
+    headers = {"x-test-role": "admin"}
+    for extra in ({"actor": "forged"}, {"tenant_id": "other"}, {"sending_enabled": True}):
+        assert c.post(path, headers=headers, json=request_data(**extra)).status_code == 422
+    assert c.post(path, headers=headers, json=request_data()).status_code == 200
+    assert calls.pop() == ("tenant-a", request_data(), "operator:user-1")
+    request_id = "00000000-0000-4000-8000-000000000001"
+    body = {"status": "paused", "expected_revision": 3, "reason": "Pause for business review"}
+    assert c.post(f"{path}/{request_id}/state", headers=headers, json=body).status_code == 200
+    assert calls.pop() == ("tenant-a", request_id, {**body, "actor": "operator:user-1"})
+    assert (
+        c.post(
+            f"{path}/{request_id}/state", headers=headers, json={**body, "expected_revision": True}
+        ).status_code
+        == 422
+    )
+
+
+def test_preparation_recovery_never_accepts_service_or_caller_authority(client, monkeypatch):
+    import robothor.sales.recovery as recovery
+
+    c, calls = client
+    monkeypatch.setattr(
+        recovery.Recovery,
+        "change",
+        lambda self, prospect_id, **body: (
+            calls.append((self.tenant, prospect_id, body)) or {"owner": "agent"}
+        ),
+    )
+    path = "/api/sales/prospects/00000000-0000-4000-8000-000000000001/recovery"
+    body = {
+        "command": "resume",
+        "expected_hash": "a" * 64,
+        "reason": "Return the conversation to the agent",
+    }
+    for headers in (
+        {},
+        {"x-test-role": "member"},
+        {"x-test-role": "admin", "x-test-service": "yes"},
+    ):
+        assert c.post(path, headers=headers, json=body).status_code == 403
+    headers = {"x-test-role": "admin"}
+    assert c.post(path, headers=headers, json={**body, "actor": "forged"}).status_code == 422
+    assert c.post(path, headers=headers, json={**body, "command": "send"}).status_code == 422
+    assert c.post(path, headers=headers, json=body).status_code == 200
+    assert calls == [
+        ("tenant-a", "00000000-0000-4000-8000-000000000001", {**body, "actor": "operator:user-1"})
+    ]

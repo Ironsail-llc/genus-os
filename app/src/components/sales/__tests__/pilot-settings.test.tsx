@@ -8,6 +8,19 @@ const initial = { revision: 4, config: { monthly_limit_units: 100_000_000, daily
   sending_enabled: false, agents: { scout: "sample-scout" } } };
 afterEach(() => vi.restoreAllMocks());
 
+it("allows reviewed request-only discovery without changing integration switches", async () => {
+  const fetcher = vi.spyOn(global, "fetch").mockImplementation(async () => Response.json(initial));
+  render(<PilotSettings onChanged={vi.fn()} />);
+  const mode = await screen.findByLabelText("Discovery scheduling");
+  fireEvent.change(mode, { target: { value: "requests" } });
+  fireEvent.change(screen.getByLabelText("Reason for these limits"), { target: { value: "Only discover against bounded research requests" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save reviewed limits" }));
+  await waitFor(() => expect(fetcher.mock.calls.some(([, options]) => options?.method === "POST")).toBe(true));
+  const body = fetcher.mock.calls.find(([, options]) => options?.method === "POST")?.[1]?.body;
+  expect(JSON.parse(String(body)).changes).toEqual({ discovery_mode: "requests" });
+});
+
 it("reviews an optional bounded follow-up cadence without enabling sending", async () => {
   const fetcher = vi.spyOn(global, "fetch").mockImplementation(async () => Response.json(initial));
   render(<PilotSettings onChanged={vi.fn()} />);

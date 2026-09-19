@@ -8,12 +8,13 @@ import { apiFetch } from "@/lib/api/client";
 const API = "/api/bridge/api/sales/settings";
 type Snapshot = { config: Record<string, unknown>; revision: number };
 type Review = { changes: Record<string, string | number | number[]>; expected_revision: number; reason: string };
-type Field = { key: string; label: string; kind: "usd" | "integer" | "timezone" | "cadence"; fallback: number | string | number[]; min?: number; max?: number };
+type Field = { key: string; label: string; kind: "usd" | "integer" | "timezone" | "cadence" | "mode"; fallback: number | string | number[]; min?: number; max?: number };
 const fields: Field[] = [
   { key: "monthly_limit_units", label: "Monthly spending limit (USD)", kind: "usd", fallback: 0 },
   { key: "daily_limit_units", label: "Daily spending limit (USD)", kind: "usd", fallback: 0 },
   { key: "verification_allowance_units", label: "Allowance per email verification (USD)", kind: "usd", fallback: 0, max: 1_000_000 },
   { key: "discovery_daily_limit", label: "New companies per day", kind: "integer", fallback: 20, min: 0, max: 1000 },
+  { key: "discovery_mode", label: "Discovery scheduling", kind: "mode", fallback: "scheduled" },
   { key: "review_backlog_limit", label: "Maximum review backlog", kind: "integer", fallback: 100, min: 1, max: 10000 },
   { key: "mailbox_daily_limit", label: "Emails per mailbox per day", kind: "integer", fallback: 5, min: 0, max: 100 },
   { key: "followup_delays_business_days", label: "Follow-up delays (business days; blank disables)", kind: "cadence", fallback: [] },
@@ -30,6 +31,10 @@ function display(field: Field, value: unknown) {
 
 function parse(field: Field, raw: string): string | number | number[] {
   const value = raw.trim();
+  if (field.kind === "mode") {
+    if (value !== "scheduled" && value !== "requests") throw new Error("Select a supported discovery mode.");
+    return value;
+  }
   if (field.kind === "cadence") {
     if (!value) return [];
     const parts = value.split(",").map((part) => part.trim());
@@ -124,9 +129,11 @@ export function PilotSettings({ onChanged }: { onChanged: () => void | Promise<v
     {saved && <p role="status" className="text-sm">Reviewed limits saved.</p>}
     {!snapshot ? <p>Loading current limits…</p> : <>
       <div className="grid gap-4 md:grid-cols-2">{fields.map((field) => <label key={field.key} htmlFor={`pilot-${field.key}`} className="block space-y-1 text-sm">
-        <span>{field.label}</span><Input id={`pilot-${field.key}`} disabled={busy || held} value={values[field.key] ?? ""}
+        <span>{field.label}</span>{field.kind === "mode" ? <select id={`pilot-${field.key}`} className="block w-full rounded border p-2" disabled={busy || held} value={values[field.key] ?? "scheduled"} onChange={(event) => { setValues({ ...values, [field.key]: event.target.value }); setReview(null); setSaved(false); }}>
+          <option value="scheduled">Requests plus scheduled segments</option><option value="requests">Bounded requests only</option>
+        </select> : <Input id={`pilot-${field.key}`} disabled={busy || held} value={values[field.key] ?? ""}
           inputMode={field.kind === "usd" ? "decimal" : field.kind === "integer" ? "numeric" : "text"}
-          onChange={(event) => { setValues({ ...values, [field.key]: event.target.value }); setReview(null); setSaved(false); }} />
+          onChange={(event) => { setValues({ ...values, [field.key]: event.target.value }); setReview(null); setSaved(false); }} />}
       </label>)}</div>
       <label htmlFor="pilot-reason" className="block space-y-1 text-sm"><span>Reason for these limits</span>
         <textarea id="pilot-reason" className="w-full rounded border bg-transparent p-2" maxLength={2000} value={reason} disabled={busy || held}

@@ -53,6 +53,47 @@ def test_no_approval_send_or_configuration_tool():
 
 
 @pytest.mark.asyncio
+async def test_request_tool_uses_authenticated_tenant_and_never_accepts_switches(monkeypatch):
+    from robothor.sales import requests
+
+    calls = []
+    monkeypatch.setattr(
+        requests.Requests,
+        "create",
+        lambda self, data, actor: (
+            calls.append((self.tenant, actor, data.target_companies)) or {"id": "request-1"}
+        ),
+    )
+    ctx = SimpleNamespace(tenant_id="tenant-a", is_benchmark=False, agent_id="coordinator")
+    args = {
+        "request_key": "request-1",
+        "title": "Practice research",
+        "query": "US prescribing practices",
+        "buying_case": "network_access",
+        "target_companies": 10,
+    }
+    assert (await HANDLERS["sales_create_request"](args, ctx))["id"] == "request-1"
+    assert calls == [("tenant-a", "agent:coordinator", 10)]
+    assert "error" in await HANDLERS["sales_create_request"](args | {"sending_enabled": True}, ctx)
+    ctx.is_benchmark = True
+    assert "error" in await HANDLERS["sales_create_request"](args, ctx)
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_request_reference_rejects_non_uuid_before_storage(monkeypatch):
+    from robothor.sales import requests
+
+    calls = []
+    monkeypatch.setattr(
+        requests.Requests, "get", lambda self, request_id: calls.append(request_id) or {}
+    )
+    ctx = SimpleNamespace(tenant_id="tenant-a", is_benchmark=False, agent_id="coordinator")
+    assert "error" in await HANDLERS["sales_get_request"]({"request_id": "not-an-id"}, ctx)
+    assert calls == []
+
+
+@pytest.mark.asyncio
 async def test_research_tool_requires_a_native_scope_and_rejects_context_overrides():
     ctx = SimpleNamespace(tenant_id="tenant-a", is_benchmark=False, agent_id="researcher")
     handler = HANDLERS["sales_research_parallel"]
@@ -145,3 +186,13 @@ async def test_queue_tool_uses_service_workflow_context_not_arguments(monkeypatc
     ctx.is_benchmark = True
     assert "error" in await HANDLERS["sales_process_queue"]({"stage": "research"}, ctx)
     assert run.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_coordinator_can_read_intake_configuration_without_changing_it(monkeypatch):
+    from robothor.sales.requests import Requests
+
+    monkeypatch.setattr(Requests, "workspace", lambda self: {"tenant": self.tenant})
+    ctx = SimpleNamespace(tenant_id="tenant-a", is_benchmark=False, agent_id="coordinator")
+    assert await HANDLERS["sales_get_workspace"]({}, ctx) == {"tenant": "tenant-a"}
+    assert "error" in await HANDLERS["sales_get_workspace"]({"tenant_id": "tenant-b"}, ctx)

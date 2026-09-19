@@ -12,6 +12,8 @@ import { PilotSettings } from "@/components/sales/pilot-settings";
 import { SalesLibrary } from "@/components/sales/sales-library";
 import { CalibrationReview } from "@/components/sales/calibration-review";
 import { QualificationAssessment, type Assessment } from "@/components/sales/qualification-assessment";
+import { ProspectRecovery } from "@/components/sales/prospect-recovery";
+import { ResearchRequests } from "@/components/sales/research-requests";
 
 const API = "/api/bridge/api/sales";
 type Evidence = { id: string; field: string; value: unknown; url: string; excerpt: string; retrieved_at: string; confidence: string };
@@ -41,6 +43,7 @@ export function SalesView({ visible, role }: { visible: boolean; role?: string |
   const [showSettings, setShowSettings] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
   const [showCalibration, setShowCalibration] = useState(false);
+  const [showRequests, setShowRequests] = useState(false);
   const permitted = isOperatorRole(role);
   const refresh = useCallback(async () => {
     const latest = await apiFetch<Overview>(API);
@@ -82,6 +85,7 @@ export function SalesView({ visible, role }: { visible: boolean; role?: string |
         </Button>)}</div>
       <p className="text-sm text-muted-foreground">Every outbound message requires individual approval. Provider acceptance and confirmed delivery are tracked separately.</p>
       <div className="flex flex-wrap gap-2">
+        <Button variant="outline" aria-expanded={showRequests} onClick={() => setShowRequests(!showRequests)}>Research requests</Button>
         <Button variant="outline" aria-expanded={showBusiness} onClick={() => setShowBusiness(!showBusiness)}>Review imported practices</Button>
         <Button variant="outline" aria-expanded={showReads} onClick={() => setShowReads(!showReads)}>Inspect provider reads</Button>
         <Button variant="outline" aria-expanded={showDeployment} onClick={() => setShowDeployment(!showDeployment)}>Manage sales deployment</Button>
@@ -96,6 +100,7 @@ export function SalesView({ visible, role }: { visible: boolean; role?: string |
       {showSettings && <PilotSettings onChanged={refresh} />}
       {showLibrary && <SalesLibrary onChanged={refresh} />}
       {showCalibration && <CalibrationReview />}
+      {showRequests && <ResearchRequests buyingCases={Object.keys((data.settings.active_policy_versions as Record<string, string> | undefined) ?? {})} />}
       <div className="grid gap-5 xl:grid-cols-2">
         <div className="space-y-3">
           <h3 className="font-medium">Prospects ({data.prospects.length} shown)</h3>
@@ -114,6 +119,7 @@ export function SalesView({ visible, role }: { visible: boolean; role?: string |
               <Button variant="outline" disabled={busy} onClick={() => void mutate(`/prospects/${detail.prospect.id}/review`, { approved: false, expected_version: detail.prospect.version, expected_policy_version: detail.prospect.qualification?.policy_version ?? null })}>Reject prospect</Button>
               <Button variant="outline" disabled={busy} onClick={() => void mutate(`/prospects/${detail.prospect.id}/takeover`, {})}>Take over conversation</Button>
             </div>
+            <ProspectRecovery key={detail.prospect.id} prospectId={detail.prospect.id} onChanged={async () => { await refresh(); setDetail(await apiFetch<Detail>(`${API}/prospects/${detail.prospect.id}`)); }} />
             <QualificationAssessment assessment={detail.prospect.qualification?.assessment} evidence={detail.prospect.dossier?.evidence ?? []} />
             <h4 className="font-medium">Original research evidence</h4>
             {detail.prospect.dossier?.evidence.map((e) => <div key={e.id} className="border-l-2 pl-3 text-sm">

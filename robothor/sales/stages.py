@@ -76,6 +76,14 @@ class ScoutWorker(StructuredWorker):
     instruction = "Discover businesses in the assigned segment, up to the context max_companies limit. Return source-backed CandidateBatch JSON. Do not invent contacts."
 
     async def context(self, job):
+        if job["payload"].get("request_id"):
+            from robothor.sales.requests import Requests
+
+            def check():
+                with self.sales.ops.transaction() as cur:
+                    Requests(self.sales).guard(job["payload"], cur=cur)
+
+            await asyncio.to_thread(check)
         return {
             "segment": job["payload"]["segment"],
             "max_companies": job["payload"].get("max_companies", 20),
@@ -85,10 +93,21 @@ class ScoutWorker(StructuredWorker):
         if len(output.companies) > context["max_companies"]:
             raise Conflict("Scout exceeded the planned candidate allowance")
         with self.sales.ops.transaction() as cur:
+            from robothor.sales.requests import Requests
+
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+                (self.sales.tenant + ":discovery",),
+            )
+            Requests(self.sales).guard(job["payload"], cur=cur)
             ids = []
             for candidate in output.companies:
                 prospect = self.sales.discover(
-                    candidate.name, candidate.website, candidate.source_url, cur=cur
+                    candidate.name,
+                    candidate.website,
+                    candidate.source_url,
+                    cur=cur,
+                    request_id=job["payload"].get("request_id"),
                 )
                 ids.append(str(prospect["id"]))
                 self.sales.ops.audit(

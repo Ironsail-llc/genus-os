@@ -13,6 +13,14 @@ Candidates already known to Genus do not consume another admission.
 
 ### Reviewed follow-ups
 
+The draft workflow first prepares eligible accepted prospects directly from
+Genus CRM. Pipedrive promotion is optional and does not gate drafting. Planning
+requires current qualification, a verified unsuppressed contact and configured
+approved knowledge/sender details. It creates one initial review job, including
+under concurrent planning or a manual draft race; existing messages, actions or
+previous draft attempts prevent automatic duplicate work. Sending can remain
+paused while drafts are prepared for review.
+
 The existing draft workflow can plan cold follow-ups when
 `followup_delays_business_days` is explicitly configured. The default empty list
 disables them. The settings review accepts at most two integer delays of 1–30
@@ -923,3 +931,51 @@ that require a tool call when offered only that one retrieval function. The latt
 uses the same authorized schema, native dispatch and successful-fetch attestation;
 it does not admit an automatic-tool-choice fallback. This permits choosing a
 research model independently of a backend's named-function syntax support.
+
+## Bounded research requests
+
+Use Sales → Research requests to enter a title, public-business search brief,
+active buying case and target of 1–1,000 **new companies**. Native agents can use
+`sales_get_workspace`, `sales_create_request` and `sales_get_request` with a
+stable request key; retries must retain the same key and content. The private
+suite supplies an interactive coordinator with only intake/read tools. Request
+creation neither enables research nor approves promotion or outreach.
+
+The planner prioritizes requests inside the configured weekday window, daily
+company cap, review backlog and shared model budget. Pilot settings expose
+`discovery_mode`: `requests` admits only explicit briefs; `scheduled` also fills
+remaining capacity from the configured rotating segments. Each request permits
+at most five scout batches per twenty requested companies; duplicates never
+count toward its target. Exhaustion, failed jobs, changed policy or disabled
+research appears in progress instead of silently buying indefinite searches.
+
+Human pause/cancel uses the displayed revision and records a reason. It cancels
+pending message approvals and queues a stop; downstream research, contact,
+promotion and draft/send checks reject held members. Resuming does not restore
+email approvals, and cancellation is permanent. A provider call already in
+flight cannot be recalled; its result remains subject to commit/approval checks.
+Request spending reports durable job reservations once per operation, with actual
+cost and unsettled reservations separate. Existing SaaS subscriptions and invoice
+adjustments are not included. Assessment completion is distinct from human lead
+acceptance and the customer pilot.
+
+Migration `135_sales_requests.sql` adds tenant-isolated request tables and the
+restricted `sales_coordinator` role. Apply all packaged migrations before starting
+the new engine; candidate installation alone does not apply database changes.
+
+## Ownership and preparation recovery
+
+Open a prospect and select **Review preparation and ownership**. The operator sees
+current ownership and durable work, then submits a command and reason bound to
+that exact state. Return ownership to Robothor first when a person has taken over;
+then explicitly choose fresh research, qualification, contact research, an initial
+draft, a reply to the latest inbound message, or milestone assessment. Initial
+drafting refuses existing conversations. The reason is supplied to the native
+preparation stage as an operator brief.
+
+Recovery cancels review/approved messages and supersedes pending preparation
+jobs; it never retries delivery or restores approvals. Fresh research or
+qualification withdraws acceptance. Running work, uncertain delivery and
+unsettled spending prevent replacement work. A stale or uncertain operator
+response requires reloading the snapshot. Original jobs, generated output,
+costs and decisions remain in the audit trail.

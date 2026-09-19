@@ -34,6 +34,7 @@ class PromotionWorker:
 
     async def promote(self, job):
         prospect_id = job["payload"]["prospect_id"]
+        await asyncio.to_thread(self.sales.require_request_open, prospect_id)
         await asyncio.to_thread(self.sales.require_assessment, prospect_id)
         p = await asyncio.to_thread(self.sales.get, prospect_id)
         if not p or p["status"] not in {"accepted", "promoted"}:
@@ -46,6 +47,7 @@ class PromotionWorker:
         known = dict(p["pipedrive_ids"])
 
         async def organization():
+            await asyncio.to_thread(self.sales.require_request_open, prospect_id)
             matches = await self.provider.search_organizations(p["name"])
             if matches.get("items"):
                 raise Conflict("Possible existing Pipedrive organization; identity review required")
@@ -64,6 +66,7 @@ class PromotionWorker:
                 continue
 
             async def person(data=data):
+                await asyncio.to_thread(self.sales.require_request_open, prospect_id)
                 matches = await self.provider.search_people(data["email"])
                 # Email identity conflicts require a human to confirm the
                 # organization relationship; never silently reparent people.
@@ -85,6 +88,7 @@ class PromotionWorker:
             )
             known[key] = receipt["id"]
         if "lead_id" not in known:
+            await asyncio.to_thread(self.sales.require_request_open, prospect_id)
             person_id = next((v for k, v in known.items() if k.startswith("person:")), None)
             title = p["name"] + " — Genus " + str(prospect_id)
             receipt = await self.effects.perform(
@@ -102,6 +106,7 @@ class PromotionWorker:
 
     def _complete(self, job, prospect_id, version, known):
         with self.sales.ops.transaction() as cur:
+            self.sales.require_request_open(prospect_id, cur=cur)
             p = self.sales.require(prospect_id, cur)
             if p["version"] != version or p["status"] not in {"accepted", "promoted"}:
                 raise Conflict(

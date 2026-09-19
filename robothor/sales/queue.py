@@ -98,7 +98,6 @@ class DiscoveryPlanner:
                 return False
             if (
                 not settings.agents.get("scout")
-                or not settings.discovery_segments
                 or settings.daily_limit_units < ResearchWorker.RUN_ALLOWANCE_UNITS
                 or settings.monthly_limit_units < ResearchWorker.RUN_ALLOWANCE_UNITS
             ):
@@ -108,8 +107,6 @@ class DiscoveryPlanner:
                 for s in settings.discovery_segments
                 if s.buying_case in settings.active_policy_versions
             ]
-            if not segments:
-                raise Conflict("Discovery segments require active qualification policies")
             prefix = "discovery:" + str(local.date()) + ":"
             cur.execute(
                 "SELECT 1 FROM operation_jobs WHERE tenant_id=%s AND kind='sales.scout' AND dedup_key LIKE %s LIMIT 1",
@@ -140,6 +137,12 @@ class DiscoveryPlanner:
             end = local.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(
                 hours=settings.discovery_end_hour
             )
+            from robothor.sales.requests import Requests
+
+            requested = Requests(self.sales).allocate(cur, settings, local, room, prefix, end)
+            room -= requested
+            if not segments or settings.discovery_mode == "requests":
+                return bool(requested)
             offset = local.date().toordinal() % len(segments)
             total = room
             index = 0

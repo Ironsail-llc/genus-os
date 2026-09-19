@@ -106,6 +106,7 @@ class VerificationWorker:
         if cur is None:
             with self.sales.ops.transaction() as cursor:
                 return self._check(job, cursor)
+        self.sales.require_request_open(job["payload"]["prospect_id"], cur=cur)
         p = self.sales.require(job["payload"]["prospect_id"], cur)
         if (p["qualification"] or {}).get("decision") != "qualified":
             raise Conflict("Verification requires a qualified business")

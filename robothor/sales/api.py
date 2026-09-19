@@ -23,6 +23,8 @@ from robothor.sales.library import (  # noqa: TC001 — FastAPI resolves annotat
     preview,
 )
 from robothor.sales.models import Contract, Draft, QualificationPolicy, SalesSettings
+from robothor.sales.recovery import Recovery, RecoveryChange  # noqa: TC001
+from robothor.sales.requests import RequestChange, Requests, ResearchRequest  # noqa: TC001
 from robothor.sales.service import Sales
 
 router = APIRouter(prefix="/api/sales", tags=["sales"])
@@ -102,6 +104,7 @@ class SettingsReview(ReadRepair):
             "daily_limit_units",
             "verification_allowance_units",
             "discovery_daily_limit",
+            "discovery_mode",
             "review_backlog_limit",
             "mailbox_daily_limit",
             "followup_delays_business_days",
@@ -146,6 +149,34 @@ class CalibrationAssessment(ReadRepair):
 def overview(request: Request):
     service, _ = require_sales_operator(request)
     return service.overview()
+
+
+@router.get("/requests")
+@domain_errors
+def research_requests(request: Request, after: UUID | None = None):
+    service, _ = require_sales_operator(request)
+    return Requests(service).list(str(after) if after else None)
+
+
+@router.post("/requests")
+@domain_errors
+def create_research_request(body: ResearchRequest, request: Request):
+    service, actor = require_sales_operator(request)
+    return Requests(service).create(body, actor)
+
+
+@router.get("/requests/{request_id}")
+@domain_errors
+def research_request(request_id: UUID, request: Request):
+    service, _ = require_sales_operator(request)
+    return Requests(service).get(str(request_id))
+
+
+@router.post("/requests/{request_id}/state")
+@domain_errors
+def change_research_request(request_id: UUID, body: RequestChange, request: Request):
+    service, actor = require_sales_operator(request)
+    return Requests(service).change(str(request_id), actor=actor, **body.model_dump())
 
 
 @router.get("/calibration")
@@ -301,6 +332,20 @@ def takeover(prospect_id: str, request: Request):
     service, actor = require_sales_operator(request)
     service.takeover(prospect_id, actor)
     return {"ok": True}
+
+
+@router.get("/prospects/{prospect_id}/recovery")
+@domain_errors
+def recovery_state(prospect_id: UUID, request: Request):
+    service, _ = require_sales_operator(request)
+    return Recovery(service).snapshot(str(prospect_id))
+
+
+@router.post("/prospects/{prospect_id}/recovery")
+@domain_errors
+def recover_preparation(prospect_id: UUID, body: RecoveryChange, request: Request):
+    service, actor = require_sales_operator(request)
+    return Recovery(service).change(str(prospect_id), actor=actor, **body.model_dump())
 
 
 @router.post("/prospects/{prospect_id}/customer")

@@ -23,6 +23,7 @@ def handler(name):
             "sales_propose_email",
             "sales_process_queue",
             "sales_research_parallel",
+            "sales_create_request",
         }:
             return {"error": f"{SANDBOX_DENIAL_PREFIX} Sales writes disabled in benchmarks"}
         if not ctx.tenant_id:
@@ -44,6 +45,15 @@ def handler(name):
             return {"error": "Sales queue execution requires a native service workflow identity"}
         service = Sales(ctx.tenant_id)
         try:
+            if name in {"sales_create_request", "sales_get_request", "sales_get_workspace"}:
+                from robothor.sales.requests import Requests
+
+                requests = Requests(service)
+                if name == "sales_get_workspace":
+                    return await asyncio.to_thread(requests.workspace)
+                if name == "sales_create_request":
+                    return await asyncio.to_thread(requests.create, parsed, "agent:" + ctx.agent_id)
+                return await asyncio.to_thread(requests.get, str(parsed.request_id))
             if name == "sales_process_queue":
                 from robothor.sales.queue import QueueDriver
 
