@@ -168,6 +168,34 @@ operator, reason, revision and before/after values. An uncertain dashboard respo
 requires reloading current limits and reviewing again; the UI never retries a save
 automatically. Existing partial `PATCH /api/sales/settings` clients remain supported.
 
+### Published policies and claims
+
+Open **Sales → Review sales library** to inspect published qualification versions
+by buying case and a published claim library. Review displays the exact weights,
+required criteria, threshold, evidence age, claim text, supporting details and
+publishing operator before selecting the versions. Large catalogs can be paged.
+This screen selects previously published records; publication still uses the human
+`POST /api/sales/policies` and `POST /api/sales/knowledge` endpoints.
+
+`GET /api/sales/library?kind=qualification|knowledge` lists tenant-scoped immutable
+records, ordered by version, with `after` and `limit` pagination. Selection uses
+`POST /api/sales/library/selection` with the complete `policy_versions` map,
+`knowledge_version`, `expected_revision` and a reason. Empty selections deactivate
+that category. Missing published records and mismatched buying cases are refused,
+including through the ordinary settings endpoint. The settings revision prevents
+a stale operator review from replacing a newer selection. Integration switches
+remain unchanged.
+
+Active context matches kind, version and buying case explicitly. Reusing a version
+label across knowledge and qualification does not activate both records. An
+internal `library_revision` increases when the active selection changes; callers
+cannot set it. Draft approvals bind to that revision. Changes cancel pending
+reviews/approvals, invalidate already claimed send authority and queue pauses for
+older campaigns. Restoring an earlier selection does not revive its old approvals.
+Pause jobs target older library revisions, preserving campaigns reviewed under a
+newer selection. Provider pauses are asynchronous and cannot recall a message
+already sent or guarantee interception of an in-flight provider request.
+
 `verification_allowance_units` must be configured from the actual subscription's
 credit economics before paid verification runs. The worker books that complete
 allowance per lookup; provider credits are not assumed to be dollars. A pending

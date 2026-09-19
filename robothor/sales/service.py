@@ -51,6 +51,8 @@ class Sales:
     def configure(self, config, actor, *, expected_revision=None, reason=None):
         """Set explicit switches. Unconfigured instances have no active capabilities."""
         operator(actor)
+        if "library_revision" in config:
+            raise Conflict("Library revision is managed by the sales service")
         if expected_revision is not None:
             if type(expected_revision) is not int or expected_revision < 0:
                 raise ValueError("Nonnegative settings revision required")
@@ -77,6 +79,32 @@ class Sales:
             merged = SalesSettings.model_validate(
                 {**(previous["config"] if previous else {}), **config}
             ).model_dump(mode="json")
+            self._validate_library_selection(config, merged, cur)
+            old = previous["config"] if previous else {}
+            library_changed = any(
+                key in config and old.get(key, default) != merged[key]
+                for key, default in (
+                    ("active_knowledge_version", ""),
+                    ("active_policy_versions", {}),
+                )
+            )
+            if library_changed:
+                merged["library_revision"] = old.get("library_revision", 0) + 1
+                cur.execute(
+                    "UPDATE operation_actions SET status='cancelled' WHERE tenant_id=%s AND kind='sales.email' AND status IN ('review','approved')",
+                    (self.tenant,),
+                )
+                cur.execute(
+                    "SELECT 1 FROM operation_actions WHERE tenant_id=%s AND kind='sales.email' LIMIT 1",
+                    (self.tenant,),
+                )
+                if cur.fetchone():
+                    self.ops.enqueue(
+                        "sales.stop",
+                        str(uuid4()),
+                        {"library_revision_before": merged["library_revision"] - 1},
+                        cur=cur,
+                    )
             cur.execute(
                 "INSERT INTO sales_settings(tenant_id,config,revision) VALUES(%s,%s,1) "
                 "ON CONFLICT(tenant_id) DO UPDATE SET config=EXCLUDED.config,revision=sales_settings.revision+1,updated_at=now()",
@@ -231,6 +259,12 @@ class Sales:
 
     def _publish(self, kind, version, data, actor):
         operator(actor)
+        if (
+            not isinstance(version, str)
+            or not 1 <= len(version) <= 80
+            or version != version.strip()
+        ):
+            raise ValueError("Published version must be a nonempty label of at most 80 characters")
         with self.ops.transaction() as cur:
             cur.execute(
                 "INSERT INTO sales_policies(tenant_id,kind,version,data,approved_by) VALUES(%s,%s,%s,%s,%s) "
@@ -253,6 +287,59 @@ class Sales:
         if not isinstance(data.get("claims"), dict) or not data["claims"]:
             raise ValueError("Approved claim library required")
         self._publish("knowledge", version, data, actor)
+
+    def _validate_library_selection(self, changes, settings, cur):
+        references = []
+        if "active_knowledge_version" in changes and settings["active_knowledge_version"]:
+            references.append(("knowledge", settings["active_knowledge_version"], None))
+        if "active_policy_versions" in changes:
+            references.extend(
+                ("qualification", version, case)
+                for case, version in settings["active_policy_versions"].items()
+            )
+        for kind, version, case in references:
+            cur.execute(
+                "SELECT data FROM sales_policies WHERE tenant_id=%s AND kind=%s AND version=%s",
+                (self.tenant, kind, version),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise Conflict("Published library version required")
+            if kind == "qualification" and row["data"].get("buying_case") != case:
+                raise Conflict("Buying case does not match the published qualification policy")
+
+    def library(self, *, kind, after=None, limit=100):
+        """Page immutable published records; version order gives a stable cursor."""
+        if (
+            kind not in {"knowledge", "qualification"}
+            or type(limit) is not int
+            or not 1 <= limit <= 100
+        ):
+            raise ValueError("Valid library kind and page size required")
+        with self.ops.transaction() as cur:
+            cur.execute(
+                "SELECT kind,version,data,approved_by,approved_at FROM sales_policies "
+                "WHERE tenant_id=%s AND kind=%s AND (%s IS NULL OR version>%s) ORDER BY version LIMIT %s",
+                (self.tenant, kind, after, after, limit + 1),
+            )
+            rows = [dict(row) for row in cur.fetchall()]
+        return {
+            "items": rows[:limit],
+            "next_cursor": rows[limit - 1]["version"] if len(rows) > limit else None,
+        }
+
+    def select_library(
+        self, *, policy_versions, knowledge_version, expected_revision, reason, actor
+    ):
+        self.configure(
+            {
+                "active_policy_versions": policy_versions,
+                "active_knowledge_version": knowledge_version,
+            },
+            actor,
+            expected_revision=expected_revision,
+            reason=reason,
+        )
 
     def qualify(self, prospect_id, policy_version, *, cur=None):
         if cur is None:
@@ -395,20 +482,31 @@ class Sales:
     def context(self, prospect_id):
         with self.ops.transaction() as cur:
             prospect = self.require(prospect_id, cur)
+            cur.execute("SELECT config FROM sales_settings WHERE tenant_id=%s", (self.tenant,))
+            row = cur.fetchone()
+            settings = row["config"] if row else {}
             cur.execute(
                 "SELECT kind,version,data FROM sales_policies WHERE tenant_id=%s", (self.tenant,)
             )
             policies = [dict(r) for r in cur.fetchall()]
-        settings = self.settings()
-        active = {
-            settings.get("active_knowledge_version"),
-            *settings.get("active_policy_versions", {}).values(),
-        }
+        active = settings.get("active_policy_versions", {})
         return {
             "prospect": prospect,
             "contacts": self.contacts(prospect_id),
             "messages": self.messages(prospect_id),
-            "policies": [p for p in policies if p["version"] in active],
+            "policies": [
+                p
+                for p in policies
+                if (
+                    p["kind"] == "knowledge"
+                    and settings.get("active_knowledge_version")
+                    and p["version"] == settings.get("active_knowledge_version")
+                )
+                or (
+                    p["kind"] == "qualification"
+                    and active.get(p["data"].get("buying_case")) == p["version"]
+                )
+            ],
             "outreach": {
                 k: settings.get(k) for k in ("senders", "postal_address", "unsubscribe_url")
             },
@@ -469,6 +567,9 @@ class Sales:
             "conversation_version": p["conversation_version"],
             "outcome_version": p["outcome_version"],
         }
+        cur.execute("SELECT config FROM sales_settings WHERE tenant_id=%s", (self.tenant,))
+        row = cur.fetchone()
+        payload["library_revision"] = (row["config"] if row else {}).get("library_revision", 0)
         return self.ops.propose("sales.email", str(uuid4()), payload, cur=cur)
 
     def validate_send(self, action, *, cur=None):
@@ -505,6 +606,8 @@ class Sales:
         payload = live["payload"]
         if live["approved_hash"] != digest(payload) or digest(payload) != digest(action["payload"]):
             raise Conflict("Approved content changed")
+        if payload.get("library_revision", 0) != settings.library_revision:
+            raise Conflict("Sales knowledge or qualification selection changed")
         p = self.require(payload["prospect_id"], cur)
         if p["owner"] != "agent":
             raise Conflict("Agent ownership required")

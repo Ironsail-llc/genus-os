@@ -67,3 +67,14 @@ it("loads pilot settings only when the operator opens the editor", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Review pilot settings" }));
   expect(await screen.findByLabelText("Monthly spending limit (USD)")).toHaveValue("0");
 });
+
+
+it("loads the published sales library only when its review panel opens", async () => {
+  const fetcher = vi.spyOn(global, "fetch").mockImplementation(async (url) => Response.json(String(url).includes("/library?")
+    ? { items: [], next_cursor: null } : String(url).endsWith("/settings") ? { config: {}, revision: 0 } : data));
+  render(<SalesView visible role="admin" />);
+  await screen.findByText("Exact approved message");
+  expect(fetcher.mock.calls.every(([url]) => !String(url).includes("/library?"))).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Review sales library" }));
+  expect(await screen.findByText("No qualification policies have been published yet.")).toBeVisible();
+});
