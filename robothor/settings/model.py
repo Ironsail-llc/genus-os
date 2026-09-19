@@ -2994,7 +2994,14 @@ class OpsSettings(SettingsGroup):
 
 
 class AutonomySettings(SettingsGroup):
-    """Host paths for the isolated personal browser broker."""
+    """Host paths and secure enrollment for personal automation."""
+
+    dashboard_origin: str = declare(
+        "",
+        "ROBOTHOR_AUTONOMY_DASHBOARD_ORIGIN",
+        "Public HTTPS origin of the authenticated dashboard for secure enrollment links. "
+        "Empty returns a relative account path; never use a merchant-provided destination.",
+    )
 
     restart_units: ClassVar[tuple[str, ...]] = (
         "robothor-autonomy",

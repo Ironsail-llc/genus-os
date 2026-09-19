@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type Resource = { id: string; kind: string; label: string; origin?: string;
   descriptor?: { version?: number; fields?: string[]; source?: string } };
@@ -31,6 +31,20 @@ async function api(path: string, method = "GET", data?: unknown) {
 }
 
 export function PersonalAutomationPanel() {
+  const intakeStarted = useRef(false);
+  const [intake, setIntake] = useState<{ token: string; origin: string | null } | null>(null);
+  const [intakeState, setIntakeState] = useState("loading");
+  useEffect(() => {
+    if (intakeStarted.current) return;
+    intakeStarted.current = true;
+    const token = new URLSearchParams(window.location.hash.slice(1)).get("enroll");
+    if (token === null) { setIntakeState("none"); return; }
+    window.history.replaceState(window.history.state, "", window.location.pathname + window.location.search);
+    api("enrollments/inspect", "POST", { token }).then(result => {
+      if (result.resource_id) { setIntakeState("complete"); setMessage("This information has already been saved."); return; }
+      setKind(result.kind); setIntake({ token, origin: result.origin }); setIntakeState("ready");
+    }).catch(error => { setIntakeState("unavailable"); setMessage(error.message); });
+  }, []);
   const [status, setStatus] = useState<Status | null>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -56,9 +70,10 @@ export function PersonalAutomationPanel() {
   }
 
   async function enroll(form: HTMLFormElement) {
+    if (!["none", "ready"].includes(intakeState)) throw new Error("This enrollment is unavailable.");
     const fields = new FormData(form);
     const label = String(fields.get("label") || "");
-    const origin = String(fields.get("origin") || "") || null;
+    const origin = intake ? intake.origin : String(fields.get("origin") || "") || null;
     const payload: Record<string, string | number | Record<string, string>> = {};
     for (const [key, value] of fields) {
       if (!["label", "origin", "file"].includes(key) && !key.startsWith("answer_") && typeof value === "string" && value) {
@@ -86,15 +101,21 @@ export function PersonalAutomationPanel() {
       });
       Object.assign(payload, { name: file.name, mime_type: file.type || "application/octet-stream", base64: encoded });
     }
-    await api("resources", "POST", { kind, label, origin, payload: JSON.stringify(payload) });
+    const resource = { kind, label, origin, payload: JSON.stringify(payload) };
+    if (intake) {
+      await api("enrollments/complete", "POST", { token: intake.token, resource });
+      setIntake(null); setIntakeState("complete");
+    } else {
+      await api("resources", "POST", resource);
+    }
     form.reset();
   }
 
   const fields: Record<string, [string, string, string][]> = {
-    profile: [["first_name", "First name", "text"], ["last_name", "Last name", "text"],
+    profile: [["legal_name", "Legal name", "text"], ["first_name", "First name", "text"], ["last_name", "Last name", "text"],
       ["email", "Email", "email"], ["phone", "Phone", "tel"], ["date_of_birth", "Date of birth", "date"],
-      ["address_line1", "Street address", "text"], ["city", "City", "text"], ["region", "State / region", "text"],
-      ["postal_code", "Postal code", "text"], ["country", "Country", "text"],
+      ["address_line1", "Street address", "text"], ["address_line2", "Apartment / suite", "text"], ["city", "City", "text"], ["region", "State / region", "text"],
+      ["postal_code", "Postal code", "text"], ["country", "Country", "text"], ["nationality", "Nationality", "text"],
       ["occupation", "Occupation", "text"], ["employer", "Employer", "text"], ["interests", "Interests", "text"]],
     credential: [["username", "Username or email", "text"], ["password", "Password", "password"]],
     payment_card: [["number", "Card number", "password"], ["name", "Name on card", "text"],
@@ -125,7 +146,7 @@ export function PersonalAutomationPanel() {
       <p className="text-sm text-muted-foreground">Saved values are private. Your assistant can use them for authorized tasks.</p>
       <button type="button" className="rounded border px-3 py-2" disabled={busy || !status}
         onClick={() => void act(() => api("profile-from-contact", "POST", {}))}>Use my saved contact details</button>
-      <select aria-label="Information type" className={inputClass} value={kind} onChange={e => setKind(e.target.value)}>
+      <select aria-label="Information type" className={inputClass} value={kind} disabled={intakeState !== "none"} onChange={e => setKind(e.target.value)}>
         <option value="profile">Personal profile</option><option value="credential">Website login</option>
         <option value="payment_card">Payment card</option><option value="document">Photo or document</option>
         <option value="totp">Website authenticator</option>
@@ -135,7 +156,7 @@ export function PersonalAutomationPanel() {
       }}>
         <label className="block">Label<input className={inputClass} name="label" required maxLength={100} /></label>
         {kind === "credential" || kind === "totp" ?
-          <label className="block">Website<input className={inputClass} name="origin" type="url" placeholder="https://example.com" required /></label> : null}
+          <label className="block">Website<input className={inputClass} name="origin" type="url" placeholder="https://example.com" defaultValue={intake?.origin || ""} readOnly={!!intake} required /></label> : null}
         {fields[kind].map(([name, title, type]) => <label className="block" key={name}>{title}
           <input className={inputClass} name={name} type={type} required={kind !== "profile"} autoComplete="off" />
         </label>)}
@@ -150,7 +171,7 @@ export function PersonalAutomationPanel() {
           <button type="button" disabled={answerCount >= 80} onClick={() => setAnswerCount(answerCount + 1)}>Add another answer</button>
         </fieldset>}
         {kind === "payment_card" && <p className="text-sm">A bank or merchant may request verification when the card is used.</p>}
-        <button className="rounded bg-primary px-4 py-2 text-primary-foreground" disabled={busy || !status}>Save information</button>
+        <button className="rounded bg-primary px-4 py-2 text-primary-foreground" disabled={busy || !status || !["none", "ready"].includes(intakeState)}>Save information</button>
       </form>
       {status?.resources.some(resource => resource.descriptor?.version !== 1) && <button type="button"
         className="rounded border px-3 py-2" disabled={busy}

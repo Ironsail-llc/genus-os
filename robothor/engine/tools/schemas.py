@@ -60,7 +60,10 @@ _BROWSER_DESCRIPTION = (
     "kind=reconcile checks a receipt-specific confirmation using plan url/success_selector/success_text/session_resource_id without submitting; kind=operation checks progress; kind=cancel "
     "cancels only before submission. Uncertain submissions require reconciliation, never blind retry. "
     "Use managed=true only when configured and local preflight fails. Never put card or credential "
-    "values in arguments. Setup is at /account/autonomy."
+    "values in arguments. Setup is at /account/autonomy. "
+    "For missing private inputs use kind=enrollment_link, enrollment={kind:profile|credential|document|totp|payment_card, "
+    "origin:HTTPS website origin when relevant}. Credential and totp require origin. "
+    "Return setup_path to the user; it expires in 15 minutes and requires their linked personal account."
 )
 
 _WEB_READ_SCHEMAS = {

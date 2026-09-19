@@ -972,3 +972,10 @@ Recurring `browser(action="autonomy")` proposals require `recurrence` dates and
 intervals, with corresponding visible-term selectors in the execution plan.
 `status.spending` reports calendar-month projections, including future free-trial
 renewals. See [Personal autonomous execution](AUTONOMOUS_EXECUTION.md).
+
+For a missing private input during a delegated browser task, request
+`browser(action="autonomy", request={"kind":"enrollment_link", "enrollment":{"kind":"credential", "origin":"https://example.com"}})`.
+Return its `setup_url` (or relative `setup_path`) to the user. The authenticated,
+owner-bound link expires in 15 minutes; passwords, documents and card values
+belong on that enrollment page and must not be placed in tool arguments.
+See [private input enrollment](AUTONOMOUS_EXECUTION.md#private-input-enrollment).

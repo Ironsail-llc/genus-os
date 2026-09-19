@@ -1729,3 +1729,9 @@ bridge controllers pass resource references and signed identities; secure human
 code entry sends its transient code only through this channel. Controller
 restarts preserve pages, while broker loss preserves reservations for
 reconciliation. See the workflow protocol and lifetime limits in the same guide.
+
+Personal automation migration 131 adds `autonomy_enrollments`, scoped by tenant
+and canonical person owner. It stores only a token hash, resource kind, website
+origin, expiration and the completed vault resource reference. Resource creation
+and consumption of the enrollment intent commit atomically. See
+[private input enrollment](AUTONOMOUS_EXECUTION.md#private-input-enrollment).

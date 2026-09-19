@@ -43,7 +43,10 @@ async function proxy(
 
     const contentType = res.headers.get("content-type") || "";
     if (contentType.includes("json")) {
-      return NextResponse.json(await res.json(), { status: res.status });
+      return NextResponse.json(await res.json(), {
+        status: res.status,
+        headers: { "Cache-Control": res.headers.get("cache-control") || "no-store" },
+      });
     }
 
     // A non-JSON reply is rebuilt rather than streamed, so the headers that

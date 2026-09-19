@@ -468,8 +468,10 @@ class TestALateAlbumMember:
         key = ("100200300", "GX")
         assert key not in bot._album_buffers, "the flush should hold its own copy by now"
 
-        # The late member arrives while the first flush is still routing.
-        await bot.handle_file(message(photo=photo(uid="D99"), media_group_id="GX"))
+        # The late member has passed intake while the first flush is still routing.
+        await bot.handle_file(
+            message(photo=photo(uid="D99"), media_group_id="GX"), _album_checked=True
+        )
         live_before = set(bot._album_tasks[key])
         assert len(live_before) == 2, "both flushes are in flight; stop() must reach both"
 
@@ -512,7 +514,9 @@ class TestALateAlbumMember:
 
         await bot.handle_file(message(photo=photo(uid="S01"), media_group_id="GS"))
         await asyncio.sleep(0.15)  # the first flush is now blocked in the route
-        await bot.handle_file(message(photo=photo(uid="S99"), media_group_id="GS"))
+        await bot.handle_file(
+            message(photo=photo(uid="S99"), media_group_id="GS"), _album_checked=True
+        )
 
         key = ("100200300", "GS")
         live = set(bot._album_tasks[key])
