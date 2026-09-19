@@ -17,6 +17,8 @@ from copy import deepcopy
 from decimal import ROUND_CEILING, Decimal, InvalidOperation
 from typing import Any
 
+from robothor.engine.request_routes import RequestRoutes
+
 
 class RequestBudgetError(RuntimeError):
     """The request cannot be safely admitted within this run's allowance."""
@@ -69,6 +71,7 @@ class RequestBudget:
             raise ValueError("Nonnegative integer micro-USD required")
         self.limit_units = limit_units
         self.quote = quote or OpenRouterQuotes()
+        self.routes = RequestRoutes()
         self._charged = 0
         self._closed = False
         self._lock = threading.Lock()
@@ -124,19 +127,25 @@ async def bounded_completion(call, **kwargs):
     budget = active_budget()
     if budget is None:
         return await call(**kwargs)
-    units, bounded = await budget.quote(kwargs)
+    units, bounded = await budget.quote(budget.routes.for_quote(kwargs))
     budget.reserve(units)
     # Failures/cancellation leave the reservation fully charged: the request
     # could have reached the provider even if no response reached this process.
-    response = await call(**bounded)
+    route = budget.routes.identity(bounded)
+    try:
+        response = await call(**bounded)
+    except BaseException as exc:
+        budget.routes.failed(route, exc)
+        raise
     if bounded.get("stream"):
-        return _BudgetStream(response, budget, units)
+        return _BudgetStream(response, budget, units, route)
     budget.settle(units, _cost_units(response))
     return response
 
 
 class _BudgetStream:
-    def __init__(self, source, budget, units):
+    def __init__(self, source, budget, units, route=None):
+        self.route = route
         self.source = source
         self.iterator = source.__aiter__()
         self.budget = budget
@@ -159,7 +168,8 @@ class _BudgetStream:
             finally:
                 await self._close_source()
             raise
-        except BaseException:
+        except BaseException as exc:
+            self.budget.routes.failed(self.route, exc)
             self.done = True
             await self._close_source()
             raise
