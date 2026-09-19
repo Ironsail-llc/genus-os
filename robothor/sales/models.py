@@ -244,6 +244,7 @@ class SalesSettings(Contract):
     business_sources: list[BusinessSource] = Field(default_factory=list, max_length=10)
     review_backlog_limit: int = Field(default=100, ge=1, le=10000, strict=True)
     discovery_daily_limit: int = Field(default=20, ge=0, le=1000, strict=True)
+    discovery_mode: Literal["scheduled", "requests"] = "scheduled"
     discovery_segments: list[DiscoverySegment] = Field(default_factory=list, max_length=50)
     discovery_start_hour: int = Field(default=2, ge=0, le=23, strict=True)
     discovery_end_hour: int = Field(default=7, ge=1, le=24, strict=True)

@@ -131,6 +131,14 @@ class Sales:
     def settings(self):
         return self.settings_snapshot()["config"]
 
+    def require_request_open(self, prospect_id, *, cur=None):
+        from robothor.sales.requests import Requests
+
+        if cur is None:
+            with self.ops.transaction() as cursor:
+                return self.require_request_open(prospect_id, cur=cursor)
+        return Requests(self).guard({"prospect_id": str(prospect_id)}, cur=cur)
+
     def settings_snapshot(self):
         """Read values and their review revision from the same database row."""
         with self.ops.transaction() as cur:
@@ -140,14 +148,14 @@ class Sales:
             row = cur.fetchone()
             return dict(row) if row else {"config": {}, "revision": 0}
 
-    def discover(self, name, website, source_url, *, cur=None):
+    def discover(self, name, website, source_url, *, cur=None, request_id=None):
         """Resolve a CRM company and enqueue research once for this domain."""
         if not name.strip() or len(name) > 300:
             raise ValueError("Company name required")
         domain = domain_of(website)
         if cur is None:
             with self.ops.transaction() as cursor:
-                return self.discover(name, website, source_url, cur=cursor)
+                return self.discover(name, website, source_url, cur=cursor, request_id=request_id)
         cur.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (self.tenant + ":discovery",)
         )
@@ -202,6 +210,10 @@ class Sales:
             (prospect, self.tenant, company, domain, name, source_url),
         )
         result = dict(cur.fetchone())
+        if request_id:
+            from robothor.sales.requests import Requests
+
+            Requests(self).attach(request_id, prospect, cur=cur)
         self.ops.enqueue(
             "sales.research", prospect + ":0", {"prospect_id": prospect, "version": 0}, cur=cur
         )
@@ -235,6 +247,9 @@ class Sales:
                     prospect_id, dossier, expected_version=expected_version, cur=cursor
                 )
         prospect = self.require(prospect_id, cur)
+        request = self.require_request_open(prospect_id, cur=cur)
+        if request and dossier.buying_case != request["config"]["buying_case"]:
+            raise Conflict("Research dossier must use its requested buying case")
         if prospect["version"] != expected_version:
             raise Conflict("Dossier changed during research")
         cur.execute(
@@ -422,6 +437,7 @@ class Sales:
         )
         settings_row = cur.fetchone()
         settings = SalesSettings.model_validate(settings_row["config"] if settings_row else {})
+        self.require_request_open(prospect_id, cur=cur)
         prospect = self.require(prospect_id, cur)
         cur.execute(
             "SELECT data FROM sales_policies WHERE tenant_id=%s AND kind='qualification' AND version=%s",
@@ -584,6 +600,7 @@ class Sales:
         p = self.require(prospect_id, cur)
         if (p["qualification"] or {}).get("decision") != "qualified":
             raise Conflict("Contact enrichment requires qualification")
+        self.require_request_open(prospect_id, cur=cur)
         self.require_assessment(prospect_id, cur=cur)
         cur.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
@@ -652,11 +669,18 @@ class Sales:
                 "SELECT kind,version,data FROM sales_policies WHERE tenant_id=%s", (self.tenant,)
             )
             policies = [dict(r) for r in cur.fetchall()]
+            cur.execute(
+                "SELECT r.config FROM sales_request_members m JOIN sales_requests r ON r.tenant_id=m.tenant_id AND r.id=m.request_id WHERE m.tenant_id=%s AND m.prospect_id=%s",
+                (self.tenant, prospect_id),
+            )
+            request = cur.fetchone()
+            brief = request["config"] if request else None
         active = settings.get("active_policy_versions", {})
         return {
             "prospect": prospect,
             "contacts": self.contacts(prospect_id),
             "messages": self.messages(prospect_id),
+            "research_request": brief,
             "policies": [
                 p
                 for p in policies
@@ -668,6 +692,7 @@ class Sales:
                 or (
                     p["kind"] == "qualification"
                     and active.get(p["data"].get("buying_case")) == p["version"]
+                    and (brief is None or p["data"].get("buying_case") == brief["buying_case"])
                 )
             ],
             "outreach": {
@@ -688,6 +713,7 @@ class Sales:
             with self.ops.transaction() as cursor:
                 return self.draft(prospect_id, data, cur=cursor)
         draft = Draft.model_validate(data)
+        self.require_request_open(prospect_id, cur=cur)
         followup_basis = None
         if draft.purpose == "followup":
             from robothor.sales.followups import Followups
@@ -785,6 +811,7 @@ class Sales:
         if payload.get("library_revision", 0) != settings.library_revision:
             raise Conflict("Sales knowledge or qualification selection changed")
         p = self.require(payload["prospect_id"], cur)
+        self.require_request_open(p["id"], cur=cur)
         if p["owner"] != "agent":
             raise Conflict("Agent ownership required")
         if p["version"] != payload["dossier_version"]:
@@ -1009,7 +1036,7 @@ class Sales:
         with self.ops.transaction() as cur:
             self.require(prospect_id, cur)
             cur.execute(
-                "UPDATE sales_prospects SET owner=%s WHERE tenant_id=%s AND id=%s",
+                "UPDATE sales_prospects SET owner=%s,updated_at=now() WHERE tenant_id=%s AND id=%s",
                 (actor, self.tenant, prospect_id),
             )
             cur.execute(

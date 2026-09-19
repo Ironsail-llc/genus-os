@@ -183,6 +183,9 @@ class ResearchWorker:
             current = SalesSettings.model_validate(row["config"] if row else {})
             if current != settings:
                 raise Conflict("Sales settings changed before spending admission")
+            from robothor.sales.requests import Requests
+
+            Requests(self.sales).guard(job["payload"], cur=cur)
             cur.execute(
                 "SELECT id FROM operation_jobs WHERE tenant_id=%s AND id=%s AND lease_token=%s "
                 "AND status='running' AND lease_until>clock_timestamp() AND deadline>clock_timestamp() FOR UPDATE",
@@ -206,6 +209,8 @@ class ResearchWorker:
             )
 
     async def _generate(self, job, settings, stage, schema, context, instruction):
+        if job["payload"].get("prospect_id") and stage not in {"conversation", "activation"}:
+            await asyncio.to_thread(self.sales.require_request_open, job["payload"]["prospect_id"])
         cached = job.get("result")
         if cached:
             if cached.get("checkpoint_version") != 1 or cached.get("stage") != stage:
@@ -237,6 +242,7 @@ class ResearchWorker:
                     message=json.dumps(
                         {
                             "task": instruction,
+                            "operator_brief": job["payload"].get("operator_brief"),
                             "untrusted_business_data": context,
                             "output_schema": schema.model_json_schema(),
                         },
@@ -379,8 +385,10 @@ class DraftWorker(ResearchWorker):
         settings = SalesSettings.model_validate(await asyncio.to_thread(self.sales.settings))
         if not settings.research_enabled:
             return False
+        from robothor.sales.drafting import InitialDraftPlanner
         from robothor.sales.followups import Followups
 
+        await asyncio.to_thread(InitialDraftPlanner(self.sales).plan)
         await asyncio.to_thread(Followups(self.sales).plan)
         job = await asyncio.to_thread(self.sales.ops.claim, "sales.draft", lease_seconds=360)
         if not job:
