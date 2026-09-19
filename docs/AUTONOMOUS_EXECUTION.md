@@ -389,3 +389,9 @@ history or the runner through another path. This is a backstop, not secure captu
 for other chat surfaces, nor automatic detection of arbitrary unlabeled secrets.
 The dashboard enrollment form includes legal name, second address line and
 nationality as well as the existing profile fields; missing values are not guessed.
+
+Enrollment deployments must also apply migration 132 through the canonical migrator.
+It adds the established tenant-isolation database backstop to enrollment intents
+and any other tenant table missing it, without changing existing policies or
+the checksum of an already-applied migration 131. Scoped database reads and
+writes are covered by a non-superuser PostgreSQL regression test.
