@@ -1931,6 +1931,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Bounded native search can fund existing Brave API requests at the current published Search rate, with per-attempt reservations and auditable estimates; unavailable pricing or funding falls back without an unfunded API call.
 - Scouts refine degraded search results with bounded distinct queries before returning a candidate batch or empty result.
 - Native scouts must search before answering, return a validated candidate batch and retain observed source URLs; plain search arguments and invented domains cannot create leads.
 - Planning and verification honor per-agent provider routing before funded requests; qualification timeouts retain their cost-reconciliation diagnostic instead of being labeled invalid assessments.

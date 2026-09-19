@@ -764,8 +764,16 @@ or spending through other applications. Production reconciliation is still a
 rollout requirement. See [provider usage accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting).
 
 The scope follows async helper work and closes when the run returns, preventing
-detached children from spending later. Paid Brave and Perplexity search have no
-pricing policy in this envelope yet; bounded research uses self-hosted search.
+detached children from spending later. Bounded native web search can use an
+existing Brave key. It reads the current standard Search rate from
+[Brave's public pricing](https://brave.com/search/api/), caches the quote for at
+most 60 seconds and reserves each HTTP attempt before dispatch, including retries.
+Tool receipts retain the rate document hash, retrieval time, response status and
+micro-USD estimate. Credits are not deducted; failed or unknown attempts retain
+their reservation. These estimates are not verified invoices or custom enterprise
+rates. Missing/ambiguous pricing or insufficient allowance skips the paid request
+and names the reason alongside self-hosted fallback results. Perplexity remains
+unpriced in this envelope. Explicit self-hosted searches never select Brave.
 Other engine runs retain their existing behavior unless explicitly placed inside
 a funded request-budget scope. Native scheduling remains inactive pending the
 remaining deployment gates.
