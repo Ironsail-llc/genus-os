@@ -100,7 +100,7 @@ class NativeStageRunner:
             research_scope(fanout),
             tool_observation_scope(
                 fanout.sources.observe if fanout is not None else None,
-                names={"web_fetch"} if fanout is not None else set(),
+                names={"web_fetch", "web_render"} if fanout is not None else set(),
             ),
             required_tool_scope(
                 "sales_research_parallel" if fanout is not None else None,

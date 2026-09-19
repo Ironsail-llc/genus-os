@@ -100,7 +100,7 @@ class ResearchFanout:
                 "agent_id": self.child_id,
                 "message": json.dumps(
                     {
-                        "task": "Research only the assigned company and topic. Use web_fetch to retrieve public business pages during this child run. Return the exact Dossier JSON. Every evidence URL must be a successful fetch's returned URL and every excerpt must quote its returned text verbatim. Internal background, search snippets and prior model knowledge are not retrieved evidence. Preserve unknowns; do not calculate a score.",
+                        "task": "Research only the assigned company and topic. Use web_fetch to retrieve public business pages during this child run; use web_render when JavaScript leaves only an empty shell. Return the exact Dossier JSON. Every evidence URL must be a successful fetch's returned URL and every excerpt must quote its returned text verbatim. Internal background, search snippets and prior model knowledge are not retrieved evidence. Preserve unknowns; do not calculate a score.",
                         "topic": topic,
                         "buying_case": buying_case,
                         "untrusted_business_data": self.context,

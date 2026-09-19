@@ -8,6 +8,39 @@ from robothor.engine.prompts import EVIDENCE_OUTRANKS_NAMES
 from robothor.engine.vision_fallback import PROVENANCE_NOTE
 from robothor.sales.tool_schemas import SALES_SCHEMAS
 
+_WEB_READ_SCHEMAS = {
+    "web_fetch": {
+        "type": "function",
+        "function": {
+            "name": "web_fetch",
+            "description": "Fetch a web page and return its content as markdown text.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "URL to fetch",
+                    },
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    "web_render": {
+        "type": "function",
+        "function": {
+            "name": "web_render",
+            "description": "Read a public JavaScript-rendered page when web_fetch returns an empty shell. Returns visible text, title, links and retrieval limits. Uses an isolated browser with vetted GET-only resource requests; no logins, clicks, forms, or arbitrary scripts.",
+            "parameters": {
+                "type": "object",
+                "properties": {"url": {"type": "string", "description": "Public HTTP(S) page URL"}},
+                "required": ["url"],
+                "additionalProperties": False,
+            },
+        },
+    },
+}
+
 # Long descriptions live out here: get_engine_schemas is already one of the
 # engine's largest functions and the size ratchet only lets it shrink.
 _WEB_SEARCH_DESCRIPTION = (
@@ -783,23 +816,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             },
         },
     }
-    schemas["web_fetch"] = {
-        "type": "function",
-        "function": {
-            "name": "web_fetch",
-            "description": "Fetch a web page and return its content as markdown text.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "URL to fetch",
-                    },
-                },
-                "required": ["url"],
-            },
-        },
-    }
+    schemas.update(_WEB_READ_SCHEMAS)
     schemas["web_search"] = {
         "type": "function",
         "function": {

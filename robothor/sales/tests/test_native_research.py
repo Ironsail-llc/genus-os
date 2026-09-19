@@ -15,11 +15,18 @@ from robothor.templates.tests.test_fleet_release import spec
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "ignore_requirement,citation_fault",
-    [(False, None), (True, None), (False, "no_fetch"), (False, "excerpt"), (False, "url")],
+    "ignore_requirement,citation_fault,fetch_tool",
+    [
+        (False, None, "web_fetch"),
+        (True, None, "web_fetch"),
+        (False, "no_fetch", "web_fetch"),
+        (False, "excerpt", "web_fetch"),
+        (False, "url", "web_fetch"),
+        (False, None, "web_render"),
+    ],
 )
 async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_children(
-    sales, source, tmp_path, monkeypatch, ignore_requirement, citation_fault
+    sales, source, tmp_path, monkeypatch, ignore_requirement, citation_fault, fetch_tool
 ):
     from litellm import ModelResponse
 
@@ -29,7 +36,7 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
     from robothor.engine.task_registry import get_task_registry
     from robothor.engine.tools import dispatch
     from robothor.engine.tools.constants import GOAL_TOOLS
-    from robothor.engine.tools.handlers import spawn, web
+    from robothor.engine.tools.handlers import spawn, web, web_render
     from robothor.engine.tools.registry import ToolRegistry
     from robothor.sales.runtime import NativeStageRunner
     from robothor.sales.tests.test_research_fanout import TOPICS, fragment
@@ -41,6 +48,9 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
             (
                 Path(__file__).parents[3] / "crm/migrations/132_sales_research_delegation.sql"
             ).read_text()
+        )
+        cur.execute(
+            (Path(__file__).parents[3] / "crm/migrations/134_web_render_permission.sql").read_text()
         )
         conn.commit()
     parent_path = source / "docs/agents/ticket-router.yaml"
@@ -73,7 +83,7 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
         id="research-worker",
         name="Research worker",
         role="sales_agent",
-        tools_allowed=["web_fetch"],
+        tools_allowed=[fetch_tool],
     )
     child["v2"] = {"can_spawn_agents": False, "max_cost_usd": 1, "hard_budget": True}
     parent_path.write_text(yaml.safe_dump(parent))
@@ -124,7 +134,7 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
                     "cost": 0.001,
                 },
             )
-        assert names in ({"sales_research_parallel"}, {"web_fetch"})
+        assert names in ({"sales_research_parallel"}, {fetch_tool})
         requests = []
         for message in kwargs["messages"]:
             if message.get("role") == "user" and isinstance(message.get("content"), str):
@@ -158,7 +168,7 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
             assert kwargs["tool_choice"] == "auto"
             topic = request["topic"]
             if tool_result is None and citation_fault != "no_fetch":
-                tool = ("web_fetch", {"url": "https://clinic.example.com/" + topic})
+                tool = (fetch_tool, {"url": "https://clinic.example.com/" + topic})
             elif tool_result is not None:
                 assert "Public business information" in tool_result["content"]
             part = fragment(topic)
@@ -187,7 +197,9 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
             },
         )
 
-    monkeypatch.setitem(web.HANDLERS, "web_fetch", fetch)
+    monkeypatch.setitem(
+        web.HANDLERS if fetch_tool == "web_fetch" else web_render.HANDLERS, fetch_tool, fetch
+    )
     monkeypatch.setattr("robothor.engine.request_budget.OpenRouterQuotes", lambda: quote)
     monkeypatch.setattr("litellm.acompletion", provider)
     engine = AgentRunner(

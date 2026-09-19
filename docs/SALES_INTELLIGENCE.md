@@ -601,7 +601,7 @@ and final job completion. An incomplete bundle is not qualified; completed whole
 stage checkpoints can be reused after a domain-commit failure.
 
 Native research also requires retrieval evidence from each child. A scoped engine
-observer captures successful `web_fetch` results after the permission gate and
+observer captures successful `web_fetch` and `web_render` results after the permission gate and
 native handler, before verification annotations. It does not treat search snippets,
 model output, another child's fetches, or cached-repeat responses as new sources.
 Each citation must use the fetch's returned URL and quote its text verbatim
@@ -622,7 +622,11 @@ agent output remains diagnostic material, not accepted sales evidence.
 Retrieval matching proves that quoted text was retrieved, not that a model's
 interpretation, summary, or criterion assignment is correct. Human qualification
 review is still required. JavaScript-only pages may return an unusable shell;
-that does not authorize invented quotations or a browser-permission bypass.
+workers can use the separately permissioned `web_render` reader after migration
+134. Its sandboxed GET-only retrieval has the same citation checks and bounded
+source retention. See [rendered public reads](TOOLS.md#reading-javascript-pages)
+for installation and limits. A failed renderer leaves the facts unresolved;
+it does not authorize invented quotations or a browser-permission bypass.
 
 Migration 133 adds immutable, tenant-scoped `operation_fragments`. Native research
 saves its selected buying case before spawning, then checkpoints each validated

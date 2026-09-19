@@ -714,6 +714,36 @@ the world as it was *before* you acted. A write your snippet made itself is
 answered by any later read of the same host — list the inbox, not the send
 endpoint.
 
+### Reading JavaScript pages
+
+`web_render(url="https://example.com/")` returns a public page's visible text,
+title and links when `web_fetch` sees only an HTML shell. Its sole argument is the
+URL. It creates a fresh sandboxed Chromium process and temporary profile; there
+are no login, click, form, file, or arbitrary-script arguments. It does not reuse
+an operator's browser session. Every permitted resource is fetched through the
+native vetted-IP transport, including redirect hops, using GET without page-supplied
+cookies or authorization headers. Non-GET requests, WebSockets, service workers,
+popups and frame navigation are blocked. Browser connections outside this route
+go to a temporary rejecting proxy.
+
+Each call has a 35-second deadline, 40 request attempts, four simultaneous fetches,
+a 4 MiB resource limit and a 12 MiB decoded-body limit. It returns at most 8,000
+characters and 50 links. `blocked_resources` indicates incomplete resource
+coverage; the resulting text is evidence of the visible page, not a guarantee of
+complete site coverage. Missing content remains unknown.
+
+Install the `browser` Python extra and the Playwright Chromium binary in the engine
+environment (`python -m playwright install chromium`). The OS must support Chromium
+sandboxing. On hosts that restrict unprivileged user namespaces, an operator can
+configure a trusted installed setuid sandbox helper with
+`ROBOTHOR_WEB_RENDER_SANDBOX_HELPER` before starting the engine. A sandbox launch
+failure returns an error; the tool never retries with sandboxing disabled.
+
+Add `web_render` explicitly to an agent's tools and role permissions. Migration 134
+grants it to `sales_research_agent`; it does not grant the interactive `browser`
+tool. Native sales research checks citations against its returned text and records
+the retrieval time, just as it does for `web_fetch`.
+
 ### Everything else
 
 The full registry is large and changes with the release; `tool_search` over the
@@ -722,7 +752,7 @@ agent's own allow-set is the authoritative answer. The families:
 | Family | Examples |
 |---|---|
 | Files and shell | `read_file`, `write_file`, `list_directory`, `exec`, [`execute_code`](#execute_code-calling-tools-from-inside-python) |
-| Web | `web_fetch`, `web_search`, `browser` |
+| Web | `web_fetch`, `web_render`, `web_search`, `browser` |
 | Memory | `search_memory`, `memory_block_read`, `memory_block_write`, `store_memory` |
 | CRM | `search_records`, `get_person`, `create_task`, `list_my_tasks`, `resolve_task` |
 | Notifications | `get_inbox`, `ack_notification`, `send_notification` |

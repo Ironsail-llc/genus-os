@@ -28,9 +28,10 @@ def capture(*, ctx=None, result=None, tool="web_fetch"):
     return sources
 
 
-def test_citations_are_bound_to_actual_source_and_engine_time_with_recoverable_receipt():
+@pytest.mark.parametrize("tool", ["web_fetch", "web_render"])
+def test_citations_are_bound_to_actual_source_and_engine_time_with_recoverable_receipt(tool):
     before = datetime.now(UTC)
-    sources = capture()
+    sources = capture(tool=tool)
     dossier, receipt = sources.attest("child", fragment("services"))
     assert before <= dossier.evidence[0].retrieved_at <= datetime.now(UTC)
     assert dossier.evidence[0].retrieved_at != fragment("services").evidence[0].retrieved_at

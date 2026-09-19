@@ -75,6 +75,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+browser = [
+    "playwright>=1.58,<2",
+]
 api = [
     # This floor also excludes the malicious FastAPI 0.136.3 release and pulls
     # the patched Starlette 1.3 line.
@@ -139,7 +142,7 @@ dev = [
     "types-PyYAML>=6.0",
 ]
 all = [
-    "genusos[api,vision,rlm,tui,channels,federation,mcp,dev]",
+    "genusos[api,vision,rlm,tui,channels,federation,mcp,browser,dev]",
 ]
 
 [project.scripts]
