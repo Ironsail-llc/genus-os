@@ -232,6 +232,8 @@ async def _handle_spawn_agent(
     message = args.get("message", "")
     if not child_agent_id or not message:
         return {"error": "agent_id and message are required"}
+    if spawn_ctx.allowed_agents is not None and child_agent_id not in spawn_ctx.allowed_agents:
+        return {"error": "Child agent is outside the inherited spawn_allowed_agents allowlist"}
 
     parent_task_id = args.get("parent_task_id")
     if parent_task_id:
@@ -264,6 +266,15 @@ async def _handle_spawn_agent(
     except ValueError as exc:
         return {"error": str(exc)}
 
+    # Every generation may narrow the ancestor's target set, never expand it.
+    child_targets = frozenset(child_config.spawn_allowed_agents) or None
+    if spawn_ctx.allowed_agents is not None:
+        child_targets = (
+            spawn_ctx.allowed_agents
+            if child_targets is None
+            else spawn_ctx.allowed_agents & child_targets
+        )
+
     # Build child SpawnContext
     child_spawn_ctx = SpawnContext(
         parent_run_id=spawn_ctx.parent_run_id,
@@ -272,6 +283,7 @@ async def _handle_spawn_agent(
         nesting_depth=child_depth,
         max_nesting_depth=spawn_ctx.max_nesting_depth,
         max_spawn_batch=spawn_ctx.max_spawn_batch,
+        allowed_agents=child_targets,
         remaining_token_budget=spawn_ctx.remaining_token_budget,
         remaining_cost_budget_usd=spawn_ctx.remaining_cost_budget_usd,
         parent_trace_id=spawn_ctx.parent_trace_id,

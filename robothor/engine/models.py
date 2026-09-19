@@ -391,6 +391,7 @@ class AgentConfig:
     # ── v2 enhancements (all default off for backward compat) ──
     # Sub-agent spawning
     can_spawn_agents: bool = False
+    spawn_allowed_agents: list[str] = field(default_factory=list)
     #: Tell the agent what files are in its workspace during warmup.
     #: Off by default — an operator's workspace listing is neither small
     #: nor useful, so this is opted into per agent.
@@ -654,6 +655,8 @@ class SpawnContext:
     user_role: str = ""
     max_nesting_depth: int = 2  # absolute cap: 3
     max_spawn_batch: int = 0  # 0 = use engine default
+    # None is unrestricted; an empty set denies every descendant target.
+    allowed_agents: frozenset[str] | None = None
     remaining_token_budget: int = 0
     remaining_cost_budget_usd: float = 0.0
     # Contact 360 linkage — propagates from parent run to all spawned children.

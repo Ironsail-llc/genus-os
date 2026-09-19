@@ -482,6 +482,10 @@ optional:
       type: boolean
       default: false
       description: Allow this agent to spawn other agents as sub-tasks mid-run
+    spawn_allowed_agents:
+      type: list[string]
+      default: []
+      description: Allowed target IDs for this spawn tree. Empty adds no restriction; ancestor restrictions always apply.
     max_nesting_depth:
       type: integer
       default: 2
