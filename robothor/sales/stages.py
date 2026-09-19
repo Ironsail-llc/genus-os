@@ -115,6 +115,7 @@ class ContactWorker(StructuredWorker):
         context = await super().context(job)
         if (context["prospect"].get("qualification") or {}).get("decision") != "qualified":
             raise Conflict("Contact research requires qualification")
+        await asyncio.to_thread(self.sales.require_assessment, job["payload"]["prospect_id"])
         return context
 
     def commit(self, job, context, output, run_id):

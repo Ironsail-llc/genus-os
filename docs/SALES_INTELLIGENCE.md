@@ -5,11 +5,35 @@ review exact outreach drafts, pause integration stages, stop outreach to a
 contact, and take over a conversation. Agents can research and propose work;
 they cannot approve messages or select another tenant.
 
-Structured workers cover discovery, research, deterministic qualification,
+Structured workers cover discovery, research, independent evidence assessment and deterministic qualification,
 contact research, provider verification, initial drafting, inbound conversation
 classification and activation guidance. Discovery admits at most 20 new domains
 per configured local day by default and stops at the review backlog limit.
 Candidates already known to Genus do not consume another admission.
+
+When `agents.qualify` is configured, qualification runs that native agent before
+calculating a score. It receives the published policy definitions and captured
+passages without the researcher's boolean labels or earlier scores. Its strict
+`QualificationAssessment` contract covers every policy criterion with a
+supported/disproved/unknown status, source IDs and explanation. Only code
+calculates points. Unknown remains distinct from explicit contrary evidence;
+expired, future or stale passages cannot earn points. The original dossier is
+preserved alongside the assessment and run receipt, and Helm displays both.
+Frozen cohort reviews reveal model assessment reasoning only after the original
+human assessment, preserving the existing blind-review boundary.
+
+Assessment work uses the existing request budget, bounded correction attempts
+and durable job checkpoint. Commit checks the current lease, dossier content and
+version, active policy, agent and release against the stored checkpoint. Restarts
+can reuse valid paid output. Changed inputs hold the work for fresh research;
+they cannot silently rescore from old researcher labels. Configured fleets also
+require a current assessment before contact enrichment, verification, human
+acceptance, promotion, drafting or delivery. Existing unassessed scores must be
+reassessed after an upgrade; they are not grandfathered. Instances without a
+qualifier binding retain the existing deterministic evidence evaluation.
+
+These checks establish provenance and workflow correctness, not semantic model
+accuracy. Representative evaluation and the human-reviewed pilot remain required.
 
 **Implementation status:** the domain, review API, view, provider adapters and
 explicitly constructed workers are available as a foundation. Importing the
