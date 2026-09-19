@@ -285,6 +285,8 @@ Admission is atomic across concurrent spawns. Failed, deduplicated, and cancelle
 attempts keep their slots, so retrying cannot replenish the allowance. Invalid
 targets or configurations are rejected before admission. This complements the
 per-batch, nesting-depth, concurrency, and funded request-budget limits.
+Automatic error-recovery helpers use the same admission path: they cannot load
+an unapproved helper from the live workspace or bypass an exhausted allowance.
 
 ### Pattern D: Cron Safety Net
 
