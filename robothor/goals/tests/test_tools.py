@@ -58,3 +58,32 @@ async def test_delegated_context_cannot_mutate_goal():
         assert "delegated run" in result["error"]
     finally:
         binding.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_adapter_tools_obey_goal_admission(db):  # noqa: F811
+    from unittest.mock import AsyncMock, patch
+
+    from robothor.engine.tools.dispatch import _execute_tool
+
+    g = store.create(
+        db, CreateGoal(objective="Deliver report", success_criteria=["Delivered"]), "operator"
+    )
+    g, attempt = store.claim(db)
+    store.update(db, g["id"], GoalUpdate(action="pause", version=g["version"]), "operator")
+    session = SimpleNamespace(call_tool=AsyncMock(return_value={"ok": True}))
+    pool = SimpleNamespace(get_session=AsyncMock(return_value=session))
+    token = binding.set(Binding(db, g["id"], attempt, run_id="root"))
+    try:
+        with (
+            patch("robothor.engine.permissions.check_tool_permission", return_value=None),
+            patch("robothor.engine.tools.get_registry") as registry,
+            patch("robothor.engine.mcp_client.get_mcp_client_pool", return_value=pool),
+            patch("robothor.engine.tools.dispatch._audit_tool_call"),
+        ):
+            registry.return_value.get_adapter_route.return_value = "adapter"
+            result = await _execute_tool("external_write", {}, tenant_id=db, run_id="root")
+        assert "error" in result
+        session.call_tool.assert_not_awaited()
+    finally:
+        binding.reset(token)

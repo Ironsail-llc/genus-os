@@ -20,7 +20,7 @@ def client(db, monkeypatch):  # noqa: F811
         request.state.auth = SimpleNamespace(
             tenant_id=db,
             role=request.headers.get("x-test-role", "owner"),
-            is_service=False,
+            is_service=request.headers.get("x-test-service") == "true",
             actor_id="operator:test",
         )
         return await call_next(request)
@@ -57,3 +57,21 @@ def test_member_and_invalid_contract_refused(client):
         == 422
     )
     assert client.get("/api/goals/not-a-uuid").status_code == 422
+
+
+@pytest.mark.parametrize("headers", [{"x-test-role": "member"}, {"x-test-service": "true"}])
+@pytest.mark.parametrize(
+    "method,path,body",
+    [
+        ("POST", "/api/goals", {"objective": "Report", "success_criteria": ["Delivered"]}),
+        ("PATCH", "/api/goals/settings", {"enabled": True}),
+        ("POST", "/api/goals/adopt", {"legacy_task_id": "00000000-0000-0000-0000-000000000001"}),
+        (
+            "PATCH",
+            "/api/goals/00000000-0000-0000-0000-000000000001",
+            {"action": "pause", "version": 1},
+        ),
+    ],
+)
+def test_all_mutations_require_human_tenant_operator(client, headers, method, path, body):
+    assert client.request(method, path, json=body, headers=headers).status_code == 403

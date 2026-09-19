@@ -153,3 +153,44 @@ async def test_missing_progress_stops_after_three_runs(db):  # noqa: F811
         await controller.tick()
     assert runner.execute.call_count == 3
     assert store.get(db, g["id"])["status"] == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_controller_failure_stops_runner_before_releasing_lease(db):  # noqa: F811
+    import asyncio
+
+    g = store.create(
+        db, CreateGoal(objective="Deliver report", success_criteria=["Delivered"]), "operator"
+    )
+    g, attempt = store.claim(db)
+    started = asyncio.Event()
+    stopped = asyncio.Event()
+
+    async def execute(**kwargs):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            stopped.set()
+
+    async def wait_for_heartbeat(*args, **kwargs):
+        await started.wait()
+        return set(), set()
+
+    finish = store.finish
+
+    def finish_after_stop(*args, **kwargs):
+        assert stopped.is_set(), "lease released while agent still running"
+        return finish(*args, **kwargs)
+
+    controller = GoalController(
+        SimpleNamespace(execute=execute), SimpleNamespace(tenant_id=db, manifest_dir="unused")
+    )
+    with (
+        patch("robothor.engine.config.load_agent_config_or_broken", return_value=SimpleNamespace()),
+        patch("robothor.goals.controller.asyncio.wait", side_effect=wait_for_heartbeat),
+        patch("robothor.goals.store.control", side_effect=RuntimeError("database unavailable")),
+        patch("robothor.goals.store.finish", side_effect=finish_after_stop),
+    ):
+        await controller.execute(g, attempt)
+    assert stopped.is_set()

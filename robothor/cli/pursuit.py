@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 if TYPE_CHECKING:
     import argparse
 
 
-def add_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+_Parser = TypeVar("_Parser", bound="argparse.ArgumentParser")
+
+
+def add_parser(subparsers: argparse._SubParsersAction[_Parser]) -> None:
     parser = subparsers.add_parser("goals", help="Manage durable short- and long-term goal pursuit")
     parser.add_argument("--tenant")
     commands = parser.add_subparsers(dest="goals_command", required=True)

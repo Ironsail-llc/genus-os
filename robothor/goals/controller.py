@@ -162,6 +162,11 @@ class GoalController:
             error = str(exc)
             logger.exception("Goal execution failed for %s", goal["id"])
         finally:
+            # Revoke the live runner before releasing its durable lease, including
+            # when a control/heartbeat lookup fails while execution is in flight.
+            if work is not None and not work.done():
+                work.cancel()
+                await asyncio.gather(work, return_exceptions=True)
             live_run = run or current.runs.get(current.run_id)
             all_runs = list(current.runs.values()) or ([run] if run else [])
             binding.reset(token)
