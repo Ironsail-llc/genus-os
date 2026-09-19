@@ -151,7 +151,16 @@ def _narrow_child_config(
 
     # Apply tools_override if provided
     tools_override = args.get("tools_override")
-    if tools_override and isinstance(tools_override, list):
+    if tools_override is not None and (
+        not isinstance(tools_override, list)
+        or any(not isinstance(tool, str) or not tool for tool in tools_override)
+    ):
+        raise ValueError("tools_override must be a list of tool names")
+    if tools_override:
+        if child_config.tools_allowed and not set(tools_override) <= set(
+            child_config.tools_allowed
+        ):
+            raise ValueError("tools_override cannot expand the child manifest's tools_allowed")
         child_config.tools_allowed = tools_override
 
     # Apply max_iterations override (never increase beyond parent's sub_agent_max_iterations)
@@ -250,7 +259,10 @@ async def _handle_spawn_agent(
     if child_config is None:
         return {"error": reason}
 
-    _narrow_child_config(child_config, args, spawn_ctx, child_depth)
+    try:
+        _narrow_child_config(child_config, args, spawn_ctx, child_depth)
+    except ValueError as exc:
+        return {"error": str(exc)}
 
     # Build child SpawnContext
     child_spawn_ctx = SpawnContext(
