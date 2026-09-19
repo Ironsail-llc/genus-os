@@ -2016,6 +2016,12 @@ class LLMClient:
         from robothor.engine.provider_routing import apply_provider_order
 
         apply_provider_order(model, kwargs)
+        if isinstance(kwargs.get("tool_choice"), dict):
+            # This trusted workflow turn must invoke a named tool. Its arguments
+            # already have a schema; adding a final-answer JSON format can make
+            # a backend emit plain JSON content instead of a native tool call.
+            # Final-answer formatting resumes when the required tool is done.
+            return kwargs
         from robothor.engine.response_schema import response_format
 
         schema_format = response_format()
