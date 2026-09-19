@@ -149,3 +149,19 @@ def test_prospect_acceptance_is_bound_to_the_reviewed_dossier(sales):
             expected_policy_version="1",
         )
     assert sales.ops.claim("sales.promote") is None
+
+
+def test_new_customer_milestone_invalidates_an_already_claimed_send(sales):
+    p = prepared(sales)
+    action = approved(sales, p)
+    sales.bind_customer(p["id"], "customer-1", "operator:test")
+    sales.record_outcome(
+        {
+            "external_company_id": "customer-1",
+            "event_id": "signup-1",
+            "kind": "signup",
+            "occurred_at": datetime.now(UTC).isoformat(),
+        }
+    )
+    with pytest.raises(Conflict, match="milestone"):
+        sales.validate_send(action)

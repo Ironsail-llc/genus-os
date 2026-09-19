@@ -140,7 +140,12 @@ class Contact(Contract):
     @classmethod
     def email_address(cls, value):
         value = value.strip().lower()
-        if value.count("@") != 1 or any(c.isspace() for c in value) or "\n" in value:
+        if (
+            value.count("@") != 1
+            or value.startswith("@")
+            or value.endswith("@")
+            or any(c.isspace() or c in '<>(),;:"' for c in value)
+        ):
             raise ValueError("Single email address required")
         return value
 
@@ -192,8 +197,10 @@ class SalesSettings(Contract):
     sending_enabled: StrictBool = False
     outcomes_enabled: StrictBool = False
     review_backlog_limit: int = Field(default=100, ge=1, le=10000, strict=True)
+    discovery_daily_limit: int = Field(default=20, ge=0, le=1000, strict=True)
     monthly_limit_units: int = Field(default=0, ge=0, strict=True)
     daily_limit_units: int = Field(default=0, ge=0, strict=True)
+    verification_allowance_units: int = Field(default=0, ge=0, le=1_000_000, strict=True)
     mailbox_daily_limit: int = Field(default=5, ge=0, le=100, strict=True)
     senders: list[str] = Field(default_factory=list, max_length=100)
     mailbox_approved_until: dict[str, datetime] = Field(default_factory=dict)
@@ -246,3 +253,65 @@ class Message(Contract):
     @classmethod
     def date(cls, value):
         return Outcome.aware(value)
+
+
+class Candidate(Contract):
+    name: str = Field(min_length=1, max_length=300)
+    website: str
+    source_url: str
+    reason: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("website", "source_url")
+    @classmethod
+    def url(cls, value):
+        return Evidence.public_url(value)
+
+
+class CandidateBatch(Contract):
+    companies: list[Candidate] = Field(max_length=20)
+
+
+class ContactBatch(Contract):
+    contacts: list[Contact] = Field(max_length=5)
+
+    @model_validator(mode="after")
+    def no_verification_claim(self):
+        if any(c.verification != "unknown" or c.verified_at is not None for c in self.contacts):
+            raise ValueError("Only provider verification can establish deliverability")
+        return self
+
+
+class ConversationDecision(Contract):
+    classification: Literal[
+        "interested",
+        "question",
+        "objection",
+        "opt_out",
+        "wrong_person",
+        "out_of_office",
+        "complaint",
+        "human_required",
+    ]
+    reason: str = Field(min_length=1, max_length=2000)
+    draft: Draft | None = None
+
+    @model_validator(mode="after")
+    def response_boundary(self):
+        if self.draft and (
+            self.classification not in {"interested", "question", "objection"}
+            or self.draft.purpose != "reply"
+        ):
+            raise ValueError("This classification cannot produce an autonomous reply draft")
+        return self
+
+
+class ActivationDecision(Contract):
+    next_step: str = Field(min_length=1, max_length=2000)
+    human_required: StrictBool
+    draft: Draft | None = None
+
+    @model_validator(mode="after")
+    def standard_onboarding_only(self):
+        if self.draft and (self.human_required or self.draft.purpose != "onboarding"):
+            raise ValueError("Only standard onboarding can produce a draft")
+        return self

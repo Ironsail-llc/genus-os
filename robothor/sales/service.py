@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from psycopg2.extras import Json
 
@@ -75,51 +76,73 @@ class Sales:
             row = cur.fetchone()
             return row["config"] if row else {}
 
-    def discover(self, name, website, source_url):
+    def discover(self, name, website, source_url, *, cur=None):
         """Resolve a CRM company and enqueue research once for this domain."""
         if not name.strip() or len(name) > 300:
             raise ValueError("Company name required")
         domain = domain_of(website)
-        with self.ops.transaction() as cur:
-            # Serialize identities before touching the legacy company table, which
-            # deliberately has no unique domain constraint.
+        if cur is None:
+            with self.ops.transaction() as cursor:
+                return self.discover(name, website, source_url, cur=cursor)
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (self.tenant + ":discovery",)
+        )
+        # Serialize identities before touching the legacy company table, which
+        # deliberately has no unique domain constraint.
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+            (self.tenant + ":" + domain,),
+        )
+        cur.execute(
+            "SELECT * FROM sales_prospects WHERE tenant_id=%s AND domain=%s",
+            (self.tenant, domain),
+        )
+        existing = cur.fetchone()
+        if existing:
+            return dict(existing)
+        cur.execute("SELECT config FROM sales_settings WHERE tenant_id=%s", (self.tenant,))
+        config = cur.fetchone()
+        settings = SalesSettings.model_validate(config["config"] if config else {})
+        local = datetime.now(ZoneInfo(settings.timezone))
+        cur.execute(
+            "SELECT count(*) AS n FROM sales_prospects WHERE tenant_id=%s AND created_at >= %s",
+            (self.tenant, local.replace(hour=0, minute=0, second=0, microsecond=0)),
+        )
+        if cur.fetchone()["n"] >= settings.discovery_daily_limit:
+            raise Conflict("Discovery daily admission limit reached")
+        cur.execute(
+            "SELECT count(*) AS n FROM sales_prospects WHERE tenant_id=%s "
+            "AND status IN ('discovered','researched','needs_research','qualified')",
+            (self.tenant,),
+        )
+        if cur.fetchone()["n"] >= settings.review_backlog_limit:
+            raise Conflict("Prospect review backlog limit reached")
+        cur.execute(
+            "SELECT id FROM crm_companies WHERE tenant_id=%s AND deleted_at IS NULL "
+            "AND lower(domain_name)=%s ORDER BY created_at LIMIT 2",
+            (self.tenant, domain),
+        )
+        companies = cur.fetchall()
+        if len(companies) > 1:
+            raise Conflict("Existing company identities require a merge review")
+        company = str(companies[0]["id"]) if companies else str(uuid4())
+        if not companies:
             cur.execute(
-                "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
-                (self.tenant + ":" + domain,),
+                "INSERT INTO crm_companies(id,tenant_id,name,domain_name) VALUES(%s,%s,%s,%s)",
+                (company, self.tenant, name, domain),
             )
-            cur.execute(
-                "SELECT * FROM sales_prospects WHERE tenant_id=%s AND domain=%s",
-                (self.tenant, domain),
-            )
-            existing = cur.fetchone()
-            if existing:
-                return dict(existing)
-            cur.execute(
-                "SELECT id FROM crm_companies WHERE tenant_id=%s AND deleted_at IS NULL "
-                "AND lower(domain_name)=%s ORDER BY created_at LIMIT 2",
-                (self.tenant, domain),
-            )
-            companies = cur.fetchall()
-            if len(companies) > 1:
-                raise Conflict("Existing company identities require a merge review")
-            company = str(companies[0]["id"]) if companies else str(uuid4())
-            if not companies:
-                cur.execute(
-                    "INSERT INTO crm_companies(id,tenant_id,name,domain_name) VALUES(%s,%s,%s,%s)",
-                    (company, self.tenant, name, domain),
-                )
-            prospect = str(uuid4())
-            cur.execute(
-                "INSERT INTO sales_prospects(id,tenant_id,company_id,domain,name,source_url) "
-                "VALUES(%s,%s,%s,%s,%s,%s) RETURNING *",
-                (prospect, self.tenant, company, domain, name, source_url),
-            )
-            result = dict(cur.fetchone())
-            self.ops.enqueue(
-                "sales.research", prospect + ":0", {"prospect_id": prospect, "version": 0}, cur=cur
-            )
-            self.ops.audit(cur, prospect, "prospect.discovered")
-            return result
+        prospect = str(uuid4())
+        cur.execute(
+            "INSERT INTO sales_prospects(id,tenant_id,company_id,domain,name,source_url) "
+            "VALUES(%s,%s,%s,%s,%s,%s) RETURNING *",
+            (prospect, self.tenant, company, domain, name, source_url),
+        )
+        result = dict(cur.fetchone())
+        self.ops.enqueue(
+            "sales.research", prospect + ":0", {"prospect_id": prospect, "version": 0}, cur=cur
+        )
+        self.ops.audit(cur, prospect, "prospect.discovered")
+        return result
 
     def get(self, prospect_id, *, cur=None, lock=False):
         if cur is None:
@@ -268,54 +291,62 @@ class Sales:
                 cur, prospect_id, "prospect.accepted" if accepted else "prospect.rejected", actor
             )
 
-    def add_contact(self, prospect_id, data):
+    def add_contact(self, prospect_id, data, *, cur=None):
         contact = Contact.model_validate(data)
-        with self.ops.transaction() as cur:
-            p = self.require(prospect_id, cur)
-            if (p["qualification"] or {}).get("decision") != "qualified":
-                raise Conflict("Contact enrichment requires qualification")
+        if cur is None:
+            with self.ops.transaction() as cursor:
+                return self.add_contact(prospect_id, data, cur=cursor)
+        p = self.require(prospect_id, cur)
+        if (p["qualification"] or {}).get("decision") != "qualified":
+            raise Conflict("Contact enrichment requires qualification")
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+            (self.tenant + ":" + contact.email,),
+        )
+        cur.execute(
+            "SELECT id,company_id FROM crm_people WHERE tenant_id=%s AND lower(email)=%s AND deleted_at IS NULL FOR UPDATE",
+            (self.tenant, contact.email),
+        )
+        people = cur.fetchall()
+        if len(people) > 1 or (people and people[0]["company_id"] not in (None, p["company_id"])):
+            raise Conflict("Contact belongs to another company or needs identity review")
+        person = str(people[0]["id"]) if people else str(uuid4())
+        if people and people[0]["company_id"] is None:
             cur.execute(
-                "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
-                (self.tenant + ":" + contact.email,),
+                "UPDATE crm_people SET company_id=%s WHERE tenant_id=%s AND id=%s AND company_id IS NULL",
+                (p["company_id"], self.tenant, person),
             )
-            cur.execute(
-                "SELECT id,company_id FROM crm_people WHERE tenant_id=%s AND lower(email)=%s AND deleted_at IS NULL",
-                (self.tenant, contact.email),
+            self.ops.audit(
+                cur, person, "contact.company_linked", detail={"company_id": str(p["company_id"])}
             )
-            people = cur.fetchall()
-            if len(people) > 1 or (
-                people and people[0]["company_id"] not in (None, p["company_id"])
-            ):
-                raise Conflict("Contact belongs to another company or needs identity review")
-            person = str(people[0]["id"]) if people else str(uuid4())
-            if not people:
-                first, _, last = contact.name.partition(" ")
-                cur.execute(
-                    "INSERT INTO crm_people(id,tenant_id,first_name,last_name,email,job_title,company_id) "
-                    "VALUES(%s,%s,%s,%s,%s,%s,%s)",
-                    (
-                        person,
-                        self.tenant,
-                        first,
-                        last,
-                        contact.email,
-                        contact.role,
-                        p["company_id"],
-                    ),
-                )
+        if not people:
+            first, _, last = contact.name.partition(" ")
             cur.execute(
-                "INSERT INTO sales_contacts(id,tenant_id,prospect_id,person_id,email,data) VALUES(%s,%s,%s,%s,%s,%s) "
-                "ON CONFLICT(tenant_id,prospect_id,email) DO UPDATE SET data=EXCLUDED.data RETURNING id",
+                "INSERT INTO crm_people(id,tenant_id,first_name,last_name,email,job_title,company_id) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s)",
                 (
-                    str(uuid4()),
-                    self.tenant,
-                    prospect_id,
                     person,
+                    self.tenant,
+                    first,
+                    last,
                     contact.email,
-                    Json(contact.model_dump(mode="json")),
+                    contact.role,
+                    p["company_id"],
                 ),
             )
-            return str(cur.fetchone()["id"])
+        cur.execute(
+            "INSERT INTO sales_contacts(id,tenant_id,prospect_id,person_id,email,data) VALUES(%s,%s,%s,%s,%s,%s) "
+            "ON CONFLICT(tenant_id,prospect_id,email) DO UPDATE SET data=EXCLUDED.data RETURNING id",
+            (
+                str(uuid4()),
+                self.tenant,
+                prospect_id,
+                person,
+                contact.email,
+                Json(contact.model_dump(mode="json")),
+            ),
+        )
+        return str(cur.fetchone()["id"])
 
     def contacts(self, prospect_id):
         with self.ops.transaction() as cur:
@@ -400,6 +431,7 @@ class Sales:
             "prospect_id": str(prospect_id),
             "dossier_version": p["version"],
             "conversation_version": p["conversation_version"],
+            "outcome_version": p["outcome_version"],
         }
         return self.ops.propose("sales.email", str(uuid4()), payload, cur=cur)
 
@@ -444,6 +476,8 @@ class Sales:
             raise Conflict("Dossier changed since approval")
         if p["conversation_version"] != payload.get("conversation_version"):
             raise Conflict("New conversation activity since approval")
+        if p["outcome_version"] != payload.get("outcome_version"):
+            raise Conflict("New customer milestone since approval")
         if p["status"] not in {"accepted", "promoted", "engaged", "onboarding", "active"}:
             raise Conflict("Accepted prospect required")
         if payload["knowledge_version"] != settings.active_knowledge_version:
@@ -571,27 +605,30 @@ class Sales:
             )
             return [dict(r) for r in cur.fetchall()]
 
-    def suppress(self, email, reason, actor):
+    def suppress(self, email, reason, actor, *, cur=None):
         """Stop all pending outreach immediately, including across campaigns."""
         email = email.strip().lower()
-        with self.ops.transaction() as cur:
-            cur.execute(
-                "INSERT INTO sales_suppression(tenant_id,email,reason) VALUES(%s,%s,%s) "
-                "ON CONFLICT(tenant_id,email) DO UPDATE SET reason=EXCLUDED.reason",
-                (self.tenant, email, reason),
-            )
-            cur.execute(
-                "UPDATE crm_people SET do_not_contact=true WHERE tenant_id=%s AND lower(email)=%s",
-                (self.tenant, email),
-            )
-            cur.execute(
-                "UPDATE operation_actions SET status='cancelled' WHERE tenant_id=%s AND kind='sales.email' "
-                "AND status IN ('review','approved') AND (payload->>'recipient'=%s OR "
-                "'@'||split_part(payload->>'recipient','@',2)=%s)",
-                (self.tenant, email, email),
-            )
-            self.ops.enqueue("sales.suppress", email, {"email": email}, cur=cur)
-            self.ops.audit(cur, email, "contact.suppressed", actor, {"reason": reason})
+        if cur is None:
+            with self.ops.transaction() as cursor:
+                return self.suppress(email, reason, actor, cur=cursor)
+        cur.execute(
+            "INSERT INTO sales_suppression(tenant_id,email,reason) VALUES(%s,%s,%s) "
+            "ON CONFLICT(tenant_id,email) DO UPDATE SET reason=EXCLUDED.reason",
+            (self.tenant, email, reason),
+        )
+        cur.execute(
+            "UPDATE crm_people SET do_not_contact=true WHERE tenant_id=%s AND lower(email)=%s",
+            (self.tenant, email),
+        )
+        cur.execute(
+            "UPDATE operation_actions SET status='cancelled' WHERE tenant_id=%s AND kind='sales.email' "
+            "AND status IN ('review','approved') AND (payload->>'recipient'=%s OR "
+            "'@'||split_part(payload->>'recipient','@',2)=%s)",
+            (self.tenant, email, email),
+        )
+        self.ops.enqueue("sales.suppress", email, {"email": email}, cur=cur)
+        self.ops.audit(cur, email, "contact.suppressed", actor, {"reason": reason})
+        return None
 
     def takeover(self, prospect_id, actor):
         operator(actor)
@@ -608,6 +645,23 @@ class Sales:
             )
             self.ops.audit(cur, prospect_id, "conversation.taken_over", actor)
             self.ops.enqueue("sales.stop", str(uuid4()), {"prospect_id": str(prospect_id)}, cur=cur)
+
+    def escalate(self, prospect_id, reason, *, cur):
+        """A worker may stop automation for review, never restore its own authority."""
+        p = self.require(prospect_id, cur)
+        if p["owner"] == "agent":
+            cur.execute(
+                "UPDATE sales_prospects SET owner='human_review',review_note=%s,updated_at=now() "
+                "WHERE tenant_id=%s AND id=%s",
+                (reason[:2000], self.tenant, prospect_id),
+            )
+        cur.execute(
+            "UPDATE operation_actions SET status='cancelled' WHERE tenant_id=%s "
+            "AND status IN ('review','approved') AND payload->>'prospect_id'=%s",
+            (self.tenant, str(prospect_id)),
+        )
+        self.ops.enqueue("sales.stop", str(uuid4()), {"prospect_id": str(prospect_id)}, cur=cur)
+        self.ops.audit(cur, prospect_id, "conversation.escalated", detail={"reason": reason[:2000]})
 
     def bind_customer(self, prospect_id, external_id, actor):
         operator(actor)
@@ -645,6 +699,15 @@ class Sales:
                 ),
             )
             if cur.rowcount:
+                cur.execute(
+                    "UPDATE sales_prospects SET outcome_version=outcome_version+1,updated_at=now() WHERE tenant_id=%s AND id=%s",
+                    (self.tenant, row["id"]),
+                )
+                cur.execute(
+                    "UPDATE operation_actions SET status='cancelled' WHERE tenant_id=%s "
+                    "AND kind='sales.email' AND status IN ('review','approved') AND payload->>'prospect_id'=%s",
+                    (self.tenant, str(row["id"])),
+                )
                 self.ops.audit(cur, str(row["id"]), "outcome." + event.kind)
                 self.ops.enqueue(
                     "sales.activation",

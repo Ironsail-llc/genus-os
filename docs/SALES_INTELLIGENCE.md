@@ -5,6 +5,12 @@ review exact outreach drafts, pause integration stages, stop outreach to a
 contact, and take over a conversation. Agents can research and propose work;
 they cannot approve messages or select another tenant.
 
+Structured workers cover discovery, research, deterministic qualification,
+contact research, provider verification, initial drafting, inbound conversation
+classification and activation guidance. Discovery admits at most 20 new domains
+per configured local day by default and stops at the review backlog limit.
+Candidates already known to Genus do not consume another admission.
+
 **Implementation status:** the domain, review API, view, provider adapters and
 explicitly constructed workers are available as a foundation. Importing the
 package does not install a schedule, activate integrations or send email.
@@ -62,6 +68,20 @@ monthly allowances in integer micro-USD; active policy/knowledge versions; and
 stage-to-agent mappings. All integration switches default off and spend limits
 default to zero. `mailbox_approved_until` records readiness review expiry.
 
+`verification_allowance_units` must be configured from the actual subscription's
+credit economics before paid verification runs. The worker books that complete
+allowance per lookup; provider credits are not assumed to be dollars. A pending
+verification is polled by email without purchasing it again. Only a provider
+result for the requested email, marked verified with a definitive false catch-all
+flag, becomes a valid address. Unknown purchases retain their budget reservation.
+
+Conversation decisions cannot grant send permission. Opt-outs immediately create
+local suppression and provider stop work; complaints and custom commitments set
+human ownership. Reply drafts must address the triggering thread. A new customer
+milestone invalidates older pending or claimed message authorizations, just as a
+new conversation revision does. Activation status derives from recorded fulfilled
+orders, independently of the agent's proposed onboarding explanation.
+
 Keep credentials in the tenant vault:
 
 | Provider | Keys |
@@ -104,6 +124,12 @@ HTTP transports. They cover tenant boundaries, concurrent budgets, stale reviews
 suppression races, exact-message authorization, uncertain writes, provider
 contracts, native stage output and mature retention windows. They do not establish
 provider production connectivity, model research quality or live sales results.
+
+`test_pipeline_rehearsal.py` runs the workers from discovery through a reviewed
+initial message, reviewed reply, opt-out and verified business outcome in the
+isolated test database. Its model answers, operator decisions, external receipts
+and customer milestones are synthetic. This is component integration evidence;
+it is not a native deployed-runtime test or a successful customer pilot.
 
 An end-to-end pilot additionally needs calibrated buying cases, reviewed dossiers,
 healthy authenticated mailboxes, individually approved test and prospect messages,
