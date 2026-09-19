@@ -30,7 +30,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from robothor.goals.runtime import stop_at_budget
+from robothor.goals.runtime import stop_pursuit
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -65,7 +65,7 @@ def check_iteration_guards(
         return True
     if _watchdog_aborted(session, watchdog):
         return True
-    return stop_at_budget(session) or _runaway(session, agent_config, state)
+    return stop_pursuit(session) or _runaway(session, agent_config, state)
 
 
 def _wallclock_expired(session: Any, watchdog: Any, deadline: float | None, ceiling: int) -> bool:

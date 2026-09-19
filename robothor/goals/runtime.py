@@ -19,6 +19,7 @@ class Binding:
     attempt: str
     token_remaining: int | None = None
     run_id: str = ""
+    yield_requested: bool = False
     runs: dict[str, AgentRun] = field(default_factory=dict)
 
 
@@ -59,6 +60,15 @@ def budget_hit() -> bool:
         and sum(r.input_tokens + r.output_tokens for r in current.runs.values())
         >= current.token_remaining
     )
+
+
+def pursuit_yielded(run: AgentRun | None) -> bool:
+    current = binding.get()
+    return bool(current and run and current.run_id == run.id and current.yield_requested)
+
+
+def stop_pursuit(session: AgentSession) -> bool:
+    return pursuit_yielded(session.run) or stop_at_budget(session)
 
 
 def stop_at_budget(session: AgentSession) -> bool:
