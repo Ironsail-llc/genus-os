@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS sales_messages (
  PRIMARY KEY(tenant_id,provider_id)
 );
 ALTER TABLE sales_prospects ADD COLUMN IF NOT EXISTS conversation_version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sales_prospects ADD COLUMN IF NOT EXISTS outcome_version INTEGER NOT NULL DEFAULT 0;
 CREATE TABLE IF NOT EXISTS sales_dossier_history (
  tenant_id TEXT NOT NULL, prospect_id UUID NOT NULL REFERENCES sales_prospects(id),
  version INTEGER NOT NULL, dossier JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),

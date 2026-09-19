@@ -255,7 +255,8 @@ class DraftWorker(ResearchWorker):
         with self.sales.ops.transaction() as cur:
             p = self.sales.require(job["payload"]["prospect_id"], cur)
             if any(
-                p[key] != context["prospect"][key] for key in ("version", "conversation_version")
+                p[key] != context["prospect"][key]
+                for key in ("version", "conversation_version", "outcome_version")
             ):
                 raise Conflict("Prospect or conversation changed during drafting")
             action = self.sales.draft(p["id"], draft, cur=cur)

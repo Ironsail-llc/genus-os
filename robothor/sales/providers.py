@@ -155,6 +155,12 @@ class Instantly(Provider):
     async def account(self, email):
         return await self.request("GET", "/api/v2/accounts/" + quote(email, safe=""))
 
+    async def start_verification(self, email):
+        return await self.request("POST", "/api/v2/email-verification", payload={"email": email})
+
+    async def verification(self, email):
+        return await self.request("GET", "/api/v2/email-verification/" + quote(email, safe=""))
+
     async def accounts(self, cursor=None):
         return await self.request(
             "GET",

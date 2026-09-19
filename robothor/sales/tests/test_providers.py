@@ -126,3 +126,27 @@ async def test_exact_reply_contract_and_one_step_initial_campaign():
     assert campaign["campaign_schedule"]["end_date"] == "2026-09-18"
     assert campaign["daily_limit"] == 1
     assert "status" not in campaign  # activation is a separate guarded operation
+
+
+@pytest.mark.asyncio
+async def test_verification_uses_separate_purchase_and_poll_contracts():
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(
+            200, json={"email": "alice@example.com", "verification_status": "pending"}
+        )
+
+    provider = Instantly(
+        "tenant-a",
+        secret_get=lambda *a, **kw: "test-secret",
+        transport=httpx.MockTransport(respond),
+    )
+    await provider.start_verification("alice@example.com")
+    await provider.verification("alice@example.com")
+    assert requests[0].method == "POST"
+    assert requests[0].url.path == "/api/v2/email-verification"
+    assert json.loads(requests[0].content) == {"email": "alice@example.com"}
+    assert requests[1].method == "GET"
+    assert requests[1].url.path == "/api/v2/email-verification/alice@example.com"

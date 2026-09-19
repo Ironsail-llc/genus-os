@@ -180,3 +180,40 @@ def test_order_placement_does_not_count_as_completed_activation(sales):
     assert result["completed_orders"] == 0
     assert result["first_completed_order"] is None
     assert result["repeat_within_30_days"] is None
+
+
+def test_existing_unassigned_crm_person_is_attached_to_the_qualified_company(sales):
+    p = researched(sales)
+    person_id = str(uuid4())
+    with sales.ops.transaction() as cur:
+        cur.execute(
+            "INSERT INTO crm_people(id,tenant_id,first_name,email) VALUES(%s,%s,%s,%s)",
+            (person_id, sales.tenant, "Alice", "alice@example.com"),
+        )
+    sales.add_contact(
+        p["id"],
+        {
+            "name": "Alice",
+            "role": "Owner",
+            "email": "alice@example.com",
+            "source_url": "https://clinic.example.com/team",
+        },
+    )
+    with sales.ops.transaction() as cur:
+        cur.execute(
+            "SELECT company_id FROM crm_people WHERE tenant_id=%s AND id=%s",
+            (sales.tenant, person_id),
+        )
+        assert str(cur.fetchone()["company_id"]) == str(p["company_id"])
+
+
+@pytest.mark.parametrize(
+    "email", ["@example.com", "alice@", "alice@@example.com", "alice@example.com,other@example.com"]
+)
+def test_invalid_email_cannot_enter_enrichment(email):
+    from robothor.sales.models import Contact
+
+    with pytest.raises(ValueError):
+        Contact(
+            name="Alice", role="Owner", email=email, source_url="https://clinic.example.com/team"
+        )
