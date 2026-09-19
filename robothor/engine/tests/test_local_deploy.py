@@ -60,3 +60,27 @@ def test_success_publishes_only_after_verification(deployment, monkeypatch):
     result = deploy.deploy(root, "candidate", root / "job/state.json")
     assert result["status"] == "verified"
     assert json.loads(state.read_text())["combined_commit"] == "a" * 40
+
+
+def test_release_switch_preserves_concurrent_feature_configuration(tmp_path):
+    original = (
+        "[Service]\nEnvironment=ROBOTHOR_AUTONOMY_CHROMIUM_EXECUTABLE=/opt/browser\n"
+        'Environment="ANOTHER_FEATURE=some value"\nWorkingDirectory=/old\n'
+    )
+    first = deploy.release_override(original, tmp_path / "one", "robothor.engine.daemon", tmp_path)
+    second = deploy.release_override(first, tmp_path / "two", "robothor.engine.daemon", tmp_path)
+    assert original.strip() in second
+    assert "/opt/browser" in second
+    assert second.count("# BEGIN GENUS LOCAL RELEASE") == 1
+    assert "WorkingDirectory=" + str(tmp_path / "two") in second
+    assert "WorkingDirectory=" + str(tmp_path / "one") not in second
+
+
+def test_queue_inherits_instance_authentication(tmp_path, monkeypatch):
+    run = MagicMock()
+    monkeypatch.setattr(deploy.subprocess, "run", run)
+    result = deploy.queue(str(tmp_path), "abc123", {})
+    argv = run.call_args.args[0]
+    assert "--property=EnvironmentFile=/etc/robothor/robothor.env" in argv
+    assert "--property=EnvironmentFile=-/run/robothor/secrets.env" in argv
+    assert result["status"] == "queued"

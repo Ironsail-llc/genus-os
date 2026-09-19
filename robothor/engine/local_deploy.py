@@ -50,6 +50,37 @@ def install_override(content: str, path: Path = OVERRIDE) -> None:
         subprocess.run(["sudo", "-n", "install", "-m", "0644", stream.name, str(path)], check=True)
 
 
+def release_override(
+    previous: str, snapshot: Path, module: str, workspace: Path | None = None
+) -> str:
+    """Change release pointers without dropping another feature's settings."""
+    begin = "# BEGIN GENUS LOCAL RELEASE"
+    end = "# END GENUS LOCAL RELEASE"
+    previous = re.sub(
+        re.escape(begin) + r".*?" + re.escape(end) + r"\n?", "", previous, flags=re.DOTALL
+    ).rstrip()
+    lines = [
+        previous,
+        "",
+        begin,
+        "[Service]",
+        "WorkingDirectory=" + str(snapshot),
+        "Environment=PYTHONPATH=" + str(snapshot),
+    ]
+    if workspace:
+        lines += [
+            "Environment=ROBOTHOR_WORKSPACE=" + str(workspace),
+            "Environment=ROBOTHOR_HOST_EXEC_SOCKET=/run/robothor-host/exec.sock",
+        ]
+    lines += [
+        "ExecStart=",
+        "ExecStart=" + str(snapshot / "venv/bin/python") + " -m " + module,
+        end,
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def wait_idle(seconds: int = 900) -> None:
     from robothor.engine_control import control_request
 
@@ -176,26 +207,12 @@ def deploy(workspace: Path, revision: str, job_path: Path) -> dict[str, Any]:
         wait_idle()
         previous = OVERRIDE.read_text()
         previous_host = HOST_OVERRIDE.read_text() if HOST_OVERRIDE.exists() else "[Service]\n"
-        new = (
-            "[Service]\nWorkingDirectory=" + str(snapshot) + "\n"
-            "Environment=PYTHONPATH=" + str(snapshot) + "\n"
-            "Environment=ROBOTHOR_WORKSPACE=" + str(workspace) + "\n"
-            "Environment=ROBOTHOR_HOST_EXEC_SOCKET=/run/robothor-host/exec.sock\n"
-            "ExecStart=\nExecStart="
-            + str(snapshot / "venv/bin/python")
-            + " -m robothor.engine.daemon\n"
-        )
+        new = release_override(previous, snapshot, "robothor.engine.daemon", workspace)
         job["previous_override"] = previous
         save(job_path, job)
         install_override(new)
         switched = True
-        host_new = (
-            "[Service]\nWorkingDirectory=" + str(snapshot) + "\n"
-            "Environment=PYTHONPATH=" + str(snapshot) + "\n"
-            "ExecStart=\nExecStart="
-            + str(snapshot / "venv/bin/python")
-            + " -m robothor.engine.host_execution\n"
-        )
+        host_new = release_override(previous_host, snapshot, "robothor.engine.host_execution")
         install_override(host_new, HOST_OVERRIDE)
         subprocess.run(["sudo", "-n", "systemctl", "daemon-reload"], check=True)
         subprocess.run(["sudo", "-n", "systemctl", "restart", "robothor-host-exec"], check=True)
