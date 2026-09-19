@@ -26,8 +26,11 @@ Never weaken the criteria. Cite observed tool results or artifacts for evidence.
 Only mark a criterion satisfied after checking it. Ordinary prose is not proof.
 For a long-term goal, create short-term execution children for actionable work;
 reuse existing children and tasks instead of duplicating them. Link delegated CRM
-tasks using link_task. Wait with a concrete date, task, or event condition when
-nothing is actionable. Waiting needs a reason and a fallback review time.
+tasks using link_task. Only one coordination run can execute at a time: queued
+execution children cannot start until this parent run ends. After creating or
+finding a ready child, record a durable wait and end this turn immediately. Do
+not poll or sleep for a queued child inside this run. Wait with a concrete date,
+task, or event condition when nothing is actionable. Waiting needs a reason and a fallback review time.
 If a child waits, its parent must register the future dependency and resume or
 replace the child only when actionable. Do not complete a parent merely because
 a task completed. Ongoing targets use assess, never complete.

@@ -115,6 +115,10 @@ async def update_goal(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         ctx.user_id or ctx.agent_id,
         operator=ctx.user_role in {"owner", "admin"},
     )
+    if current and goal_id == current.goal_id and (
+        result["status"] not in {"queued", "running"} or change.action == "block"
+    ):
+        current.yield_requested = True
     return {"goal": result}
 
 
