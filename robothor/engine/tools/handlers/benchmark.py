@@ -19,8 +19,10 @@ import json
 import logging
 import re
 import statistics
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -1935,6 +1937,10 @@ async def _benchmark_define(args: dict[str, Any], ctx: ToolContext) -> dict[str,
     # Normalise
     suite_data["id"] = suite_id
     suite_data["agent_id"] = agent_id
+    try:
+        _suite_request_units(suite_data)
+    except ValueError as exc:
+        return {"error": str(exc)}
 
     # Validate tasks
     tasks = suite_data.get("tasks", [])
@@ -2028,6 +2034,30 @@ def _skipped_result(task: dict[str, Any], reason: str) -> dict[str, Any]:
     }
 
 
+def _suite_request_units(suite: dict[str, Any]) -> int | None:
+    """Opt-in exact micro-USD ceiling; reject malformed or oversized funding."""
+    flag = suite.get("hard_request_budget", False)
+    if type(flag) is not bool:
+        raise ValueError("hard_request_budget must be a boolean")
+    if not flag:
+        return None
+    value = suite.get("max_cost_usd")
+    if isinstance(value, bool):
+        raise ValueError("Funded max_cost_usd must be a finite monetary amount")
+    try:
+        amount = Decimal(str(value))
+        units = amount * 1_000_000
+        if (
+            not amount.is_finite()
+            or not 0 <= amount <= Decimal(str(_MAX_COST_PER_SUITE_USD))
+            or units != units.to_integral_value()
+        ):
+            raise ValueError("Funded max_cost_usd must fit the suite cap and micro-USD precision")
+        return int(units)
+    except InvalidOperation:
+        raise ValueError("Funded max_cost_usd must be a finite monetary amount") from None
+
+
 def _error_result(task: dict[str, Any], error: str) -> dict[str, Any]:
     """A case that could not run and is graded 0 with the reason attached."""
     return {
@@ -2049,6 +2079,7 @@ async def _execute_suite_tasks(
     suite_tenant: str | None,
     spawn_context: SpawnContext | None,
     suite_max_cost: float,
+    request_budget: Any = None,
 ) -> tuple[list[dict[str, Any]], float]:
     """Run every task of one suite and return its results and total spend.
 
@@ -2075,6 +2106,7 @@ async def _execute_suite_tasks(
     total_cost = 0.0
 
     for task in tasks:
+        charged_before = request_budget.charged_units if request_budget else 0
         # Cost guard. A skipped task keeps its weight and stays in every
         # denominator: it is a case the agent did not complete, not a case
         # that does not exist. Filtering these out let a suite that died
@@ -2224,6 +2256,12 @@ async def _execute_suite_tasks(
                 }
             )
         finally:
+            if request_budget:
+                total_cost = request_budget.charged_units / 1_000_000
+                if results and results[-1]["task_id"] == task["id"]:
+                    charged = request_budget.charged_units - charged_before
+                    results[-1]["charged_units"] = charged
+                    results[-1]["cost_usd"] = charged / 1_000_000
             # Tear down unconditionally — including after a timeout or a crash.
             # Rows left behind become the next night's ambient state, and a
             # benchmark that grades yesterday's leftovers is worse than none.
@@ -2280,6 +2318,16 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     suite = _load_block(_suite_block(agent_id, suite_id))
     if suite is None:
         return {"error": f"Benchmark suite '{suite_id}' not found for agent '{agent_id}'"}
+
+    from robothor.engine.request_budget import RequestBudget, active_budget, budget_scope
+
+    try:
+        request_units = _suite_request_units(suite)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    if request_units is not None and active_budget() is not None:
+        return {"error": "A funded request scope is already active; cannot reset its allowance"}
+    request_budget = RequestBudget(request_units) if request_units is not None else None
 
     # Check for existing run with this tag
     existing_run = _load_block(_run_block(suite_id, tag))
@@ -2340,15 +2388,20 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         "spawn_context": benchmark_spawn_ctx,
         "suite_max_cost": suite_max_cost,
     }
-    if suite_tenant is None:
-        results, total_cost = await _execute_suite_tasks(**task_args)
-    else:
-        from robothor.engine import benchmark_sandbox as _bs
-
-        with _bs.sandbox_suite_lock(suite_tenant) as lock_status:
-            if lock_status != _bs.LOCK_ACQUIRED:
-                return _sandbox_lock_refusal(lock_status, suite_tenant, suite_id)
+    if request_budget is not None:
+        task_args["request_budget"] = request_budget
+    with budget_scope(request_budget) if request_budget is not None else nullcontext():
+        if suite_tenant is None:
             results, total_cost = await _execute_suite_tasks(**task_args)
+        else:
+            from robothor.engine import benchmark_sandbox as _bs
+
+            with _bs.sandbox_suite_lock(suite_tenant) as lock_status:
+                if lock_status != _bs.LOCK_ACQUIRED:
+                    return _sandbox_lock_refusal(lock_status, suite_tenant, suite_id)
+                results, total_cost = await _execute_suite_tasks(**task_args)
+    if request_budget is not None:
+        total_cost = request_budget.charged_units / 1_000_000
 
     # Every task in the suite is a case, whether or not it got to run. The
     # only thing `skipped` changes is telemetry — never the denominator.
@@ -2394,6 +2447,13 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         "tasks_run": len(executed),
         "tasks_skipped": skipped_count,
     }
+    if request_budget is not None:
+        run_record["total_cost_usd"] = total_cost
+        run_record["request_budget"] = {
+            "limit_units": request_budget.limit_units,
+            "charged_units": request_budget.charged_units,
+            "accounting": "actual_or_reserved_unknown",
+        }
 
     _save_block(_run_block(suite_id, tag), run_record)
 
@@ -2471,6 +2531,11 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         "tasks_run": len(executed),
         "tasks_skipped": skipped_count,
         "task_results": results,
+        **(
+            {"request_budget": run_record["request_budget"], "total_cost_usd": total_cost}
+            if request_budget is not None
+            else {}
+        ),
     }
 
 
@@ -2756,6 +2821,11 @@ async def auto_define_suite_from_disk(agent_id: str, workspace: str) -> dict[str
     suite_id = suite_data.get("id") or suite_data.get("suite_id") or f"{agent_id}-default"
     suite_data["id"] = suite_id
     suite_data["agent_id"] = agent_id
+
+    try:
+        _suite_request_units(suite_data)
+    except ValueError as exc:
+        return {"error": str(exc)}
 
     tasks = suite_data.get("tasks", [])
     if not tasks:

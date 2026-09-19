@@ -45,9 +45,23 @@ item. Truthy strings, booleans and other numbers are grading errors. Each judge
 request and retry passes through the engine's opt-in `RequestBudget` when a funded
 scope is active. Unknown provider usage retains its reservation. Without that scope,
 legacy benchmark cost behavior is unchanged: suite task totals exclude judge spend
-and per-task `max_cost_usd` is telemetry rather than a hard request cap. A caller
-requiring a total spending ceiling must provide the shared envelope and record its
-charged units; the ordinary benchmark entry point does not establish it.
+and per-task `max_cost_usd` is telemetry rather than a hard request cap.
+
+Set `hard_request_budget: true` in the suite YAML to make the native benchmark entry
+point establish one funded envelope from the suite's `max_cost_usd`. The amount
+must be finite, nonnegative, within the normal suite ceiling, and exactly expressible
+in micro-USD. The loader and execution boundary both validate it. A pre-existing
+funded scope is refused rather than reset. Provider pricing and supported request
+features follow the engine's request-budget policy; unsupported calls fail closed.
+
+Funded per-task `charged_units`/`cost_usd` and the suite total include model and judge
+attempts. The response and stored run record carry `request_budget` with the limit,
+charged units and `actual_or_reserved_unknown` accounting label: unknown requests
+retain their full reservation, so the total is conservative rather than necessarily
+a provider invoice amount. A failed or skipped case remains in the denominator.
+This is a per-invocation ceiling, not a durable monthly allowance. Process death
+can interrupt result persistence; retain the original authorized allowance for an
+interrupted run until provider charges are reconciled before funding another run.
 
 **Owner:** ops · **Code:** `robothor/engine/tools/handlers/benchmark.py`
 **Tests:** `robothor/engine/tests/test_benchmark_harness_fairness.py`
