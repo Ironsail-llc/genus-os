@@ -5,11 +5,30 @@ import { BusinessReview } from "@/components/sales/business-review";
 afterEach(() => vi.restoreAllMocks());
 const practice = { id: "observed-1", source: "orders_app", account_id: "account-1", external_id: "practice-1",
   revision: "revision-shown", observed_at: "2026-09-18T12:00:00Z", data: { name: "East Clinic", state: "TX", active: true, business_unit_id: "group-1" },
-  prospect_id: null, binding_status: null };
+  prospect_id: null, binding_status: null, binding_version: 1 };
 const props = { prospects: [{ id: "prospect-1", name: "Example Customer", domain: "example.com" }], sources: [], onChanged: vi.fn(async () => {}) };
 const response = (value: unknown) => ({ ok: true, json: async () => value }) as Response;
 
 describe("Business identity review", () => {
+  it("requires a separate ownership repair and submits the reviewed binding generation", async () => {
+    const fetcher = vi.spyOn(global, "fetch").mockResolvedValue(response({ items: [{ ...practice, prospect_id: "previous-customer", binding_status: "confirmed", binding_version: 4 }], next_cursor: null }));
+    render(<BusinessReview {...props} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Repair customer match for East Clinic" }));
+    expect(screen.getByText(/Both customer conversations will be held/)).toBeInTheDocument();
+    const submit = screen.getByRole("button", { name: "Reassign practice" });
+    expect(submit).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Genus customer"), { target: { value: "prospect-1" } });
+    fireEvent.change(screen.getByLabelText("Matching evidence and reason"), { target: { value: "Reviewed corrected ownership with both customer records" } });
+    expect(submit).toBeDisabled();
+    fireEvent.click(screen.getByLabelText("I verified the corrected owner and reviewed both customer conversations"));
+    fireEvent.click(submit);
+    await waitFor(() => expect(fetcher).toHaveBeenCalledWith("/api/bridge/api/sales/business-observations/observed-1/reassign", expect.objectContaining({ method: "POST", body: JSON.stringify({
+      expected_revision: "revision-shown", expected_prospect_id: "previous-customer", target_prospect_id: "prospect-1", expected_binding_version: 4,
+      reason: "Reviewed corrected ownership with both customer records",
+    }) })));
+    expect(await screen.findByRole("status")).toHaveTextContent("Practice reassigned");
+  });
+
   it("ignores a previous source response after the source selection changes", async () => {
     let release!: (value: Response) => void;
     vi.spyOn(global, "fetch").mockImplementation(async (path) => String(path).includes("account_id=account-2")

@@ -166,6 +166,10 @@ In Sales, **Review imported practices** confirms customer identity matches;
 required before retrying a repaired read. Each outbound message still has its
 own approval.
 
+Use **Repair customer match** for incorrect practice ownership. It requires a
+separate review and holds both affected conversations while their corrected
+context is reviewed.
+
 | Symptom | Start here |
 |---|---|
 | Anything at all, first response | `genus doctor` |

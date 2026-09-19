@@ -14,6 +14,9 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import Field, StrictBool, ValidationError
 
 from robothor.operations.store import Conflict
+from robothor.sales.business_repair import (
+    Reassignment,  # noqa: TC001 — FastAPI resolves at runtime.
+)
 from robothor.sales.models import Contract, Draft, QualificationPolicy, SalesSettings
 from robothor.sales.service import Sales
 
@@ -208,6 +211,16 @@ def business_observations(
     return service.business_records(
         kind=kind, source=source, account_id=account_id, after=str(after) if after else None
     )
+
+
+@router.post("/business-observations/{observation_id}/reassign")
+@domain_errors
+def reassign_business_customer(observation_id: UUID, body: Reassignment, request: Request):
+    service, actor = require_sales_operator(request)
+    service.reassign_business_customer(
+        str(observation_id), actor=actor, **body.model_dump(mode="json")
+    )
+    return {"ok": True}
 
 
 @router.post("/suppression")

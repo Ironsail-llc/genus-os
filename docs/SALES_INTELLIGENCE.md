@@ -246,8 +246,32 @@ external CRM adoption still needs independent account and entity verification.
 A changed practice name or business-unit identity holds its association, transfers
 automation to human review and cancels pending message approvals. Reconfirmation
 requires the current revision. Account inactivity changes readiness without erasing
-historical order evidence. Cross-customer reassignment and account migration need
-a dedicated repair workflow; this endpoint cannot silently perform either.
+historical order evidence. The ordinary binding endpoint cannot move a practice
+between customers or migrate its source account.
+
+Migration 129 adds a binding review generation and remembers when a customer has
+lost its final practice association. To correct ownership, a human owner/admin
+uses `POST /api/sales/business-observations/{observation_id}/reassign` with
+`expected_revision`, `expected_prospect_id`, `target_prospect_id`,
+`expected_binding_version` and a 10–2,000-character `reason`. The source account
+and practice identity stay fixed. The target must be a different customer in the
+same tenant, with compatible current attribution and no legacy mapping.
+
+The repair locks the source and both customer records, checks the reviewed match,
+then moves the binding and its current order attribution in one transaction.
+Both customers receive an audit entry and a new outcome version; their pending
+message approvals are cancelled, stop work is queued, and agent-owned
+conversations move to human review with status `customer_review`. Existing human
+ownership is preserved. The repair does not grant renewed sending authority.
+The review generation rejects a stale request even after an association has moved
+away and back to the same customer. Partial failure rolls back both sides.
+
+If the former customer has other reviewed practices, their observations remain
+attributed to it. If it loses its final match, attribution and retention become
+unknown with `requires_review=true` and `coverage_complete=false`; the system
+cannot silently fall back to legacy metrics or interpret the missing match as no
+orders. A new reviewed binding restores observation attribution. Source-account
+migration and source-side order regrouping still require separate reconciliation.
 
 `BusinessObservations.commit_page` is the durable import boundary for a leased
 `sales.business` job. It checks the stored scan identity and cursor, commits all
@@ -306,7 +330,7 @@ Account, outcome switch and practice review are checked before reading and again
 in the page transaction, so pausing or changing identity during a read cannot
 commit its results. Job completion checks wall-clock lease expiry.
 
-Cross-customer reassignment controls, complete-history certification,
+Source-account migration, complete-history certification,
 atomic instance deployment and production connection checks remain before live
 activation. The native workflow and provider tests use synthetic business data;
 they do not establish deployed-runtime or customer-pilot success.
@@ -319,9 +343,11 @@ state, observation time and current or held match. Select **Review match**, choo
 a Genus customer, record the matching evidence, and explicitly confirm ownership.
 The submission binds the exact revision displayed during review. A stale revision
 or changed association discards the form and requires refresh/review. A held match
-can be reconfirmed for its current customer. Reassignment to a different customer
-is not offered by this control. Customer choices currently come from the latest
-200 prospects in the Sales workspace.
+can be reconfirmed for its current customer. **Repair customer match** opens the
+separate reassignment form: review the existing customer, select the corrected
+owner, record the evidence, and acknowledge review of both conversations. The form
+explains that pending approvals are cancelled and both conversations held.
+Customer choices currently come from the latest 200 prospects in the Sales workspace.
 
 **Inspect provider reads** opens the recovery inventory. Filter by read type or
 show all statuses, inspect the failed read's scope, then use **Review read recovery**
@@ -348,7 +374,7 @@ the `write_path_restrict` guardrail and an explicit status-file allowlist.
 
 ## Recovery and validation
 
-Migrations 126–128 add tenant-scoped work, budgets, event inbox, audit, immutable
+Migrations 126–129 add tenant-scoped work, budgets, event inbox, audit, immutable
 actions, external effects and sales records. Work leases are fenced; domain
 updates and follow-on jobs commit together. Daily and monthly spending admission
 and settlement are atomic across both scopes. Admission locks current settings
