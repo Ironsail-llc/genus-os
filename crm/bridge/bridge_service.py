@@ -211,6 +211,9 @@ app.include_router(automations_router)
 # ask_user question (a row) and a permission escalation (a proxy to the engine,
 # where the pending request actually lives).
 app.include_router(approvals_router)
+from routers.autonomy import router as autonomy_router
+
+app.include_router(autonomy_router)
 # Who may reach this instance over a channel. Beside approvals because both are
 # "a person has to decide something", and one of the decisions here is the only
 # way a pairing code is ever spent over the network -- the channel that issued

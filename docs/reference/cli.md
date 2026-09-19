@@ -644,7 +644,7 @@ Usage: `genus tunnel status`
 
 Manage the secret vault.
 
-Usage: `genus vault {init,set,get,list,delete,import-env,export-env,audit}`
+Usage: `genus vault {init,set,get,list,delete,import-env,export-env,audit,rotate-resources}`
 
 ### `genus vault init`
 
@@ -718,6 +718,12 @@ Usage: `genus vault export-env`
 Audit secret usage across the codebase.
 
 Usage: `genus vault audit`
+
+### `genus vault rotate-resources`
+
+Rotate the encryption key for personal vault resources.
+
+Usage: `genus vault rotate-resources`
 
 ## `genus secrets`
 

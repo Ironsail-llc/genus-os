@@ -303,6 +303,9 @@ def redact(text: str) -> str:
     if not text:
         return text
     try:
+        from robothor.autonomy.intake import protect_payment_text
+
+        text = protect_payment_text(text)
         named = _ASSIGNMENT.sub(_redact_assignment, text)
         return _CREDENTIAL_SHAPED.sub(PLACEHOLDER, named)
     except Exception:  # noqa: BLE001 - pragma: no cover - a regex that cannot fail

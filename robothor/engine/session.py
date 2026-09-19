@@ -344,6 +344,18 @@ class AgentSession:
         replies_to) are dropped before the envelope reaches the LLM —
         only role + content go on the wire.
         """
+        from robothor.autonomy.intake import protect_payment_text
+
+        user_message = protect_payment_text(user_message)
+        if "browser" in tools_provided:
+            system_prompt += (
+                "\n\nFor account creation, applications and purchases, inspect browser(action='autonomy', "
+                "request={'kind':'status'}). An active standing grant is prior explicit authorization "
+                "for its covered actions; do not ask for it again or impose a blanket stop before submission. "
+                "Use the reference-only broker for credentials and payments. Complete and verify authorized "
+                "work; preserve uncertain submissions for reconciliation. Missing data, unsupported verification "
+                "and absent authority are distinct conditions, not reasons to claim all forms are impossible."
+            )
         self.run.status = RunStatus.RUNNING
         self.run.started_at = datetime.now(UTC)
         # The run has begun — tell anyone watching for it now, not when the

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import json
 import logging
 import os
 import re as re_mod
@@ -23,10 +24,63 @@ logger = logging.getLogger(__name__)
 
 HANDLERS: dict[str, Any] = {}
 
-# Active browser sessions keyed by agent_id
+
+def _upload_payload(workspace: str, requested: str) -> dict[str, Any]:
+    """Validate the opened file, so a pathname race cannot change the source."""
+    import mimetypes
+    import stat
+    from pathlib import Path
+
+    from robothor.engine.attachments import is_inbox_secret
+    from robothor.engine.secret_paths import is_secret_path
+
+    root = Path(workspace).resolve(strict=True)
+    candidate = Path(requested)
+    candidate = candidate if candidate.is_absolute() else root / candidate
+    path = candidate.resolve(strict=True)
+    if not path.is_relative_to(root) or is_secret_path(candidate) or is_secret_path(path):
+        raise ValueError("upload source is not an allowed workspace file")
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        opened = Path(f"/proc/self/fd/{fd}").resolve(strict=True)
+        metadata = os.fstat(fd)
+        if (
+            not opened.is_relative_to(root)
+            or is_secret_path(opened)
+            or is_inbox_secret(opened, workspace=root)
+            or not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_size > 5_000_000
+        ):
+            raise ValueError("upload requires an allowed regular file under 5 MB")
+        with os.fdopen(fd, "rb", closefd=False) as source:
+            content = source.read(5_000_001)
+        if len(content) > 5_000_000:
+            raise ValueError("upload source grew beyond 5 MB")
+        return {
+            "name": path.name,
+            "mimeType": mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+            "buffer": content,
+        }
+    finally:
+        os.close(fd)
+
+
+# Active browser sessions keyed by tenant, principal, agent and run
 _sessions: dict[str, BrowserSession] = {}
 _playwright_instance: Any = None
 _session_lock = asyncio.Lock()
+
+
+def _session_key(ctx: ToolContext) -> str:
+    """A browser belongs to one tenant, principal, agent and run."""
+    return json.dumps(
+        [
+            str(getattr(ctx, name, "") or "")
+            for name in ("tenant_id", "user_id", "agent_id", "run_id")
+        ]
+    )
+
 
 # Auto-cleanup after 10 minutes of inactivity
 SESSION_TIMEOUT_SECONDS = 600
@@ -339,7 +393,7 @@ async def ensure_session(ctx: ToolContext) -> tuple[bool, str]:
     ``started_here`` is True only when this call launched the browser, so the
     caller knows whether stopping it again is its business.
     """
-    agent_id = ctx.agent_id or "default"
+    agent_id = _session_key(ctx)
     if await _get_session(agent_id) is not None:
         return False, ""
     result = await _action_start({}, ctx)
@@ -350,7 +404,7 @@ async def ensure_session(ctx: ToolContext) -> tuple[bool, str]:
 
 async def close_session(ctx: ToolContext) -> None:
     """Close the agent's session. Only for a caller that started it."""
-    await _close_session(ctx.agent_id or "default")
+    await _close_session(_session_key(ctx))
 
 
 # How long a throwaway tab waits for the content its caller asked for. Long
@@ -383,7 +437,7 @@ async def isolated_fetch(
     Returns ``{status, url, result, html, error}``. ``html`` is populated only
     when ``html_js`` is given and ``js`` returned nothing useful.
     """
-    session = await _get_session(ctx.agent_id or "default")
+    session = await _get_session(_session_key(ctx))
     if session is None:
         return {"error": "Browser not started."}
     try:
@@ -437,6 +491,10 @@ async def isolated_fetch(
 async def _browser(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Full browser automation via Playwright. Dispatches by 'action' parameter."""
     action = args.get("action", "")
+    if action == "autonomy":
+        from robothor.engine.tools.handlers.autonomy import handle
+
+        return await handle(args.get("request", {}), ctx)
     if not action:
         return {
             "error": "No action provided. Use: start, stop, navigate, screenshot, snapshot, click, fill, type, press, scroll, evaluate, tabs, pdf, console, status"
@@ -476,7 +534,7 @@ async def _browser(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
 async def _action_start(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Launch a managed Chromium browser on the virtual display."""
-    agent_id = ctx.agent_id or "default"
+    agent_id = _session_key(ctx)
 
     async with _session_lock:
         from robothor.engine.sandbox import get_current_sandbox
@@ -490,7 +548,7 @@ async def _action_start(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
             # not be reused — its CDP handle points at a torn-down container,
             # potentially from another run/tenant. Drop it and start fresh.
             if existing.sandbox_endpoint == endpoint:
-                return {"status": "already_running", "agent_id": agent_id}
+                return {"status": "already_running", "agent_id": ctx.agent_id or "default"}
             await _close_session(agent_id)
 
         try:
@@ -499,12 +557,8 @@ async def _action_start(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
                 # Per-run Docker sandbox: drive the container's Chromium over CDP
                 # instead of launching one on the host display.
                 browser = await pw.chromium.connect_over_cdp(endpoint)
-                context = (
-                    browser.contexts[0]
-                    if browser.contexts
-                    else await browser.new_context(viewport={"width": 1280, "height": 960})
-                )
-                page = context.pages[0] if context.pages else await context.new_page()
+                context = await browser.new_context(viewport={"width": 1280, "height": 960})
+                page = await context.new_page()
             else:
                 browser = await pw.chromium.launch(
                     headless=False,
@@ -525,27 +579,27 @@ async def _action_start(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
             _sessions[agent_id] = BrowserSession(
                 browser=browser, context=context, page=page, sandbox_endpoint=endpoint
             )
-            return {"status": "started", "agent_id": agent_id}
+            return {"status": "started", "agent_id": ctx.agent_id or "default"}
         except Exception as e:
             return {"error": f"Failed to start browser: {e}"}
 
 
 async def _action_stop(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Close the browser session."""
-    agent_id = ctx.agent_id or "default"
+    agent_id = _session_key(ctx)
     await _close_session(agent_id)
-    return {"status": "stopped", "agent_id": agent_id}
+    return {"status": "stopped", "agent_id": ctx.agent_id or "default"}
 
 
 async def _action_status(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Check browser session status."""
-    agent_id = ctx.agent_id or "default"
+    agent_id = _session_key(ctx)
     session = await _get_session(agent_id)
     if session is None:
-        return {"status": "not_running", "agent_id": agent_id}
+        return {"status": "not_running", "agent_id": ctx.agent_id or "default"}
     return {
         "status": "running",
-        "agent_id": agent_id,
+        "agent_id": ctx.agent_id or "default",
         "url": session.page.url,
         "title": await session.page.title(),
         "age_seconds": int(time.time() - session.created_at),
@@ -559,7 +613,7 @@ async def _action_status(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
 
 async def _action_navigate(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Navigate to a URL."""
-    agent_id = ctx.agent_id or "default"
+    agent_id = _session_key(ctx)
     session = await _get_session(agent_id)
     if session is None:
         return {"error": "Browser not started. Call browser(action='start') first."}
@@ -603,7 +657,7 @@ async def _action_navigate(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
 
 async def _action_screenshot(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Capture a screenshot of the current page."""
-    agent_id = ctx.agent_id or "default"
+    agent_id = _session_key(ctx)
     session = await _get_session(agent_id)
     if session is None:
         return {"error": "Browser not started."}
@@ -630,7 +684,7 @@ async def _action_snapshot(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
     without indexing.  When few interactive elements are detected, a
     screenshot is auto-included as a vision fallback.
     """
-    agent_id = ctx.agent_id or "default"
+    agent_id = _session_key(ctx)
     session = await _get_session(agent_id)
     if session is None:
         return {"error": "Browser not started."}
@@ -701,7 +755,7 @@ async def _action_snapshot(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
 
 async def _action_pdf(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Export the current page as PDF (base64)."""
-    agent_id = ctx.agent_id or "default"
+    agent_id = _session_key(ctx)
     session = await _get_session(agent_id)
     if session is None:
         return {"error": "Browser not started."}
@@ -716,7 +770,7 @@ async def _action_pdf(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
 async def _action_console(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Read recent console messages from the page."""
-    agent_id = ctx.agent_id or "default"
+    agent_id = _session_key(ctx)
     session = await _get_session(agent_id)
     if session is None:
         return {"error": "Browser not started."}
@@ -731,7 +785,7 @@ async def _action_console(args: dict[str, Any], ctx: ToolContext) -> dict[str, A
 
 async def _action_evaluate(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Execute JavaScript on the current page."""
-    agent_id = ctx.agent_id or "default"
+    agent_id = _session_key(ctx)
     session = await _get_session(agent_id)
     if session is None:
         return {"error": "Browser not started."}
@@ -754,7 +808,7 @@ async def _action_evaluate(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
 
 async def _action_tabs(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """List open browser tabs."""
-    agent_id = ctx.agent_id or "default"
+    agent_id = _session_key(ctx)
     session = await _get_session(agent_id)
     if session is None:
         return {"error": "Browser not started."}
@@ -851,7 +905,7 @@ async def _action_act(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     request.selector: CSS selector (fallback)
     request.x, request.y: pixel coordinates (for click)
     """
-    agent_id = ctx.agent_id or "default"
+    agent_id = _session_key(ctx)
     session = await _get_session(agent_id)
     if session is None:
         return {"error": "Browser not started."}
@@ -882,7 +936,21 @@ async def _action_act(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         target_desc = selector
 
     try:
-        if kind == "click":
+        if kind == "upload":
+            if not locator or not ctx.workspace:
+                return {"error": "upload requires a target and workspace"}
+            await locator.set_input_files(
+                await asyncio.to_thread(_upload_payload, ctx.workspace, request.get("path", ""))
+            )
+            return {"acted": "upload", "target": target_desc}
+
+        elif kind == "check":
+            if not locator:
+                return {"error": "check requires a target"}
+            await locator.set_checked(bool(request.get("checked", True)), timeout=10000)
+            return {"acted": "check", "target": target_desc}
+
+        elif kind == "click":
             if request.get("x") is not None and request.get("y") is not None:
                 await page.mouse.click(int(request["x"]), int(request["y"]))
                 return {"acted": "click", "target": f"({request['x']}, {request['y']})"}

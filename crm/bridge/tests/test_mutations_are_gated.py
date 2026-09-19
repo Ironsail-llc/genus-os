@@ -41,6 +41,13 @@ JUSTIFIED_WITHOUT_OPERATOR_GATE: dict[str, str] = {
         "Platform-only require_operator would exclude other tenants' own operators. "
         "Dependency enforcement is exercised in robothor/goals/tests/test_api.py."
     ),
+    "/api/autonomy": (
+        "Personal resources and grants, not appliance credentials: AuthMiddleware "
+        "requires bridge:write and every route calls require_personal_owner, "
+        "which refuses service/read-only principals and binds tenant plus CRM "
+        "person from verified identity. Payment posture changes additionally "
+        "require owner/admin. The per-router invariant below pins that guard."
+    ),
     "/api/auth": (
         "Public session bootstrap/rotation — AuthMiddleware._PUBLIC_PATHS lists "
         "/api/auth/sso|refresh|logout and _authorization_denial() returns None for "
@@ -210,6 +217,7 @@ EXPECTED_ROUTER_MODULES = frozenset(
         # so a mount that silently stopped contributing routes would take the
         # gate assertions on them with it and still leave the floor intact.
         "routers.providers",
+        "routers.autonomy",
         # Manifest writes. Same reasoning: these are the only routes that decide
         # which agents exist and what they may do, and a mount that stopped
         # contributing them would leave both this floor and the per-route gate
@@ -235,6 +243,13 @@ EXPECTED_ROUTER_MODULES = frozenset(
         "routers.memory_facts",
     }
 )
+
+
+def test_personal_autonomy_routes_always_bind_the_authenticated_person():
+    routes = [route for route in _all_routes() if _matches(route.path, "/api/autonomy")]
+    assert len(routes) >= 8
+    for route in routes:
+        assert "require_personal_owner(request)" in inspect.getsource(route.endpoint)
 
 
 def test_the_app_actually_exposes_mutation_routes() -> None:
