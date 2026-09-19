@@ -203,6 +203,7 @@ async def _handle_spawn_agent(
     ctx: ToolContext | None = None,
     *,
     agent_id: str = "",
+    _runner: AgentRunner | None = None,
 ) -> dict[str, Any]:
     """Spawn a single child agent and wait for its result.
 
@@ -221,7 +222,7 @@ async def _handle_spawn_agent(
     if ctx and not agent_id:
         agent_id = ctx.agent_id
 
-    runner = get_runner()
+    runner = _runner or get_runner()
     if runner is None:
         return {"error": "Runner not available — spawn_agent requires a running engine"}
 
