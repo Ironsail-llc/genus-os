@@ -108,6 +108,43 @@ async def test_missing_budget_never_invokes_an_agent(sales):
 
 
 @pytest.mark.asyncio
+async def test_research_completion_retains_child_merge_provenance(sales):
+    existing = researched(sales)
+    provenance = {
+        "version": 1,
+        "children": {"services": {"run_id": "child-run"}},
+        "merged_hash": "a" * 64,
+    }
+
+    class DelegatingRunner(RunnerStub):
+        async def run(self, **kwargs):
+            result = await super().run(**kwargs)
+            result.stage_provenance = provenance
+            return result
+
+    runner = DelegatingRunner(sales.get(existing["id"])["dossier"])
+    sales.configure(
+        {
+            "monthly_limit_units": 500_000_000,
+            "daily_limit_units": 20_000_000,
+            "agents": {"research": "researcher"},
+        },
+        "operator:test",
+    )
+    first = sales.ops.claim("sales.research")
+    sales.ops.complete(first["id"], first["lease_token"], {})
+    prospect = sales.discover("Other", "https://other.example.com", "https://directory.example.com")
+    assert await ResearchWorker(sales, runner).tick()
+    assert runner.calls[0]["stage"] == "research"
+    with sales.ops.transaction() as cur:
+        cur.execute(
+            "SELECT result FROM operation_jobs WHERE tenant_id=%s AND kind='sales.research' AND payload->>'prospect_id'=%s AND status='completed'",
+            (sales.tenant, str(prospect["id"])),
+        )
+        assert cur.fetchone()["result"]["provenance"] == provenance
+
+
+@pytest.mark.asyncio
 async def test_malformed_agent_output_cannot_change_company_state(sales):
     p = sales.discover("Example", "https://example.com", "https://directory.example.com")
     sales.configure(

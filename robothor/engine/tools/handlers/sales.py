@@ -22,10 +22,20 @@ def handler(name):
             "sales_discover",
             "sales_propose_email",
             "sales_process_queue",
+            "sales_research_parallel",
         }:
             return {"error": f"{SANDBOX_DENIAL_PREFIX} Sales writes disabled in benchmarks"}
         if not ctx.tenant_id:
             return {"error": "Authenticated tenant required"}
+        if name == "sales_research_parallel":
+            from robothor.sales.research_fanout import delegate_research
+
+            try:
+                return await delegate_research(parsed.buying_case, ctx)
+            except (Conflict, ValueError):
+                return {
+                    "error": "Research delegation was unavailable or did not return a complete valid bundle"
+                }
         if name == "sales_process_queue" and (
             not ctx.agent_id.startswith("workflow:")
             or getattr(ctx, "user_id", "") != "service:" + ctx.agent_id

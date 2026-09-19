@@ -144,6 +144,7 @@ and report `kind: "own"` — they degrade honestly rather than pretending.
 | `sales_discover` | Deduplicate a candidate business in the CRM and queue research. |
 | `sales_get_prospect` | Read the tenant's current dossier and qualification. |
 | `sales_get_context` | Read contacts, conversation and active sales knowledge for drafting. |
+| `sales_research_parallel` | In a bounded native research stage, run three fixed topics through the selected release's worker and merge validated evidence. The only argument is an active approved buying case. |
 | `sales_propose_email` | Create an immutable draft for human review; never approves or sends. |
 | `sales_process_queue` | Advance one durable stage from an explicitly bound native service workflow. Refused for agent, interactive and benchmark callers. |
 

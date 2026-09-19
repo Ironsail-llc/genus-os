@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 from pydantic import ValidationError
@@ -18,20 +18,43 @@ from robothor.operations.store import BudgetExceeded, Conflict
 from robothor.sales.models import Dossier, Draft, SalesSettings
 
 
+@dataclass
+class StageResult:
+    """Business output can differ from the parent's retained raw narrative."""
+
+    id: str
+    status: str
+    total_cost_usd: float
+    output_text: str | None = None
+    stage_provenance: dict = field(default_factory=dict)
+    error_message: str = ""
+
+
 class NativeStageRunner:
     """Apply workflow limits while retaining the native manifest and permissions."""
 
     async def run(
-        self, *, agent_id, tenant_id, message, correlation_id, max_cost_usd, release_id=None
+        self,
+        *,
+        agent_id,
+        tenant_id,
+        message,
+        correlation_id,
+        max_cost_usd,
+        release_id=None,
+        stage=None,
     ):
         from robothor.engine.config import load_agent_config
-        from robothor.engine.models import TriggerType
+        from robothor.engine.models import RunStatus, TriggerType
         from robothor.engine.request_budget import RequestBudget, budget_scope
         from robothor.engine.tools.handlers.spawn import get_runner
+        from robothor.sales.research_fanout import research_scope
+        from robothor.sales.research_manifest import prepare_research
 
         runner = get_runner()
         if runner is None:
             raise Conflict("Genus agent runner is not available")
+        snapshot = None
         if release_id is not None:
             from robothor.templates.fleet_release import ReleaseError
             from robothor.templates.fleet_snapshot import load_snapshot
@@ -47,19 +70,7 @@ class NativeStageRunner:
             config = load_agent_config(agent_id, runner.config.manifest_dir)
         if config is None:
             raise Conflict("Configured sales agent manifest is missing")
-        safe = {"web_search", "web_fetch", "sales_get_prospect", "sales_get_context", "write_file"}
-        if (
-            not config.tools_allowed
-            or not set(config.tools_allowed) <= safe
-            or config.can_spawn_agents
-        ):
-            raise Conflict("Sales research requires a bounded read/research manifest")
-        if "write_file" in config.tools_allowed and (
-            not config.write_path_allowlist
-            or "write_path_restrict" not in config.guardrails
-            or config.guardrails_opt_out
-        ):
-            raise Conflict("Sales status writes require an enforced path allowlist")
+        fanout, message = prepare_research(config, snapshot, stage, tenant_id, message)
         bounded = replace(
             config,
             hard_budget=True,
@@ -71,7 +82,7 @@ class NativeStageRunner:
             downstream_agents=[],
         )
         budget = RequestBudget(math.floor(bounded.max_cost_usd * 1e6))
-        with budget_scope(budget):
+        with budget_scope(budget), research_scope(fanout):
             result = await runner.execute(
                 agent_id=agent_id,
                 message=message,
@@ -86,6 +97,17 @@ class NativeStageRunner:
         # Includes retries, failed attempts, finalizers and auxiliary model calls
         # omitted from normal run token accounting. Unknown usage stays charged.
         result.total_cost_usd = max(result.total_cost_usd, budget.charged_units / 1e6)
+        if fanout is not None:
+            # Preserve the native parent's raw output in its run record. Only
+            # the validated child merge is the business-stage deliverable.
+            result = StageResult(str(result.id), str(result.status), result.total_cost_usd)
+            if str(result.status) == "completed" and fanout.dossier is not None:
+                result.output_text = fanout.dossier.model_dump_json()
+                result.stage_provenance = fanout.provenance
+            else:
+                result.status = RunStatus.FAILED
+                result.output_text = None
+                result.error_message = "Native research did not complete all three validated topics"
         return result
 
 
@@ -149,6 +171,7 @@ class ResearchWorker:
                     correlation_id=str(job["id"]),
                     max_cost_usd=self.RUN_ALLOWANCE_UNITS / 1e6,
                     release_id=settings.fleet_release_id,
+                    stage=stage,
                     message=json.dumps(
                         {
                             "task": instruction,
@@ -176,9 +199,12 @@ class ResearchWorker:
             "output": output.model_dump(mode="json"),
             "context": json.loads(json.dumps(context, default=str)),
         }
+        if getattr(result, "stage_provenance", None):
+            checkpoint["provenance"] = result.stage_provenance
         await asyncio.to_thread(
             self.sales.ops.checkpoint, job["id"], job["lease_token"], checkpoint
         )
+        job["result"] = checkpoint
         return output, context, str(result.id)
 
     async def tick(self):
@@ -220,7 +246,10 @@ class ResearchWorker:
                 expected_version=job["payload"]["version"],
                 cur=cur,
             )
-            self.sales.ops.complete(job["id"], job["lease_token"], {"run_id": str(run_id)}, cur=cur)
+            receipt = {"run_id": str(run_id)}
+            if (job.get("result") or {}).get("provenance"):
+                receipt["provenance"] = job["result"]["provenance"]
+            self.sales.ops.complete(job["id"], job["lease_token"], receipt, cur=cur)
 
     async def qualify_tick(self):
         settings = SalesSettings.model_validate(await asyncio.to_thread(self.sales.settings))
