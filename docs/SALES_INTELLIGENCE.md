@@ -218,6 +218,14 @@ already sent or guarantee interception of an in-flight provider request.
 
 ### Human qualification quality review
 
+Before real dossier sampling, use role-specific native agent benchmarks with
+synthetic business sources. Use native `expected.json_assertions` for decisive
+fields and `require_all: true` to require every declared check to pass. The source
+runbook `docs/runbooks/BENCHMARK_HARNESS_FAIRNESS.md` documents those contracts.
+Offline grader fixtures, measured model quality and human customer calibration
+are separate evidence. Native sales read/write tools are deliberately excluded
+from benchmark children; fixtures must not depend on live prospects or policies.
+
 Open **Sales → Assess qualification quality** after publishing and selecting the
 policies to evaluate. Create a named 100-dossier cohort with a review purpose. The
 cohort fixes an 85% initial agreement target and captures the active policy map,

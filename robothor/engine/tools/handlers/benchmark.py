@@ -259,6 +259,13 @@ def benchmark_readonly_tools() -> frozenset[str]:
 #: someone classifies it — which is how the previous list was allowed to rot.
 _BENCHMARK_EXCLUDED_TOOLS: frozenset[str] = _BENCHMARK_WITHHELD_READS | frozenset(
     {
+        # Sales fixtures are supplied in the offline task. Do not expose live
+        # prospect context or durable discovery/draft/queue work to the grader.
+        "sales_discover",
+        "sales_get_context",
+        "sales_get_prospect",
+        "sales_process_queue",
+        "sales_propose_email",
         # Notifications / inbox state.
         "ack_notification",
         "send_notification",
@@ -858,6 +865,14 @@ def _validate_task(task: dict[str, Any]) -> str | None:
     expected = task.get("expected", {})
     if not expected:
         return f"task '{task['id']}' missing 'expected' criteria"
+    if "require_all" in expected and type(expected["require_all"]) is not bool:
+        return f"task '{task['id']}' require_all must be a boolean"
+    if "json_assertions" in expected:
+        from robothor.engine.benchmark_json import validate_assertions
+
+        error = validate_assertions(expected["json_assertions"])
+        if error:
+            return f"task '{task['id']}': {error}"
     for field in ("must_contain", "must_not_contain"):
         for pattern in expected.get(field, []):
             try:
@@ -1027,6 +1042,12 @@ def _score_task(output: str, expected: dict[str, Any], run_meta: dict[str, Any])
     keys are still tolerated in suite YAML so existing suites parse unchanged.
     """
     checks: list[bool] = []
+    if "json_assertions" in expected:
+        from robothor.engine.benchmark_json import grade_json
+
+        if not grade_json(output, expected["json_assertions"])["passed"]:
+            return 0.0
+        checks.append(True)
     for p in expected.get("must_contain", []):
         try:
             checks.append(bool(re.search(p, output, re.IGNORECASE)))
@@ -1041,7 +1062,7 @@ def _score_task(output: str, expected: dict[str, Any], run_meta: dict[str, Any])
     if not checks:
         return 0.0
 
-    return sum(checks) / len(checks)
+    return float(all(checks)) if expected.get("require_all") else sum(checks) / len(checks)
 
 
 #: How much of an agent's output the LLM judge is shown.
@@ -1124,9 +1145,11 @@ async def _judge_output(output: str, rubric: list[str], model: str) -> JudgeOutc
             # front-runner question. Rotation restores the run without
             # varying what is being measured.
             from robothor.engine.key_pool import api_key_for_model
+            from robothor.engine.request_budget import bounded_completion
 
             judge_key = api_key_for_model(model)
-            response = await litellm.acompletion(
+            response = await bounded_completion(
+                litellm.acompletion,
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
@@ -1157,7 +1180,9 @@ async def _judge_output(output: str, rubric: list[str], model: str) -> JudgeOutc
                     score=None,
                     error=f"judge returned {len(scores)} scores for {len(rubric)} rubric items",
                 )
-            return JudgeOutcome(score=sum(1 for s in scores if s) / len(rubric))
+            if any(type(score) is not int or score not in (0, 1) for score in scores):
+                return JudgeOutcome(score=None, error="judge scores must be integer 0 or 1")
+            return JudgeOutcome(score=sum(scores) / len(rubric))
         except Exception as e:
             detail = str(e).replace("\n", "\\n")
             # Retire a rejected credential before the next attempt, or all
@@ -1275,6 +1300,13 @@ async def _score_task_detailed(
     """
     detail: dict[str, Any] = {}
     checks: list[bool] = []
+    if "json_assertions" in expected:
+        from robothor.engine.benchmark_json import grade_json
+
+        detail["json_assertions"] = grade_json(output, expected["json_assertions"])
+        if not detail["json_assertions"]["passed"]:
+            return 0.0, detail
+        checks.append(True)
 
     # Standard regex checks (same as _score_task)
     for p in expected.get("must_contain", []):
@@ -1308,7 +1340,11 @@ async def _score_task_detailed(
         )
         detail["honesty"] = grade.to_payload()
         if grade.score is not None:
-            return grade.score, detail
+            if not expected.get("require_all"):
+                return grade.score, detail
+            if grade.score != 1:
+                return 0.0, detail
+            checks.append(True)
 
     # Cost and iteration count are telemetry only, never graded (Phase 0b) —
     # see _score_task docstring.
@@ -1333,7 +1369,8 @@ async def _score_task_detailed(
     if not checks:
         return 0.0, detail
 
-    return sum(checks) / len(checks), detail
+    score = float(all(checks)) if expected.get("require_all") else sum(checks) / len(checks)
+    return score, detail
 
 
 # ---------------------------------------------------------------------------
