@@ -64,7 +64,7 @@ async def test_gmail_delivery_routes_only_to_gmail_worker(sales, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage", ["verify", "stop", "inbox", "reconcile", "status"])
+@pytest.mark.parametrize("stage", ["verify", "stop", "reconcile", "status"])
 async def test_unimplemented_gmail_stages_never_fall_back_to_instantly(sales, monkeypatch, stage):
     from robothor.sales import queue
 

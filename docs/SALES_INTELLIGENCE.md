@@ -1097,12 +1097,12 @@ adapter: receipts, approvals and reply/suppression handling must still be wired.
 
 ### Direct Gmail integration (implementation in progress)
 
-The Gmail transport and approved-action delivery worker are implemented. This is
-not yet a complete alternative fleet: incoming-thread monitoring, opt-out/bounce
-intake, durable sent-copy reconciliation with operator controls, mailbox-error
-recovery and Gmail follow-up evidence remain unfinished. Keep deployed fleets at
+The Gmail transport, approved-action delivery worker, owned-thread monitoring and
+human sent-copy recovery are implemented. This is not yet a complete alternative
+fleet: bounce intake outside the original thread, mailbox-error recovery, local
+stop-job handling and Gmail follow-up evidence remain unfinished. Keep deployed fleets at
 `email_provider: none` until these parts and the internal pilot pass. The native
-queue can route `delivery` to Gmail; unsupported Gmail provider stages return
+queue can route `delivery` and `inbox` to Gmail; unsupported Gmail provider stages return
 `gmail_stage_not_implemented` and never fall back to Instantly. Gmail is not an
 email-address verification service; the existing valid-contact requirement stays.
 
@@ -1134,8 +1134,8 @@ automatic resend. Unresolved Gmail effects also block fleet deployment.
 `find_sent` is a read-only recovery primitive. A search hit alone is insufficient:
 it requires a single unpaginated result and independently fetched SENT message
 with the approved participants, Message-ID, subject, text and reply association.
-Absence, duplicates, changed content and unsupported MIME stay unresolved. Wiring
-this proof into durable human recovery and conversation ingestion is still required.
+Absence, duplicates, changed content and unsupported MIME stay unresolved. The
+human recovery controls below consume this proof without granting another send.
 An API receipt is `provider_accepted`; verified mailbox evidence is
 `sent_copy_verified`. Neither proves receipt by the destination or a customer sale.
 
@@ -1144,3 +1144,54 @@ Contracts checked against the upstream [sending guide](https://developers.google
 [error guidance](https://developers.google.com/workspace/gmail/api/guides/handle-errors).
 The installed CLI's [raw request executor](https://github.com/googleworkspace/cli/blob/v0.8.0/src/executor.rs)
 was checked separately from its mail helper commands.
+
+
+#### Gmail conversation intake and human recovery
+
+The `inbox` queue pump plans at most 25 owned threads and processes one per tick.
+It uses the existing durable operation jobs (`sales.gmail_sync`), not another
+scheduler. A read is one complete [Gmail thread](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.threads/get),
+limited to 100 messages, with the original approved message present. It validates
+account, participants, message/thread IDs and approved outbound content before
+committing any observations. Unsupported/ambiguous data becomes a visible read
+failure. Failures do not advance the checkpoint. Expired leases cannot commit
+messages or receipts; a reconstructed worker can claim and replay the same job.
+
+Scheduled and pre-send scans share a 30-thread-read admission limit per minute.
+Per-prospect preflight is capped at ten threads and 200 action records; exceeding
+these bounds requires review. The normal scheduled scan repeats completed threads
+after a minute and continues when research/sending switches are paused, provided
+Gmail remains the selected provider. The fleet itself remains email-excluded until
+the remaining Gmail features and internal pilot pass.
+
+Canonical messages enter the existing sales conversation pipeline exactly once.
+New inbound messages invalidate pending approvals. Auto-replies also invalidate
+stale approvals but do not start an agent conversation. Clear English opt-outs
+in the new reply or an unsubscribe subject immediately set sales/CRM suppression;
+quoted history is excluded from that deterministic check. Other reply intent
+continues through the existing conversation classifier and human message review.
+Unapproved outbound mail observed in an owned thread records the fact and transfers
+the prospect to human review. An unresolved earlier Gmail effect blocks another
+send. Thread observations run both before preparation and during the final
+pre-send callback, followed by approval validation; new replies cannot be ignored
+merely because the scheduled inbox job has not run yet.
+
+Sales → Provider read recovery includes Gmail conversation jobs. A repaired read
+retries the same account-bound thread; it never repeats a send. Sales → Delivery
+and sync exposes an **Inspect Gmail sent copy** control for held Gmail actions.
+The first step performs only reads and displays the exact canonical copy. The
+second requires a reason and the inspected evidence hash. It re-fetches Gmail and
+rejects changed evidence, another tenant, a service identity, an active write lease
+or a conflicting completed receipt. In one database transaction it records the
+canonical outbound message, resolves the action/effect, and audits the human and
+proof hash. Any failure rolls the entire update back. This neither re-enables
+sending nor restores agent ownership.
+
+Operator-only endpoints:
+
+- `POST /api/sales/actions/{action_id}/gmail/inspect` with `{}`.
+- `POST /api/sales/actions/{action_id}/gmail/reconcile` with `expected_hash` and
+  a 10–2000 character review `reason`.
+
+Neither endpoint accepts a supplied provider receipt, actor or tenant. No API
+success or sent-copy observation is presented as recipient-delivery confirmation.

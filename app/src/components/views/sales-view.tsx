@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/business/page-header";
 import { isOperatorRole } from "@/components/layout/nav-config";
 import { apiFetch } from "@/lib/api/client";
 import { BusinessReview, type BusinessSource } from "@/components/sales/business-review";
+import { GmailRecovery } from "@/components/sales/gmail-recovery";
 import { ReadRecovery } from "@/components/sales/read-recovery";
 import { DeploymentControls } from "@/components/sales/deployment-controls";
 import { PilotSettings } from "@/components/sales/pilot-settings";
@@ -24,7 +25,7 @@ type Evidence = { id: string; field: string; value: unknown; url: string; excerp
 type Prospect = { id: string; version: number; name: string; domain: string; status: string; owner: string;
   qualification?: { policy_version?: string; score: number; decision: string; missing: string[]; buying_case: string; assessment?: Assessment };
   dossier?: { summary: string; unanswered: string[]; evidence: Evidence[] } };
-type Action = { id: string; status: string; expires_at: string; receipt?: { id?: string; delivery_status?: string }; payload: {
+type Action = { id: string; status: string; expires_at: string; receipt?: { id?: string; delivery_status?: string; provider?: string }; payload: {
   prospect_id: string; sender: string; recipient: string; subject: string; body: string;
   claim_ids: string[]; evidence_ids: string[]; knowledge_version: string; purpose: string } };
 type Overview = { prospects: Prospect[]; actions: Action[]; jobs: { id: string; kind: string; status: string; error?: string }[];
@@ -171,7 +172,11 @@ export function SalesView({ visible, role }: { visible: boolean; role?: string |
           </article>)}
           {!data.actions.some((a) => a.status === "review") && <p className="text-sm text-muted-foreground">No messages awaiting review.</p>}
           <h3 className="font-medium">Delivery and sync</h3>
-          {data.actions.filter((a) => a.status !== "review").map((a) => <p key={a.id} className="text-sm">{a.payload.recipient}: {a.receipt?.delivery_status ?? a.status}</p>)}
+          {data.actions.filter((a) => a.status !== "review").map((a) => <div key={a.id} className="space-y-2">
+            <p className="text-sm">{a.payload.recipient}: {a.receipt?.delivery_status ?? a.status}</p>
+            {["unknown", "executing"].includes(a.status) && (a.receipt?.provider === "gmail" || data.settings.email_provider === "gmail") &&
+              <GmailRecovery actionId={a.id} onChanged={refresh} />}
+          </div>)}
           {data.jobs.filter((j) => j.error || j.status === "failed").map((j) => <p key={j.id} className="text-sm">{j.kind}: {j.status} · {j.error}</p>)}
           <h3 className="font-medium">Spending</h3>
           {data.budgets.map((b) => <p key={b.scope} className="text-sm">{b.scope}: ${(b.spent_units / 1e6).toFixed(2)} spent · ${(b.reserved_units / 1e6).toFixed(2)} reserved · ${(b.limit_units / 1e6).toFixed(2)} limit</p>)}

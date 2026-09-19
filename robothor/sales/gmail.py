@@ -50,6 +50,9 @@ def headers(record):
                 "references",
                 "in-reply-to",
                 "reply-to",
+                "auto-submitted",
+                "x-autoreply",
+                "x-autorespond",
             }:
                 if name in result:
                     raise ValueError
@@ -190,6 +193,13 @@ class Gmail:
         self.provider_id(record.get("threadId"))
         return record
 
+    async def get_thread(self, thread_id):
+        raw_id = self.raw_id(thread_id)
+        record = await self._call(["threads", "get"], params={"id": raw_id, "format": "full"})
+        if record.get("id") != raw_id:
+            raise ProviderError("Gmail thread identity mismatch")
+        return record
+
     async def prepare(self, action_id, payload):
         draft = Draft.model_validate({k: payload[k] for k in Draft.model_fields if k in payload})
         if draft.sender != self.mailbox:
@@ -256,7 +266,7 @@ class Gmail:
             raise UnknownEffect("Gmail acknowledged a different thread; reconcile before retrying")
         return self._receipt(result, status="provider_accepted")
 
-    async def find_sent(self, action_id, payload):
+    async def find_sent(self, action_id, payload, *, include_record=False):
         """Read-only evidence for reconciliation; never interprets absence as failure."""
         if payload.get("sender") != self.mailbox:
             raise ProviderError("Approved sender differs from Gmail host mailbox")
@@ -291,4 +301,5 @@ class Gmail:
                 parent
             ).get("message-id"):
                 raise ProviderError("Gmail sent reply identity mismatch")
-        return self._receipt(record, status="sent_copy_verified")
+        receipt = self._receipt(record, status="sent_copy_verified")
+        return {"receipt": receipt, "record": record} if include_record else receipt

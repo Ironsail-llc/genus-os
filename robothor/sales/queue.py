@@ -16,6 +16,7 @@ from robothor.operations.store import Conflict
 from robothor.sales.business_queue import BusinessWorker
 from robothor.sales.delivery import DeliveryWorker, StopWorker
 from robothor.sales.gmail_delivery import GmailDeliveryWorker
+from robothor.sales.gmail_sync import GmailThreadWorker
 from robothor.sales.ingestion import InstantlyInboxWorker
 from robothor.sales.models import SalesSettings
 from robothor.sales.promotion import PromotionWorker
@@ -57,7 +58,6 @@ class QueueDriver:
         if settings.email_provider == "gmail" and stage in {
             "verify",
             "stop",
-            "inbox",
             "reconcile",
             "status",
         }:
@@ -80,7 +80,12 @@ class QueueDriver:
                     "tick",
                 ),
                 "stop": (StopWorker, "tick"),
-                "inbox": (InstantlyInboxWorker, "tick"),
+                "inbox": (
+                    GmailThreadWorker
+                    if settings.email_provider == "gmail"
+                    else InstantlyInboxWorker,
+                    "tick",
+                ),
                 "reconcile": (ReconciliationWorker, "drain"),
                 "business": (BusinessWorker, "tick"),
                 "analyst": (AnalystWorker, "tick"),
