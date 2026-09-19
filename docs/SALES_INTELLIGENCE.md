@@ -766,3 +766,9 @@ workflow-authored, and retains all child IDs and provenance. A broker rejection
 before any bundle starts can still receive normal agent correction. Failed or
 cancelled children never become a successful bundle; partial validated fragments
 remain available for an authorized recovery attempt.
+
+Mandatory first retrieval supports both named-function endpoints and endpoints
+that require a tool call when offered only that one retrieval function. The latter
+uses the same authorized schema, native dispatch and successful-fetch attestation;
+it does not admit an automatic-tool-choice fallback. This permits choosing a
+research model independently of a backend's named-function syntax support.
