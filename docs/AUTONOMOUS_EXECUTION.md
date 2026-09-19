@@ -390,6 +390,12 @@ for other chat surfaces, nor automatic detection of arbitrary unlabeled secrets.
 The dashboard enrollment form includes legal name, second address line and
 nationality as well as the existing profile fields; missing values are not guessed.
 
+Enrollment deployments must also apply migration 132 through the canonical migrator.
+It adds the established tenant-isolation database backstop to enrollment intents
+and any other tenant table missing it, without changing existing policies or
+the checksum of an already-applied migration 131. Scoped database reads and
+writes are covered by a non-superuser PostgreSQL regression test.
+
 ## Purposes and shared spending decisions
 
 Standing grants can set `allowed_purposes` on Account → Personal automation.
@@ -416,3 +422,4 @@ standing grants do not acquire a new approval threshold. Future personal renewal
 projections use the same bounded arithmetic. Ownership checks, resource access,
 reservations and ledger records remain scoped to their respective domains, so
 personal funds are never represented as company-owned virtual cards.
+e
