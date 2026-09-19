@@ -432,7 +432,7 @@ async def _handle_spawn_agents(
             spawn_args["tools_override"] = spec["tools_override"]
         if "parent_task_id" in spec:
             spawn_args["parent_task_id"] = spec["parent_task_id"]
-        coros.append(_handle_spawn_agent(spawn_args, agent_id=agent_id))
+        coros.append(_handle_spawn_agent(spawn_args, ctx=ctx, agent_id=agent_id))
 
     raw_results = await asyncio.gather(*coros, return_exceptions=True)
 
