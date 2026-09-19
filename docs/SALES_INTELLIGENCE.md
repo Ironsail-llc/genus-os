@@ -587,8 +587,25 @@ becomes the stage output; facts added in the parent's final narrative do not ent
 the committed dossier. The original parent and child outputs remain in native run
 records. Child run IDs, output hashes, and the merged hash survive checkpointing
 and final job completion. An incomplete bundle is not qualified; completed whole
-stage checkpoints can be reused after a domain-commit failure. Partial child
-bundles are not yet resumable across separate research jobs.
+stage checkpoints can be reused after a domain-commit failure.
+
+Migration 133 adds immutable, tenant-scoped `operation_fragments`. Native research
+saves its selected buying case before spawning, then checkpoints each validated
+child as it finishes, without waiting for its siblings. A new attempt of the same
+job loads those topics and dispatches only the missing ones. All topics must still
+validate and merge before the dossier is committed; the parent model may run again
+to finish orchestration. Each attempt retains the ordinary job-attempt, spawn and
+funded-request limits. Previously uncertain charges remain reserved.
+
+Reuse binds to the exact company/context, policy content, agent ID, fleet release
+and output schema. Changed inputs, duplicate child receipts, altered stored bytes,
+or a different native stage identity refuse reuse; fragments are never replaced
+or transferred to another job. Writes require the current work lease and deadline,
+rechecked after acquiring the database lock and immediately before insertion.
+Cancellation preserves already committed fragments. A crash before a fragment is
+saved can still require paid re-research under a new allowance; this is not an
+exactly-once guarantee for remote requests. Changed-input holds require review or
+newly authorized research work rather than silently discarding paid evidence.
 
 This tool is withheld from offline benchmarks. Synthetic inline-evidence grades
 do not validate live tool use, delegated research quality, or the human pilot.

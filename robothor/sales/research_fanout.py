@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -59,6 +60,10 @@ class ResearchFanout:
         self.buying_case = None
         self.dossier: Dossier | None = None
         self.provenance: dict = {}
+        self.parts: dict[str, Dossier] = {}
+        self.children: dict = {}
+        self.recovery = None
+        self._record_lock = asyncio.Lock()
 
     async def run(self, buying_case, ctx):
         from robothor.engine.tools.handlers.spawn import _handle_spawn_agents
@@ -83,7 +88,12 @@ class ResearchFanout:
             if self.dossier is not None and buying_case == self.buying_case:
                 return self.result()
             raise Conflict("Research bundle already attempted; no additional children admitted")
+        if self.buying_case is not None and self.buying_case != buying_case:
+            raise Conflict("Recovered research must retain its original buying case")
         self.started, self.buying_case = True, buying_case
+        if self.recovery is not None:
+            await self.recovery.begin(buying_case)
+        missing = [topic for topic in TOPICS if topic not in self.parts]
         specs = [
             {
                 "agent_id": self.child_id,
@@ -97,40 +107,69 @@ class ResearchFanout:
                     }
                 ),
             }
-            for topic in TOPICS
+            for topic in missing
         ]
-        response = await _handle_spawn_agents({"agents": specs}, ctx=ctx)
-        results = response.get("results", [])
-        if len(results) != len(TOPICS):
-            raise Conflict("Research bundle did not return all planned children")
-        parts, children, run_ids = {}, {}, set()
-        for topic, result in zip(TOPICS, results, strict=True):
+        if missing:
+
+            async def capture(index, result):
+                await self.record(missing[index], result)
+
+            options = {"_on_result": capture} if self.recovery is not None else {}
+            response = await _handle_spawn_agents({"agents": specs}, ctx=ctx, **options)
+            results = response.get("results", [])
+            if len(results) != len(missing):
+                raise Conflict("Research bundle did not return all planned children")
+            for topic, result in zip(missing, results, strict=True):
+                await self.record(topic, result)
+        dossier = merge_fragments(self.parts, buying_case)
+        self.dossier = dossier
+        self.provenance = {
+            "version": 1,
+            "children": self.children,
+            "merged_hash": digest(dossier.model_dump(mode="json")),
+        }
+        return self.result()
+
+    async def record(self, topic, result):
+        """Validate and persist each successful result before siblings finish."""
+        async with self._record_lock:
             run_id = result.get("run_id")
             if (
-                result.get("status") != "completed"
+                topic not in TOPICS
+                or result.get("status") != "completed"
                 or result.get("error")
                 or result.get("agent_id") != self.child_id
+                or not isinstance(run_id, str)
                 or not run_id
-                or run_id in run_ids
             ):
                 raise Conflict(
                     "Every research child must complete with a distinct native run receipt"
                 )
-            parts[topic] = Dossier.model_validate_json(result.get("output_text") or "")
-            run_ids.add(run_id)
-            children[topic] = {
-                "run_id": str(run_id),
+            part = Dossier.model_validate_json(result.get("output_text") or "")
+            if part.buying_case != self.buying_case:
+                raise Conflict("Research child changed the approved buying case")
+            receipt = {
+                "run_id": run_id,
                 "agent_id": self.child_id,
-                "output_hash": digest(parts[topic].model_dump(mode="json")),
+                "output_hash": digest(part.model_dump(mode="json")),
             }
-        dossier = merge_fragments(parts, buying_case)
-        self.dossier = dossier
-        self.provenance = {
-            "version": 1,
-            "children": children,
-            "merged_hash": digest(dossier.model_dump(mode="json")),
-        }
-        return self.result()
+            if topic in self.parts:
+                if receipt != self.children[topic]:
+                    raise Conflict("Completed research topic cannot be replaced")
+                return
+            if any(c["run_id"] == run_id for c in self.children.values()):
+                raise Conflict("Research child receipts must be distinct")
+            if self.recovery is not None:
+                await self.recovery.save(
+                    topic,
+                    {
+                        "run_id": run_id,
+                        "agent_id": self.child_id,
+                        "status": "completed",
+                        "output_text": part.model_dump_json(),
+                    },
+                )
+            self.parts[topic], self.children[topic] = part, receipt
 
     def result(self):
         return {"dossier": self.dossier.model_dump(mode="json"), "provenance": self.provenance}

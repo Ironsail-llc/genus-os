@@ -291,6 +291,12 @@ an unapproved helper from the live workspace or bypass an exhausted allowance.
 first children use one. The runner persists that value without incrementing it
 again; benchmark child contexts use the same convention.
 
+Native integrations may attach an internal per-result callback to the parallel
+spawn handler to checkpoint completed children before siblings finish. It receives
+the input index and native result; it does not alter spawn admission, identities,
+funding or cancellation. This callback is not a model-callable tool argument.
+Callback failures are batch failures, and the remaining children are still awaited.
+
 ### Pattern D: Cron Safety Net
 
 Python crons fetch data and publish events. Unit agents process the data. Crons are NOT the primary trigger — they catch anything the event hooks missed.

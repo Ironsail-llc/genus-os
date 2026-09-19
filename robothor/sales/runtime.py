@@ -43,6 +43,7 @@ class NativeStageRunner:
         max_cost_usd,
         release_id=None,
         stage=None,
+        recovery=None,
     ):
         from robothor.engine.config import load_agent_config
         from robothor.engine.models import DeliveryMode, RunStatus, TriggerType
@@ -71,6 +72,13 @@ class NativeStageRunner:
         if config is None:
             raise Conflict("Configured sales agent manifest is missing")
         fanout, message = prepare_research(config, snapshot, stage, tenant_id, message)
+        if fanout is not None and recovery is not None:
+            await recovery.bind(fanout, release_id=release_id)
+            if fanout.buying_case is not None:
+                request = json.loads(message)
+                request["delegation"]["resume_buying_case"] = fanout.buying_case
+                request["delegation"]["completed_topics"] = sorted(fanout.parts)
+                message = json.dumps(request)
         bounded = replace(
             config,
             hard_budget=True,
@@ -162,6 +170,15 @@ class ResearchWorker:
         agent = settings.agents.get(stage)
         if not agent:
             raise Conflict("Native stage agent not configured")
+        options = {}
+        if stage == "research":
+            from robothor.sales.research_recovery import ResearchRecovery
+
+            recovery = ResearchRecovery(
+                self.sales.ops, job, settings.fleet_release_id, agent, context
+            )
+            await recovery.load()
+            options["recovery"] = recovery
         reservations = await asyncio.to_thread(self._reserve, settings, job)
         try:
             result = await asyncio.wait_for(
@@ -172,6 +189,7 @@ class ResearchWorker:
                     max_cost_usd=self.RUN_ALLOWANCE_UNITS / 1e6,
                     release_id=settings.fleet_release_id,
                     stage=stage,
+                    **options,
                     message=json.dumps(
                         {
                             "task": instruction,
