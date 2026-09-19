@@ -603,3 +603,50 @@ def test_setup_api_accepts_reviewed_configuration_but_no_secrets_or_switches(cli
         assert c.post(path, headers=headers, json={**body, "changes": changes}).status_code == 422
     assert c.post(path, headers=headers, json=body).status_code == 200
     assert calls == [("tenant-a", body["changes"], 3, "operator:user-1")]
+
+
+def test_gmail_recovery_requires_human_review_and_rejects_injected_receipts(client, monkeypatch):
+    import robothor.sales.api as api
+
+    c, calls = client
+
+    class RecoveryStub:
+        def __init__(self, service):
+            self.tenant = service.tenant
+
+        async def inspect(self, key, **review):
+            calls.append((self.tenant, "inspect", key, review))
+            return {"content_hash": "a" * 64}
+
+        async def reconcile(self, key, **review):
+            calls.append((self.tenant, "reconcile", key, review))
+            return {"delivery_status": "sent_copy_verified"}
+
+    monkeypatch.setattr(api, "GmailRecovery", RecoveryStub)
+    key = "00000000-0000-4000-8000-000000000001"
+    path = f"/api/sales/actions/{key}/gmail"
+    body = {"expected_hash": "a" * 64, "reason": "Reviewed the exact Gmail sent copy"}
+    for headers in (
+        {},
+        {"x-test-role": "member"},
+        {"x-test-role": "admin", "x-test-service": "yes"},
+    ):
+        assert c.post(path + "/inspect", json={}, headers=headers).status_code == 403
+        assert c.post(path + "/reconcile", json=body, headers=headers).status_code == 403
+    headers = {"x-test-role": "admin"}
+    assert (
+        c.post(path + "/inspect", json={"actor": "operator:forged"}, headers=headers).status_code
+        == 422
+    )
+    assert (
+        c.post(
+            path + "/reconcile", json={**body, "receipt": {"id": "forged"}}, headers=headers
+        ).status_code
+        == 422
+    )
+    assert c.post(path + "/inspect", json={}, headers=headers).status_code == 200
+    assert c.post(path + "/reconcile", json=body, headers=headers).status_code == 200
+    assert calls == [
+        ("tenant-a", "inspect", key, {"actor": "operator:user-1"}),
+        ("tenant-a", "reconcile", key, {**body, "actor": "operator:user-1"}),
+    ]

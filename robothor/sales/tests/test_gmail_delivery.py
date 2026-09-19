@@ -97,16 +97,41 @@ async def test_optout_during_final_profile_read_blocks_the_send(sales, monkeypat
 
 @pytest.mark.asyncio
 async def test_gmail_shared_daily_limit_is_reserved_before_send(sales, monkeypatch):
+    from robothor.sales.gmail_sync import GmailThreadWorker
+    from robothor.sales.tests.test_gmail import message
+    from robothor.sales.tests.test_gmail_sync import ThreadProvider
+
     p, cli, worker = gmail_setup(sales, monkeypatch)
+    reservations = []
+    reserve = worker._reserve_slot
+
+    def reserve_checked(action, day):
+        reservations.append(action["id"])
+        return reserve(action, day)
+
+    worker._reserve_slot = reserve_checked
     sales.configure({"mailbox_daily_limit": 1}, "operator:test")
     first = draft(sales, p)
     sales.ops.decide(first, True, "operator:test")
     assert await worker.tick()
+    sent = action(sales, first)["payload"]
+    record = message(
+        message_id=worker.provider.message_id(first, sent),
+        sender=sent["sender"],
+        recipient=sent["recipient"],
+        subject=sent["subject"],
+        body=sent["body"] + "\n",
+        labels=["SENT"],
+    )
+    record["internalDate"] = str(int(datetime.now(UTC).timestamp() * 1000))
+    worker.provider = ThreadProvider(worker.provider, [record])
+    await GmailThreadWorker(sales, worker.provider).sync_prospect(p["id"])
     second = draft(sales, p)
     sales.ops.decide(second, True, "operator:test")
     assert await worker.tick()
     assert action(sales, second)["status"] == "cancelled"
     assert sends(cli) == 1
+    assert reservations == [first, second]
 
 
 @pytest.mark.asyncio

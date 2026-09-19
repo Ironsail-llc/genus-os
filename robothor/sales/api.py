@@ -19,6 +19,7 @@ from robothor.sales.business_repair import (
 )
 from robothor.sales.calibration import Calibration
 from robothor.sales.contacts import ContactEntry, ContactReview, Contacts  # noqa: TC001
+from robothor.sales.gmail_recovery import GmailRecovery
 from robothor.sales.library import (  # noqa: TC001 — FastAPI resolves annotations.
     LibraryPacket,
     preview,
@@ -64,6 +65,15 @@ def domain_errors(fn):
 class Decision(Contract):
     approved: StrictBool
     note: str = Field(default="", max_length=4000)
+
+
+class GmailInspection(Contract):
+    pass
+
+
+class GmailReconciliation(Contract):
+    expected_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    reason: str = Field(min_length=10, max_length=2000)
 
 
 class ProspectDecision(Decision):
@@ -250,7 +260,13 @@ def retry_read(job_id: UUID, body: ReadRepair, request: Request):
 def provider_reads(
     request: Request,
     state: Literal["attention", "all"] = "attention",
-    kind: Literal["sales.inbound", "sales.reconcile", "sales.business", "sales.provider_status"]
+    kind: Literal[
+        "sales.inbound",
+        "sales.reconcile",
+        "sales.business",
+        "sales.provider_status",
+        "sales.gmail_sync",
+    ]
     | None = None,
     after: UUID | None = None,
 ):
@@ -570,3 +586,29 @@ def integration_setup(request: Request):
 def save_integration_setup(body: SetupChange, request: Request):
     service, actor = require_sales_operator(request)
     return Setup(service).save(actor=actor, **body.model_dump())
+
+
+@router.post("/actions/{action_id}/gmail/inspect")
+async def inspect_gmail_action(action_id: UUID, body: GmailInspection, request: Request):
+    service, actor = require_sales_operator(request)
+    try:
+        return await GmailRecovery(service).inspect(str(action_id), actor=actor)
+    except Conflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except ProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
+
+
+@router.post("/actions/{action_id}/gmail/reconcile")
+async def reconcile_gmail_action(action_id: UUID, body: GmailReconciliation, request: Request):
+    service, actor = require_sales_operator(request)
+    try:
+        return await GmailRecovery(service).reconcile(
+            str(action_id), actor=actor, **body.model_dump()
+        )
+    except Conflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except ProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None

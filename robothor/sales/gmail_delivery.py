@@ -1,7 +1,7 @@
 """Direct Gmail delivery through the same approved-action and send-slot ledger.
 
-This worker supplies transport, not recipient-delivery proof. Sent-copy recovery
-and incoming-thread monitoring must complete the integration before fleet rollout.
+This worker supplies transport, not recipient-delivery proof. Owned conversations
+are rescanned before preparation and the final authorization callback.
 """
 
 from __future__ import annotations
@@ -45,6 +45,14 @@ class GmailDeliveryWorker:
             raise Conflict("Gmail follow-ups require a reconciled cadence implementation")
         return settings, local
 
+    async def _before_send(self, action):
+        from robothor.sales.gmail_sync import GmailThreadWorker
+
+        await GmailThreadWorker(self.sales, self.provider).sync_prospect(
+            action["payload"]["prospect_id"], exclude_action=action["id"]
+        )
+        return await self._authorize(action)
+
     async def tick(self):
         settings = SalesSettings.model_validate(await asyncio.to_thread(self.sales.settings))
         if settings.email_provider != "gmail" or not settings.sending_enabled:
@@ -60,7 +68,7 @@ class GmailDeliveryWorker:
             return False
         started = False
         try:
-            _, local = await self._authorize(action)
+            _, local = await self._before_send(action)
             prepared = await self.provider.prepare(str(action["id"]), action["payload"])
             await self._authorize(action)
             await asyncio.to_thread(self._reserve_slot, action, local.date())
@@ -71,7 +79,7 @@ class GmailDeliveryWorker:
                 "gmail.send",
                 str(action["id"]),
                 action["payload"],
-                lambda: self.provider.send(prepared, before_send=lambda: self._authorize(action)),
+                lambda: self.provider.send(prepared, before_send=lambda: self._before_send(action)),
             )
             await asyncio.to_thread(
                 self.sales.ops.finish_action,
@@ -88,9 +96,10 @@ class GmailDeliveryWorker:
                 action["lease_token"],
                 status,
                 {
+                    "provider": "gmail",
                     "reason": "Gmail action requires reconciliation"
                     if status == "unknown"
-                    else "Gmail preflight failed; review before creating another approval"
+                    else "Gmail preflight failed; review before creating another approval",
                 },
             )
         return True

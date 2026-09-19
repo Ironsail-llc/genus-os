@@ -1003,7 +1003,13 @@ class Sales:
             return [dict(r) for r in cur.fetchall()]
 
     def provider_reads(self, *, state="attention", kind=None, after=None):
-        kinds = ("sales.inbound", "sales.reconcile", "sales.business", "sales.provider_status")
+        kinds = (
+            "sales.inbound",
+            "sales.reconcile",
+            "sales.business",
+            "sales.provider_status",
+            "sales.gmail_sync",
+        )
         if state not in {"attention", "all"} or (kind is not None and kind not in kinds):
             raise ValueError("Provider read inventory filter invalid")
         with self.ops.transaction() as cur:
@@ -1020,7 +1026,7 @@ class Sales:
             cur.execute(
                 "SELECT id,kind,status,error,attempts,max_attempts,created_at,updated_at,available_at,deadline, "
                 "jsonb_strip_nulls(jsonb_build_object('source',payload->>'source','account_id',payload->>'account_id', "
-                "'kind',payload->>'kind','practice_id',payload->>'practice_id','campaign_id',payload->>'campaign_id','sender',payload->>'sender','status_scope',payload->>'scope')) AS scope "
+                "'kind',payload->>'kind','practice_id',payload->>'practice_id','campaign_id',payload->>'campaign_id','sender',payload->>'sender','thread_id',payload->>'thread_id','mailbox',payload->>'mailbox','status_scope',payload->>'scope')) AS scope "
                 "FROM operation_jobs WHERE tenant_id=%s AND kind=ANY(%s) "
                 "AND (%s::text IS NULL OR kind=%s) "
                 "AND (%s='all' OR (status IN ('failed','pending') AND (status='failed' OR COALESCE(error,'')<>''))) "
@@ -1043,7 +1049,7 @@ class Sales:
             cur.execute(
                 "UPDATE operation_jobs SET status='pending',attempts=0,available_at=now(), "
                 "deadline=now()+interval '1 day',lease_token=NULL,lease_until=NULL,error='',updated_at=now() "
-                "WHERE tenant_id=%s AND id=%s AND kind IN ('sales.inbound','sales.reconcile','sales.business','sales.provider_status') "
+                "WHERE tenant_id=%s AND id=%s AND kind IN ('sales.inbound','sales.reconcile','sales.business','sales.provider_status','sales.gmail_sync') "
                 "AND status IN ('failed','pending')",
                 (self.tenant, job_id),
             )
