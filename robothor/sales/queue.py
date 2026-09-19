@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 from robothor.operations.store import Conflict
 from robothor.sales.delivery import DeliveryWorker, StopWorker
+from robothor.sales.ingestion import InstantlyInboxWorker
 from robothor.sales.models import SalesSettings
 from robothor.sales.promotion import PromotionWorker
 from robothor.sales.runtime import DraftWorker, ResearchWorker
@@ -43,6 +44,7 @@ class QueueDriver:
                 "activation": (ActivationWorker, "tick"),
                 "delivery": (DeliveryWorker, "tick"),
                 "stop": (StopWorker, "tick"),
+                "inbox": (InstantlyInboxWorker, "tick"),
             }
             if stage not in workers:
                 raise Conflict("Unknown sales queue stage")

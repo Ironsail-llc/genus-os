@@ -553,56 +553,59 @@ class Sales:
             )
             return [dict(r) for r in cur.fetchall()]
 
-    def record_message(self, data):
+    def record_message(self, data, *, cur=None):
         """Normalized provider event; inbound text remains untrusted agent input."""
         message = Message.model_validate(data)
         payload = message.model_dump(mode="json")
-        with self.ops.transaction() as cur:
-            self.require(message.prospect_id, cur)
+        if cur is None:
+            with self.ops.transaction() as cursor:
+                return self.record_message(data, cur=cursor)
+        self.require(message.prospect_id, cur)
+        cur.execute(
+            "INSERT INTO sales_messages(tenant_id,provider_id,prospect_id,direction,occurred_at,data) "
+            "VALUES(%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING",
+            (
+                self.tenant,
+                message.provider_id,
+                message.prospect_id,
+                message.direction,
+                message.occurred_at,
+                Json(payload),
+            ),
+        )
+        if not cur.rowcount:
             cur.execute(
-                "INSERT INTO sales_messages(tenant_id,provider_id,prospect_id,direction,occurred_at,data) "
-                "VALUES(%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING",
-                (
-                    self.tenant,
-                    message.provider_id,
-                    message.prospect_id,
-                    message.direction,
-                    message.occurred_at,
-                    Json(payload),
-                ),
+                "SELECT data FROM sales_messages WHERE tenant_id=%s AND provider_id=%s",
+                (self.tenant, message.provider_id),
             )
-            if not cur.rowcount:
-                cur.execute(
-                    "SELECT data FROM sales_messages WHERE tenant_id=%s AND provider_id=%s",
-                    (self.tenant, message.provider_id),
-                )
-                if cur.fetchone()["data"] != payload:
-                    raise Conflict("Provider message ID reused with different content")
-                return False
+            if cur.fetchone()["data"] != payload:
+                raise Conflict("Provider message ID reused with different content")
+            return False
+        cur.execute(
+            "UPDATE sales_prospects SET conversation_version=conversation_version+1,updated_at=now() "
+            "WHERE tenant_id=%s AND id=%s",
+            (self.tenant, message.prospect_id),
+        )
+        if message.direction == "inbound":
             cur.execute(
-                "UPDATE sales_prospects SET conversation_version=conversation_version+1,updated_at=now() "
-                "WHERE tenant_id=%s AND id=%s",
+                "UPDATE operation_actions SET status='cancelled' WHERE tenant_id=%s AND kind='sales.email' "
+                "AND status IN ('review','approved') AND payload->>'prospect_id'=%s",
                 (self.tenant, message.prospect_id),
             )
-            if message.direction == "inbound":
-                cur.execute(
-                    "UPDATE operation_actions SET status='cancelled' WHERE tenant_id=%s AND kind='sales.email' "
-                    "AND status IN ('review','approved') AND payload->>'prospect_id'=%s",
-                    (self.tenant, message.prospect_id),
-                )
+            if not message.auto_reply:
                 self.ops.enqueue(
                     "sales.conversation",
                     message.provider_id,
                     {"prospect_id": message.prospect_id, "provider_id": message.provider_id},
                     cur=cur,
                 )
-            self.ops.audit(
-                cur,
-                message.prospect_id,
-                "message." + message.direction,
-                detail={"provider_id": message.provider_id},
-            )
-            return True
+        self.ops.audit(
+            cur,
+            message.prospect_id,
+            "message." + message.direction,
+            detail={"provider_id": message.provider_id},
+        )
+        return True
 
     def messages(self, prospect_id):
         with self.ops.transaction() as cur:

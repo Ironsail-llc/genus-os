@@ -296,23 +296,28 @@ class Operations:
                     (actual, self.tenant, row["id"]),
                 )
 
-    def receive(self, provider: str, event_id: str, payload: dict) -> bool:
+    def receive(self, provider: str, event_id: str, payload: dict, *, cur=None) -> bool:
         """Durably accept a provider event once; processing occurs separately."""
-        with self.transaction() as cur:
-            cur.execute(
-                "INSERT INTO operation_inbox(tenant_id,provider,event_id,payload) VALUES(%s,%s,%s,%s) "
-                "ON CONFLICT DO NOTHING",
-                (self.tenant, provider, event_id, Json(payload)),
-            )
-            if cur.rowcount == 1:
-                return True
-            cur.execute(
-                "SELECT payload FROM operation_inbox WHERE tenant_id=%s AND provider=%s AND event_id=%s",
-                (self.tenant, provider, event_id),
-            )
-            if cur.fetchone()["payload"] != payload:
-                raise Conflict("Provider event identity reused with different content")
-            return False
+        if cur is None:
+            with self.transaction() as cursor:
+                return self.receive(provider, event_id, payload, cur=cursor)
+        return self._receive(cur, provider, event_id, payload)
+
+    def _receive(self, cur, provider, event_id, payload):
+        cur.execute(
+            "INSERT INTO operation_inbox(tenant_id,provider,event_id,payload) VALUES(%s,%s,%s,%s) "
+            "ON CONFLICT DO NOTHING",
+            (self.tenant, provider, event_id, Json(payload)),
+        )
+        if cur.rowcount == 1:
+            return True
+        cur.execute(
+            "SELECT payload FROM operation_inbox WHERE tenant_id=%s AND provider=%s AND event_id=%s",
+            (self.tenant, provider, event_id),
+        )
+        if cur.fetchone()["payload"] != payload:
+            raise Conflict("Provider event identity reused with different content")
+        return False
 
     def propose(
         self, kind: str, key: str, payload: dict, *, expires_seconds=86400, cur=None

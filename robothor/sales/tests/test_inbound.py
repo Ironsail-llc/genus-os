@@ -30,3 +30,19 @@ def test_instantly_custom_header_auth_and_workspace_binding():
         instantly_event(body, "Bearer wrong", "test-secret", "workspace-1")
     with pytest.raises(AuthenticationError):
         instantly_event(body, "Bearer test-secret", "test-secret", "another-workspace")
+
+
+def test_reply_addresses_are_inbound_not_outbound():
+    raw = json.dumps(
+        {
+            "event_type": "reply_received",
+            "workspace": "workspace-1",
+            "timestamp": "2026-09-01T12:00:00Z",
+            "lead_email": "alice@example.com",
+            "email_account": "sales@example.com",
+        }
+    ).encode()
+    result = instantly_event(raw, "Bearer test-secret", "test-secret", "workspace-1")
+    assert result["sender"] == "alice@example.com"
+    assert result["recipient"] == "sales@example.com"
+    assert result["provider_id"] == ""  # Never invent a reply_to_uuid.
