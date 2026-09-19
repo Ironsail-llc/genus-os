@@ -21,7 +21,9 @@ from robothor.sales.models import Dossier, Draft, SalesSettings
 class NativeStageRunner:
     """Apply workflow limits while retaining the native manifest and permissions."""
 
-    async def run(self, *, agent_id, tenant_id, message, correlation_id, max_cost_usd):
+    async def run(
+        self, *, agent_id, tenant_id, message, correlation_id, max_cost_usd, release_id=None
+    ):
         from robothor.engine.config import load_agent_config
         from robothor.engine.models import TriggerType
         from robothor.engine.request_budget import RequestBudget, budget_scope
@@ -30,7 +32,20 @@ class NativeStageRunner:
         runner = get_runner()
         if runner is None:
             raise Conflict("Genus agent runner is not available")
-        config = load_agent_config(agent_id, runner.config.manifest_dir)
+        if release_id is not None:
+            from robothor.templates.fleet_release import ReleaseError
+            from robothor.templates.fleet_snapshot import load_snapshot
+            from robothor.templates.safety import validate_sha256
+
+            try:
+                validate_sha256(release_id)
+                root = runner.config.workspace / ".robothor/fleet-releases" / release_id
+                snapshot = await asyncio.to_thread(load_snapshot, root, expected_digest=release_id)
+                config = snapshot.agent(agent_id)
+            except (ReleaseError, ValueError, OSError):
+                raise Conflict("Selected fleet release is unavailable or has drifted") from None
+        else:
+            config = load_agent_config(agent_id, runner.config.manifest_dir)
         if config is None:
             raise Conflict("Configured sales agent manifest is missing")
         safe = {"web_search", "web_fetch", "sales_get_prospect", "sales_get_context", "write_file"}
@@ -64,7 +79,7 @@ class NativeStageRunner:
                 agent_config=bounded,
                 tenant_id=tenant_id,
                 trigger_type=TriggerType.WORKFLOW,
-                trigger_detail="durable_sales_work",
+                trigger_detail="durable_sales_work" + (":" + release_id if release_id else ""),
                 correlation_id=correlation_id,
                 user_id="service:" + agent_id,
                 user_role=bounded.service_role,
@@ -134,6 +149,7 @@ class ResearchWorker:
                     tenant_id=self.sales.tenant,
                     correlation_id=str(job["id"]),
                     max_cost_usd=self.RUN_ALLOWANCE_UNITS / 1e6,
+                    release_id=settings.fleet_release_id,
                     message=json.dumps(
                         {
                             "task": instruction,
@@ -157,6 +173,7 @@ class ResearchWorker:
             "checkpoint_version": 1,
             "stage": stage,
             "run_id": str(result.id),
+            "fleet_release_id": settings.fleet_release_id,
             "output": output.model_dump(mode="json"),
             "context": json.loads(json.dumps(context, default=str)),
         }

@@ -1378,6 +1378,8 @@ def build_system_prompt(config: AgentConfig, workspace: Path) -> SystemPromptPar
     Returns a SystemPromptParts with static (file-based, cached) and dynamic
     (time context, always fresh) portions separated for API-level caching.
     """
+    if config.knowledge_snapshot is not None:
+        return _prompt_with_time(_snapshot_prompt_body(config), config.timezone)
     # Collect all source file paths for mtime checking
     source_files: list[Path] = []
     workspace_resolved = workspace.resolve()
@@ -1465,8 +1467,36 @@ def build_system_prompt(config: AgentConfig, workspace: Path) -> SystemPromptPar
         body = "\n\n---\n\n".join(parts)
         _prompt_cache[cache_key] = (max_mtime, body)
 
-    # Always append fresh time context (dynamic tail)
-    tz = ZoneInfo(config.timezone or "America/New_York")
+    return _prompt_with_time(body, config.timezone)
+
+
+def _snapshot_prompt_body(config: AgentConfig) -> str:
+    """Use captured release knowledge without filesystem or legacy cache reads."""
+    from robothor.engine.prompts import behavioral_rules
+    from robothor.engine.skills import build_skill_catalog
+
+    files = dict(config.knowledge_snapshot or ())
+    references = [config.instruction_file, *config.bootstrap_files]
+    if not config.fleet_release_id or any(
+        path and path not in files for path in [*references, *config.warmup_context_files]
+    ):
+        raise ValueError("Prompt references content outside its verified fleet snapshot")
+    parts = [SECURITY_PREAMBLE, behavioral_rules()]
+    parts.extend(files[path] for path in references if path)
+    if sum(map(len, parts)) > BOOTSTRAP_TOTAL_MAX_CHARS:
+        raise ValueError("Fleet snapshot system prompt exceeds the bootstrap character limit")
+    try:
+        catalog = build_skill_catalog()
+        if catalog:
+            parts.append(catalog)
+    except Exception as exc:
+        logger.debug("Skill catalog failed: %s", type(exc).__name__)
+    return "\n\n---\n\n".join(parts)
+
+
+def _prompt_with_time(body: str, timezone: str) -> SystemPromptParts:
+    # Always append fresh time context (dynamic tail).
+    tz = ZoneInfo(timezone or "America/New_York")
     now = datetime.now(tz)
     time_context = (
         f"Current time: {now.strftime('%A, %B %d, %Y %I:%M %p %Z')} "

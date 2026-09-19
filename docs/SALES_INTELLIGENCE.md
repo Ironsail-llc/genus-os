@@ -24,6 +24,29 @@ not establish runtime deployment, provider connectivity or pilot approval.
 
 ## Native workflow execution
 
+`fleet_release_id` optionally selects a verified release by its 64-character
+SHA-256 fingerprint. The native sales runner loads it from
+`$ROBOTHOR_WORKSPACE/.robothor/fleet-releases/<fingerprint>`, verifies the complete
+artifact and captures its bytes before executing the selected agent. Missing or
+changed artifacts stop the run; they do not fall back to loose manifests. A null
+selection retains the existing manifest-directory behavior.
+
+The selected run uses the release's native agent configuration and captured
+instruction, bootstrap and declared warmup-context files. It does not merge
+ambient fleet, project or environment configuration overrides. Mutable status
+files remain in the normal workspace under the agent's existing write allowlist.
+The request budget and tool restrictions still apply. The native run's trigger
+detail records the release fingerprint, as does a structured stage's recovery
+checkpoint. An admitted run retains its captured knowledge across subsequent
+file changes; a later admission verifies the artifact again.
+
+This selection pins agent configuration and knowledge for native sales stages.
+It does not yet install the artifact, load its workflow schedules, activate
+plugins, verify the deployed platform revision or coordinate database settings
+with runtime cutover. Those remain deployment gates. Live business context,
+platform behavioral rules and the skill catalog remain runtime inputs rather
+than being frozen by the knowledge snapshot.
+
 Instance workflow YAML calls `sales_process_queue` in a deterministic tool step.
 `workflow_bindings` explicitly maps each stage to its authorized native service
 workflow. No agent has this execution authority. Stages are `plan`, `scout`,
