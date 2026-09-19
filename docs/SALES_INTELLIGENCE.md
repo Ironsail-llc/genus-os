@@ -1083,3 +1083,14 @@ Installation uses the canonical migration chain through 137; it includes native
 research permissions/fragments, bounded requests, account-scoped Pipedrive IDs and
 analyst permissions. Run the standard Genus migrator during the reviewed deployment.
 Copying only agent YAML files does not install the platform schema or roles.
+
+### Excluding email integrations
+
+Set `email_provider: none` to exclude the current email provider. Sending cannot
+be enabled in this mode, setup omits its credential requirements, and native
+verification/delivery/inbox/status/reconciliation/stop pumps do no provider work.
+Remove those workflow bindings from an inactive fleet as well. Research, public
+contact discovery, Genus CRM, Pipedrive and business outcomes remain independent.
+For an already active provider, stop and reconcile its external campaigns before
+retiring the connection. A general mailbox connection is not a sales delivery
+adapter: receipts, approvals and reply/suppression handling must still be wired.
