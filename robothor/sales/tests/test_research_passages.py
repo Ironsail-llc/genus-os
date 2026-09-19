@@ -118,3 +118,59 @@ def test_passages_are_bounded_exact_substrings_and_deterministic():
     assert "".join(r["text"].replace(" ", "").replace("\n", "") for r in rows) == text.replace(
         " ", ""
     ).replace("\n", "")
+
+
+def test_new_captures_do_not_join_business_paragraphs_to_neighboring_reviews():
+    from robothor.engine.tools.dispatch import ToolContext
+
+    sources = capture()
+    packet = sources.observe(
+        "web_fetch",
+        {},
+        {
+            "status": 200,
+            "url": "https://business.example.com/",
+            "content": "# Example Business\n\nLocated in Springfield, Illinois.\n\nCustomer review: wonderful service!",
+        },
+        ToolContext(tenant_id="tenant-a", agent_id="research-worker", run_id="child"),
+    )
+    assert packet["kind"] == "captured_passages_v2"
+    assert [p["text"] for p in packet["passages"]] == [
+        "# Example Business",
+        "Located in Springfield, Illinois.",
+        "Customer review: wonderful service!",
+    ]
+    request = selection(packet)
+    request["evidence"][0]["passage_ref"] = packet["passages"][1]["ref"]
+    dossier, proof = sources.attest_output("child", request)
+    assert dossier.evidence[0].excerpt == "Located in Springfield, Illinois."
+    assert proof["sources"][-1]["passage_version"] == 2
+    assert sources.restore("child", dossier, proof)[0] == dossier
+    changed = deepcopy(proof)
+    changed["sources"][-1]["passage_version"] = 1
+    with pytest.raises(Conflict):
+        sources.restore("child", dossier, changed)
+
+
+def test_old_unversioned_capture_proofs_keep_original_passage_boundaries():
+    sources, _ = captured()
+    source = sources.runs["child"][-1]
+    source.pop("passage_version", None)
+    packet = sources.packet("child", source)
+    assert packet["kind"] == "captured_passages_v1"
+    assert packet["passages"][0]["text"] == "A clinic.\n\nPublic business information."
+    dossier, proof = sources.attest_output("child", selection(packet))
+    assert sources.restore("child", dossier, proof)[0] == dossier
+
+
+def test_paragraph_passages_keep_long_text_bounded_and_unknown_versions_fail():
+    from robothor.sales.research_contract import passages
+
+    text = "Header\n\n" + "A long sentence. " * 100 + "\n \t\nFooter"
+    rows = passages(text, version=2)
+    assert all(0 < len(p["text"]) <= 800 and p["text"] in text for p in rows)
+    assert rows[0]["text"] == "Header"
+    assert rows[-1]["text"] == "Footer"
+    assert " ".join(p["text"] for p in rows).split() == text.split()
+    with pytest.raises(ValueError):
+        passages(text, version=99)
