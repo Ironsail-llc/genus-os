@@ -38,6 +38,21 @@ class Mail(MailProvider):
 @pytest.mark.asyncio
 async def test_discovery_to_reviewed_outreach_reply_optout_and_fulfillment(sales):
     now = datetime.now(UTC)
+    sales.publish_policy(
+        QualificationPolicy(
+            version="1",
+            buying_case="network_access",
+            required=["prescribing"],
+            weights={"prescribing": 100},
+            threshold=80,
+        ),
+        "operator:synthetic-reviewer",
+    )
+    sales.publish_knowledge(
+        "1",
+        {"claims": {"access": "Access participating pharmacies."}},
+        "operator:synthetic-reviewer",
+    )
     sales.configure(
         {
             "research_enabled": True,
@@ -66,21 +81,6 @@ async def test_discovery_to_reviewed_outreach_reply_optout_and_fulfillment(sales
             "active_policy_versions": {"network_access": "1"},
             "active_knowledge_version": "1",
         },
-        "operator:synthetic-reviewer",
-    )
-    sales.publish_policy(
-        QualificationPolicy(
-            version="1",
-            buying_case="network_access",
-            required=["prescribing"],
-            weights={"prescribing": 100},
-            threshold=80,
-        ),
-        "operator:synthetic-reviewer",
-    )
-    sales.publish_knowledge(
-        "1",
-        {"claims": {"access": "Access participating pharmacies."}},
         "operator:synthetic-reviewer",
     )
     sales.ops.enqueue(

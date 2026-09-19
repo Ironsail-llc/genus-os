@@ -108,6 +108,12 @@ class SettingsReview(ReadRepair):
         return changes
 
 
+class LibrarySelection(ReadRepair):
+    expected_revision: int = Field(ge=0, strict=True)
+    policy_versions: dict[str, str]
+    knowledge_version: str = Field(max_length=80)
+
+
 @router.get("")
 def overview(request: Request):
     service, _ = require_sales_operator(request)
@@ -269,6 +275,26 @@ def suppress(body: Suppression, request: Request):
     service, actor = require_sales_operator(request)
     service.suppress(body.email, body.reason, actor)
     return {"ok": True}
+
+
+@router.get("/library")
+@domain_errors
+def library(
+    request: Request,
+    kind: Literal["qualification", "knowledge"],
+    after: str | None = Query(default=None, max_length=80),
+    limit: int = Query(default=100, ge=1, le=100),
+):
+    service, _ = require_sales_operator(request)
+    return service.library(kind=kind, after=after, limit=limit)
+
+
+@router.post("/library/selection")
+@domain_errors
+def select_library(body: LibrarySelection, request: Request):
+    service, actor = require_sales_operator(request)
+    service.select_library(**body.model_dump(), actor=actor)
+    return service.settings_snapshot()
 
 
 @router.post("/policies")

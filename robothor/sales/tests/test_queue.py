@@ -9,12 +9,23 @@ from unittest.mock import AsyncMock
 import pytest
 
 from robothor.operations.store import Conflict
+from robothor.sales.models import QualificationPolicy
 from robothor.sales.queue import DiscoveryPlanner, QueueDriver
 
 NOW = datetime(2026, 9, 21, 7, tzinfo=UTC)  # Monday 03:00 New York
 
 
 def configure(sales, **changes):
+    sales.publish_policy(
+        QualificationPolicy(
+            version="v1",
+            buying_case="network_access",
+            required=["prescribing"],
+            weights={"prescribing": 100},
+            threshold=80,
+        ),
+        "operator:test",
+    )
     sales.configure(
         {
             "research_enabled": True,
@@ -276,16 +287,6 @@ async def test_native_workflow_executes_registry_worker_and_persists_receipts(
     model = RunnerStub(output)
     monkeypatch.setattr(queue, "ResearchWorker", lambda service: ResearchWorker(service, model))
     binding = {stage: "test-" + stage + "-" + sales.tenant for stage in ("research", "qualify")}
-    sales.configure(
-        {
-            "agents": {"research": "research-agent"},
-            "daily_limit_units": 20_000_000,
-            "monthly_limit_units": 500_000_000,
-            "workflow_bindings": binding,
-            "active_policy_versions": {"network_access": "v1"},
-        },
-        "operator:test",
-    )
     sales.publish_policy(
         QualificationPolicy(
             version="v1",
@@ -294,6 +295,16 @@ async def test_native_workflow_executes_registry_worker_and_persists_receipts(
             weights={"prescribing": 100},
             threshold=80,
         ),
+        "operator:test",
+    )
+    sales.configure(
+        {
+            "agents": {"research": "research-agent"},
+            "daily_limit_units": 20_000_000,
+            "monthly_limit_units": 500_000_000,
+            "workflow_bindings": binding,
+            "active_policy_versions": {"network_access": "v1"},
+        },
         "operator:test",
     )
     engine = WorkflowEngine(

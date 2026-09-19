@@ -71,6 +71,7 @@ async def test_only_exact_approved_message_is_scheduled_once(sales):
     p, provider, worker = setup(sales)
     action = draft(sales, p)
     assert await worker.tick() is False
+
     assert provider.calls == []
     sales.ops.decide(action, True, "operator:test")
     assert await worker.tick() is True
@@ -80,6 +81,28 @@ async def test_only_exact_approved_message_is_scheduled_once(sales):
     assert result["receipt"]["delivery_status"] == "scheduled"
     assert sales.messages(p["id"]) == []  # activation is not delivery evidence
     assert await worker.tick() is False
+
+
+@pytest.mark.asyncio
+async def test_library_stop_targets_old_campaigns_and_not_newly_reviewed_generation(sales):
+    p, provider, worker = setup(sales)
+    old = draft(sales, p)
+    sales.ops.decide(old, True, "operator:test")
+    assert await worker.tick()
+    old_revision = sales.settings()["library_revision"]
+    sales.publish_knowledge("v2", {"claims": {"access": "Updated positioning"}}, "operator:test")
+    sales.configure({"active_knowledge_version": "v2"}, "operator:test")
+    sales.configure({"active_knowledge_version": "v1"}, "operator:test")
+
+    async def new_campaign(*args):
+        return {"id": "campaign-2"}
+
+    provider.create_campaign = new_campaign
+    new = draft(sales, p)
+    sales.ops.decide(new, True, "operator:test")
+    assert await worker.tick()
+    stop = StopWorker(sales, provider)
+    assert stop._campaigns({"library_revision_before": old_revision}) == [{"id": "campaign-1"}]
 
 
 @pytest.mark.asyncio

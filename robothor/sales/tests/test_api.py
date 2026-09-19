@@ -29,6 +29,13 @@ def client(monkeypatch):
         def configure(self, changes, actor, **review):
             calls.append((self.tenant, changes, actor, review))
 
+        def library(self, **query):
+            calls.append((self.tenant, query))
+            return {"items": [], "next_cursor": None}
+
+        def select_library(self, **selection):
+            calls.append((self.tenant, selection))
+
         def retry_provider_read(self, job_id, actor, reason):
             calls.append((self.tenant, job_id, actor, reason))
 
@@ -58,6 +65,40 @@ def client(monkeypatch):
 
     app.include_router(router)
     return TestClient(app), calls
+
+
+def test_library_catalog_and_selection_are_human_scoped(client):
+    c, calls = client
+    body = {
+        "policy_versions": {"network_access": "v1"},
+        "knowledge_version": "v1",
+        "expected_revision": 3,
+        "reason": "Reviewed library selection",
+    }
+    path = "/api/sales/library/selection"
+    for headers in (
+        {},
+        {"x-test-role": "member"},
+        {"x-test-role": "admin", "x-test-service": "yes"},
+    ):
+        assert c.get("/api/sales/library?kind=knowledge", headers=headers).status_code == 403
+        assert c.post(path, json=body, headers=headers).status_code == 403
+    headers = {"x-test-role": "admin"}
+    assert (
+        c.get(
+            "/api/sales/library?kind=qualification&after=v1&limit=20", headers=headers
+        ).status_code
+        == 200
+    )
+    assert calls.pop() == ("tenant-a", {"kind": "qualification", "after": "v1", "limit": 20})
+    for extra in (
+        {"actor": "operator:forged"},
+        {"sending_enabled": True},
+        {"expected_revision": True},
+    ):
+        assert c.post(path, json={**body, **extra}, headers=headers).status_code == 422
+    assert c.post(path, json=body, headers=headers).status_code == 200
+    assert calls == [("tenant-a", {**body, "actor": "operator:user-1"})]
 
 
 def test_reviewed_pilot_limits_require_human_revision_and_cannot_enable_integrations(client):

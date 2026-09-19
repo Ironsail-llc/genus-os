@@ -75,10 +75,12 @@ def test_preflight_checks_pause_takeover_suppression_and_current_knowledge(sales
     sales.configure({"sending_enabled": False}, "operator:test")
     with pytest.raises(Conflict, match="paused"):
         sales.validate_send(action)
+    sales.publish_knowledge("v2", {"claims": {"access": "Updated positioning"}}, "operator:test")
     sales.configure({"sending_enabled": True, "active_knowledge_version": "v2"}, "operator:test")
     with pytest.raises(Conflict, match="knowledge"):
         sales.validate_send(action)
     sales.configure({"active_knowledge_version": "v1"}, "operator:test")
+    action = approved(sales, p)
     sales.takeover(p["id"], "operator:test")
     with pytest.raises(Conflict, match="ownership"):
         sales.validate_send(action)
