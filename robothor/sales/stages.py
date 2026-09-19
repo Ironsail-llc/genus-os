@@ -98,6 +98,8 @@ class ScoutWorker(StructuredWorker):
                     detail={"reason": candidate.reason, "run_id": str(run_id)},
                 )
             receipt = {"prospect_ids": sorted(set(ids)), "run_id": str(run_id)}
+            if not ids and output.empty_reason:
+                receipt["empty_reason"] = output.empty_reason
             if (job.get("result") or {}).get("provenance"):
                 receipt["provenance"] = job["result"]["provenance"]
             self.sales.ops.complete(

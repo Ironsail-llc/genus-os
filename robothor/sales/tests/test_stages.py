@@ -63,6 +63,21 @@ def test_discovery_stops_at_daily_admission_and_review_backlog_limits(sales):
 
 
 @pytest.mark.asyncio
+async def test_empty_discovery_reason_survives_job_completion(sales):
+    configure(sales, "scout")
+    job = sales.ops.enqueue("sales.scout", "empty-explained", {"segment": "provider practices"})
+    output = {
+        "companies": [],
+        "empty_reason": "Only out-of-region directory listings were available.",
+    }
+    assert await ScoutWorker(sales, RunnerStub(output)).tick()
+    completed = sales.ops.get_job(job)
+    assert completed["status"] == "completed"
+    assert completed["result"]["empty_reason"] == output["empty_reason"]
+    assert completed["result"]["prospect_ids"] == []
+
+
+@pytest.mark.asyncio
 async def test_contact_research_cannot_assert_email_verification(sales):
     p = researched(sales)
     configure(sales, "contacts")

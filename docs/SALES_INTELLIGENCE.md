@@ -21,7 +21,10 @@ empty batch; failed searches cannot fabricate successful discovery. When the
 search tool marks results degraded, the scout must refine its query until one
 search is not degraded or three distinct queries have completed. Final-answer
 formatting remains deferred during those required search turns. The durable
-scout receipt retains source observations and the native run identity. These
+scout receipt retains source observations and the native run identity. When a
+search returned URLs but no candidate is selected, `empty_reason` must explain
+the exclusion or unresolved requirement; the completion receipt preserves it.
+This enables review without requiring invented positive results. These
 checks establish observed URLs, not business fit, which still requires research
 and independent qualification.
 

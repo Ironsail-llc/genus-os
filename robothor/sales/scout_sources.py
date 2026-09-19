@@ -86,6 +86,10 @@ class ScoutSources:
         if len(batch.companies) > self.limit:
             raise Conflict("Scout exceeded the supplied candidate allowance")
         urls = {url_key(url) for o in rows for url in o["urls"]}
+        if not batch.companies and urls and not (batch.empty_reason or "").strip():
+            raise Conflict(
+                "Search returned source URLs: explain why no business is a plausible research candidate in empty_reason. Recheck relevant business results or fetch a service page when a missing detail can be resolved. Do not invent candidates or treat incomplete qualification as automatic rejection."
+            )
         domains = {domain(url) for url in urls}
         selected = set()
         for candidate in batch.companies:
