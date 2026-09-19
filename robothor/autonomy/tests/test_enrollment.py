@@ -139,3 +139,27 @@ def test_configured_dashboard_origin_is_the_only_link_destination(store, identit
     monkeypatch.setenv("ROBOTHOR_AUTONOMY_DASHBOARD_ORIGIN", "https://dashboard.example")
     link = EnrollmentStore(store).create(identity, request())
     assert link["url"] == "https://dashboard.example" + link["path"]
+
+
+async def test_agent_requests_link_from_its_verified_owner(store, identity, monkeypatch):
+    from robothor.autonomy.enrollment import EnrollmentStore
+    from robothor.engine.tools.dispatch import ToolContext
+    from robothor.engine.tools.handlers import autonomy
+
+    monkeypatch.setattr(autonomy, "AutonomyStore", lambda: store)
+    monkeypatch.setattr(autonomy, "scope_for_actor", lambda tenant, actor: identity)
+    result = await autonomy.handle(
+        {
+            "kind": "enrollment_link",
+            "enrollment": {"kind": "credential", "origin": "https://shop.example"},
+        },
+        ToolContext(
+            agent_id="main",
+            user_id="verified-actor",
+            user_role="owner",
+            tenant_id=identity.tenant_id,
+        ),
+    )
+    token = result["setup_path"].split("=", 1)[1]
+    assert EnrollmentStore(store).inspect(identity, token)["kind"] == "credential"
+    assert not store.resources(identity)

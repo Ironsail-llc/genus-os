@@ -17,7 +17,23 @@ from robothor.autonomy.runtime import run_browser
 from robothor.autonomy.store import AutonomyStore
 
 if TYPE_CHECKING:
+    from robothor.autonomy.models import Scope
     from robothor.engine.tools.dispatch import ToolContext
+
+
+async def _enrollment_link(
+    store: AutonomyStore, scope: Scope, args: dict[str, Any]
+) -> dict[str, Any]:
+    from robothor.autonomy.enrollment import EnrollmentRequest, EnrollmentStore
+
+    spec = EnrollmentRequest.model_validate(args.get("enrollment", {}))
+    link = await asyncio.to_thread(EnrollmentStore(store).create, scope, spec)
+    # Only a scoped link reaches history; private inputs use the secure page.
+    return {
+        "setup_path": link["path"],
+        "setup_url": link["url"],
+        "expires_at": link["expires_at"],
+    }
 
 
 async def handle(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
@@ -28,16 +44,7 @@ async def handle(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         store = AutonomyStore()
         kind = args.get("kind", "status")
         if kind == "enrollment_link":
-            from robothor.autonomy.enrollment import EnrollmentRequest, EnrollmentStore
-
-            spec = EnrollmentRequest.model_validate(args.get("enrollment", {}))
-            link = await asyncio.to_thread(EnrollmentStore(store).create, scope, spec)
-            # Only a scoped link reaches history; private inputs use the secure page.
-            return {
-                "setup_path": link["path"],
-                "setup_url": link["url"],
-                "expires_at": link["expires_at"],
-            }
+            return await _enrollment_link(store, scope, args)
         if kind in {
             "workflow_open",
             "workflow_inspect",
