@@ -247,3 +247,33 @@ async def verification(operation_id: UUID, request: Request):
     _resumes.add(task)
     task.add_done_callback(_resumes.discard)
     return _safe({"operation_id": str(operation_id), "state": "resuming"})
+
+
+@router.get("/operations/{operation_id}/terms")
+async def terms_history(operation_id: UUID, request: Request):
+    from robothor.autonomy.terms_audit import TermsAudit
+
+    scope = await require_personal_owner(request)
+    try:
+        rows = await asyncio.to_thread(TermsAudit(AutonomyStore()).list, scope, str(operation_id))
+        return _safe({"snapshots": rows})
+    except PermissionError:
+        raise HTTPException(404, "Submission record not found") from None
+    except Exception:
+        raise HTTPException(503, "Submission record unavailable") from None
+
+
+@router.get("/operations/{operation_id}/terms/{snapshot_id}")
+async def terms_detail(operation_id: UUID, snapshot_id: UUID, request: Request):
+    from robothor.autonomy.terms_audit import TermsAudit
+
+    scope = await require_personal_owner(request)
+    try:
+        result = await asyncio.to_thread(
+            TermsAudit(AutonomyStore()).read, scope, str(operation_id), str(snapshot_id)
+        )
+        return _safe(result)
+    except PermissionError:
+        raise HTTPException(404, "Submission record not found") from None
+    except Exception:
+        raise HTTPException(503, "Submission record unavailable") from None

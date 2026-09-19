@@ -423,3 +423,38 @@ projections use the same bounded arithmetic. Ownership checks, resource access,
 reservations and ledger records remain scoped to their respective domains, so
 personal funds are never represented as company-owned virtual cards.
 e
+
+## Private submission observations
+
+The exclusive broker records visible page text before filling an operation and
+again before its submit click. These immutable snapshots are encrypted separately
+from model-readable resources, bound to tenant, owner, operation and record ID.
+Each version references the operation's grant version; the operation retains its
+originating request, purpose, amounts and outcome. They are authorization audit
+observations, not digital signatures or independent evidence of acceptance,
+settlement, or complete review of a contract.
+
+On Account → Personal automation, open **Submission record** under a recent task
+and choose a snapshot. Only the authenticated linked owner can retrieve the
+private text; agent service tokens cannot. Listing metadata and ordinary agent
+responses contain no snapshot text or link values. The page renders text without
+executing markup, clears it when closed, and uses uncached authenticated requests.
+
+Coverage is explicitly `visible_text_only`: the top-level page and authorized
+direct child frames. Hidden text, nested or unauthorized frames, images, PDFs,
+and linked documents are not captured by this mechanism. Link references remain
+encrypted and their contents are labeled as uncaptured. Bounded text or link
+extraction reports truncation, and omitted frames are counted. This does not yet
+complete material-contract collection for websites whose terms live elsewhere.
+
+Known protected values are masked before storage. No page snapshot is taken after
+any transient verification code or TOTP entry in that browser, including a code
+reflected with an arbitrary encoding. The earlier pre-input observation remains
+available; do not describe it as a later pre-submit snapshot. Failed or rejected
+attempts retain their own observations, and a snapshot alone never changes an
+operation's state or authorizes another submission.
+
+Apply migration 133 through the canonical migrator before deploying the broker
+and bridge changes. The new table applies tenant row-level security inline and
+uses the native versioned encryption keyring; retained historical keys can still
+read existing snapshots. Ordinary credential exports do not include this table.

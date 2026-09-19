@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { PersonalAutomationAudit } from "./personal-automation-audit";
 
 type Resource = { id: string; kind: string; label: string; origin?: string;
   descriptor?: { version?: number; fields?: string[]; source?: string } };
@@ -145,6 +146,7 @@ export function PersonalAutomationPanel() {
       {operations.slice(0,10).map(operation => <div key={operation.id} className="space-y-2 rounded border p-3">
         <p>{operation.proposal.purpose} · {operation.state.replaceAll("_", " ")}</p>
         <p className="text-sm text-muted-foreground">{operation.proposal.origin}</p>
+        <PersonalAutomationAudit operationId={operation.id} />
         {operation.state === "awaiting_input" && <form className="flex gap-2" autoComplete="off" onSubmit={event => {
           event.preventDefault(); const form = event.currentTarget;
           const code = String(new FormData(form).get("code") || "");

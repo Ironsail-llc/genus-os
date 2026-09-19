@@ -147,3 +147,4 @@ crm/135_sales_requests.sql
 crm/136_sales_pipedrive_scope.sql
 crm/137_sales_analyst_permissions.sql
 crm/132_autonomy_enrollment_rls.sql
+crm/133_autonomy_terms_audit.sql
