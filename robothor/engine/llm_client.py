@@ -35,6 +35,7 @@ import time
 import time as _time
 from collections.abc import Awaitable, Callable  # noqa: TC003
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
@@ -109,6 +110,7 @@ if TYPE_CHECKING:
     from robothor.engine.stall_watchdog import _StallWatchdog
 
 logger = logging.getLogger(__name__)
+_response_format_var: ContextVar[str] = ContextVar("agent_response_format", default="text")
 
 # ── LLM request timeouts (shared with runner, which re-exports these) ──
 # Max seconds to wait for the next streaming chunk before aborting and
@@ -1527,6 +1529,11 @@ class LLMClient:
         # Expose the run id to the model breaker so a trip during this call
         # can be recorded as a guardrail event against the run.
         run_token = _current_run_id_var.set(getattr(session.run, "id", None))
+        format_token = _response_format_var.set(
+            "json_object"
+            if getattr(session, "response_format", "text") == "json_object"
+            else "text"
+        )
         try:
             if on_content or on_stream_event:
                 response = await self._call_llm_streaming(
@@ -1560,6 +1567,7 @@ class LLMClient:
             return await last_resort_attempt(self, session, models)
         finally:
             _current_run_id_var.reset(run_token)
+            _response_format_var.reset(format_token)
 
     # ─── Pre-flight ──────────────────────────────────────────────────
 
@@ -1982,6 +1990,15 @@ class LLMClient:
         kwargs.update(
             thinking_kwargs_for_call(model, kwargs["max_tokens"], reduced=thinking_reduced)
         )
+        if _response_format_var.get() == "json_object":
+            kwargs["response_format"] = {"type": "json_object"}
+            kwargs["messages"] = [
+                {
+                    "role": "system",
+                    "content": "Return a single JSON object as the final answer. Do not prepend or append commentary or Markdown fences. Tool calls remain available when needed.",
+                },
+                *kwargs["messages"],
+            ]
         return kwargs
 
     # ─── Model error handling ────────────────────────────────────────

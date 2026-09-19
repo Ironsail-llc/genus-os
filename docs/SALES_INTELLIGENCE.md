@@ -538,6 +538,13 @@ Scaffold through the native agent builder; do not put instance data in platform
 source. Workers run the existing Genus runner with explicit tenant, service role,
 cost allowance, timeout and structured output contract.
 
+For object-returning stages, set `model.response_format: json_object` in the
+manifest. The shared runner passes this mode to provider requests without
+changing other agents. Stage validation remains mandatory: research criteria
+must reference at least one evidence item. Omit unknown criteria instead of
+emitting an empty reference list; the dossier's generated JSON Schema exposes
+this constraint to the model.
+
 Declare `role: sales_agent` and narrow each manifest's `tools_allowed`. The role
 grants web research, constrained file writes and the four sales tools; it has
 no approval, vault or provider-send capability. File writes additionally need

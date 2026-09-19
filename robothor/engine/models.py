@@ -268,6 +268,7 @@ class AgentConfig:
     # Models
     model_primary: str = ""
     model_fallbacks: list[str] = field(default_factory=list)
+    response_format: str = "text"  # text | json_object; final content, not tool arguments
 
     # Schedule
     cron_expr: str = ""
