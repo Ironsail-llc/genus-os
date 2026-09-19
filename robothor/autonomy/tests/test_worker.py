@@ -98,3 +98,14 @@ async def test_local_browser_uses_system_chromium_with_sandbox_enabled(monkeypat
     assert kwargs["executable_path"] == "/usr/bin/chromium"
     assert "PRIVATE_PROVIDER_SECRET" not in kwargs["env"]
     assert "DEBUG" not in kwargs["env"]
+
+
+async def test_local_browser_respects_configured_executable(monkeypatch):
+    from robothor.settings import get_settings
+
+    configured = get_settings(autonomy={"chromium_executable": "/opt/protected-browser/chromium"})
+    monkeypatch.setattr("robothor.settings.get_settings", lambda: configured)
+    monkeypatch.setattr(worker.shutil, "which", lambda name: "/usr/bin/chromium")
+    chromium = SimpleNamespace(launch=AsyncMock(return_value="browser"))
+    await worker.launch_local(chromium)
+    assert chromium.launch.call_args.kwargs["executable_path"] == "/opt/protected-browser/chromium"

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from robothor.auth import tokens
 from robothor.autonomy.workflows.protocol import AUDIENCE, RPC, SCOPE, ExecuteRequest
+from robothor.settings import get_settings
 
 if TYPE_CHECKING:
     from robothor.autonomy.models import Scope
@@ -35,9 +35,7 @@ async def invoke(
         scopes=(SCOPE,),
         ttl_seconds=60,
     )
-    actual_transport = transport or httpx.AsyncHTTPTransport(
-        uds=os.environ.get("ROBOTHOR_AUTONOMY_SOCKET", "/run/robothor-autonomy/broker.sock")
-    )
+    actual_transport = transport or httpx.AsyncHTTPTransport(uds=get_settings().autonomy.socket)
     try:
         async with httpx.AsyncClient(
             transport=actual_transport,

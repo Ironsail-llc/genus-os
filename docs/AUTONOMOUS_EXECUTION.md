@@ -330,3 +330,10 @@ revocation, process errors, and controlled Chromium account/checkout flows.
 The subprocess acceptance test requires a sandbox-capable Chromium executable.
 Managed browser tests mock the provider. No live account creation, real payment,
 production migration or service deployment is performed by this test suite.
+
+Host browser paths are declared under `settings.autonomy` in the normal settings
+registry. `chromium_executable` and `socket` accept the corresponding documented
+environment overrides and appear in the generated configuration reference.
+Browser tests carry the `e2e` marker where they do not require the database fixture;
+the required `test-autonomy` CI lane installs Chromium and runs the entire autonomy
+suite, including these tests. Generic Python matrix jobs do not install browsers.

@@ -36,3 +36,12 @@ def store(identity):
 @pytest.fixture
 def identity():
     return Scope(tenant_id="test-" + uuid4().hex, owner_id="alice")
+
+
+@pytest.fixture(autouse=True)
+def fresh_autonomy_settings():
+    from robothor.settings import reset_settings
+
+    reset_settings()
+    yield
+    reset_settings()

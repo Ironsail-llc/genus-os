@@ -2986,6 +2986,28 @@ class OpsSettings(SettingsGroup):
 # ---------------------------------------------------------------------------
 
 
+class AutonomySettings(SettingsGroup):
+    """Host paths for the isolated personal browser broker."""
+
+    restart_units: ClassVar[tuple[str, ...]] = (
+        "robothor-autonomy",
+        "robothor-engine",
+        "robothor-bridge",
+    )
+    chromium_executable: str = declare(
+        "",
+        "ROBOTHOR_AUTONOMY_CHROMIUM_EXECUTABLE",
+        "Sandbox-capable Chromium executable for protected browsing. Empty uses system Chromium, "
+        "then Playwright's installed browser. Requires the host's user-namespace policy.",
+    )
+    socket: str = declare(
+        "/run/robothor-autonomy/broker.sock",
+        "ROBOTHOR_AUTONOMY_SOCKET",
+        "Private Unix socket shared by the protected browser service and its authenticated clients. "
+        "Its parent directory must be owned by the service user with mode 0700.",
+    )
+
+
 class GenusSettings(BaseSettings):
     """Every Genus OS setting, grouped.
 
@@ -3001,6 +3023,7 @@ class GenusSettings(BaseSettings):
         populate_by_name=True,
     )
 
+    autonomy: AutonomySettings = Field(default_factory=AutonomySettings)
     paths: PathsSettings = Field(default_factory=PathsSettings)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     redis: RedisSettings = Field(default_factory=RedisSettings)

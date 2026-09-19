@@ -7,7 +7,6 @@ import base64
 import ipaddress
 import json
 import logging
-import os
 import shutil
 import socket
 import sys
@@ -30,7 +29,9 @@ if TYPE_CHECKING:
 async def launch_local(chromium: BrowserType) -> Browser:
     # Distribution Chromium carries the host's AppArmor/user-namespace policy;
     # a downloaded executable may not. Always retain Chromium's own sandbox.
-    executable = os.environ.get("ROBOTHOR_AUTONOMY_CHROMIUM_EXECUTABLE") or shutil.which("chromium")
+    from robothor.settings import get_settings
+
+    executable = get_settings().autonomy.chromium_executable or shutil.which("chromium")
     return await chromium.launch(
         headless=True,
         chromium_sandbox=True,
@@ -41,11 +42,9 @@ async def launch_local(chromium: BrowserType) -> Browser:
 
 def browser_environment() -> dict[str, str]:
     """No provider/database secrets, debug flags, preload hooks or tracing."""
-    return {
-        key: os.environ[key]
-        for key in ("PATH", "HOME", "LANG", "TMPDIR", "PLAYWRIGHT_BROWSERS_PATH")
-        if key in os.environ
-    }
+    from robothor.settings.env import process_env_allowlist
+
+    return process_env_allowlist(("PATH", "HOME", "LANG", "TMPDIR", "PLAYWRIGHT_BROWSERS_PATH"))
 
 
 async def public_request(route: Route) -> None:

@@ -54,3 +54,13 @@ def process_env_snapshot() -> dict[str, str]:
     and mutated on the way.
     """
     return dict(os.environ)
+
+
+def process_env_allowlist(names: tuple[str, ...]) -> dict[str, str]:
+    """Copy only explicitly permitted process variables into an isolated child.
+
+    This preserves host plumbing (PATH, locale, temporary directories) without
+    inheriting provider credentials, debug hooks or arbitrary browser flags.
+    Declared Genus settings are resolved separately through get_settings().
+    """
+    return {name: os.environ[name] for name in names if name in os.environ}

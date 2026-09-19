@@ -10,6 +10,8 @@ from playwright.async_api import async_playwright
 from robothor.autonomy.broker import BrowserBroker, ExecutionPlan, FieldBinding
 from robothor.autonomy.models import Delegation, ResourceInput, WebOperation
 
+pytestmark = pytest.mark.e2e
+
 
 @pytest.mark.timeout(60)
 async def test_invalid_plan_can_be_corrected_without_filling_or_duplicate_submission(
