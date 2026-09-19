@@ -158,3 +158,17 @@ async def test_each_child_requires_its_first_read_attempt_then_can_choose_fallba
     assert tool_choice(tools) == "auto"
     with pytest.raises(Conflict):
         sources.attest("child-1", fragment("services"))
+
+
+def test_empty_research_requires_an_explicit_unknown_and_criteria_require_boolean_facts():
+    from robothor.sales.models import Dossier
+
+    sources = capture()
+    with pytest.raises(Conflict, match="unknown"):
+        sources.attest("child", Dossier(buying_case="network_access"))
+    empty = Dossier(buying_case="network_access", unanswered=["Ownership not established"])
+    assert sources.attest("child", empty)[0] == empty
+    part = fragment("services")
+    part.evidence[0].value = "A clinical title alone implies prescribing"
+    with pytest.raises(Conflict, match="boolean"):
+        sources.attest("child", part)

@@ -46,6 +46,7 @@ class ResearchSources:
     @contextmanager
     def child_scope(self, index):
         """A fresh native child must attempt retrieval before answering from context."""
+        from robothor.engine.output_validation import output_validation_scope
         from robothor.engine.required_tool import required_tool_scope
         from robothor.engine.response_schema import response_schema_scope
         from robothor.engine.tool_observation import tool_observation_scope
@@ -65,7 +66,21 @@ class ResearchSources:
                 attempted = True
             self.observe(name, args, result, ctx)
 
+        def validate(run, text):
+            from pydantic import ValidationError
+
+            if run.tenant_id != self.tenant_id or run.agent_id != self.agent_id:
+                return "Research output identity does not match its owning child"
+            try:
+                self.attest(str(run.id), Dossier.model_validate_json(text or ""))
+            except ValidationError:
+                return "Return the exact Dossier schema with valid evidence references and timezone-aware dates"
+            except Conflict as exc:
+                return str(exc)
+            return None
+
         with (
+            output_validation_scope(validate),
             required_tool_scope(self.first_read_tool, lambda: not attempted),
             tool_observation_scope(observe, names={"web_fetch", "web_render"}),
             response_schema_scope(
@@ -108,6 +123,17 @@ class ResearchSources:
         if not sources:
             raise Conflict("Research requires a successful retrieval by the same native child")
         part = Dossier.model_validate(dossier.model_dump(mode="json"))
+        if not part.evidence and not any(item.strip() for item in part.unanswered):
+            raise Conflict("Research without evidence must explain explicit unknowns in unanswered")
+        facts = {e.id: e for e in part.evidence}
+        for criterion, references in part.criteria.items():
+            if any(
+                facts[ref].field != criterion or type(facts[ref].value) is not bool
+                for ref in references
+            ):
+                raise Conflict(
+                    "Scored criteria require matching boolean evidence; put contextual text outside criteria"
+                )
         for evidence in part.evidence:
             quote = text_key(evidence.excerpt)
             matches = [

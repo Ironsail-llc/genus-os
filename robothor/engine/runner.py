@@ -77,6 +77,7 @@ from robothor.engine.models import (
     StepType,
     TriggerType,
 )
+from robothor.engine.output_validation import request_output_repair, validated_completion
 from robothor.engine.prompts import (
     EXECUTION_MODE_PREAMBLE,
 )
@@ -1469,7 +1470,7 @@ class AgentRunner(
         self._publish_run_telemetry(trace, session.run)
 
         return self._finish_run(
-            session.complete(output_text),
+            validated_completion(session, output_text),
             trace=trace,
             agent_config=agent_config,
             session=session,
@@ -2064,7 +2065,9 @@ class AgentRunner(
                     )
                     continue
 
-                if nudge_for_missing_deliverable(session, _workspace):  # owes an artifact
+                if request_output_repair(session) or nudge_for_missing_deliverable(
+                    session, _workspace
+                ):
                     continue
                 return
 
