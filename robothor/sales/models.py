@@ -241,7 +241,7 @@ class SalesSettings(Contract):
     research_enabled: StrictBool = False
     enrichment_enabled: StrictBool = False
     promotion_enabled: StrictBool = False
-    email_provider: Literal["instantly", "none"] = "instantly"
+    email_provider: Literal["instantly", "gmail", "none"] = "instantly"
     sending_enabled: StrictBool = False
     outcomes_enabled: StrictBool = False
     business_sources: list[BusinessSource] = Field(default_factory=list, max_length=10)

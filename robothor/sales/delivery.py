@@ -32,7 +32,7 @@ class DeliveryWorker:
 
     async def tick(self):
         settings = SalesSettings.model_validate(await asyncio.to_thread(self.sales.settings))
-        if not settings.sending_enabled:
+        if settings.email_provider != "instantly" or not settings.sending_enabled:
             return False
         try:
             self._window(settings, self.clock())
