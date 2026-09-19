@@ -1,0 +1,1 @@
+Restore host browser startup with read-only home directories, retain the current task through compaction and restart, and bind Telegram approvals to exact plan revisions. Add authenticated owner host execution and durable, verified local repair deployments with rollback and task recovery.

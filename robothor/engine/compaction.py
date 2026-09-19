@@ -554,6 +554,11 @@ def protected_prefix_len(messages: list[dict[str, Any]], protect_first_n: int | 
     """
     if not messages:
         return 0
+    from robothor.engine.task_context import read_context
+
+    # The actual task lives in the system message, not the oldest user turn.
+    if read_context(messages) is not None:
+        return 1
     if protect_first_n is None:
         from robothor.settings import get_settings
 

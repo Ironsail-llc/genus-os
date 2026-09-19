@@ -44,35 +44,51 @@ def _display() -> str:
     return _cfg().desktop_display
 
 
-def _env() -> dict[str, str]:
-    """Build subprocess env with DISPLAY injected."""
-    env = os.environ.copy()
+def _env(agent_id: str = "") -> dict[str, str]:
+    """Minimal desktop-helper environment, independent of exec's rollout flag."""
+    from robothor.engine.exec_env import build_exec_env
+
+    env = build_exec_env(agent_id=agent_id, mode="enforce", base=dict(os.environ), grants=()).env
     env["DISPLAY"] = _display()
+    if os.environ.get("XAUTHORITY"):
+        env["XAUTHORITY"] = os.environ["XAUTHORITY"]
     return env
 
 
-def _run_xdotool(*args: str, timeout: int = 10) -> dict[str, Any]:
-    """Run an xdotool command and return result.
+def _desktop_command(argv: list[str]) -> list[str]:
+    """Every desktop operation targets the selected display backend."""
+    from robothor.engine.sandbox import SandboxMode, get_current_sandbox, sandbox_binary
 
-    When a per-run Docker sandbox is active, automate the container's display
-    (``docker exec``) instead of the host's — so a sandboxed agent cannot drive
-    the operator's real screen. With no sandbox (the default) this is the
-    unchanged host path.
-    """
-    from robothor.engine.sandbox import get_current_sandbox
-
-    cmd = ["xdotool", *args]
     sandbox = get_current_sandbox()
     container_id = getattr(sandbox, "container_id", None) if sandbox else None
     if container_id:
-        cmd = ["docker", "exec", "-e", "DISPLAY=:0", str(container_id), *cmd]
+        return [sandbox_binary(), "exec", "-e", "DISPLAY=:0", str(container_id), *argv]
+    if sandbox and getattr(sandbox, "mode", SandboxMode.LOCAL) != SandboxMode.LOCAL:
+        raise RuntimeError("Container desktop is unavailable; host fallback is disabled")
+    return argv
+
+
+def _run_xdotool(*args: str, timeout: int = 10, agent_id: str = "") -> dict[str, Any]:
+    """Run an xdotool command and return result.
+
+    When a per-run sandbox is active, automate the container's display instead
+    of the host's — so a sandboxed agent cannot drive the operator's real
+    screen. With no sandbox (the default) this is the unchanged host path.
+
+    The container runtime comes from :func:`robothor.engine.sandbox.sandbox_binary`,
+    not a hardcoded ``docker``. ``sandbox.py`` prefers rootless podman precisely
+    because ``docker`` needs a daemon whose socket is root-equivalent, and on
+    this instance the engine user is not in the docker group — so the
+    hardcoded form was a branch that could never execute.
+    """
+    cmd = _desktop_command(["xdotool", *args])
     try:
         proc = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=timeout,
-            env=_env(),
+            env=_env(agent_id),
         )
         if proc.returncode != 0:
             return {"error": f"xdotool failed: {proc.stderr.strip()}"}
@@ -91,6 +107,31 @@ def _run_xdotool(*args: str, timeout: int = 10) -> dict[str, Any]:
 @_handler("desktop_screenshot")
 async def _screenshot(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Capture the virtual display and return base64 PNG."""
+    agent_id = ctx.agent_id or ""
+    # Container screenshots must be captured AND read inside the container;
+    # its /tmp is not the engine's /tmp.
+    if _desktop_command(["true"])[0] != "true":
+        import json
+
+        script = (
+            "import tempfile,subprocess,base64,json,pathlib; "
+            "f=tempfile.NamedTemporaryFile(suffix='.png'); "
+            "subprocess.run(['scrot','-o',f.name],check=True); "
+            "size=subprocess.check_output(['identify','-format','%w %h',f.name],text=True).split(); "
+            "print(json.dumps(dict(screenshot_base64=base64.b64encode(pathlib.Path(f.name).read_bytes())"
+            ".decode(),width=int(size[0]),height=int(size[1]),format='png')))"
+        )
+        proc = await asyncio.to_thread(
+            subprocess.run,
+            _desktop_command(["python3", "-c", script]),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            env=_env(agent_id),
+        )
+        if proc.returncode:
+            return {"error": "Container screenshot failed: " + proc.stderr}
+        return json.loads(proc.stdout)
 
     def _run() -> dict[str, Any]:
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
@@ -101,7 +142,7 @@ async def _screenshot(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 capture_output=True,
                 text=True,
                 timeout=10,
-                env=_env(),
+                env=_env(agent_id),
             )
             if proc.returncode != 0:
                 return {"error": f"scrot failed: {proc.stderr.strip()}"}
@@ -160,8 +201,10 @@ async def _click(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         return result
     x, y = result
 
+    agent_id = ctx.agent_id or ""
+
     def _run() -> dict[str, Any]:
-        return _run_xdotool("mousemove", str(x), str(y), "click", "1")
+        return _run_xdotool("mousemove", str(x), str(y), "click", "1", agent_id=agent_id)
 
     return await asyncio.to_thread(_run)
 
@@ -174,8 +217,12 @@ async def _double_click(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
         return result
     x, y = result
 
+    agent_id = ctx.agent_id or ""
+
     def _run() -> dict[str, Any]:
-        return _run_xdotool("mousemove", str(x), str(y), "click", "--repeat", "2", "1")
+        return _run_xdotool(
+            "mousemove", str(x), str(y), "click", "--repeat", "2", "1", agent_id=agent_id
+        )
 
     return await asyncio.to_thread(_run)
 
@@ -188,8 +235,10 @@ async def _right_click(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
         return result
     x, y = result
 
+    agent_id = ctx.agent_id or ""
+
     def _run() -> dict[str, Any]:
-        return _run_xdotool("mousemove", str(x), str(y), "click", "3")
+        return _run_xdotool("mousemove", str(x), str(y), "click", "3", agent_id=agent_id)
 
     return await asyncio.to_thread(_run)
 
@@ -202,8 +251,10 @@ async def _mouse_move(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         return result
     x, y = result
 
+    agent_id = ctx.agent_id or ""
+
     def _run() -> dict[str, Any]:
-        return _run_xdotool("mousemove", str(x), str(y))
+        return _run_xdotool("mousemove", str(x), str(y), agent_id=agent_id)
 
     return await asyncio.to_thread(_run)
 
@@ -220,6 +271,8 @@ async def _drag(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     sx, sy = start
     ex, ey = end
 
+    agent_id = ctx.agent_id or ""
+
     def _run() -> dict[str, Any]:
         return _run_xdotool(
             "mousemove",
@@ -232,6 +285,7 @@ async def _drag(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             str(ey),
             "mouseup",
             "1",
+            agent_id=agent_id,
         )
 
     return await asyncio.to_thread(_run)
@@ -244,9 +298,10 @@ async def _scroll(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     clicks = max(1, min(int(args.get("clicks", 3)), 20))
     # xdotool: button 4 = scroll up, button 5 = scroll down
     button = "4" if direction == "up" else "5"
+    agent_id = ctx.agent_id or ""
 
     def _run() -> dict[str, Any]:
-        return _run_xdotool("click", "--repeat", str(clicks), button)
+        return _run_xdotool("click", "--repeat", str(clicks), button, agent_id=agent_id)
 
     return await asyncio.to_thread(_run)
 
@@ -262,9 +317,10 @@ async def _type_text(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     text = args.get("text", "")
     if not text:
         return {"error": "No text provided"}
+    agent_id = ctx.agent_id or ""
 
     def _run() -> dict[str, Any]:
-        return _run_xdotool("type", "--delay", "50", "--", text)
+        return _run_xdotool("type", "--delay", "50", "--", text, agent_id=agent_id)
 
     return await asyncio.to_thread(_run)
 
@@ -275,9 +331,10 @@ async def _key(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     combo = args.get("key", "")
     if not combo:
         return {"error": "No key combination provided"}
+    agent_id = ctx.agent_id or ""
 
     def _run() -> dict[str, Any]:
-        return _run_xdotool("key", "--", combo)
+        return _run_xdotool("key", "--", combo, agent_id=agent_id)
 
     return await asyncio.to_thread(_run)
 
@@ -290,15 +347,16 @@ async def _key(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 @_handler("desktop_window_list")
 async def _window_list(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """List all open windows with IDs, titles, and geometry."""
+    agent_id = ctx.agent_id or ""
 
     def _run() -> dict[str, Any]:
         try:
             proc = subprocess.run(
-                ["wmctrl", "-lG"],
+                _desktop_command(["wmctrl", "-lG"]),
                 capture_output=True,
                 text=True,
                 timeout=5,
-                env=_env(),
+                env=_env(agent_id),
             )
             if proc.returncode != 0:
                 return {"error": f"wmctrl failed: {proc.stderr.strip()}"}
@@ -332,15 +390,16 @@ async def _window_focus(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     window_id = args.get("window_id", "")
     if not window_id:
         return {"error": "No window_id provided"}
+    agent_id = ctx.agent_id or ""
 
     def _run() -> dict[str, Any]:
         try:
             proc = subprocess.run(
-                ["wmctrl", "-ia", window_id],
+                _desktop_command(["wmctrl", "-ia", window_id]),
                 capture_output=True,
                 text=True,
                 timeout=5,
-                env=_env(),
+                env=_env(agent_id),
             )
             if proc.returncode != 0:
                 return {"error": f"wmctrl focus failed: {proc.stderr.strip()}"}
@@ -366,13 +425,14 @@ async def _launch(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     app_args = args.get("args", [])
     if isinstance(app_args, str):
         app_args = app_args.split()
+    agent_id = ctx.agent_id or ""
 
     def _run() -> dict[str, Any]:
         try:
-            cmd = [app, *app_args]
+            cmd = _desktop_command([app, *app_args])
             proc = subprocess.Popen(
                 cmd,
-                env=_env(),
+                env=_env(agent_id),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )

@@ -1342,6 +1342,10 @@ async def main() -> int:
     if cleaned:
         logger.info("Startup: cleaned %d stale agent runs", cleaned)
 
+    from robothor.engine.repair_recovery import recover as recover_repairs
+
+    await recover_repairs(runner, config)
+
     _init_fleet_capacity(config)
 
     # Initialize inter-agent messaging + teams so the send_agent_message /

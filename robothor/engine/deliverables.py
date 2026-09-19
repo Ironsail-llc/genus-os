@@ -85,6 +85,12 @@ def task_text_from(messages: list[dict[str, Any]] | None) -> str:
     resumed run also carries history between the system prompt and the task,
     so "the last message" is equally wrong; the task is the first user turn.
     """
+    from robothor.engine.task_context import read_context
+
+    record = read_context(messages or [])
+    if record is not None:
+        return str(record["request"])
+    # Legacy single-task transcripts have no explicit engine record.
     for msg in messages or []:
         if msg.get("role") != "user":
             continue

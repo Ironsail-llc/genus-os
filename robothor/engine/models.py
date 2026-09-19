@@ -698,6 +698,7 @@ class PlanState:
     created_at: str = ""  # ISO timestamp
     exploration_run_id: str = ""  # Run ID of the read-only phase
     rejection_feedback: str = ""  # Why the operator rejected (fed back to agent on re-plan)
+    task_context: dict[str, Any] = field(default_factory=dict)
     plan_hash: str = ""  # SHA-256 of plan_text for integrity verification on approval
 
     # Deep plan mode — when True, approval routes to execute_deep() instead of execute()

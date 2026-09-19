@@ -639,6 +639,18 @@ class RunLifecycleMixin:
             messages = checkpoint_data.get("messages")
             if messages and isinstance(messages, list):
                 session.messages = messages
+                from robothor.engine.task_context import install_context, make_context, read_context
+
+                record = read_context(messages)
+                if record is None:
+                    record = make_context(
+                        session.run.task_text or session.originating_message, [], run_id=run_id
+                    )
+                    install_context(session.messages, record)
+                session.originating_message = record["request"]
+                from robothor.engine.deliverable_contract import task_text_for_column
+
+                session.run.task_text = task_text_for_column(record["request"])
 
             # Restore scratchpad
             scratchpad_data = checkpoint_data.get("scratchpad")

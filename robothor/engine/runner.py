@@ -51,7 +51,7 @@ from robothor.engine.context_budget import keep_context_within_budget
 # Re-exported for existing importers. The `as` form is what marks a name as
 # deliberately re-exported; a plain import reads to mypy as a private detail,
 # which is the right default and the wrong one here.
-from robothor.engine.deliverables import task_text_from  # noqa: E402
+from robothor.engine.deliverable_contract import task_text_for_run  # noqa: E402
 from robothor.engine.error_actions import apply_error_recovery, inject_error_feedback
 from robothor.engine.finalization_budget import FinalizationBudget  # noqa: E402
 from robothor.engine.injection_screen import screen_run_prompt
@@ -520,6 +520,18 @@ class AgentRunner(
         message = protect_payment_text(message)
         resolved_tenant = tenant_id or current_tenant_scope() or self.config.tenant_id
 
+        # Restore the execution mode BEFORE constructing tools. A plan-only
+        # checkpoint must never acquire mutating tools after a daemon restart.
+        if resume_from_run_id:
+            from robothor.engine.checkpoint import CheckpointManager
+            from robothor.engine.task_context import read_context
+
+            saved = await asyncio.to_thread(CheckpointManager.load_latest, resume_from_run_id)
+            saved_context = read_context((saved or {}).get("messages") or [])
+            if saved_context and saved_context.get("mode") == "plan":
+                readonly_mode = True
+                execution_mode = False
+
         reason = f"Agent config not found: {agent_id}"
         if agent_config is None:
             agent_config, reason = load_agent_config_or_reason(agent_id, self.config.manifest_dir)
@@ -974,6 +986,14 @@ class AgentRunner(
             conversation_history=conversation_history,
             engine_context=engine_preamble or None,
         )
+
+        session.readonly_mode = readonly_mode
+        from robothor.engine.task_context import install_context, read_context
+
+        task_record = read_context(session.messages)
+        if task_record:
+            task_record["mode"] = "plan" if readonly_mode else "execute"
+            install_context(session.messages, task_record)
 
         watchdog.touch("session_started")
 
@@ -1832,7 +1852,7 @@ class AgentRunner(
                     session,
                     _stop.budget,
                     elapsed=_stop.elapsed,
-                    task_text=task_text_from(session.messages),
+                    task_text=task_text_for_run(session.run, session),
                     workspace=_workspace,
                 )
                 return
@@ -1844,7 +1864,7 @@ class AgentRunner(
                     wrapup_note(
                         elapsed=_stop.elapsed,
                         budget_seconds=_stop.budget.seconds,
-                        task_text=task_text_from(session.messages),
+                        task_text=task_text_for_run(session.run, session),
                         workspace=_workspace,
                     ),
                     _workspace,
@@ -1877,7 +1897,7 @@ class AgentRunner(
             _dl_note = _pacer.note_for(
                 self._active_watchdog,
                 iteration=_iteration,
-                task_text=task_text_from(session.messages),
+                task_text=task_text_for_run(session.run, session),
                 workspace=_workspace,
                 run_id=session.run.id,
             )
@@ -1904,7 +1924,7 @@ class AgentRunner(
                 _pacer.mode,
                 run_id=session.run.id,
                 session=session,
-                task_text=task_text_from(session.messages),
+                task_text=task_text_for_run(session.run, session),
                 workspace=_workspace,
                 fraction=_stop.fraction_spent(),
             )
@@ -2011,7 +2031,7 @@ class AgentRunner(
                     session,
                     _stop.budget,
                     elapsed=_stop.elapsed,
-                    task_text=task_text_from(session.messages),
+                    task_text=task_text_for_run(session.run, session),
                     workspace=_workspace,
                 )
                 return
@@ -2055,6 +2075,12 @@ class AgentRunner(
                     )
                     continue
 
+                if readonly_mode:
+                    from robothor.engine.plan_integrity import require_alignment
+
+                    if await require_alignment(self, session, models, assistant_msg.content or ""):
+                        continue
+
                 if nudge_for_missing_deliverable(session, _workspace):  # owes an artifact
                     continue
                 return
@@ -2067,7 +2093,7 @@ class AgentRunner(
                     session,
                     _stop.budget,
                     elapsed=_stop.elapsed,
-                    task_text=task_text_from(session.messages),
+                    task_text=task_text_for_run(session.run, session),
                     workspace=_workspace,
                 )
                 return

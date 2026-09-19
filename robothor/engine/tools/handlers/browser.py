@@ -323,6 +323,51 @@ def _display() -> str:
     return _cfg().desktop_display
 
 
+#: Writable application state for Chromium configuration and crash reports.
+_PROFILE_DIRNAME = "browser-profiles"
+
+
+def _browser_profile_dir(agent_id: str) -> str:
+    """Writable Chromium crash/config state, not a persistent cookie profile.
+
+    Playwright owns the temporary user-data directory. These XDG paths keep
+    crashpad off read-only HOME. Authentication uses the autonomy session store.
+    """
+    import hashlib
+    from pathlib import Path
+
+    from robothor.settings.sources import workspace_path
+
+    safe = agent_id or "default"
+    if not re_mod.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,100}", safe):
+        safe = hashlib.sha256(safe.encode()).hexdigest()[:32]
+    root = workspace_path()
+    if root is None:
+        # No workspace resolves (no ROBOTHOR_WORKSPACE and no HOME). Fall back
+        # to the tmpdir, which PrivateTmp=yes makes writable for the service.
+        # Writable temporary configuration state for non-service installations.
+        import tempfile
+
+        root = Path(tempfile.gettempdir()) / "robothor-workspace"
+    path = root / "local" / _PROFILE_DIRNAME / safe
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
+
+
+def _browser_env(profile_dir: str, agent_id: str) -> dict[str, str]:
+    """Minimal browser environment with writable XDG state and display access."""
+    from robothor.engine.exec_env import build_exec_env
+
+    env = build_exec_env(agent_id=agent_id, mode="enforce", base=dict(os.environ), grants=()).env
+    env["DISPLAY"] = _display()
+    if os.environ.get("XAUTHORITY"):
+        env["XAUTHORITY"] = os.environ["XAUTHORITY"]
+    env["XDG_CONFIG_HOME"] = profile_dir
+    env["XDG_CACHE_HOME"] = f"{profile_dir}/cache"
+    env["XDG_DATA_HOME"] = f"{profile_dir}/data"
+    return env
+
+
 async def _get_playwright() -> Any:
     """Get or create the global Playwright instance."""
     global _playwright_instance
@@ -541,6 +586,15 @@ async def _action_start(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
 
         sandbox = get_current_sandbox()
         endpoint = sandbox.browser_endpoint() if sandbox else ""
+        if sandbox is not None and not endpoint:
+            from robothor.engine.sandbox import SandboxMode
+
+            if getattr(sandbox, "mode", SandboxMode.LOCAL) != SandboxMode.LOCAL:
+                return {
+                    "error": "Container browser endpoint is unavailable",
+                    "error_type": "browser_backend_unavailable",
+                    "execution_mode": "container",
+                }
 
         existing = await _get_session(agent_id)
         if existing is not None:
@@ -560,6 +614,30 @@ async def _action_start(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
                 context = await browser.new_context(viewport={"width": 1280, "height": 960})
                 page = await context.new_page()
             else:
+                # The env, not the args, is what fixes the launch. Chromium
+                # spawns chrome_crashpad_handler with a --database path derived
+                # from $HOME/.config, which the unit's ProtectHome=read-only
+                # makes unwritable; the handler exits and takes the browser with
+                # it with a missing crashpad database error. Pointing
+                # XDG_CONFIG_HOME at the workspace removes that path entirely.
+                # A user-data-dir launch argument is deliberately omitted: Playwright rejects
+                # it as a launch arg (it manages its own temp profile), and it is
+                # not what fails. See _browser_profile_dir / _browser_env.
+                state_key = json.dumps(
+                    [
+                        getattr(ctx, "tenant_id", ""),
+                        getattr(ctx, "user_id", ""),
+                        ctx.agent_id or "default",
+                    ]
+                )
+                profile_dir = _browser_profile_dir(state_key)
+                import tempfile
+                from pathlib import Path
+
+                for directory in (profile_dir, f"{profile_dir}/cache", f"{profile_dir}/data"):
+                    Path(directory).mkdir(parents=True, exist_ok=True, mode=0o700)
+                    with tempfile.TemporaryFile(dir=directory):
+                        pass
                 browser = await pw.chromium.launch(
                     headless=False,
                     args=[
@@ -569,7 +647,7 @@ async def _action_start(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
                         "--window-size=1280,960",
                         "--window-position=0,0",
                     ],
-                    env={**os.environ, "DISPLAY": _display()},
+                    env=_browser_env(profile_dir, ctx.agent_id or ""),
                 )
                 context = await browser.new_context(
                     viewport={"width": 1280, "height": 960},
@@ -581,7 +659,18 @@ async def _action_start(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
             )
             return {"status": "started", "agent_id": ctx.agent_id or "default"}
         except Exception as e:
-            return {"error": f"Failed to start browser: {e}"}
+            from robothor.secrets.redaction import redact
+
+            detail = redact(str(e))
+            return {
+                "error": f"Failed to start browser: {detail[-5000:]}",
+                "error_type": "browser_launch_failed",
+                "execution_mode": "container" if endpoint else "host",
+                "cause": "crashpad_state_unwritable"
+                if "--database is required" in detail
+                else "browser_startup",
+                "display": _display(),
+            }
 
 
 async def _action_stop(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:

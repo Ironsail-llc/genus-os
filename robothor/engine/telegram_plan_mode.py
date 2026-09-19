@@ -18,10 +18,14 @@ import asyncio
 import contextlib
 import html
 import logging
+import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from aiogram.enums import ChatAction
+
+from robothor.engine.plan_integrity import plan_hash
+from robothor.engine.task_context import make_context
 
 if TYPE_CHECKING:
     from aiogram import Bot
@@ -55,6 +59,8 @@ def _plan_state_to_dict(plan: PlanState) -> dict[str, Any]:
     return {
         "plan_id": plan.plan_id,
         "plan_text": plan.plan_text,
+        "plan_hash": plan.plan_hash,
+        "task_context": plan.task_context,
         "original_message": plan.original_message,
         "status": plan.status,
         "created_at": plan.created_at,
@@ -199,22 +205,28 @@ class PlanModeMixin:
                     plan_id=str(uuid.uuid4()),
                     plan_text=plan_text,
                     original_message=user_text,
+                    plan_hash=plan_hash(plan_text),
+                    task_context=make_context(user_text, history, mode="plan", run_id=run.id),
                     status="pending",
                     created_at=datetime.now(UTC).isoformat(),
                     exploration_run_id=run.id,
                     deep_plan=deep_plan,
                     creator_sender_info=user or None,
                 )
+                plan.task_context["plan_id"] = plan.plan_id
                 session.active_plan = plan
 
                 # Persist plan state to DB
-                get_task_registry().spawn(
-                    save_plan_state_async(
-                        session_key,
-                        _plan_state_to_dict(plan),
-                        tenant_id=tenant_id,
-                    ),
-                    name=f"tg-save-plan:{chat_id}",
+                await save_exchange_async(
+                    session_key,
+                    user_text,
+                    run.output_text or "",
+                    channel="telegram",
+                    model_override=model,
+                    tenant_id=tenant_id,
+                )
+                await save_plan_state_async(
+                    session_key, _plan_state_to_dict(plan), tenant_id=tenant_id
                 )
 
                 sent_plan = await self.send_message(chat_id, plan_text)
@@ -381,6 +393,7 @@ class PlanModeMixin:
         chat_id: str,
         session_key: str,
         session: Any,
+        expected_plan_id: str | None = None,
     ) -> None:
         """Execute an approved plan in background mode.
 
@@ -404,6 +417,10 @@ class PlanModeMixin:
             await self.send_message(chat_id, "No pending plan to execute.")
             return
 
+        if expected_plan_id and plan.plan_id != expected_plan_id:
+            await self.send_message(chat_id, "That plan revision is no longer active.")
+            return
+
         # Check expiration before executing
         if _plan_is_expired(plan):
             plan.status = "expired"
@@ -413,6 +430,11 @@ class PlanModeMixin:
             )
             return
 
+        if plan.plan_hash and plan.plan_hash != plan_hash(plan.plan_text):
+            await self.send_message(
+                chat_id, "Plan changed since approval. Please request a new plan."
+            )
+            return
         plan.status = "approved"
 
         user = plan.creator_sender_info or {}
@@ -448,6 +470,7 @@ class PlanModeMixin:
                 "Use your tools to carry out each step.\n"
                 "Do NOT re-plan, re-draft, or produce another version. ACT.\n\n"
                 f"Original request: {plan.original_message}\n\n"
+                f"Task context: {plan.task_context}\n\n"
                 f"Approved plan:\n{plan.plan_text}"
             )
 
@@ -763,6 +786,8 @@ class PlanModeMixin:
                 "[PLAN REVISION]\n"
                 "The user reviewed your plan and gave this feedback:\n"
                 f'"{feedback}"\n\n'
+                f"Original request: {plan.original_message}\n\n"
+                f"Task context: {plan.task_context}\n\n"
                 f"Current plan:\n{plan.plan_text}\n\n"
                 "Revise the plan to address their feedback. "
                 "Keep everything they didn't object to.\n"
@@ -802,8 +827,14 @@ class PlanModeMixin:
                     await self.bot.delete_message(chat_id=int(chat_id), message_id=stream_msg_id)
 
             if revised_plan_text:
-                # Update plan in-place (same plan_id)
+                # A revision invalidates every previously issued approval button.
+                plan.plan_id = str(uuid.uuid4())
                 plan.plan_text = revised_plan_text
+                plan.plan_hash = plan_hash(revised_plan_text)
+                plan.task_context.setdefault("steering", []).append(feedback)
+                await save_plan_state_async(
+                    session_key, _plan_state_to_dict(plan), tenant_id=tenant_id
+                )
 
                 revision_label = f"<b>Plan v{plan.revision_count + 1}</b>"
                 sent_revision = await self.send_message(chat_id, revised_plan_text)
