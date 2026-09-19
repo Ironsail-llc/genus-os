@@ -185,3 +185,17 @@ def resolve_slash_command(
     if token in loaded:
         return ("skill", None)
     return ("unknown", None)
+
+
+def expand_slash_command(text: str) -> str:
+    """Compose a known skill bundle and preserve its optional user context."""
+    if not text.startswith("/"):
+        return text
+    kind, bundle = resolve_slash_command(text.split()[0])
+    if kind != "bundle" or bundle is None:
+        return text
+    parts = text.split(maxsplit=1)
+    extra = parts[1] if len(parts) > 1 else ""
+    return f"{bundle.instruction}\n\nRun these skills in order: {', '.join(bundle.skills)}." + (
+        f"\n\nAdditional context: {extra}" if extra else ""
+    )

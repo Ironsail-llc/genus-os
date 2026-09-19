@@ -920,19 +920,9 @@ class TelegramHandlersMixin:
 
         user_text = protect_payment_text(user_text)
 
-        # ── Skill bundles: "/bundle-name" composes a multi-skill prompt ──
-        if user_text.startswith("/"):
-            from robothor.engine.skill_bundles import resolve_slash_command
+        from robothor.engine.skill_bundles import expand_slash_command
 
-            _kind, _bundle = resolve_slash_command(user_text.split()[0])
-            if _kind == "bundle" and _bundle is not None:
-                _parts = user_text.split(maxsplit=1)
-                _extra = _parts[1] if len(_parts) > 1 else ""
-                user_text = (
-                    f"{_bundle.instruction}\n\n"
-                    f"Run these skills in order: {', '.join(_bundle.skills)}."
-                    + (f"\n\nAdditional context: {_extra}" if _extra else "")
-                )
+        user_text = expand_slash_command(user_text)
 
         logger.info(
             "Telegram message from %s (chat %s): %s",
