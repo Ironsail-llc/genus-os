@@ -52,3 +52,10 @@ def defers_tool_turns():
     """Collection workflows validate final JSON in code while allowing more tools."""
     state = _schema.get()
     return state is not None and state.active and state.defer_for_tools
+
+
+def set_tool_format_deferred(deferred: bool):
+    """Trusted validators may request strict formatting or resume collection."""
+    state = _schema.get()
+    if state is not None and state.active:
+        state.defer_for_tools = deferred

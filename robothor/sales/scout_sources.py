@@ -118,7 +118,7 @@ def scout_scope(stage, tenant_id, agent_id, message):
         return
     from robothor.engine.output_validation import output_validation_scope
     from robothor.engine.required_tool import required_tool_scope
-    from robothor.engine.response_schema import response_schema_scope
+    from robothor.engine.response_schema import response_schema_scope, set_tool_format_deferred
     from robothor.engine.tool_observation import tool_observation_scope
 
     context = json.loads(message)["untrusted_business_data"]
@@ -130,8 +130,10 @@ def scout_scope(stage, tenant_id, agent_id, message):
         try:
             sources.attest(str(run.id), text)
         except Conflict as exc:
+            set_tool_format_deferred(True)
             return str(exc)
         except ValueError:
+            set_tool_format_deferred(False)
             return "Return CandidateBatch JSON with companies, not search-tool arguments"
         return None
 

@@ -831,6 +831,10 @@ tools and its schema is ready, it still requests strict `json_schema`; those
 requests require endpoint JSON/structured-output support. Genus always parses the
 final dossier and attests every citation against that child's successful
 retrievals. Invalid JSON, missing evidence and invented citations fail normally.
+If final output fails schema validation, the bounded correction requests strict
+provider formatting. A citation/source failure reopens tool collection instead,
+so the agent can read missing evidence. Neither transition adds repair attempts,
+time or spending allowance; malformed final output cannot complete the stage.
 
 New captures use `captured_passages_v2`: each paragraph has its own reference,
 with long paragraphs split into continuous slices of at most 800 characters.
