@@ -226,7 +226,7 @@ class PlanModeMixin:
                     tenant_id=tenant_id,
                 )
                 await save_plan_state_async(
-                    session_key, _plan_state_to_dict(plan), tenant_id=tenant_id
+                    session_key, _plan_state_to_dict(plan), tenant_id=tenant_id, strict=True
                 )
 
                 sent_plan = await self.send_message(chat_id, plan_text)
@@ -405,8 +405,7 @@ class PlanModeMixin:
         Finding 1). Attribution here instead comes from
         ``plan.creator_sender_info`` -- the identity frozen at plan-creation
         time in ``_run_plan_mode`` -- not whoever is cached for the chat, and
-        not whoever happened to click "Approve" (any group member can click
-        approve; the plan's author owns what it does end to end).
+        not a mutable chat cache. The callback admits only the author or owner.
 
         Sends immediate acknowledgement, executes with continuous-mode overrides
         for long-running tasks, and delivers the final result as a new Telegram
@@ -440,6 +439,17 @@ class PlanModeMixin:
         user = plan.creator_sender_info or {}
         tenant_id = user.get("tenant_id") or self.config.tenant_id
         _identity = self._build_identity(user, chat_id, tenant_id)
+
+        try:
+            await save_plan_state_async(
+                session_key, _plan_state_to_dict(plan), tenant_id=tenant_id, strict=True
+            )
+        except Exception:
+            plan.status = "pending"
+            await self.send_message(
+                chat_id, "Could not persist plan approval; execution has not started."
+            )
+            return
 
         # Deep plan: route to RLM with rich context instead of agent execution
         if plan.deep_plan:
@@ -480,6 +490,7 @@ class PlanModeMixin:
                 agent_config=bg_config,
                 trigger_type=TriggerType.TELEGRAM,
                 trigger_detail=f"plan-exec:{chat_id}",
+                correlation_id=plan.plan_id,
                 model_override=model,
                 conversation_history=None,  # CLEAN CONTEXT
                 execution_mode=True,
@@ -833,7 +844,7 @@ class PlanModeMixin:
                 plan.plan_hash = plan_hash(revised_plan_text)
                 plan.task_context.setdefault("steering", []).append(feedback)
                 await save_plan_state_async(
-                    session_key, _plan_state_to_dict(plan), tenant_id=tenant_id
+                    session_key, _plan_state_to_dict(plan), tenant_id=tenant_id, strict=True
                 )
 
                 revision_label = f"<b>Plan v{plan.revision_count + 1}</b>"
@@ -847,15 +858,6 @@ class PlanModeMixin:
                     reply_markup=kb,
                 )
 
-                # Persist updated plan state
-                get_task_registry().spawn(
-                    save_plan_state_async(
-                        session_key,
-                        _plan_state_to_dict(plan),
-                        tenant_id=tenant_id,
-                    ),
-                    name=f"tg-save-plan-revision:{chat_id}",
-                )
             else:
                 sent_fallback = await self.send_message(
                     chat_id, run.output_text or "No revised plan produced."

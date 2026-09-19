@@ -245,3 +245,14 @@ class TestCleanupStaleSessions:
         assert result == 0
         params = chat_db["cursor"].execute.call_args[0][1]
         assert 14 in params
+
+
+@pytest.mark.asyncio
+async def test_required_plan_persistence_propagates_database_failure():
+    from robothor.engine.chat_store import save_plan_state_async
+
+    with patch("robothor.engine.chat_store.save_plan_state", side_effect=OSError("DB unavailable")):
+        with pytest.raises(OSError, match="DB unavailable"):
+            await save_plan_state_async("telegram:fixture", {"status": "approved"}, strict=True)
+        # Existing best-effort callers retain their behavior.
+        await save_plan_state_async("telegram:fixture", {"status": "pending"})

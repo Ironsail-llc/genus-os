@@ -2778,3 +2778,30 @@ class TestPlanRevisionSafety:
         bot.runner.execute = AsyncMock()
         await bot._execute_approved_plan("12345", key, session, expected_plan_id="old-revision")
         bot.runner.execute.assert_not_called()
+
+    async def test_failed_durable_approval_does_not_execute(self, bot):
+        from datetime import UTC, datetime
+
+        from robothor.engine.models import PlanState
+
+        key = bot._session_key("12345")
+        session = get_shared_session(key)
+        session.active_plan = PlanState(
+            plan_id="current-revision",
+            plan_text="Deploy browser",
+            original_message="Get it live",
+            created_at=datetime.now(UTC).isoformat(),
+        )
+        bot.send_message = AsyncMock()
+        bot.runner.execute = AsyncMock()
+        with patch(
+            "robothor.engine.telegram_plan_mode.save_plan_state_async",
+            AsyncMock(side_effect=OSError("DB unavailable")),
+        ) as save:
+            await bot._execute_approved_plan(
+                "12345", key, session, expected_plan_id="current-revision"
+            )
+        assert save.call_args.kwargs["strict"] is True
+        bot.runner.execute.assert_not_called()
+        assert session.active_plan.status == "pending"
+        assert "execution has not started" in bot.send_message.call_args.args[1]
