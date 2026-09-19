@@ -53,10 +53,9 @@ class VerificationWorker:
             )
             # Conservatively book the full operator-approved cost per lookup.
             # Raw provider credits are not USD and never silently treated as USD.
-            for reservation in receipt["reservations"]:
-                await asyncio.to_thread(
-                    self.sales.ops.settle, reservation, receipt["allowance_units"]
-                )
+            await asyncio.to_thread(
+                self.sales.ops.settle_many, receipt["reservations"], receipt["allowance_units"]
+            )
             response = await self.provider.verification(job["payload"]["email"])
             self._validate(response, job["payload"]["email"])
             status = response["verification_status"]

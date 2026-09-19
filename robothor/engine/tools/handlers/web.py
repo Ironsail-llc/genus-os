@@ -1743,7 +1743,12 @@ async def _search_with_fallback(
     query: str, limit: int, provider: str, ctx: ToolContext
 ) -> dict[str, Any]:
     """Pick a provider, grade what it returned, and fall back when it is empty."""
+    from robothor.engine.request_budget import active_budget
+
+    bounded = active_budget() is not None
     if provider == "perplexity":
+        if bounded:
+            return {"error": "Search provider has no bounded spending contract"}
         try:
             from robothor.rag.web_search import search_perplexity
 
@@ -1759,7 +1764,9 @@ async def _search_with_fallback(
     # only when the caller left the choice open or asked for it. An explicit
     # provider="searxng" means SearXNG, not "whatever we think is best".
     brave_skipped: str | None = None
-    if provider in ("auto", "brave"):
+    if bounded and provider in ("auto", "brave"):
+        brave_skipped = "Run budget requires a priced search contract; using self-hosted search"
+    elif provider in ("auto", "brave"):
         brave_rows = await _brave_search(query, limit)
         if brave_rows:
             return _with_quota(

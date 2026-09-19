@@ -167,23 +167,42 @@ class Operations:
             row = cur.fetchone()
             return dict(row) if row else None
 
-    def set_budget(self, scope: str, limit: int):
+    def set_budget(self, scope: str, limit: int, *, cur=None):
         """Set a finite allowance; reducing it never erases consumption."""
         if type(limit) is not int or limit < 0:
             raise ValueError("Budget must be nonnegative integer micro-USD")
-        with self.transaction() as cur:
-            cur.execute(
-                "INSERT INTO operation_budgets(tenant_id,scope,limit_units) VALUES(%s,%s,%s) "
-                "ON CONFLICT(tenant_id,scope) DO UPDATE SET limit_units=EXCLUDED.limit_units",
-                (self.tenant, scope, limit),
-            )
-            self.audit(cur, scope, "budget.configured", detail={"limit_units": limit})
+        if cur is None:
+            with self.transaction() as cursor:
+                return self.set_budget(scope, limit, cur=cursor)
+        cur.execute(
+            "INSERT INTO operation_budgets(tenant_id,scope,limit_units) VALUES(%s,%s,%s) "
+            "ON CONFLICT(tenant_id,scope) DO UPDATE SET limit_units=EXCLUDED.limit_units",
+            (self.tenant, scope, limit),
+        )
+        self.audit(cur, scope, "budget.configured", detail={"limit_units": limit})
+        return None
 
     def reserve(self, scope: str, key: str, amount: int) -> str:
-        """Serialize all reservations against a scope, including concurrent children."""
+        """Serialize reservations against a scope, including concurrent children."""
+        return self.reserve_many([scope], key, amount)[0]
+
+    def reserve_many(self, scopes, key: str, amount: int, *, active_only=False, cur=None):
+        """Reserve every scope together, or none. Lock scopes in canonical order.
+
+        A caller supplying a cursor must roll back the transaction on failure.
+        ``active_only`` prevents a settled idempotency key from authorizing more
+        work; ordinary replay can still retrieve its original reservation IDs.
+        """
         if type(amount) is not int or amount < 0:
             raise ValueError("Reservation must be nonnegative integer micro-USD")
-        with self.transaction() as cur:
+        scopes = sorted(set(scopes))
+        if not scopes or any(not scope for scope in scopes):
+            raise ValueError("At least one budget scope required")
+        if cur is None:
+            with self.transaction() as cursor:
+                return self.reserve_many(scopes, key, amount, active_only=active_only, cur=cursor)
+        reservations = []
+        for scope in scopes:
             cur.execute(
                 "SELECT * FROM operation_budgets WHERE tenant_id=%s AND scope=%s FOR UPDATE",
                 (self.tenant, scope),
@@ -199,7 +218,10 @@ class Operations:
             if existing:
                 if existing["reserved_units"] != amount:
                     raise Conflict("Reservation key reused with a different amount")
-                return str(existing["id"])
+                if active_only and existing["actual_units"] is not None:
+                    raise Conflict("Settled reservation cannot authorize new work")
+                reservations.append(str(existing["id"]))
+                continue
             if budget["spent_units"] + budget["reserved_units"] + amount > budget["limit_units"]:
                 raise BudgetExceeded("Spending allowance exhausted")
             reservation = str(uuid4())
@@ -212,33 +234,50 @@ class Operations:
                 "UPDATE operation_budgets SET reserved_units=reserved_units+%s WHERE tenant_id=%s AND scope=%s",
                 (amount, self.tenant, scope),
             )
-            return reservation
+            reservations.append(reservation)
+        return reservations
 
     def settle(self, reservation: str, actual: int):
-        """Record actual consumption once, retaining overruns so future calls stop."""
+        """Record consumption once, retaining overruns so future calls stop."""
+        self.settle_many([reservation], actual)
+
+    def settle_many(self, reservations, actual: int):
+        """Settle a group atomically, preserving each scope on conflict or crash."""
         if type(actual) is not int or actual < 0:
             raise ValueError("Actual spend must be nonnegative integer micro-USD")
+        reservations = sorted({str(r) for r in reservations})
+        if not reservations:
+            raise ValueError("At least one reservation required")
         with self.transaction() as cur:
             cur.execute(
-                "SELECT * FROM operation_reservations WHERE tenant_id=%s AND id=%s FOR UPDATE",
-                (self.tenant, reservation),
+                "SELECT * FROM operation_reservations WHERE tenant_id=%s AND id=ANY(%s::uuid[]) "
+                "ORDER BY id FOR UPDATE",
+                (self.tenant, reservations),
             )
-            row = cur.fetchone()
-            if not row:
+            rows = cur.fetchall()
+            if len(rows) != len(reservations):
                 raise Conflict("Unknown reservation")
-            if row["actual_units"] is not None:
-                if row["actual_units"] != actual:
-                    raise Conflict("Reservation already settled")
-                return
+            if any(row["actual_units"] not in (None, actual) for row in rows):
+                raise Conflict("Reservation already settled")
+            # All settlement paths lock reservation rows before budget rows;
+            # scope order also matches multi-scope admission and configuration.
             cur.execute(
-                "UPDATE operation_budgets SET reserved_units=reserved_units-%s,spent_units=spent_units+%s "
-                "WHERE tenant_id=%s AND scope=%s",
-                (row["reserved_units"], actual, self.tenant, row["scope"]),
+                "SELECT scope FROM operation_budgets WHERE tenant_id=%s AND scope=ANY(%s) "
+                "ORDER BY scope FOR UPDATE",
+                (self.tenant, sorted({row["scope"] for row in rows})),
             )
-            cur.execute(
-                "UPDATE operation_reservations SET actual_units=%s WHERE tenant_id=%s AND id=%s",
-                (actual, self.tenant, reservation),
-            )
+            for row in rows:
+                if row["actual_units"] is not None:
+                    continue
+                cur.execute(
+                    "UPDATE operation_budgets SET reserved_units=reserved_units-%s,spent_units=spent_units+%s "
+                    "WHERE tenant_id=%s AND scope=%s",
+                    (row["reserved_units"], actual, self.tenant, row["scope"]),
+                )
+                cur.execute(
+                    "UPDATE operation_reservations SET actual_units=%s WHERE tenant_id=%s AND id=%s",
+                    (actual, self.tenant, row["id"]),
+                )
 
     def receive(self, provider: str, event_id: str, payload: dict) -> bool:
         """Durably accept a provider event once; processing occurs separately."""

@@ -99,3 +99,56 @@ def test_expired_executor_cannot_commit_a_completed_action(ops):
         )
     with pytest.raises(Conflict):
         ops.finish_action(action, claimed["lease_token"], "completed", {"id": "receipt"})
+
+
+def test_multi_scope_admission_is_atomic_and_parallel_safe(ops):
+    ops.set_budget("day", 80)
+    ops.set_budget("month", 100)
+
+    def admit(i):
+        try:
+            return ops.reserve_many(["month", "day"], str(i), 40)
+        except BudgetExceeded:
+            return None
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        admitted = [r for r in pool.map(admit, range(4)) if r]
+    assert len(admitted) == 2
+    with ops.transaction() as cur:
+        cur.execute(
+            "SELECT scope,reserved_units FROM operation_budgets WHERE tenant_id=%s", (ops.tenant,)
+        )
+        assert {r["scope"]: r["reserved_units"] for r in cur.fetchall()} == {"day": 80, "month": 80}
+        cur.execute(
+            "SELECT count(*) AS n FROM operation_reservations WHERE tenant_id=%s", (ops.tenant,)
+        )
+        assert cur.fetchone()["n"] == 4
+
+
+def test_multi_scope_missing_budget_leaves_no_partial_reservation(ops):
+    ops.set_budget("a", 100)
+    with pytest.raises(BudgetExceeded):
+        ops.reserve_many(["a", "missing"], "attempt", 40)
+    with ops.transaction() as cur:
+        cur.execute(
+            "SELECT reserved_units FROM operation_budgets WHERE tenant_id=%s", (ops.tenant,)
+        )
+        assert cur.fetchone()["reserved_units"] == 0
+
+
+def test_group_settlement_cannot_partially_commit_or_reauthorize_spend(ops):
+    for scope in ("day", "month"):
+        ops.set_budget(scope, 100)
+    reservations = ops.reserve_many(["month", "day"], "attempt", 40, active_only=True)
+    assert ops.reserve_many(["day", "month"], "attempt", 40, active_only=True) == reservations
+    with pytest.raises(Conflict):
+        ops.settle_many([*reservations, str(uuid4())], 20)
+    with ops.transaction() as cur:
+        cur.execute(
+            "SELECT actual_units FROM operation_reservations WHERE tenant_id=%s", (ops.tenant,)
+        )
+        assert all(r["actual_units"] is None for r in cur.fetchall())
+    ops.settle_many(reservations, 20)
+    ops.settle_many(list(reversed(reservations)), 20)
+    with pytest.raises(Conflict):
+        ops.reserve_many(["day", "month"], "attempt", 40, active_only=True)
