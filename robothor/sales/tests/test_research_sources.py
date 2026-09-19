@@ -91,6 +91,27 @@ def test_unretrieved_or_unmatched_citations_are_refused(fault):
         sources.attest("other" if fault == "other_child" else "child", dossier)
 
 
+def test_citation_feedback_identifies_bad_fields_without_replaying_untrusted_text():
+    sources = capture()
+    dossier = fragment("services")
+    original = dossier.evidence[0]
+    dossier.evidence.extend(
+        [
+            original.model_copy(update={"id": "bad-url", "url": "https://unread.example.com"}),
+            original.model_copy(update={"id": "bad-excerpt", "excerpt": "Public Footer"}),
+        ]
+    )
+    with pytest.raises(Conflict) as exc:
+        sources.attest("child", dossier)
+    message = str(exc.value)
+    assert "evidence[1].url" in message
+    assert "evidence[2].excerpt" in message
+    assert "evidence[0]" not in message
+    assert "continuous" in message
+    assert "unread.example.com" not in message
+    assert "Public Footer" not in message
+
+
 @pytest.mark.parametrize(
     "fault", ["missing", "run", "tenant", "agent", "content", "time", "dossier"]
 )
