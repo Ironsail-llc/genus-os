@@ -30,7 +30,7 @@ async def test_inspection_discovers_fields_terms_and_authorized_frames_without_v
             await route.fulfill(
                 content_type="text/html",
                 body=html
-                if route.request.url.startswith("https://shop.example")
+                if route.request.url == "https://shop.example/join"
                 else '<label>Card number<input name="card" value="4242424242424242"></label>',
             )
 
