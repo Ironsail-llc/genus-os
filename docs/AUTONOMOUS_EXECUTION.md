@@ -61,6 +61,18 @@ operator can select an executable with
 `ROBOTHOR_AUTONOMY_CHROMIUM_EXECUTABLE`. A host that blocks the downloaded
 binary's user namespace may support the distribution's Chromium policy.
 
+Validate Chromium under the actual service restrictions, not only in a login
+shell. A Snap launcher can require capabilities that `NoNewPrivileges=yes`
+correctly denies. One supported deployment option is a root-owned copy of the
+matching Playwright Chromium headless shell, selected with the executable
+override in the engine, bridge and workflow service. On Ubuntu hosts that restrict
+unprivileged user namespaces, give that exact executable a dedicated AppArmor
+profile with `userns,`, following
+[Ubuntu's per-application namespace policy](https://documentation.ubuntu.com/security/security-features/privilege-restriction/apparmor/).
+Keep Chromium sandboxing and the service restrictions enabled. Update that
+browser alongside Playwright, and verify a real protected open/inspect after
+deployment; an HTTP readiness response alone does not prove browser launch.
+
 Optional Browserbase fallback uses the tenant's native-vault credential
 `providers/browserbase/api_key`. Enable managed browsing only after configuring
 that provider. Sessions request `recordSession=false`, `logSession=false`, and
