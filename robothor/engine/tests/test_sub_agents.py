@@ -112,6 +112,63 @@ def test_narrowing_unrestricted_child_and_empty_override_are_unambiguous(
 
 class TestSpawnAgentTool:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("allowed", [frozenset({"research-worker"}), frozenset()])
+    async def test_spawn_target_denied_before_loading_manifest(self, spawn_context, allowed):
+        from robothor.engine.tools import _current_spawn_context, _handle_spawn_agent, set_runner
+
+        runner = MagicMock()
+        runner.execute = AsyncMock(return_value=_make_completed_run())
+        set_runner(runner)
+        spawn_context.allowed_agents = allowed
+        token = _current_spawn_context.set(spawn_context)
+        try:
+            with patch("robothor.engine.config.load_agent_config_or_reason") as loader:
+                result = await _handle_spawn_agent(
+                    {"agent_id": "unrelated-agent", "message": "task"}, agent_id="parent"
+                )
+            assert "error" in result
+            loader.assert_not_called()
+            runner.execute.assert_not_awaited()
+        finally:
+            set_runner(None)
+            _current_spawn_context.reset(token)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "child_targets,expected",
+        [
+            ([], frozenset({"email-classifier", "safe-leaf"})),
+            (["safe-leaf", "unrelated-agent"], frozenset({"safe-leaf"})),
+            (["unrelated-agent"], frozenset()),
+        ],
+    )
+    async def test_descendants_cannot_expand_ancestor_spawn_targets(
+        self, spawn_context, child_agent_config, child_targets, expected
+    ):
+        from robothor.engine.tools import _current_spawn_context, _handle_spawn_agent, set_runner
+
+        runner = MagicMock()
+        runner.execute = AsyncMock(return_value=_make_completed_run())
+        set_runner(runner)
+        spawn_context.allowed_agents = frozenset({"email-classifier", "safe-leaf"})
+        child_agent_config.spawn_allowed_agents = child_targets
+        token = _current_spawn_context.set(spawn_context)
+        try:
+            with (
+                patch("robothor.engine.config.load_agent_config", return_value=child_agent_config),
+                patch("robothor.engine.dedup.try_acquire", return_value=True),
+                patch("robothor.engine.dedup.release"),
+            ):
+                result = await _handle_spawn_agent(
+                    {"agent_id": "email-classifier", "message": "task"}, agent_id="parent"
+                )
+            assert "error" not in result
+            assert runner.execute.call_args.kwargs["spawn_context"].allowed_agents == expected
+        finally:
+            set_runner(None)
+            _current_spawn_context.reset(token)
+
+    @pytest.mark.asyncio
     async def test_spawn_agent_basic(self, spawn_context, child_agent_config):
         """Completed run returns structured result."""
         from robothor.engine.tools import (

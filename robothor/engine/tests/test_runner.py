@@ -61,6 +61,30 @@ def runner(engine_config):
 
 class TestAgentRunnerExecute:
     @pytest.mark.asyncio
+    async def test_manifest_spawn_targets_reach_run_context(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        from robothor.engine.tools import _current_spawn_context
+
+        sample_agent_config.can_spawn_agents = True
+        sample_agent_config.spawn_allowed_agents = ["research-worker"]
+        seen = []
+
+        async def provider(**kwargs):
+            seen.append(getattr(_current_spawn_context.get(), "allowed_agents", None))
+            return mock_litellm_response(content="Done.")
+
+        with (
+            patch("robothor.engine.runner.create_run"),
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.run_finalizer.create_step"),
+            patch("litellm.acompletion", side_effect=provider),
+        ):
+            run = await runner.execute("test-agent", "task", agent_config=sample_agent_config)
+        assert run.status == RunStatus.COMPLETED
+        assert seen == [frozenset({"research-worker"})]
+
+    @pytest.mark.asyncio
     async def test_declared_json_mode_reaches_provider(
         self, runner, sample_agent_config, mock_litellm_response
     ):

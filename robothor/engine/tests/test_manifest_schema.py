@@ -65,6 +65,16 @@ class TestSchemaIsLoadedFromTheFile:
 
 
 class TestStructuralRules:
+    def test_spawn_allowlist_is_validated_and_loaded(self):
+        from robothor.engine.config import manifest_to_agent_config
+
+        data = _valid()
+        data["v2"] = {"can_spawn_agents": True, "spawn_allowed_agents": ["research-worker"]}
+        assert _errors(validate(data, strict=True)) == []
+        assert manifest_to_agent_config(data).spawn_allowed_agents == ["research-worker"]
+        data["v2"]["spawn_allowed_agents"] = "research-worker"
+        assert any(i.path == "v2.spawn_allowed_agents" for i in _errors(validate(data)))
+
     def test_json_response_mode_is_explicit_and_validated(self):
         data = _valid()
         data["model"]["response_format"] = "json_object"
