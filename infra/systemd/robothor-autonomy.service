@@ -1,0 +1,39 @@
+[Unit]
+Description=Genus OS protected browser workflows
+Requires=robothor-secrets.service
+After=network-online.target postgresql.service robothor-secrets.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=robothor
+Group=robothor
+WorkingDirectory=/opt/robothor
+EnvironmentFile=/etc/robothor/robothor.env
+EnvironmentFile=-/run/robothor/secrets.env
+ExecStart=/opt/robothor/venv/bin/python -m robothor.autonomy.workflows.service
+RuntimeDirectory=robothor-autonomy
+RuntimeDirectoryMode=0700
+UMask=0077
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
+KillMode=control-group
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+LockPersonality=yes
+ReadWritePaths=/run/robothor-autonomy /var/run/postgresql
+# Chromium uses its own sandbox; do not deny user/mount namespaces here.
+
+[Install]
+WantedBy=multi-user.target

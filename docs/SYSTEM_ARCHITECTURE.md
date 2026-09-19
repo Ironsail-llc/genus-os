@@ -1667,3 +1667,11 @@ The account dashboard enrolls information and grants authority through
 authenticated `/api/autonomy` endpoints. Existing organizational treasury stays
 separate. See [Personal autonomous execution](AUTONOMOUS_EXECUTION.md) for
 transaction state, revocation, key rotation and deployment requirements.
+
+Migration 129 adds owner/agent-bound `autonomy_workflows` and durable command
+results. `robothor-autonomy.service` owns persistent protected browser contexts,
+with a private Unix socket and a separate JWT audience and scope. Engine and
+bridge controllers pass resource references and signed identities; secure human
+code entry sends its transient code only through this channel. Controller
+restarts preserve pages, while broker loss preserves reservations for
+reconciliation. See the workflow protocol and lifetime limits in the same guide.

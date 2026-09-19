@@ -8,11 +8,18 @@ existing native vault; no external password manager is required.
 
 ## Setup
 
-1. Apply packaged migrations `127_autonomous_execution.sql` and
-   `128_autonomy_resource_descriptors.sql` through the normal
+1. Apply packaged migrations `127_autonomous_execution.sql`,
+   `128_autonomy_resource_descriptors.sql`, and `129_autonomy_workflows.sql` through the normal
    upgrade process. Preserve the existing vault master key and encrypted backups.
    Install the `genusos[autonomy]` extra and either a system Chromium or the
    browser installed by `python -m playwright install chromium`.
+   For persistent workflows install the `genusos[api,autonomy]` extras, render/install
+   the platform units with `scripts/install-units.sh`, and enable
+   `robothor-autonomy.service`. It runs independently of the engine and bridge;
+   restarting either controller leaves browser pages alive. The default private
+   socket is `/run/robothor-autonomy/broker.sock` (override
+   `ROBOTHOR_AUTONOMY_SOCKET` consistently in the service and both controllers).
+   Readiness: `curl --unix-socket /run/robothor-autonomy/broker.sock http://autonomy/ready`.
 2. Link the signed-in dashboard account and messaging identity to the same CRM
    person. Enrollment refuses an ambiguous or unlinked identity. Resources and
    operations are scoped to both tenant and person, including for administrators.
@@ -88,6 +95,11 @@ Use the existing `browser` tool with `action="autonomy"` and `request`:
 | `status` | Discover setup state, resource references, grants and recent operations. |
 | `procedures` | Find recent successful plan templates by `origin` and `action`, scoped to the current owner and agent. |
 | `prepare` | Reserve a proposal under `grant_id`; returns a durable operation ID. |
+| `workflow_open` | Open one protected persistent page for `{operation_id,url,session_resource_id?}`; returns workflow ID, revision and inspection. |
+| `workflow_inspect` | Inspect the same page using `{workflow_id}` without reloading it. |
+| `workflow_execute` | Execute `{workflow_id,command_id,revision,plan,advance?}` on that page. Reuse the exact command ID and payload after a transport failure. |
+| `workflow_status` | Read durable workflow and operation state with `{workflow_id}`. |
+| `workflow_close` | Close `{workflow_id}`; unfinished effects retain their budget reservation and require reconciliation. |
 | `inspect` | Discover field selectors, labels, option labels, billing terms and authorized frame fields, never input values. |
 | `generate_credential` | Create an origin-bound username/password reference using an enrolled profile. |
 | `email_verification` | Obtain a short-lived code/link reference from the authorized owner's Gmail. |
@@ -128,6 +140,29 @@ during filling, the broker stops before clicking and preserves the operation for
 reconciliation. Discovered confirmations return a fixed rule name and a text hash;
 page text is not returned to the model. Confirmation means the merchant's observed
 message, not settlement or admission.
+
+Persistent workflows use a separate non-dumpable broker service with a private
+0700 runtime directory, 0600 socket, exclusive process lease, and signed
+owner/tenant/agent-bound service tokens. Browser processes receive an environment
+allowlist without service credentials or tracing flags. The RPC has no arbitrary
+JavaScript, screenshot, HTML or download operation.
+
+Each workflow owns one page and one immutable proposal. `advance=true` permits
+zero-money account/login/application steps only: at least one previous field must
+disappear and a new field appear, or the broker must observe a final confirmation.
+A confirmed intermediate step clears the old plan and increments the revision.
+Invalid native constraints can be corrected in place. Commands are journaled before
+execution; duplicates return the original result and changed payloads are refused.
+Secure code entry resumes the same page without retaining the code in the journal.
+Up to 16 contexts are retained, for 15 idle minutes and at most one hour total.
+Completion, uncertain outcomes, expiry and shutdown close the browser. Restarting
+the browser service loses page state and requires reconciliation; a controller
+restart does not. Closing a workflow does not assert cancellation or release money.
+
+Persistent workflows currently use local Chromium. Managed-browser CAPTCHA
+sessions, authentication redirects, verification-link navigation, cumulative-only
+wizard transitions, and multi-operation checkout workflows remain separate work.
+The one-shot browser path remains available for its supported tasks.
 
 Successful execution plans persist in the operation journal. `procedures` returns
 up to five distinct templates from confirmed operations in the last 90 days.

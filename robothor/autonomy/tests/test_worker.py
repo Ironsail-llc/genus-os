@@ -86,10 +86,14 @@ async def test_managed_provider_disables_recording_and_enables_challenge_support
 
 
 async def test_local_browser_uses_system_chromium_with_sandbox_enabled(monkeypatch):
+    monkeypatch.setenv("PRIVATE_PROVIDER_SECRET", "must-not-inherit")
+    monkeypatch.setenv("DEBUG", "pw:*")
     monkeypatch.delenv("ROBOTHOR_AUTONOMY_CHROMIUM_EXECUTABLE", raising=False)
     monkeypatch.setattr(worker.shutil, "which", lambda name: "/usr/bin/chromium")
     chromium = SimpleNamespace(launch=AsyncMock(return_value="browser"))
     assert await worker.launch_local(chromium) == "browser"
-    chromium.launch.assert_awaited_once_with(
-        headless=True, chromium_sandbox=True, executable_path="/usr/bin/chromium"
-    )
+    kwargs = chromium.launch.call_args.kwargs
+    assert kwargs["headless"] and kwargs["chromium_sandbox"]
+    assert kwargs["executable_path"] == "/usr/bin/chromium"
+    assert "PRIVATE_PROVIDER_SECRET" not in kwargs["env"]
+    assert "DEBUG" not in kwargs["env"]

@@ -27,6 +27,25 @@ async def handle(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         scope = await asyncio.to_thread(scope_for_actor, ctx.tenant_id, ctx.user_id)
         store = AutonomyStore()
         kind = args.get("kind", "status")
+        if kind in {
+            "workflow_open",
+            "workflow_inspect",
+            "workflow_execute",
+            "workflow_status",
+            "workflow_close",
+        }:
+            from robothor.autonomy.workflows.client import invoke
+
+            if "verification_code" in args:
+                return {"error": "use_secure_code_entry"}
+            return await invoke(
+                scope,
+                ctx.agent_id,
+                {
+                    **{key: value for key, value in args.items() if key != "kind"},
+                    "kind": kind.removeprefix("workflow_"),
+                },
+            )
         if kind == "status":
             settings = await asyncio.to_thread(store.settings, scope)
             return {

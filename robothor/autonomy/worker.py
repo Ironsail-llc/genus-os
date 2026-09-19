@@ -32,7 +32,21 @@ async def launch_local(chromium: BrowserType) -> Browser:
     # Distribution Chromium carries the host's AppArmor/user-namespace policy;
     # a downloaded executable may not. Always retain Chromium's own sandbox.
     executable = os.environ.get("ROBOTHOR_AUTONOMY_CHROMIUM_EXECUTABLE") or shutil.which("chromium")
-    return await chromium.launch(headless=True, chromium_sandbox=True, executable_path=executable)
+    return await chromium.launch(
+        headless=True,
+        chromium_sandbox=True,
+        executable_path=executable,
+        env={**browser_environment()},
+    )
+
+
+def browser_environment() -> dict[str, str]:
+    """No provider/database secrets, debug flags, preload hooks or tracing."""
+    return {
+        key: os.environ[key]
+        for key in ("PATH", "HOME", "LANG", "TMPDIR", "PLAYWRIGHT_BROWSERS_PATH")
+        if key in os.environ
+    }
 
 
 async def public_request(route: Route) -> None:
