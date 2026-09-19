@@ -118,3 +118,18 @@ def test_money_is_integral_and_nonnegative():
     for amount in (-1, 1.5, True):
         with pytest.raises(ValidationError):
             operation(amount_minor=amount)
+
+
+def test_general_website_grant_retains_agent_action_and_money_limits():
+    policy = grant(origins=set(), allow_any_website=True)
+    other = operation(origin="https://another.example")
+    assert policy.decision(other, agent_id="main", used_minor=0) == "allow"
+    assert policy.decision(other, agent_id="other", used_minor=0) == "agent_not_allowed"
+    assert (
+        policy.decision(
+            other.model_copy(update={"amount_minor": 10001}), agent_id="main", used_minor=0
+        )
+        == "purchase_limit"
+    )
+    assert policy.decision(other, agent_id="main", used_minor=16000) == "monthly_limit"
+    assert grant().decision(other, agent_id="main", used_minor=0) == "origin_not_allowed"

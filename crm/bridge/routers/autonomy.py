@@ -11,6 +11,7 @@ from pydantic import SecretStr
 from robothor.autonomy.broker import ExecutionPlan
 from robothor.autonomy.identity import scope_for_actor
 from robothor.autonomy.models import Delegation, ResourceInput, RuntimeSettings, StrictModel
+from robothor.autonomy.onboarding import import_contact_profile
 from robothor.autonomy.runtime import run_browser
 from robothor.autonomy.store import AutonomyStore
 
@@ -80,6 +81,18 @@ async def enroll(request: Request):
         raise HTTPException(422, "Invalid resource; no values were stored") from None
     except Exception:
         raise HTTPException(503, "Resource storage unavailable") from None
+
+
+@router.post("/profile-from-contact")
+async def profile_from_contact(request: Request):
+    scope = await require_personal_owner(request)
+    await _body(request, StrictModel)  # no caller-supplied person or tenant IDs
+    try:
+        return _safe(await asyncio.to_thread(import_contact_profile, AutonomyStore(), scope))
+    except (PermissionError, ValueError):
+        raise HTTPException(409, "Your linked contact has no information to import") from None
+    except Exception:
+        raise HTTPException(503, "Contact import is unavailable") from None
 
 
 @router.delete("/resources/{resource_id}")

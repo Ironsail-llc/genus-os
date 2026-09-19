@@ -15,13 +15,19 @@ existing native vault; no external password manager is required.
 2. Link the signed-in dashboard account and messaging identity to the same CRM
    person. Enrollment refuses an ambiguous or unlinked identity. Resources and
    operations are scoped to both tenant and person, including for administrators.
-3. Enroll the profile, reusable application answers, website logins, photos or
-   documents, and website authenticator keys needed for the task. Values travel
+3. Use **Use my saved contact details** to import the linked CRM person’s
+   existing name, email, phone, occupation and city into an encrypted profile.
+   This reads only the signed-in person’s record and never returns its values.
+   Enroll any remaining profile fields, reusable application answers, website
+   logins, photos or documents, and website authenticator keys. Values travel
    inward through the authenticated dashboard; responses contain references.
    Application answers use a short name, such as `membership_reason`, so the
    agent can request `answers.membership_reason` without reading its value.
-4. Grant named agents access to exact HTTPS website origins, an expiration,
-   and spending limits. Embedded payment providers require separately listed
+4. Grant named agents access to exact HTTPS website origins or explicitly
+   select **Allow any public HTTPS website**, with an expiration and spending
+   limits. The general website option retains agent, action, currency and budget
+   checks; saved credentials remain bound to their own origins. Embedded payment
+   providers still require separately listed
    frame origins. The UI currently uses USD; the broker also recognizes strict
    decimal EUR and GBP totals. Zero spending limits still permit account and
    application tasks.
