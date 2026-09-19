@@ -159,10 +159,11 @@ async def test_reconciliation_has_native_binding_independent_of_sending(sales):
     }
 
 
-def test_read_recovery_retry_is_human_audited_and_does_not_rearm_delivery(sales):
+@pytest.mark.parametrize("kind", ["sales.reconcile", "sales.business"])
+def test_read_recovery_retry_is_human_audited_and_does_not_rearm_delivery(sales, kind):
     from robothor.operations.store import Conflict
 
-    job_id = sales.ops.enqueue("sales.reconcile", "retry-test", {"campaign_id": "campaign-1"})
+    job_id = sales.ops.enqueue(kind, "retry-test", {"campaign_id": "campaign-1"})
     sales.retry_provider_read(job_id, "operator:test", "Workspace configuration was corrected")
     with sales.ops.transaction() as cur:
         cur.execute(
@@ -175,7 +176,7 @@ def test_read_recovery_retry_is_human_audited_and_does_not_rearm_delivery(sales)
     delivery = sales.ops.enqueue("sales.promote", "not-read", {})
     with pytest.raises(Conflict):
         sales.retry_provider_read(delivery, "operator:test", "Cannot rearm external writes")
-    sales.ops.claim("sales.reconcile")
+    sales.ops.claim(kind)
     with pytest.raises(Conflict):
         sales.retry_provider_read(job_id, "operator:test", "Do not replace an active lease")
 

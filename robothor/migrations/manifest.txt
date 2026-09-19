@@ -130,3 +130,4 @@ crm/124_guardrail_context_overflow.sql
 crm/125_agent_run_step_batch.sql
 crm/126_durable_operations.sql
 crm/127_sales_intelligence.sql
+crm/128_sales_business_observations.sql

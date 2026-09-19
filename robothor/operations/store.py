@@ -165,7 +165,7 @@ class Operations:
                 return self.complete(job_id, token, result, cur=cursor)
         cur.execute(
             "UPDATE operation_jobs SET status='completed',result=%s,updated_at=now() "
-            "WHERE tenant_id=%s AND id=%s AND lease_token=%s AND status='running' AND lease_until>now()",
+            "WHERE tenant_id=%s AND id=%s AND lease_token=%s AND status='running' AND lease_until>clock_timestamp()",
             (Json(result), self.tenant, job_id, token),
         )
         if cur.rowcount != 1:

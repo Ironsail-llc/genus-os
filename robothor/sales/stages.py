@@ -217,6 +217,24 @@ class ActivationWorker(StructuredWorker):
     def commit(self, job, context, output, run_id):
         with self.sales.ops.transaction() as cur:
             p = self.current(cur, context)
+            if (
+                context["retention"].get("coverage_complete") is False
+                and not context["retention"]["completed_orders"]
+            ):
+                cur.execute(
+                    "UPDATE sales_prospects SET status='awaiting_outcome_evidence',updated_at=now() WHERE tenant_id=%s AND id=%s",
+                    (self.sales.tenant, p["id"]),
+                )
+                if output.human_required:
+                    self.sales.escalate(p["id"], output.next_step, cur=cur)
+                result = {
+                    "awaiting_business_evidence": True,
+                    "human_required": output.human_required,
+                    "run_id": str(run_id),
+                }
+                self.sales.ops.audit(cur, p["id"], "activation.awaiting_evidence", detail=result)
+                self.sales.ops.complete(job["id"], job["lease_token"], result, cur=cur)
+                return
             # Metric and lifecycle state come from verified event data, not an
             # LLM assertion that a prospect has become a purchasing customer.
             status = "active" if context["retention"]["completed_orders"] else "onboarding"

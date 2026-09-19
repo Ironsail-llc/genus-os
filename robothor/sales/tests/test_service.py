@@ -16,7 +16,11 @@ from robothor.sales.service import Sales
 def sales():
     with get_connection() as conn:
         with conn.cursor() as cur:
-            for filename in ("126_durable_operations.sql", "127_sales_intelligence.sql"):
+            for filename in (
+                "126_durable_operations.sql",
+                "127_sales_intelligence.sql",
+                "128_sales_business_observations.sql",
+            ):
                 cur.execute((Path(__file__).parents[3] / "crm/migrations" / filename).read_text())
         conn.commit()
     service = Sales("test-" + uuid4().hex)
