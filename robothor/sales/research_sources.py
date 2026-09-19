@@ -85,7 +85,10 @@ class ResearchSources:
             required_tool_scope(self.first_read_tool, lambda: not attempted),
             tool_observation_scope(observe, names={"web_fetch", "web_render"}, annotations=True),
             response_schema_scope(
-                "research_dossier", ResearchDossier.model_json_schema(), ready=lambda: attempted
+                "research_dossier",
+                ResearchDossier.model_json_schema(),
+                ready=lambda: attempted,
+                defer_for_tools=True,
             ),
         ):
             yield

@@ -822,14 +822,15 @@ Concurrent agents retain separate routing scopes. A qualification timeout stays
 pending with its cost-reconciliation diagnostic; it is not reported as malformed
 assessment output. Uncertain spending remains reserved until reconciled.
 
-After its first actual page-read attempt, each native research child sends the
-trusted ResearchDossier selection schema as `response_format.type=json_schema` with strict mode.
-The initial required retrieval call keeps its normal tool contract. Only
-endpoints advertising both JSON formatting and structured outputs are admitted
-for subsequent schema requests. This requests provider-side structure, not a
-guarantee of factual correctness: Genus still parses the dossier and attests
-every citation against that child's successful retrievals. Unsupported schema
-requests, invalid JSON, missing evidence and invented quotations fail normally.
+Native scouts and research children keep the trusted output schema in their task
+and validate every final response in code. While tools remain available, they
+defer provider final-answer formatting: some backends otherwise stop collecting
+evidence after the first search or page read. This opt-in scope does not change
+ordinary agents or the evidence-only qualifier. When a scoped final call has no
+tools and its schema is ready, it still requests strict `json_schema`; those
+requests require endpoint JSON/structured-output support. Genus always parses the
+final dossier and attests every citation against that child's successful
+retrievals. Invalid JSON, missing evidence and invented citations fail normally.
 
 New captures use `captured_passages_v2`: each paragraph has its own reference,
 with long paragraphs split into continuous slices of at most 800 characters.

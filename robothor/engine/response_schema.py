@@ -12,13 +12,14 @@ class _Schema:
     response_format: dict
     ready: Callable[[], bool]
     active: bool = True
+    defer_for_tools: bool = False
 
 
 _schema: ContextVar[_Schema | None] = ContextVar("workflow_response_schema", default=None)
 
 
 @contextmanager
-def response_schema_scope(name, schema, *, ready=lambda: True):
+def response_schema_scope(name, schema, *, ready=lambda: True, defer_for_tools=False):
     """Request the trusted schema when ready; callers still validate all output."""
     state = _Schema(
         {
@@ -30,6 +31,7 @@ def response_schema_scope(name, schema, *, ready=lambda: True):
             },
         },
         ready,
+        defer_for_tools=defer_for_tools,
     )
     token = _schema.set(state)
     try:
@@ -44,3 +46,9 @@ def response_format():
     if state is None or not state.active or not state.ready():
         return None
     return deepcopy(state.response_format)
+
+
+def defers_tool_turns():
+    """Collection workflows validate final JSON in code while allowing more tools."""
+    state = _schema.get()
+    return state is not None and state.active and state.defer_for_tools

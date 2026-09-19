@@ -93,3 +93,41 @@ def test_structured_output_requires_endpoint_schema_support_before_funding():
     assert bounded["extra_body"]["provider"]["only"] == ["structured"]
     with pytest.raises(RequestBudgetError):
         openrouter_quote(request, [json_only])
+
+
+def test_tool_collection_can_defer_final_format_without_losing_final_validation_schema():
+    from robothor.engine.llm_client import _response_format_var
+    from robothor.engine.response_schema import response_schema_scope
+
+    tools = [{"type": "function", "function": {"name": "web_fetch", "parameters": {}}}]
+    token = _response_format_var.set("json_object")
+    try:
+        with response_schema_scope("result", SCHEMA, defer_for_tools=True):
+            collecting = LLMClient._build_llm_kwargs(
+                "openrouter/example/model", [], tools, 100, 0.3
+            )
+            assert collecting["tool_choice"] == "auto"
+            assert "response_format" not in collecting
+            assert collecting["messages"] == []
+            final = LLMClient._build_llm_kwargs("openrouter/example/model", [], [], 100, 0.3)
+            assert final["response_format"]["json_schema"]["schema"] == SCHEMA
+        ordinary = LLMClient._build_llm_kwargs("openrouter/example/model", [], tools, 100, 0.3)
+        assert ordinary["response_format"]["type"] == "json_object"
+    finally:
+        _response_format_var.reset(token)
+
+
+async def test_deferred_format_scope_closes_for_detached_tool_work():
+    from robothor.engine.response_schema import defers_tool_turns, response_schema_scope
+
+    release = asyncio.Event()
+
+    async def inherited():
+        await release.wait()
+        return defers_tool_turns()
+
+    with response_schema_scope("result", SCHEMA, defer_for_tools=True):
+        assert defers_tool_turns()
+        task = asyncio.create_task(inherited())
+    release.set()
+    assert not await task

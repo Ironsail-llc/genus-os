@@ -139,7 +139,10 @@ def scout_scope(stage, tenant_id, agent_id, message):
         required_tool_scope("web_search", lambda: not sources.searched()),
         tool_observation_scope(sources.observe, names={"web_search", "web_fetch"}),
         response_schema_scope(
-            "candidate_batch", CandidateBatch.model_json_schema(), ready=sources.searched
+            "candidate_batch",
+            CandidateBatch.model_json_schema(),
+            ready=sources.searched,
+            defer_for_tools=True,
         ),
         output_validation_scope(validate),
     ):
