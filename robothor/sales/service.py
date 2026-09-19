@@ -625,7 +625,7 @@ class Sales:
             cur.execute(
                 "UPDATE operation_jobs SET status='pending',attempts=0,available_at=now(), "
                 "deadline=now()+interval '1 day',lease_token=NULL,lease_until=NULL,error='',updated_at=now() "
-                "WHERE tenant_id=%s AND id=%s AND kind IN ('sales.inbound','sales.reconcile') "
+                "WHERE tenant_id=%s AND id=%s AND kind IN ('sales.inbound','sales.reconcile','sales.business') "
                 "AND status IN ('failed','pending')",
                 (self.tenant, job_id),
             )
@@ -691,10 +691,26 @@ class Sales:
         self.ops.enqueue("sales.stop", str(uuid4()), {"prospect_id": str(prospect_id)}, cur=cur)
         self.ops.audit(cur, prospect_id, "conversation.escalated", detail={"reason": reason[:2000]})
 
+    def business_records(self, **query):
+        from robothor.sales.business import BusinessObservations
+
+        return BusinessObservations(self).records(**query)
+
+    def bind_business_customer(self, prospect_id, observation_id, revision, actor, reason):
+        from robothor.sales.business import BusinessObservations
+
+        return BusinessObservations(self).bind(prospect_id, observation_id, revision, actor, reason)
+
     def bind_customer(self, prospect_id, external_id, actor):
         operator(actor)
         with self.ops.transaction() as cur:
             p = self.require(prospect_id, cur)
+            cur.execute(
+                "SELECT 1 FROM sales_customer_bindings WHERE tenant_id=%s AND prospect_id=%s LIMIT 1",
+                (self.tenant, prospect_id),
+            )
+            if cur.fetchone():
+                raise Conflict("Current business attribution already exists")
             if p["external_company_id"] not in (None, external_id):
                 raise Conflict("Customer association already exists")
             cur.execute(
@@ -761,6 +777,11 @@ class Sales:
                     raise Conflict("Outcome event ID reused with different content")
 
     def retention(self, prospect_id, now=None):
+        from robothor.sales.business import BusinessObservations, retention_metrics
+
+        current = BusinessObservations(self).retention(prospect_id, now)
+        if current is not None:
+            return current
         now = now or datetime.now(UTC)
         with self.ops.transaction() as cur:
             self.require(prospect_id, cur)
@@ -779,23 +800,7 @@ class Sales:
                 (self.tenant, prospect_id),
             )
             dates = [r["occurred_at"] for r in cur.fetchall()]
-        result = {
-            "first_order_placed": placed_at.astimezone(UTC).isoformat() if placed_at else None,
-            "completed_orders": len(dates),
-            "first_completed_order": dates[0].astimezone(UTC).isoformat() if dates else None,
-        }
-        for key, start, end in [
-            ("repeat_within_30_days", 0, 30),
-            ("active_days_31_60", 30, 60),
-            ("active_days_61_90", 60, 90),
-        ]:
-            mature = bool(dates) and now >= dates[0] + timedelta(days=end)
-            result[key] = (
-                any(timedelta(days=start) < d - dates[0] <= timedelta(days=end) for d in dates[1:])
-                if mature
-                else None
-            )
-        return result
+        return retention_metrics(placed_at, dates, now)
 
     def overview(self):
         with self.ops.transaction() as cur:

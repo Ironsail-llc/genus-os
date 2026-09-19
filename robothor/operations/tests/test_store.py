@@ -192,3 +192,16 @@ def test_request_admission_is_shared_bounded_and_tenant_isolated(ops):
             (ops.tenant,),
         )
     assert ops.admit_request("provider.emails", limit=3, window_seconds=60)
+
+
+def test_completion_rechecks_wall_clock_after_a_transaction_wait(ops):
+    job_id = ops.enqueue("clock-test", "one", {})
+    job = ops.claim("clock-test")
+    with pytest.raises(Conflict):
+        with ops.transaction() as cur:
+            cur.execute(
+                "UPDATE operation_jobs SET lease_until=clock_timestamp()+interval '30 milliseconds' WHERE tenant_id=%s AND id=%s",
+                (ops.tenant, job_id),
+            )
+            cur.execute("SELECT pg_sleep(0.06)")
+            ops.complete(job_id, job["lease_token"], {}, cur=cur)

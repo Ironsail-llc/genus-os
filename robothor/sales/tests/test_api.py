@@ -104,3 +104,68 @@ def test_read_retry_uses_verified_human_tenant_and_requires_repair_reason(client
     assert calls == [
         ("tenant-a", "00000000-0000-4000-8000-000000000001", "operator:user-1", body["reason"])
     ]
+
+
+def test_business_binding_requires_human_and_exact_reviewed_revision(client, monkeypatch):
+    import robothor.sales.api as api
+
+    c, calls = client
+    monkeypatch.setattr(
+        api.Sales,
+        "bind_business_customer",
+        lambda self, prospect, observation, revision, actor, reason: calls.append(
+            (self.tenant, prospect, observation, revision, actor, reason)
+        ),
+        raising=False,
+    )
+    prospect = "00000000-0000-4000-8000-000000000001"
+    observation = "00000000-0000-4000-8000-000000000002"
+    path = f"/api/sales/prospects/{prospect}/business-customer"
+    payload = {
+        "observation_id": observation,
+        "expected_revision": "version-1",
+        "reason": "Reviewed public business identity",
+    }
+    assert (
+        c.post(
+            path, json=payload, headers={"x-test-role": "admin", "x-test-service": "yes"}
+        ).status_code
+        == 403
+    )
+    assert (
+        c.post(
+            path, json={**payload, "tenant_id": "other"}, headers={"x-test-role": "admin"}
+        ).status_code
+        == 422
+    )
+    assert c.post(path, json=payload, headers={"x-test-role": "admin"}).status_code == 200
+    assert calls == [
+        (
+            "tenant-a",
+            prospect,
+            observation,
+            "version-1",
+            "operator:user-1",
+            "Reviewed public business identity",
+        )
+    ]
+
+
+def test_business_observation_list_is_bounded_and_operator_only(client, monkeypatch):
+    import robothor.sales.api as api
+
+    c, calls = client
+    monkeypatch.setattr(
+        api.Sales,
+        "business_records",
+        lambda self, **query: {"tenant": self.tenant, **query},
+        raising=False,
+    )
+    path = "/api/sales/business-observations"
+    assert c.get(path).status_code == 403
+    assert c.get(path + "?kind=patient", headers={"x-test-role": "admin"}).status_code == 422
+    response = c.get(
+        path + "?kind=practice&source=orders_app&account_id=one", headers={"x-test-role": "admin"}
+    )
+    assert response.status_code == 200
+    assert response.json()["tenant"] == "tenant-a"

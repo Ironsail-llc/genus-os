@@ -203,7 +203,7 @@ completed campaign proves inbox delivery or customer activation.
 
 After correcting a provider-read problem, a tenant owner/admin can call
 `POST /api/sales/jobs/{job_id}/retry` with a 10–2,000-character `reason`. Only
-inactive `sales.inbound` and `sales.reconcile` jobs can be reset. The reason and
+inactive `sales.inbound`, `sales.reconcile`, and `sales.business` jobs can be reset. The reason and
 actor are audited; delivery and CRM mutation jobs are excluded. This endpoint
 retries the same page and does not authorize a changed identity or message.
 
@@ -211,6 +211,65 @@ Message backfill does not recover missed provider-only unsubscribe labels,
 account-status changes or disabled subscriptions. Reconciliation of those states,
 ambiguous thread/HTML handling, operator repair UI, and lag alerts remain
 activation requirements.
+
+## Reviewed business observations
+
+Migration 128 stores allowlisted current practice, signup and order observations,
+revision history, and tenant-scoped customer bindings. Source adapters normalize
+business-only records before the domain accepts them; there is no agent-facing
+raw import endpoint. Source, account, resource and external identity are separate
+keys. A platform organization must never stand in for a customer practice.
+
+`GET /api/sales/business-observations` lists at most 100 current records, with
+`kind`, optional `source`/`account_id` filters and a UUID `after` cursor. The response
+includes current evidence, revision and binding state. Tenant owners/admins can
+review those records and use
+`POST /api/sales/prospects/{prospect_id}/business-customer` with `observation_id`,
+`expected_revision` and a 10–2,000-character `reason`. Tenant and actor come from
+verified authentication, never the request body. Agents/service identities cannot
+confirm a binding. Name similarity alone is not a confirmed association.
+
+Several practices can belong to one customer, under one authoritative source
+account. A practice cannot be attached to two customers. Legacy free-text customer
+IDs and current observation bindings cannot be mixed; existing legacy attribution
+needs an explicit migration. Provider account/deal candidates are evidence only:
+external CRM adoption still needs independent account and entity verification.
+
+A changed practice name or business-unit identity holds its association, transfers
+automation to human review and cancels pending message approvals. Reconfirmation
+requires the current revision. Account inactivity changes readiness without erasing
+historical order evidence. Cross-customer reassignment and account migration need
+a dedicated repair workflow; this endpoint cannot silently perform either.
+
+`BusinessObservations.commit_page` is the durable import boundary for a leased
+`sales.business` job. It checks the stored scan identity and cursor, commits all
+observations/history/customer revisions, and queues the next page in the same
+transaction as work completion. Expired leases, mismatched accounts, repeated
+cursors and malformed records cannot partly advance a page. Empty pages never
+remove previously observed records. A scan is bounded to 1,000 pages.
+
+Repeated identical observations do not generate another outcome transition.
+Changed revisions preserve history; a previously revoked fulfillment can be
+restored even when the source returns its original content revision again. Older
+observations and reused revisions with different content are rejected. Order
+reassignment requires reconciliation. Source clocks and stable external identities
+are part of the adapter contract; timestamps are not inferred from order names.
+
+Retention uses current verified observations for reviewed customers. Counts and
+first dates refer to observed orders, not a certified complete history. These
+current-page feeds report `coverage_complete=false`; 30/60/90-day cohort metrics
+remain unknown until complete historical coverage and the cohort anchor are
+proven. A held identity makes attribution unknown as well. At least one verified
+commercial fulfillment can establish activation; a partial empty history instead
+leaves the prospect `awaiting_outcome_evidence` and cannot create an onboarding
+message in the activation stage.
+
+The storage, operator API and page transaction are implemented. Native source
+registration, scheduled scan planning/dispatch, association/repair controls in the
+Sales view, complete-history certification and production connection checks remain
+before activating this importer. No background process is started by importing
+these modules. Job completion now checks the database wall clock so time spent
+waiting inside a transaction cannot preserve an expired lease.
 
 ## Native agent deployment
 
@@ -229,7 +288,7 @@ the `write_path_restrict` guardrail and an explicit status-file allowlist.
 
 ## Recovery and validation
 
-Migrations 126–127 add tenant-scoped work, budgets, event inbox, audit, immutable
+Migrations 126–128 add tenant-scoped work, budgets, event inbox, audit, immutable
 actions, external effects and sales records. Work leases are fenced; domain
 updates and follow-on jobs commit together. Daily and monthly spending admission
 and settlement are atomic across both scopes. Admission locks current settings

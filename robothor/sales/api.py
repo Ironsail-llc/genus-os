@@ -7,9 +7,10 @@ is supplied by the bridge, and no request body may select a tenant or actor.
 from __future__ import annotations
 
 from functools import wraps
+from typing import Literal
 from uuid import UUID  # noqa: TC003 — FastAPI resolves this annotation at runtime.
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import Field, StrictBool, ValidationError
 
 from robothor.operations.store import Conflict
@@ -69,6 +70,12 @@ class Suppression(Contract):
 
 class Customer(Contract):
     external_company_id: str = Field(min_length=1, max_length=200)
+
+
+class BusinessCustomer(Contract):
+    observation_id: UUID
+    expected_revision: str = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=10, max_length=2000)
 
 
 class ReadRepair(Contract):
@@ -164,6 +171,31 @@ def bind_customer(prospect_id: str, body: Customer, request: Request):
     service, actor = require_sales_operator(request)
     service.bind_customer(prospect_id, body.external_company_id, actor)
     return {"ok": True}
+
+
+@router.post("/prospects/{prospect_id}/business-customer")
+@domain_errors
+def bind_business_customer(prospect_id: UUID, body: BusinessCustomer, request: Request):
+    service, actor = require_sales_operator(request)
+    service.bind_business_customer(
+        str(prospect_id), str(body.observation_id), body.expected_revision, actor, body.reason
+    )
+    return {"ok": True}
+
+
+@router.get("/business-observations")
+@domain_errors
+def business_observations(
+    request: Request,
+    kind: Literal["practice", "signup", "order"] = "practice",
+    source: str | None = Query(default=None, pattern=r"^[a-z][a-z0-9_-]{0,39}$"),
+    account_id: str | None = Query(default=None, min_length=1, max_length=200),
+    after: UUID | None = None,
+):
+    service, _ = require_sales_operator(request)
+    return service.business_records(
+        kind=kind, source=source, account_id=account_id, after=str(after) if after else None
+    )
 
 
 @router.post("/suppression")
