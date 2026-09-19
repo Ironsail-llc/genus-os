@@ -47,6 +47,13 @@ with runtime cutover. Those remain deployment gates. Live business context,
 platform behavioral rules and the skill catalog remain runtime inputs rather
 than being frozen by the knowledge snapshot.
 
+Queue admission also takes the tenant's shared `sales-fleet` maintenance gate.
+An exclusive maintenance transaction blocks new ticks and is refused while a tick
+is still active. Stop and inbox work continue independently alongside research
+when no exclusive maintenance is running. Caller cancellation drains the bounded
+worker before releasing its gate. This is a cutover primitive, not an installed
+deployment controller; durable leases and unresolved effects still need checking.
+
 Instance workflow YAML calls `sales_process_queue` in a deterministic tool step.
 `workflow_bindings` explicitly maps each stage to its authorized native service
 workflow. No agent has this execution authority. Stages are `plan`, `scout`,

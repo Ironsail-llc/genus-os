@@ -35,11 +35,10 @@ class NativeStageRunner:
         if release_id is not None:
             from robothor.templates.fleet_release import ReleaseError
             from robothor.templates.fleet_snapshot import load_snapshot
-            from robothor.templates.safety import validate_sha256
+            from robothor.templates.fleet_store import staged_release_path
 
             try:
-                validate_sha256(release_id)
-                root = runner.config.workspace / ".robothor/fleet-releases" / release_id
+                root = staged_release_path(runner.config.workspace, release_id)
                 snapshot = await asyncio.to_thread(load_snapshot, root, expected_digest=release_id)
                 config = snapshot.agent(agent_id)
             except (ReleaseError, ValueError, OSError):

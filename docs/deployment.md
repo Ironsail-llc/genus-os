@@ -937,6 +937,35 @@ admissions reverify it. The [sales runtime](SALES_INTELLIGENCE.md#native-workflo
 supports selecting such a release explicitly. Other manifest-loading callers
 retain their existing behavior until a coordinated installer integrates them.
 
+`robothor.templates.fleet_store.stage_release(source, workspace,
+expected_digest=...)` privately stages the complete verified artifact at
+`.robothor/fleet-releases/<fingerprint>`. Concurrent staging is serialized;
+repeated staging reverifies the existing destination. Drift is refused rather
+than repaired in place. Files and directory entries are flushed before the
+completed directory is published. Interrupted staging can be retried against the
+same reviewed fingerprint. A crash after publication is recovered by reverifying
+the destination. Hidden staging directories are never runtime lookup targets.
+
+Staging does not change the active release setting, install wheel code, copy
+manifests into the loose fleet directories or register schedules. Artifact
+metadata remains unchanged. The native sales runner and stager share the same
+validated lookup-path function.
+
+Native sales queue ticks hold a shared `sales-fleet` maintenance gate for their
+tenant. A controller can acquire an exclusive
+`robothor.operations.gates.gate(operations, "sales-fleet")` before its settings
+transaction; busy gates refuse immediately. Acquire this gate before settings
+or work-row locks. Shared gates allow stop, inbox and research work to proceed
+concurrently. Cancelling a caller waits for its bounded worker and gate cleanup,
+so a workflow timeout does not falsely report an idle worker boundary.
+
+The gate uses a pooled PostgreSQL transaction for the duration of a queue tick.
+A future cutover controller must also inspect durable job/action leases and
+unresolved provider effects: an available advisory gate alone cannot prove
+quiescence after a process or database failure. Schedule generation, deployed
+platform/plugin identity, rollback and activation acknowledgements remain
+coordinator requirements.
+
 ## Directory Structure (systemd install)
 
 The unit templates spell the workspace `/opt/robothor` and

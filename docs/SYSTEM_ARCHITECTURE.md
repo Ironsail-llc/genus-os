@@ -428,6 +428,13 @@ mutable in the workspace. This provides run-level configuration/knowledge
 consistency; coordinated fleet installation, schedule cutover and rollback remain
 separate deployment requirements.
 
+Verified artifacts can be staged at the native fingerprinted lookup path without
+changing runtime selection. Native queue ticks hold a tenant-scoped shared
+maintenance gate, allowing concurrent stages while excluding a maintenance
+transaction. Gate cleanup follows actual worker completion even when its caller
+is cancelled. The deployment coordinator must combine this with durable lease
+and provider-effect checks before a cutover.
+
 ### General intelligence pipeline
 
 Three-tier architecture converts raw API data into structured knowledge:

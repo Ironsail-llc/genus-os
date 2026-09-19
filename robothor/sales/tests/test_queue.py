@@ -121,6 +121,48 @@ async def test_control_work_is_independent_of_slow_research_and_all_switches(sal
     await task
 
 
+@pytest.mark.asyncio
+async def test_maintenance_exclusion_blocks_queue_admission(sales, monkeypatch):
+    from robothor.operations.gates import gate
+    from robothor.sales import queue
+
+    sales.configure({"workflow_bindings": {"stop": "stop-workflow"}}, "operator:test")
+    stop = AsyncMock(return_value=True)
+    monkeypatch.setattr(queue, "StopWorker", lambda service: SimpleNamespace(tick=stop))
+    with gate(sales.ops, "sales-fleet"):
+        with pytest.raises(Conflict, match="gate"):
+            await QueueDriver(sales).tick("stop", "stop-workflow")
+    stop.assert_not_awaited()
+    assert (await QueueDriver(sales).tick("stop", "stop-workflow"))["worked"]
+
+
+@pytest.mark.asyncio
+async def test_running_queue_work_refuses_maintenance_until_completion(sales, monkeypatch):
+    from robothor.operations.gates import gate
+    from robothor.sales import queue
+
+    sales.configure({"workflow_bindings": {"research": "research-workflow"}}, "operator:test")
+    started, finish = asyncio.Event(), asyncio.Event()
+
+    async def research():
+        started.set()
+        await finish.wait()
+        return True
+
+    monkeypatch.setattr(queue, "ResearchWorker", lambda service: SimpleNamespace(tick=research))
+    task = asyncio.create_task(QueueDriver(sales).tick("research", "research-workflow"))
+    await asyncio.wait_for(started.wait(), 2)
+    try:
+        with pytest.raises(Conflict, match="gate"):
+            with gate(sales.ops, "sales-fleet"):
+                pytest.fail("maintenance entered while research was active")
+    finally:
+        finish.set()
+        await task
+    with gate(sales.ops, "sales-fleet"):
+        pass
+
+
 def test_partial_settings_are_validated_against_current_configuration(sales):
     from pydantic import ValidationError
 

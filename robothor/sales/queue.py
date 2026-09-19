@@ -11,6 +11,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from robothor.operations.gates import run_shared
 from robothor.operations.store import Conflict
 from robothor.sales.business_queue import BusinessWorker
 from robothor.sales.delivery import DeliveryWorker, StopWorker
@@ -28,6 +29,11 @@ class QueueDriver:
         self.sales = sales
 
     async def tick(self, stage, workflow_id):
+        return await run_shared(
+            self.sales.ops, "sales-fleet", lambda: self._tick(stage, workflow_id)
+        )
+
+    async def _tick(self, stage, workflow_id):
         settings = SalesSettings.model_validate(await asyncio.to_thread(self.sales.settings))
         if settings.workflow_bindings.get(stage) != workflow_id:
             raise Conflict("Sales stage is not bound to this native workflow")
