@@ -61,6 +61,25 @@ def runner(engine_config):
 
 class TestAgentRunnerExecute:
     @pytest.mark.asyncio
+    async def test_declared_json_mode_reaches_provider(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        sample_agent_config.response_format = "json_object"
+        response = mock_litellm_response(content='{"items": []}')
+        with (
+            patch("robothor.engine.runner.create_run"),
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.run_finalizer.create_step"),
+            patch("litellm.acompletion", new_callable=AsyncMock, return_value=response) as call,
+        ):
+            run = await runner.execute(
+                "test-agent", "Return the result.", agent_config=sample_agent_config
+            )
+        assert run.status == RunStatus.COMPLETED
+        assert call.call_args.kwargs["response_format"] == {"type": "json_object"}
+        assert "JSON object" in call.call_args.kwargs["messages"][0]["content"]
+
+    @pytest.mark.asyncio
     async def test_missing_agent_config(self, runner):
         """Agent run fails gracefully when config not found."""
         # `load_agent_config_or_reason` since the schema ladder landed: the

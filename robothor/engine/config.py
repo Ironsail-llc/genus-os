@@ -604,6 +604,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         description=manifest.get("description", ""),
         model_primary=model.get("primary", ""),
         model_fallbacks=_with_last_resort(model.get("primary", ""), model.get("fallbacks", [])),
+        response_format=model.get("response_format", "text"),
         cron_expr=schedule.get("cron", ""),
         schedule_enabled=bool(schedule.get("enabled", True)),
         timezone=schedule.get("timezone", "America/New_York"),

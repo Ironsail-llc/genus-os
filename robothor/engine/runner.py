@@ -609,6 +609,8 @@ class AgentRunner(
             tool_offload_threshold=agent_config.tool_offload_threshold,
         )
 
+        session.response_format = agent_config.response_format
+
         # User identity threading
         session.run.user_id = effective_user_id
         session.run.user_role = effective_user_role

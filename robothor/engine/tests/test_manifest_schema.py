@@ -65,6 +65,17 @@ class TestSchemaIsLoadedFromTheFile:
 
 
 class TestStructuralRules:
+    def test_json_response_mode_is_explicit_and_validated(self):
+        data = _valid()
+        data["model"]["response_format"] = "json_object"
+        assert _errors(validate(data, strict=True)) == []
+        data["model"]["response_format"] = "json"
+        issues = _errors(validate(data, strict=True))
+        assert any(
+            issue.path == "model.response_format" and issue.code == "invalid_enum"
+            for issue in issues
+        )
+
     def test_a_valid_manifest_has_no_errors(self):
         assert _errors(validate(_valid())) == []
 

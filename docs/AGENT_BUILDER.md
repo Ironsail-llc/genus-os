@@ -975,6 +975,15 @@ install-from-a-path or a URL is CLI-only.
 
 ## 9. Complete Example: Email Pipeline
 
+Agents returning machine-consumed objects can declare `model.response_format:
+json_object`. The runner requests JSON mode for both streaming and non-streaming
+calls, including model fallbacks, and asks for one final object without Markdown
+or trailing commentary. The default is `text`; concurrent agents keep their own
+format. Choose primary and fallback models that support the provider's JSON mode.
+Tool calls remain available. JSON mode controls syntax, not business correctness:
+validate the result against the workflow's schema and evidence rules before
+accepting it. A truncated or unsupported response still fails validation.
+
 A 3-unit pipeline: **classifier** → **analyst** → **responder**, connected via CRM tasks and event hooks.
 
 ### Unit 1: Email Classifier
