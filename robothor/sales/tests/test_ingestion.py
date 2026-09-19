@@ -376,3 +376,21 @@ def test_malformed_addresses_return_validation_error(changes):
         instantly_event(
             json.dumps(event(**changes)).encode(), "Bearer " + SECRET, SECRET, "workspace-1"
         )
+
+
+@pytest.mark.asyncio
+async def test_inbox_rate_limit_wait_does_not_consume_processing_attempt(sales):
+    from robothor.sales.providers import RateLimited
+
+    owned_campaign(sales)
+    receive(sales, event(email_id=None))
+    provider = AsyncMock()
+    provider.secret.return_value = "workspace-1"
+    provider.emails.side_effect = RateLimited(75)
+    await InstantlyInboxWorker(sales, provider).tick()
+    with sales.ops.transaction() as cur:
+        cur.execute(
+            "SELECT attempts,status FROM operation_jobs WHERE tenant_id=%s AND kind='sales.inbound'",
+            (sales.tenant,),
+        )
+        assert dict(cur.fetchone()) == {"attempts": 0, "status": "pending"}

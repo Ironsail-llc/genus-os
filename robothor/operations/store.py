@@ -100,6 +100,33 @@ class Operations:
             raise Conflict("Idempotency key already has a different payload")
         return str(row["id"])
 
+    def admit_request(self, scope: str, *, limit: int, window_seconds: int) -> bool:
+        """Reserve one read attempt in a shared sliding window; failures count.
+
+        The audit record is durable before network I/O. This meters this
+        tenant's callers, not unrelated clients using the provider account.
+        """
+        if not scope or limit < 1 or window_seconds < 1:
+            raise ValueError("Request scope and positive limits required")
+        with self.transaction() as cur:
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+                (self.tenant + ":request:" + scope,),
+            )
+            cur.execute(
+                "SELECT count(*) AS n FROM operation_audit WHERE tenant_id=%s AND entity_id=%s "
+                "AND event='request.admitted' AND created_at>clock_timestamp()-%s*interval '1 second'",
+                (self.tenant, scope, window_seconds),
+            )
+            if cur.fetchone()["n"] >= limit:
+                return False
+            cur.execute(
+                "INSERT INTO operation_audit(tenant_id,entity_id,event,actor,created_at) "
+                "VALUES(%s,%s,'request.admitted','system',clock_timestamp())",
+                (self.tenant, scope),
+            )
+            return True
+
     def claim(self, kind: str, *, lease_seconds=900) -> dict | None:
         """Claim one ready job with SKIP LOCKED; retire exhausted/expired jobs."""
         if lease_seconds < 1:

@@ -172,3 +172,23 @@ def test_checkpoint_is_fenced_and_preserved_when_a_worker_is_replaced(ops):
         ops.checkpoint(job, replacement["lease_token"], {"output": "changed"})
     ops.checkpoint(job, replacement["lease_token"], saved)
     ops.complete(job, replacement["lease_token"], {"run_id": "run-1"})
+
+
+def test_request_admission_is_shared_bounded_and_tenant_isolated(ops):
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(
+            pool.map(
+                lambda _: ops.admit_request("provider.emails", limit=3, window_seconds=60), range(8)
+            )
+        )
+    assert sum(results) == 3
+    assert not Operations(ops.tenant).admit_request("provider.emails", limit=3, window_seconds=60)
+    assert Operations("test-" + uuid4().hex).admit_request(
+        "provider.emails", limit=3, window_seconds=60
+    )
+    with ops.transaction() as cur:
+        cur.execute(
+            "UPDATE operation_audit SET created_at=now()-interval '61 seconds' WHERE tenant_id=%s AND event='request.admitted'",
+            (ops.tenant,),
+        )
+    assert ops.admit_request("provider.emails", limit=3, window_seconds=60)

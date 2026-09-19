@@ -23,6 +23,9 @@ def client(monkeypatch):
         def overview(self):
             return {"tenant": self.tenant}
 
+        def retry_provider_read(self, job_id, actor, reason):
+            calls.append((self.tenant, job_id, actor, reason))
+
         def decide(self, action, approved, actor):
             calls.append((self.tenant, action, approved, actor))
 
@@ -77,3 +80,27 @@ def test_tenant_and_actor_are_not_caller_supplied(client):
         == 200
     )
     assert calls == [("tenant-a", "action-1", True, "operator:user-1")]
+
+
+def test_read_retry_uses_verified_human_tenant_and_requires_repair_reason(client):
+    c, calls = client
+    body = {"reason": "Workspace configuration repaired"}
+    path = "/api/sales/jobs/00000000-0000-4000-8000-000000000001/retry"
+    assert c.post(path, json=body).status_code == 403
+    assert (
+        c.post(
+            path, json=body, headers={"x-test-role": "admin", "x-test-service": "yes"}
+        ).status_code
+        == 403
+    )
+    assert (
+        c.post(
+            path, json={**body, "tenant_id": "other"}, headers={"x-test-role": "admin"}
+        ).status_code
+        == 422
+    )
+    assert not calls
+    assert c.post(path, json=body, headers={"x-test-role": "admin"}).status_code == 200
+    assert calls == [
+        ("tenant-a", "00000000-0000-4000-8000-000000000001", "operator:user-1", body["reason"])
+    ]

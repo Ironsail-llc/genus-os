@@ -150,3 +150,77 @@ async def test_verification_uses_separate_purchase_and_poll_contracts():
     assert json.loads(requests[0].content) == {"email": "alice@example.com"}
     assert requests[1].method == "GET"
     assert requests[1].url.path == "/api/v2/email-verification/alice@example.com"
+
+
+@pytest.mark.asyncio
+async def test_email_scans_pin_workspace_filter_cursor_and_shared_rate_limit(ops):
+    requests = []
+
+    def secret(key, **kwargs):
+        return "workspace-1" if key.endswith("workspace_id") else "test-secret"
+
+    def respond(request):
+        requests.append(request)
+        if request.url.path == "/api/v2/workspaces/current":
+            return httpx.Response(200, json={"id": "workspace-1"})
+        assert request.url.path == "/api/v2/emails"
+        assert dict(request.url.params) == {
+            "limit": "100",
+            "campaign_id": "campaign-1",
+            "starting_after": "page-2",
+            "min_timestamp_created": "2026-09-01T00:00:00Z",
+            "max_timestamp_created": "2026-09-18T00:00:00Z",
+            "sort_order": "asc",
+            "latest_of_thread": "false",
+        }
+        return httpx.Response(200, json={"items": []})
+
+    api = Instantly(ops.tenant, secret_get=secret, transport=httpx.MockTransport(respond))
+    for _ in range(20):
+        await api.emails(
+            campaign_id="campaign-1",
+            cursor="page-2",
+            min_timestamp_created="2026-09-01T00:00:00Z",
+            max_timestamp_created="2026-09-18T00:00:00Z",
+            sort_order="asc",
+            latest_of_thread=False,
+        )
+    with pytest.raises(RateLimited):
+        await Instantly(
+            ops.tenant, secret_get=secret, transport=httpx.MockTransport(respond)
+        ).emails()
+    assert len([r for r in requests if r.url.path == "/api/v2/emails"]) == 20
+
+
+@pytest.mark.asyncio
+async def test_email_scan_refuses_wrong_workspace_even_if_page_would_be_empty(ops):
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(200, json={"id": "another-workspace"})
+
+    api = Instantly(
+        ops.tenant, secret_get=lambda *a, **k: "workspace-1", transport=httpx.MockTransport(respond)
+    )
+    with pytest.raises(ProviderError):
+        await api.emails()
+    assert [r.url.path for r in calls] == ["/api/v2/workspaces/current"]
+
+
+@pytest.mark.asyncio
+async def test_email_scan_rejects_vault_rotation_away_from_pinned_workspace(ops):
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(200, json={"id": "new-workspace"})
+
+    api = Instantly(
+        ops.tenant,
+        secret_get=lambda *a, **kw: "new-workspace",
+        transport=httpx.MockTransport(respond),
+    )
+    with pytest.raises(ProviderError):
+        await api.emails(workspace_id="original-workspace")
+    assert calls == []

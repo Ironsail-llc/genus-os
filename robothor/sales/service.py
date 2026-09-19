@@ -616,6 +616,23 @@ class Sales:
             )
             return [dict(r) for r in cur.fetchall()]
 
+    def retry_provider_read(self, job_id, actor, reason):
+        """Retry repaired event reads without granting any external write authority."""
+        operator(actor)
+        if not isinstance(reason, str) or not 10 <= len(reason.strip()) <= 2000:
+            raise ValueError("A repair reason of 10–2000 characters is required")
+        with self.ops.transaction() as cur:
+            cur.execute(
+                "UPDATE operation_jobs SET status='pending',attempts=0,available_at=now(), "
+                "deadline=now()+interval '1 day',lease_token=NULL,lease_until=NULL,error='',updated_at=now() "
+                "WHERE tenant_id=%s AND id=%s AND kind IN ('sales.inbound','sales.reconcile') "
+                "AND status IN ('failed','pending')",
+                (self.tenant, job_id),
+            )
+            if cur.rowcount != 1:
+                raise Conflict("Only inactive provider read jobs can be retried")
+            self.ops.audit(cur, job_id, "provider.read_retried", actor, {"reason": reason.strip()})
+
     def suppress(self, email, reason, actor, *, cur=None):
         """Stop all pending outreach immediately, including across campaigns."""
         email = email.strip().lower()
