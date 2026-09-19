@@ -1909,6 +1909,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Research schema corrections request strict final JSON, while citation corrections resume tool collection, within the existing repair and spending limits.
 - Native scouting and research defer provider final-answer formatting while tools remain available, permitting further page reads; final schema/source validation and ordinary agent behavior remain enforced.
 - Scouts explain empty batches when searches returned source URLs; durable discovery receipts retain the reason for operator review.
 - New research captures expose separate paragraph references so selecting a business heading does not also quote adjacent reviews; saved captures retain their original versioned boundaries during recovery.

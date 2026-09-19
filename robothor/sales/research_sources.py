@@ -49,7 +49,7 @@ class ResearchSources:
         """A fresh native child must attempt retrieval before answering from context."""
         from robothor.engine.output_validation import output_validation_scope
         from robothor.engine.required_tool import required_tool_scope
-        from robothor.engine.response_schema import response_schema_scope
+        from robothor.engine.response_schema import response_schema_scope, set_tool_format_deferred
         from robothor.engine.tool_observation import tool_observation_scope
 
         attempted = False
@@ -75,8 +75,10 @@ class ResearchSources:
             try:
                 self.attest_output(str(run.id), text or "")
             except ValidationError:
-                return "Return the exact ResearchDossier schema with captured source_ref and passage_ref for each evidence item; do not write URLs, quotations or retrieval dates"
+                set_tool_format_deferred(False)
+                return "Return one JSON object matching the exact ResearchDossier schema, without prose or Markdown fences, with captured source_ref and passage_ref for each evidence item; do not write URLs, quotations or retrieval dates"
             except Conflict as exc:
+                set_tool_format_deferred(True)
                 return str(exc)
             return None
 

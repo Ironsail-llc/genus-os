@@ -174,3 +174,48 @@ def test_paragraph_passages_keep_long_text_bounded_and_unknown_versions_fail():
     assert " ".join(p["text"] for p in rows).split() == text.split()
     with pytest.raises(ValueError):
         passages(text, version=99)
+
+
+def test_schema_repair_uses_final_format_but_citation_repair_can_resume_page_reads():
+    import json
+    from types import SimpleNamespace
+
+    from robothor.engine.llm_client import LLMClient
+    from robothor.engine.output_validation import request_output_repair
+    from robothor.engine.tool_observation import observe_tool_result
+    from robothor.engine.tools.dispatch import ToolContext
+
+    sources = capture()
+    text = ["Here is my final answer: not a JSON object"]
+    session = SimpleNamespace(
+        run=SimpleNamespace(id="child", tenant_id="tenant-a", agent_id="research-worker"),
+        messages=[],
+        get_final_text=lambda: text[0],
+        record_error=lambda error: None,
+    )
+    tools = [{"type": "function", "function": {"name": "web_fetch", "parameters": {}}}]
+
+    def request():
+        return LLMClient._build_llm_kwargs("openrouter/example/model", [], tools, 100, 0.3)
+
+    with sources.child_scope("services"):
+        packet = observe_tool_result(
+            "web_fetch",
+            {},
+            {
+                "status": 200,
+                "url": "https://clinic.example.com/about",
+                "content": "A public business.",
+            },
+            ToolContext(tenant_id="tenant-a", agent_id="research-worker", run_id="child"),
+        )
+        assert "response_format" not in request()
+        assert request_output_repair(session)
+        assert request()["response_format"]["type"] == "json_schema"
+        bad = selection(packet)
+        bad["evidence"][0]["source_ref"] = "invented"
+        text[0] = json.dumps(bad)
+        assert request_output_repair(session)
+        assert "response_format" not in request()
+        text[0] = json.dumps(selection(packet))
+        assert not request_output_repair(session)
