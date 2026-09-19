@@ -279,6 +279,7 @@ class CronScheduler:
         self.config = config
         self.runner = runner
         self.workflow_engine = workflow_engine
+        self.sales_runtime: Any = None
         self.scheduler = AsyncIOScheduler(timezone=config.default_timezone)
         self._rows = RowLedger()
 
@@ -395,6 +396,15 @@ class CronScheduler:
 
         self.scheduler.start()
         logger.info("Cron scheduler started")
+
+        sales_runtime = getattr(self, "sales_runtime", None)
+        if sales_runtime is not None:
+            try:
+                await sales_runtime.bootstrap()
+            except Exception:
+                # Keep operator/core access alive. Managed queues lack an admitted
+                # generation, and /ready reports failed native verification.
+                logger.exception("Managed sales startup verification failed")
 
         # Keep running; poll user-authored cron jobs each minute.
         while True:

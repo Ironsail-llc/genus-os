@@ -439,8 +439,11 @@ Migration 130 adds the durable sales deployment ledger and settings revision.
 Preparation excludes active/unresolved work and blocks native queue admission
 until commit or verified restoration. Structural settings selection, transition
 completion and audit commit together; rollback is another prepared transition.
-The native runtime verifier for platform/plugin/schedule state remains a required
-integration, and no deployment endpoint is exposed before it exists.
+The native source-checkout runtime integrates platform/plugin/schedule verification
+with daemon bootstrap and readiness. Managed queue admission rechecks these assets
+off-loop before work. Pending transitions stay closed after restart, and control
+cancellation drains the database transaction. Public deployment controls and
+non-Git build provenance remain separate work.
 
 ### General intelligence pipeline
 

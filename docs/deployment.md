@@ -990,8 +990,8 @@ identity primitive. Capture it once when establishing a runtime generation and
 retain it: verification requires the expected clean Git revision and unchanged
 tracked-file inventory, including filesystem modification history. Untracked
 files in the engine and bridge package trees also refuse verification. A source
-edit followed by restoration still requires a fresh generation. This module is
-not yet wired into daemon readiness. Wheel/container installations without a Git
+edit followed by restoration still requires a fresh generation. The native sales
+runtime captures this identity before subsystem construction. Wheel/container installations without a Git
 checkout require separate build provenance; a version label is insufficient.
 Installed plugin payload verification is described in [Plugins](PLUGINS.md#installed-payload-verification).
 Neither primitive by itself establishes loaded-code or schedule readiness.
@@ -1003,15 +1003,33 @@ verification that the previous runtime has been restored before it clears the
 pending record; it preserves newer operator settings. Failed verification or a
 transaction failure leaves the pending transition recoverable and admission closed.
 
-**Native runtime adapter remains to be implemented.** There is no default verifier
-or public deployment endpoint. Its `verify(transition, restoring=...)` contract
-must check the actual running platform revision, installed plugin integrity,
-workflow definitions, schedule ownership/set and current engine generation. It
-must return evidence for this transition and release only after reconciliation,
-or raise. It receives a copy of the transition and cannot alter the configuration
-being committed. Proof dictionaries must never be accepted from an HTTP caller
-or agent tool. Lifecycle tests use an explicit runtime test double; they prove
-database coordination, not those live runtime checks or a successful cutover.
+`robothor.engine.sales_runtime.NativeSalesRuntime` supplies the native verifier
+for source-checkout engines and service-only fleet plugins. Its async `prepare`,
+`commit` and `abort` methods serialize control on the engine loop. Commit/abort
+reconcile the selected snapshot, then run the database coordinator off-loop; the
+coordinator's synchronous verification bridges back to the owning loop. Evidence
+is bound to the exact durable transition, restoration direction and schedule
+generation. Callers cannot submit proof dictionaries. Cancellation drains the
+actual control transaction before releasing the control lock.
+
+The daemon captures source and plugin startup identity before subsystem
+construction, attaches the runtime to its native scheduler, and bootstraps it
+after APScheduler starts. A committed selection is reverified and reconciled.
+A pending transition loads no managed jobs and remains pending until explicit
+commit or abort; restart never chooses between them. `/ready` includes a native
+sales check. Failed sales bootstrap preserves core engine/operator access while
+managed admission stays closed. Every managed queue admission also verifies
+artifact bytes, source identity, installed plugin payload and schedule state;
+file work runs off-loop and completes before a worker starts.
+
+Plugin checks pin the boot governance record, installed file history and native
+plugin generation. Replacement, edit/restoration or reload requires restart.
+Service factories must resolve through the native registry from declared files
+inside the governed installed distribution. Runtime inspection uses captured
+wheel bytes. Other plugin extension groups and non-Git build provenance need
+explicit support. Native preparation refuses an unsupported nonempty unmanaged
+sales baseline before creating a transition. Public deployment controls and
+production cutover remain separate work; no HTTP deployment endpoint exists yet.
 
 ### Managed workflow schedule generations
 
@@ -1034,11 +1052,10 @@ generation inside shared admission before invoking a worker. Unmanaged fleets
 retain their existing behavior. HTTP arguments cannot supply this context.
 
 This component is tested through native scheduled execution, tool registry,
-service identity and queue admission against the isolated database. It is not yet
-wired into daemon bootstrap or the coordinator's runtime verifier. The remaining
-adapter must bridge the database thread to the engine loop, combine source/plugin
-evidence, reconcile on restart and gate readiness before exposing deployment
-controls. No installed schedule is itself evidence of a completed live pilot.
+service identity and queue admission against the isolated database. Additional
+native deployment tests exercise actual source verification, coordinator commit,
+restart, rollback, restoration and cancellation recovery. These establish the
+integrated deployment path in isolation; they do not prove a live customer pilot.
 
 ## Directory Structure (systemd install)
 

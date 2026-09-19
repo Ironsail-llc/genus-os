@@ -126,3 +126,30 @@ async def test_native_scheduled_workflow_reaches_governed_queue(sales, tmp_path,
         assert invocation.get() is None
     finally:
         native.scheduler.shutdown(wait=False)
+
+
+@pytest.mark.asyncio
+async def test_async_runtime_verification_finishes_before_worker_admission(sales, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from robothor.engine.fleet_context import FleetInvocation, invocation
+    from robothor.sales import queue
+
+    release = "a" * 64
+    sales.configure({"workflow_bindings": {"plan": "sales-work"}}, "operator:test")
+    with sales.ops.transaction() as cur:
+        cur.execute(
+            "UPDATE sales_settings SET config=config || %s WHERE tenant_id=%s",
+            (Json({"fleet_release_id": release}), sales.tenant),
+        )
+    worker = Mock()
+    monkeypatch.setattr(queue.DiscoveryPlanner, "plan", worker)
+    verify = AsyncMock(side_effect=Conflict("Runtime files changed"))
+    token = invocation.set(FleetInvocation(sales.tenant, release, "sales-work", verify))
+    try:
+        with pytest.raises(Conflict):
+            await QueueDriver(sales).tick("plan", "sales-work")
+        verify.assert_awaited_once()
+        worker.assert_not_called()
+    finally:
+        invocation.reset(token)

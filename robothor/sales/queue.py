@@ -39,7 +39,7 @@ class QueueDriver:
 
         await asyncio.to_thread(assert_queue_open, self.sales)
         settings = SalesSettings.model_validate(await asyncio.to_thread(self.sales.settings))
-        assert_current(self.sales.tenant, settings.fleet_release_id, workflow_id)
+        await assert_current(self.sales.tenant, settings.fleet_release_id, workflow_id)
         if settings.workflow_bindings.get(stage) != workflow_id:
             raise Conflict("Sales stage is not bound to this native workflow")
         if stage == "plan":

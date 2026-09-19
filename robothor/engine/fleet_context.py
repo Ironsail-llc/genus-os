@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from inspect import isawaitable
 
 from robothor.operations.store import Conflict
 
@@ -18,7 +19,7 @@ class FleetInvocation:
 invocation: ContextVar[FleetInvocation | None] = ContextVar("fleet_invocation", default=None)
 
 
-def assert_current(tenant, release_id, workflow_id):
+async def assert_current(tenant, release_id, workflow_id):
     context = invocation.get()
     if release_id is None and context is None:
         return  # Existing unmanaged workflows retain their native behavior.
@@ -28,4 +29,6 @@ def assert_current(tenant, release_id, workflow_id):
         workflow_id,
     ):
         raise Conflict("Sales queue requires its selected native fleet generation")
-    context.verify_current()
+    verified = context.verify_current()
+    if isawaitable(verified):
+        await verified
