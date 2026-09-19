@@ -979,3 +979,31 @@ qualification withdraws acceptance. Running work, uncertain delivery and
 unsettled spending prevent replacement work. A stale or uncertain operator
 response requires reloading the snapshot. Original jobs, generated output,
 costs and decisions remain in the audit trail.
+
+## Existing Pipedrive identities
+
+The prospect console can search a bounded set of organization/contact matches,
+fetch selected organization/person/lead records, and adopt the exact reviewed
+packet. Fetching performs provider reads; adoption changes Genus bindings and
+queues ordinary promotion, which remains controlled by its switch. People must
+have one unambiguous existing Genus contact email and the selected organization;
+leads must reference the same organization and reviewed people. Deleted or
+archived records, reused identities, changed relationships and conflicting
+completed receipts are held. No person is silently reparented.
+
+Review expires after 15 minutes. Adoption re-fetches the provider records and
+requires unchanged business state and account identity. It can reconcile an
+uncertain promotion receipt only to the reviewed canonical record; an in-flight
+write is held. Numeric remote IDs are bound to their original Pipedrive account
+by migration `136_sales_pipedrive_scope.sql`. Legacy unscoped IDs need this review
+before reuse. Account rotation to another company cannot reuse old receipts.
+
+Read-only identity conflicts no longer create uncertain-write receipts. Promotion
+rechecks the accepted prospect and enabled switch after searches and before
+writes. Initial draft admission now belongs to the independent draft planner,
+so promotion or verification cannot create a second copy of a manual draft.
+
+Canonical adapter references, checked September 19, 2026:
+[Pipedrive organizations](https://developers.pipedrive.com/docs/api/v1/Organizations),
+[persons](https://developers.pipedrive.com/docs/api/v1/Persons), and
+[leads](https://developers.pipedrive.com/docs/api/v1/Leads).

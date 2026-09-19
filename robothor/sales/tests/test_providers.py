@@ -224,3 +224,29 @@ async def test_email_scan_rejects_vault_rotation_away_from_pinned_workspace(ops)
     with pytest.raises(ProviderError):
         await api.emails(workspace_id="original-workspace")
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_pipedrive_identity_inspection_uses_canonical_read_endpoints():
+    paths = []
+
+    def respond(request):
+        paths.append(request.url.path)
+        assert request.method == "GET"
+        return httpx.Response(200, json={"success": True, "data": {"id": 11}})
+
+    provider = Pipedrive(
+        "tenant-a",
+        secret_get=lambda key, **kw: (
+            "example-account" if key.endswith("company_domain") else "test-secret"
+        ),
+        transport=httpx.MockTransport(respond),
+    )
+    await provider.organization(11)
+    await provider.person_record(22)
+    await provider.lead("00000000-0000-4000-8000-000000000001")
+    assert paths == [
+        "/api/v2/organizations/11",
+        "/api/v2/persons/22",
+        "/api/v1/leads/00000000-0000-4000-8000-000000000001",
+    ]

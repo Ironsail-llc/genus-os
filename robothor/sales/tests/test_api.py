@@ -483,3 +483,37 @@ def test_preparation_recovery_never_accepts_service_or_caller_authority(client, 
     assert calls == [
         ("tenant-a", "00000000-0000-4000-8000-000000000001", {**body, "actor": "operator:user-1"})
     ]
+
+
+def test_pipedrive_identity_api_requires_human_and_exact_packet(client, monkeypatch):
+    import robothor.sales.pipedrive_identity as identity
+
+    c, calls = client
+
+    async def adopt(self, prospect_id, packet_id, expected_hash, actor, reason):
+        calls.append((self.tenant, prospect_id, str(packet_id), expected_hash, actor))
+        return {"organization_id": 11}
+
+    monkeypatch.setattr(identity.IdentityReview, "adopt", adopt)
+    path = "/api/sales/prospects/00000000-0000-4000-8000-000000000001/pipedrive/adopt"
+    body = {
+        "packet_id": "00000000-0000-4000-8000-000000000002",
+        "expected_hash": "a" * 64,
+        "reason": "Reviewed the provider records",
+    }
+    for headers in (
+        {},
+        {"x-test-role": "member"},
+        {"x-test-role": "admin", "x-test-service": "yes"},
+    ):
+        assert c.post(path, headers=headers, json=body).status_code == 403
+    headers = {"x-test-role": "admin"}
+    assert c.post(path, headers=headers, json={**body, "organization_id": 99}).status_code == 422
+    assert c.post(path, headers=headers, json=body).status_code == 200
+    assert calls[0] == (
+        "tenant-a",
+        "00000000-0000-4000-8000-000000000001",
+        body["packet_id"],
+        body["expected_hash"],
+        "operator:user-1",
+    )
