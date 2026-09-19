@@ -1,13 +1,13 @@
 export type Entry = { kind: "qualification" | "knowledge"; version: string; approved_by?: string; approved_at?: string; data: Record<string, unknown> };
 const label = (value: string) => value.replaceAll("_", " ");
 
-export function LibraryEntry({ entry, published = true }: { entry: Entry; published?: boolean }) {
+export function LibraryEntry({ entry, published = true, statusLabel }: { entry: Entry; published?: boolean; statusLabel?: string }) {
   const data = entry.data;
   const weights = (data.weights ?? {}) as Record<string, number>;
   const required = (data.required ?? []) as string[];
   return <article className="rounded border p-3 space-y-2 text-sm">
     <h5 className="font-medium">{entry.kind === "knowledge" ? "Claims" : label(String(data.buying_case))} · {entry.version}</h5>
-    <p className="text-muted-foreground">{published ? `Published by ${entry.approved_by} · ${new Date(entry.approved_at!).toLocaleDateString()}` : "Draft for operator review"}</p>
+    <p className="text-muted-foreground">{statusLabel ?? (published ? `Published by ${entry.approved_by} · ${new Date(entry.approved_at!).toLocaleDateString()}` : "Draft for operator review")}</p>
     {entry.kind === "qualification" ? <>
       <p>Qualification threshold: {String(data.threshold)} / 100 · Evidence age limit: {String(data.max_evidence_age_days)} days</p>
       <ul className="space-y-1">{Object.entries(weights).map(([key, points]) => <li key={key}>{label(key)}: {points} points{required.includes(key) ? " · required" : ""}{!!(data.criteria_definitions as Record<string, string> | undefined)?.[key] && <p className="text-muted-foreground">{(data.criteria_definitions as Record<string, string>)[key]}</p>}</li>)}</ul>
@@ -21,4 +21,3 @@ export function LibraryEntry({ entry, published = true }: { entry: Entry; publis
     </details>}
   </article>;
 }
-

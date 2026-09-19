@@ -57,6 +57,24 @@ def client(monkeypatch):
             calls.append((self.tenant, action, approved, actor))
 
     monkeypatch.setattr(api, "Sales", Service)
+
+    class CalibrationStub:
+        def __init__(self, service):
+            self.tenant = service.tenant
+
+        def create(self, **body):
+            calls.append((self.tenant, body))
+            return {"id": "cohort-1"}
+
+        def assess(self, item_id, **body):
+            calls.append((self.tenant, item_id, body))
+            return {"revision": 1}
+
+        def list_cohorts(self, **query):
+            calls.append((self.tenant, query))
+            return {"items": [], "next_cursor": None}
+
+    monkeypatch.setattr(api, "Calibration", CalibrationStub, raising=False)
     app = FastAPI()
 
     @app.middleware("http")
@@ -72,6 +90,39 @@ def client(monkeypatch):
 
     app.include_router(router)
     return TestClient(app), calls
+
+
+def test_qualification_assessment_is_human_scoped_without_promotion_authority(client):
+    c, calls = client
+    body = {
+        "reference_decision": "qualified",
+        "expected_snapshot_hash": "a" * 64,
+        "expected_assessment_id": None,
+        "reason": "This practice meets our business criteria",
+    }
+    item = "00000000-0000-4000-8000-000000000001"
+    path = f"/api/sales/calibration/items/{item}/assessment"
+    for headers in (
+        {},
+        {"x-test-role": "member"},
+        {"x-test-role": "admin", "x-test-service": "yes"},
+    ):
+        assert c.post(path, headers=headers, json=body).status_code == 403
+        assert c.get("/api/sales/calibration", headers=headers).status_code == 403
+    headers = {"x-test-role": "admin"}
+    assert c.post(path, json={**body, "approved": True}, headers=headers).status_code == 422
+    assert c.post(path, json={**body, "actor": "forged"}, headers=headers).status_code == 422
+    assert c.post(path, json=body, headers=headers).status_code == 200
+    assert calls.pop() == ("tenant-a", item, {**body, "actor": "operator:user-1"})
+    create = {
+        "name": "Pilot review",
+        "target_size": 100,
+        "agreement_target_percent": 85,
+        "expected_settings_revision": 3,
+        "reason": "Assess the first researched sample",
+    }
+    assert c.post("/api/sales/calibration", json=create, headers=headers).status_code == 200
+    assert calls == [("tenant-a", {**create, "actor": "operator:user-1"})]
 
 
 def test_library_preview_and_publication_require_a_human_and_exact_review_hash(client):
