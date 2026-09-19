@@ -74,6 +74,7 @@ JUDGE_RETRY_DELAY_S = 1.0
 #: fleet pass it cost 12 of 40 counted failures (30%) across 9 of 19 agents,
 #: every one of them recorded against the agent rather than the instrument.
 JUDGE_MAX_TOKENS = 2000
+JUDGE_REQUEST_TIMEOUT_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -1151,15 +1152,18 @@ async def _judge_output(output: str, rubric: list[str], model: str) -> JudgeOutc
             from robothor.engine.request_budget import bounded_completion
 
             judge_key = api_key_for_model(model)
-            response = await bounded_completion(
-                litellm.acompletion,
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=JUDGE_MAX_TOKENS,
-                response_format={"type": "json_object"},
-                timeout=30,
-                **({"api_key": judge_key} if judge_key else {}),
+            response = await asyncio.wait_for(
+                bounded_completion(
+                    litellm.acompletion,
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.1,
+                    max_tokens=JUDGE_MAX_TOKENS,
+                    response_format={"type": "json_object"},
+                    timeout=JUDGE_REQUEST_TIMEOUT_SECONDS,
+                    **({"api_key": judge_key} if judge_key else {}),
+                ),
+                timeout=JUDGE_REQUEST_TIMEOUT_SECONDS,
             )
             content = response.choices[0].message.content
             if not content:
@@ -1187,7 +1191,7 @@ async def _judge_output(output: str, rubric: list[str], model: str) -> JudgeOutc
                 return JudgeOutcome(score=None, error="judge scores must be integer 0 or 1")
             return JudgeOutcome(score=sum(scores) / len(rubric), item_scores=tuple(scores))
         except Exception as e:
-            detail = str(e).replace("\n", "\\n")
+            detail = (str(e) or type(e).__name__).replace("\n", "\\n")
             # Retire a rejected credential before the next attempt, or all
             # three attempts burn on the same dead key. Classified the way
             # the engine does, so a weekly cap is not retried in 15 minutes.

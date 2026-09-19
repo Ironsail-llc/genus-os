@@ -1,5 +1,6 @@
 """Semantic judge attempts share a funded request envelope when one is active."""
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -76,6 +77,24 @@ async def test_failed_judge_does_not_invent_item_decisions(monkeypatch):
     assert detail["judge"]["score"] is None
     assert detail["judge"]["item_scores"] == []
     assert detail["judge_error"]
+
+
+async def test_judge_wall_clock_deadline_bounds_a_provider_that_ignores_timeout(monkeypatch):
+    call = setup(monkeypatch, None)
+
+    async def stuck(**kwargs):
+        await asyncio.Event().wait()
+
+    call.side_effect = stuck
+    monkeypatch.setattr(benchmark, "JUDGE_REQUEST_TIMEOUT_SECONDS", 0.01, raising=False)
+    budget = RequestBudget(100, quote=quote)
+    with budget_scope(budget):
+        result = await asyncio.wait_for(
+            benchmark._judge_output("output", ["criterion"], "example/model"), 0.3
+        )
+    assert result.score is None and result.error
+    assert call.await_count == 1
+    assert budget.charged_units == 60
 
 
 @pytest.mark.parametrize("score", ['"0"', '"false"', "2", "true", "0.5", "null"])
