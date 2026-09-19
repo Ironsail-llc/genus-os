@@ -241,6 +241,7 @@ class SalesSettings(Contract):
     research_enabled: StrictBool = False
     enrichment_enabled: StrictBool = False
     promotion_enabled: StrictBool = False
+    email_provider: Literal["instantly", "none"] = "instantly"
     sending_enabled: StrictBool = False
     outcomes_enabled: StrictBool = False
     business_sources: list[BusinessSource] = Field(default_factory=list, max_length=10)
@@ -269,6 +270,8 @@ class SalesSettings(Contract):
 
     @model_validator(mode="after")
     def discovery_configuration(self):
+        if self.email_provider == "none" and self.sending_enabled:
+            raise ValueError("Select an email provider before enabling sending")
         if self.discovery_start_hour >= self.discovery_end_hour:
             raise ValueError("Discovery window must start before it ends")
         if len({s.id for s in self.discovery_segments}) != len(self.discovery_segments):

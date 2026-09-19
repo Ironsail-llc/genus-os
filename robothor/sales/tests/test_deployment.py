@@ -14,7 +14,7 @@ source = source_fixture
 
 
 @pytest.fixture
-def deployment(sales, source, tmp_path):
+def deployment(sales, source, tmp_path, request):
     from robothor.sales.deployment import DeploymentCoordinator
     from robothor.templates.fleet_release import build_release
     from robothor.templates.fleet_store import stage_release
@@ -40,7 +40,11 @@ def deployment(sales, source, tmp_path):
     )
     (source / "config/settings.yaml").write_text(
         yaml.safe_dump(
-            {"agents": {"research": "ticket-router"}, "workflow_bindings": {"research": "process"}}
+            {
+                "agents": {"research": "ticket-router"},
+                "workflow_bindings": {"research": "process"},
+                "email_provider": getattr(request, "param", "instantly"),
+            }
         )
     )
     built = build_release(
@@ -326,3 +330,29 @@ def test_other_tenant_cannot_read_or_commit_transition(deployment):
     assert other.status()["pending"] is None
     with pytest.raises(Conflict):
         other.commit(record["id"], RuntimeEvidence(), actor="operator:test")
+
+
+@pytest.mark.parametrize("deployment", ["none"], indirect=True)
+def test_email_provider_selection_is_deployed_locked_and_rolled_back(deployment, sales):
+    from robothor.operations.store import Conflict
+
+    coordinator, _ = deployment
+    record = prepare(deployment)
+    assert record["target_config"]["email_provider"] == "none"
+    coordinator.commit(record["id"], RuntimeEvidence(), actor="operator:test")
+    assert sales.settings()["email_provider"] == "none"
+    with pytest.raises(Conflict, match="coordinator"):
+        sales.configure({"email_provider": "instantly"}, "operator:test")
+    # Older deployment snapshots predate this field; rollback must use its default.
+    with sales.ops.transaction() as cur:
+        cur.execute(
+            "UPDATE sales_deployments SET previous_config=previous_config-'email_provider' WHERE id=%s",
+            (str(record["id"]),),
+        )
+    rollback = coordinator.prepare_rollback(
+        record["id"],
+        expected_revision=coordinator.status()["settings_revision"],
+        actor="operator:test",
+        reason="Restore the previous email selection",
+    )
+    assert rollback["target_config"]["email_provider"] == "instantly"

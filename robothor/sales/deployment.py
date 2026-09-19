@@ -19,7 +19,7 @@ from robothor.sales.service import operator
 from robothor.templates.fleet_snapshot import load_snapshot
 from robothor.templates.fleet_store import staged_release_path
 
-STRUCTURAL = ("fleet_release_id", "agents", "workflow_bindings")
+STRUCTURAL = ("fleet_release_id", "agents", "workflow_bindings", "email_provider")
 SWITCHES = (
     "research_enabled",
     "enrichment_enabled",
@@ -160,6 +160,7 @@ class DeploymentCoordinator:
             or not 10 <= len(reason.strip()) <= 2000
         ):
             raise ValueError("A settings revision and explicit deployment reason are required")
+        desired = SalesSettings.model_validate(desired).model_dump(mode="json")
         with gate(self.sales.ops, "sales-fleet") as cur:
             self._idle(cur)
             current = self._settings(cur)

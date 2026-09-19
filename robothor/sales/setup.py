@@ -53,6 +53,8 @@ class Setup:
                 "providers/instantly/webhook_secret",
             ],
         }
+        if settings.email_provider == "none":
+            required.pop("instantly")
         sources = []
         for source in settings.business_sources:
             factory = self.service_get("sales.business." + source.source)
@@ -107,6 +109,7 @@ class Setup:
             "mailboxes": mailbox_reviews,
             "provider_checks": checks,
             "readiness": {
+                "email_provider": settings.email_provider,
                 "connected": None,
                 "connection_check": "Not performed by configuration inspection",
                 "fleet_selected": bool(settings.fleet_release_id),
@@ -116,7 +119,12 @@ class Setup:
                     settings.senders and settings.postal_address and settings.unsubscribe_url
                 ),
             },
-            "notes": [
+            "notes": (
+                ["Email delivery is excluded. Research and CRM can run without an email provider."]
+                if settings.email_provider == "none"
+                else []
+            )
+            + [
                 "Credential presence is not proof of authentication, subscription entitlement, mailbox health or a successful live pilot.",
                 "Saving setup does not enable any integration. Provider reads and sending remain controlled separately.",
             ],

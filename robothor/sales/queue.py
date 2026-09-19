@@ -44,6 +44,15 @@ class QueueDriver:
         await assert_current(self.sales.tenant, settings.fleet_release_id, workflow_id)
         if settings.workflow_bindings.get(stage) != workflow_id:
             raise Conflict("Sales stage is not bound to this native workflow")
+        if settings.email_provider == "none" and stage in {
+            "verify",
+            "delivery",
+            "stop",
+            "inbox",
+            "reconcile",
+            "status",
+        }:
+            return {"stage": stage, "worked": False, "reason": "email_provider_not_configured"}
         if stage == "plan":
             worked = await asyncio.to_thread(DiscoveryPlanner(self.sales).plan)
         else:
