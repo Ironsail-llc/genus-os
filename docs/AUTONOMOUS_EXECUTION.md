@@ -347,3 +347,45 @@ request. Exact idempotent retries from another run preserve the original context
 Older or direct administrative reservations remain explicitly unattributed; a retry
 does not invent a historical request. Apply migration 130 before using this version.
 This is attribution, not additional spending authority or a digital signature.
+
+## Private input enrollment
+
+Apply migration 131 for expiring enrollment intents. The existing browser tool
+accepts `action=autonomy`, `request.kind=enrollment_link`, and an `enrollment`
+object containing `kind` and optional HTTPS `origin`. Website logins and
+authenticator keys require an origin. It returns a 15-minute link to Account →
+Personal automation; set `autonomy.dashboard_origin` to the dashboard's public
+HTTPS origin to make links clickable outside the dashboard.
+
+Links require a normally authenticated personal account linked to the same CRM
+person as the requesting channel identity. The token is in the URL fragment,
+removed on page load, and submitted only in a private request body. The database
+stores its hash. The link fixes the resource type and destination; expiration,
+foreign owners and foreign tenants cannot enroll through it. Completion writes
+the encrypted resource and its receipt in one transaction. Concurrent submissions
+and retries return the original reference without replacing its value. Revoked
+resources cannot be recovered through an old enrollment receipt.
+
+In a linked private Telegram chat, `/secure profile` or `/secure document` requests
+a link; `/secure credential https://example.com` requests a website-specific link.
+For an explicitly supplied structured input, append a JSON object: a credential
+uses `username` and `password`, a profile uses the documented profile fields, and
+`/secure totp https://example.com` accepts an object containing `secret`. Such
+inputs are intercepted before message logging, pending questions, history and
+model processing. Only a resource reference is queued for the assistant. Storage,
+validation or identity errors consume the marked message and return a generic
+error; they never fall back to normal chat. Cards must use the secure page.
+
+A single file with caption `/secure document` is downloaded into bounded memory
+and encrypted directly, up to 5 MB. Its contents and original filename do not
+enter the normal attachment inbox, OCR, vision or agent arguments. Albums are
+held for the normal collection window before any download; a private caption
+refuses that entire batch. Send private documents individually: an item arriving
+after the collection window is a separate batch, and Telegram itself retains the
+original upload. Ordinary document-analysis requests retain their normal flow.
+
+The shared redaction boundary also withholds explicit `/secure` text if it reaches
+history or the runner through another path. This is a backstop, not secure capture
+for other chat surfaces, nor automatic detection of arbitrary unlabeled secrets.
+The dashboard enrollment form includes legal name, second address line and
+nationality as well as the existing profile fields; missing values are not guessed.

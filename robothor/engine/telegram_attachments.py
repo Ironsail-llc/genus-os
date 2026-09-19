@@ -431,7 +431,7 @@ class TelegramAttachmentsMixin:
             "text what you need and I can work from the recording's file."
         )
 
-    async def handle_file(self, message: Message) -> None:
+    async def handle_file(self, message: Message, *, _album_checked: bool = False) -> None:
         """Keep whatever arrived, then hand the agent the caption and the paths."""
         if not message.from_user:
             return
@@ -444,6 +444,13 @@ class TelegramAttachmentsMixin:
             await message.answer(reply)
             return
 
+        from robothor.engine.secure_intake import collect_album, intercept
+
+        if message.media_group_id and not _album_checked:
+            collect_album(self, message)
+            return
+        if await intercept(self, message, attachment=True):
+            return
         caption = (message.caption or "").strip()
         media = media_ref(message)
         if media is None:
