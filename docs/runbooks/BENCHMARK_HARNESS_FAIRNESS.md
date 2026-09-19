@@ -1,5 +1,54 @@
 # Runbook — the benchmark harness must not fail agents for its own limits
 
+## Structured deliverables and strict grading
+
+A suite can require an exact JSON document with `expected.json_assertions`:
+
+```yaml
+expected:
+  require_all: true
+  json_assertions:
+    - {path: /classification, op: equals, value: opt_out}
+    - {path: /draft, op: equals, value: null}
+    - {path: /approved, op: absent}
+```
+
+Paths are JSON pointers: an empty path selects the root, `/0` selects an array
+element, and `~0`/`~1` escape a tilde/slash in a field name. Supported operations
+are `equals` (structural JSON equality), `absent`, `contains` (an exact array
+member), `length` (array/object/string), and `type` (object, array, string,
+boolean, integer, number or null). Booleans do not equal numeric 0/1. Missing
+fields differ from null. These are targeted assertions, not JSON Schema validation.
+
+Malformed assertions are rejected before execution. A present assertion set must
+have 1–100 checks. Both assertion data and output have a 128,000-character limit;
+output must be one strict JSON document, with no fences, duplicate keys or nonfinite
+numbers. A failed JSON assertion sets the task score to zero, regardless of other
+passing checks. The per-task result records failed check indexes or a parsing error
+without copying the document into that diagnostic.
+
+`require_all: true` additionally requires every declared regex, trace, state and
+semantic judge check that is evaluated to pass. It prevents a failed judge or a
+forbidden tool attempt from being averaged away. Honesty checks remain required;
+their success does not skip the remaining checks in strict mode. State checks
+still follow the sandbox flag's scoring mode; use `enforce` when they are part of
+acceptance. Omit `require_all` to retain existing partial-credit behavior. Judge
+unavailability remains a failed, explicitly reported check.
+
+JSON contract fixtures validate the grader, not the agent. Actual quality evidence
+requires native task runs with recorded model, instructions, suite version, traces,
+cost, outputs and judge results. Synthetic business fixtures cannot establish real
+customer conversion or deployment readiness.
+
+Semantic judges accept only integer 0/1 scores with exactly one score per rubric
+item. Truthy strings, booleans and other numbers are grading errors. Each judge
+request and retry passes through the engine's opt-in `RequestBudget` when a funded
+scope is active. Unknown provider usage retains its reservation. Without that scope,
+legacy benchmark cost behavior is unchanged: suite task totals exclude judge spend
+and per-task `max_cost_usd` is telemetry rather than a hard request cap. A caller
+requiring a total spending ceiling must provide the shared envelope and record its
+charged units; the ordinary benchmark entry point does not establish it.
+
 **Owner:** ops · **Code:** `robothor/engine/tools/handlers/benchmark.py`
 **Tests:** `robothor/engine/tests/test_benchmark_harness_fairness.py`
 **Related:** [`BENCHMARK_SANDBOX.md`](BENCHMARK_SANDBOX.md) (the tool-split it
