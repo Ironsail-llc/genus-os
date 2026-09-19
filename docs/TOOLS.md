@@ -927,3 +927,11 @@ matching granted purpose verbatim in the browser autonomy proposal. Purpose
 matching is whole-text, case-insensitive matching; a website cannot change the
 prepared purpose or expand the grant. Empty purpose lists preserve broad standing
 authority. See [purposes and shared spending decisions](AUTONOMOUS_EXECUTION.md#purposes-and-shared-spending-decisions).
+
+The protected autonomous browser now stores encrypted submission observations
+for the linked owner to inspect on Account → Personal automation. They are
+visible-text observations with explicit coverage, not a signature or a substitute
+for inspecting linked legal documents. Agent results remain reference-only;
+private snapshot retrieval rejects service identities. Capture stops after
+transient verification-code entry. See
+[Private submission observations](AUTONOMOUS_EXECUTION.md#private-submission-observations).

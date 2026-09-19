@@ -10,6 +10,7 @@ from robothor.autonomy.models import Scope
 
 @pytest.fixture
 def setup(monkeypatch):
+    monkeypatch.setattr("robothor.autonomy.terms_capture.capture_terms", AsyncMock(return_value=None))
     monkeypatch.setattr("robothor.autonomy.preflight.validate_plan", AsyncMock(return_value=[]))
     store = MagicMock()
     store.operation.return_value = {
