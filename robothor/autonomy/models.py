@@ -3,6 +3,7 @@
 from datetime import UTC, date, datetime
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
@@ -40,6 +41,13 @@ class StrictModel(BaseModel):
 class Scope(StrictModel):
     tenant_id: Identifier
     owner_id: Identifier
+
+
+class RequestContext(StrictModel):
+    """Attribution supplied by the authenticated execution layer, not the model."""
+
+    run_id: UUID
+    actor_id: Identifier
 
 
 class ResourceInput(StrictModel):
