@@ -790,6 +790,13 @@ one endpoint and retain normal spending admission. This configuration does not
 relax child deadlines or source attestation. See the model configuration guidance
 in [Agent Builder](AGENT_BUILDER.md).
 
+Optional planning and verification calls use the same owning agent's provider
+preferences before budget quotation. Those calls keep their configured model
+fallback chain and cannot silently use another provider for a pinned model.
+Concurrent agents retain separate routing scopes. A qualification timeout stays
+pending with its cost-reconciliation diagnostic; it is not reported as malformed
+assessment output. Uncertain spending remains reserved until reconciled.
+
 After its first actual page-read attempt, each native research child sends the
 trusted ResearchDossier selection schema as `response_format.type=json_schema` with strict mode.
 The initial required retrieval call keeps its normal tool contract. Only

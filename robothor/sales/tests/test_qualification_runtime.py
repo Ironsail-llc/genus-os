@@ -212,6 +212,25 @@ async def test_no_budget_does_not_invoke_qualifier_or_fall_back(sales):
 
 
 @pytest.mark.asyncio
+async def test_timeout_diagnostic_is_not_misreported_as_invalid_model_output(sales):
+    prepared(sales)
+
+    class TimedOut(RunnerStub):
+        async def run(self, **kwargs):
+            raise TimeoutError("Simulated native timeout")
+
+    assert await ResearchWorker(sales, TimedOut({})).qualify_tick()
+    with sales.ops.transaction() as cur:
+        cur.execute(
+            "SELECT error FROM operation_jobs WHERE tenant_id=%s AND kind='sales.qualify' AND status='pending'",
+            (sales.tenant,),
+        )
+        assert (
+            cur.fetchone()["error"] == "Stage did not finish; reserved cost requires reconciliation"
+        )
+
+
+@pytest.mark.asyncio
 async def test_native_stage_installs_trusted_assessment_schema_and_validation(monkeypatch):
     from types import SimpleNamespace
 

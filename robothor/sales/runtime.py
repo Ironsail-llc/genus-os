@@ -321,7 +321,11 @@ class ResearchWorker:
                 )
             await asyncio.to_thread(self._qualify, job, settings)
         except (Conflict, BudgetExceeded, ValueError) as exc:
-            reason = "Invalid qualification assessment" if isinstance(exc, ValueError) else str(exc)
+            reason = (
+                str(exc)
+                if isinstance(exc, (Conflict, BudgetExceeded))
+                else "Invalid qualification assessment"
+            )
             await asyncio.to_thread(
                 self.sales.ops.defer, job["id"], job["lease_token"], reason, delay_seconds=300
             )

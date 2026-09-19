@@ -405,18 +405,17 @@ class RunLifecycleMixin:
         """Run the planning phase. Returns PlanResult or None."""
         try:
             from robothor.engine.planner import generate_plan
+            from robothor.engine.provider_routing import provider_order_scope
 
             plan_model = agent_config.planning_model or models[0]
-            return await generate_plan(
-                message,
-                tool_names,
-                plan_model,
-                # The whole remaining chain, not one model: models[1:2] can
-                # never reach the offline tier that terminates every chain, so
-                # a cloud outage silently removed the planning stage from every
-                # run at the same moment it removed the strong model.
-                fallback_models=models[1:],
-            )
+            with provider_order_scope(getattr(agent_config, "provider_order", {})):
+                return await generate_plan(
+                    message,
+                    tool_names,
+                    plan_model,
+                    # Retain the entire configured fallback chain.
+                    fallback_models=models[1:],
+                )
         except Exception as e:
             logger.debug("Planning phase failed: %s", _sanitize(e))
             return None
@@ -580,6 +579,7 @@ class RunLifecycleMixin:
     ) -> str | None:
         """Run verification step. If it fails, retry once."""
         try:
+            from robothor.engine.provider_routing import provider_order_scope
             from robothor.engine.verifier import (
                 format_verification_feedback,
                 verify_output,
@@ -593,13 +593,14 @@ class RunLifecycleMixin:
             error_count = sum(
                 1 for s in session.run.steps if s.error_message and not is_attempt_step(s)
             )
-            result = await verify_output(
-                output_text or "",
-                agent_config.verification_prompt,
-                error_count,
-                models[0],
-                fallback_models=models[1:],
-            )
+            with provider_order_scope(getattr(agent_config, "provider_order", {})):
+                result = await verify_output(
+                    output_text or "",
+                    agent_config.verification_prompt,
+                    error_count,
+                    models[0],
+                    fallback_models=models[1:],
+                )
             if result.passed:
                 return output_text
 
