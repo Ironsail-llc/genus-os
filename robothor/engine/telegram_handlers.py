@@ -916,6 +916,9 @@ class TelegramHandlersMixin:
 
         chat_id = str(message.chat.id)
         user_text = message.text.strip()
+        from robothor.autonomy.intake import protect_payment_text
+
+        user_text = protect_payment_text(user_text)
 
         # ── Skill bundles: "/bundle-name" composes a multi-skill prompt ──
         if user_text.startswith("/"):

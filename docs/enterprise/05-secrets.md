@@ -209,3 +209,11 @@ report a differing vault row as a conflict rather than overwriting it. It will
 never print a value, not even under `--dry-run`.
 
 Next: [Backup and upgrade](06-backup-upgrade.md).
+
+## Personal information for delegated tasks
+
+Open **Account → Personal automation** to enroll profiles, logins, documents,
+authenticator keys and personal payment resources, then grant bounded standing
+authority. These resources extend the native vault and return references to
+agents. See [Personal autonomous execution](../AUTONOMOUS_EXECUTION.md) for
+setup, key rotation, verification and the separate payment deployment gate.

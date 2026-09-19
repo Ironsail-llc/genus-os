@@ -881,3 +881,17 @@ destroy.
   touch.
 * `docs/agents/INSTRUCTION_CONTRACT.md` in the repository — what an agent's
   instruction file may say, tools included.
+
+## Personal accounts, applications and purchases
+
+Use `browser(action="autonomy", request={kind:"status"})` for tasks that consume
+personal profile, login, document, authenticator or payment resources. This
+mode uses native-vault references and standing grants; a covered action does
+not need another approval. Use ordinary browser navigation for public research
+and nonsecret interaction. Ordinary `act` also supports `check` and workspace
+file `upload`; protected documents should use resource references.
+
+Prepare an operation, inspect its fields, execute the resource-bound plan, and
+check confirmation. An uncertain submission must be reconciled before any
+retry. See [Personal autonomous execution](AUTONOMOUS_EXECUTION.md) for setup,
+verification, plan fields, spending limits and current integration boundaries.

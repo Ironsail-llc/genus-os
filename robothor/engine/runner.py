@@ -536,6 +536,9 @@ class AgentRunner(
         # Falling through to the config default writes a row the connection's RLS
         # binding refuses, and the refusal arrives as an opaque
         # InsufficientPrivilege at INSERT time. See test_nested_run_tenant.py.
+        from robothor.autonomy.intake import protect_payment_text
+
+        message = protect_payment_text(message)
         resolved_tenant = tenant_id or current_tenant_scope() or self.config.tenant_id
 
         reason = f"Agent config not found: {agent_id}"
