@@ -35,6 +35,7 @@ def test_confirmation_requires_an_affirmative_message_for_the_requested_action(
 
 @pytest.mark.timeout(60)
 @pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.e2e
 async def test_account_confirmation_discovered_after_click_without_known_selector(
     store, identity, existing
 ):
@@ -87,6 +88,7 @@ async def test_account_confirmation_discovered_after_click_without_known_selecto
         await browser.close()
 
 
+@pytest.mark.e2e
 async def test_hidden_editable_and_unrelated_confirmation_text_is_not_evidence():
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
@@ -108,6 +110,7 @@ async def test_hidden_editable_and_unrelated_confirmation_text_is_not_evidence()
 
 @pytest.mark.timeout(60)
 @pytest.mark.parametrize("mode", ["before_click", "pending_after_click"])
+@pytest.mark.e2e
 async def test_discovery_does_not_repeat_an_uncertain_operation(store, identity, monkeypatch, mode):
     from robothor.autonomy import confirmation
 

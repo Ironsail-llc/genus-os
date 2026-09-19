@@ -12,6 +12,8 @@ from robothor.secrets.redaction import redact
 if TYPE_CHECKING:
     from playwright.async_api import Frame, Page
 
+    from robothor.autonomy.privacy import ProtectedValues
+
 _SELECTOR = r"""function selector(el) {
     const parts = [];
     while (el && el.nodeType === 1) {
@@ -33,14 +35,15 @@ _INSPECT = (
     + _SELECTOR
     + r"""
     const visible = e => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
+    const bounded = text => text.length <= 8192 ? text : '';
     const fields = Array.from(document.querySelectorAll('input,select,textarea,button')).filter(visible).slice(0,80).map(e => ({
         selector: selector(e), tag: e.tagName.toLowerCase(), type: e.type || '',
         id: e.id || '', name: e.name || '', required: !!e.required,
-        label: (e.labels?.[0]?.textContent || e.getAttribute('aria-label') ||
-            (e.tagName === 'BUTTON' ? e.textContent : '') || '').slice(0,100),
+        label: bounded(e.labels?.[0]?.textContent || e.getAttribute('aria-label') ||
+            (e.tagName === 'BUTTON' ? e.textContent : '') || ''),
         autocomplete: e.autocomplete || '', min_length: e.minLength >= 0 ? e.minLength : null,
         max_length: e.maxLength >= 0 ? e.maxLength : null,
-        options: e.tagName === 'SELECT' ? Array.from(e.options).slice(0,80).map(o => o.label.slice(0,100)) : []
+        options: e.tagName === 'SELECT' ? Array.from(e.options).slice(0,80).map(o => bounded(o.label)) : []
     }));
     const names = ['total','subtotal','tax','shipping','annual','monthly','next charge',
         'next payment','renewal','billing','end date','expires','joining','membership','trial','recurring'];
@@ -101,8 +104,18 @@ def _term(candidate: dict[str, Any]) -> dict[str, Any] | None:
 
 
 async def inspect_page(
-    page: Page, *, destination: str, allowed_frames: frozenset[str]
+    page: Page,
+    *,
+    destination: str,
+    allowed_frames: frozenset[str],
+    protected_values: ProtectedValues | None = None,
 ) -> dict[str, Any]:
+    selector_script = (
+        _SELECTOR.replace("if (el.id) {", "if (false && el.id) {")
+        if protected_values
+        else _SELECTOR
+    )
+    inspect_script = _INSPECT.replace(_SELECTOR, selector_script)
     fields: list[dict[str, Any]] = []
     terms: list[dict[str, Any]] = []
     frames: list[dict[str, Any]] = []
@@ -119,7 +132,9 @@ async def inspect_page(
             frames.append({"origin": frame_origin, "state": "nested_frame_not_supported"})
             continue
         element = await frame.frame_element()
-        frame_selector = await element.evaluate("el => {" + _SELECTOR + "return selector(el);}")
+        frame_selector = await element.evaluate(
+            "el => {" + selector_script + "return selector(el);}"
+        )
         permitted = frame_origin == destination or frame_origin in allowed_frames
         frames.append(
             {
@@ -131,17 +146,27 @@ async def inspect_page(
         if permitted:
             roots.append((frame, {"frame_selector": frame_selector, "frame_origin": frame_origin}))
     for root, binding in roots:
-        data = await root.evaluate(_INSPECT)
+        data = await root.evaluate(inspect_script)
         # Recheck after evaluation: a frame navigation must not turn one
         # approved origin into a channel for an unapproved document.
         actual = root.url
         if url_origin(actual) != binding.get("frame_origin", destination):
             raise PermissionError("inspection_destination_changed")
-        fields.extend(
-            {**field, **binding} for field in data["fields"] if len(field["selector"]) <= 500
-        )
+        for field in data["fields"]:
+            if len(field["selector"]) > 500:
+                continue
+            for key in ("id", "name", "label", "autocomplete"):
+                value = field[key]
+                field[key] = (protected_values.text(value) if protected_values else value)[:100]
+            field["options"] = [
+                (protected_values.text(value) if protected_values else value)[:100]
+                for value in field["options"]
+            ]
+            fields.append({**field, **binding})
         for candidate in data["candidates"]:
             if len(candidate["selector"]) > 500:
+                continue
+            if protected_values and protected_values.text(candidate["text"]) != candidate["text"]:
                 continue
             term = _term(candidate)
             if term:

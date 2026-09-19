@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from robothor.autonomy.broker import BrowserBroker, ExecutionPlan, url_origin
-from robothor.autonomy.inspection import inspect_page
 from robothor.autonomy.workflows.store import WorkflowStore
 
 if TYPE_CHECKING:
@@ -52,6 +51,17 @@ class WorkflowManager:
         self.clock = clock
         self._live: dict[str, LiveWorkflow] = {}
         self._opening = asyncio.Lock()
+        self.accepting = True
+
+    def drain(self) -> None:
+        self.accepting = False
+
+    def resume_admission(self) -> None:
+        self.accepting = True
+
+    @property
+    def opening(self) -> bool:
+        return self._opening.locked()
 
     @property
     def active_count(self) -> int:
@@ -70,7 +80,10 @@ class WorkflowManager:
             )
         finally:
             self._live.pop(workflow_id, None)
-            await live.browser.close()
+            try:
+                await live.browser.close()
+            finally:
+                live.broker.protected_values.clear()
 
     async def expire_idle(self) -> None:
         for workflow_id, live in list(self._live.items()):
@@ -119,6 +132,8 @@ class WorkflowManager:
         session_resource_id: str | None = None,
     ) -> dict[str, Any]:
         async with self._opening:
+            if not self.accepting:
+                return {"error": "workflow_broker_draining"}
             operation = await asyncio.to_thread(self.store.operation, scope, operation_id)
             if url_origin(url) != operation["proposal"]["origin"]:
                 raise PermissionError("destination_mismatch")
@@ -152,6 +167,8 @@ class WorkflowManager:
                             row["origin"],
                             kind="browser_session",
                         )
+                    broker = BrowserBroker(self.store)
+                    broker.protected_values.session(storage)
                     browser = await self.browser_factory()
                     context = await browser.new_context(
                         storage_state=cast("StorageState | None", storage),
@@ -168,7 +185,7 @@ class WorkflowManager:
                         agent_id,
                         browser,
                         page,
-                        BrowserBroker(self.store),
+                        broker,
                         self.clock(),
                         self.clock(),
                     )
@@ -187,8 +204,8 @@ class WorkflowManager:
                 if self._expired(live):
                     await self._discard(workflow_id, live)
                     raise PermissionError("workflow_lost")
-                inspection = await inspect_page(
-                    live.page, destination=row["origin"], allowed_frames=grant.frame_origins
+                inspection = await live.broker.inspect(
+                    live.page, row["origin"], grant.frame_origins
                 )
                 live.last_used = self.clock()
             return {
@@ -213,9 +230,7 @@ class WorkflowManager:
             grant = await asyncio.to_thread(
                 self.store.check_authority, scope, row["operation_id"], agent_id
             )
-            inspection = await inspect_page(
-                live.page, destination=row["origin"], allowed_frames=grant.frame_origins
-            )
+            inspection = await live.broker.inspect(live.page, row["origin"], grant.frame_origins)
             live.last_used = self.clock()
             return {
                 "workflow_id": workflow_id,
@@ -282,7 +297,8 @@ class WorkflowManager:
                     advance=advance,
                 )
                 changed = (
-                    result.get("reason") == "workflow_step_completed"
+                    result.get("reason")
+                    in {"workflow_step_completed", "server_validation_required"}
                     or result.get("state") == "completed"
                 )
                 result = {**result, "workflow_id": workflow_id, "revision": revision + int(changed)}

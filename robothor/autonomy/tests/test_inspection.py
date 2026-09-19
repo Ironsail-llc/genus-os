@@ -7,6 +7,8 @@ from playwright.async_api import async_playwright
 
 from robothor.autonomy.inspection import inspect_page
 
+pytestmark = pytest.mark.e2e
+
 
 @pytest.mark.timeout(60)
 async def test_inspection_discovers_fields_terms_and_authorized_frames_without_values():

@@ -7,6 +7,7 @@ import contextlib
 import fcntl
 import logging
 import os
+import signal
 import socket
 import stat
 from pathlib import Path
@@ -19,6 +20,7 @@ from robothor.autonomy.store import AutonomyStore
 from robothor.autonomy.worker import browser_environment, launch_local
 from robothor.autonomy.workflows.api import create_app
 from robothor.autonomy.workflows.manager import WorkflowManager
+from robothor.settings import get_settings
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -83,6 +85,9 @@ async def start_driver(starter: DriverStarter) -> Playwright:
 
 
 async def serve(manager: WorkflowManager, listener: socket.socket) -> None:
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(signal.SIGUSR1, manager.drain)
+    loop.add_signal_handler(signal.SIGUSR2, manager.resume_admission)
     server = uvicorn.Server(
         uvicorn.Config(
             create_app(manager),
@@ -108,6 +113,8 @@ async def serve(manager: WorkflowManager, listener: socket.socket) -> None:
     try:
         await server.serve(sockets=[listener])
     finally:
+        loop.remove_signal_handler(signal.SIGUSR1)
+        loop.remove_signal_handler(signal.SIGUSR2)
         reaper.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await reaper
@@ -134,13 +141,7 @@ def main() -> None:
     if not harden_process():
         raise SystemExit("workflow_process_isolation_unavailable")
     try:
-        asyncio.run(
-            run(
-                Path(
-                    os.environ.get("ROBOTHOR_AUTONOMY_SOCKET", "/run/robothor-autonomy/broker.sock")
-                )
-            )
-        )
+        asyncio.run(run(Path(get_settings().autonomy.socket)))
     except Exception:
         raise SystemExit("workflow_service_failed") from None
 

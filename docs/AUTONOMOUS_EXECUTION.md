@@ -61,6 +61,18 @@ operator can select an executable with
 `ROBOTHOR_AUTONOMY_CHROMIUM_EXECUTABLE`. A host that blocks the downloaded
 binary's user namespace may support the distribution's Chromium policy.
 
+Validate Chromium under the actual service restrictions, not only in a login
+shell. A Snap launcher can require capabilities that `NoNewPrivileges=yes`
+correctly denies. One supported deployment option is a root-owned copy of the
+matching Playwright Chromium headless shell, selected with the executable
+override in the engine, bridge and workflow service. On Ubuntu hosts that restrict
+unprivileged user namespaces, give that exact executable a dedicated AppArmor
+profile with `userns,`, following
+[Ubuntu's per-application namespace policy](https://documentation.ubuntu.com/security/security-features/privilege-restriction/apparmor/).
+Keep Chromium sandboxing and the service restrictions enabled. Update that
+browser alongside Playwright, and verify a real protected open/inspect after
+deployment; an HTTP readiness response alone does not prove browser launch.
+
 Optional Browserbase fallback uses the tenant's native-vault credential
 `providers/browserbase/api_key`. Enable managed browsing only after configuring
 that provider. Sessions request `recordSession=false`, `logSession=false`, and
@@ -145,13 +157,33 @@ Persistent workflows use a separate non-dumpable broker service with a private
 0700 runtime directory, 0600 socket, exclusive process lease, and signed
 owner/tenant/agent-bound service tokens. Browser processes receive an environment
 allowlist without service credentials or tracing flags. The RPC has no arbitrary
-JavaScript, screenshot, HTML or download operation.
+JavaScript, screenshot, HTML or download operation. Entered values and restored
+cookie/storage values are masked from inspection metadata before results are
+returned or journaled, including common URL/HTML/base64 representations. Once
+protected values are present, inspection returns structural CSS selectors, so
+secret-bearing element IDs are not exposed or turned into unusable masked
+selectors. Masking happens before label shortening. Confirmation digests from
+explicit selectors normally hash masked text; after transient-code entry they
+hash only the previously declared matched phrase, so even a transformed code
+cannot be retained in an arbitrary confirmation-text digest. Browser storage
+is not saved after transient code or TOTP entry. This does not constitute verification
+against every possible site-specific encoding; adversarial leakage testing
+remains part of deployment validation.
 
 Each workflow owns one page and one immutable proposal. `advance=true` permits
 zero-money account/login/application steps only: at least one previous field must
 disappear and a new field appear, or the broker must observe a final confirmation.
 A confirmed intermediate step clears the old plan and increments the revision.
-Invalid native constraints can be corrected in place. Commands are journaled before
+Invalid native constraints can be corrected in place. For zero-money account,
+login and application forms, a `server_validation_required` result permits
+correcting bindings and retrying at its new revision. Recovery requires exactly
+one POST to the submitted form's declared same-origin action, an HTTP 422
+response, and a newly invalid visible bound field with an associated visible
+error inside that form. It supports AJAX and full-document submissions. Only
+fixed error categories and existing selectors are returned; error text, response
+bodies and entered values stay private. Wrong endpoints, multiple requests,
+stale/hidden errors, unknown outcomes, payments and transient-code challenges
+cannot authorize a retry through this path. Commands are journaled before
 execution; duplicates return the original result and changed payloads are refused.
 Secure code entry resumes the same page without retaining the code in the journal.
 Up to 16 contexts are retained, for 15 idle minutes and at most one hour total.
@@ -159,9 +191,18 @@ Completion, uncertain outcomes, expiry and shutdown close the browser. Restartin
 the browser service loses page state and requires reconciliation; a controller
 restart does not. Closing a workflow does not assert cancellation or release money.
 
+Before updating the broker service, send its main process `SIGUSR1` to stop
+admitting new workflows. Existing pages remain inspectable and executable.
+The private `/ready` response reports `accepting`, `active_workflows` and
+`opening_workflow`; restart only when admission is off and both counts/activity
+are zero. `SIGUSR2` resumes admission if the rollout is deferred. These controls
+are process-management signals, not agent tools. Engine and bridge updates
+need not restart this service.
+
 Persistent workflows currently use local Chromium. Managed-browser CAPTCHA
 sessions, authentication redirects, verification-link navigation, cumulative-only
-wizard transitions, and multi-operation checkout workflows remain separate work.
+wizard transitions, field rejection without the explicit request/error evidence above,
+and multi-operation checkout workflows remain separate work.
 The one-shot browser path remains available for its supported tasks.
 
 Successful execution plans persist in the operation journal. `procedures` returns
@@ -289,3 +330,10 @@ revocation, process errors, and controlled Chromium account/checkout flows.
 The subprocess acceptance test requires a sandbox-capable Chromium executable.
 Managed browser tests mock the provider. No live account creation, real payment,
 production migration or service deployment is performed by this test suite.
+
+Host browser paths are declared under `settings.autonomy` in the normal settings
+registry. `chromium_executable` and `socket` accept the corresponding documented
+environment overrides and appear in the generated configuration reference.
+Browser tests carry the `e2e` marker where they do not require the database fixture;
+the required `test-autonomy` CI lane installs Chromium and runs the entire autonomy
+suite, including these tests. Generic Python matrix jobs do not install browsers.

@@ -169,7 +169,9 @@ class WorkflowStore:
             )
             self.store._event(cur, scope, workflow_id, "workflow_command_completed")
 
-    def checkpoint(self, scope: Scope, agent_id: str, workflow_id: str) -> None:
+    def checkpoint(
+        self, scope: Scope, agent_id: str, workflow_id: str, *, rejected: bool = False
+    ) -> None:
         with self.store.transaction() as cur:
             self.store._lock(cur, scope)
             row = self._get(cur, scope, agent_id, workflow_id)
@@ -189,7 +191,12 @@ class WorkflowStore:
                 "UPDATE autonomy_operations SET state='reserved',execution_plan=NULL,updated_at=now() WHERE id=%s",
                 (row["operation_id"],),
             )
-            self.store._event(cur, scope, row["operation_id"], "workflow_step_confirmed")
+            self.store._event(
+                cur,
+                scope,
+                row["operation_id"],
+                "workflow_form_rejected" if rejected else "workflow_step_confirmed",
+            )
 
     def close(self, scope: Scope, agent_id: str, workflow_id: str, state: str) -> None:
         if state not in {"completed", "closed", "lost"}:

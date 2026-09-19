@@ -7,7 +7,6 @@ import base64
 import ipaddress
 import json
 import logging
-import os
 import shutil
 import socket
 import sys
@@ -20,7 +19,6 @@ from playwright.async_api import async_playwright
 from pydantic import SecretStr
 
 from robothor.autonomy.broker import BrowserBroker, ExecutionPlan, url_origin
-from robothor.autonomy.inspection import inspect_page
 from robothor.autonomy.models import ResourceInput, Scope
 from robothor.autonomy.store import AutonomyStore
 
@@ -31,7 +29,9 @@ if TYPE_CHECKING:
 async def launch_local(chromium: BrowserType) -> Browser:
     # Distribution Chromium carries the host's AppArmor/user-namespace policy;
     # a downloaded executable may not. Always retain Chromium's own sandbox.
-    executable = os.environ.get("ROBOTHOR_AUTONOMY_CHROMIUM_EXECUTABLE") or shutil.which("chromium")
+    from robothor.settings import get_settings
+
+    executable = get_settings().autonomy.chromium_executable or shutil.which("chromium")
     return await chromium.launch(
         headless=True,
         chromium_sandbox=True,
@@ -42,11 +42,9 @@ async def launch_local(chromium: BrowserType) -> Browser:
 
 def browser_environment() -> dict[str, str]:
     """No provider/database secrets, debug flags, preload hooks or tracing."""
-    return {
-        key: os.environ[key]
-        for key in ("PATH", "HOME", "LANG", "TMPDIR", "PLAYWRIGHT_BROWSERS_PATH")
-        if key in os.environ
-    }
+    from robothor.settings.env import process_env_allowlist
+
+    return process_env_allowlist(("PATH", "HOME", "LANG", "TMPDIR", "PLAYWRIGHT_BROWSERS_PATH"))
 
 
 async def public_request(route: Route) -> None:
@@ -111,6 +109,8 @@ async def handle(data: dict[str, Any]) -> dict[str, Any]:
         storage = await asyncio.to_thread(
             store.consume_resource, scope, session_ref, destination, kind="browser_session"
         )
+    broker = BrowserBroker(store)
+    broker.protected_values.session(storage)
     async with async_playwright() as pw:
         browser = None
         if data.get("managed"):
@@ -144,12 +144,12 @@ async def handle(data: dict[str, Any]) -> dict[str, Any]:
             await context.route("**/*", public_request)
             page = await context.new_page()
             if reconcile and plan:
-                return await BrowserBroker(store).reconcile_on_page(
+                return await broker.reconcile_on_page(
                     scope, data["operation_id"], data["agent_id"], plan, page
                 )
             if plan:
                 assert grant is not None
-                return await BrowserBroker(store).execute_on_page(
+                return await broker.execute_on_page(
                     scope,
                     data["operation_id"],
                     data["agent_id"],
@@ -161,10 +161,8 @@ async def handle(data: dict[str, Any]) -> dict[str, Any]:
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
             if url_origin(page.url) != destination:
                 return {"error": "destination_changed"}
-            inspected = await inspect_page(
-                page,
-                destination=destination,
-                allowed_frames=grant.frame_origins if grant else frozenset(),
+            inspected = await broker.inspect(
+                page, destination, grant.frame_origins if grant else frozenset()
             )
             saved = await asyncio.to_thread(
                 store.put_resource,
@@ -183,7 +181,10 @@ async def handle(data: dict[str, Any]) -> dict[str, Any]:
                 "session_resource_id": saved["id"],
             }
         finally:
-            await browser.close()
+            try:
+                await browser.close()
+            finally:
+                broker.protected_values.clear()
 
 
 def main() -> None:

@@ -100,18 +100,13 @@ async def run_browser(
     if managed and not payload["browserbase_key"]:
         return {"error": "browserbase_not_configured"}
     # No inherited provider tokens, tracing toggles or debugging configuration.
-    env = {
-        key: os.environ[key]
-        for key in (
-            "PATH",
-            "HOME",
-            "LANG",
-            "TMPDIR",
-            "PLAYWRIGHT_BROWSERS_PATH",
-            "ROBOTHOR_AUTONOMY_CHROMIUM_EXECUTABLE",
-        )
-        if key in os.environ
-    }
+    from robothor.settings import get_settings
+    from robothor.settings.env import process_env_allowlist
+
+    env = process_env_allowlist(("PATH", "HOME", "LANG", "TMPDIR", "PLAYWRIGHT_BROWSERS_PATH"))
+    executable = get_settings().autonomy.chromium_executable
+    if executable:
+        env["ROBOTHOR_AUTONOMY_CHROMIUM_EXECUTABLE"] = executable
     proc = await asyncio.create_subprocess_exec(
         sys.executable,
         "-m",

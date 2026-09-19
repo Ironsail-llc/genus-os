@@ -41,7 +41,16 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-410 settings in 13 groups.
+412 settings in 14 groups.
+
+## autonomy
+
+Host paths for the isolated personal browser service and clients.
+
+| Variable | Type | Default | Restart | Secret | Since | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `ROBOTHOR_AUTONOMY_CHROMIUM_EXECUTABLE` | str | _(empty)_ | `robothor-autonomy`, `robothor-engine`, `robothor-bridge` | no | legacy | Sandbox-capable Chromium executable for protected browsing. Empty uses system Chromium, then Playwright's installed browser. Requires the host's user-namespace policy. |
+| `ROBOTHOR_AUTONOMY_SOCKET` | str | `/run/robothor-autonomy/broker.sock` | `robothor-autonomy`, `robothor-engine`, `robothor-bridge` | no | legacy | Private Unix socket shared by the protected browser service and its authenticated clients. Its parent directory must be owned by the service user with mode 0700. |
 
 ## paths
 

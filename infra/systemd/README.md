@@ -292,3 +292,9 @@ listener. Keep it independent of engine/bridge restart dependencies so a
 controller rollout does not erase an in-progress wizard. Restarting this service
 closes its entire browser process group and leaves unfinished operations for
 reconciliation. See [Personal autonomous execution](../../docs/AUTONOMOUS_EXECUTION.md).
+
+For an upgrade, first send `SIGUSR1` to this service's main process and check
+its private `/ready` response: `accepting=false`, `active_workflows=0`, and
+`opening_workflow=false` mean a restart will not destroy a live page. Send
+`SIGUSR2` to resume admission if deferring the upgrade. This drain applies to
+the browser service only; controller restarts remain independent.

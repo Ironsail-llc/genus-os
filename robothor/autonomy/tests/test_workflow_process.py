@@ -6,6 +6,7 @@ payment is sent to an external site; database access is restricted to *_test.
 
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -123,6 +124,20 @@ def test_controller_restart_preserves_page_broker_restart_requires_reconciliatio
             }
         )
         assert advanced["reason"] == "workflow_step_completed", advanced
+        proc.send_signal(signal.SIGUSR1)
+        with httpx.Client(
+            transport=httpx.HTTPTransport(uds=str(socket)), base_url="http://autonomy"
+        ) as client:
+            for _ in range(50):
+                ready = client.get("/ready").json()
+                if not ready["accepting"]:
+                    break
+                time.sleep(0.02)
+            assert not ready["accepting"]
+            assert ready["active_workflows"] == 1
+        assert call(
+            {"kind": "open", "operation_id": op["id"], "url": "https://form.example/apply"}
+        ) == {"error": "workflow_broker_draining"}
         inspected = call({"kind": "inspect", "workflow_id": wid})
         assert any(field["id"] == "two" for field in inspected["fields"])
         assert not any(field["id"] == "one" for field in inspected["fields"])
@@ -137,6 +152,16 @@ def test_controller_restart_preserves_page_broker_restart_requires_reconciliatio
         assert completed["state"] == "completed", completed
         assert call(command) == completed
         assert proc.poll() is None
+        proc.send_signal(signal.SIGUSR2)
+        with httpx.Client(
+            transport=httpx.HTTPTransport(uds=str(socket)), base_url="http://autonomy"
+        ) as client:
+            for _ in range(50):
+                ready = client.get("/ready").json()
+                if ready["accepting"]:
+                    break
+                time.sleep(0.02)
+            assert ready["accepting"] and ready["active_workflows"] == 0
 
         row = store.operation(identity, op["id"])
         another = store.reserve(
