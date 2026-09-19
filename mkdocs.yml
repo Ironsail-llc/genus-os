@@ -84,6 +84,7 @@ exclude_docs: |
   !/reference/cli.md
   !/reference/configuration.md
   !/TOOLS.md
+  !/SALES_INTELLIGENCE.md
   !/PLUGINS.md
   !/channels/telegram.md
   !/CONNECTORS.md
@@ -136,6 +137,7 @@ nav:
       - Settings: reference/configuration.md
   - Operating:
       - Tools: TOOLS.md
+      - Sales intelligence: SALES_INTELLIGENCE.md
       - Plugins: PLUGINS.md
       - Telegram channel: channels/telegram.md
       - Connectors: CONNECTORS.md

@@ -157,6 +157,10 @@ tell you everything is fine.
 
 ## Where to look when something is wrong
 
+For governed prospect research and outreach, open **Sales** and follow
+[Sales intelligence](../SALES_INTELLIGENCE.md). Its deployment gates distinguish
+automated contract tests from a verified live sales pilot.
+
 | Symptom | Start here |
 |---|---|
 | Anything at all, first response | `genus doctor` |

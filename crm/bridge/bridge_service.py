@@ -24,6 +24,7 @@ import logging
 
 import httpx
 from fastapi import FastAPI
+from robothor.sales.api import router as sales_router
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +161,7 @@ app.add_middleware(CorrelationMiddleware)
 
 # Routers
 app.include_router(health_router)
+app.include_router(sales_router)
 app.include_router(auth_router)
 app.include_router(agents_router)
 app.include_router(people_router)

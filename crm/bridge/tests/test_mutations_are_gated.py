@@ -35,6 +35,13 @@ MUTATION_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 # Each reason cites the middleware clause that actually constrains the route;
 # without such a clause the route must be gated instead of listed here.
 JUSTIFIED_WITHOUT_OPERATOR_GATE: dict[str, str] = {
+    "/api/sales": (
+        "Tenant-scoped human sales console: _authorization_denial() rejects services "
+        "and non-owner/admin callers; require_sales_operator() repeats the human "
+        "gate and derives every actor and tenant from verified auth. The platform-global "
+        "require_operator() would incorrectly forbid another tenant's own sales team. "
+        "Covered by robothor/sales/tests/test_api.py."
+    ),
     "/api/auth": (
         "Public session bootstrap/rotation — AuthMiddleware._PUBLIC_PATHS lists "
         "/api/auth/sso|refresh|logout and _authorization_denial() returns None for "
