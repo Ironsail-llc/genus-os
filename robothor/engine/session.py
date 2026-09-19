@@ -206,6 +206,7 @@ class AgentSession:
             status=RunStatus.PENDING,
         )
         self.messages: list[dict[str, Any]] = []
+        self.response_format: str = "text"
         # Unified identity context (robothor.identity) for the human on the
         # other end of this run — set by AgentRunner.execute() after
         # precedence resolution (explicit kwarg / webchat resolve / legacy

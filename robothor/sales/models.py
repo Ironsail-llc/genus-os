@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
@@ -48,7 +48,7 @@ class Evidence(Contract):
 class Dossier(Contract):
     buying_case: str = Field(min_length=1, max_length=80)
     evidence: list[Evidence] = Field(default_factory=list, max_length=200)
-    criteria: dict[str, list[str]] = Field(default_factory=dict)
+    criteria: dict[str, Annotated[list[str], Field(min_length=1)]] = Field(default_factory=dict)
     services: list[str] = Field(default_factory=list)
     locations: list[str] = Field(default_factory=list)
     providers: list[str] = Field(default_factory=list)

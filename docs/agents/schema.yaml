@@ -49,6 +49,11 @@ recommended:
     temperature:
       type: number
       default: 0.3
+    response_format:
+      type: string
+      enum: [text, json_object]
+      default: text
+      description: Request one JSON object for final content; business schema validation remains required.
     reasoning_effort:
       type: string
       default: medium
