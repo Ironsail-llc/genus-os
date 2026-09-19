@@ -14,6 +14,7 @@ import { CalibrationReview } from "@/components/sales/calibration-review";
 import { QualificationAssessment, type Assessment } from "@/components/sales/qualification-assessment";
 import { PipedriveIdentity } from "@/components/sales/pipedrive-identity";
 import { ProspectRecovery } from "@/components/sales/prospect-recovery";
+import { SalesReports } from "@/components/sales/sales-reports";
 import { ResearchRequests } from "@/components/sales/research-requests";
 
 const API = "/api/bridge/api/sales";
@@ -45,6 +46,7 @@ export function SalesView({ visible, role }: { visible: boolean; role?: string |
   const [showLibrary, setShowLibrary] = useState(false);
   const [showCalibration, setShowCalibration] = useState(false);
   const [showRequests, setShowRequests] = useState(false);
+  const [showReports, setShowReports] = useState(false);
   const permitted = isOperatorRole(role);
   const refresh = useCallback(async () => {
     const latest = await apiFetch<Overview>(API);
@@ -86,6 +88,7 @@ export function SalesView({ visible, role }: { visible: boolean; role?: string |
         </Button>)}</div>
       <p className="text-sm text-muted-foreground">Every outbound message requires individual approval. Provider acceptance and confirmed delivery are tracked separately.</p>
       <div className="flex flex-wrap gap-2">
+        <Button variant="outline" aria-expanded={showReports} onClick={() => setShowReports(!showReports)}>Sales intelligence reports</Button>
         <Button variant="outline" aria-expanded={showRequests} onClick={() => setShowRequests(!showRequests)}>Research requests</Button>
         <Button variant="outline" aria-expanded={showBusiness} onClick={() => setShowBusiness(!showBusiness)}>Review imported practices</Button>
         <Button variant="outline" aria-expanded={showReads} onClick={() => setShowReads(!showReads)}>Inspect provider reads</Button>
@@ -101,6 +104,7 @@ export function SalesView({ visible, role }: { visible: boolean; role?: string |
       {showSettings && <PilotSettings onChanged={refresh} />}
       {showLibrary && <SalesLibrary onChanged={refresh} />}
       {showCalibration && <CalibrationReview />}
+      {showReports && <SalesReports />}
       {showRequests && <ResearchRequests buyingCases={Object.keys((data.settings.active_policy_versions as Record<string, string> | undefined) ?? {})} />}
       <div className="grid gap-5 xl:grid-cols-2">
         <div className="space-y-3">

@@ -30,6 +30,7 @@ from robothor.sales.pipedrive_identity import (  # noqa: TC001
 )
 from robothor.sales.providers import ProviderError
 from robothor.sales.recovery import Recovery, RecoveryChange  # noqa: TC001
+from robothor.sales.reporting import Reports
 from robothor.sales.requests import RequestChange, Requests, ResearchRequest  # noqa: TC001
 from robothor.sales.service import Sales
 
@@ -506,3 +507,24 @@ async def adopt_pipedrive_identity(prospect_id: UUID, body: IdentityAdoption, re
         raise HTTPException(status_code=409, detail=str(exc)) from None
     except ProviderError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from None
+
+
+@router.get("/reports")
+@domain_errors
+def sales_reports(request: Request, after: UUID | None = None):
+    service, _ = require_sales_operator(request)
+    return Reports(service).list(str(after) if after else None)
+
+
+@router.get("/reports/latest")
+@domain_errors
+def latest_sales_report(request: Request):
+    service, _ = require_sales_operator(request)
+    return Reports(service).latest()
+
+
+@router.get("/reports/{report_id}")
+@domain_errors
+def sales_report(report_id: UUID, request: Request):
+    service, _ = require_sales_operator(request)
+    return Reports(service).get(str(report_id))

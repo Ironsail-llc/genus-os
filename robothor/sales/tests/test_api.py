@@ -517,3 +517,12 @@ def test_pipedrive_identity_api_requires_human_and_exact_packet(client, monkeypa
         body["expected_hash"],
         "operator:user-1",
     )
+
+
+def test_report_api_requires_a_human_operator_and_uses_authenticated_tenant(client, monkeypatch):
+    from robothor.sales.reporting import Reports
+    c, calls = client
+    monkeypatch.setattr(Reports, "latest", lambda self: {"tenant": self.tenant})
+    for headers in ({}, {"x-test-role": "member"}, {"x-test-role": "admin", "x-test-service": "yes"}):
+        assert c.get("/api/sales/reports/latest", headers=headers).status_code == 403
+    assert c.get("/api/sales/reports/latest", headers={"x-test-role": "admin"}).json() == {"tenant": "tenant-a"}

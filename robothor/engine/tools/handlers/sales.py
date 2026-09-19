@@ -45,6 +45,15 @@ def handler(name):
             return {"error": "Sales queue execution requires a native service workflow identity"}
         service = Sales(ctx.tenant_id)
         try:
+            if name == "sales_get_report":
+                from robothor.sales.reporting import Reports
+
+                reports = Reports(service)
+                return (
+                    await asyncio.to_thread(reports.get, str(parsed.report_id))
+                    if parsed.report_id
+                    else await asyncio.to_thread(reports.latest)
+                )
             if name in {"sales_create_request", "sales_get_request", "sales_get_workspace"}:
                 from robothor.sales.requests import Requests
 
