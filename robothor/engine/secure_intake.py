@@ -20,9 +20,14 @@ from robothor.autonomy.models import ResourceInput
 from robothor.autonomy.store import AutonomyStore
 
 if TYPE_CHECKING:
+    from typing import TypeAlias
+
     from aiogram.types import Message
 
-    from robothor.engine.telegram import TelegramBot
+    from robothor.engine.telegram_attachments import TelegramAttachmentsMixin
+    from robothor.engine.telegram_handlers import TelegramHandlersMixin
+
+    IntakeHost: TypeAlias = TelegramAttachmentsMixin | TelegramHandlersMixin
 
 _COMMAND = re.compile(r"^/secure(?:@[a-zA-Z0-9_]+)?(?:\s|$)", re.IGNORECASE)
 _HELP = (
@@ -49,7 +54,7 @@ def _parse(text: str) -> tuple[EnrollmentRequest, str]:
     return EnrollmentRequest(kind=kind, origin=origin), rest  # type: ignore[arg-type]
 
 
-async def intercept(bot: TelegramBot, message: Message, *, attachment: bool = False) -> bool:
+async def intercept(bot: IntakeHost, message: Message, *, attachment: bool = False) -> bool:
     text = (message.caption if attachment else message.text) or ""
     if not is_secure(text):
         return False
@@ -117,7 +122,7 @@ async def intercept(bot: TelegramBot, message: Message, *, attachment: bool = Fa
     return True
 
 
-def collect_album(bot: TelegramBot, message: Message) -> None:
+def collect_album(bot: IntakeHost, message: Message) -> None:
     """Hold album metadata until its caption arrives, before downloading any member.
 
     Secure enrollment supports individual files. A batch with a secure caption is
@@ -137,7 +142,7 @@ def collect_album(bot: TelegramBot, message: Message) -> None:
         pending["private"] = True  # refuse an unbounded or incomplete batch
 
 
-async def _flush_intake(bot: TelegramBot, key: tuple[str, str]) -> None:
+async def _flush_intake(bot: IntakeHost, key: tuple[str, str]) -> None:
     from robothor.engine.telegram_attachments import ALBUM_WINDOW_SECONDS
 
     mine = asyncio.current_task()
