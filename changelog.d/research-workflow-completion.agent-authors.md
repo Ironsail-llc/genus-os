@@ -1,0 +1,1 @@
+Native research now ends the parent directly from the broker’s validated result or failure, avoiding an unnecessary final model call. Successful workflow-authored output has a distinct checkpoint; child provenance, final output validation and recovery remain intact. See `docs/SALES_INTELLIGENCE.md`.

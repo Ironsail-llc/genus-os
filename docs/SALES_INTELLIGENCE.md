@@ -758,3 +758,11 @@ become a durable fragment; recovery reapplies source and criterion checks.
 An evidence-free result must explain its unknowns and cannot establish fit.
 Provider JSON conformance and successful correction do not establish semantic
 research quality; human qualification calibration remains required.
+
+When the research broker finishes, the owning parent ends from the deterministic
+merged result or explicit bundle failure. It does not buy another model call to
+restate the broker result. Native run history marks successful final content as
+workflow-authored, and retains all child IDs and provenance. A broker rejection
+before any bundle starts can still receive normal agent correction. Failed or
+cancelled children never become a successful bundle; partial validated fragments
+remain available for an authorized recovery attempt.

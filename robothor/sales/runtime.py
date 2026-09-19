@@ -51,6 +51,7 @@ class NativeStageRunner:
         from robothor.engine.required_tool import required_tool_scope
         from robothor.engine.tool_observation import tool_observation_scope
         from robothor.engine.tools.handlers.spawn import get_runner
+        from robothor.engine.workflow_completion import workflow_completion_scope
         from robothor.sales.research_fanout import research_scope
         from robothor.sales.research_manifest import prepare_research
         from robothor.sales.research_sources import ResearchSources
@@ -98,6 +99,9 @@ class NativeStageRunner:
         with (
             budget_scope(budget),
             research_scope(fanout),
+            workflow_completion_scope(
+                tenant_id, agent_id, fanout.completion if fanout is not None else lambda: None
+            ),
             tool_observation_scope(
                 fanout.sources.observe if fanout is not None else None,
                 names={"web_fetch", "web_render"} if fanout is not None else set(),
@@ -122,8 +126,8 @@ class NativeStageRunner:
         # omitted from normal run token accounting. Unknown usage stays charged.
         result.total_cost_usd = max(result.total_cost_usd, budget.charged_units / 1e6)
         if fanout is not None:
-            # Preserve the native parent's raw output in its run record. Only
-            # the validated child merge is the business-stage deliverable.
+            # Retain the native parent's workflow-authored result and checkpoint.
+            # Only the validated child merge is the business-stage deliverable.
             result = StageResult(str(result.id), str(result.status), result.total_cost_usd)
             if str(result.status) == "completed" and fanout.dossier is not None:
                 result.output_text = fanout.dossier.model_dump_json()

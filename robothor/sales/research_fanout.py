@@ -186,6 +186,16 @@ class ResearchFanout:
                 )
             self.parts[topic], self.children[topic] = part, receipt
 
+    def completion(self):
+        """Called only after the owning parent's complete native tool turn."""
+        from robothor.engine.workflow_completion import WorkflowCompletion
+
+        if not self.started:
+            return None
+        if self.dossier is None:
+            return WorkflowCompletion(error="Research bundle did not complete all validated topics")
+        return WorkflowCompletion(output=json.dumps(self.result()))
+
     def result(self):
         return {"dossier": self.dossier.model_dump(mode="json"), "provenance": self.provenance}
 
