@@ -1053,6 +1053,14 @@ The validator also checks finalization output before marking a run complete.
 Validators must be deterministic and side-effect-free. The scope closes for
 inherited tasks when its owner exits and does not affect other concurrent runs.
 
+A workflow whose native tool already computes its final result can install a
+trusted `workflow_completion_scope` from `robothor.engine.workflow_completion`.
+After the complete tool turn, its owning tenant/agent can resolve to final text
+or a failure. A success records a `workflow_completion` checkpoint with
+`origin=trusted_workflow`; it does not fabricate an LLM call. Ordinary final
+output validation remains active. This is an internal callback, not a tool
+argument, and it cannot complete child runs or survive the scope's exit.
+
 For a model whose backends have different reliability or tool support, set
 `model.provider_order` to a mapping from its exact LiteLLM OpenRouter path to an
 ordered, nonempty list of provider slugs. Base slugs include endpoint variants;

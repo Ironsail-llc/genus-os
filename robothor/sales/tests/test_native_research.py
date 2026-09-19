@@ -257,6 +257,14 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
             ),
         )
         await get_task_registry().drain(timeout=10)
+    parent_calls = [
+        call
+        for call in provider_calls
+        if any(
+            tool["function"]["name"] == "sales_research_parallel" for tool in call.get("tools", [])
+        )
+    ]
+    assert len(parent_calls) == 1
     if ignore_requirement:
         assert ignored_answers == [True]
         assert result.status == "failed"
@@ -275,7 +283,7 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
     assert result.status == "completed", result.error_message
     assert len(Dossier.model_validate_json(result.output_text).evidence) == 3
     assert len([call for call in provider_calls if call.get("tools")]) == (
-        11 if citation_fault == "repair_excerpt" else 8
+        10 if citation_fault == "repair_excerpt" else 7
     )
     assert result.total_cost_usd == pytest.approx(len(provider_calls) * 0.001)
     assert set(fetched) == {"https://clinic.example.com/" + topic for topic in TOPICS}
