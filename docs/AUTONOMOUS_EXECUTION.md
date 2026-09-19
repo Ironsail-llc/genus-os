@@ -96,16 +96,31 @@ Use the existing `browser` tool with `action="autonomy"` and `request`:
 
 A proposal names `origin`, `action` (`account`, `login`, `application`, `purchase`,
 `subscription`), `purpose`, `idempotency_key`, `amount_minor`, `currency`,
-`recurring_minor` and `annual_commitment_minor`. Money is integer minor units.
+`recurring_minor`, `annual_commitment_minor` and optional `recurrence`. Money is integer minor units.
+Recurring charges require `recurrence` with `interval_months` (1, 2, 3, 6 or 12),
+`next_charge_on` (ISO date), and optional `ends_on`. New first renewals must be
+within a year. Month-end billing keeps its original day, clamped to shorter months.
 A subscription requires its annual commitment. Per-purchase, monthly total,
 per-recurring-charge and per-membership annual caps are distinct. Monthly
 accounting includes committed purchases and unresolved reservations across the
-person's grants; it is not an issuer-side card limit.
+person's grants plus recorded renewals due in that UTC calendar month. Future
+commitments are projected across 25 calendar months, covering a new subscription's
+first full billing cycle; free trials cannot overbook a later month. Completed
+memberships remain commitments after the initial purchase rolls out of the current
+month. Missing legacy renewal dates block new spending until resolved. Status
+returns projections separately from actual settlement; this is not an issuer-side
+card limit.
 
 An execution plan identifies the URL, field selectors with resource IDs and
 field names, checkboxes, submit selector, and a new, specific success marker.
 Payment plans also identify visible current, recurring and annual totals as
-applicable. Even a zero-charge checkout must show a matching zero total.
+applicable. Recurring plans also require `recurrence_interval_selector` and
+`next_charge_selector`, plus `recurrence_end_selector` when an end date is declared.
+The broker compares those visible terms to the proposal before filling and again
+before submitting. Date selectors must identify an ISO date or an unambiguous
+English month-name date; interval selectors identify monthly, quarterly, yearly
+or an explicit “every N months” label. Even a zero-charge checkout must show a
+matching zero total.
 The broker validates origin and totals again immediately before clicking.
 Multi-step applications use a separate operation for each meaningful step,
 with the saved account session carried forward. File upload accepts an enrolled

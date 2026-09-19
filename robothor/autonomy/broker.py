@@ -17,7 +17,7 @@ import json
 import re
 import struct
 import time
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlsplit
@@ -67,6 +67,9 @@ class ExecutionPlan(StrictModel):
     amount_selector: str | None = Field(default=None, max_length=500)
     recurring_selector: str | None = Field(default=None, max_length=500)
     annual_selector: str | None = Field(default=None, max_length=500)
+    recurrence_interval_selector: str | None = Field(default=None, max_length=500)
+    next_charge_selector: str | None = Field(default=None, max_length=500)
+    recurrence_end_selector: str | None = Field(default=None, max_length=500)
     session_resource_id: UUID | None = None
     verification_link_id: UUID | None = None
     challenge: Challenge | None = None
@@ -232,6 +235,7 @@ class BrowserBroker:
         return locator
 
     async def _prices(self, page: Page, proposal: WebOperation, plan: ExecutionPlan) -> None:
+        await self._recurrence(page, proposal, plan)
         for amount, selector, required in [
             (
                 proposal.amount_minor,
@@ -247,6 +251,50 @@ class BrowserBroker:
                 locator = await self._unique(page.locator(selector))
                 if price_minor(await locator.inner_text(), proposal.currency) != amount:
                     raise ValueError("price_changed")
+
+    async def _recurrence(self, page: Page, proposal: WebOperation, plan: ExecutionPlan) -> None:
+        terms = proposal.recurrence
+        if not proposal.recurring_minor:
+            return
+        if not terms or not plan.recurrence_interval_selector or not plan.next_charge_selector:
+            raise ValueError("renewal_evidence_required")
+        interval = await self._unique(page.locator(plan.recurrence_interval_selector))
+        label = " ".join((await interval.inner_text()).strip().lower().split())
+        periods = {
+            "monthly": 1,
+            "every month": 1,
+            "quarterly": 3,
+            "every quarter": 3,
+            "annually": 12,
+            "annual": 12,
+            "yearly": 12,
+            "every year": 12,
+        }
+        for months in (1, 2, 3, 6, 12):
+            periods[f"every {months} month" + ("s" if months != 1 else "")] = months
+        if periods.get(label) != terms.interval_months:
+            raise ValueError("recurrence_changed")
+        for expected, selector in (
+            (terms.next_charge_on, plan.next_charge_selector),
+            (terms.ends_on, plan.recurrence_end_selector),
+        ):
+            if expected is None:
+                continue
+            if not selector:
+                raise ValueError("renewal_evidence_required")
+            value = (await (await self._unique(page.locator(selector))).inner_text()).strip()
+            parsed = None
+            try:
+                parsed = date.fromisoformat(value)
+            except ValueError:
+                for pattern in ("%B %d, %Y", "%b %d, %Y", "%d %B %Y", "%d %b %Y"):
+                    try:
+                        parsed = datetime.strptime(value, pattern).replace(tzinfo=UTC).date()
+                        break
+                    except ValueError:
+                        continue
+            if parsed != expected:
+                raise ValueError("renewal_date_changed")
 
     async def _field(
         self,

@@ -142,3 +142,91 @@ def test_profile_accepts_reusable_application_answers(store, identity):
     )
     saved = store.consume_resource(identity, resource["id"], "https://shop.example", kind="profile")
     assert saved["answers"]["membership_reason"] == "Meet other designers"
+
+
+def recurring_policy():
+    return policy().model_copy(
+        update={
+            "actions": frozenset({"purchase", "subscription"}),
+            "recurring_minor": 1000,
+            "annual_minor": 12000,
+        }
+    )
+
+
+def subscription(key, *, days=40):
+    return WebOperation(
+        origin="https://shop.example",
+        action="subscription",
+        purpose="Requested membership",
+        idempotency_key=key,
+        amount_minor=0,
+        recurring_minor=600,
+        annual_commitment_minor=7200,
+        recurrence={
+            "interval_months": 1,
+            "next_charge_on": (datetime.now(UTC) + timedelta(days=days)).date(),
+        },
+    )
+
+
+def test_free_trials_cannot_overbook_a_future_month_across_grants(store, identity):
+    first = store.create_grant(identity, recurring_policy())
+    second = store.create_grant(identity, recurring_policy())
+    op = store.reserve(identity, first["id"], "main", subscription("trial-first"))
+    store.begin_submit(identity, op["id"], "main")
+    store.finish(identity, op["id"], "completed", {"confirmation_sha256": "a" * 64})
+    with pytest.raises(PermissionError, match="monthly_commitment_limit"):
+        store.reserve(identity, second["id"], "main", subscription("trial-second"))
+    assert (
+        store.reserve(identity, second["id"], "main", proposal("current-one-off", 1000))["state"]
+        == "reserved"
+    )
+
+
+def test_current_month_renewal_reduces_new_purchase_budget(store, identity):
+    grant = store.create_grant(identity, recurring_policy())
+    store.reserve(identity, grant["id"], "main", subscription("current-renewal", days=0))
+    with pytest.raises(PermissionError, match="monthly_limit"):
+        store.reserve(identity, grant["id"], "main", proposal("new-one-off", 500))
+
+
+def test_new_recurring_commitment_requires_renewal_dates(store, identity):
+    grant = store.create_grant(identity, recurring_policy())
+    with pytest.raises(PermissionError, match="renewal_schedule_missing"):
+        store.reserve(
+            identity,
+            grant["id"],
+            "main",
+            subscription("missing-schedule").model_copy(update={"recurrence": None}),
+        )
+
+
+def test_cancelling_unsubmitted_trial_releases_future_commitment(store, identity):
+    grant = store.create_grant(identity, recurring_policy())
+    op = store.reserve(identity, grant["id"], "main", subscription("trial-cancelled"))
+    store.finish(identity, op["id"], "cancelled")
+    assert (
+        store.reserve(identity, grant["id"], "main", subscription("trial-replacement"))["state"]
+        == "reserved"
+    )
+
+
+def test_concurrent_free_trial_reservations_cannot_overbook_renewals(store, identity):
+    grant = store.create_grant(identity, recurring_policy())
+
+    def reserve(key):
+        try:
+            return store.reserve(identity, grant["id"], "main", subscription(key))["state"]
+        except PermissionError as exc:
+            return str(exc)
+
+    with ThreadPoolExecutor(2) as pool:
+        outcomes = list(pool.map(reserve, ["trial-concurrent-a", "trial-concurrent-b"]))
+    assert sorted(outcomes) == ["monthly_commitment_limit", "reserved"]
+    forecast = store.spending_projection(identity)
+    month = (datetime.now(UTC) + timedelta(days=40)).strftime("%Y-%m")
+    assert forecast["months"]["USD"][month] == 600
+    assert (
+        store.spending_projection(identity.model_copy(update={"owner_id": "bob"}))["months"] == {}
+    )

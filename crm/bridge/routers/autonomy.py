@@ -65,6 +65,7 @@ async def status(request: Request):
                 "settings": (await asyncio.to_thread(store.settings, scope)).model_dump(),
                 "resources": await asyncio.to_thread(store.resources, scope),
                 "grants": await asyncio.to_thread(store.grants, scope),
+                "spending": await asyncio.to_thread(store.spending_projection, scope),
             }
         )
     except Exception:

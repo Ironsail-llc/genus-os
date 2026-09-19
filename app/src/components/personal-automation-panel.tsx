@@ -3,11 +3,15 @@
 import { useEffect, useState } from "react";
 
 type Resource = { id: string; kind: string; label: string; origin?: string };
-type Grant = { id: string; revoked: boolean; policy: { origins: string[]; allow_any_website?: boolean } };
+type Grant = { id: string; revoked: boolean; policy: { origins: string[]; allow_any_website?: boolean;
+  currency: string; per_purchase_minor: number; monthly_minor: number; recurring_minor: number; annual_minor: number } };
 type Settings = { enabled: boolean; managed_browser: boolean; payment_processing: boolean;
   payment_assessment_reference: string };
-type Status = { resources: Resource[]; grants: Grant[]; settings: Settings };
+type Status = { resources: Resource[]; grants: Grant[]; settings: Settings;
+  spending?: { state: string; months: Record<string, Record<string, number>> } };
 type Operation = { id: string; state: string; proposal: { purpose: string; origin: string } };
+const moneyDisplay = (minor: number, currency: string) =>
+  new Intl.NumberFormat("en-US", { style: "currency", currency }).format(minor / 100);
 const inputClass = "w-full rounded border bg-background p-2";
 
 async function api(path: string, method = "GET", data?: unknown) {
@@ -174,9 +178,24 @@ export function PersonalAutomationPanel() {
         <button className="rounded bg-primary px-4 py-2 text-primary-foreground" disabled={busy || !status}>Grant authority</button>
       </form>
       {status?.grants.filter(grant => !grant.revoked).map(grant => <div className="flex justify-between rounded border p-3" key={grant.id}>
-        <span>{grant.policy.allow_any_website ? "Any public HTTPS website" : grant.policy.origins.join(", ")}</span><button disabled={busy} onClick={() => void act(() => api(`grants/${grant.id}`, "DELETE"))}>Revoke</button>
+        <div><p>{grant.policy.allow_any_website ? "Any public HTTPS website" : grant.policy.origins.join(", ")}</p>
+          <p className="text-sm">Per purchase: {moneyDisplay(grant.policy.per_purchase_minor, grant.policy.currency)} · Monthly total: {moneyDisplay(grant.policy.monthly_minor, grant.policy.currency)}</p>
+          <p className="text-sm">Per recurring charge: {moneyDisplay(grant.policy.recurring_minor, grant.policy.currency)} · Annual commitment: {moneyDisplay(grant.policy.annual_minor, grant.policy.currency)}</p>
+        </div><button disabled={busy} onClick={() => void act(() => api(`grants/${grant.id}`, "DELETE"))}>Revoke</button>
       </div>)}
     </section>
+    {status?.spending && Object.keys(status.spending.months).length > 0 && <section className="space-y-3">
+      <h2 className="text-lg font-medium">Projected charges</h2>
+      <p className="text-sm">Includes submitted purchases, pending tasks and recorded renewals. These are estimates, not bank settlement records. Merchants can charge saved cards independently of Robothor.</p>
+      {Object.entries(status.spending.months).map(([currency, months]) => <details key={currency}>
+        <summary>Monthly projection ({currency})</summary>
+        <table className="w-full text-sm"><thead><tr><th className="text-left">Month (UTC)</th><th className="text-right">Projected total</th></tr></thead>
+          <tbody>{Object.entries(months).map(([month, amount]) => <tr key={month}>
+            <td>{month}</td><td className="text-right">{moneyDisplay(amount, currency)}</td>
+          </tr>)}</tbody></table>
+      </details>)}
+    </section>}
+    {status?.spending?.state === "renewal_schedule_missing" && <p role="status">A membership is missing its renewal schedule. New spending is paused until its dates are recorded.</p>}
     {status && <section className="space-y-3">
       <h2 className="text-lg font-medium">Execution</h2>
       <label className="flex gap-2"><input type="checkbox" checked={status.settings.enabled} disabled={busy}

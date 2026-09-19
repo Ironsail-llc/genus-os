@@ -33,6 +33,7 @@ async def handle(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "settings": settings.model_dump(),
                 "resources": await asyncio.to_thread(store.resources, scope),
                 "grants": await asyncio.to_thread(store.grants, scope),
+                "spending": await asyncio.to_thread(store.spending_projection, scope),
                 "operations": await asyncio.to_thread(store.recent_operations, scope),
                 "setup_path": "/account/autonomy",
             }
