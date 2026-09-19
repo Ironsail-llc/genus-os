@@ -11,6 +11,17 @@ classification and activation guidance. Discovery admits at most 20 new domains
 per configured local day by default and stops at the review backlog limit.
 Candidates already known to Genus do not consume another admission.
 
+Native scouts must complete a real `web_search` before returning a candidate
+batch. The required tool turn precedes final-answer JSON formatting; afterward,
+the native runner requests and validates the strict `CandidateBatch` schema.
+Each source URL and company website domain must occur in that run's captured
+search or successful page-read results. The supplied batch allowance and domain
+deduplication are validated before completion. A real empty search can return an
+empty batch; failed searches cannot fabricate successful discovery. The durable
+scout receipt retains source observations and the native run identity. These
+checks establish observed URLs, not business fit, which still requires research
+and independent qualification.
+
 When `agents.qualify` is configured, qualification runs that native agent before
 calculating a score. It receives the published policy definitions and captured
 passages without the researcher's boolean labels or earlier scores. Its strict

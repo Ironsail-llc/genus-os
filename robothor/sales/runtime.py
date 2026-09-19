@@ -56,6 +56,7 @@ class NativeStageRunner:
         from robothor.sales.research_fanout import research_scope
         from robothor.sales.research_manifest import prepare_research
         from robothor.sales.research_sources import ResearchSources
+        from robothor.sales.scout_sources import scout_scope
 
         runner = get_runner()
         if runner is None:
@@ -112,6 +113,7 @@ class NativeStageRunner:
                 "sales_research_parallel" if fanout is not None else None,
                 lambda: fanout is not None and not fanout.started,
             ),
+            scout_scope(stage, tenant_id, agent_id, message) as scout,
         ):
             result = await runner.execute(
                 agent_id=agent_id,
@@ -127,6 +129,15 @@ class NativeStageRunner:
         # Includes retries, failed attempts, finalizers and auxiliary model calls
         # omitted from normal run token accounting. Unknown usage stays charged.
         result.total_cost_usd = max(result.total_cost_usd, budget.charged_units / 1e6)
+        if scout is not None and str(result.status) == "completed":
+            batch, proof = scout.attest(str(result.id), result.output_text)
+            result = StageResult(
+                str(result.id),
+                str(result.status),
+                result.total_cost_usd,
+                output_text=batch.model_dump_json(),
+                stage_provenance={"discovery_sources": proof},
+            )
         if fanout is not None:
             # Retain the native parent's workflow-authored result and checkpoint.
             # Only the validated child merge is the business-stage deliverable.

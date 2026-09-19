@@ -97,10 +97,13 @@ class ScoutWorker(StructuredWorker):
                     "discovery.reason",
                     detail={"reason": candidate.reason, "run_id": str(run_id)},
                 )
+            receipt = {"prospect_ids": sorted(set(ids)), "run_id": str(run_id)}
+            if (job.get("result") or {}).get("provenance"):
+                receipt["provenance"] = job["result"]["provenance"]
             self.sales.ops.complete(
                 job["id"],
                 job["lease_token"],
-                {"prospect_ids": sorted(set(ids)), "run_id": str(run_id)},
+                receipt,
                 cur=cur,
             )
 
