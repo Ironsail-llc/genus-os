@@ -14,7 +14,7 @@ Candidates already known to Genus do not consume another admission.
 **Implementation status:** the domain, review API, view, provider adapters and
 explicitly constructed workers are available as a foundation. Importing the
 package does not install a schedule, activate integrations or send email.
-Automated deployment, provider-state and subscription reconciliation,
+Live deployment verification, provider-state and subscription reconciliation,
 provider billing reconciliation, and the real pilot remain deployment gates. Keep integration switches off until those gates are satisfied.
 
 The [fleet artifact compiler](deployment.md#verified-fleet-artifacts) can package
@@ -41,9 +41,9 @@ checkpoint. An admitted run retains its captured knowledge across subsequent
 file changes; a later admission verifies the artifact again.
 
 This selection pins agent configuration and knowledge for native sales stages.
-It does not yet install the artifact, load its workflow schedules, activate
-plugins, verify the deployed platform revision or coordinate database settings
-with runtime cutover. Those remain deployment gates. Live business context,
+The durable coordinator described below installs the selected workflow schedules
+and coordinates database settings with runtime cutover. It verifies the deployed
+platform and already installed plugins; staging alone does not perform these steps. Live business context,
 platform behavioral rules and the skill catalog remain runtime inputs rather
 than being frozen by the knowledge snapshot.
 
@@ -61,8 +61,10 @@ monotonic revision, and managed release selection, agents and workflow bindings
 can only change through this coordinator. Other operator settings remain editable;
 a newer revision makes the prepared selection stale. Deployment and rollback keep
 integration switches off. The native source-checkout verifier now integrates
-daemon restart recovery, installed service-plugin checks and `/ready`. Public
-deployment controls and real production cutover remain pending.
+daemon restart recovery, installed service-plugin checks and `/ready`.
+[Helm deployment controls](deployment.md#helm-sales-deployment-controls) now expose
+inspection, preparation, commit, restoration and rollback to verified human
+operators. Provider connectivity and real production cutover remain separate gates.
 
 Managed release queues additionally require the native
 [schedule generation](deployment.md#managed-workflow-schedule-generations)
