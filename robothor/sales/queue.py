@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from robothor.operations.store import Conflict
+from robothor.sales.business_queue import BusinessWorker
 from robothor.sales.delivery import DeliveryWorker, StopWorker
 from robothor.sales.ingestion import InstantlyInboxWorker
 from robothor.sales.models import SalesSettings
@@ -47,6 +48,7 @@ class QueueDriver:
                 "stop": (StopWorker, "tick"),
                 "inbox": (InstantlyInboxWorker, "tick"),
                 "reconcile": (ReconciliationWorker, "drain"),
+                "business": (BusinessWorker, "tick"),
             }
             if stage not in workers:
                 raise Conflict("Unknown sales queue stage")

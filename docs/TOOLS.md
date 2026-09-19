@@ -153,6 +153,11 @@ general mail-send tools. Writes are refused in benchmarks; tenant identity comes
 from the authenticated tool context. See [Sales intelligence](SALES_INTELLIGENCE.md)
 for deployment gates and provider ownership.
 
+The queue's `business` stage reads one page through an explicitly configured
+plugin source. It requires the outcome switch and a source account, and imports
+orders only for reviewed practice bindings. It grants no customer-matching or
+outbound-message authority to an agent.
+
 Keep the queue tool out of sales agent manifests. Its trusted caller must carry
 the matching `workflow:<id>` / `service:workflow:<id>` identity and `service` role,
 and the tenant's `workflow_bindings` must authorize that workflow for the requested

@@ -205,6 +205,7 @@ QueueStage = Literal[
     "stop",
     "inbox",
     "reconcile",
+    "business",
 ]
 
 
@@ -214,12 +215,19 @@ class DiscoverySegment(Contract):
     query: str = Field(min_length=1, max_length=2000)
 
 
+class BusinessSource(Contract):
+    source: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,39}$")
+    account_id: str = Field(min_length=1, max_length=200, strict=True)
+    refresh_seconds: int = Field(default=21600, ge=600, le=604800, strict=True)
+
+
 class SalesSettings(Contract):
     research_enabled: StrictBool = False
     enrichment_enabled: StrictBool = False
     promotion_enabled: StrictBool = False
     sending_enabled: StrictBool = False
     outcomes_enabled: StrictBool = False
+    business_sources: list[BusinessSource] = Field(default_factory=list, max_length=10)
     review_backlog_limit: int = Field(default=100, ge=1, le=10000, strict=True)
     discovery_daily_limit: int = Field(default=20, ge=0, le=1000, strict=True)
     discovery_segments: list[DiscoverySegment] = Field(default_factory=list, max_length=50)
@@ -245,6 +253,8 @@ class SalesSettings(Contract):
             raise ValueError("Discovery window must start before it ends")
         if len({s.id for s in self.discovery_segments}) != len(self.discovery_segments):
             raise ValueError("Discovery segment IDs must be unique")
+        if len({s.source for s in self.business_sources}) != len(self.business_sources):
+            raise ValueError("Business source names must be unique")
         if any(not value.strip() for value in self.workflow_bindings.values()):
             raise ValueError("Workflow bindings require nonempty native workflow IDs")
         return self
