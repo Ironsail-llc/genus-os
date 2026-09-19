@@ -61,3 +61,9 @@ it("pages published policies so later versions can be inspected and selected", a
   fireEvent.click(await screen.findByRole("button", { name: "Load more qualification versions" }));
   expect(await screen.findByRole("option", { name: "v2" })).toBeInTheDocument();
 });
+
+it("offers packet publication from the native library panel", async () => {
+  backend(); render(<SalesLibrary onChanged={vi.fn()} />);
+  await screen.findByLabelText("Active claim library");
+  expect(screen.getByLabelText("Library review packet")).toBeInTheDocument();
+});

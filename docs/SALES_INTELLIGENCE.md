@@ -174,8 +174,28 @@ Open **Sales → Review sales library** to inspect published qualification versi
 by buying case and a published claim library. Review displays the exact weights,
 required criteria, threshold, evidence age, claim text, supporting details and
 publishing operator before selecting the versions. Large catalogs can be paged.
-This screen selects previously published records; publication still uses the human
-`POST /api/sales/policies` and `POST /api/sales/knowledge` endpoints.
+The same panel publishes a new version from a portable JSON review packet.
+
+A packet has `kind` (`qualification` or `knowledge`), `version` and `data`.
+Qualification data follows `QualificationPolicy`, with an explicit evidence
+definition for every weighted criterion in `criteria_definitions`. The packet and
+policy version labels must agree. Knowledge data includes 1–100 named text claims
+and can retain dated sources, limitations and other supporting review details.
+Packets are bounded to 128 KiB and neither the preview nor the publication path
+fetches their source URLs or executes their contents.
+
+`POST /api/sales/library/preview` validates and normalizes the packet, returning its
+canonical content and hash without storing it. After inspecting the exact content,
+the operator confirms review and supplies a reason. Publication posts that packet,
+`expected_hash` and reason to `/api/sales/library/publication`. The server rechecks
+the hash, requires a verified human operator and records the reason/hash in the
+immutable version's publication audit. It does not change active selections or
+integration switches. A changed existing version is refused; use a new label.
+
+After an uncertain response, **Check published version** reads
+`GET /api/sales/library/records/{kind}/{version}` and compares its content hash.
+It never automatically repeats publication. The legacy human `/policies` and
+`/knowledge` endpoints remain available for existing integrations.
 
 `GET /api/sales/library?kind=qualification|knowledge` lists tenant-scoped immutable
 records, ordered by version, with `after` and `limit` pagination. Selection uses

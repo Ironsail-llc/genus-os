@@ -17,6 +17,10 @@ from robothor.operations.store import Conflict
 from robothor.sales.business_repair import (
     Reassignment,  # noqa: TC001 — FastAPI resolves at runtime.
 )
+from robothor.sales.library import (  # noqa: TC001 — FastAPI resolves annotations.
+    LibraryPacket,
+    preview,
+)
 from robothor.sales.models import Contract, Draft, QualificationPolicy, SalesSettings
 from robothor.sales.service import Sales
 
@@ -112,6 +116,11 @@ class LibrarySelection(ReadRepair):
     expected_revision: int = Field(ge=0, strict=True)
     policy_versions: dict[str, str]
     knowledge_version: str = Field(max_length=80)
+
+
+class LibraryPublication(ReadRepair):
+    packet: LibraryPacket
+    expected_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
 @router.get("")
@@ -295,6 +304,36 @@ def select_library(body: LibrarySelection, request: Request):
     service, actor = require_sales_operator(request)
     service.select_library(**body.model_dump(), actor=actor)
     return service.settings_snapshot()
+
+
+@router.post("/library/preview")
+@domain_errors
+def preview_library(body: LibraryPacket, request: Request):
+    require_sales_operator(request)
+    return preview(body.model_dump(mode="json"))
+
+
+@router.get("/library/records/{kind}/{version}")
+@domain_errors
+def library_record(kind: Literal["qualification", "knowledge"], version: str, request: Request):
+    service, _ = require_sales_operator(request)
+    record = service.library_record(kind=kind, version=version)
+    if record is None:
+        raise HTTPException(404, detail="Published version not found")
+    return record
+
+
+@router.post("/library/publication")
+@domain_errors
+def publish_library(body: LibraryPublication, request: Request):
+    service, actor = require_sales_operator(request)
+    service.publish_library(
+        body.packet.model_dump(mode="json"),
+        expected_hash=body.expected_hash,
+        reason=body.reason,
+        actor=actor,
+    )
+    return {"ok": True}
 
 
 @router.post("/policies")

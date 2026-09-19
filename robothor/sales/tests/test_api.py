@@ -36,6 +36,13 @@ def client(monkeypatch):
         def select_library(self, **selection):
             calls.append((self.tenant, selection))
 
+        def publish_library(self, packet, **review):
+            calls.append((self.tenant, packet, review))
+
+        def library_record(self, **query):
+            calls.append((self.tenant, query))
+            return
+
         def retry_provider_read(self, job_id, actor, reason):
             calls.append((self.tenant, job_id, actor, reason))
 
@@ -65,6 +72,53 @@ def client(monkeypatch):
 
     app.include_router(router)
     return TestClient(app), calls
+
+
+def test_library_preview_and_publication_require_a_human_and_exact_review_hash(client):
+    c, calls = client
+    record_path = "/api/sales/library/records/knowledge/claims-1"
+    assert c.get(record_path).status_code == 403
+    assert c.get(record_path, headers={"x-test-role": "admin"}).status_code == 404
+    assert calls.pop() == ("tenant-a", {"kind": "knowledge", "version": "claims-1"})
+    packet = {
+        "kind": "knowledge",
+        "version": "claims-1",
+        "data": {"claims": {"access": "One pharmacy workflow."}},
+    }
+    for headers in (
+        {},
+        {"x-test-role": "member"},
+        {"x-test-role": "admin", "x-test-service": "yes"},
+    ):
+        assert c.post("/api/sales/library/preview", json=packet, headers=headers).status_code == 403
+    headers = {"x-test-role": "admin"}
+    response = c.post("/api/sales/library/preview", json=packet, headers=headers)
+    assert response.status_code == 200
+    reviewed = response.json()
+    assert reviewed["packet"] == packet and len(reviewed["content_hash"]) == 64
+    body = {
+        "packet": packet,
+        "expected_hash": reviewed["content_hash"],
+        "reason": "Reviewed source-backed claims",
+    }
+    path = "/api/sales/library/publication"
+    assert c.post(path, json=body).status_code == 403
+    assert c.post(path, json={**body, "actor": "forged"}, headers=headers).status_code == 422
+    assert (
+        c.post(path, json={**body, "expected_hash": "invalid"}, headers=headers).status_code == 422
+    )
+    assert c.post(path, json=body, headers=headers).status_code == 200
+    assert calls == [
+        (
+            "tenant-a",
+            packet,
+            {
+                "expected_hash": reviewed["content_hash"],
+                "reason": body["reason"],
+                "actor": "operator:user-1",
+            },
+        )
+    ]
 
 
 def test_library_catalog_and_selection_are_human_scoped(client):
