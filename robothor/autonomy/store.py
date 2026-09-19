@@ -29,6 +29,7 @@ from robothor.autonomy.models import (
     Scope,
     WebOperation,
 )
+from robothor.entity.spend_limits import within_limit
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -416,7 +417,8 @@ class AutonomyStore:
         if decision != "allow":
             return decision
         if proposal.recurring_minor and any(
-            before[key] + amount > policy.monthly_minor for key, amount in added.items()
+            not within_limit(before[key], amount, policy.monthly_minor)
+            for key, amount in added.items()
         ):
             return "monthly_commitment_limit"
         return "allow"

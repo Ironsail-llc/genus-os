@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 type Resource = { id: string; kind: string; label: string; origin?: string;
   descriptor?: { version?: number; fields?: string[]; source?: string } };
-type Grant = { id: string; revoked: boolean; policy: { origins: string[]; allow_any_website?: boolean;
+type Grant = { id: string; revoked: boolean; policy: { origins: string[]; allow_any_website?: boolean; allowed_purposes?: string[];
   currency: string; per_purchase_minor: number; monthly_minor: number; recurring_minor: number; annual_minor: number } };
 type Settings = { enabled: boolean; managed_browser: boolean; payment_processing: boolean;
   payment_assessment_reference: string };
@@ -208,6 +208,7 @@ export function PersonalAutomationPanel() {
         void act(() => api("grants", "POST", { agent_ids: String(data.get("agents")).split(",").map(s => s.trim()),
           origins: String(data.get("origins") || "").split(/[,\n]/).map(s => s.trim()).filter(Boolean),
           allow_any_website: anyWebsite,
+          allowed_purposes: String(data.get("purposes") || "").split(/\n/).map(s => s.trim()).filter(Boolean),
           frame_origins: String(data.get("frames") || "").split(/[,\n]/).map(s => s.trim()).filter(Boolean),
           actions: ["account", "login", "application", "purchase", "subscription"], currency: "USD",
           expires_at: new Date(String(data.get("expires")) + "T23:59:59Z").toISOString(),
@@ -220,6 +221,9 @@ export function PersonalAutomationPanel() {
         <label className="block">Websites, one per line<textarea name="origins" className={inputClass}
           placeholder="https://example.com" required={!anyWebsite} disabled={anyWebsite} /></label>
         <label className="block">Embedded payment providers, if needed<textarea name="frames" className={inputClass} placeholder="https://payments.example.com" /></label>
+        <label className="block">Allowed purposes, one per line<textarea name="purposes" className={inputClass}
+          maxLength={24080} placeholder="Personal memberships" /></label>
+        <p className="text-sm text-muted-foreground">Leave empty for any task covered by this grant.</p>
         <label className="block">Authority expires<input type="date" name="expires" className={inputClass} required /></label>
         {[["purchase", "Per purchase"], ["monthly", "Monthly total"], ["recurring", "Per recurring charge"], ["annual", "Annual commitment per membership"]].map(([key, title]) =>
           <label className="block" key={key}>{title} (USD)<input className={inputClass} type="number" name={key} min="0" step="0.01" defaultValue="0" required /></label>)}
@@ -227,6 +231,7 @@ export function PersonalAutomationPanel() {
       </form>
       {status?.grants.filter(grant => !grant.revoked).map(grant => <div className="flex justify-between rounded border p-3" key={grant.id}>
         <div><p>{grant.policy.allow_any_website ? "Any public HTTPS website" : grant.policy.origins.join(", ")}</p>
+          <p className="text-sm">Purposes: {grant.policy.allowed_purposes?.length ? grant.policy.allowed_purposes.join(" · ") : "Any task covered by this grant"}</p>
           <p className="text-sm">Per purchase: {moneyDisplay(grant.policy.per_purchase_minor, grant.policy.currency)} · Monthly total: {moneyDisplay(grant.policy.monthly_minor, grant.policy.currency)}</p>
           <p className="text-sm">Per recurring charge: {moneyDisplay(grant.policy.recurring_minor, grant.policy.currency)} · Annual commitment: {moneyDisplay(grant.policy.annual_minor, grant.policy.currency)}</p>
         </div><button disabled={busy} onClick={() => void act(() => api(`grants/${grant.id}`, "DELETE"))}>Revoke</button>
