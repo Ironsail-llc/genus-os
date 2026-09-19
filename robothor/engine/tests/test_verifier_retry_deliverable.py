@@ -53,6 +53,7 @@ async def test_retry_that_yields_nothing_keeps_the_original_output(monkeypatch):
     session.get_final_text.return_value = None
     config = MagicMock()
     config.verification_prompt = None
+    config.provider_order = {}
 
     out = await run_lifecycle.RunLifecycleMixin._run_verification(
         lifecycle, config, session, ["m"], [], "the report", None, None

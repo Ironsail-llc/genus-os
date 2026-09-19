@@ -1931,6 +1931,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Planning and verification honor per-agent provider routing before funded requests; qualification timeouts retain their cost-reconciliation diagnostic instead of being labeled invalid assessments.
 - Configured sales qualifier agents independently assess captured passages before code calculates scores. Version-bound checkpoints preserve original researcher claims, reject stale assessments and prevent legacy scores from bypassing the new review stage.
 - Native research selects engine-issued captured-passage references; Genus materializes exact CRM quotations and verifies selections again during recovery. Rendered pages receive the same untrusted-content boundary as fetched pages.
 - Research citation feedback identifies invalid evidence fields and distinguishes unread URLs from non-verbatim excerpts without replaying untrusted text as instructions.
