@@ -172,6 +172,17 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
                 if tool_result is None
                 else "auto"
             )
+            if tool_result is not None:
+                assert kwargs["response_format"] == {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "research_dossier",
+                        "strict": True,
+                        "schema": Dossier.model_json_schema(),
+                    },
+                }
+            else:
+                assert kwargs["response_format"] == {"type": "json_object"}
             topic = request["topic"]
             if tool_result is None and citation_fault != "no_fetch":
                 tool = (fetch_tool, {"url": "https://clinic.example.com/" + topic})

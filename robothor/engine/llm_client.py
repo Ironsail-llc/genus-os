@@ -2009,7 +2009,12 @@ class LLMClient:
         from robothor.engine.provider_routing import apply_provider_order
 
         apply_provider_order(model, kwargs)
-        if _response_format_var.get() == "json_object":
+        from robothor.engine.response_schema import response_format
+
+        schema_format = response_format()
+        if schema_format is not None:
+            kwargs["response_format"] = schema_format
+        elif _response_format_var.get() == "json_object":
             kwargs["response_format"] = {"type": "json_object"}
             kwargs["messages"] = [
                 {

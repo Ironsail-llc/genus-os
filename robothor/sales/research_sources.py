@@ -47,6 +47,7 @@ class ResearchSources:
     def child_scope(self, index):
         """A fresh native child must attempt retrieval before answering from context."""
         from robothor.engine.required_tool import required_tool_scope
+        from robothor.engine.response_schema import response_schema_scope
         from robothor.engine.tool_observation import tool_observation_scope
 
         attempted = False
@@ -67,6 +68,9 @@ class ResearchSources:
         with (
             required_tool_scope(self.first_read_tool, lambda: not attempted),
             tool_observation_scope(observe, names={"web_fetch", "web_render"}),
+            response_schema_scope(
+                "research_dossier", Dossier.model_json_schema(), ready=lambda: attempted
+            ),
         ):
             yield
 

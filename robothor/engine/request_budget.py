@@ -297,6 +297,11 @@ def openrouter_quote(kwargs, endpoints):
                 and "response_format" not in endpoint["supported_parameters"]
             ):
                 continue
+            if (
+                (kwargs.get("response_format") or {}).get("type") == "json_schema"
+                and "structured_outputs" not in endpoint["supported_parameters"]
+            ):
+                continue
             choice = kwargs.get("tool_choice")
             choice_kind = "function" if isinstance(choice, dict) else choice
             if choice_kind in ("function", "required"):

@@ -738,3 +738,12 @@ Bounded attempts honor provider order after capability and cost filtering, pin
 one endpoint and retain normal spending admission. This configuration does not
 relax child deadlines or source attestation. See the model configuration guidance
 in [Agent Builder](AGENT_BUILDER.md).
+
+After its first actual page-read attempt, each native research child sends the
+trusted Dossier schema as `response_format.type=json_schema` with strict mode.
+The initial required retrieval call keeps its normal tool contract. Only
+endpoints advertising both JSON formatting and structured outputs are admitted
+for subsequent schema requests. This requests provider-side structure, not a
+guarantee of factual correctness: Genus still parses the dossier and attests
+every citation against that child's successful retrievals. Unsupported schema
+requests, invalid JSON, missing evidence and invented quotations fail normally.
