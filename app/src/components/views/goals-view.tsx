@@ -51,6 +51,7 @@ export function GoalsView({ visible }: { visible: boolean }) {
     setGoals(data.goals); setEnabled(data.enabled); setLoaded(true);
   }, []);
 
+  const selectedId = selected?.id;
   useEffect(() => {
     if (!visible) return;
     let disposed = false;
@@ -58,12 +59,16 @@ export function GoalsView({ visible }: { visible: boolean }) {
       try {
         const data = await api();
         if (!disposed) { setGoals(data.goals); setEnabled(data.enabled); setLoaded(true); }
+        if (selectedId) {
+          const detail: Goal = (await api(`/${selectedId}`)).goal;
+          if (!disposed) setSelected(current => current?.id === detail.id && detail.version >= current.version ? detail : current);
+        }
       } catch (e) { if (!disposed) setError((e as Error).message); }
     };
     void poll();
     const timer = setInterval(() => void poll(), 5000);
     return () => { disposed = true; clearInterval(timer); };
-  }, [visible]);
+  }, [visible, selectedId]);
 
   async function perform(fn: () => Promise<void>) {
     setBusy(true); setError("");

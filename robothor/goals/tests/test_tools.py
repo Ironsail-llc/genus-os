@@ -87,3 +87,32 @@ async def test_adapter_tools_obey_goal_admission(db):  # noqa: F811
         session.call_tool.assert_not_awaited()
     finally:
         binding.reset(token)
+
+
+def test_recovery_allows_deferred_reads_but_not_writes(db):  # noqa: F811
+    store.create(db, CreateGoal(objective="Report", success_criteria=["Delivered"]), "operator")
+    g, attempt = store.claim(db)
+    with store.transaction() as cur:
+        g["recovery_required"] = True
+        store.save(cur, db, g)
+    token = binding.set(Binding(db, g["id"], attempt, run_id="root"))
+    try:
+        admit_tool("tool_call", {"name": "get_task", "arguments": {}}, ToolContext())
+        with pytest.raises(ValueError, match="inspect previous"):
+            admit_tool("tool_call", {"name": "create_task", "arguments": {}}, ToolContext())
+    finally:
+        binding.reset(token)
+
+
+def test_pursuit_tools_advertised_with_deferred_discovery():
+    from unittest.mock import patch
+
+    from robothor.engine.models import AgentConfig
+    from robothor.engine.tools.registry import ToolRegistry
+
+    registry = ToolRegistry()
+    with patch.object(registry, "should_defer", return_value=True):
+        advertised = registry.build_for_agent(
+            AgentConfig(id="main", name="Main", tools_allowed=["read_file"])
+        )
+    assert {schema["function"]["name"] for schema in advertised} >= TOOL_NAMES
