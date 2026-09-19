@@ -1548,36 +1548,39 @@ class LLMClient:
             else "text"
         )
         try:
-            if on_content or on_stream_event:
-                response = await self._call_llm_streaming(
-                    session.messages,
-                    models,
-                    tool_schemas,
-                    on_content,
-                    broken_models=broken_models,
-                    temperature=temperature,
-                    on_stream_event=on_stream_event,
-                    timeout_override=timeout_override,
-                )
-            else:
-                response = await self._call_llm(
-                    session.messages,
-                    models,
-                    tool_schemas,
-                    broken_models=broken_models,
-                    temperature=temperature,
-                    timeout_override=timeout_override,
-                )
-            if response is not None:
-                return response
-            # Every model in the chain is out. The local tier is the reason a
-            # last fallback exists, and the commonest reason a chain ends with
-            # nothing is a conversation that outgrew it — so the one thing not
-            # yet tried is the SHORTEST possible conversation. Unstreamed and
-            # untooled: all that is left to produce is a sentence for whoever
-            # is waiting. (2026-09-16: the local model had answered twelve
-            # steps of the run that ended "All models failed to respond".)
-            return await last_resort_attempt(self, session, models)
+            from robothor.engine.provider_routing import provider_order_scope
+
+            with provider_order_scope(getattr(session, "provider_order", {})):
+                if on_content or on_stream_event:
+                    response = await self._call_llm_streaming(
+                        session.messages,
+                        models,
+                        tool_schemas,
+                        on_content,
+                        broken_models=broken_models,
+                        temperature=temperature,
+                        on_stream_event=on_stream_event,
+                        timeout_override=timeout_override,
+                    )
+                else:
+                    response = await self._call_llm(
+                        session.messages,
+                        models,
+                        tool_schemas,
+                        broken_models=broken_models,
+                        temperature=temperature,
+                        timeout_override=timeout_override,
+                    )
+                if response is not None:
+                    return response
+                # Every model in the chain is out. The local tier is the reason a
+                # last fallback exists, and the commonest reason a chain ends with
+                # nothing is a conversation that outgrew it — so the one thing not
+                # yet tried is the SHORTEST possible conversation. Unstreamed and
+                # untooled: all that is left to produce is a sentence for whoever
+                # is waiting. (2026-09-16: the local model had answered twelve
+                # steps of the run that ended "All models failed to respond".)
+                return await last_resort_attempt(self, session, models)
         finally:
             _current_run_id_var.reset(run_token)
             _response_format_var.reset(format_token)
@@ -2003,6 +2006,9 @@ class LLMClient:
         kwargs.update(
             thinking_kwargs_for_call(model, kwargs["max_tokens"], reduced=thinking_reduced)
         )
+        from robothor.engine.provider_routing import apply_provider_order
+
+        apply_provider_order(model, kwargs)
         if _response_format_var.get() == "json_object":
             kwargs["response_format"] = {"type": "json_object"}
             kwargs["messages"] = [

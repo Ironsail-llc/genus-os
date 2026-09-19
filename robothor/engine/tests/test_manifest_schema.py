@@ -91,6 +91,13 @@ class TestStructuralRules:
             for issue in issues
         )
 
+    def test_provider_order_rejects_malformed_lists(self):
+        data = _valid()
+        data["model"]["provider_order"] = {"openrouter/example/model": ["preferred"]}
+        assert _errors(validate(data, strict=True)) == []
+        data["model"]["provider_order"] = {"openrouter/example/model": "preferred"}
+        assert any(i.path == "model.provider_order" for i in _errors(validate(data)))
+
     def test_a_valid_manifest_has_no_errors(self):
         assert _errors(validate(_valid())) == []
 

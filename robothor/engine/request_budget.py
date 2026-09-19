@@ -352,7 +352,20 @@ def openrouter_quote(kwargs, endpoints):
             continue
     if not choices:
         raise RequestBudgetError("No published endpoint satisfies the bounded request contract")
-    units, tag, ceiling = min(choices, key=lambda row: (row[0], row[1]))
+
+    def preference(row):
+        order = routing.get("order", [])
+        rank = next(
+            (
+                i
+                for i, value in enumerate(order)
+                if row[1].lower() == value.lower() or row[1].lower().startswith(value.lower() + "/")
+            ),
+            len(order),
+        )
+        return rank, row[0], row[1]
+
+    units, tag, ceiling = min(choices, key=preference)
     extra["provider"] = {
         **routing,
         "only": [tag],
