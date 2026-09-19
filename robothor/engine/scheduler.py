@@ -49,6 +49,7 @@ from robothor.engine.tracking import (
     update_schedule_state,
     upsert_schedule,
 )
+from robothor.goals.controller import GoalController, stop_controller
 from robothor.sanitize import sanitize_log
 
 # Circuit breaker: skip agent after this many consecutive errors
@@ -281,6 +282,7 @@ class CronScheduler:
         self.workflow_engine = workflow_engine
         self.scheduler = AsyncIOScheduler(timezone=config.default_timezone)
         self._rows = RowLedger()
+        self._goal_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         """Load manifests and start the scheduler."""
@@ -393,6 +395,7 @@ class CronScheduler:
         # covers misses within a single process's uptime.
         self._catch_up_missed_runs(cron_agent_configs)
 
+        self._goal_task = asyncio.create_task(GoalController(self.runner, self.config).serve())
         self.scheduler.start()
         logger.info("Cron scheduler started")
 
@@ -1420,6 +1423,7 @@ class CronScheduler:
 
     async def stop(self) -> None:
         """Shut down the scheduler."""
+        await stop_controller(self._goal_task)
         if self.scheduler.running:
             self.scheduler.shutdown(wait=False)
             logger.info("Cron scheduler stopped")

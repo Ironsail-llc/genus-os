@@ -282,6 +282,8 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "get_agent_stats",
         "get_agent_performance_summary",
         "get_goal",
+        "get_pursuit_goal",
+        "list_pursuit_goals",
         # Buddy's per-run reviews and the fleet roll-up — SELECT-only.
         # Added 2026-08-21: agent-architect's instructions require citing a
         # review_id, and the benchmark harness (which derives its allow-list

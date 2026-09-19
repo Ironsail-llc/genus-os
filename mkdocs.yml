@@ -83,6 +83,7 @@ exclude_docs: |
   !/enterprise/07-operate.md
   !/reference/cli.md
   !/reference/configuration.md
+  !/features/goal-pursuit.md
   !/TOOLS.md
   !/PLUGINS.md
   !/channels/telegram.md
@@ -135,6 +136,7 @@ nav:
       - CLI: reference/cli.md
       - Settings: reference/configuration.md
   - Operating:
+      - Goals: features/goal-pursuit.md
       - Tools: TOOLS.md
       - Plugins: PLUGINS.md
       - Telegram channel: channels/telegram.md

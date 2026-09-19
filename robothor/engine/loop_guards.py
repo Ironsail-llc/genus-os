@@ -30,6 +30,8 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from robothor.goals.runtime import stop_at_budget
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -38,12 +40,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class GuardState:
-    """Guard state the loop carries between iterations.
-
-    Both fields are one-shot latches for things that must be SAID once while
-    the behaviour behind them continues: the loop runs its checks every
-    iteration, and without a latch the 500K warning would fire on every one.
-    """
+    """One-shot notices retained across iterations; checks continue after notice."""
 
     runaway_alerted: bool = False
     #: Whether the agent has already been told a credential was found. The
@@ -68,7 +65,7 @@ def check_iteration_guards(
         return True
     if _watchdog_aborted(session, watchdog):
         return True
-    return _runaway(session, agent_config, state)
+    return stop_at_budget(session) or _runaway(session, agent_config, state)
 
 
 def _wallclock_expired(session: Any, watchdog: Any, deadline: float | None, ceiling: int) -> bool:

@@ -560,6 +560,9 @@ async def _execute_tool(
     # 30-min reaper fired. Returning a structured error lets the LLM decide
     # whether to retry, skip, or surface to the operator.
     try:
+        from robothor.goals.runtime import admit_tool
+
+        await asyncio.to_thread(admit_tool, name, args, ctx)
         result = cast("dict[str, Any]", await handler(args, ctx))
     except httpx.HTTPStatusError as e:
         # A backing service responded with an error status. Map to a short
