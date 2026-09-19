@@ -50,6 +50,34 @@ async def test_successful_judge_settles_actual_cost(monkeypatch):
     assert result.score == 1 and budget.charged_units == 20
 
 
+async def test_judge_decisions_are_retained_for_failed_case_diagnosis(monkeypatch):
+    setup(monkeypatch, response('{"scores":[1,0]}'))
+    score, detail = await benchmark._score_task_detailed(
+        '{"criteria":{}}',
+        {"require_all": True, "judge": {"rubric": ["first", "second"], "threshold": 1}},
+        {},
+        [],
+    )
+    assert score == 0
+    assert detail["judge"] == {
+        "model": "openrouter/xiaomi/mimo-v2.5-pro",
+        "threshold": 1.0,
+        "score": 0.5,
+        "item_scores": [1, 0],
+    }
+
+
+async def test_failed_judge_does_not_invent_item_decisions(monkeypatch):
+    setup(monkeypatch, response('{"scores":[true]}'))
+    score, detail = await benchmark._score_task_detailed(
+        "{}", {"judge": {"rubric": ["criterion"]}}, {}, []
+    )
+    assert score == 0
+    assert detail["judge"]["score"] is None
+    assert detail["judge"]["item_scores"] == []
+    assert detail["judge_error"]
+
+
 @pytest.mark.parametrize("score", ['"0"', '"false"', "2", "true", "0.5", "null"])
 async def test_nonbinary_judge_scores_are_errors_not_truthy_passes(monkeypatch, score):
     setup(monkeypatch, response('{"scores":[' + score + "]}"))
