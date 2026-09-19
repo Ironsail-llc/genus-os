@@ -1865,7 +1865,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                     "tools_override": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Optional: replace child's tools_allowed",
+                        "description": "Optional: narrow the child's tools_allowed; cannot add tools outside its declared allowlist. An empty list keeps the manifest unchanged.",
                     },
                     "max_iterations": {
                         "type": "integer",
@@ -1914,7 +1914,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                                 "tools_override": {
                                     "type": "array",
                                     "items": {"type": "string"},
-                                    "description": "Optional tools override",
+                                    "description": "Optional: narrow the child's declared tools_allowed; an empty list keeps the manifest unchanged.",
                                 },
                                 "parent_task_id": {
                                     "type": "string",

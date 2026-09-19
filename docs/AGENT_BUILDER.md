@@ -254,6 +254,13 @@ Main agent:
 
 Sub-agents inherit budget constraints from the parent. Delivery is forced to `none` on children.
 
+`tools_override` may narrow a child's declared `tools_allowed`, but it cannot add
+tools outside that list. The engine rejects such a request before starting the
+child. An empty override preserves the manifest; it does not mean unrestricted
+access or disable all tools. A child with no declared allowlist can be narrowed
+to an explicit list, and its `tools_denied` restrictions still apply. Change the
+child manifest deliberately when it needs an additional capability.
+
 ### Pattern D: Cron Safety Net
 
 Python crons fetch data and publish events. Unit agents process the data. Crons are NOT the primary trigger — they catch anything the event hooks missed.
