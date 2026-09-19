@@ -673,6 +673,8 @@ class SpawnContext:
     # with parent_task_id. At run end, unfinished todo_write items are
     # lifted back to this task so the planner picks up next beat.
     parent_task_id: str | None = None
+    # Child manifests and knowledge must resolve from this same reviewed artifact.
+    fleet_release_id: str | None = None
 
 
 @dataclass

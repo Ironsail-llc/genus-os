@@ -68,10 +68,17 @@ class TestAgentRunnerExecute:
 
         sample_agent_config.can_spawn_agents = True
         sample_agent_config.spawn_allowed_agents = ["research-worker"]
+        sample_agent_config.fleet_release_id = "a" * 64
         seen = []
 
         async def provider(**kwargs):
-            seen.append(getattr(_current_spawn_context.get(), "allowed_agents", None))
+            context = _current_spawn_context.get()
+            seen.append(
+                (
+                    getattr(context, "allowed_agents", None),
+                    getattr(context, "fleet_release_id", None),
+                )
+            )
             return mock_litellm_response(content="Done.")
 
         with (
@@ -82,7 +89,7 @@ class TestAgentRunnerExecute:
         ):
             run = await runner.execute("test-agent", "task", agent_config=sample_agent_config)
         assert run.status == RunStatus.COMPLETED
-        assert seen == [frozenset({"research-worker"})]
+        assert seen == [(frozenset({"research-worker"}), "a" * 64)]
 
     @pytest.mark.asyncio
     async def test_declared_json_mode_reaches_provider(

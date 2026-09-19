@@ -269,6 +269,14 @@ An omitted or empty list adds no restriction, preserving existing configurations
 `can_spawn_agents: false` still disables spawning. Target permission does not grant
 additional tools or change the child's service role.
 
+If the parent runs from a managed fleet release, its children and further
+descendants inherit that exact release ID. Before each child starts, the engine
+verifies the staged artifact and loads the child's manifest and knowledge from
+it. Drift, a missing release, or a child outside that release refuses the spawn;
+there is no fallback to live workspace manifests. Unpinned runs retain their
+normal manifest-loading behavior. Spawned model requests also inherit any active
+funded request-budget scope; delegation does not create a new allowance.
+
 ### Pattern D: Cron Safety Net
 
 Python crons fetch data and publish events. Unit agents process the data. Crons are NOT the primary trigger — they catch anything the event hooks missed.
