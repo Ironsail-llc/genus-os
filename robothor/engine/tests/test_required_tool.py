@@ -45,6 +45,7 @@ def test_bounded_quote_requires_endpoint_support_for_forced_tool_choice():
     supported = endpoint(
         tag="capable",
         supported_parameters=["max_tokens", "tools", "tool_choice"],
+        supports_tool_choice={"function": True},
         pricing={"prompt": "0.000002", "completion": "0.000003"},
     )
     _, request = openrouter_quote(
@@ -54,5 +55,33 @@ def test_bounded_quote_requires_endpoint_support_for_forced_tool_choice():
             "tool_choice": {"type": "function", "function": {"name": "research"}},
         },
         [cheap, supported],
+    )
+    assert request["extra_body"]["provider"]["only"] == ["capable"]
+
+
+@pytest.mark.parametrize(
+    "capabilities", [None, {}, {"function": False}, {"function": "true"}, {"required": True}]
+)
+def test_general_tool_support_does_not_prove_named_function_support(capabilities):
+    from robothor.engine.request_budget import openrouter_quote
+    from robothor.engine.tests.test_request_budget import endpoint
+
+    parameters = ["max_tokens", "tools", "tool_choice"]
+    cheap = endpoint(
+        tag="cheap", supported_parameters=parameters, supports_tool_choice=capabilities
+    )
+    capable = endpoint(
+        tag="capable",
+        supported_parameters=parameters,
+        supports_tool_choice={"function": True},
+        pricing={"prompt": "0.000002", "completion": "0.000003"},
+    )
+    _, request = openrouter_quote(
+        {
+            "max_tokens": 100,
+            "tools": TOOLS,
+            "tool_choice": {"type": "function", "function": {"name": "research"}},
+        },
+        [cheap, capable],
     )
     assert request["extra_body"]["provider"]["only"] == ["capable"]

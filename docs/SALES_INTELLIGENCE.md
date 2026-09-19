@@ -573,7 +573,9 @@ instruction supplied by a web page or a permission grant. It can select only a
 tool already available to the parent. Auxiliary requests without tools are
 unchanged; child calls and later parent calls use normal selection. The requirement
 closes with the stage, including for tasks that inherited its context. Endpoint
-quotes must support both tools and forced tool selection. A provider that ignores
+quotes must support both tools and forced tool selection: the endpoint's specific
+`supports_tool_choice.function` flag must be true, not merely a generic
+`tool_choice` entry in its supported parameters. A provider that ignores
 the request still cannot bypass the validated-child merge required for success.
 
 Genus supplies the company context and dispatches three native children for

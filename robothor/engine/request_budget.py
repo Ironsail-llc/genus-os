@@ -297,10 +297,16 @@ def openrouter_quote(kwargs, endpoints):
                 and "response_format" not in endpoint["supported_parameters"]
             ):
                 continue
-            if isinstance(kwargs.get("tool_choice"), dict) and not {"tools", "tool_choice"} <= set(
-                endpoint["supported_parameters"]
-            ):
-                continue
+            choice = kwargs.get("tool_choice")
+            choice_kind = "function" if isinstance(choice, dict) else choice
+            if choice_kind in ("function", "required"):
+                capabilities = endpoint.get("supports_tool_choice")
+                if (
+                    not {"tools", "tool_choice"} <= set(endpoint["supported_parameters"])
+                    or not isinstance(capabilities, dict)
+                    or capabilities.get(choice_kind) is not True
+                ):
+                    continue
             price = endpoint["pricing"]
             # Tiered/time-varying and explicit cache-write pricing need their
             # own reviewed quote policy. Do not guess the maximum surcharge.
