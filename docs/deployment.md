@@ -985,6 +985,17 @@ settings, including budgets and policy references, are preserved. A settings edi
 after preparation invalidates commit, even if later edits restore the same values.
 The normal settings API cannot bypass the coordinator to change managed bindings.
 
+`robothor.engine.source_identity.SourceIdentity` supplies a source-checkout
+identity primitive. Capture it once when establishing a runtime generation and
+retain it: verification requires the expected clean Git revision and unchanged
+tracked-file inventory, including filesystem modification history. Untracked
+files in the engine and bridge package trees also refuse verification. A source
+edit followed by restoration still requires a fresh generation. This module is
+not yet wired into daemon readiness. Wheel/container installations without a Git
+checkout require separate build provenance; a version label is insufficient.
+Installed plugin payload verification is described in [Plugins](PLUGINS.md#installed-payload-verification).
+Neither primitive by itself establishes loaded-code or schedule readiness.
+
 `prepare_rollback` creates another guarded transition from the latest committed
 deployment to its previous structural configuration. It preserves current
 operational settings and also leaves integration switches off. `abort` requires
