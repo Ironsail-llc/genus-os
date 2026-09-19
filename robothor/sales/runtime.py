@@ -52,6 +52,7 @@ class NativeStageRunner:
         from robothor.engine.tool_observation import tool_observation_scope
         from robothor.engine.tools.handlers.spawn import get_runner
         from robothor.engine.workflow_completion import workflow_completion_scope
+        from robothor.sales.contact_sources import contact_scope
         from robothor.sales.qualification import qualification_scope
         from robothor.sales.research_fanout import research_scope
         from robothor.sales.research_manifest import prepare_research
@@ -114,6 +115,7 @@ class NativeStageRunner:
                 lambda: fanout is not None and not fanout.started,
             ),
             scout_scope(stage, tenant_id, agent_id, message) as scout,
+            contact_scope(stage, tenant_id, agent_id) as contacts,
         ):
             result = await runner.execute(
                 agent_id=agent_id,
@@ -129,6 +131,15 @@ class NativeStageRunner:
         # Includes retries, failed attempts, finalizers and auxiliary model calls
         # omitted from normal run token accounting. Unknown usage stays charged.
         result.total_cost_usd = max(result.total_cost_usd, budget.charged_units / 1e6)
+        if contacts is not None and str(result.status) == "completed":
+            batch, proof = contacts.attest(str(result.id), result.output_text)
+            result = StageResult(
+                str(result.id),
+                str(result.status),
+                result.total_cost_usd,
+                output_text=batch.model_dump_json(),
+                stage_provenance={"contact_sources": proof},
+            )
         if scout is not None and str(result.status) == "completed":
             batch, proof = scout.attest(str(result.id), result.output_text)
             result = StageResult(

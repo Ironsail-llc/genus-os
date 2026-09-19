@@ -13,6 +13,7 @@ from robothor.sales.models import QualificationPolicy
 from robothor.sales.promotion import PromotionWorker
 from robothor.sales.runtime import DraftWorker, ResearchWorker
 from robothor.sales.stages import ActivationWorker, ContactWorker, ConversationWorker, ScoutWorker
+from robothor.sales.tests.test_contact_sources import ContactRunnerStub
 from robothor.sales.tests.test_delivery import MailProvider
 from robothor.sales.tests.test_promotion import PipedriveStub
 from robothor.sales.tests.test_runtime import RunnerStub
@@ -126,7 +127,7 @@ async def test_discovery_to_reviewed_outreach_reply_optout_and_fulfillment(sales
     assert sales.get(p["id"])["qualification"]["score"] == 100
     assert await ContactWorker(
         sales,
-        RunnerStub(
+        ContactRunnerStub(
             {
                 "contacts": [
                     {
