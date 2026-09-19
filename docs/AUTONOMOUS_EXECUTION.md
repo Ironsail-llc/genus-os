@@ -337,3 +337,13 @@ environment overrides and appear in the generated configuration reference.
 Browser tests carry the `e2e` marker where they do not require the database fixture;
 the required `test-autonomy` CI lane installs Chromium and runs the entire autonomy
 suite, including these tests. Generic Python matrix jobs do not install browsers.
+
+
+Engine-created operations retain a `request_context` with the authenticated actor
+identifier and originating run UUID. It is supplied from tool execution context,
+never from page content or model arguments. Operation lookup exposes this reference
+alongside the grant version and proposal, so an audit can follow it to the recorded
+request. Exact idempotent retries from another run preserve the original context.
+Older or direct administrative reservations remain explicitly unattributed; a retry
+does not invent a historical request. Apply migration 130 before using this version.
+This is attribution, not additional spending authority or a digital signature.
