@@ -117,25 +117,28 @@ class ResearchSources:
                 "content": result["content"],
                 "content_hash": content_hash(result["content"]),
                 "retrieved_at": datetime.now(UTC).isoformat(),
+                "passage_version": 2,
             }
         )
         return self.packet(str(ctx.run_id), rows[-1])
 
     def packet(self, run_id, source):
+        version = source.get("passage_version", 1)
+        identity = [
+            self.tenant_id,
+            self.agent_id,
+            run_id,
+            source["url"],
+            source["content_hash"],
+            source["retrieved_at"],
+        ]
+        if version != 1:
+            identity.append(version)
         return {
-            "kind": "captured_passages_v1",
+            "kind": f"captured_passages_v{version}",
             "trust": "untrusted_website_content",
-            "source_ref": digest(
-                [
-                    self.tenant_id,
-                    self.agent_id,
-                    run_id,
-                    source["url"],
-                    source["content_hash"],
-                    source["retrieved_at"],
-                ]
-            )[:24],
-            "passages": passages(source["content"]),
+            "source_ref": digest(identity)[:24],
+            "passages": passages(source["content"], version=version),
         }
 
     def _resolve(self, run_id, selection, sources):
@@ -255,6 +258,8 @@ class ResearchSources:
                     or not isinstance(source["content"], str)
                     or not 1 <= len(source["content"]) <= MAX_CONTENT
                     or source["content_hash"] != content_hash(source["content"])
+                    or type(source.get("passage_version", 1)) is not int
+                    or source.get("passage_version", 1) not in {1, 2}
                 ):
                     raise ValueError
                 when = datetime.fromisoformat(source["retrieved_at"])

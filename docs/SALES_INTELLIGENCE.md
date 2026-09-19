@@ -828,6 +828,15 @@ guarantee of factual correctness: Genus still parses the dossier and attests
 every citation against that child's successful retrievals. Unsupported schema
 requests, invalid JSON, missing evidence and invented quotations fail normally.
 
+New captures use `captured_passages_v2`: each paragraph has its own reference,
+with long paragraphs split into continuous slices of at most 800 characters.
+This avoids including a neighboring review when citing a business heading.
+Source proofs store the passage version and bind it to new source references;
+older unversioned captures keep their original boundaries and references during
+recovery. Paragraph separation is not a semantic privacy filter: private agent
+instructions must exclude personal reviews and mixed passages, and source-quality
+review remains necessary before accepting dossiers.
+
 Research workers validate their proposed final output before ending the native
 run. Invalid schemas, invented passage references, unexplained empty dossiers and
 non-boolean scored evidence produce bounded correction feedback: at most two

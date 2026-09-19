@@ -1,5 +1,7 @@
 """Native citation selections; persisted CRM dossiers retain full source evidence."""
 
+import re
+
 from pydantic import Field
 
 from robothor.sales.models import DossierFields, EvidenceFact
@@ -14,8 +16,17 @@ class ResearchDossier(DossierFields[PassageEvidence]):
     """Native research selects passages before producing the persisted dossier."""
 
 
-def passages(content: str) -> list[dict[str, str]]:
-    """Version 1: bounded continuous slices, preferring paragraph/word boundaries."""
+def passages(content: str, *, version: int = 1) -> list[dict[str, str]]:
+    """V2 keeps paragraphs separate; V1 remains stable for saved source proofs."""
+    if version == 2:
+        parts = [
+            row["text"]
+            for paragraph in re.split(r"\n[ \t]*\n", content)
+            for row in passages(paragraph, version=1)
+        ]
+        return [{"ref": "p" + str(i), "text": text} for i, text in enumerate(parts)]
+    if version != 1:
+        raise ValueError("Unsupported captured passage version")
     rows: list[dict[str, str]] = []
     start = 0
     while start < len(content):
