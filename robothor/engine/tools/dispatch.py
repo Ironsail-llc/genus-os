@@ -227,6 +227,7 @@ def builtin_handlers() -> dict[str, Any]:
         vision,
         voice,
         web,
+        web_render,
     )
 
     all_handlers: dict[str, Any] = {}
@@ -237,6 +238,7 @@ def builtin_handlers() -> dict[str, Any]:
         symbolic,
         vision,
         web,
+        web_render,
         filesystem,
         crm,
         browser,

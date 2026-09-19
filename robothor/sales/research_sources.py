@@ -42,7 +42,7 @@ class ResearchSources:
     def observe(self, name, args, result, ctx):
         """Only the dispatcher supplies this callback; model output cannot supply sources."""
         if (
-            name != "web_fetch"
+            name not in {"web_fetch", "web_render"}
             or ctx.tenant_id != self.tenant_id
             or ctx.agent_id != self.agent_id
             or not ctx.run_id
@@ -61,6 +61,7 @@ class ResearchSources:
             return
         rows.append(
             {
+                "tool": name,
                 "url": result["url"],
                 "content": result["content"],
                 "content_hash": content_hash(result["content"]),

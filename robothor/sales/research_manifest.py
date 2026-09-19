@@ -6,7 +6,14 @@ from robothor.operations.store import Conflict
 from robothor.sales.models import Dossier
 from robothor.sales.research_fanout import ResearchFanout
 
-READ_TOOLS = {"web_search", "web_fetch", "sales_get_prospect", "sales_get_context", "write_file"}
+READ_TOOLS = {
+    "web_search",
+    "web_fetch",
+    "web_render",
+    "sales_get_prospect",
+    "sales_get_context",
+    "write_file",
+}
 FANOUT_TOOLS = {"sales_research_parallel", "write_file"}
 
 
