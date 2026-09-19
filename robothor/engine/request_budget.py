@@ -24,6 +24,10 @@ class RequestBudgetError(RuntimeError):
     """The request cannot be safely admitted within this run's allowance."""
 
 
+class RequestRouteUnavailableError(RequestBudgetError):
+    """No eligible endpoint for this model; a separately funded fallback may run."""
+
+
 _ACTIVE: ContextVar[RequestBudget | None] = ContextVar("request_budget", default=None)
 _MICRO = Decimal(1_000_000)
 
@@ -297,10 +301,9 @@ def openrouter_quote(kwargs, endpoints):
                 and "response_format" not in endpoint["supported_parameters"]
             ):
                 continue
-            if (
-                (kwargs.get("response_format") or {}).get("type") == "json_schema"
-                and "structured_outputs" not in endpoint["supported_parameters"]
-            ):
+            if (kwargs.get("response_format") or {}).get(
+                "type"
+            ) == "json_schema" and "structured_outputs" not in endpoint["supported_parameters"]:
                 continue
             from robothor.engine.required_tool import endpoint_tool_contract
 
@@ -351,7 +354,9 @@ def openrouter_quote(kwargs, endpoints):
         except (KeyError, TypeError, ValueError):
             continue
     if not choices:
-        raise RequestBudgetError("No published endpoint satisfies the bounded request contract")
+        raise RequestRouteUnavailableError(
+            "No published endpoint satisfies the bounded request contract"
+        )
 
     def preference(row):
         order = routing.get("order", [])
