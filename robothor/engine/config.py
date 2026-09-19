@@ -612,6 +612,8 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
     # v2 enhancement fields
     v2 = manifest.get("v2", {})
 
+    from robothor.engine.provider_routing import parse_provider_order
+
     config = AgentConfig(
         id=manifest["id"],
         name=manifest.get("name", manifest["id"]),
@@ -619,6 +621,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         model_primary=model.get("primary", ""),
         model_fallbacks=_with_last_resort(model.get("primary", ""), model.get("fallbacks", [])),
         response_format=model.get("response_format", "text"),
+        provider_order=parse_provider_order(model.get("provider_order", {})),
         cron_expr=schedule.get("cron", ""),
         schedule_enabled=bool(schedule.get("enabled", True)),
         timezone=schedule.get("timezone", "America/New_York"),

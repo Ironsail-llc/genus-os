@@ -729,6 +729,14 @@ def _check_semantics(issues: list[ManifestIssue], data: dict[str, Any]) -> None:
     # Model blocks — top-level, heartbeat, and worker all carry one, and the
     # 2026-08-23 incident's broken entry was in the HEARTBEAT block.
     _check_model_block(issues, "model", data.get("model"))
+    model = data.get("model")
+    if isinstance(model, dict) and "provider_order" in model:
+        from robothor.engine.provider_routing import parse_provider_order
+
+        try:
+            parse_provider_order(model["provider_order"])
+        except ValueError as exc:
+            issues.append(ManifestIssue("model.provider_order", "wrong_type", str(exc), "error"))
     _check_last_resort_model(issues)
     _check_stall_budget_vs_llm_timeout(issues, "schedule", data.get("model"), data.get("schedule"))
     for section in ("heartbeat", "worker"):

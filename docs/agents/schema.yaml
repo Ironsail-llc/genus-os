@@ -49,6 +49,10 @@ recommended:
     temperature:
       type: number
       default: 0.3
+    provider_order:
+      type: object
+      default: {}
+      description: Map exact OpenRouter model paths to ordered provider allowlists; no unlisted backend fallback. Other models retain their routing.
     response_format:
       type: string
       enum: [text, json_object]

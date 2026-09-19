@@ -610,6 +610,7 @@ class AgentRunner(
         )
 
         session.response_format = agent_config.response_format
+        session.provider_order = agent_config.provider_order
 
         # User identity threading
         session.run.user_id = effective_user_id

@@ -728,3 +728,13 @@ An end-to-end pilot additionally needs calibrated buying cases, reviewed dossier
 healthy authenticated mailboxes, individually approved test and prospect messages,
 provider send/reply/opt-out evidence, restart recovery, and independently verified
 customer fulfillment. Report 30/60/90-day retention only for mature cohorts.
+
+### Research provider selection
+
+Research manifests may set `model.provider_order` for an exact OpenRouter model
+when backend latency or function support differs. Both parent and worker manifests
+own their preferences; the worker does not inherit the parent's model routing.
+Bounded attempts honor provider order after capability and cost filtering, pin
+one endpoint and retain normal spending admission. This configuration does not
+relax child deadlines or source attestation. See the model configuration guidance
+in [Agent Builder](AGENT_BUILDER.md).

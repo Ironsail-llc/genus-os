@@ -1035,6 +1035,31 @@ Tool calls remain available. JSON mode controls syntax, not business correctness
 validate the result against the workflow's schema and evidence rules before
 accepting it. A truncated or unsupported response still fails validation.
 
+For a model whose backends have different reliability or tool support, set
+`model.provider_order` to a mapping from its exact LiteLLM OpenRouter path to an
+ordered, nonempty list of provider slugs. Base slugs include endpoint variants;
+use an endpoint slug to pin a variant. These lists are also allowlists: unlisted
+backends are refused. Models absent from the mapping retain their usual routing,
+including fallback models. Existing engine compatibility requirements still apply.
+See [OpenRouter provider selection](https://openrouter.ai/docs/guides/routing/provider-selection)
+for provider slug syntax.
+
+```yaml
+model:
+  primary: openrouter/example/model
+  provider_order:
+    openrouter/example/model: [preferred/fp8, backup]
+```
+
+Within a bounded operation, Genus chooses the first eligible listed provider,
+then the least expensive endpoint within that preference. Tool/JSON support,
+price constraints, failed-route exclusions and full-context spending admission
+still apply. Each attempt pins one endpoint with SDK retries and unlisted
+provider fallback disabled. Provider preferences do not increase the job budget
+or guarantee a response within the agent deadline. They apply to the session's
+main streaming/non-streaming calls; independently invoked auxiliary model calls
+keep their own routing.
+
 A 3-unit pipeline: **classifier** → **analyst** → **responder**, connected via CRM tasks and event hooks.
 
 ### Unit 1: Email Classifier

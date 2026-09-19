@@ -85,6 +85,7 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
         role="sales_agent",
         tools_allowed=[fetch_tool],
     )
+    child["model"]["provider_order"] = {"openrouter/test/model": ["preferred/fp8"]}
     child["v2"] = {"can_spawn_agents": False, "max_cost_usd": 1, "hard_budget": True}
     parent_path.write_text(yaml.safe_dump(parent))
     (source / "docs/agents/research-worker.yaml").write_text(yaml.safe_dump(child))
@@ -165,6 +166,7 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
 
             content = '{"untrusted_parent_narrative": true}'
         else:
+            assert kwargs["extra_body"]["provider"]["only"] == ["preferred/fp8"]
             assert kwargs["tool_choice"] == (
                 {"type": "function", "function": {"name": fetch_tool}}
                 if tool_result is None
