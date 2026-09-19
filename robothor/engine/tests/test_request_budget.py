@@ -192,6 +192,34 @@ def test_quote_uses_full_context_and_provider_rate_limits_not_token_estimates():
     assert "extra_body" not in kwargs
 
 
+def test_json_request_skips_cheaper_endpoint_without_format_support():
+    cheap = endpoint(tag="cheap/fp8")
+    compatible = endpoint(
+        tag="compatible/fp8",
+        supported_parameters=["max_tokens", "response_format"],
+        pricing={"prompt": "0.000002", "completion": "0.000003"},
+    )
+    kwargs = {"max_tokens": 100, "response_format": {"type": "json_object"}}
+    _, bounded = openrouter_quote(kwargs, [cheap, compatible])
+    assert bounded["extra_body"]["provider"]["only"] == ["compatible/fp8"]
+    assert bounded["response_format"] == {"type": "json_object"}
+
+
+@pytest.mark.asyncio
+async def test_unsupported_json_mode_fails_before_reserving_or_dispatching():
+    async def unsupported_quote(kwargs):
+        return openrouter_quote(kwargs, [endpoint()])
+
+    provider = AsyncMock(return_value=response(None))
+    budget = RequestBudget(10_000, quote=unsupported_quote)
+    with budget_scope(budget), pytest.raises(RequestBudgetError):
+        await bounded_completion(
+            provider, max_tokens=100, response_format={"type": "json_object"}
+        )
+    provider.assert_not_called()
+    assert budget.charged_units == 0
+
+
 @pytest.mark.parametrize(
     "extra",
     [
