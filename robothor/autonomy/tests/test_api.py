@@ -54,7 +54,13 @@ def test_service_and_read_only_accounts_cannot_enroll_or_grant(api, service, rol
     client, identity, store = api
     identity.is_service = service
     identity.role = role
-    for path in ("resources", "profile-from-contact", "grants", "settings"):
+    for path in (
+        "resources",
+        "resources/refresh-descriptions",
+        "profile-from-contact",
+        "grants",
+        "settings",
+    ):
         response = client.request(
             "PUT" if path == "settings" else "POST",
             f"/api/autonomy/{path}",
@@ -104,3 +110,18 @@ def test_contact_import_failure_does_not_echo_contact_data(api, monkeypatch):
     response = client.post("/api/autonomy/profile-from-contact", json={})
     assert response.status_code == 409
     assert "private contact" not in response.text
+
+
+def test_owner_can_refresh_legacy_field_descriptions_without_choosing_another_person(api):
+    client, _, store = api
+    store.refresh_resource_descriptors.return_value = 1
+    response = client.post("/api/autonomy/resources/refresh-descriptions", json={"owner_id": "bob"})
+    assert response.status_code == 422
+    store.refresh_resource_descriptors.assert_not_called()
+    response = client.post("/api/autonomy/resources/refresh-descriptions", json={})
+    assert response.status_code == 200
+    assert response.json() == {"updated": 1}
+    assert response.headers["cache-control"] == "no-store"
+    store.refresh_resource_descriptors.assert_called_once_with(
+        Scope(tenant_id="test", owner_id="alice")
+    )

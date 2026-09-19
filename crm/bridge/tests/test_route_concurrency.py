@@ -44,6 +44,7 @@ def test_only_genuinely_async_routes_run_on_the_event_loop():
         ("GET", "/api/autonomy/status"),
         ("GET", "/api/autonomy/operations"),
         ("POST", "/api/autonomy/resources"),
+        ("POST", "/api/autonomy/resources/refresh-descriptions"),
         ("POST", "/api/autonomy/profile-from-contact"),
         ("DELETE", "/api/autonomy/resources/{resource_id}"),
         ("POST", "/api/autonomy/grants"),

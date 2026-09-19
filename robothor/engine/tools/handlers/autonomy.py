@@ -78,6 +78,7 @@ async def handle(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                         )
                     ),
                 ),
+                source="generated",
             )
         if kind == "email_verification":
             # The legacy gws connector represents the appliance owner's
@@ -149,6 +150,7 @@ async def handle(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                             ),
                         ),
                         lifetime_seconds=600,
+                        source="mailbox_verification",
                     )
             return {
                 "state": "awaiting_external_action",

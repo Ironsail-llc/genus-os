@@ -39,6 +39,9 @@ async def test_managed_provider_disables_recording_and_enables_challenge_support
     store.check_authority.return_value = SimpleNamespace(frame_origins=frozenset())
     store.put_resource.return_value = {"id": "session-ref"}
     monkeypatch.setattr(worker, "AutonomyStore", lambda *args, **kwargs: store)
+    monkeypatch.setattr(
+        worker, "inspect_page", AsyncMock(return_value={"fields": [], "terms": [], "frames": []})
+    )
     page = MagicMock(url="https://shop.example/")
     page.goto = AsyncMock()
     page.locator.return_value.evaluate_all = AsyncMock(return_value=[])

@@ -96,6 +96,17 @@ async def profile_from_contact(request: Request):
         raise HTTPException(503, "Contact import is unavailable") from None
 
 
+@router.post("/resources/refresh-descriptions")
+async def refresh_descriptions(request: Request):
+    scope = await require_personal_owner(request)
+    await _body(request, StrictModel)
+    try:
+        count = await asyncio.to_thread(AutonomyStore().refresh_resource_descriptors, scope)
+        return _safe({"updated": count})
+    except Exception:
+        raise HTTPException(503, "Saved information could not be checked") from None
+
+
 @router.delete("/resources/{resource_id}")
 async def revoke_resource(resource_id: UUID, request: Request):
     scope = await require_personal_owner(request)

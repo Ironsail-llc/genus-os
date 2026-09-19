@@ -17,7 +17,7 @@ import json
 import re
 import struct
 import time
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlsplit
@@ -26,9 +26,10 @@ from uuid import UUID  # noqa: TC003 - Pydantic resolves this annotation at runt
 from pydantic import Field, SecretStr, field_validator
 
 from robothor.autonomy.models import ResourceInput, Scope, StrictModel, WebOperation, origin
+from robothor.autonomy.terms import interval_months, renewal_date
 
 if TYPE_CHECKING:
-    from playwright.async_api import Frame, Locator, Page
+    from playwright.async_api import Frame, Locator, Page, Route
 
     from robothor.autonomy.store import AutonomyStore
 
@@ -64,6 +65,8 @@ class ExecutionPlan(StrictModel):
     submit_selector: str = Field(min_length=1, max_length=500)
     success_selector: str = Field(min_length=1, max_length=500)
     success_text: str = Field(min_length=3, max_length=300)
+    terms_frame_selector: str | None = Field(default=None, max_length=500)
+    terms_frame_origin: str | None = None
     amount_selector: str | None = Field(default=None, max_length=500)
     recurring_selector: str | None = Field(default=None, max_length=500)
     annual_selector: str | None = Field(default=None, max_length=500)
@@ -73,6 +76,10 @@ class ExecutionPlan(StrictModel):
     session_resource_id: UUID | None = None
     verification_link_id: UUID | None = None
     challenge: Challenge | None = None
+
+    _terms_origin = field_validator("terms_frame_origin")(
+        lambda value: origin(value) if value else None
+    )
 
     @field_validator("url")
     @classmethod
@@ -121,6 +128,29 @@ def price_minor(text: str, currency: str) -> int:
 class BrowserBroker:
     def __init__(self, store: AutonomyStore) -> None:
         self.store = store
+        self._guarded_frames: dict[Frame, str] = {}
+
+    async def _guard_origin(self, page: Page, frame: Frame, destination: str) -> None:
+        if frame in self._guarded_frames and self._guarded_frames[frame] != destination:
+            raise PermissionError("frame_origin_mismatch")
+        if frame not in self._guarded_frames:
+
+            async def protect(route: Route) -> None:
+                if route.request.is_navigation_request() and route.request.frame == frame:
+                    try:
+                        permitted = url_origin(route.request.url) == destination
+                    except ValueError:
+                        permitted = False
+                    if not permitted:
+                        await route.abort()
+                        return
+                await route.fallback()
+
+            await page.route("**/*", protect)
+            self._guarded_frames[frame] = destination
+        current_url = page.url if frame == page.main_frame else frame.url
+        if url_origin(current_url) != destination:
+            raise PermissionError("destination_changed")
 
     async def verify_link_on_page(
         self, scope: Scope, operation_id: str, agent_id: str, plan: ExecutionPlan, page: Page
@@ -169,6 +199,7 @@ class BrowserBroker:
                         origin=destination,
                         payload=SecretStr(json.dumps(await page.context.storage_state())),
                     ),
+                    source="broker_session",
                 )
                 session_ref = saved["id"]
             return {
@@ -234,8 +265,28 @@ class BrowserBroker:
             raise ValueError("selector_not_unique_and_visible")
         return locator
 
-    async def _prices(self, page: Page, proposal: WebOperation, plan: ExecutionPlan) -> None:
-        await self._recurrence(page, proposal, plan)
+    async def _prices(
+        self,
+        page: Page,
+        proposal: WebOperation,
+        plan: ExecutionPlan,
+        *,
+        allowed_frames: frozenset[str] = frozenset(),
+    ) -> None:
+        root: Page | Frame = page
+        if plan.terms_frame_selector:
+            if not plan.terms_frame_origin or (
+                plan.terms_frame_origin != proposal.origin
+                and plan.terms_frame_origin not in allowed_frames
+            ):
+                raise PermissionError("frame_not_authorized")
+            element = await page.locator(plan.terms_frame_selector).element_handle()
+            frame = await element.content_frame() if element else None
+            if not frame or url_origin(frame.url) != plan.terms_frame_origin:
+                raise PermissionError("frame_origin_mismatch")
+            await self._guard_origin(page, frame, plan.terms_frame_origin)
+            root = frame
+        await self._recurrence(root, proposal, plan)
         for amount, selector, required in [
             (
                 proposal.amount_minor,
@@ -248,31 +299,20 @@ class BrowserBroker:
             if amount or selector or required:
                 if not selector:
                     raise ValueError("price_evidence_required")
-                locator = await self._unique(page.locator(selector))
+                locator = await self._unique(root.locator(selector))
                 if price_minor(await locator.inner_text(), proposal.currency) != amount:
                     raise ValueError("price_changed")
 
-    async def _recurrence(self, page: Page, proposal: WebOperation, plan: ExecutionPlan) -> None:
+    async def _recurrence(
+        self, page: Page | Frame, proposal: WebOperation, plan: ExecutionPlan
+    ) -> None:
         terms = proposal.recurrence
         if not proposal.recurring_minor:
             return
         if not terms or not plan.recurrence_interval_selector or not plan.next_charge_selector:
             raise ValueError("renewal_evidence_required")
         interval = await self._unique(page.locator(plan.recurrence_interval_selector))
-        label = " ".join((await interval.inner_text()).strip().lower().split())
-        periods = {
-            "monthly": 1,
-            "every month": 1,
-            "quarterly": 3,
-            "every quarter": 3,
-            "annually": 12,
-            "annual": 12,
-            "yearly": 12,
-            "every year": 12,
-        }
-        for months in (1, 2, 3, 6, 12):
-            periods[f"every {months} month" + ("s" if months != 1 else "")] = months
-        if periods.get(label) != terms.interval_months:
+        if interval_months(await interval.inner_text()) != terms.interval_months:
             raise ValueError("recurrence_changed")
         for expected, selector in (
             (terms.next_charge_on, plan.next_charge_selector),
@@ -283,17 +323,7 @@ class BrowserBroker:
             if not selector:
                 raise ValueError("renewal_evidence_required")
             value = (await (await self._unique(page.locator(selector))).inner_text()).strip()
-            parsed = None
-            try:
-                parsed = date.fromisoformat(value)
-            except ValueError:
-                for pattern in ("%B %d, %Y", "%b %d, %Y", "%d %B %Y", "%d %b %Y"):
-                    try:
-                        parsed = datetime.strptime(value, pattern).replace(tzinfo=UTC).date()
-                        break
-                    except ValueError:
-                        continue
-            if parsed != expected:
+            if renewal_date(value) != expected:
                 raise ValueError("renewal_date_changed")
 
     async def _field(
@@ -307,19 +337,26 @@ class BrowserBroker:
         if url_origin(page.url) != destination:
             raise PermissionError("destination_changed")
         root: Page | Frame = page
+        resource_destination = destination
+        guarded_frame = page.main_frame
         if binding.frame_selector:
-            if not binding.frame_origin or binding.frame_origin not in allowed_frames:
+            if not binding.frame_origin or (
+                binding.frame_origin != destination and binding.frame_origin not in allowed_frames
+            ):
                 raise PermissionError("frame_not_authorized")
             element = await page.locator(binding.frame_selector).element_handle()
             frame = await element.content_frame() if element else None
             if not frame or url_origin(frame.url) != binding.frame_origin:
                 raise PermissionError("frame_origin_mismatch")
             root = frame
+            guarded_frame = frame
+            resource_destination = binding.frame_origin
+        await self._guard_origin(page, guarded_frame, resource_destination)
         value = await asyncio.to_thread(
             self.store.consume_resource,
             scope,
             str(binding.resource_id),
-            destination,
+            resource_destination,
             kind=binding.kind,
         )
         locator = await self._unique(root.locator(binding.selector))
@@ -383,18 +420,26 @@ class BrowserBroker:
                 raise PermissionError("destination_changed")
             if await page.locator(plan.success_selector).is_visible():
                 raise ValueError("confirmation_already_present")
-            await self._prices(page, proposal, plan)
+            await self._prices(page, proposal, plan, allowed_frames=allowed_frames)
             challenge_locator = None
             if plan.challenge:
                 challenge = plan.challenge
                 root: Page | Frame | None = page
                 if challenge.frame_selector:
-                    if challenge.frame_origin not in allowed_frames:
+                    if (
+                        challenge.frame_origin != proposal.origin
+                        and challenge.frame_origin not in allowed_frames
+                    ):
                         raise PermissionError("frame_not_authorized")
                     element = await page.locator(challenge.frame_selector).element_handle()
                     root = await element.content_frame() if element else None
-                    if not root or url_origin(root.url) != challenge.frame_origin:
+                    if (
+                        not root
+                        or not challenge.frame_origin
+                        or url_origin(root.url) != challenge.frame_origin
+                    ):
                         raise PermissionError("frame_origin_mismatch")
+                    await self._guard_origin(page, root, challenge.frame_origin)
                 assert root is not None
                 challenge_locator = await self._unique(root.locator(challenge.selector))
                 if verification_code is None:
@@ -408,6 +453,8 @@ class BrowserBroker:
                 pattern = r"\d{3,4}" if challenge.kind == "card_code" else r"\d{6}"
                 if not re.fullmatch(pattern, verification_code):
                     raise ValueError("invalid_verification_code")
+            # Keep the actual document origin fixed across decryption and fill.
+            await self._guard_origin(page, page.main_frame, proposal.origin)
             # Claim once, before any credential fill can trigger site scripts.
             await asyncio.to_thread(self.store.begin_submit, scope, operation_id, agent_id)
             started = True
@@ -424,7 +471,7 @@ class BrowserBroker:
                 await (await self._unique(page.locator(selector))).check(timeout=15000)
             if url_origin(page.url) != proposal.origin:
                 raise PermissionError("destination_changed")
-            await self._prices(page, proposal, plan)
+            await self._prices(page, proposal, plan, allowed_frames=allowed_frames)
             # Revalidate revocation immediately before the irreversible click.
             await asyncio.to_thread(self.store.check_authority, scope, operation_id, agent_id)
             await (await self._unique(page.locator(plan.submit_selector))).click(timeout=15000)
@@ -465,6 +512,7 @@ class BrowserBroker:
                         origin=proposal.origin,
                         payload=SecretStr(json.dumps(storage)),
                     ),
+                    source="broker_session",
                 )
                 session_ref = saved["id"]
             except Exception:

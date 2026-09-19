@@ -28,6 +28,7 @@ def setup():
     store.consume_resource.return_value = {"username": "alice", "password": "private-password"}
     page = MagicMock(url="https://shop.example/signup")
     page.goto = AsyncMock()
+    page.route = AsyncMock()
     page.wait_for_url = AsyncMock()
     page.locator.return_value = MagicMock()
     locator = page.locator.return_value
@@ -233,3 +234,66 @@ async def test_recurring_terms_are_verified_against_visible_merchant_terms(
             await broker._prices(page, proposal, execution)
     else:
         await broker._prices(page, proposal, execution)
+
+
+@pytest.mark.parametrize(
+    "saved_origin,frame_origin,allowed,accepted",
+    [
+        ("https://shop.example", "https://payments.example", {"https://payments.example"}, False),
+        (
+            "https://payments.example",
+            "https://payments.example",
+            {"https://payments.example"},
+            True,
+        ),
+        ("https://shop.example", "https://shop.example", set(), True),
+    ],
+)
+async def test_frame_discovery_and_credential_destination_rules_agree(
+    saved_origin, frame_origin, allowed, accepted
+):
+    store = MagicMock()
+
+    def consume(scope, resource, destination, **kwargs):
+        if destination != saved_origin:
+            raise PermissionError("resource_not_authorized")
+        return {"password": "private"}
+
+    store.consume_resource.side_effect = consume
+    locator = MagicMock(
+        count=AsyncMock(return_value=1), is_visible=AsyncMock(return_value=True), fill=AsyncMock()
+    )
+    frame = MagicMock(url=frame_origin)
+    frame.locator.return_value = locator
+    element = MagicMock(content_frame=AsyncMock(return_value=frame))
+    page = MagicMock(url="https://shop.example/signup")
+    page.route = AsyncMock()
+    page.locator.return_value.element_handle = AsyncMock(return_value=element)
+    binding = FieldBinding(
+        selector="#password",
+        resource_id="11111111-1111-1111-1111-111111111111",
+        kind="credential",
+        field="password",
+        frame_selector="#frame",
+        frame_origin=frame_origin,
+    )
+    broker = BrowserBroker(store)
+    if accepted:
+        await broker._field(
+            Scope(tenant_id="test", owner_id="alice"),
+            page,
+            binding,
+            "https://shop.example",
+            frozenset(allowed),
+        )
+        locator.fill.assert_awaited_once_with("private", timeout=15000)
+    else:
+        with pytest.raises(PermissionError, match="resource_not_authorized"):
+            await broker._field(
+                Scope(tenant_id="test", owner_id="alice"),
+                page,
+                binding,
+                "https://shop.example",
+                frozenset(allowed),
+            )
+        locator.fill.assert_not_awaited()

@@ -20,6 +20,7 @@ from playwright.async_api import async_playwright
 from pydantic import SecretStr
 
 from robothor.autonomy.broker import BrowserBroker, ExecutionPlan, url_origin
+from robothor.autonomy.inspection import inspect_page
 from robothor.autonomy.models import ResourceInput, Scope
 from robothor.autonomy.store import AutonomyStore
 
@@ -146,18 +147,11 @@ async def handle(data: dict[str, Any]) -> dict[str, Any]:
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
             if url_origin(page.url) != destination:
                 return {"error": "destination_changed"}
-            # Fixed code owned by the broker, never agent-supplied evaluation.
-            # Attribute names/labels only: no values, HTML, cookies or scripts.
-            fields = await page.locator("input,select,textarea,button").evaluate_all("""els => els.slice(0,80).map(e => ({
-                tag: e.tagName.toLowerCase(), type: e.type || '',
-                id: e.id || '', name: e.name || '', required: !!e.required,
-                label: (e.labels?.[0]?.textContent || e.getAttribute('aria-label') ||
-                    (e.tagName === 'BUTTON' ? e.textContent : '') || '').slice(0,100)
-            }))""")
-            from robothor.entity.audit import redact_for_audit
-            from robothor.secrets.redaction import redact
-
-            safe_fields = json.loads(redact(json.dumps(redact_for_audit(fields))))
+            inspected = await inspect_page(
+                page,
+                destination=destination,
+                allowed_frames=grant.frame_origins if grant else frozenset(),
+            )
             saved = await asyncio.to_thread(
                 store.put_resource,
                 scope,
@@ -167,10 +161,11 @@ async def handle(data: dict[str, Any]) -> dict[str, Any]:
                     origin=destination,
                     payload=SecretStr(json.dumps(await context.storage_state())),
                 ),
+                source="broker_session",
             )
             return {
                 "origin": destination,
-                "fields": safe_fields,
+                **inspected,
                 "session_resource_id": saved["id"],
             }
         finally:
