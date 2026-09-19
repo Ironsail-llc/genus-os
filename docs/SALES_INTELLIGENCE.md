@@ -697,6 +697,10 @@ instruction. The tool argument schema still applies. Once the required tool has
 run, normal final-answer formatting resumes, including the research dossier
 schema after retrieval. Source attestation and local output validation remain
 mandatory; JSON text that resembles tool arguments is never executed as a tool.
+Citation correction feedback identifies up to eight invalid evidence field
+positions and distinguishes an unread URL from a non-verbatim excerpt. It includes
+no model-supplied quotation, identifier or URL as an instruction. Corrections
+still share the existing two-attempt, time and spending limits.
 
 Other providers, paid
 server tools, multimodal inputs, tiered pricing and explicit cache-write charges

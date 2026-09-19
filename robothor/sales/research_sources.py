@@ -134,16 +134,27 @@ class ResearchSources:
                 raise Conflict(
                     "Scored criteria require matching boolean evidence; put contextual text outside criteria"
                 )
-        for evidence in part.evidence:
+        problems = []
+        for index, evidence in enumerate(part.evidence):
             quote = text_key(evidence.excerpt)
-            matches = [
-                s
-                for s in sources
-                if s["url"] == str(evidence.url) and quote and quote in text_key(s["content"])
-            ]
+            pages = [s for s in sources if s["url"] == str(evidence.url)]
+            matches = [s for s in pages if quote and quote in text_key(s["content"])]
             if not matches:
-                raise Conflict("Research citation does not match the child's retrieved source")
+                field = "excerpt" if pages else "url"
+                problems.append(f"evidence[{index}].{field}")
+                continue
             evidence.retrieved_at = datetime.fromisoformat(matches[0]["retrieved_at"])
+        if problems:
+            # Only engine-generated field positions enter correction feedback;
+            # never replay a model's IDs, quotations or URLs as instructions.
+            raise Conflict(
+                "Research citation validation failed at "
+                + ", ".join(problems[:8])
+                + (" (additional mismatches omitted)" if len(problems) > 8 else "")
+                + ". Use a URL returned by this child's successful retrieval and copy a short, "
+                "continuous verbatim passage from its content. Do not join separated sentences, "
+                "headings or list items. Correct or remove unsupported evidence and its criterion references."
+            )
         return part
 
     def attest(self, run_id, dossier):
