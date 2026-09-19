@@ -210,7 +210,7 @@ def test_reviewed_pilot_limits_require_human_revision_and_cannot_enable_integrat
     c, calls = client
     path = "/api/sales/settings/review"
     body = {
-        "changes": {"monthly_limit_units": 500_000_000},
+        "changes": {"monthly_limit_units": 500_000_000, "followup_delays_business_days": [3, 4]},
         "expected_revision": 3,
         "reason": "Reviewed monthly pilot budget",
     }

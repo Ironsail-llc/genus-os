@@ -8,6 +8,22 @@ const initial = { revision: 4, config: { monthly_limit_units: 100_000_000, daily
   sending_enabled: false, agents: { scout: "sample-scout" } } };
 afterEach(() => vi.restoreAllMocks());
 
+it("reviews an optional bounded follow-up cadence without enabling sending", async () => {
+  const fetcher = vi.spyOn(global, "fetch").mockImplementation(async () => Response.json(initial));
+  render(<PilotSettings onChanged={vi.fn()} />);
+  const cadence = await screen.findByLabelText("Follow-up delays (business days; blank disables)");
+  fireEvent.change(cadence, { target: { value: "3, 4, 5" } });
+  fireEvent.change(screen.getByLabelText("Reason for these limits"), { target: { value: "Review two follow-up delays" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  expect(screen.getByRole("alert")).toHaveTextContent(/at most two/i);
+  fireEvent.change(cadence, { target: { value: "3, 4" } });
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save reviewed limits" }));
+  await waitFor(() => expect(fetcher.mock.calls.some(([, o]) => o?.method === "POST")).toBe(true));
+  const body = fetcher.mock.calls.find(([, o]) => o?.method === "POST")?.[1]?.body;
+  expect(JSON.parse(String(body)).changes).toEqual({ followup_delays_business_days: [3, 4] });
+});
+
 async function reviewMonthly(value = "500") {
   await screen.findByLabelText("Monthly spending limit (USD)");
   fireEvent.change(screen.getByLabelText("Monthly spending limit (USD)"), { target: { value } });

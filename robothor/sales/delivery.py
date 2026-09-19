@@ -53,6 +53,10 @@ class DeliveryWorker:
             local = self._window(settings, now)
             account = await self.provider.account(payload["sender"])
             self._check_mailbox(settings, payload["sender"], account, now)
+            if payload.get("purpose") == "followup":
+                workspace = await self.provider.secret("providers/instantly/workspace_id")
+                if workspace != payload.get("followup_basis", {}).get("workspace"):
+                    raise Conflict("Follow-up workspace changed since reconciliation")
             await asyncio.to_thread(self._reserve_slot, action, local.date())
             if payload.get("reply_to_uuid"):
                 await asyncio.to_thread(self.sales.validate_send, action)
