@@ -52,6 +52,17 @@ class WorkflowManager:
         self.clock = clock
         self._live: dict[str, LiveWorkflow] = {}
         self._opening = asyncio.Lock()
+        self.accepting = True
+
+    def drain(self) -> None:
+        self.accepting = False
+
+    def resume_admission(self) -> None:
+        self.accepting = True
+
+    @property
+    def opening(self) -> bool:
+        return self._opening.locked()
 
     @property
     def active_count(self) -> int:
@@ -119,6 +130,8 @@ class WorkflowManager:
         session_resource_id: str | None = None,
     ) -> dict[str, Any]:
         async with self._opening:
+            if not self.accepting:
+                return {"error": "workflow_broker_draining"}
             operation = await asyncio.to_thread(self.store.operation, scope, operation_id)
             if url_origin(url) != operation["proposal"]["origin"]:
                 raise PermissionError("destination_mismatch")
@@ -282,7 +295,8 @@ class WorkflowManager:
                     advance=advance,
                 )
                 changed = (
-                    result.get("reason") == "workflow_step_completed"
+                    result.get("reason")
+                    in {"workflow_step_completed", "server_validation_required"}
                     or result.get("state") == "completed"
                 )
                 result = {**result, "workflow_id": workflow_id, "revision": revision + int(changed)}

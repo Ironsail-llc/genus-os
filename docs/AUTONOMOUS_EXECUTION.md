@@ -163,7 +163,16 @@ Each workflow owns one page and one immutable proposal. `advance=true` permits
 zero-money account/login/application steps only: at least one previous field must
 disappear and a new field appear, or the broker must observe a final confirmation.
 A confirmed intermediate step clears the old plan and increments the revision.
-Invalid native constraints can be corrected in place. Commands are journaled before
+Invalid native constraints can be corrected in place. For zero-money account,
+login and application forms, a `server_validation_required` result permits
+correcting bindings and retrying at its new revision. Recovery requires exactly
+one POST to the submitted form's declared same-origin action, an HTTP 422
+response, and a newly invalid visible bound field with an associated visible
+error inside that form. It supports AJAX and full-document submissions. Only
+fixed error categories and existing selectors are returned; error text, response
+bodies and entered values stay private. Wrong endpoints, multiple requests,
+stale/hidden errors, unknown outcomes, payments and transient-code challenges
+cannot authorize a retry through this path. Commands are journaled before
 execution; duplicates return the original result and changed payloads are refused.
 Secure code entry resumes the same page without retaining the code in the journal.
 Up to 16 contexts are retained, for 15 idle minutes and at most one hour total.
@@ -171,9 +180,18 @@ Completion, uncertain outcomes, expiry and shutdown close the browser. Restartin
 the browser service loses page state and requires reconciliation; a controller
 restart does not. Closing a workflow does not assert cancellation or release money.
 
+Before updating the broker service, send its main process `SIGUSR1` to stop
+admitting new workflows. Existing pages remain inspectable and executable.
+The private `/ready` response reports `accepting`, `active_workflows` and
+`opening_workflow`; restart only when admission is off and both counts/activity
+are zero. `SIGUSR2` resumes admission if the rollout is deferred. These controls
+are process-management signals, not agent tools. Engine and bridge updates
+need not restart this service.
+
 Persistent workflows currently use local Chromium. Managed-browser CAPTCHA
 sessions, authentication redirects, verification-link navigation, cumulative-only
-wizard transitions, and multi-operation checkout workflows remain separate work.
+wizard transitions, field rejection without the explicit request/error evidence above,
+and multi-operation checkout workflows remain separate work.
 The one-shot browser path remains available for its supported tasks.
 
 Successful execution plans persist in the operation journal. `procedures` returns

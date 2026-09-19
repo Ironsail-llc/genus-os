@@ -21,7 +21,13 @@ def create_app(manager: WorkflowManager) -> FastAPI:
 
     @app.get("/ready")
     async def ready() -> dict[str, str | int]:
-        return {"status": "ok", "protocol": 1}
+        return {
+            "status": "ok",
+            "protocol": 1,
+            "accepting": manager.accepting,
+            "active_workflows": manager.active_count,
+            "opening_workflow": manager.opening,
+        }
 
     @app.post("/rpc")
     async def rpc(request: Request) -> JSONResponse:

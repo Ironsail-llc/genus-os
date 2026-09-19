@@ -108,3 +108,17 @@ async def test_status_waits_for_in_progress_browser_open(store, identity, monkey
         await opening
         await checking
         await manager.shutdown()
+
+
+async def test_drain_refuses_new_work_but_preserves_existing_page(opened, store, identity):
+    manager, result, operation, browser, _ = opened
+    manager.drain()
+    assert not manager.accepting
+    refused = await manager.open(identity, "main", operation["id"], "https://form.example/apply")
+    assert refused == {"error": "workflow_broker_draining"}
+    inspected = await manager.inspect(identity, "main", result["workflow_id"])
+    assert inspected["workflow_id"] == result["workflow_id"]
+    assert manager.active_count == 1
+    browser.close.assert_not_awaited()
+    manager.resume_admission()
+    assert manager.accepting

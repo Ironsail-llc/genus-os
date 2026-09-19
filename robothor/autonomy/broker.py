@@ -546,48 +546,51 @@ class BrowserBroker:
             )
             if confirmed_before_click:
                 raise ValueError("confirmation_before_submit")
-            before_step = set()
-            if advance:
-                from robothor.autonomy.inspection import inspect_page
-                from robothor.autonomy.workflows.transition import signature, wait_for_step
+            if workflow_id:
+                from robothor.autonomy.workflows.outcome import submit_and_observe
 
-                before_step = signature(
-                    await inspect_page(
-                        page, destination=proposal.origin, allowed_frames=allowed_frames
-                    )
+                transition = await submit_and_observe(
+                    self, page, proposal, plan, allowed_frames, advance=advance
                 )
-            await (await self._unique(page.locator(plan.submit_selector))).click(timeout=15000)
-            if advance:
-                transition = await wait_for_step(
-                    page, proposal.origin, proposal.action, allowed_frames, before_step
-                )
-                if transition["kind"] == "step":
+                if transition["kind"] in {"step", "validation"}:
                     from robothor.autonomy.workflows.store import WorkflowStore
 
-                    assert workflow_id is not None
+                    validation = transition["kind"] == "validation"
                     await asyncio.to_thread(
-                        WorkflowStore(self.store).checkpoint, scope, agent_id, workflow_id
+                        WorkflowStore(self.store).checkpoint,
+                        scope,
+                        agent_id,
+                        workflow_id,
+                        rejected=validation,
                     )
                     return {
                         "operation_id": operation_id,
                         "state": "reserved",
-                        "reason": "workflow_step_completed",
-                        **transition["inspection"],
+                        "reason": "server_validation_required"
+                        if validation
+                        else "workflow_step_completed",
+                        **(
+                            {"fields": transition["fields"]}
+                            if validation
+                            else transition["inspection"]
+                        ),
                     }
                 confirmation_evidence = transition["evidence"]
-            elif plan.success_selector:
-                confirmation = page.locator(plan.success_selector)
-                await confirmation.wait_for(state="visible", timeout=30000)
-                text = await (await self._unique(confirmation)).inner_text()
-                if not plan.success_text or plan.success_text not in text:
-                    raise ValueError("confirmation_missing")
-                confirmation_evidence = {
-                    "confirmation_sha256": hashlib.sha256(text.encode()).hexdigest()
-                }
             else:
-                confirmation_evidence = await wait_for_confirmation(
-                    page, proposal.origin, proposal.action
-                )
+                await (await self._unique(page.locator(plan.submit_selector))).click(timeout=15000)
+                if plan.success_selector:
+                    confirmation = page.locator(plan.success_selector)
+                    await confirmation.wait_for(state="visible", timeout=30000)
+                    text = await (await self._unique(confirmation)).inner_text()
+                    if not plan.success_text or plan.success_text not in text:
+                        raise ValueError("confirmation_missing")
+                    confirmation_evidence = {
+                        "confirmation_sha256": hashlib.sha256(text.encode()).hexdigest()
+                    }
+                else:
+                    confirmation_evidence = await wait_for_confirmation(
+                        page, proposal.origin, proposal.action
+                    )
             if url_origin(page.url) != proposal.origin:
                 raise PermissionError("confirmation_origin_changed")
             evidence = {
