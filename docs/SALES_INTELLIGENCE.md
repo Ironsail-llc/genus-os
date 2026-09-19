@@ -207,9 +207,17 @@ inactive `sales.inbound`, `sales.reconcile`, and `sales.business` jobs can be re
 actor are audited; delivery and CRM mutation jobs are excluded. This endpoint
 retries the same page and does not authorize a changed identity or message.
 
+`GET /api/sales/provider-reads` supplies the owner/admin recovery inventory.
+`state=attention` (default) lists failed reads and pending reads with errors;
+`state=all` also includes running/completed reads. Optional `kind` is restricted
+to the three read queues above. The response contains at most 100 rows, newest
+created first, and an `after` cursor for the next page. Cursor lookup is tenant
+scoped. Only recovery metadata and allowlisted source/account/practice/campaign
+references are returned, without job payloads or lease tokens.
+
 Message backfill does not recover missed provider-only unsubscribe labels,
 account-status changes or disabled subscriptions. Reconciliation of those states,
-ambiguous thread/HTML handling, operator repair UI, and lag alerts remain
+ambiguous thread/HTML handling, uncertain-write repair controls, and lag alerts remain
 activation requirements.
 
 ## Reviewed business observations
@@ -298,10 +306,30 @@ Account, outcome switch and practice review are checked before reading and again
 in the page transaction, so pausing or changing identity during a read cannot
 commit its results. Job completion checks wall-clock lease expiry.
 
-Association/repair controls in the Sales view, complete-history certification,
+Cross-customer reassignment controls, complete-history certification,
 atomic instance deployment and production connection checks remain before live
 activation. The native workflow and provider tests use synthetic business data;
 they do not establish deployed-runtime or customer-pilot success.
+
+### Reviewing and recovering in Helm
+
+In **Sales**, **Review imported practices** opens a paginated source inventory.
+Each practice shows its source account, practice/business-group identity, active
+state, observation time and current or held match. Select **Review match**, choose
+a Genus customer, record the matching evidence, and explicitly confirm ownership.
+The submission binds the exact revision displayed during review. A stale revision
+or changed association discards the form and requires refresh/review. A held match
+can be reconfirmed for its current customer. Reassignment to a different customer
+is not offered by this control. Customer choices currently come from the latest
+200 prospects in the Sales workspace.
+
+**Inspect provider reads** opens the recovery inventory. Filter by read type or
+show all statuses, inspect the failed read's scope, then use **Review read recovery**
+to record what was repaired. **Retry this read** resumes only that read. Running
+and completed rows have no recovery button; the API enforces the same boundary.
+Pagination failures preserve existing rows and the cursor for another attempt.
+Changing the practice source ignores late responses from the previous selection.
+Both panels load only within the visible owner/admin Sales view.
 
 ## Native agent deployment
 

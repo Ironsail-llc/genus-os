@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/business/page-header";
 import { isOperatorRole } from "@/components/layout/nav-config";
 import { apiFetch } from "@/lib/api/client";
+import { BusinessReview, type BusinessSource } from "@/components/sales/business-review";
+import { ReadRecovery } from "@/components/sales/read-recovery";
 
 const API = "/api/bridge/api/sales";
 type Evidence = { id: string; field: string; value: unknown; url: string; excerpt: string; retrieved_at: string; confidence: string };
@@ -28,6 +30,8 @@ export function SalesView({ visible, role }: { visible: boolean; role?: string |
   const [detail, setDetail] = useState<Detail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [showBusiness, setShowBusiness] = useState(false);
+  const [showReads, setShowReads] = useState(false);
   const permitted = isOperatorRole(role);
   const refresh = useCallback(async () => {
     const latest = await apiFetch<Overview>(API);
@@ -68,6 +72,13 @@ export function SalesView({ visible, role }: { visible: boolean; role?: string |
           {label}: {data.settings[key] === true ? "enabled" : "paused"}
         </Button>)}</div>
       <p className="text-sm text-muted-foreground">Every outbound message requires individual approval. Provider acceptance and confirmed delivery are tracked separately.</p>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="outline" aria-expanded={showBusiness} onClick={() => setShowBusiness(!showBusiness)}>Review imported practices</Button>
+        <Button variant="outline" aria-expanded={showReads} onClick={() => setShowReads(!showReads)}>Inspect provider reads</Button>
+      </div>
+      {showBusiness && <BusinessReview prospects={data.prospects} sources={(data.settings.business_sources as BusinessSource[] | undefined) ?? []}
+        onChanged={async () => { await refresh(); if (detail) setDetail(await apiFetch<Detail>(`${API}/prospects/${detail.prospect.id}`)); }} />}
+      {showReads && <ReadRecovery />}
       <div className="grid gap-5 xl:grid-cols-2">
         <div className="space-y-3">
           <h3 className="font-medium">Prospects ({data.prospects.length} shown)</h3>
