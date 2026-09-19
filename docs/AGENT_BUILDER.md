@@ -297,6 +297,14 @@ the input index and native result; it does not alter spawn admission, identities
 funding or cancellation. This callback is not a model-callable tool argument.
 Callback failures are batch failures, and the remaining children are still awaited.
 
+Trusted workflow integrations can use `required_tool_scope` to require one
+already-granted tool while a workflow prerequisite is pending. LLM dispatch sends
+an exact function `tool_choice`; it refuses a missing capability rather than
+adding it. This scope is not model-controlled and closes for inherited async tasks
+when its owner exits. It does not validate tool outcomes or confer success: the
+owning workflow must retain its result checks. Tool-less auxiliary requests remain
+unchanged, and outside the scope the engine uses normal automatic tool selection.
+
 ### Pattern D: Cron Safety Net
 
 Python crons fetch data and publish events. Unit agents process the data. Crons are NOT the primary trigger — they catch anything the event hooks missed.

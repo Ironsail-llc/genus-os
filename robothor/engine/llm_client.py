@@ -98,6 +98,7 @@ from robothor.engine.reasoning_replay import (
     strip_reasoning_for_model,
 )
 from robothor.engine.request_budget import RequestBudgetError, bounded_completion
+from robothor.engine.required_tool import tool_choice
 from robothor.engine.retry import retry_async
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.stall_watchdog import _active_watchdog_var
@@ -1998,7 +1999,7 @@ class LLMClient:
             kwargs["stream"] = True
         if tools:
             kwargs["tools"] = tools
-            kwargs["tool_choice"] = "auto"
+            kwargs["tool_choice"] = tool_choice(tools)
         kwargs.update(
             thinking_kwargs_for_call(model, kwargs["max_tokens"], reduced=thinking_reduced)
         )

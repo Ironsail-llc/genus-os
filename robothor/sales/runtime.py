@@ -48,6 +48,7 @@ class NativeStageRunner:
         from robothor.engine.config import load_agent_config
         from robothor.engine.models import DeliveryMode, RunStatus, TriggerType
         from robothor.engine.request_budget import RequestBudget, budget_scope
+        from robothor.engine.required_tool import required_tool_scope
         from robothor.engine.tools.handlers.spawn import get_runner
         from robothor.sales.research_fanout import research_scope
         from robothor.sales.research_manifest import prepare_research
@@ -90,7 +91,14 @@ class NativeStageRunner:
             downstream_agents=[],
         )
         budget = RequestBudget(math.floor(bounded.max_cost_usd * 1e6))
-        with budget_scope(budget), research_scope(fanout):
+        with (
+            budget_scope(budget),
+            research_scope(fanout),
+            required_tool_scope(
+                "sales_research_parallel" if fanout is not None else None,
+                lambda: fanout is not None and not fanout.started,
+            ),
+        ):
             result = await runner.execute(
                 agent_id=agent_id,
                 message=message,
