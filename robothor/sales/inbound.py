@@ -32,7 +32,7 @@ def instantly_event(raw, authorization, secret, workspace):
     if (
         not secret
         or not workspace
-        or not hmac.compare_digest(authorization or "", "Bearer " + secret)
+        or not hmac.compare_digest((authorization or "").encode(), ("Bearer " + secret).encode())
     ):
         raise AuthenticationError("Webhook authentication required")
     source = _document(raw)
@@ -46,6 +46,7 @@ def instantly_event(raw, authorization, secret, workspace):
         "email_bounced",
         "lead_unsubscribed",
         "lead_not_interested",
+        "lead_wrong_person",
         "account_error",
         "campaign_completed",
         "supersearch_enrichment_completed",
@@ -60,10 +61,17 @@ def instantly_event(raw, authorization, secret, workspace):
         "campaign_id": str(source.get("campaign_id") or ""),
         "provider_id": str(source.get("email_id") or ""),
     }
-    for source_key, target_key in [("lead_email", "recipient"), ("email_account", "sender")]:
-        if source.get(source_key):
-            result[target_key] = Contact.email_address(source[source_key])
     inbound = kind in {"reply_received", "auto_reply_received"}
+    pairs = (
+        [("lead_email", "sender"), ("email_account", "recipient")]
+        if inbound
+        else [("lead_email", "recipient"), ("email_account", "sender")]
+    )
+    for source_key, target_key in pairs:
+        if source.get(source_key):
+            if not isinstance(source[source_key], str):
+                raise ValueError("Webhook address must be text")
+            result[target_key] = Contact.email_address(source[source_key])
     if kind in {"email_sent", "reply_received", "auto_reply_received"}:
         result["body"] = str(source.get("reply_text" if inbound else "email_text") or "")[:50000]
         result["subject"] = str(source.get("reply_subject" if inbound else "email_subject") or "")[

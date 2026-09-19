@@ -234,11 +234,14 @@ class StopWorker:
                 "JOIN operation_actions a ON a.tenant_id=e.tenant_id AND a.id::text=e.dedup_key "
                 "WHERE e.tenant_id=%s AND e.kind='instantly.campaign' AND e.status='completed' "
                 "AND (%s IS NULL OR a.payload->>'prospect_id'=%s) "
+                "AND (%s IS NULL OR a.payload->>'sender'=%s) "
                 "AND (%s IS NULL OR a.payload->>'recipient'=%s OR '@'||split_part(a.payload->>'recipient','@',2)=%s)",
                 (
                     self.sales.tenant,
                     payload.get("prospect_id"),
                     payload.get("prospect_id"),
+                    payload.get("sender"),
+                    payload.get("sender"),
                     payload.get("email"),
                     payload.get("email"),
                     payload.get("email"),

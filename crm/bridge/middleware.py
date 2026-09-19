@@ -178,8 +178,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         from robothor.auth.deps import token_from_request, verify_token
         from robothor.auth.tokens import TokenError
+        from robothor.sales.ingestion import is_instantly_webhook
 
         request.state.auth = None
+        # This exact POST authenticates its custom provider header in the route.
+        # Do not exempt neighboring resources or other HTTP methods from JWTs.
+        if is_instantly_webhook(request.method, request.url.path):
+            return await call_next(request)
         if request.url.path.startswith(self._SETUP_PREFIX):
             return await call_next(request)
 
@@ -250,11 +255,12 @@ def _authorization_denial(auth: AuthContext, method: str, path: str) -> str | No
     if not auth.has_scope(required_scope):
         return "insufficient scope"
 
-    if path == "/api/sales" or path.startswith("/api/sales/"):
-        # This console controls only the verified tenant's sales data. It is
-        # human-only even when a service token carries broad bridge scopes.
-        if auth.is_service or auth.role not in {"owner", "admin"}:
-            return "human tenant operator required"
+    # This console controls only the verified tenant's sales data. It is
+    # human-only even when a service token carries broad bridge scopes.
+    if (path == "/api/sales" or path.startswith("/api/sales/")) and (
+        auth.is_service or auth.role not in {"owner", "admin"}
+    ):
+        return "human tenant operator required"
 
     if path.startswith("/api/tenants"):
         if auth.is_service:

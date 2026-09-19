@@ -203,6 +203,7 @@ QueueStage = Literal[
     "activation",
     "delivery",
     "stop",
+    "inbox",
 ]
 
 
@@ -279,6 +280,8 @@ class Message(Contract):
     subject: str = Field(max_length=2000)
     body: str = Field(max_length=50000)
     campaign_id: str | None = None
+    auto_reply: StrictBool = False
+    thread_id: str | None = Field(default=None, max_length=200)
 
     @field_validator("sender", "recipient")
     @classmethod

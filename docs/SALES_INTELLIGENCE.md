@@ -14,9 +14,8 @@ Candidates already known to Genus do not consume another admission.
 **Implementation status:** the domain, review API, view, provider adapters and
 explicitly constructed workers are available as a foundation. Importing the
 package does not install a schedule, activate integrations or send email.
-Automated deployment, provider event ingestion,
-provider billing reconciliation, and the real pilot remain deployment
-gates. Keep integration switches off until those gates are satisfied.
+Automated deployment, periodic provider reconciliation,
+provider billing reconciliation, and the real pilot remain deployment gates. Keep integration switches off until those gates are satisfied.
 
 ## Native workflow execution
 
@@ -24,11 +23,11 @@ Instance workflow YAML calls `sales_process_queue` in a deterministic tool step.
 `workflow_bindings` explicitly maps each stage to its authorized native service
 workflow. No agent has this execution authority. Stages are `plan`, `scout`,
 `research`, `qualify`, `contacts`, `verify`, `promotion`, `draft`, `conversation`,
-`activation`, `delivery`, and `stop`. Each call handles at most one work item;
+`activation`, `delivery`, `stop`, and `inbox`. Each call handles at most one work item;
 the planner creates a bounded set of discovery jobs. There is no separate daemon.
 
 Use separate workflows for stop requests, inbound conversations, delivery, and
-research. The stop workflow remains scheduled when sending is paused. All other
+research. Stop and inbox workflows remain scheduled when sending is paused. Other
 workers respect their stage switches. Set `tool_timeout_seconds` in the native
 workflow step to cover the worker's allowance and keep the enclosing workflow
 timeout larger. Research workers allow 300 seconds; a 330-second tool step inside
@@ -117,7 +116,7 @@ Keep credentials in the tenant vault:
 | Provider | Keys |
 |---|---|
 | Pipedrive | `providers/pipedrive/api_key`, `providers/pipedrive/company_domain` |
-| Instantly | `providers/instantly/api_key` |
+| Instantly | `providers/instantly/api_key`, `providers/instantly/workspace_id`, `providers/instantly/webhook_secret` |
 
 Application-specific signup and fulfillment adapters belong in the private
 instance deployment. They must pin the authenticated organization and minimize
@@ -125,6 +124,47 @@ returned business fields. Signup readiness, order placement, administrative clos
 fulfillment are separate milestones. Outcome import needs an authoritative
 business-only projection and a confirmed practice mapping; webhook names alone
 do not prove delivery. Patient records and clinical details are not sales inputs.
+
+## Provider event intake
+
+`POST /api/integrations/instantly/{tenant_id}/webhook` authenticates a configured
+`Authorization: Bearer <webhook_secret>` header against the selected tenant's
+vault. It separately checks the payload workspace ID. The path selects a vault;
+body fields and tenant headers do not authorize access. Only this exact POST
+bypasses JWT parsing. Other integration paths still require normal authentication.
+The route authenticates before reading the body, caps it at 256 KiB, and stores
+an allowlisted event without attachments or unrelated contact fields.
+
+[Instantly documents custom webhook headers](https://help.instantly.ai/en/articles/6261906-webhooks),
+not an HMAC signature contract. Configure specific supported subscriptions, not
+“All events”: sent, replies (including automatic replies), bounce, unsubscribe,
+not interested, wrong person, campaign completed and account error. Registration,
+subscription-health checks and periodic backfill are still activation gates.
+
+A completed campaign-creation receipt binds each event to its original,
+single-recipient Genus action. Supplied addresses must agree; missing optional
+addresses can be resolved from that unique campaign. Unknown campaigns remain
+unprocessed for reconciliation. Replies invalidate pending approvals and queue
+campaign pauses within the intake transaction. Negative events also suppress the
+recipient immediately. Known mailbox errors revoke its readiness and queue pauses
+for only that mailbox. These controls do not depend on a research or sending switch.
+
+The `inbox` worker retrieves the actual email from Instantly before committing a
+message and follow-on work atomically. Workspace, campaign, direction, mailbox,
+participants and provider message ID must agree. A scheduled email is not sent.
+Automatic replies are stored and stop pending work without starting a reply loop.
+Canonical sent events record **sent**, not inbox delivery. The message time is
+[the provider's database insertion timestamp](https://developer.instantly.ai/api-reference/schemas/email),
+not the sender-controlled email date. The real provider UUID and thread ID are
+preserved; no reply identifier is fabricated.
+
+Without an email UUID, one campaign-filtered page is checked for exactly one
+matching body, subject, participants and nearby timestamp. Ambiguous matches,
+additional pages, HTML-only bodies, missing campaign associations and unsupported
+identities remain pending and eventually fail visibly after bounded retries.
+Periodic paginated reconciliation and an operator repair workflow are still
+required. Provider pauses are asynchronous: intake invalidates local authority
+immediately, but an already in-flight provider request cannot be recalled.
 
 ## Native agent deployment
 
