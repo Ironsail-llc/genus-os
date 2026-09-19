@@ -279,6 +279,14 @@ def openrouter_quote(kwargs, endpoints):
                 continue
             if requested > maximum or "max_tokens" not in endpoint["supported_parameters"]:
                 continue
+            # Pinning an endpoint that cannot honor JSON mode makes the
+            # provider's require_parameters gate reject an otherwise valid
+            # model. Filter before reserving money or attempting that route.
+            if (
+                kwargs.get("response_format") is not None
+                and "response_format" not in endpoint["supported_parameters"]
+            ):
+                continue
             price = endpoint["pricing"]
             # Tiered/time-varying and explicit cache-write pricing need their
             # own reviewed quote policy. Do not guess the maximum surcharge.
