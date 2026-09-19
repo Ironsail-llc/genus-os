@@ -803,6 +803,7 @@ class WorkflowStepDef:
     # Tool step
     tool_name: str = ""
     tool_args: dict[str, Any] = field(default_factory=dict)
+    tool_timeout_seconds: int = 120  # Still bounded by the enclosing workflow deadline.
 
     # Condition step
     input_expr: str = ""  # {{ steps.X.output_text }}

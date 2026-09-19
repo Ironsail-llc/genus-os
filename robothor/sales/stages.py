@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import math
 
 from pydantic import ValidationError
 
@@ -38,47 +36,21 @@ class StructuredWorker(ResearchWorker):
         if not job:
             return False
         try:
-            agent = settings.agents.get(self.stage)
-            if not agent:
-                raise Conflict("Native stage agent not configured")
             context = await self.context(job)
             if context.get("prospect", {}).get("owner", "agent") != "agent":
                 await asyncio.to_thread(
                     self.sales.ops.complete, job["id"], job["lease_token"], {"held_for_human": True}
                 )
                 return True
-            reservations = await asyncio.to_thread(self._reserve, settings, job)
-            try:
-                result = await asyncio.wait_for(
-                    self.runner.run(
-                        agent_id=agent,
-                        tenant_id=self.sales.tenant,
-                        correlation_id=str(job["id"]),
-                        max_cost_usd=self.RUN_ALLOWANCE_UNITS / 1e6,
-                        message=json.dumps(
-                            {
-                                "task": self.instruction,
-                                "untrusted_business_data": context,
-                                "output_schema": self.schema.model_json_schema(),
-                            },
-                            default=str,
-                        ),
-                    ),
-                    300,
-                )
-            except (TimeoutError, Conflict):
-                raise Conflict(
-                    "Stage did not finish; reserved cost requires reconciliation"
-                ) from None
-            await asyncio.to_thread(
-                self.sales.ops.settle_many,
-                reservations,
-                max(0, math.ceil(result.total_cost_usd * 1e6)),
+            output, context, run_id = await self._generate(
+                job,
+                settings,
+                self.stage,
+                self.schema,
+                context,
+                self.instruction,
             )
-            if str(result.status) != "completed":
-                raise Conflict("Native stage run did not complete")
-            output = self.schema.model_validate_json(result.output_text or "")
-            await asyncio.to_thread(self.commit, job, context, output, result.id)
+            await asyncio.to_thread(self.commit, job, context, output, run_id)
         except (Conflict, BudgetExceeded, ValidationError) as exc:
             reason = (
                 "Invalid structured stage output" if isinstance(exc, ValidationError) else str(exc)
@@ -101,12 +73,17 @@ class StructuredWorker(ResearchWorker):
 class ScoutWorker(StructuredWorker):
     stage = "scout"
     schema = CandidateBatch
-    instruction = "Discover up to 20 businesses in the assigned segment. Return source-backed CandidateBatch JSON. Do not invent contacts."
+    instruction = "Discover businesses in the assigned segment, up to the context max_companies limit. Return source-backed CandidateBatch JSON. Do not invent contacts."
 
     async def context(self, job):
-        return {"segment": job["payload"]["segment"]}
+        return {
+            "segment": job["payload"]["segment"],
+            "max_companies": job["payload"].get("max_companies", 20),
+        }
 
     def commit(self, job, context, output, run_id):
+        if len(output.companies) > context["max_companies"]:
+            raise Conflict("Scout exceeded the planned candidate allowance")
         with self.sales.ops.transaction() as cur:
             ids = []
             for candidate in output.companies:

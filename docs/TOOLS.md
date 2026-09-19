@@ -145,12 +145,19 @@ and report `kind: "own"` — they degrade honestly rather than pretending.
 | `sales_get_prospect` | Read the tenant's current dossier and qualification. |
 | `sales_get_context` | Read contacts, conversation and active sales knowledge for drafting. |
 | `sales_propose_email` | Create an immutable draft for human review; never approves or sends. |
+| `sales_process_queue` | Advance one durable stage from an explicitly bound native service workflow. Refused for agent, interactive and benchmark callers. |
 
 Use these for the governed prospect workflow. Generic CRM edits do not substitute
 for evidence, qualification or sales review. Sales agents should not receive
 general mail-send tools. Writes are refused in benchmarks; tenant identity comes
 from the authenticated tool context. See [Sales intelligence](SALES_INTELLIGENCE.md)
 for deployment gates and provider ownership.
+
+Keep the queue tool out of sales agent manifests. Its trusted caller must carry
+the matching `workflow:<id>` / `service:workflow:<id>` identity and `service` role,
+and the tenant's `workflow_bindings` must authorize that workflow for the requested
+stage. It does not create approvals. Stop requests run on a separate workflow and
+continue while delivery and research switches are off.
 
 ### Google Workspace (`gws_*`)
 

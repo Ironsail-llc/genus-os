@@ -992,6 +992,12 @@ manifest writer calls it: `POST`/`PATCH`/`DELETE /api/agent-manifests`,
 
 #### Workflow budgets and step visibility
 
+Deterministic tool steps may declare `tool_timeout_seconds` (integer 1–3600,
+default 120). The workflow passes this allowance to the native tool registry;
+the enclosing workflow deadline still bounds the entire execution. This allows
+longer durable workers to finish without silently inheriting a two-minute tool
+limit. Declare a workflow timeout that leaves room for the tool and persistence.
+
 A workflow's `timeout_seconds` is one wall-clock budget shared by all of its
 steps, and an agent step spends it walking that agent's model chain — primary,
 one in-place transient retry, then each fallback, each leg with its own per-call

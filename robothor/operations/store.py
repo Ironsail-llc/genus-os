@@ -146,6 +146,23 @@ class Operations:
         self.audit(cur, job_id, "work.completed")
         return None
 
+    def checkpoint(self, job_id: str, token: str, payload: dict):
+        """Persist paid work before domain commit; a replacement may reuse it.
+
+        The active lease fences writes. A checkpoint cannot change in place;
+        completion replaces it with the final receipt in the domain transaction.
+        """
+        with self.transaction() as cur:
+            cur.execute(
+                "UPDATE operation_jobs SET result=%s,updated_at=now() "
+                "WHERE tenant_id=%s AND id=%s AND lease_token=%s AND status='running' "
+                "AND lease_until>clock_timestamp() AND (result IS NULL OR result=%s)",
+                (Json(payload), self.tenant, job_id, token, Json(payload)),
+            )
+            if cur.rowcount != 1:
+                raise Conflict("Work lease expired, replaced, or checkpoint changed")
+            self.audit(cur, job_id, "work.checkpointed")
+
     def defer(self, job_id: str, token: str, reason: str, *, delay_seconds=60, busy=False):
         """Retry a known-safe stage; busy admission does not consume an attempt."""
         with self.transaction() as cur:

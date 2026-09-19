@@ -2,7 +2,7 @@
 
 from pydantic import Field
 
-from robothor.sales.models import Contract, Draft
+from robothor.sales.models import Contract, Draft, QueueStage
 
 
 class ProspectRef(Contract):
@@ -19,7 +19,15 @@ class DraftArgs(ProspectRef):
     draft: Draft
 
 
+class QueueArgs(Contract):
+    stage: QueueStage
+
+
 CONTRACTS = {
+    "sales_process_queue": (
+        QueueArgs,
+        "Native service-workflow operation: advance one configured sales queue stage. Requires a tenant workflow binding; agents cannot invoke it. Existing approval and spending boundaries still apply.",
+    ),
     "sales_discover": (
         DiscoverArgs,
         "Add a candidate business to Genus CRM and queue evidence research. Does not contact anyone.",
