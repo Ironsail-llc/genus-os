@@ -1035,6 +1035,14 @@ Tool calls remain available. JSON mode controls syntax, not business correctness
 validate the result against the workflow's schema and evidence rules before
 accepting it. A truncated or unsupported response still fails validation.
 
+Native workflows can additionally apply a trusted `response_schema_scope` from
+`robothor.engine.response_schema`. Its JSON Schema overrides the session's generic
+JSON-object mode only while that scope is active and its readiness predicate is
+true. This is an internal workflow contract, not a model-supplied schema or a tool
+permission. Streaming and non-streaming request builders share it. Budgeted
+OpenRouter requests require endpoint `structured_outputs` support in addition to
+`response_format`; callers must still validate output and domain evidence locally.
+
 For a model whose backends have different reliability or tool support, set
 `model.provider_order` to a mapping from its exact LiteLLM OpenRouter path to an
 ordered, nonempty list of provider slugs. Base slugs include endpoint variants;
