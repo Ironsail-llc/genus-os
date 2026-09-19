@@ -261,6 +261,14 @@ access or disable all tools. A child with no declared allowlist can be narrowed
 to an explicit list, and its `tools_denied` restrictions still apply. Change the
 child manifest deliberately when it needs an additional capability.
 
+Set `v2.spawn_allowed_agents` to a list of agent IDs when delegation must stay
+inside an approved team. The engine checks the target before loading its manifest.
+This restriction follows the entire spawn tree: each child's own nonempty list
+can only narrow its ancestor's list. Disjoint lists permit no further targets.
+An omitted or empty list adds no restriction, preserving existing configurations;
+`can_spawn_agents: false` still disables spawning. Target permission does not grant
+additional tools or change the child's service role.
+
 ### Pattern D: Cron Safety Net
 
 Python crons fetch data and publish events. Unit agents process the data. Crons are NOT the primary trigger — they catch anything the event hooks missed.

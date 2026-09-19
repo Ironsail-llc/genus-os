@@ -384,6 +384,7 @@ def _v2_keys_read_by_config() -> frozenset[str]:
     static = frozenset(
         {
             "can_spawn_agents",
+            "spawn_allowed_agents",
             "max_nesting_depth",
             "guardrails",
             "sandbox",

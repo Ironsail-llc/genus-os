@@ -1753,6 +1753,7 @@ class AgentRunner(
                 nesting_depth=0,
                 max_nesting_depth=agent_config.max_nesting_depth,
                 max_spawn_batch=agent_config.max_spawn_batch,
+                allowed_agents=frozenset(agent_config.spawn_allowed_agents) or None,
                 remaining_token_budget=session.run.token_budget,
                 parent_trace_id=trace.trace_id if trace else "",
                 parent_span_id="",
