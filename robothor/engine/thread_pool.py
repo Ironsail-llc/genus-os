@@ -110,6 +110,7 @@ WHERE t.deleted_at IS NULL
   AND t.tenant_id = %s
   AND t.status != 'DONE'
   AND 'thread' = ANY(t.tags)
+  AND pursuit_task_runnable(t.id,t.tenant_id)
   AND (t.follow_up_at IS NULL OR t.follow_up_at <= NOW())
 ORDER BY
   CASE WHEN t.requires_human AND t.status = 'REVIEW' THEN 0 ELSE 1 END,

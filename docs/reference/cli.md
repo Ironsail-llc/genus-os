@@ -28,7 +28,7 @@ Where to start, rather than reading this top to bottom:
 Settings are documented in the [configuration reference](configuration.md),
 not here: a flag belongs to one command, a setting to the whole instance.
 
-35 verbs.
+37 verbs.
 
 ## `genus plugin`
 
@@ -433,6 +433,112 @@ Start the MCP server (stdio transport).
 
 Usage: `genus mcp`
 
+## `genus goals`
+
+Manage durable short- and long-term goal pursuit.
+
+Usage: `genus goals {list,enable,disable,create,adopt,get,pause,resume,cancel,approve,update} [--tenant TENANT]`
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--tenant` | `TENANT` | — |  |
+
+### `genus goals list`
+
+Usage: `genus goals list`
+
+### `genus goals enable`
+
+Usage: `genus goals enable`
+
+### `genus goals disable`
+
+Usage: `genus goals disable`
+
+### `genus goals create`
+
+Usage: `genus goals create <objective> [--criterion CRITERION] [--kind KIND] [--mode MODE] [--parent-goal-id PARENT_GOAL_ID] [--token-budget TOKEN_BUDGET] [--review-seconds REVIEW_SECONDS] [--human-review]`
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `objective` | yes |  |
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--criterion` | `CRITERION` | — |  |
+| `--kind` | `short` \| `long` | `short` |  |
+| `--mode` | `finite` \| `ongoing` | `finite` |  |
+| `--parent-goal-id` | `PARENT_GOAL_ID` | — |  |
+| `--token-budget` | `TOKEN_BUDGET` | — |  |
+| `--review-seconds` | `REVIEW_SECONDS` | `86400` |  |
+| `--human-review` | — | off |  |
+
+### `genus goals adopt`
+
+Usage: `genus goals adopt <legacy_task_id>`
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `legacy_task_id` | yes |  |
+
+### `genus goals get`
+
+Usage: `genus goals get <goal_id>`
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `goal_id` | yes |  |
+
+### `genus goals pause`
+
+Usage: `genus goals pause <goal_id>`
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `goal_id` | yes |  |
+
+### `genus goals resume`
+
+Usage: `genus goals resume <goal_id> [--token-budget TOKEN_BUDGET]`
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `goal_id` | yes |  |
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--token-budget` | `TOKEN_BUDGET` | — |  |
+
+### `genus goals cancel`
+
+Usage: `genus goals cancel <goal_id>`
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `goal_id` | yes |  |
+
+### `genus goals approve`
+
+Usage: `genus goals approve <goal_id>`
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `goal_id` | yes |  |
+
+### `genus goals update`
+
+Apply a versioned GoalUpdate JSON object.
+
+Usage: `genus goals update <goal_id> [--file FILE]`
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `goal_id` | yes |  |
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--file` | `FILE` | — | JSON file, or - for stdin |
+
 ## `genus goal`
 
 Manage the active long-running session goal.
@@ -548,6 +654,128 @@ Usage: `genus goal set-target <metric> <target> [--weight WEIGHT] [--window-days
 Remove a metric target by id.
 
 Usage: `genus goal remove-target <target_id> [--json]`
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `target_id` | yes | Target id (typically the metric name) |
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--json` | — | off |  |
+
+## `genus legacy-goal`
+
+Usage: `genus legacy-goal {set,status,evidence,complete,edit-objective,add-criterion,set-target,remove-target} [--tenant TENANT] [--agent AGENT]`
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--tenant` | `TENANT` | — | Tenant ID (defaults to ROBOTHOR_DEFAULT_TENANT or 'default') |
+| `--agent` | `AGENT` | — | Agent ID for a per-agent goal (workspace goal otherwise, owner=main) |
+
+### `genus legacy-goal set`
+
+Create the active session goal.
+
+Usage: `genus legacy-goal set <objective> [--criteria CRITERIA] [--json]`
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `objective` | yes | Goal objective (one sentence) |
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--criteria` | `CRITERIA` | `[]` | Success criterion; repeat to provide an explicit completion contract |
+| `--json` | — | off | Output JSON |
+
+### `genus legacy-goal status`
+
+Show the active session goal.
+
+Usage: `genus legacy-goal status [--json]`
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--json` | — | off | Output JSON |
+
+### `genus legacy-goal evidence`
+
+Record typed evidence.
+
+Usage: `genus legacy-goal evidence [--kind KIND] [--summary SUMMARY] [--reference REFERENCE] [--json]`
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--kind` | `test_run` \| `commit` \| `ci_run` \| `note` | — | test_run: pytest:passed:N or run UUID; commit: git SHA validated via git cat-file; ci_run: https URL; note: free-form (does not satisfy completion) |
+| `--summary` | `SUMMARY` | — | Short evidence summary |
+| `--reference` | `REFERENCE` | — | Verifiable reference for this kind |
+| `--json` | — | off | Output JSON |
+
+### `genus legacy-goal complete`
+
+Mark the active session goal complete.
+
+Usage: `genus legacy-goal complete <note> [--json]`
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `note` | yes | Completion note |
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--json` | — | off | Output JSON |
+
+### `genus legacy-goal edit-objective`
+
+Replace the goal's objective in place.
+
+Usage: `genus legacy-goal edit-objective <objective> [--json]`
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `objective` | yes | New objective text |
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--json` | — | off |  |
+
+### `genus legacy-goal add-criterion`
+
+Append a success criterion to the goal.
+
+Usage: `genus legacy-goal add-criterion <text> [--json]`
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `text` | yes | Criterion text |
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--json` | — | off |  |
+
+### `genus legacy-goal set-target`
+
+Add or replace a metric target on the goal.
+
+Usage: `genus legacy-goal set-target <metric> <target> [--weight WEIGHT] [--window-days WINDOW_DAYS] [--category CATEGORY] [--id TARGET_ID] [--json]`
+
+| Argument | Required | Description |
+| --- | --- | --- |
+| `metric` | yes | Metric name (e.g. benchmark_pass_rate) |
+| `target` | yes | Target comparator e.g. ">=0.85" or "<0.05" |
+
+| Flag | Takes | Default | Description |
+| --- | --- | --- | --- |
+| `--weight` | `WEIGHT` | `1.0` |  |
+| `--window-days` | `WINDOW_DAYS` | `7` |  |
+| `--category` | `reach` \| `quality` \| `efficiency` \| `correctness` | `correctness` |  |
+| `--id` | `TARGET_ID` | — | Stable id for this target (defaults to metric) |
+| `--json` | — | off |  |
+
+### `genus legacy-goal remove-target`
+
+Remove a metric target by id.
+
+Usage: `genus legacy-goal remove-target <target_id> [--json]`
 
 | Argument | Required | Description |
 | --- | --- | --- |

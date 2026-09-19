@@ -35,6 +35,12 @@ MUTATION_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 # Each reason cites the middleware clause that actually constrains the route;
 # without such a clause the route must be gated instead of listed here.
 JUSTIFIED_WITHOUT_OPERATOR_GATE: dict[str, str] = {
+    "/api/goals": (
+        "Tenant-owned goals: goal_operator dependency rejects service tokens and "
+        "non-owner/admin roles; TenantMiddleware pins the verified tenant. "
+        "Platform-only require_operator would exclude other tenants' own operators. "
+        "Dependency enforcement is exercised in robothor/goals/tests/test_api.py."
+    ),
     "/api/auth": (
         "Public session bootstrap/rotation — AuthMiddleware._PUBLIC_PATHS lists "
         "/api/auth/sso|refresh|logout and _authorization_denial() returns None for "
