@@ -96,6 +96,18 @@ def retry_read(job_id: UUID, body: ReadRepair, request: Request):
     return {"ok": True}
 
 
+@router.get("/provider-reads")
+@domain_errors
+def provider_reads(
+    request: Request,
+    state: Literal["attention", "all"] = "attention",
+    kind: Literal["sales.inbound", "sales.reconcile", "sales.business"] | None = None,
+    after: UUID | None = None,
+):
+    service, _ = require_sales_operator(request)
+    return service.provider_reads(state=state, kind=kind, after=str(after) if after else None)
+
+
 @router.patch("/settings")
 @domain_errors
 def configure(body: SalesSettings, request: Request):

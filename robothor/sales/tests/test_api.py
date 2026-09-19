@@ -26,6 +26,10 @@ def client(monkeypatch):
         def retry_provider_read(self, job_id, actor, reason):
             calls.append((self.tenant, job_id, actor, reason))
 
+        def provider_reads(self, **filters):
+            calls.append((self.tenant, filters))
+            return {"items": [], "next_cursor": None}
+
         def decide(self, action, approved, actor):
             calls.append((self.tenant, action, approved, actor))
 
@@ -45,6 +49,19 @@ def client(monkeypatch):
 
     app.include_router(router)
     return TestClient(app), calls
+
+
+def test_provider_read_inventory_is_human_only_and_filters_cannot_select_writes(client):
+    c, calls = client
+    path = "/api/sales/provider-reads"
+    assert c.get(path).status_code == 403
+    assert c.get(path, headers={"x-test-role": "member"}).status_code == 403
+    assert c.get(path, headers={"x-test-role": "admin", "x-test-service": "yes"}).status_code == 403
+    assert c.get(path + "?kind=sales.email", headers={"x-test-role": "admin"}).status_code == 422
+    assert c.get(
+        path + "?state=all&kind=sales.business", headers={"x-test-role": "admin"}
+    ).json() == {"items": [], "next_cursor": None}
+    assert calls == [("tenant-a", {"state": "all", "kind": "sales.business", "after": None})]
 
 
 @pytest.mark.parametrize(

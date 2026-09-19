@@ -616,6 +616,38 @@ class Sales:
             )
             return [dict(r) for r in cur.fetchall()]
 
+    def provider_reads(self, *, state="attention", kind=None, after=None):
+        kinds = ("sales.inbound", "sales.reconcile", "sales.business")
+        if state not in {"attention", "all"} or (kind is not None and kind not in kinds):
+            raise ValueError("Provider read inventory filter invalid")
+        with self.ops.transaction() as cur:
+            boundary = None
+            if after:
+                cur.execute(
+                    "SELECT created_at FROM operation_jobs WHERE tenant_id=%s AND id=%s AND kind=ANY(%s)",
+                    (self.tenant, after, list(kinds)),
+                )
+                cursor = cur.fetchone()
+                if not cursor:
+                    raise Conflict("Provider read cursor missing in this tenant")
+                boundary = cursor["created_at"]
+            cur.execute(
+                "SELECT id,kind,status,error,attempts,max_attempts,created_at,updated_at,available_at,deadline, "
+                "jsonb_strip_nulls(jsonb_build_object('source',payload->>'source','account_id',payload->>'account_id', "
+                "'kind',payload->>'kind','practice_id',payload->>'practice_id','campaign_id',payload->>'campaign_id')) AS scope "
+                "FROM operation_jobs WHERE tenant_id=%s AND kind=ANY(%s) "
+                "AND (%s::text IS NULL OR kind=%s) "
+                "AND (%s='all' OR (status IN ('failed','pending') AND (status='failed' OR COALESCE(error,'')<>''))) "
+                "AND (%s::timestamptz IS NULL OR (created_at,id)<(%s,%s::uuid)) "
+                "ORDER BY created_at DESC,id DESC LIMIT 101",
+                (self.tenant, list(kinds), kind, kind, state, boundary, boundary, after),
+            )
+            rows = [dict(row) for row in cur.fetchall()]
+        return {
+            "items": rows[:100],
+            "next_cursor": str(rows[99]["id"]) if len(rows) > 100 else None,
+        }
+
     def retry_provider_read(self, job_id, actor, reason):
         """Retry repaired event reads without granting any external write authority."""
         operator(actor)

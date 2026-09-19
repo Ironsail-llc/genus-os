@@ -161,6 +161,11 @@ For governed prospect research and outreach, open **Sales** and follow
 [Sales intelligence](../SALES_INTELLIGENCE.md). Its deployment gates distinguish
 automated contract tests from a verified live sales pilot.
 
+In Sales, **Review imported practices** confirms customer identity matches;
+**Inspect provider reads** shows failed imports and message reads, with a reason
+required before retrying a repaired read. Each outbound message still has its
+own approval.
+
 | Symptom | Start here |
 |---|---|
 | Anything at all, first response | `genus doctor` |
