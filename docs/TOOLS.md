@@ -902,6 +902,11 @@ An uncertain submission must be reconciled before any
 retry. See [Personal autonomous execution](AUTONOMOUS_EXECUTION.md) for setup,
 verification, plan fields, spending limits and current integration boundaries.
 
+An execution plan can omit both success fields to discover a new affirmative
+completion message for its action. Discovery recognizes bounded English phrases;
+welcome/pending/error text does not establish success. Verification links and
+reconciliation require specific confirmation selectors and text.
+
 Recurring `browser(action="autonomy")` proposals require `recurrence` dates and
 intervals, with corresponding visible-term selectors in the execution plan.
 `status.spending` reports calendar-month projections, including future free-trial

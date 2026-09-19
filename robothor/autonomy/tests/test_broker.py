@@ -40,7 +40,7 @@ def setup(monkeypatch):
     locator.wait_for = AsyncMock()
     locator.inner_text = AsyncMock(return_value="Account created")
     confirmation = MagicMock()
-    confirmation.is_visible = AsyncMock(side_effect=[False, True])
+    confirmation.is_visible = AsyncMock(side_effect=[False, False, True])
     confirmation.count = AsyncMock(return_value=1)
     confirmation.wait_for = AsyncMock()
     confirmation.inner_text = AsyncMock(return_value="Account created")

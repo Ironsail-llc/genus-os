@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlsplit
 from uuid import UUID  # noqa: TC003 - Pydantic resolves this annotation at runtime
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 
 from robothor.autonomy.models import ResourceInput, Scope, StrictModel, WebOperation, origin
 from robothor.autonomy.terms import interval_months, renewal_date
@@ -63,8 +63,8 @@ class ExecutionPlan(StrictModel):
     fields: list[FieldBinding] = Field(default_factory=list, max_length=80)
     check_selectors: list[str] = Field(default_factory=list, max_length=20)
     submit_selector: str = Field(min_length=1, max_length=500)
-    success_selector: str = Field(min_length=1, max_length=500)
-    success_text: str = Field(min_length=3, max_length=300)
+    success_selector: str | None = Field(default=None, min_length=1, max_length=500)
+    success_text: str | None = Field(default=None, min_length=3, max_length=300)
     terms_frame_selector: str | None = Field(default=None, max_length=500)
     terms_frame_origin: str | None = None
     amount_selector: str | None = Field(default=None, max_length=500)
@@ -80,6 +80,12 @@ class ExecutionPlan(StrictModel):
     _terms_origin = field_validator("terms_frame_origin")(
         lambda value: origin(value) if value else None
     )
+
+    @model_validator(mode="after")
+    def confirmation_pair(self) -> ExecutionPlan:
+        if bool(self.success_selector) != bool(self.success_text):
+            raise ValueError("confirmation_selector_and_text_required_together")
+        return self
 
     @field_validator("url")
     @classmethod
@@ -160,6 +166,8 @@ class BrowserBroker:
             raise PermissionError("verification_authority_required")
         if row["state"] != "reserved":
             return {"operation_id": operation_id, "state": row["state"]}
+        if not plan.success_selector or not plan.success_text:
+            raise ValueError("specific_confirmation_required")
         destination = row["proposal"]["origin"]
         value = await asyncio.to_thread(
             self.store.consume_resource,
@@ -230,6 +238,8 @@ class BrowserBroker:
             raise PermissionError("operation_not_pending")
         if plan.fields or plan.check_selectors:
             raise PermissionError("reconciliation_is_read_only")
+        if not plan.success_selector or not plan.success_text:
+            raise ValueError("specific_confirmation_required")
         destination = row["proposal"]["origin"]
         if url_origin(plan.url) != destination:
             raise PermissionError("destination_mismatch")
@@ -430,8 +440,19 @@ class BrowserBroker:
             await page.goto(plan.url, wait_until="domcontentloaded", timeout=30000)
             if url_origin(page.url) != proposal.origin:
                 raise PermissionError("destination_changed")
-            if await page.locator(plan.success_selector).is_visible():
-                raise ValueError("confirmation_already_present")
+            from robothor.autonomy.confirmation import observe, wait_for_confirmation
+
+            already_confirmed = (
+                await page.locator(plan.success_selector).is_visible()
+                if plan.success_selector
+                else bool(await observe(page, proposal.origin, proposal.action))
+            )
+            if already_confirmed:
+                return {
+                    "operation_id": operation_id,
+                    "state": "reserved",
+                    "reason": "confirmation_already_present",
+                }
             await self._prices(page, proposal, plan, allowed_frames=allowed_frames)
             await asyncio.to_thread(self.store.check_authority, scope, operation_id, agent_id)
             from robothor.autonomy.preflight import validate_plan
@@ -500,17 +521,32 @@ class BrowserBroker:
             await self._prices(page, proposal, plan, allowed_frames=allowed_frames)
             # Revalidate revocation immediately before the irreversible click.
             await asyncio.to_thread(self.store.check_authority, scope, operation_id, agent_id)
+            confirmed_before_click = (
+                await page.locator(plan.success_selector).is_visible()
+                if plan.success_selector
+                else bool(await observe(page, proposal.origin, proposal.action))
+            )
+            if confirmed_before_click:
+                raise ValueError("confirmation_before_submit")
             await (await self._unique(page.locator(plan.submit_selector))).click(timeout=15000)
-            confirmation = page.locator(plan.success_selector)
-            await confirmation.wait_for(state="visible", timeout=30000)
+            if plan.success_selector:
+                confirmation = page.locator(plan.success_selector)
+                await confirmation.wait_for(state="visible", timeout=30000)
+                text = await (await self._unique(confirmation)).inner_text()
+                if not plan.success_text or plan.success_text not in text:
+                    raise ValueError("confirmation_missing")
+                confirmation_evidence = {
+                    "confirmation_sha256": hashlib.sha256(text.encode()).hexdigest()
+                }
+            else:
+                confirmation_evidence = await wait_for_confirmation(
+                    page, proposal.origin, proposal.action
+                )
             if url_origin(page.url) != proposal.origin:
                 raise PermissionError("confirmation_origin_changed")
-            text = await (await self._unique(confirmation)).inner_text()
-            if plan.success_text not in text:
-                raise ValueError("confirmation_missing")
             evidence = {
                 "origin": proposal.origin,
-                "confirmation_sha256": hashlib.sha256(text.encode()).hexdigest(),
+                **confirmation_evidence,
                 "verified_at": datetime.now(UTC).isoformat(),
                 "kind": "merchant_confirmation",
             }
