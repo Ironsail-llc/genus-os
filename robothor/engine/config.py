@@ -470,6 +470,20 @@ def _tool_policy(manifest: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _spawn_options(v2):
+    """Parse the manifest's delegation limits and target scope."""
+    return {
+        "can_spawn_agents": v2.get("can_spawn_agents", False),
+        "spawn_allowed_agents": list(v2.get("spawn_allowed_agents", [])),
+        "max_spawn_total": int(v2.get("max_spawn_total", 0)),
+        "max_nesting_depth": min(int(v2.get("max_nesting_depth", 2)), 3),
+        "sub_agent_max_iterations": int(v2.get("sub_agent_max_iterations", 10)),
+        "sub_agent_timeout_seconds": int(v2.get("sub_agent_timeout_seconds", 0)),
+        "max_concurrent_spawns": int(v2.get("max_concurrent_spawns", 0)),
+        "max_spawn_batch": int(v2.get("max_spawn_batch", 0)),
+    }
+
+
 def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
     """Convert a YAML manifest dict to an AgentConfig."""
     model = manifest.get("model", {})
@@ -654,16 +668,8 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         channel_bus=channel_bus_config,
         # Safety cap — absolute max iterations (infinite-loop protection only)
         safety_cap=int(schedule.get("safety_cap", v2.get("safety_cap", 200))),
-        # v2 enhancements — sub-agent spawning
-        can_spawn_agents=v2.get("can_spawn_agents", False),
-        spawn_allowed_agents=list(v2.get("spawn_allowed_agents", [])),
-        max_spawn_total=int(v2.get("max_spawn_total", 0)),
+        **_spawn_options(v2),
         workspace_inventory=bool(v2.get("workspace_inventory", False)),
-        max_nesting_depth=min(int(v2.get("max_nesting_depth", 2)), 3),  # cap at 3
-        sub_agent_max_iterations=int(v2.get("sub_agent_max_iterations", 10)),
-        sub_agent_timeout_seconds=int(v2.get("sub_agent_timeout_seconds", 0)),
-        max_concurrent_spawns=int(v2.get("max_concurrent_spawns", 0)),
-        max_spawn_batch=int(v2.get("max_spawn_batch", 0)),
         mcp_servers=v2.get("mcp_servers", []),
         # v2 enhancements
         error_feedback=v2.get("error_feedback", True),
