@@ -60,3 +60,7 @@ Verification uses the current run's task, not the first historical user turn.
 A separate plan-alignment check permits one correction before withholding approval.
 Telegram revisions have new IDs, hashes, and durable state before approval buttons
 are shown, so an old button cannot approve a newer plan.
+
+Approval transitions require a successful durable write before execution starts.
+Automatic checkpoint recovery re-resolves the original caller against current
+identity records, within the same tenant and agent, before restoring host access.

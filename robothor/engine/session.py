@@ -430,6 +430,17 @@ class AgentSession:
                 else "execute",
             ),
         )
+        if self.identity is not None:
+            from dataclasses import asdict
+
+            from robothor.engine.task_context import read_context
+
+            record = read_context(self.messages)
+            if record is not None:
+                record["identity"] = asdict(self.identity)
+                record["agent_id"] = self.run.agent_id
+                install_context(self.messages, record)
+
         # Count this user turn for the memory-review nudge (Rip 1). Previously
         # never incremented, so the memory half of the background-review fork
         # could never reach its threshold. Accumulates across turns on a

@@ -533,6 +533,26 @@ class AgentRunner(
             if saved_context and saved_context.get("mode") == "plan":
                 readonly_mode = True
                 execution_mode = False
+            if (
+                saved_context
+                and trigger_type == TriggerType.EVENT
+                and identity is None
+                and saved_context.get("agent_id") == agent_id
+            ):
+                from robothor.identity import resolve_identity
+
+                original = saved_context.get("identity") or {}
+                if original.get("tenant_id") == resolved_tenant:
+                    restored_identity = await asyncio.to_thread(
+                        resolve_identity,
+                        original.get("channel", ""),
+                        original.get("identifier", ""),
+                        tenant_id=resolved_tenant,
+                    )
+                    if restored_identity and restored_identity.verified:
+                        identity = restored_identity
+                        user_id = identity.user_account_id or identity.tenant_user_id or ""
+                        user_role = identity.role
 
         reason = f"Agent config not found: {agent_id}"
         if agent_config is None:
