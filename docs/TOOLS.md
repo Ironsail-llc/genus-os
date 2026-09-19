@@ -921,3 +921,9 @@ Return its `setup_url` (or relative `setup_path`) to the user. The authenticated
 owner-bound link expires in 15 minutes; passwords, documents and card values
 belong on that enrollment page and must not be placed in tool arguments.
 See [private input enrollment](AUTONOMOUS_EXECUTION.md#private-input-enrollment).
+
+A personal grant may contain `allowed_purposes`. When it is nonempty, use the
+matching granted purpose verbatim in the browser autonomy proposal. Purpose
+matching is whole-text, case-insensitive matching; a website cannot change the
+prepared purpose or expand the grant. Empty purpose lists preserve broad standing
+authority. See [purposes and shared spending decisions](AUTONOMOUS_EXECUTION.md#purposes-and-shared-spending-decisions).
