@@ -34,6 +34,7 @@ class PromotionWorker:
 
     async def promote(self, job):
         prospect_id = job["payload"]["prospect_id"]
+        await asyncio.to_thread(self.sales.require_assessment, prospect_id)
         p = await asyncio.to_thread(self.sales.get, prospect_id)
         if not p or p["status"] not in {"accepted", "promoted"}:
             raise Conflict("Human acceptance required before Pipedrive promotion")

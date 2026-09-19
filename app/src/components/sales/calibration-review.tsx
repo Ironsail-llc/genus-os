@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { apiFetch } from "@/lib/api/client";
 import { LibraryEntry } from "./library-entry";
+import { QualificationAssessment, type Assessment as ModelAssessment } from "./qualification-assessment";
 
 const API = "/api/bridge/api/sales/calibration";
 type Cohort = { id: string; name: string; target_size: number; agreement_target_percent: number; policy_versions: Record<string, string> };
@@ -16,7 +17,7 @@ type Report = { cohort: Cohort; initial: Summary; latest: Summary; corrections: 
 type Assessment = { id: string; revision: number; reference_decision: string; reason: string; actor: string };
 type ItemSummary = { id: string; ordinal: number; name: string; domain: string; buying_case: string; policy_version: string; snapshot_hash: string; reference_decision?: string | null };
 type Item = ItemSummary & { snapshot: { name: string; domain: string; version: number; policy: Record<string, unknown>;
-  qualification: { decision: string; score: number }; dossier: { summary: string; unanswered: string[]; evidence: { id: string; field: string; value: unknown; confidence: string; url: string; excerpt: string }[] } }; assessments: Assessment[] };
+  qualification: { decision: string; score: number; assessment?: ModelAssessment }; dossier: { summary: string; unanswered: string[]; evidence: { id: string; field: string; value: unknown; confidence: string; url: string; excerpt: string }[] } }; assessments: Assessment[] };
 type Settings = { revision: number; config: { active_policy_versions?: Record<string, string> } };
 const pct = (value: number | null) => value === null ? "Not measured" : `${value.toFixed(1)}%`;
 
@@ -127,6 +128,7 @@ export function CalibrationReview() {
         <div className="space-y-3">{item.snapshot.dossier.evidence.map((fact) => <div key={fact.id} className="border-l-2 pl-3 text-sm"><p>{fact.field}: {String(fact.value)} · {fact.confidence}</p><blockquote>{fact.excerpt}</blockquote><a className="underline" href={fact.url} target="_blank" rel="noopener noreferrer">Evidence source</a></div>)}</div>
         <details><summary className="cursor-pointer text-sm">Frozen policy rules</summary><LibraryEntry entry={{ kind: "qualification", version: item.policy_version, data: item.snapshot.policy }} statusLabel="Frozen policy snapshot" /></details>
         {!!item.assessments.length && <div className="space-y-2 text-sm"><p>Model decision: {item.snapshot.qualification.decision} · {item.snapshot.qualification.score}/100</p>
+          <QualificationAssessment assessment={item.snapshot.qualification.assessment} evidence={item.snapshot.dossier.evidence} />
           {item.assessments.map((row) => <p key={row.id}>Assessment {row.revision}: {row.reference_decision} · {row.actor} · {row.reason}</p>)}
         </div>}
         <label className="block space-y-1 text-sm"><span>Your qualification assessment</span><select className="block w-full rounded border bg-background p-2" value={decision} disabled={busy || held} onChange={(event) => setDecision(event.target.value)}><option value="">Choose an assessment</option><option value="qualified">Qualified business fit</option><option value="rejected">Not a business fit</option><option value="needs_research">More research needed</option></select></label>

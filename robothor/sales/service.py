@@ -374,10 +374,54 @@ class Sales:
             reason=reason,
         )
 
-    def qualify(self, prospect_id, policy_version, *, cur=None):
+    def qualification_context(self, prospect_id, settings, *, cur=None):
+        """Bind an assessment to current published policy and immutable dossier content."""
+        from robothor.sales.qualification import assessment_context
+
         if cur is None:
             with self.ops.transaction() as cursor:
-                return self.qualify(prospect_id, policy_version, cur=cursor)
+                return self.qualification_context(prospect_id, settings, cur=cursor)
+        cur.execute(
+            "SELECT config FROM sales_settings WHERE tenant_id=%s FOR UPDATE", (self.tenant,)
+        )
+        row = cur.fetchone()
+        current = SalesSettings.model_validate(row["config"] if row else {})
+        if current != settings or not current.research_enabled:
+            raise Conflict("Sales settings changed during qualification")
+        prospect = self.require(prospect_id, cur)
+        dossier = Dossier.model_validate(prospect["dossier"])
+        version = current.active_policy_versions.get(dossier.buying_case)
+        cur.execute(
+            "SELECT data FROM sales_policies WHERE tenant_id=%s AND kind='qualification' AND version=%s",
+            (self.tenant, version),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise Conflict("No active approved policy for this buying case")
+        policy = QualificationPolicy.model_validate(row["data"])
+        return {
+            **assessment_context(dossier, policy),
+            "binding": {
+                "prospect_id": str(prospect_id),
+                "dossier_version": prospect["version"],
+                "dossier_hash": digest(prospect["dossier"]),
+                "agent_id": current.agents.get("qualify"),
+                "fleet_release_id": current.fleet_release_id,
+                "library_revision": current.library_revision,
+            },
+        }
+
+    def qualify(self, prospect_id, policy_version, *, assessment_job=None, cur=None):
+        if cur is None:
+            with self.ops.transaction() as cursor:
+                return self.qualify(
+                    prospect_id, policy_version, assessment_job=assessment_job, cur=cursor
+                )
+        cur.execute(
+            "SELECT config FROM sales_settings WHERE tenant_id=%s FOR UPDATE", (self.tenant,)
+        )
+        settings_row = cur.fetchone()
+        settings = SalesSettings.model_validate(settings_row["config"] if settings_row else {})
         prospect = self.require(prospect_id, cur)
         cur.execute(
             "SELECT data FROM sales_policies WHERE tenant_id=%s AND kind='qualification' AND version=%s",
@@ -386,9 +430,45 @@ class Sales:
         row = cur.fetchone()
         if not row:
             raise Conflict("An approved qualification policy is required")
-        result = QualificationPolicy.model_validate(row["data"]).evaluate(
-            Dossier.model_validate(prospect["dossier"])
-        )
+        policy = QualificationPolicy.model_validate(row["data"])
+        dossier = Dossier.model_validate(prospect["dossier"])
+        if settings.agents.get("qualify") or assessment_job is not None:
+            from robothor.sales.qualification import QualificationAssessment, evaluate_assessment
+
+            if assessment_job is None:
+                raise Conflict("Native qualification assessment required")
+            context = self.qualification_context(prospect_id, settings, cur=cur)
+            cur.execute(
+                "SELECT result,payload FROM operation_jobs WHERE tenant_id=%s AND id=%s "
+                "AND kind='sales.qualify' AND status='running' AND lease_token=%s "
+                "AND lease_until>clock_timestamp() AND deadline>clock_timestamp() FOR UPDATE",
+                (self.tenant, assessment_job["id"], assessment_job["lease_token"]),
+            )
+            saved = cur.fetchone()
+            checkpoint = saved["result"] if saved else None
+            if (
+                not checkpoint
+                or checkpoint.get("checkpoint_version") != 1
+                or checkpoint.get("stage") != "qualify"
+                or not checkpoint.get("run_id")
+                or checkpoint.get("context") != context
+                or checkpoint.get("fleet_release_id") != settings.fleet_release_id
+                or policy_version != context["policy"]["version"]
+                or saved["payload"].get("prospect_id") != str(prospect_id)
+                or saved["payload"].get("version") != prospect["version"]
+            ):
+                raise Conflict("Qualification assessment is stale or belongs to different work")
+            assessment = QualificationAssessment.model_validate(checkpoint["output"])
+            result = evaluate_assessment(policy, dossier, assessment)
+            result["assessment"] = assessment.model_dump(mode="json")
+            result["assessment_receipt"] = {
+                **context["binding"],
+                "run_id": checkpoint["run_id"],
+                "job_id": str(assessment_job["id"]),
+                "context_hash": digest(context),
+            }
+        else:
+            result = policy.evaluate(dossier)
         cur.execute(
             "UPDATE sales_prospects SET qualification=%s,status=%s,updated_at=now() WHERE tenant_id=%s AND id=%s",
             (Json(result), result["decision"], self.tenant, prospect_id),
@@ -402,6 +482,53 @@ class Sales:
             )
         self.ops.audit(cur, prospect_id, "qualification.completed", detail=result)
         return result
+
+    def require_assessment(self, prospect_id, *, cur=None):
+        """A fleet upgrade must not grandfather old researcher-only scores."""
+        from robothor.sales.qualification import QualificationAssessment, evaluate_assessment
+
+        if cur is None:
+            with self.ops.transaction() as cursor:
+                return self.require_assessment(prospect_id, cur=cursor)
+        cur.execute("SELECT config FROM sales_settings WHERE tenant_id=%s", (self.tenant,))
+        row = cur.fetchone()
+        settings = SalesSettings.model_validate(row["config"] if row else {})
+        if not settings.agents.get("qualify"):
+            return None
+        p = self.require(prospect_id, cur)
+        qualification = p["qualification"] or {}
+        receipt = qualification.get("assessment_receipt") or {}
+        if (
+            not qualification.get("assessment")
+            or not receipt.get("run_id")
+            or receipt.get("dossier_version") != p["version"]
+            or receipt.get("dossier_hash") != digest(p["dossier"])
+            or receipt.get("agent_id") != settings.agents["qualify"]
+            or receipt.get("fleet_release_id") != settings.fleet_release_id
+            or settings.active_policy_versions.get(qualification.get("buying_case"))
+            != qualification.get("policy_version")
+        ):
+            raise Conflict("Current independent qualification assessment required")
+        cur.execute(
+            "SELECT data FROM sales_policies WHERE tenant_id=%s AND kind='qualification' AND version=%s",
+            (self.tenant, qualification["policy_version"]),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise Conflict("Qualification assessment policy unavailable")
+        try:
+            current = evaluate_assessment(
+                QualificationPolicy.model_validate(row["data"]),
+                Dossier.model_validate(p["dossier"]),
+                QualificationAssessment.model_validate(qualification["assessment"]),
+            )
+        except ValueError:
+            raise Conflict("Invalid qualification assessment") from None
+        if current["decision"] != "qualified" or any(
+            current[k] != qualification.get(k) for k in current
+        ):
+            raise Conflict("Qualification assessment needs current supporting evidence")
+        return None
 
     def accept(
         self, prospect_id, accepted, actor, note="", *, expected_version, expected_policy_version
@@ -419,6 +546,8 @@ class Sales:
                 )
             if accepted and (p["qualification"] or {}).get("decision") != "qualified":
                 raise Conflict("Qualification required before acceptance")
+            if accepted:
+                self.require_assessment(prospect_id, cur=cur)
             cur.execute(
                 "UPDATE sales_prospects SET status=%s,review_note=%s,updated_at=now() WHERE tenant_id=%s AND id=%s",
                 (
@@ -455,6 +584,7 @@ class Sales:
         p = self.require(prospect_id, cur)
         if (p["qualification"] or {}).get("decision") != "qualified":
             raise Conflict("Contact enrichment requires qualification")
+        self.require_assessment(prospect_id, cur=cur)
         cur.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
             (self.tenant + ":" + contact.email,),
@@ -559,6 +689,7 @@ class Sales:
                 return self.draft(prospect_id, data, cur=cursor)
         draft = Draft.model_validate(data)
         p = self.require(prospect_id, cur)
+        self.require_assessment(prospect_id, cur=cur)
         if (
             p["status"] not in {"accepted", "promoted", "engaged", "onboarding", "active"}
             or p["owner"] != "agent"
@@ -655,6 +786,7 @@ class Sales:
         if payload["knowledge_version"] != settings.active_knowledge_version:
             raise Conflict("Active knowledge version changed")
         q = p["qualification"] or {}
+        self.require_assessment(p["id"], cur=cur)
         if q.get("decision") != "qualified" or settings.active_policy_versions.get(
             q.get("buying_case")
         ) != q.get("policy_version"):

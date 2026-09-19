@@ -109,6 +109,7 @@ class VerificationWorker:
         p = self.sales.require(job["payload"]["prospect_id"], cur)
         if (p["qualification"] or {}).get("decision") != "qualified":
             raise Conflict("Verification requires a qualified business")
+        self.sales.require_assessment(p["id"], cur=cur)
         if self.sales._suppressed(job["payload"]["email"], cur):
             raise Conflict("Contact is suppressed")
         cur.execute(

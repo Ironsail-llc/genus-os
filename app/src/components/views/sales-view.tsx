@@ -11,11 +11,12 @@ import { DeploymentControls } from "@/components/sales/deployment-controls";
 import { PilotSettings } from "@/components/sales/pilot-settings";
 import { SalesLibrary } from "@/components/sales/sales-library";
 import { CalibrationReview } from "@/components/sales/calibration-review";
+import { QualificationAssessment, type Assessment } from "@/components/sales/qualification-assessment";
 
 const API = "/api/bridge/api/sales";
 type Evidence = { id: string; field: string; value: unknown; url: string; excerpt: string; retrieved_at: string; confidence: string };
 type Prospect = { id: string; version: number; name: string; domain: string; status: string; owner: string;
-  qualification?: { policy_version?: string; score: number; decision: string; missing: string[]; buying_case: string };
+  qualification?: { policy_version?: string; score: number; decision: string; missing: string[]; buying_case: string; assessment?: Assessment };
   dossier?: { summary: string; unanswered: string[]; evidence: Evidence[] } };
 type Action = { id: string; status: string; expires_at: string; receipt?: { id?: string; delivery_status?: string }; payload: {
   prospect_id: string; sender: string; recipient: string; subject: string; body: string;
@@ -113,7 +114,8 @@ export function SalesView({ visible, role }: { visible: boolean; role?: string |
               <Button variant="outline" disabled={busy} onClick={() => void mutate(`/prospects/${detail.prospect.id}/review`, { approved: false, expected_version: detail.prospect.version, expected_policy_version: detail.prospect.qualification?.policy_version ?? null })}>Reject prospect</Button>
               <Button variant="outline" disabled={busy} onClick={() => void mutate(`/prospects/${detail.prospect.id}/takeover`, {})}>Take over conversation</Button>
             </div>
-            <h4 className="font-medium">Evidence</h4>
+            <QualificationAssessment assessment={detail.prospect.qualification?.assessment} evidence={detail.prospect.dossier?.evidence ?? []} />
+            <h4 className="font-medium">Original research evidence</h4>
             {detail.prospect.dossier?.evidence.map((e) => <div key={e.id} className="border-l-2 pl-3 text-sm">
               <p>{e.field}: {String(e.value)} · {e.confidence}</p>
               <blockquote className="text-muted-foreground">{e.excerpt}</blockquote>
