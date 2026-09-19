@@ -30,7 +30,7 @@ def test_persisted_key_rotation_and_old_worker_readability(monkeypatch, identity
     try:
         setup = connect()
         with setup, setup.cursor() as cur:
-            cur.execute(Path("crm/migrations/126_autonomous_execution.sql").read_text())
+            cur.execute(Path("crm/migrations/127_autonomous_execution.sql").read_text())
         setup.close()
         store = AutonomyStore(connect)
         original_id, original_keys = store.resource_keyring()

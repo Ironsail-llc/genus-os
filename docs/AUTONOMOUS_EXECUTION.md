@@ -8,7 +8,7 @@ existing native vault; no external password manager is required.
 
 ## Setup
 
-1. Apply packaged migration `126_autonomous_execution.sql` through the normal
+1. Apply packaged migration `127_autonomous_execution.sql` through the normal
    upgrade process. Preserve the existing vault master key and encrypted backups.
    Install the `genusos[autonomy]` extra and either a system Chromium or the
    browser installed by `python -m playwright install chromium`.

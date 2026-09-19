@@ -24,6 +24,48 @@ logger = logging.getLogger(__name__)
 
 HANDLERS: dict[str, Any] = {}
 
+
+def _upload_payload(workspace: str, requested: str) -> dict[str, Any]:
+    """Validate the opened file, so a pathname race cannot change the source."""
+    import mimetypes
+    import stat
+    from pathlib import Path
+
+    from robothor.engine.attachments import is_inbox_secret
+    from robothor.engine.secret_paths import is_secret_path
+
+    root = Path(workspace).resolve(strict=True)
+    candidate = Path(requested)
+    candidate = candidate if candidate.is_absolute() else root / candidate
+    path = candidate.resolve(strict=True)
+    if not path.is_relative_to(root) or is_secret_path(candidate) or is_secret_path(path):
+        raise ValueError("upload source is not an allowed workspace file")
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        opened = Path(f"/proc/self/fd/{fd}").resolve(strict=True)
+        metadata = os.fstat(fd)
+        if (
+            not opened.is_relative_to(root)
+            or is_secret_path(opened)
+            or is_inbox_secret(opened, workspace=root)
+            or not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_size > 5_000_000
+        ):
+            raise ValueError("upload requires an allowed regular file under 5 MB")
+        with os.fdopen(fd, "rb", closefd=False) as source:
+            content = source.read(5_000_001)
+        if len(content) > 5_000_000:
+            raise ValueError("upload source grew beyond 5 MB")
+        return {
+            "name": path.name,
+            "mimeType": mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+            "buffer": content,
+        }
+    finally:
+        os.close(fd)
+
+
 # Active browser sessions keyed by tenant, principal, agent and run
 _sessions: dict[str, BrowserSession] = {}
 _playwright_instance: Any = None
@@ -895,28 +937,10 @@ async def _action_act(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
     try:
         if kind == "upload":
-            from pathlib import Path
-
-            from robothor.engine.secret_paths import is_secret_path
-
             if not locator or not ctx.workspace:
                 return {"error": "upload requires a target and workspace"}
-            root = Path(ctx.workspace).resolve()
-            candidate = Path(request.get("path", ""))
-            candidate = candidate if candidate.is_absolute() else root / candidate
-            path = candidate.resolve(strict=True)
-            if not path.is_relative_to(root) or is_secret_path(candidate) or is_secret_path(path):
-                return {"error": "upload source is not an allowed workspace file"}
-            if not path.is_file() or path.stat().st_nlink != 1 or path.stat().st_size > 5_000_000:
-                return {"error": "upload requires a regular file under 5 MB"}
-            import mimetypes
-
             await locator.set_input_files(
-                {
-                    "name": path.name,
-                    "mimeType": mimetypes.guess_type(path.name)[0] or "application/octet-stream",
-                    "buffer": await asyncio.to_thread(path.read_bytes),
-                }
+                await asyncio.to_thread(_upload_payload, ctx.workspace, request.get("path", ""))
             )
             return {"acted": "upload", "target": target_desc}
 

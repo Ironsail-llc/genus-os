@@ -64,3 +64,38 @@ async def test_upload_refuses_quarantined_inbox_attachment(tmp_path, monkeypatch
     )
     assert "error" in result
     page.locator.return_value.first.set_input_files.assert_not_called()
+
+
+async def test_upload_rejects_file_swapped_after_path_validation(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    photo = workspace / "photo.png"
+    photo.write_bytes(b"public photo")
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(b"private outside content")
+    resolve = Path.resolve
+    swapped = False
+
+    def race(path, *args, **kwargs):
+        nonlocal swapped
+        result = resolve(path, *args, **kwargs)
+        if path == photo and not swapped:
+            swapped = True
+            photo.unlink()
+            photo.symlink_to(outside)
+        return result
+
+    monkeypatch.setattr(Path, "resolve", race)
+    locator = MagicMock()
+    locator.set_input_files = AsyncMock()
+    page = MagicMock()
+    page.locator.return_value.first = locator
+    monkeypatch.setattr(browser, "_get_session", AsyncMock(return_value=SimpleNamespace(page=page)))
+    result = await browser._action_act(
+        {"request": {"kind": "upload", "selector": "#photo", "path": "photo.png"}},
+        ToolContext(agent_id="main", workspace=str(workspace)),
+    )
+    assert "error" in result
+    locator.set_input_files.assert_not_awaited()

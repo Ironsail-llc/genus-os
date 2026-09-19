@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from robothor.engine.tools.dispatch import ToolContext
-
 from robothor.engine.tools.handlers.browser import (
     ElementRef,
     _build_shadow_distilled,
@@ -755,7 +754,9 @@ def stub_session_cleanup():
     from robothor.engine.tools.handlers import browser as browser_mod
 
     yield
-    browser_mod._sessions.pop(browser_mod._session_key(ToolContext(agent_id="isolation-test")), None)
+    browser_mod._sessions.pop(
+        browser_mod._session_key(ToolContext(agent_id="isolation-test")), None
+    )
 
 
 async def test_isolated_fetch_uses_a_new_tab_and_closes_it(stub_session_cleanup):
@@ -852,4 +853,7 @@ async def test_isolated_fetch_without_a_session_does_not_start_one():
     )
 
     assert out["error"] == "Browser not started."
-    assert browser_mod._session_key(ToolContext(agent_id="no-session-here")) not in browser_mod._sessions
+    assert (
+        browser_mod._session_key(ToolContext(agent_id="no-session-here"))
+        not in browser_mod._sessions
+    )

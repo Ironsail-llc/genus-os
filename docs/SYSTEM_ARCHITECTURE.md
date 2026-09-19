@@ -1660,7 +1660,7 @@ robothor/                                 Project root (git repo)
 The native vault's personal-resource broker (`robothor/autonomy/`) consumes
 owner-scoped references in a separate browser process. The existing browser
 tool exposes preparation, execution and reconciliation under standing grants.
-Migration 126 adds encrypted `vault_resources`, wrapped `autonomy_key_versions`,
+Migration 127 adds encrypted `vault_resources`, wrapped `autonomy_key_versions`,
 `autonomy_grants`, `autonomy_operations`, `autonomy_events`, and
 `autonomy_settings`; service-secret exports exclude personal resources.
 The account dashboard enrolls information and grants authority through
