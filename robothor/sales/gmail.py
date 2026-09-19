@@ -115,6 +115,10 @@ def plain_text(record):
         raise ProviderError("Gmail plain-text content requires review") from None
 
 
+class GmailMailboxError(ProviderError):
+    """The bound account cannot currently be authenticated or identified."""
+
+
 class Gmail:
     """One local OAuth account, explicitly assigned to one sales tenant."""
 
@@ -155,10 +159,13 @@ class Gmail:
         return result
 
     async def profile(self):
-        result = await self._call(["getProfile"])
+        try:
+            result = await self._call(["getProfile"])
+        except ProviderError:
+            raise GmailMailboxError("Gmail mailbox connection unavailable") from None
         address = result.get("emailAddress")
         if not isinstance(address, str) or address.lower() != self.mailbox:
-            raise ProviderError("Gmail account identity changed")
+            raise GmailMailboxError("Gmail account identity changed")
         return {"mailbox": self.mailbox, "history_id": result.get("historyId")}
 
     def provider_id(self, raw_id):
@@ -192,6 +199,23 @@ class Gmail:
             raise ProviderError("Gmail message identity mismatch")
         self.provider_id(record.get("threadId"))
         return record
+
+    async def list_messages(self, *, q, cursor=None, limit=25):
+        params = {"q": q, "maxResults": limit, "includeSpamTrash": True}
+        if cursor:
+            params["pageToken"] = cursor
+        return await self._call(["messages", "list"], params=params)
+
+    async def get_metadata(self, raw_id):
+        self.provider_id(raw_id)
+        return await self._call(
+            ["messages", "get"],
+            params={"id": raw_id, "format": "metadata", "metadataHeaders": ["Content-Type"]},
+        )
+
+    async def get_raw(self, raw_id):
+        self.provider_id(raw_id)
+        return await self._call(["messages", "get"], params={"id": raw_id, "format": "raw"})
 
     async def get_thread(self, thread_id):
         raw_id = self.raw_id(thread_id)
@@ -258,6 +282,12 @@ class Gmail:
         await self.profile()
         if before_send is not None:
             await before_send()
+        return await self.submit(prepared)
+
+    async def submit(self, prepared):
+        """One write, after the worker has finished reads and claimed its effect."""
+        if prepared.get("mailbox") != self.mailbox:
+            raise ProviderError("Prepared Gmail account identity changed")
         result = await self._call(
             ["messages", "send"],
             body={k: prepared[k] for k in ("raw", "threadId") if k in prepared},

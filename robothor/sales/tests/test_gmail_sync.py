@@ -225,7 +225,7 @@ async def test_final_send_check_ingests_new_reply_and_never_posts_stale_approved
     )
     assert await worker.tick()
     assert sends(cli) == 1
-    assert action(sales, key)["status"] == "unknown"
+    assert action(sales, key)["status"] == "cancelled"
     with sales.ops.transaction() as cur:
         assert sales._suppressed("alice@example.com", cur)
 

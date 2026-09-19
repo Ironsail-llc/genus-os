@@ -417,18 +417,21 @@ class Operations:
             self.audit(cur, str(row["id"]), "action.claimed")
             return row
 
-    def finish_action(self, action: str, token: str, status: str, receipt: dict):
+    def finish_action(self, action: str, token: str, status: str, receipt: dict, *, cur=None):
         """Record evidence about a claimed effect without permitting blind retries."""
         if status not in {"completed", "unknown", "cancelled", "failed"}:
             raise ValueError("Invalid action outcome")
         if status == "completed" and not receipt.get("id"):
             raise Conflict("Provider acknowledgement ID required")
-        with self.transaction() as cur:
-            cur.execute(
-                "UPDATE operation_actions SET status=%s,receipt=%s WHERE tenant_id=%s AND id=%s "
-                "AND lease_token=%s AND status='executing' AND (%s != 'completed' OR lease_until>now())",
-                (status, Json(receipt), self.tenant, action, token, status),
-            )
-            if cur.rowcount != 1:
-                raise Conflict("Action is no longer owned by this executor")
-            self.audit(cur, action, "action." + status)
+        if cur is None:
+            with self.transaction() as cursor:
+                return self.finish_action(action, token, status, receipt, cur=cursor)
+        cur.execute(
+            "UPDATE operation_actions SET status=%s,receipt=%s WHERE tenant_id=%s AND id=%s "
+            "AND lease_token=%s AND status='executing' AND (%s != 'completed' OR lease_until>now())",
+            (status, Json(receipt), self.tenant, action, token, status),
+        )
+        if cur.rowcount != 1:
+            raise Conflict("Action is no longer owned by this executor")
+        self.audit(cur, action, "action." + status)
+        return None

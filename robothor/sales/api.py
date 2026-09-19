@@ -266,6 +266,8 @@ def provider_reads(
         "sales.business",
         "sales.provider_status",
         "sales.gmail_sync",
+        "sales.gmail_status",
+        "sales.gmail_bounces",
     ]
     | None = None,
     after: UUID | None = None,

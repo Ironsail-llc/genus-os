@@ -89,16 +89,27 @@ class Followups:
         effects = {(e["dedup_key"], e["kind"]): dict(e) for e in cur.fetchall()}
         if any(e["status"] != "completed" for e in effects.values()):
             raise Conflict("Follow-up has unresolved provider effects")
-        campaign = (
-            effects.get((str(root["id"]), "instantly.campaign"), {}).get("receipt", {}).get("id")
-        )
-        activation = effects.get((str(root["id"]), "instantly.activate"))
-        if (
-            not campaign
-            or not activation
-            or activation["payload_hash"] != digest({"campaign_id": campaign})
-        ):
-            raise Conflict("Follow-up requires an owned activated campaign")
+        gmail = None
+        if settings.email_provider == "gmail":
+            from robothor.sales.gmail_cadence import GmailCadence
+
+            gmail = GmailCadence(self.sales, root, effects)
+            campaign = None
+        elif settings.email_provider == "instantly":
+            campaign = (
+                effects.get((str(root["id"]), "instantly.campaign"), {})
+                .get("receipt", {})
+                .get("id")
+            )
+            activation = effects.get((str(root["id"]), "instantly.activate"))
+            if (
+                not campaign
+                or not activation
+                or activation["payload_hash"] != digest({"campaign_id": campaign})
+            ):
+                raise Conflict("Follow-up requires an owned activated campaign")
+        else:
+            raise Conflict("Follow-up email provider is not configured")
         previous = None
         for index, message in enumerate(messages):
             matches = [
@@ -115,7 +126,8 @@ class Followups:
                 a["approved_hash"] != digest(draft)
                 or a["payload_hash"] != digest(draft)
                 or not (a["decided_by"] or "").startswith("operator:")
-                or a["receipt"].get("delivery_status") != "sent"
+                or a["receipt"].get("delivery_status")
+                != ("sent_copy_verified" if gmail else "sent")
                 or message["occurred_at"] > now
                 or any(
                     data.get(k) != draft.get(k)
@@ -125,11 +137,15 @@ class Followups:
                 or any(draft.get(k) != payload.get(k) for k in ("sender", "recipient"))
             ):
                 raise Conflict("Follow-up canonical message does not match its approved send")
+            if gmail:
+                gmail.validate(a, message, effects)
             if index == 0:
                 if a["id"] != root["id"]:
                     raise Conflict("Follow-up root is not the first confirmed send")
             else:
-                effect = effects.get((str(a["id"]), "instantly.reply"), {})
+                effect = effects.get(
+                    (str(a["id"]), "gmail.send" if gmail else "instantly.reply"), {}
+                )
                 basis = draft.get("followup_basis", {})
                 if (
                     draft.get("purpose") != "followup"
@@ -188,39 +204,45 @@ class Followups:
             for ref in payload["evidence_ids"]
         ):
             raise Conflict("Follow-up evidence is stale")
-        # Any pending event for this campaign or sender holds the sequence. A
-        # previously received reply ends it even before canonical text is read.
-        cur.execute(
-            "SELECT 1 FROM operation_inbox WHERE tenant_id=%s AND provider='instantly' "
-            "AND (payload->>'campaign_id'=%s OR payload->>'sender'=%s) "
-            "AND (processed_at IS NULL OR payload->>'kind' IN "
-            "('reply_received','auto_reply_received','lead_unsubscribed','lead_not_interested','lead_wrong_person','email_bounced','account_error')) LIMIT 1",
-            (tenant, campaign, payload["sender"]),
-        )
-        if cur.fetchone():
-            raise Conflict("Follow-up provider events require attention")
-        cur.execute(
-            "SELECT status,result,payload FROM operation_jobs WHERE tenant_id=%s AND kind='sales.reconcile' "
-            "AND payload->>'campaign_id'=%s ORDER BY created_at DESC,id DESC LIMIT 1",
-            (tenant, campaign),
-        )
-        scan = cur.fetchone()
-        result = scan["result"] if scan else {}
-        try:
-            fresh = (
-                scan
-                and scan["status"] == "completed"
-                and result.get("final") is True
-                and scan["payload"].get("action_id") == str(root["id"])
-                and result.get("workspace")
-                and now - timedelta(minutes=15) <= datetime.fromisoformat(result["through"]) <= now
-                and now - timedelta(days=1) <= datetime.fromisoformat(result["full_at"]) <= now
+        if gmail:
+            result = gmail.coverage(cur, now)
+        else:
+            # Any pending event for this campaign or sender holds the sequence. A
+            # previously received reply ends it even before canonical text is read.
+            cur.execute(
+                "SELECT 1 FROM operation_inbox WHERE tenant_id=%s AND provider='instantly' "
+                "AND (payload->>'campaign_id'=%s OR payload->>'sender'=%s) "
+                "AND (processed_at IS NULL OR payload->>'kind' IN "
+                "('reply_received','auto_reply_received','lead_unsubscribed','lead_not_interested','lead_wrong_person','email_bounced','account_error')) LIMIT 1",
+                (tenant, campaign, payload["sender"]),
             )
-        except (KeyError, TypeError, ValueError):
-            fresh = False
-        if not fresh:
-            raise Conflict("Follow-up requires fresh completed campaign reconciliation")
+            if cur.fetchone():
+                raise Conflict("Follow-up provider events require attention")
+            cur.execute(
+                "SELECT status,result,payload FROM operation_jobs WHERE tenant_id=%s AND kind='sales.reconcile' "
+                "AND payload->>'campaign_id'=%s ORDER BY created_at DESC,id DESC LIMIT 1",
+                (tenant, campaign),
+            )
+            scan = cur.fetchone()
+            result = scan["result"] if scan else {}
+            try:
+                fresh = (
+                    scan
+                    and scan["status"] == "completed"
+                    and result.get("final") is True
+                    and scan["payload"].get("action_id") == str(root["id"])
+                    and result.get("workspace")
+                    and now - timedelta(minutes=15)
+                    <= datetime.fromisoformat(result["through"])
+                    <= now
+                    and now - timedelta(days=1) <= datetime.fromisoformat(result["full_at"]) <= now
+                )
+            except (KeyError, TypeError, ValueError):
+                fresh = False
+            if not fresh:
+                raise Conflict("Follow-up requires fresh completed campaign reconciliation")
         return {
+            **({"provider": "gmail", "thread_id": gmail.thread} if gmail else {}),
             "root_action_id": str(root["id"]),
             "campaign_id": campaign,
             "ordinal": ordinal,

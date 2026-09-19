@@ -64,8 +64,8 @@ async def test_gmail_delivery_routes_only_to_gmail_worker(sales, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage", ["verify", "stop", "reconcile", "status"])
-async def test_unimplemented_gmail_stages_never_fall_back_to_instantly(sales, monkeypatch, stage):
+@pytest.mark.parametrize("stage", ["verify"])
+async def test_gmail_verification_never_falls_back_to_instantly(sales, monkeypatch, stage):
     from robothor.sales import queue
 
     sales.configure(
@@ -80,7 +80,7 @@ async def test_unimplemented_gmail_stages_never_fall_back_to_instantly(sales, mo
     ):
         monkeypatch.setattr(queue, name, lambda sales: pytest.fail("Instantly must not run"))
     result = await queue.QueueDriver(sales).tick(stage, "gmail-workflow")
-    assert result == {"stage": stage, "worked": False, "reason": "gmail_stage_not_implemented"}
+    assert result == {"stage": stage, "worked": False, "reason": "email_verification_not_provided"}
 
 
 def test_gmail_setup_does_not_require_instantly_keys(sales):

@@ -258,7 +258,7 @@ class GmailThreadWorker:
                         raise Conflict("Gmail observed action disappeared")
                     authorized(target)
                     cur.execute(
-                        "UPDATE operation_actions SET receipt=COALESCE(receipt,'{}'::jsonb)||%s WHERE tenant_id=%s AND id=%s AND status='completed'",
+                        "UPDATE operation_actions SET receipt=COALESCE(receipt,'{}'::jsonb)||%s||jsonb_build_object('delivery_status',CASE WHEN receipt->'delivery_failure'->>'action'='failed' THEN 'bounced' WHEN receipt->'delivery_failure'->>'action'='delayed' THEN 'delivery_delayed' ELSE 'sent_copy_verified' END) WHERE tenant_id=%s AND id=%s AND status='completed'",
                         (
                             Json(
                                 {

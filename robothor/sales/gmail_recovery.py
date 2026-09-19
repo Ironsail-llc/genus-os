@@ -77,6 +77,15 @@ class GmailRecovery:
         )
         if event["action_id"] != str(action_id):
             raise Conflict("Gmail recovery lacks the exact approved message")
+        failure = (action["receipt"] or {}).get("delivery_failure")
+        if failure and failure.get("action") in {"failed", "delayed"}:
+            receipt = {
+                **receipt,
+                "delivery_failure": failure,
+                "delivery_status": "bounced"
+                if failure["action"] == "failed"
+                else "delivery_delayed",
+            }
         content = {
             "action_id": str(action_id),
             "state_hash": self._state(action),
