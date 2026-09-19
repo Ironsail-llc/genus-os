@@ -1338,6 +1338,18 @@ def strip_image_blocks(
     return out, changed
 
 
+def _bind_attempt_key(pool, kwargs):
+    """Bind and return the credential this attempt actually uses.
+
+    Failure handling must retire this key, even if a concurrent run rotates the
+    shared pool before the response arrives. None leaves existing kwargs intact.
+    """
+    key = pool.current() if pool is not None else None
+    if key is not None:
+        kwargs["api_key"] = key
+    return key
+
+
 class LLMClient:
     """LLM dispatch, model-fallback, streaming, cost, and message hygiene.
 
@@ -2305,16 +2317,7 @@ class LLMClient:
                         thinking_reduced=thinking_reduced,
                         nudge=nudge,
                     )
-                    if pool is not None:
-                        # Bound per attempt so the failure handler retires the
-                        # credential this request actually carried. Re-reading
-                        # the pool afterwards retires whatever is current
-                        # *then* — which, with the shared client the daemon
-                        # builds, is the healthy spare another run just
-                        # rotated onto.
-                        attempt_key = pool.current()
-                        if attempt_key is not None:
-                            kwargs["api_key"] = attempt_key
+                    attempt_key = _bind_attempt_key(pool, kwargs)
                     with self._watchdog_wait(f"llm_inflight:{model}", attempt_timeout):
                         async with asyncio.timeout(attempt_timeout):
                             if is_codex_model(model):
@@ -2516,10 +2519,7 @@ class LLMClient:
                         stream=True,
                         request_timeout=per_call_timeout,
                     )
-                    if pool is not None:
-                        attempt_key = pool.current()
-                        if attempt_key is not None:
-                            kwargs["api_key"] = attempt_key
+                    attempt_key = _bind_attempt_key(pool, kwargs)
                     if is_codex_model(model):
                         with self._watchdog_wait(f"llm_inflight:{model}", per_call_timeout):
                             async with asyncio.timeout(per_call_timeout):

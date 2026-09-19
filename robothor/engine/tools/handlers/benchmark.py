@@ -2311,6 +2311,58 @@ def _sandbox_lock_refusal(status: str, tenant_id: str, suite_id: str) -> dict[st
 
 
 @_handler("benchmark_run")
+def _make_benchmark_budget(suite):
+    from robothor.engine.request_budget import RequestBudget, active_budget
+
+    units = _suite_request_units(suite)
+    if units is not None and active_budget() is not None:
+        raise ValueError("A funded request scope is already active; cannot reset its allowance")
+    return RequestBudget(units) if units is not None else None
+
+
+def _benchmark_budget_receipt(budget):
+    return {
+        "limit_units": budget.limit_units,
+        "charged_units": budget.charged_units,
+        "accounting": "actual_or_reserved_unknown",
+    }
+
+
+async def _execute_funded_benchmark(
+    runner, agent_id, suite, suite_id, tasks, suite_tenant, spawn_context, request_budget
+):
+    """Keep suite funding and sandbox ownership around all task execution."""
+    from robothor.engine.request_budget import budget_scope
+
+    suite_max_cost = suite.get("max_cost_usd", _DEFAULT_SUITE_MAX_COST)
+    task_args: dict[str, Any] = {
+        "runner": runner,
+        "agent_id": agent_id,
+        "suite": suite,
+        "suite_id": suite_id,
+        "tasks": tasks,
+        "suite_tenant": suite_tenant,
+        "spawn_context": spawn_context,
+        "suite_max_cost": suite_max_cost,
+    }
+    if request_budget is not None:
+        task_args["request_budget"] = request_budget
+    with budget_scope(request_budget) if request_budget is not None else nullcontext():
+        if suite_tenant is None:
+            results, total_cost = await _execute_suite_tasks(**task_args)
+        else:
+            from robothor.engine import benchmark_sandbox as _bs
+
+            with _bs.sandbox_suite_lock(suite_tenant) as lock_status:
+                if lock_status != _bs.LOCK_ACQUIRED:
+                    return _sandbox_lock_refusal(lock_status, suite_tenant, suite_id)
+                results, total_cost = await _execute_suite_tasks(**task_args)
+    if request_budget is not None:
+        total_cost = request_budget.charged_units / 1_000_000
+
+    return results, total_cost
+
+
 async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Execute a benchmark suite against an agent and score the results.
 
@@ -2331,15 +2383,10 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     if suite is None:
         return {"error": f"Benchmark suite '{suite_id}' not found for agent '{agent_id}'"}
 
-    from robothor.engine.request_budget import RequestBudget, active_budget, budget_scope
-
     try:
-        request_units = _suite_request_units(suite)
+        request_budget = _make_benchmark_budget(suite)
     except ValueError as exc:
         return {"error": str(exc)}
-    if request_units is not None and active_budget() is not None:
-        return {"error": "A funded request scope is already active; cannot reset its allowance"}
-    request_budget = RequestBudget(request_units) if request_units is not None else None
 
     # Check for existing run with this tag
     existing_run = _load_block(_run_block(suite_id, tag))
@@ -2389,31 +2436,12 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         suite_tenant or "<the owning tenant, read-only>",
     )
 
-    suite_max_cost = suite.get("max_cost_usd", _DEFAULT_SUITE_MAX_COST)
-    task_args: dict[str, Any] = {
-        "runner": runner,
-        "agent_id": agent_id,
-        "suite": suite,
-        "suite_id": suite_id,
-        "tasks": tasks,
-        "suite_tenant": suite_tenant,
-        "spawn_context": benchmark_spawn_ctx,
-        "suite_max_cost": suite_max_cost,
-    }
-    if request_budget is not None:
-        task_args["request_budget"] = request_budget
-    with budget_scope(request_budget) if request_budget is not None else nullcontext():
-        if suite_tenant is None:
-            results, total_cost = await _execute_suite_tasks(**task_args)
-        else:
-            from robothor.engine import benchmark_sandbox as _bs
-
-            with _bs.sandbox_suite_lock(suite_tenant) as lock_status:
-                if lock_status != _bs.LOCK_ACQUIRED:
-                    return _sandbox_lock_refusal(lock_status, suite_tenant, suite_id)
-                results, total_cost = await _execute_suite_tasks(**task_args)
-    if request_budget is not None:
-        total_cost = request_budget.charged_units / 1_000_000
+    execution = await _execute_funded_benchmark(
+        runner, agent_id, suite, suite_id, tasks, suite_tenant, benchmark_spawn_ctx, request_budget
+    )
+    if isinstance(execution, dict):
+        return execution
+    results, total_cost = execution
 
     # Every task in the suite is a case, whether or not it got to run. The
     # only thing `skipped` changes is telemetry — never the denominator.
@@ -2461,11 +2489,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     }
     if request_budget is not None:
         run_record["total_cost_usd"] = total_cost
-        run_record["request_budget"] = {
-            "limit_units": request_budget.limit_units,
-            "charged_units": request_budget.charged_units,
-            "accounting": "actual_or_reserved_unknown",
-        }
+        run_record["request_budget"] = _benchmark_budget_receipt(request_budget)
 
     _save_block(_run_block(suite_id, tag), run_record)
 

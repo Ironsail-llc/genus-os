@@ -1263,6 +1263,27 @@ def _harden_and_state_posture() -> None:
     _log_pending_migrations()
 
 
+async def _create_runner_with_assets(config):
+    # Create subsystems
+    from robothor.engine.runtime_assets import RuntimeAssets
+
+    # Capture before subsystem constructors import plugin contributions. Managed
+    # releases may only use this cold process identity, never a later refresh.
+    sales_runtime_assets = await asyncio.to_thread(RuntimeAssets.capture)
+    runner = AgentRunner(config)
+
+    return runner, sales_runtime_assets
+
+
+def _attach_sales_runtime(scheduler, config, sales_runtime_assets):
+    from robothor.engine.sales_runtime import NativeSalesRuntime
+    from robothor.sales.service import Sales
+
+    scheduler.sales_runtime = NativeSalesRuntime(
+        scheduler, Sales(config.tenant_id), config.workspace, sales_runtime_assets
+    )
+
+
 async def main() -> int:
     """Start all engine subsystems. Returns the process exit code."""
     # Own SIGTERM/SIGINT before anything slow, so a stop during startup also
@@ -1323,13 +1344,7 @@ async def main() -> int:
     logger.info("Health port: %d", config.port)
     logger.info("Telegram bot: %s", "configured" if config.bot_token else "disabled")
 
-    # Create subsystems
-    from robothor.engine.runtime_assets import RuntimeAssets
-
-    # Capture before subsystem constructors import plugin contributions. Managed
-    # releases may only use this cold process identity, never a later refresh.
-    sales_runtime_assets = await asyncio.to_thread(RuntimeAssets.capture)
-    runner = AgentRunner(config)
+    runner, sales_runtime_assets = await _create_runner_with_assets(config)
 
     # Resume BEFORE reaping: `_cleanup_stale_runs` marks every interrupted row
     # terminal, which would destroy exactly what resume recovers. This block
@@ -1464,12 +1479,7 @@ async def main() -> int:
         init_permission_manager(bot, config.default_chat_id)
         logger.info("Permission escalation manager wired to Telegram")
     scheduler = CronScheduler(config, runner, workflow_engine=workflow_engine)
-    from robothor.engine.sales_runtime import NativeSalesRuntime
-    from robothor.sales.service import Sales
-
-    scheduler.sales_runtime = NativeSalesRuntime(
-        scheduler, Sales(config.tenant_id), config.workspace, sales_runtime_assets
-    )
+    _attach_sales_runtime(scheduler, config, sales_runtime_assets)
     global _ACTIVE_SCHEDULER
     _ACTIVE_SCHEDULER = scheduler
     hooks = EventHooks(config, runner, workflow_engine=workflow_engine)
