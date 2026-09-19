@@ -52,6 +52,10 @@ of appearing only as a failed overall case. A failed judge has a null score and
 no item decisions; `judge_error` remains separate. This diagnostic does not change
 grading or reproduce the evaluated output. Truthy strings, booleans and other
 numbers are grading errors. Each judge
+attempt also has an outer 30-second wall-clock deadline, independent of the SDK's
+network timeout. A timed-out request keeps its conservative charge; a later
+attempt must reserve its own allowance. This prevents a stalled grader from
+holding an otherwise finished suite indefinitely. Each judge
 request and retry passes through the engine's opt-in `RequestBudget` when a funded
 scope is active. Unknown provider usage retains its reservation. Without that scope,
 legacy benchmark cost behavior is unchanged: suite task totals exclude judge spend
