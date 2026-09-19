@@ -1043,6 +1043,16 @@ permission. Streaming and non-streaming request builders share it. Budgeted
 OpenRouter requests require endpoint `structured_outputs` support in addition to
 `response_format`; callers must still validate output and domain evidence locally.
 
+For domain checks beyond JSON shape, a workflow can apply
+`output_validation_scope` from `robothor.engine.output_validation`. Its trusted
+synchronous validator receives the run identity and proposed final text, returning
+`None` or a short, safe correction reason. Do not return raw untrusted page text or
+sensitive values in feedback. Native completion can request at most two repairs;
+these consume the existing run iterations, deadline and shared request budget.
+The validator also checks finalization output before marking a run complete.
+Validators must be deterministic and side-effect-free. The scope closes for
+inherited tasks when its owner exits and does not affect other concurrent runs.
+
 For a model whose backends have different reliability or tool support, set
 `model.provider_order` to a mapping from its exact LiteLLM OpenRouter path to an
 ordered, nonempty list of provider slugs. Base slugs include endpoint variants;

@@ -747,3 +747,14 @@ for subsequent schema requests. This requests provider-side structure, not a
 guarantee of factual correctness: Genus still parses the dossier and attests
 every citation against that child's successful retrievals. Unsupported schema
 requests, invalid JSON, missing evidence and invented quotations fail normally.
+
+Research workers validate their proposed final output before ending the native
+run. Invalid schemas, unmatched quotations, unexplained empty dossiers and
+non-boolean scored evidence produce bounded correction feedback: at most two
+additional ordinary iterations, subject to the existing time, iteration and
+spending ceilings. Exhaustion fails the child. Completion after a budget or
+finalizer exit rechecks the same validator. Only locally accepted output can
+become a durable fragment; recovery reapplies source and criterion checks.
+An evidence-free result must explain its unknowns and cannot establish fit.
+Provider JSON conformance and successful correction do not establish semantic
+research quality; human qualification calibration remains required.

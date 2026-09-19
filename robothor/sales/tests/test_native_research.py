@@ -21,6 +21,7 @@ from robothor.templates.tests.test_fleet_release import spec
         (True, None, "web_fetch"),
         (False, "no_fetch", "web_fetch"),
         (False, "excerpt", "web_fetch"),
+        (False, "repair_excerpt", "web_fetch"),
         (False, "url", "web_fetch"),
         (False, None, "web_render"),
     ],
@@ -189,7 +190,12 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
             elif tool_result is not None:
                 assert "Public business information" in tool_result["content"]
             part = fragment(topic)
-            if citation_fault == "excerpt":
+            repaired = any(
+                m.get("role") == "developer"
+                and "[workflow output validation]" in str(m.get("content", ""))
+                for m in kwargs["messages"]
+            )
+            if citation_fault == "excerpt" or (citation_fault == "repair_excerpt" and not repaired):
                 part.evidence[0].excerpt = "Made-up quotation"
             elif citation_fault == "url":
                 part.evidence[0].url = "https://different.example.com/"
@@ -259,7 +265,7 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
         assert fetched == []
         assert recovery.store.read(job, recovery.input_hash) == {}
         return
-    if citation_fault:
+    if citation_fault and citation_fault != "repair_excerpt":
         assert result.status == "failed"
         assert result.output_text is None
         assert result.stage_provenance == {}
@@ -268,7 +274,9 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
         return
     assert result.status == "completed", result.error_message
     assert len(Dossier.model_validate_json(result.output_text).evidence) == 3
-    assert len([call for call in provider_calls if call.get("tools")]) == 8
+    assert len([call for call in provider_calls if call.get("tools")]) == (
+        11 if citation_fault == "repair_excerpt" else 8
+    )
     assert result.total_cost_usd == pytest.approx(len(provider_calls) * 0.001)
     assert set(fetched) == {"https://clinic.example.com/" + topic for topic in TOPICS}
     with sales.ops.transaction() as cur:
