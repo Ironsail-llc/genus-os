@@ -30,11 +30,19 @@ class ResearchArgs(Contract):
     buying_case: str = Field(min_length=1, max_length=80)
 
 
+class ReportRef(Contract):
+    report_id: UUID | None = None
+
+
 class RequestRef(Contract):
     request_id: UUID
 
 
 CONTRACTS = {
+    "sales_get_report": (
+        ReportRef,
+        "Read a measured sales intelligence report in your tenant. Omit report_id for the latest completed report. Separate observed counts, incomplete coverage and proposed changes; this tool cannot activate proposals or approve sales.",
+    ),
     "sales_get_workspace": (
         Contract,
         "Read active buying cases, bounded research scheduling and shared spending limits before creating a research request. No secrets, integration configuration or permission to send messages is returned.",

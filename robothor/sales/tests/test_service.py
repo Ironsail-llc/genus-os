@@ -22,9 +22,13 @@ def sales():
                 "128_sales_business_observations.sql",
                 "129_sales_binding_repair.sql",
                 "130_sales_deployments.sql",
+                "131_sales_calibration.sql",
+                "132_sales_research_delegation.sql",
                 "133_operation_fragments.sql",
+                "134_web_render_permission.sql",
                 "135_sales_requests.sql",
                 "136_sales_pipedrive_scope.sql",
+                "137_sales_analyst_permissions.sql",
             ):
                 cur.execute((Path(__file__).parents[3] / "crm/migrations" / filename).read_text())
         conn.commit()

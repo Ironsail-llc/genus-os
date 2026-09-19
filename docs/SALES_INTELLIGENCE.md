@@ -1007,3 +1007,26 @@ Canonical adapter references, checked September 19, 2026:
 [Pipedrive organizations](https://developers.pipedrive.com/docs/api/v1/Organizations),
 [persons](https://developers.pipedrive.com/docs/api/v1/Persons), and
 [leads](https://developers.pipedrive.com/docs/api/v1/Leads).
+
+## Measured sales intelligence
+
+The `analyst` queue stage prepares at most one automatic report per ISO week while
+research is enabled and an analyst manifest is configured. Its dataset is fixed
+before model work and retained with the report; restart reuses the checkpoint.
+The Sales reports console and `sales_get_report` native tool expose completed
+reports. The analyst has read/telemetry tools only (migration
+`137_sales_analyst_permissions.sql`); proposals cannot publish policies or approve
+outreach.
+
+Code supplies current funnel counts, buying-case/policy/discovery-month cohorts,
+original versus latest qualification-review metrics, observed fulfillment,
+source timestamps and costs deduplicated across budget scopes. Model output must
+copy supporting counts exactly, and proposals must cite existing scalar metric
+paths. Interpretation remains reviewable model output, not proof of causality.
+
+Reports explicitly describe their collection interval and sample: oldest 1,000
+companies and at most 20 qualification cohorts, with completeness flags. Individual
+API observations and incomplete historical coverage cannot establish retention;
+unknown/immature windows are shown as unknown. Recorded operation cost excludes
+existing subscriptions, product cost, revenue and invoice adjustments. Each native
+analysis uses the shared finite model allowance and spending caps.
