@@ -685,6 +685,13 @@ do not exclude endpoints, and health exclusions do not persist into a new run.
 Already in-flight concurrent requests cannot be recalled. Streaming failures apply
 the same exclusions while retaining uncertain costs.
 
+If a model has no eligible endpoint, the engine advances through the agent's
+declared model fallback chain. This also covers a route excluded by another
+worker sharing the run's budget. Each fallback needs a fresh compatible endpoint
+quote and spending reservation; provider restrictions are not relaxed. Exhausted
+funding, unverified pricing and unpriced request features still stop the run.
+The same distinction applies to streaming and auxiliary model calls.
+
 Other providers, paid
 server tools, multimodal inputs, tiered pricing and explicit cache-write charges
 need a supported pricing policy before they can run within this envelope. See

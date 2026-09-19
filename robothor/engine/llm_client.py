@@ -97,7 +97,11 @@ from robothor.engine.reasoning_replay import (
     redacted_history_digest,
     strip_reasoning_for_model,
 )
-from robothor.engine.request_budget import RequestBudgetError, bounded_completion
+from robothor.engine.request_budget import (
+    RequestBudgetError,
+    RequestRouteUnavailableError,
+    bounded_completion,
+)
 from robothor.engine.required_tool import tool_choice
 from robothor.engine.retry import retry_async
 from robothor.engine.sanitize import sanitize_log as _sanitize
@@ -1230,6 +1234,9 @@ async def llm_call(
                 retryable_exceptions=_RETRYABLE_EXCEPTIONS,
                 backoff_base=1.0,
             )
+        except RequestRouteUnavailableError as exc:
+            last = exc
+            logger.info("No eligible funded route for %s — advancing", _sanitize(candidate))
         except RequestBudgetError:
             raise
         except Exception as exc:  # noqa: BLE001 - the next model is the point
@@ -2373,6 +2380,13 @@ class LLMClient:
                     if not noted:
                         note_outcome(model, attempt_started, error=ce)
                     raise
+                except RequestRouteUnavailableError as exc:
+                    # No provider request was admitted. Shared workers may have
+                    # excluded this model's last endpoint; do not blame its
+                    # breaker or bypass the next model's own quote/reservation.
+                    last_error = exc
+                    logger.info("No eligible funded route for %s — advancing", _sanitize(model))
+                    break
                 except RequestBudgetError:
                     raise
                 except Exception as e:
@@ -2647,6 +2661,10 @@ class LLMClient:
                     get_model_breaker().record_success(model)
                     _record_execution_mode(model)
                     return rebuilt
+                except RequestRouteUnavailableError as exc:
+                    last_error = exc
+                    logger.info("No eligible funded route for %s — advancing", _sanitize(model))
+                    break
                 except RequestBudgetError:
                     raise
                 except TimeoutError as te:

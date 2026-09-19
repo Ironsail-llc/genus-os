@@ -1930,6 +1930,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Funded model calls advance through the configured fallback chain when no eligible endpoint remains, including shared worker route exclusions. Streaming and auxiliary calls follow the same rule; exhausted funding and unpriced features remain fatal.
+
 ### Changed
 - **Behavior change** — Forward thread planner (`thread_planner.py`) is now **on by default**. Previously gated by `ROBOTHOR_PLANNER_ENABLED=1`; from the task-system stabilization, the variable defaults to `"1"` and only `ROBOTHOR_PLANNER_ENABLED=0` disables it. Operators who want the old off-by-default behavior must set the env explicitly.
 - `crm_tasks.autonomy_budget` is now validated at write time via `robothor.engine.autonomy.validate_budget`. Malformed budgets (negative caps, unknown verdicts, extra top-level keys) cause `create_task` / `update_task` to return `{"error": reason}` instead of silently degrading the planner.
