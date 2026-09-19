@@ -1013,6 +1013,33 @@ being committed. Proof dictionaries must never be accepted from an HTTP caller
 or agent tool. Lifecycle tests use an explicit runtime test double; they prove
 database coordination, not those live runtime checks or a successful cutover.
 
+### Managed workflow schedule generations
+
+`robothor.engine.fleet_schedules.FleetSchedules` reconciles a verified snapshot's
+cron workflows through the native workflow engine and APScheduler. It owns only
+the definitions and jobs it introduces, refuses collisions with loose workflows,
+removes retired jobs and preserves unrelated schedules. Call it on its owning
+engine event loop while the deployment's durable pending record blocks queue
+admission. Interrupted reconciliation invalidates the generation until retried.
+The initial supported baseline is an empty managed fleet; existing loose sales
+workflows require a separately verified migration rather than silent adoption.
+
+Verification checks the exact workflow definitions, callback identity and
+arguments, cron fields/timezone, running scheduler, non-paused jobs and execution
+limits. Every reconciliation creates a fresh generation, even when restoring the
+same release. An old callback or an in-flight workflow reaching the queue after
+reconciliation is refused. A managed queue tick requires an in-process native
+invocation matching its tenant, selected release and workflow; it rechecks the
+generation inside shared admission before invoking a worker. Unmanaged fleets
+retain their existing behavior. HTTP arguments cannot supply this context.
+
+This component is tested through native scheduled execution, tool registry,
+service identity and queue admission against the isolated database. It is not yet
+wired into daemon bootstrap or the coordinator's runtime verifier. The remaining
+adapter must bridge the database thread to the engine loop, combine source/plugin
+evidence, reconcile on restart and gate readiness before exposing deployment
+controls. No installed schedule is itself evidence of a completed live pilot.
+
 ## Directory Structure (systemd install)
 
 The unit templates spell the workspace `/opt/robothor` and
