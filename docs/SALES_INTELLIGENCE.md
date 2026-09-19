@@ -635,6 +635,13 @@ suppression races, exact-message authorization, uncertain writes, provider
 contracts, native stage output and mature retention windows. They do not establish
 provider production connectivity, model research quality or live sales results.
 
+The native research integration test also runs the full AgentRunner and real
+tool registry/RBAC path for one parent and three children. It checks stored run
+lineage, source-tool calls, the deterministic merged dossier, and shared accounting
+including auxiliary model requests. Only the remote model and web responses are
+fixtures; this is stronger wiring evidence than a stubbed stage runner, but still
+does not establish live research quality.
+
 `test_pipeline_rehearsal.py` runs the workers from discovery through a reviewed
 initial message, reviewed reply, opt-out and verified business outcome in the
 isolated test database. Its model answers, operator decisions, external receipts

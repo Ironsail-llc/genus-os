@@ -652,7 +652,7 @@ class SpawnContext:
     parent_run_id: str
     parent_agent_id: str
     correlation_id: str
-    nesting_depth: int  # parent's depth (child = +1)
+    nesting_depth: int  # this run's depth; the next child adds one
     user_id: str = ""
     user_role: str = ""
     max_nesting_depth: int = 2  # absolute cap: 3

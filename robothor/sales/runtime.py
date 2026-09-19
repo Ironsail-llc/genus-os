@@ -45,7 +45,7 @@ class NativeStageRunner:
         stage=None,
     ):
         from robothor.engine.config import load_agent_config
-        from robothor.engine.models import RunStatus, TriggerType
+        from robothor.engine.models import DeliveryMode, RunStatus, TriggerType
         from robothor.engine.request_budget import RequestBudget, budget_scope
         from robothor.engine.tools.handlers.spawn import get_runner
         from robothor.sales.research_fanout import research_scope
@@ -76,7 +76,7 @@ class NativeStageRunner:
             hard_budget=True,
             max_cost_usd=min(max_cost_usd, config.max_cost_usd or max_cost_usd),
             safety_cap=min(config.safety_cap, 20),
-            delivery_mode="none",
+            delivery_mode=DeliveryMode.NONE,
             continuous=False,
             auto_task=False,
             downstream_agents=[],
