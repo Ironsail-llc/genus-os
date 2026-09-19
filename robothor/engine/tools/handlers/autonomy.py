@@ -12,7 +12,7 @@ from pydantic import SecretStr
 
 from robothor.autonomy.broker import ExecutionPlan
 from robothor.autonomy.identity import scope_for_actor
-from robothor.autonomy.models import ResourceInput, WebOperation
+from robothor.autonomy.models import RequestContext, ResourceInput, WebOperation
 from robothor.autonomy.runtime import run_browser
 from robothor.autonomy.store import AutonomyStore
 
@@ -59,7 +59,14 @@ async def handle(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         if kind == "prepare":
             proposal = WebOperation.model_validate(args["proposal"])
             return await asyncio.to_thread(
-                store.reserve, scope, str(UUID(args["grant_id"])), ctx.agent_id, proposal
+                store.reserve,
+                scope,
+                str(UUID(args["grant_id"])),
+                ctx.agent_id,
+                proposal,
+                request_context=RequestContext(run_id=UUID(ctx.run_id), actor_id=ctx.user_id)
+                if ctx.run_id
+                else None,
             )
         if kind == "procedures":
             from robothor.autonomy.procedures import ProcedureQuery

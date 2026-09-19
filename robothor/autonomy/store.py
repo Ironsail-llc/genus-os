@@ -23,6 +23,7 @@ from robothor.autonomy.descriptors import Source, describe, refresh_descriptors
 from robothor.autonomy.models import (
     Delegation,
     PaymentCard,
+    RequestContext,
     ResourceInput,
     RuntimeSettings,
     Scope,
@@ -402,7 +403,13 @@ class AutonomyStore:
         return "allow"
 
     def reserve(
-        self, scope: Scope, grant_id: str, agent_id: str, proposal: WebOperation
+        self,
+        scope: Scope,
+        grant_id: str,
+        agent_id: str,
+        proposal: WebOperation,
+        *,
+        request_context: RequestContext | None = None,
     ) -> dict[str, Any]:
         payload = proposal.model_dump(mode="json", exclude_none=True)
         fingerprint = hashlib.sha256(
@@ -428,7 +435,7 @@ class AutonomyStore:
             cur.execute(
                 "INSERT INTO autonomy_operations "
                 "(id,tenant_id,owner_id,grant_id,grant_version,agent_id,idempotency_key,"
-                "fingerprint,proposal,state) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'reserved')",
+                "fingerprint,proposal,request_context,state) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'reserved')",
                 (
                     operation_id,
                     scope.tenant_id,
@@ -439,6 +446,7 @@ class AutonomyStore:
                     proposal.idempotency_key,
                     fingerprint,
                     Json(payload),
+                    Json(request_context.model_dump(mode="json")) if request_context else None,
                 ),
             )
             self._event(cur, scope, operation_id, "reserved")
@@ -458,7 +466,7 @@ class AutonomyStore:
     @staticmethod
     def _operation(cur: Any, scope: Scope, operation_id: str) -> dict[str, Any]:
         cur.execute(
-            "SELECT id::text,grant_id::text,grant_version,agent_id,proposal,state,evidence,execution_plan,input_reason,workflow_id::text,extract(epoch FROM created_at)::bigint AS created_epoch "
+            "SELECT id::text,grant_id::text,grant_version,agent_id,proposal,request_context,state,evidence,execution_plan,input_reason,workflow_id::text,extract(epoch FROM created_at)::bigint AS created_epoch "
             "FROM autonomy_operations WHERE id=%s AND tenant_id=%s AND owner_id=%s",
             (operation_id, scope.tenant_id, scope.owner_id),
         )
