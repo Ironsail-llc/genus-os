@@ -571,7 +571,15 @@ Until the broker starts, the native stage requires that exact function in the
 provider's `tool_choice` contract. This is a scoped runtime requirement, not an
 instruction supplied by a web page or a permission grant. It can select only a
 tool already available to the parent. Auxiliary requests without tools are
-unchanged; child calls and later parent calls use normal selection. The requirement
+unchanged; later parent calls use normal selection. Each fresh research child has
+its own scoped first-read requirement: `web_fetch`, or `web_render` for a worker
+that permits only rendered reads. The reviewed child manifest must contain at
+least one page retrieval tool. After an actual native read attempt, even a failed
+one, that child returns to ordinary selection so it can try another URL or the
+renderer. Search snippets do not satisfy this requirement. Siblings cannot clear
+each other's requirement, and the internal child-scope hook is not a model tool
+argument. A provider that ignores the requirement still fails source attestation.
+The requirement
 closes with the stage, including for tasks that inherited its context. Endpoint
 quotes must support both tools and forced tool selection: the endpoint's specific
 `supports_tool_choice.function` flag must be true, not merely a generic

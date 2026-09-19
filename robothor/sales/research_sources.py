@@ -1,5 +1,6 @@
 """Match citations to successful native retrievals belonging to the emitting child."""
 
+from contextlib import contextmanager
 from copy import deepcopy
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -35,9 +36,39 @@ def valid_url(url):
 
 
 class ResearchSources:
-    def __init__(self, tenant_id, agent_id):
+    def __init__(self, tenant_id, agent_id, first_read_tool="web_fetch"):
+        if first_read_tool not in {"web_fetch", "web_render"}:
+            raise ValueError("Research requires an available page retrieval tool")
         self.tenant_id, self.agent_id = tenant_id, agent_id
+        self.first_read_tool = first_read_tool
         self.runs: dict[str, list[dict]] = {}
+
+    @contextmanager
+    def child_scope(self, index):
+        """A fresh native child must attempt retrieval before answering from context."""
+        from robothor.engine.required_tool import required_tool_scope
+        from robothor.engine.tool_observation import tool_observation_scope
+
+        attempted = False
+
+        def observe(name, args, result, ctx):
+            nonlocal attempted
+            if (
+                name in {"web_fetch", "web_render"}
+                and ctx.tenant_id == self.tenant_id
+                and ctx.agent_id == self.agent_id
+                and ctx.run_id
+            ):
+                # A blocked page must allow the model to choose another page or
+                # the renderer; source attestation still requires success.
+                attempted = True
+            self.observe(name, args, result, ctx)
+
+        with (
+            required_tool_scope(self.first_read_tool, lambda: not attempted),
+            tool_observation_scope(observe, names={"web_fetch", "web_render"}),
+        ):
+            yield
 
     def observe(self, name, args, result, ctx):
         """Only the dispatcher supplies this callback; model output cannot supply sources."""

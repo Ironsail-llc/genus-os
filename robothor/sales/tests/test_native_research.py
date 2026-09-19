@@ -165,7 +165,11 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
 
             content = '{"untrusted_parent_narrative": true}'
         else:
-            assert kwargs["tool_choice"] == "auto"
+            assert kwargs["tool_choice"] == (
+                {"type": "function", "function": {"name": fetch_tool}}
+                if tool_result is None
+                else "auto"
+            )
             topic = request["topic"]
             if tool_result is None and citation_fault != "no_fetch":
                 tool = (fetch_tool, {"url": "https://clinic.example.com/" + topic})

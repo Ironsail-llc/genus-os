@@ -113,3 +113,48 @@ def test_recovery_cannot_accept_legacy_or_mismatched_source_proof(fault):
         dossier.evidence[0].excerpt = "Invented"
     with pytest.raises(Conflict):
         sources.restore("child", dossier, proof)
+
+
+@pytest.mark.asyncio
+async def test_each_child_requires_its_first_read_attempt_then_can_choose_fallback():
+    import asyncio
+
+    from robothor.engine.required_tool import tool_choice
+    from robothor.engine.tool_observation import observe_tool_result
+    from robothor.sales.research_sources import ResearchSources
+
+    tools = [{"function": {"name": "web_fetch"}}, {"function": {"name": "web_render"}}]
+    sources = ResearchSources("tenant-a", "research-worker")
+    assert callable(sources.child_scope)
+    required = {"type": "function", "function": {"name": "web_fetch"}}
+    ready, release = asyncio.Event(), asyncio.Event()
+
+    async def first():
+        with sources.child_scope(0):
+            assert tool_choice(tools) == required
+            observe_tool_result(
+                "web_fetch",
+                {},
+                {"error": "Blocked site"},
+                ToolContext(tenant_id="tenant-a", agent_id="research-worker", run_id="child-1"),
+            )
+            assert tool_choice(tools) == "auto"
+            ready.set()
+            await release.wait()
+
+    task = asyncio.create_task(first())
+    await asyncio.wait_for(ready.wait(), 1)
+    with sources.child_scope(1):
+        assert tool_choice(tools) == required
+        observe_tool_result(
+            "web_fetch",
+            {},
+            {"error": "Wrong identity"},
+            ToolContext(tenant_id="other", agent_id="research-worker", run_id="child-2"),
+        )
+        assert tool_choice(tools) == required
+        release.set()
+    await task
+    assert tool_choice(tools) == "auto"
+    with pytest.raises(Conflict):
+        sources.attest("child-1", fragment("services"))
