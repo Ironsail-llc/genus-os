@@ -79,12 +79,16 @@ async def validate_plan(
     allowed_frames: frozenset[str],
 ) -> list[dict[str, Any]]:
     entries: dict[tuple[str, str], dict[str, Any]] = {}
+    one = _ONE.replace("if (el.id) {", "if (false && el.id) {") if broker.protected_values else _ONE
+    form = (
+        _FORM.replace("if (el.id) {", "if (false && el.id) {") if broker.protected_values else _FORM
+    )
 
     async def collect(locator: Locator, frame: dict[str, str]) -> tuple[str, str] | None:
-        for item in await locator.evaluate(_FORM):
+        for item in await locator.evaluate(form):
             key = (frame.get("frame_selector", ""), item["selector"])
             entries.setdefault(key, {**item, "frame": frame})
-        item = await locator.evaluate(_ONE)
+        item = await locator.evaluate(one)
         if item is None:
             return None
         key = (frame.get("frame_selector", ""), item["selector"])
@@ -144,9 +148,9 @@ async def validate_plan(
             challenge_frame = await element.content_frame() if element else None
             if not challenge_frame or url_origin(challenge_frame.url) != challenge_destination:
                 raise PermissionError("frame_origin_mismatch")
-            item = await challenge_frame.locator(plan.challenge.selector).evaluate(_ONE)
+            item = await challenge_frame.locator(plan.challenge.selector).evaluate(one)
         else:
-            item = await challenge_root.locator(plan.challenge.selector).evaluate(_ONE)
+            item = await challenge_root.locator(plan.challenge.selector).evaluate(one)
         if item:
             entries.pop((frame_selector or "", item["selector"]), None)
     browser = page.context.browser

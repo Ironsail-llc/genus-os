@@ -14,7 +14,7 @@ from robothor.autonomy.workflows.manager import WorkflowManager
 
 @pytest.fixture
 async def opened(store, identity, monkeypatch):
-    from robothor.autonomy.workflows import manager as module
+    from robothor.autonomy import inspection as module
 
     clock = [0.0]
     page = SimpleNamespace(goto=AsyncMock(), url="https://form.example/apply")
@@ -77,7 +77,7 @@ async def test_close_is_owner_bound_and_does_not_release_budget(opened, store, i
 
 
 async def test_status_waits_for_in_progress_browser_open(store, identity, monkeypatch):
-    from robothor.autonomy.workflows import manager as module
+    from robothor.autonomy import inspection as module
 
     entered, release = asyncio.Event(), asyncio.Event()
     page = SimpleNamespace(goto=AsyncMock(), url="https://form.example/apply")

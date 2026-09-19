@@ -157,7 +157,18 @@ Persistent workflows use a separate non-dumpable broker service with a private
 0700 runtime directory, 0600 socket, exclusive process lease, and signed
 owner/tenant/agent-bound service tokens. Browser processes receive an environment
 allowlist without service credentials or tracing flags. The RPC has no arbitrary
-JavaScript, screenshot, HTML or download operation.
+JavaScript, screenshot, HTML or download operation. Entered values and restored
+cookie/storage values are masked from inspection metadata before results are
+returned or journaled, including common URL/HTML/base64 representations. Once
+protected values are present, inspection returns structural CSS selectors, so
+secret-bearing element IDs are not exposed or turned into unusable masked
+selectors. Masking happens before label shortening. Confirmation digests from
+explicit selectors normally hash masked text; after transient-code entry they
+hash only the previously declared matched phrase, so even a transformed code
+cannot be retained in an arbitrary confirmation-text digest. Browser storage
+is not saved after transient code or TOTP entry. This does not constitute verification
+against every possible site-specific encoding; adversarial leakage testing
+remains part of deployment validation.
 
 Each workflow owns one page and one immutable proposal. `advance=true` permits
 zero-money account/login/application steps only: at least one previous field must

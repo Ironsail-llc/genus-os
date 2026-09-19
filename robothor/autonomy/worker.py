@@ -20,7 +20,6 @@ from playwright.async_api import async_playwright
 from pydantic import SecretStr
 
 from robothor.autonomy.broker import BrowserBroker, ExecutionPlan, url_origin
-from robothor.autonomy.inspection import inspect_page
 from robothor.autonomy.models import ResourceInput, Scope
 from robothor.autonomy.store import AutonomyStore
 
@@ -111,6 +110,8 @@ async def handle(data: dict[str, Any]) -> dict[str, Any]:
         storage = await asyncio.to_thread(
             store.consume_resource, scope, session_ref, destination, kind="browser_session"
         )
+    broker = BrowserBroker(store)
+    broker.protected_values.session(storage)
     async with async_playwright() as pw:
         browser = None
         if data.get("managed"):
@@ -144,12 +145,12 @@ async def handle(data: dict[str, Any]) -> dict[str, Any]:
             await context.route("**/*", public_request)
             page = await context.new_page()
             if reconcile and plan:
-                return await BrowserBroker(store).reconcile_on_page(
+                return await broker.reconcile_on_page(
                     scope, data["operation_id"], data["agent_id"], plan, page
                 )
             if plan:
                 assert grant is not None
-                return await BrowserBroker(store).execute_on_page(
+                return await broker.execute_on_page(
                     scope,
                     data["operation_id"],
                     data["agent_id"],
@@ -161,10 +162,8 @@ async def handle(data: dict[str, Any]) -> dict[str, Any]:
             await page.goto(url, wait_until="domcontentloaded", timeout=30000)
             if url_origin(page.url) != destination:
                 return {"error": "destination_changed"}
-            inspected = await inspect_page(
-                page,
-                destination=destination,
-                allowed_frames=grant.frame_origins if grant else frozenset(),
+            inspected = await broker.inspect(
+                page, destination, grant.frame_origins if grant else frozenset()
             )
             saved = await asyncio.to_thread(
                 store.put_resource,
@@ -183,7 +182,10 @@ async def handle(data: dict[str, Any]) -> dict[str, Any]:
                 "session_resource_id": saved["id"],
             }
         finally:
-            await browser.close()
+            try:
+                await browser.close()
+            finally:
+                broker.protected_values.clear()
 
 
 def main() -> None:

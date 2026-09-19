@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from robothor.autonomy.broker import BrowserBroker, ExecutionPlan, url_origin
-from robothor.autonomy.inspection import inspect_page
 from robothor.autonomy.workflows.store import WorkflowStore
 
 if TYPE_CHECKING:
@@ -81,7 +80,10 @@ class WorkflowManager:
             )
         finally:
             self._live.pop(workflow_id, None)
-            await live.browser.close()
+            try:
+                await live.browser.close()
+            finally:
+                live.broker.protected_values.clear()
 
     async def expire_idle(self) -> None:
         for workflow_id, live in list(self._live.items()):
@@ -165,6 +167,8 @@ class WorkflowManager:
                             row["origin"],
                             kind="browser_session",
                         )
+                    broker = BrowserBroker(self.store)
+                    broker.protected_values.session(storage)
                     browser = await self.browser_factory()
                     context = await browser.new_context(
                         storage_state=cast("StorageState | None", storage),
@@ -181,7 +185,7 @@ class WorkflowManager:
                         agent_id,
                         browser,
                         page,
-                        BrowserBroker(self.store),
+                        broker,
                         self.clock(),
                         self.clock(),
                     )
@@ -200,8 +204,8 @@ class WorkflowManager:
                 if self._expired(live):
                     await self._discard(workflow_id, live)
                     raise PermissionError("workflow_lost")
-                inspection = await inspect_page(
-                    live.page, destination=row["origin"], allowed_frames=grant.frame_origins
+                inspection = await live.broker.inspect(
+                    live.page, row["origin"], grant.frame_origins
                 )
                 live.last_used = self.clock()
             return {
@@ -226,9 +230,7 @@ class WorkflowManager:
             grant = await asyncio.to_thread(
                 self.store.check_authority, scope, row["operation_id"], agent_id
             )
-            inspection = await inspect_page(
-                live.page, destination=row["origin"], allowed_frames=grant.frame_origins
-            )
+            inspection = await live.broker.inspect(live.page, row["origin"], grant.frame_origins)
             live.last_used = self.clock()
             return {
                 "workflow_id": workflow_id,

@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 from typing import TYPE_CHECKING, Any
 
 from robothor.autonomy.broker import url_origin
 from robothor.autonomy.confirmation import observe
-from robothor.autonomy.inspection import inspect_page
 from robothor.autonomy.workflows.rejection import RejectionWatch
 from robothor.autonomy.workflows.transition import signature
 
@@ -31,11 +29,7 @@ async def submit_and_observe(
     advance: bool,
 ) -> dict[str, Any]:
     before = (
-        signature(
-            await inspect_page(page, destination=proposal.origin, allowed_frames=allowed_frames)
-        )
-        if advance
-        else set()
+        signature(await broker.inspect(page, proposal.origin, allowed_frames)) if advance else set()
     )
     # Only zero-money form operations may recover from merchant field rejection.
     # Payment/code outcomes retain the existing reconciliation requirement.
@@ -58,7 +52,7 @@ async def submit_and_observe(
                         return {
                             "kind": "confirmation",
                             "evidence": {
-                                "confirmation_sha256": hashlib.sha256(text.encode()).hexdigest()
+                                "confirmation_sha256": broker._confirmation_digest(text, plan)
                             },
                         }
             else:
@@ -74,9 +68,7 @@ async def submit_and_observe(
                 if errors:
                     return {"kind": "validation", "fields": errors}
             if advance:
-                inspection = await inspect_page(
-                    page, destination=proposal.origin, allowed_frames=allowed_frames
-                )
+                inspection = await broker.inspect(page, proposal.origin, allowed_frames)
                 after = signature(inspection)
                 if before - after and after - before:
                     return {"kind": "step", "inspection": inspection}

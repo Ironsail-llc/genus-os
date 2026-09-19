@@ -133,8 +133,36 @@ def price_minor(text: str, currency: str) -> int:
 
 class BrowserBroker:
     def __init__(self, store: AutonomyStore) -> None:
+        from robothor.autonomy.privacy import ProtectedValues
+
         self.store = store
+        self.protected_values = ProtectedValues()
+        self._used_transient_code = False
         self._guarded_frames: dict[Frame, str] = {}
+
+    def _confirmation_digest(self, text: str, plan: ExecutionPlan) -> str:
+        # A merchant can echo a code in an arbitrary encoding. After code entry,
+        # hash only the already-declared, matched phrase, not arbitrary DOM text.
+        # The plan predates the transient code and is already in the journal.
+        public_text = plan.success_text or ""
+        source = (
+            public_text
+            if self._used_transient_code or plan.challenge
+            else self.protected_values.text(text)
+        )
+        return hashlib.sha256(source.encode()).hexdigest()
+
+    async def inspect(
+        self, page: Page, destination: str, allowed_frames: frozenset[str]
+    ) -> dict[str, Any]:
+        from robothor.autonomy.inspection import inspect_page
+
+        return await inspect_page(
+            page,
+            destination=destination,
+            allowed_frames=allowed_frames,
+            protected_values=self.protected_values,
+        )
 
     async def _guard_origin(self, page: Page, frame: Frame, destination: str) -> None:
         if frame in self._guarded_frames and self._guarded_frames[frame] != destination:
@@ -177,6 +205,7 @@ class BrowserBroker:
             kind="credential",
         )
         url = value["password"]
+        self.protected_values.add(url)
         if url_origin(url) != destination:
             raise PermissionError("verification_origin_mismatch")
         await asyncio.to_thread(self.store.begin_submit, scope, operation_id, agent_id)
@@ -191,7 +220,7 @@ class BrowserBroker:
                 raise ValueError("confirmation_missing")
             evidence = {
                 "origin": destination,
-                "confirmation_sha256": hashlib.sha256(text.encode()).hexdigest(),
+                "confirmation_sha256": self._confirmation_digest(text, plan),
                 "verified_at": datetime.now(UTC).isoformat(),
                 "kind": "verification_confirmation",
             }
@@ -256,7 +285,7 @@ class BrowserBroker:
                 raise ValueError("confirmation_missing")
             evidence = {
                 "origin": destination,
-                "confirmation_sha256": hashlib.sha256(text.encode()).hexdigest(),
+                "confirmation_sha256": self._confirmation_digest(text, plan),
                 "verified_at": datetime.now(UTC).isoformat(),
                 "kind": "reconciled_confirmation",
             }
@@ -395,6 +424,7 @@ class BrowserBroker:
         if binding.kind == "document":
             if binding.method != "upload":
                 raise ValueError("document_requires_upload")
+            self.protected_values.add(value["name"])
             await locator.set_input_files(
                 {
                     "name": value["name"],
@@ -404,6 +434,9 @@ class BrowserBroker:
             )
             return
         text = self._binding_text(binding, value)
+        self.protected_values.add(text)
+        if binding.kind == "totp":
+            self._used_transient_code = True
         if binding.method == "select":
             await locator.select_option(text, timeout=15000)
         elif binding.method == "fill":
@@ -444,6 +477,12 @@ class BrowserBroker:
         try:
             if url_origin(plan.url) != proposal.origin:
                 raise PermissionError("destination_mismatch")
+            if (
+                plan.challenge
+                and plan.challenge.kind == "card_code"
+                and proposal.action not in {"purchase", "subscription"}
+            ):
+                raise PermissionError("payment_authority_required")
             if advance and (
                 not workflow_id
                 or proposal.action not in {"account", "login", "application"}
@@ -531,6 +570,8 @@ class BrowserBroker:
                     raise PermissionError("payment_authority_required")
                 await self._field(scope, page, binding, proposal.origin, allowed_frames)
             if challenge_locator:
+                self.protected_values.add(verification_code or "")
+                self._used_transient_code = True
                 await challenge_locator.fill(verification_code or "", timeout=15000)
             for selector in plan.check_selectors:
                 await (await self._unique(page.locator(selector))).check(timeout=15000)
@@ -585,7 +626,7 @@ class BrowserBroker:
                     if not plan.success_text or plan.success_text not in text:
                         raise ValueError("confirmation_missing")
                     confirmation_evidence = {
-                        "confirmation_sha256": hashlib.sha256(text.encode()).hexdigest()
+                        "confirmation_sha256": self._confirmation_digest(text, plan)
                     }
                 else:
                     confirmation_evidence = await wait_for_confirmation(
@@ -604,7 +645,11 @@ class BrowserBroker:
             # leaves the broker. Failure to save must not undo a completed purchase.
             # A merchant can copy a verification code into cookies/localStorage.
             # Never persist browser storage after payment or transient-code entry.
-            if proposal.action in {"purchase", "subscription"} or plan.challenge:
+            if (
+                proposal.action in {"purchase", "subscription"}
+                or plan.challenge
+                or self._used_transient_code
+            ):
                 return {
                     "operation_id": operation_id,
                     "state": "completed",
