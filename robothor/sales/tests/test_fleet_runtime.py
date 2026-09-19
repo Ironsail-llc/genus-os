@@ -85,12 +85,20 @@ async def test_research_admission_passes_release_and_checkpoints_its_provenance(
     sales.configure(
         {
             "agents": {"research": "research-agent"},
-            "fleet_release_id": "a" * 64,
             "monthly_limit_units": 10_000_000,
             "daily_limit_units": 5_000_000,
         },
         "operator:test",
     )
+    # Seed the selected state for this worker-only test. Deployment admission is
+    # exercised separately with real artifacts in test_deployment.py.
+    from psycopg2.extras import Json
+
+    with sales.ops.transaction() as cur:
+        cur.execute(
+            "UPDATE sales_settings SET config=config || %s,revision=revision+1 WHERE tenant_id=%s",
+            (Json({"fleet_release_id": "a" * 64}), sales.tenant),
+        )
     job = sales.ops.claim("sales.research", lease_seconds=360)
     runner = RunnerStub(sales.get(prospect["id"])["dossier"])
     settings = SalesSettings.model_validate(sales.settings())

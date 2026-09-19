@@ -34,6 +34,9 @@ class QueueDriver:
         )
 
     async def _tick(self, stage, workflow_id):
+        from robothor.sales.deployment import assert_queue_open
+
+        await asyncio.to_thread(assert_queue_open, self.sales)
         settings = SalesSettings.model_validate(await asyncio.to_thread(self.sales.settings))
         if settings.workflow_bindings.get(stage) != workflow_id:
             raise Conflict("Sales stage is not bound to this native workflow")

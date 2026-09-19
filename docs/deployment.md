@@ -966,6 +966,42 @@ quiescence after a process or database failure. Schedule generation, deployed
 platform/plugin identity, rollback and activation acknowledgements remain
 coordinator requirements.
 
+### Durable sales deployment transitions
+
+Migration 130 adds monotonic sales-settings revisions and tenant-scoped
+`sales_deployments` records. `robothor.sales.deployment.DeploymentCoordinator`
+prepares a transition against an exact settings revision and staged artifact.
+It takes the exclusive maintenance gate, checks running sales jobs (including
+expired leases), executing/unknown sales actions and unresolved sales/Pipedrive/
+Instantly effects, then records the previous and proposed configurations. Only
+one transition may prepare per tenant. The durable pending record blocks native
+queue admission across controller/process restarts.
+
+`commit` requires a runtime verifier dependency and rechecks the artifact,
+settings revision and unfinished-work conditions. It writes the selected release,
+agent/workflow bindings, transition status and audit event in one transaction.
+All five integration switches are off after deployment. Current operational
+settings, including budgets and policy references, are preserved. A settings edit
+after preparation invalidates commit, even if later edits restore the same values.
+The normal settings API cannot bypass the coordinator to change managed bindings.
+
+`prepare_rollback` creates another guarded transition from the latest committed
+deployment to its previous structural configuration. It preserves current
+operational settings and also leaves integration switches off. `abort` requires
+verification that the previous runtime has been restored before it clears the
+pending record; it preserves newer operator settings. Failed verification or a
+transaction failure leaves the pending transition recoverable and admission closed.
+
+**Native runtime adapter remains to be implemented.** There is no default verifier
+or public deployment endpoint. Its `verify(transition, restoring=...)` contract
+must check the actual running platform revision, installed plugin integrity,
+workflow definitions, schedule ownership/set and current engine generation. It
+must return evidence for this transition and release only after reconciliation,
+or raise. It receives a copy of the transition and cannot alter the configuration
+being committed. Proof dictionaries must never be accepted from an HTTP caller
+or agent tool. Lifecycle tests use an explicit runtime test double; they prove
+database coordination, not those live runtime checks or a successful cutover.
+
 ## Directory Structure (systemd install)
 
 The unit templates spell the workspace `/opt/robothor` and
