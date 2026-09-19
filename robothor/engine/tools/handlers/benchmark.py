@@ -276,6 +276,9 @@ _BENCHMARK_EXCLUDED_TOOLS: frozenset[str] = _BENCHMARK_WITHHELD_READS | frozense
         # Task-system writes beyond the sandbox CRM set.
         "approve_task",
         "reject_task",
+        # Durable goals can schedule real work outside the benchmark sandbox.
+        "create_pursuit_goal",
+        "update_pursuit_goal",
         # Workflow approvals: approving resumes a real suspended run, and
         # even the read exposes what the operator is currently being asked
         # about. A graded agent has no business anywhere near either.
