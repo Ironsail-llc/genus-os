@@ -44,6 +44,9 @@ class _Session:
     """The two things the guard reads off a live ``AgentSession``."""
 
     def __init__(self) -> None:
+        from robothor.engine.models import AgentRun
+
+        self.run = AgentRun(agent_id="repeat-guard-test")
         self.messages: list[dict[str, Any]] = []
         self._step_counter = 0
 
