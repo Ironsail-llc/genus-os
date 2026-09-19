@@ -216,6 +216,51 @@ Pause jobs target older library revisions, preserving campaigns reviewed under a
 newer selection. Provider pauses are asynchronous and cannot recall a message
 already sent or guarantee interception of an in-flight provider request.
 
+### Human qualification quality review
+
+Open **Sales → Assess qualification quality** after publishing and selecting the
+policies to evaluate. Create a named 100-dossier cohort with a review purpose. The
+cohort fixes an 85% initial agreement target and captures the active policy map,
+full policy contents and settings revision. The authenticated API also supports
+other explicit sample sizes and targets; a smaller test cohort does not satisfy
+the 100-dossier pilot requirement.
+
+**Enroll next eligible dossiers** fills the remaining sample slots in creation
+order. It includes qualified, rejected and needs-research model decisions under
+the cohort's exact policy versions. Enrollment freezes each dossier, qualification,
+policy and content hash. Later research does not rewrite those snapshots. Sample
+membership is fixed; additional enrollment only fills vacant slots. Concurrent
+enrollment cannot exceed the sample size or enroll a prospect twice.
+
+Review the business evidence and unknowns, then record a human fit assessment and
+reason. The screen reveals the model result after the first assessment to reduce
+anchoring. This is a presentation choice, not an API secrecy boundary. An assessment
+does not accept a prospect, promote it to an external CRM or approve a message.
+Corrections append a new revision and require the currently displayed assessment
+ID and frozen snapshot hash. Stale or uncertain responses require reloading; the
+dashboard does not automatically retry a judgment.
+
+The report keeps original and latest assessments separate, including agreement,
+human-qualified count, unresolved human judgments, false positives, missed fits
+(including model abstentions) and precision among model-qualified prospects with
+decisive human reviews. Per-buying-case results expose uneven performance. The
+initial target requires every planned dossier to have a decisive original human
+assessment; missing or uncertain judgments cannot pass it. Corrections remain
+visible but cannot rewrite the original target result. Use a separately identified
+cohort after changing policies and disclose reused businesses as in-sample evidence.
+
+This is an ordered convenience sample, not a randomized estimate of all prospects.
+It excludes unresearched and differently versioned records and can reflect discovery
+and website-visibility bias. Human qualification agreement does not establish
+customer conversion, commercial fulfillment or complete existing-customer history.
+
+Migration 131 stores tenant-scoped cohorts, frozen items and append-only assessment
+revisions. Human operator routes under `/api/sales/calibration` provide cohort
+creation/listing, enrollment, paginated items, individual assessment and reports.
+All use authenticated tenant/actor identity; agents cannot record reference labels.
+
+### Verification and conversation handling
+
 `verification_allowance_units` must be configured from the actual subscription's
 credit economics before paid verification runs. The worker books that complete
 allowance per lookup; provider credits are not assumed to be dollars. A pending

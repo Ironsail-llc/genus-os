@@ -17,6 +17,7 @@ from robothor.operations.store import Conflict
 from robothor.sales.business_repair import (
     Reassignment,  # noqa: TC001 — FastAPI resolves at runtime.
 )
+from robothor.sales.calibration import Calibration
 from robothor.sales.library import (  # noqa: TC001 — FastAPI resolves annotations.
     LibraryPacket,
     preview,
@@ -123,10 +124,76 @@ class LibraryPublication(ReadRepair):
     expected_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
+class CalibrationCreate(ReadRepair):
+    name: str = Field(min_length=1, max_length=200)
+    target_size: int = Field(default=100, ge=1, le=1000, strict=True)
+    agreement_target_percent: int = Field(default=85, ge=0, le=100, strict=True)
+    expected_settings_revision: int = Field(ge=0, strict=True)
+
+
+class CalibrationEnrollment(Contract):
+    pass
+
+
+class CalibrationAssessment(ReadRepair):
+    reference_decision: Literal["qualified", "rejected", "needs_research"]
+    expected_snapshot_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    expected_assessment_id: UUID | None
+
+
 @router.get("")
 def overview(request: Request):
     service, _ = require_sales_operator(request)
     return service.overview()
+
+
+@router.get("/calibration")
+@domain_errors
+def calibration_cohorts(request: Request, after: UUID | None = None):
+    service, _ = require_sales_operator(request)
+    return Calibration(service).list_cohorts(after=str(after) if after else None)
+
+
+@router.post("/calibration")
+@domain_errors
+def create_calibration(body: CalibrationCreate, request: Request):
+    service, actor = require_sales_operator(request)
+    return Calibration(service).create(**body.model_dump(), actor=actor)
+
+
+@router.get("/calibration/{cohort_id}")
+@domain_errors
+def calibration_report(cohort_id: UUID, request: Request):
+    service, _ = require_sales_operator(request)
+    return Calibration(service).report(str(cohort_id))
+
+
+@router.post("/calibration/{cohort_id}/enroll")
+@domain_errors
+def enroll_calibration(cohort_id: UUID, body: CalibrationEnrollment, request: Request):
+    service, actor = require_sales_operator(request)
+    return Calibration(service).enroll(str(cohort_id), actor=actor)
+
+
+@router.get("/calibration/{cohort_id}/items")
+@domain_errors
+def calibration_items(cohort_id: UUID, request: Request, after: int = Query(default=0, ge=0)):
+    service, _ = require_sales_operator(request)
+    return Calibration(service).items(str(cohort_id), after=after)
+
+
+@router.get("/calibration/items/{item_id}")
+@domain_errors
+def calibration_item(item_id: UUID, request: Request):
+    service, _ = require_sales_operator(request)
+    return Calibration(service).item(str(item_id))
+
+
+@router.post("/calibration/items/{item_id}/assessment")
+@domain_errors
+def assess_calibration(item_id: UUID, body: CalibrationAssessment, request: Request):
+    service, actor = require_sales_operator(request)
+    return Calibration(service).assess(str(item_id), **body.model_dump(mode="json"), actor=actor)
 
 
 @router.post("/jobs/{job_id}/retry")

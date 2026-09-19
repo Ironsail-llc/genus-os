@@ -446,6 +446,13 @@ cancellation drains the database transaction. Human-only engine control routes
 and Helm forward the actual verified operator identity; they cannot accept
 client-supplied readiness evidence. Non-Git build provenance remains separate work.
 
+Migration 131 adds tenant-scoped qualification review cohorts, frozen dossier and
+policy snapshots, and append-only human assessment revisions. Enrollment includes
+all model decisions under the captured policies, with serialized size and duplicate
+checks. Reports preserve original agreement separately from corrections. Human
+assessment routes and the Helm review screen grant no prospect-promotion or message
+authority; measured qualification quality remains separate from customer outcomes.
+
 ### General intelligence pipeline
 
 Three-tier architecture converts raw API data into structured knowledge:

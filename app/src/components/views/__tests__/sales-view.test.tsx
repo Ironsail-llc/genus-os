@@ -78,3 +78,13 @@ it("loads the published sales library only when its review panel opens", async (
   fireEvent.click(screen.getByRole("button", { name: "Review sales library" }));
   expect(await screen.findByText("No qualification policies have been published yet.")).toBeVisible();
 });
+
+it("opens qualification review without granting prospect promotion", async () => {
+  const fetcher = vi.spyOn(global, "fetch").mockImplementation(async (url) => Response.json(String(url).endsWith("/calibration")
+    ? { items: [], next_cursor: null } : String(url).endsWith("/settings") ? { config: {}, revision: 0 } : data));
+  render(<SalesView visible role="admin" />);
+  await screen.findByText("Exact approved message");
+  fireEvent.click(screen.getByRole("button", { name: "Assess qualification quality" }));
+  expect(await screen.findByRole("region", { name: "Qualification review" })).toBeVisible();
+  expect(fetcher.mock.calls.every(([, options]) => !options?.method || options.method === "GET")).toBe(true);
+});
