@@ -145,3 +145,22 @@ async def test_durable_wait_ends_coordinator_iterations(db):  # noqa: F811
         )
     finally:
         binding.reset(token)
+
+
+def test_worker_cannot_override_its_paused_task_with_another_parent():
+    from unittest.mock import patch
+
+    session = SimpleNamespace(run=SimpleNamespace(task_id="paused-owned-task"))
+    with (
+        patch("robothor.engine.session_registry.lookup", return_value=session),
+        patch(
+            "robothor.goals.runtime.task_runnable",
+            side_effect=lambda task, tenant: task != "paused-owned-task",
+        ),
+        pytest.raises(ValueError, match="inactive"),
+    ):
+        admit_tool(
+            "create_task",
+            {"parent_task_id": "unrelated-active-task"},
+            ToolContext(run_id="worker", tenant_id="tenant"),
+        )

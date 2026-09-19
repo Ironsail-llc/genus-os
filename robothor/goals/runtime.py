@@ -94,8 +94,8 @@ def admit_tool(name: str, args: dict[str, Any], ctx: ToolContext) -> None:
 
         session = lookup(ctx.run_id) if ctx.run_id else None
         task_id = getattr(session.run, "task_id", None) if session else None
-        task_id = args.get("parent_task_id") or task_id
-        if task_id and not task_runnable(task_id, ctx.tenant_id):
+        task_ids = {task_id, args.get("parent_task_id")}
+        if any(task and not task_runnable(task, ctx.tenant_id) for task in task_ids):
             raise ValueError("the goal owning this task is inactive")
         return
     from robothor.engine.tools.constants import READONLY_TOOLS
