@@ -61,6 +61,58 @@ def runner(engine_config):
 
 class TestAgentRunnerExecute:
     @pytest.mark.asyncio
+    async def test_manifest_spawn_targets_reach_run_context(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        from robothor.engine.tools import _current_spawn_context
+
+        sample_agent_config.can_spawn_agents = True
+        sample_agent_config.spawn_allowed_agents = ["research-worker"]
+        sample_agent_config.max_spawn_total = 2
+        sample_agent_config.fleet_release_id = "a" * 64
+        seen = []
+
+        async def provider(**kwargs):
+            context = _current_spawn_context.get()
+            assert len(getattr(context, "spawn_limits", ())) == 1
+            seen.append(
+                (
+                    getattr(context, "allowed_agents", None),
+                    getattr(context, "fleet_release_id", None),
+                )
+            )
+            return mock_litellm_response(content="Done.")
+
+        with (
+            patch("robothor.engine.runner.create_run"),
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.run_finalizer.create_step"),
+            patch("litellm.acompletion", side_effect=provider),
+        ):
+            run = await runner.execute("test-agent", "task", agent_config=sample_agent_config)
+        assert run.status == RunStatus.COMPLETED
+        assert seen == [(frozenset({"research-worker"}), "a" * 64)]
+
+    @pytest.mark.asyncio
+    async def test_declared_json_mode_reaches_provider(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        sample_agent_config.response_format = "json_object"
+        response = mock_litellm_response(content='{"items": []}')
+        with (
+            patch("robothor.engine.runner.create_run"),
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.run_finalizer.create_step"),
+            patch("litellm.acompletion", new_callable=AsyncMock, return_value=response) as call,
+        ):
+            run = await runner.execute(
+                "test-agent", "Return the result.", agent_config=sample_agent_config
+            )
+        assert run.status == RunStatus.COMPLETED
+        assert call.call_args.kwargs["response_format"] == {"type": "json_object"}
+        assert "JSON object" in call.call_args.kwargs["messages"][0]["content"]
+
+    @pytest.mark.asyncio
     async def test_missing_agent_config(self, runner):
         """Agent run fails gracefully when config not found."""
         # `load_agent_config_or_reason` since the schema ladder landed: the

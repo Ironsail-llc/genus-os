@@ -235,6 +235,7 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "analyze_image",
         # Web
         "web_fetch",
+        "web_render",
         "web_search",
         # Memory read-only tools
         "search_memory",

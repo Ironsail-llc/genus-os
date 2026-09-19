@@ -1,0 +1,1 @@
+Agent manifests can now select ordered provider allowlists for individual OpenRouter models. Budgeted requests honor that order while retaining capability checks, cost admission and endpoint pinning; fallback models keep their own routing. See `docs/AGENT_BUILDER.md` for `model.provider_order`.

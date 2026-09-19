@@ -33,6 +33,7 @@ export type ViewId =
   | "inbox"
   | "tasks"
   | "goals"
+  | "sales"
   | "agents"
   | "workflows"
   | "dashboard"
@@ -216,6 +217,7 @@ export const navGroups: NavGroup[] = [
       // until those move across.
       { id: "goals", label: "Goals", view: "goals", icon: Flag, requires: "operator" },
       { id: "tasks", label: "Tasks", view: "tasks", icon: ListTodo },
+      { id: "sales", label: "Sales", view: "sales", icon: Users, requires: "operator" },
       { id: "agents", label: "Agents", view: "agents", icon: Bot },
       // "Automations" is the product name for the existing workflows view.
       { id: "workflows", label: "Automations", view: "workflows", icon: Workflow },
@@ -270,6 +272,7 @@ export const viewTitles: Record<ViewId, string> = {
   inbox: "Inbox",
   tasks: "Tasks",
   goals: "Goals",
+  sales: "Sales",
   agents: "Agents",
   workflows: "Automations",
   dashboard: "Dashboard",

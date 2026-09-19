@@ -77,6 +77,7 @@ from robothor.engine.models import (
     StepType,
     TriggerType,
 )
+from robothor.engine.output_validation import request_output_repair, validated_completion
 from robothor.engine.prompts import (
     EXECUTION_MODE_PREAMBLE,
 )
@@ -132,6 +133,7 @@ from robothor.engine.toolset_prep import (
 from robothor.engine.tracking import create_run, update_run
 from robothor.engine.warmup_steps import record_warmup_steps
 from robothor.engine.workflow_budget import WorkflowDeadlineError, propagates_to_caller
+from robothor.engine.workflow_completion import finish_after_tools
 
 # Per-tool wall-clock caps. The tables and the rule live in
 # robothor/engine/tool_timeouts.py; re-exported under their old private names
@@ -606,6 +608,8 @@ class AgentRunner(
         from robothor.goals.runtime import attach_run
 
         await asyncio.to_thread(attach_run, session.run)
+        session.response_format = agent_config.response_format
+        session.provider_order = agent_config.provider_order
 
         # User identity threading
         session.run.user_id = effective_user_id
@@ -624,7 +628,7 @@ class AgentRunner(
         # would sink this child's entire row.
         if spawn_context:
             session.run.parent_run_id = spawn_context.parent_run_id or None
-            session.run.nesting_depth = spawn_context.nesting_depth + 1
+            session.run.nesting_depth = spawn_context.nesting_depth
             if not session.run.user_id and spawn_context.user_id:
                 session.run.user_id = spawn_context.user_id
                 session.run.user_role = spawn_context.user_role
@@ -1463,7 +1467,7 @@ class AgentRunner(
         self._publish_run_telemetry(trace, session.run)
 
         return self._finish_run(
-            session.complete(output_text),
+            validated_completion(session, output_text),
             trace=trace,
             agent_config=agent_config,
             session=session,
@@ -1734,27 +1738,10 @@ class AgentRunner(
             _current_spawn_context.set(spawn_context)
         elif agent_config.can_spawn_agents:
             # This is a top-level run that can spawn — create fresh context
-            import uuid
-
+            from robothor.engine.spawn_context import make_spawn_context
             from robothor.engine.tools import _current_spawn_context
 
-            fresh_ctx = SpawnContext(
-                # An untracked run (tracking_disabled) has no agent_runs row —
-                # advertising its id would make every child's insert fail the
-                # parent_run_id FK. Empty string → children record NULL parent.
-                parent_run_id="" if session.run.tracking_disabled else session.run.id,
-                parent_agent_id=agent_config.id,
-                correlation_id=session.run.correlation_id or str(uuid.uuid4()),
-                nesting_depth=0,
-                max_nesting_depth=agent_config.max_nesting_depth,
-                max_spawn_batch=agent_config.max_spawn_batch,
-                remaining_token_budget=session.run.token_budget,
-                parent_trace_id=trace.trace_id if trace else "",
-                parent_span_id="",
-                person_id=session.run.person_id,
-                identity=getattr(session, "identity", None),
-            )
-            _current_spawn_context.set(fresh_ctx)
+            _current_spawn_context.set(make_spawn_context(agent_config, session, trace))
 
         # ── v2: Initialize enhancement objects ──
         scratchpad = self._create_scratchpad(agent_config, route, resumed_scratchpad)
@@ -2081,7 +2068,9 @@ class AgentRunner(
                     if await require_alignment(self, session, models, assistant_msg.content or ""):
                         continue
 
-                if nudge_for_missing_deliverable(session, _workspace):  # owes an artifact
+                if request_output_repair(session) or nudge_for_missing_deliverable(
+                    session, _workspace
+                ):
                     continue
                 return
 
@@ -2124,6 +2113,9 @@ class AgentRunner(
                     tool_failures=_tool_failures,
                 )
             )
+
+            if finish_after_tools(session):
+                return
 
             # ── [ERROR RECOVERY] Attempt autonomous recovery before escalation ──
             # robothor/engine/error_actions.py. `applied` suppresses the error

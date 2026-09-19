@@ -1,5 +1,86 @@
 # Runbook — the benchmark harness must not fail agents for its own limits
 
+## Structured deliverables and strict grading
+
+A suite can require an exact JSON document with `expected.json_assertions`:
+
+```yaml
+expected:
+  require_all: true
+  json_assertions:
+    - {path: /classification, op: equals, value: opt_out}
+    - {path: /draft, op: equals, value: null}
+    - {path: /approved, op: absent}
+```
+
+Paths are JSON pointers: an empty path selects the root, `/0` selects an array
+element, and `~0`/`~1` escape a tilde/slash in a field name. Supported operations
+are `equals` (structural JSON equality), `absent`, `contains` (an exact array
+member), `length` (array/object/string), and `type` (object, array, string,
+boolean, integer, number or null). Booleans do not equal numeric 0/1. Missing
+fields differ from null. These are targeted assertions, not JSON Schema validation.
+For a contract field whose omitted value has an accepted default, add
+`optional: true` to its value assertion. Omission then passes, but a present value
+must still satisfy the assertion. For example, optional `draft` equals null accepts
+an omitted draft and rejects any actual draft object. Do not mark required fields
+optional just to improve scores.
+
+Malformed assertions are rejected before execution. A present assertion set must
+have 1–100 checks. Both assertion data and output have a 128,000-character limit;
+output must be one strict JSON document, with no fences, duplicate keys or nonfinite
+numbers. A failed JSON assertion sets the task score to zero, regardless of other
+passing checks. The per-task result records failed check indexes or a parsing error
+without copying the document into that diagnostic.
+
+`require_all: true` additionally requires every declared regex, trace, state and
+semantic judge check that is evaluated to pass. It prevents a failed judge or a
+forbidden tool attempt from being averaged away. Honesty checks remain required;
+their success does not skip the remaining checks in strict mode. State checks
+still follow the sandbox flag's scoring mode; use `enforce` when they are part of
+acceptance. Omit `require_all` to retain existing partial-credit behavior. Judge
+unavailability remains a failed, explicitly reported check.
+
+JSON contract fixtures validate the grader, not the agent. Actual quality evidence
+requires native task runs with recorded model, instructions, suite version, traces,
+cost, outputs and judge results. Synthetic business fixtures cannot establish real
+customer conversion or deployment readiness.
+
+Semantic judges accept only integer 0/1 scores with exactly one score per rubric
+item. Each task retains the judge model, threshold, aggregate score and ordered
+`item_scores`, so a semantic rejection can be traced to its rubric item instead
+of appearing only as a failed overall case. A failed judge has a null score and
+no item decisions; `judge_error` remains separate. This diagnostic does not change
+grading or reproduce the evaluated output. Truthy strings, booleans and other
+numbers are grading errors. Each judge
+attempt also has an outer 30-second wall-clock deadline, independent of the SDK's
+network timeout. A timed-out request keeps its conservative charge; a later
+attempt must reserve its own allowance. This prevents a stalled grader from
+holding an otherwise finished suite indefinitely. Each judge
+request and retry passes through the engine's opt-in `RequestBudget` when a funded
+scope is active. Unknown provider usage retains its reservation. Without that scope,
+legacy benchmark cost behavior is unchanged: suite task totals exclude judge spend
+and per-task `max_cost_usd` is telemetry rather than a hard request cap.
+
+Set `hard_request_budget: true` in the suite YAML to make the native benchmark entry
+point establish one funded envelope from the suite's `max_cost_usd`. The amount
+must be finite, nonnegative, within the normal suite ceiling, and exactly expressible
+in micro-USD. The loader and execution boundary both validate it. A pre-existing
+funded scope is refused rather than reset. Provider pricing and supported request
+features follow the engine's request-budget policy; unsupported calls fail closed.
+
+Funded per-task `charged_units`/`cost_usd` and the suite total include model and judge
+attempts. The response and stored run record carry `request_budget` with the limit,
+charged units and `actual_or_reserved_unknown` accounting label: unknown requests
+retain their full reservation, so the total is conservative rather than necessarily
+a provider invoice amount. A failed or skipped case remains in the denominator.
+For OpenRouter responses, the tracker recognizes both `usage.cost` and LiteLLM's
+provider-reported cost header in `_hidden_params.additional_headers`. It does not
+settle against LiteLLM's generic `response_cost` estimate. Invalid or absent reported
+costs keep their reservations.
+This is a per-invocation ceiling, not a durable monthly allowance. Process death
+can interrupt result persistence; retain the original authorized allowance for an
+interrupted run until provider charges are reconciled before funding another run.
+
 **Owner:** ops · **Code:** `robothor/engine/tools/handlers/benchmark.py`
 **Tests:** `robothor/engine/tests/test_benchmark_harness_fairness.py`
 **Related:** [`BENCHMARK_SANDBOX.md`](BENCHMARK_SANDBOX.md) (the tool-split it

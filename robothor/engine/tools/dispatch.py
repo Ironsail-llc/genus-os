@@ -216,6 +216,7 @@ def builtin_handlers() -> dict[str, Any]:
         pdf,
         reasoning,
         reports,
+        sales,
         skills,
         spawn,
         symbolic,
@@ -226,6 +227,7 @@ def builtin_handlers() -> dict[str, Any]:
         vision,
         voice,
         web,
+        web_render,
     )
 
     all_handlers: dict[str, Any] = {}
@@ -236,6 +238,7 @@ def builtin_handlers() -> dict[str, Any]:
         symbolic,
         vision,
         web,
+        web_render,
         filesystem,
         crm,
         browser,
@@ -261,6 +264,7 @@ def builtin_handlers() -> dict[str, Any]:
         devops_metrics,
         identity,
         reports,
+        sales,
         mcp_client,
         timing,
         todolist,
@@ -603,9 +607,20 @@ async def _execute_tool(
             from robothor.crm.dal import reset_benchmark_sandbox
 
             reset_benchmark_sandbox(sandbox_token)
+    # Trusted workflow evidence sees the native handler's result, never a
+    # model-supplied claim or a later verification annotation. Cached repeats
+    # are not new retrievals; their original execution was already observed.
+    from robothor.engine.tool_observation import observe_tool_result
+
+    workflow_context = observe_tool_result(name, args, result, ctx)
+    if workflow_context is not None:
+        if not isinstance(result, dict) or "_workflow_context" in result:
+            raise ValueError("Native result cannot accept reserved workflow context")
+        result = {**result, "_workflow_context": workflow_context}
+
     # ── Repeat-call guard: remember what this call returned ──
     # Deliberately BEFORE verification, so what the guard digests is the
-    # handler's own output and not something a later control annotated onto it.
+    # handler's output plus optional trusted workflow context, before verification.
     if guard is not None:
         await asyncio.to_thread(guard.after, name, args, result, workspace=workspace)
 

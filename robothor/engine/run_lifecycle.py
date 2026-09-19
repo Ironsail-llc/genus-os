@@ -340,58 +340,34 @@ class RunLifecycleMixin:
     ) -> str | None:
         """Spawn a helper agent to diagnose/fix an error. Returns helper output or None."""
         try:
-            from robothor.engine.config import load_agent_config as _load_cfg
-            from robothor.engine.models import DeliveryMode, TriggerType
-            from robothor.engine.tools import _current_spawn_context
+            from robothor.engine.tools.dispatch import ToolContext
+            from robothor.engine.tools.handlers.spawn import _handle_spawn_agent
 
-            ctx = _current_spawn_context.get()
-            if ctx is None:
-                logger.debug("No spawn context — cannot spawn recovery helper")
-                return None
-
-            helper_agent_id = action.agent_id or "main"
-            child_config = _load_cfg(helper_agent_id, self.config.manifest_dir)
-            if child_config is None:
-                logger.debug("Recovery helper config not found: %s", helper_agent_id)
-                return None
-
-            # Safety: force delivery off, cap iterations, prevent deep nesting.
-            # No wall-clock cap — recovery helpers run as long as they need.
-            child_config.delivery_mode = DeliveryMode.NONE
-            child_config.max_iterations = min(child_config.max_iterations, 5)
-            child_depth = ctx.nesting_depth + 1
-            if child_depth >= ctx.max_nesting_depth:
-                child_config.can_spawn_agents = False
-
-            child_ctx = SpawnContext(
-                parent_run_id=ctx.parent_run_id,
-                parent_agent_id=agent_config.id,
-                correlation_id=ctx.correlation_id,
-                nesting_depth=child_depth,
-                max_nesting_depth=ctx.max_nesting_depth,
-                max_spawn_batch=ctx.max_spawn_batch,
-                remaining_token_budget=ctx.remaining_token_budget,
-                remaining_cost_budget_usd=ctx.remaining_cost_budget_usd,
-                parent_trace_id=ctx.parent_trace_id,
-                parent_span_id=ctx.parent_span_id,
-                person_id=getattr(ctx, "person_id", None),
-                identity=getattr(ctx, "identity", None),
+            # Recovery must use exactly the same release, target, depth,
+            # identity, attempt and cancellation boundary as ordinary spawns.
+            run = session.run
+            result = await _handle_spawn_agent(
+                {
+                    "agent_id": action.agent_id or "main",
+                    "message": action.message,
+                    "max_iterations": 5,
+                },
+                ctx=ToolContext(
+                    agent_id=agent_config.id,
+                    run_id=run.id,
+                    tenant_id=run.tenant_id,
+                    user_id=run.user_id,
+                    user_role=run.user_role,
+                    is_benchmark=getattr(run, "is_benchmark", False),
+                    identity=getattr(session, "identity", None),
+                ),
+                agent_id=agent_config.id,
+                _runner=self,
             )
-
-            run = await self.execute(
-                agent_id=helper_agent_id,
-                message=action.message,
-                trigger_type=TriggerType.SUB_AGENT,
-                trigger_detail=f"recovery_helper:{agent_config.id}",
-                correlation_id=ctx.correlation_id,
-                agent_config=child_config,
-                spawn_context=child_ctx,
-            )
-
-            if run.error_message:
-                logger.debug("Recovery helper failed: %s", run.error_message)
+            if result.get("error") or result.get("status") != "completed":
+                logger.debug("Recovery helper refused or failed")
                 return None
-            return run.output_text or ""
+            return result.get("output_text") or ""
         except Exception as e:
             logger.debug("Failed to spawn recovery helper: %s", _sanitize(e))
             return None
@@ -428,18 +404,17 @@ class RunLifecycleMixin:
         """Run the planning phase. Returns PlanResult or None."""
         try:
             from robothor.engine.planner import generate_plan
+            from robothor.engine.provider_routing import provider_order_scope
 
             plan_model = agent_config.planning_model or models[0]
-            return await generate_plan(
-                message,
-                tool_names,
-                plan_model,
-                # The whole remaining chain, not one model: models[1:2] can
-                # never reach the offline tier that terminates every chain, so
-                # a cloud outage silently removed the planning stage from every
-                # run at the same moment it removed the strong model.
-                fallback_models=models[1:],
-            )
+            with provider_order_scope(getattr(agent_config, "provider_order", {})):
+                return await generate_plan(
+                    message,
+                    tool_names,
+                    plan_model,
+                    # Retain the entire configured fallback chain.
+                    fallback_models=models[1:],
+                )
         except Exception as e:
             logger.debug("Planning phase failed: %s", _sanitize(e))
             return None
@@ -576,6 +551,7 @@ class RunLifecycleMixin:
     ) -> str | None:
         """Run verification step. If it fails, retry once."""
         try:
+            from robothor.engine.provider_routing import provider_order_scope
             from robothor.engine.verifier import (
                 format_verification_feedback,
                 verify_output,
@@ -589,13 +565,14 @@ class RunLifecycleMixin:
             error_count = sum(
                 1 for s in session.run.steps if s.error_message and not is_attempt_step(s)
             )
-            result = await verify_output(
-                output_text or "",
-                agent_config.verification_prompt,
-                error_count,
-                models[0],
-                fallback_models=models[1:],
-            )
+            with provider_order_scope(getattr(agent_config, "provider_order", {})):
+                result = await verify_output(
+                    output_text or "",
+                    agent_config.verification_prompt,
+                    error_count,
+                    models[0],
+                    fallback_models=models[1:],
+                )
             if result.passed:
                 return output_text
 

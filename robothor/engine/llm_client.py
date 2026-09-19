@@ -35,6 +35,7 @@ import time
 import time as _time
 from collections.abc import Awaitable, Callable  # noqa: TC003
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
@@ -96,6 +97,12 @@ from robothor.engine.reasoning_replay import (
     redacted_history_digest,
     strip_reasoning_for_model,
 )
+from robothor.engine.request_budget import (
+    RequestBudgetError,
+    RequestRouteUnavailableError,
+    bounded_completion,
+)
+from robothor.engine.required_tool import tool_choice
 from robothor.engine.retry import retry_async
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.stall_watchdog import _active_watchdog_var
@@ -108,6 +115,7 @@ if TYPE_CHECKING:
     from robothor.engine.stall_watchdog import _StallWatchdog
 
 logger = logging.getLogger(__name__)
+_response_format_var: ContextVar[str] = ContextVar("agent_response_format", default="text")
 
 # ── LLM request timeouts (shared with runner, which re-exports these) ──
 # Max seconds to wait for the next streaming chunk before aborting and
@@ -345,14 +353,14 @@ async def _gated_acompletion(model: str, kwargs: dict[str, Any]) -> Any:
 
     model_registry.note_active_model(model)
     if not is_local_model(model):
-        return await litellm.acompletion(**kwargs)
+        return await bounded_completion(litellm.acompletion, **kwargs)
 
     from robothor.llm.local_gate import Lane, gate
 
     cm = gate().slot(lane=Lane.NORMAL)
     await cm.__aenter__()
     try:
-        stream = await litellm.acompletion(**kwargs)
+        stream = await bounded_completion(litellm.acompletion, **kwargs)
     except BaseException:
         await cm.__aexit__(None, None, None)
         raise
@@ -1195,7 +1203,7 @@ async def llm_call(
         t0 = _time.monotonic()
         try:
             call = codex_acompletion if is_codex_model(model) else litellm.acompletion
-            resp = await asyncio.wait_for(call(**kwargs), timeout=timeout)
+            resp = await asyncio.wait_for(bounded_completion(call, **kwargs), timeout=timeout)
             LLM_CALLS_TOTAL.labels(model=model, status="success").inc()
             LLM_CALL_DURATION.labels(model=model).observe(_time.monotonic() - t0)
             usage = getattr(resp, "usage", None)
@@ -1226,6 +1234,11 @@ async def llm_call(
                 retryable_exceptions=_RETRYABLE_EXCEPTIONS,
                 backoff_base=1.0,
             )
+        except RequestRouteUnavailableError as exc:
+            last = exc
+            logger.info("No eligible funded route for %s — advancing", _sanitize(candidate))
+        except RequestBudgetError:
+            raise
         except Exception as exc:  # noqa: BLE001 - the next model is the point
             last = exc
             # Judge, buddy review and the background legs never touch
@@ -1331,6 +1344,18 @@ def strip_image_blocks(
             note = " ".join(texts) + " " + note
         out.append({**msg, "content": note})
     return out, changed
+
+
+def _bind_attempt_key(pool, kwargs):
+    """Bind and return the credential this attempt actually uses.
+
+    Failure handling must retire this key, even if a concurrent run rotates the
+    shared pool before the response arrives. None leaves existing kwargs intact.
+    """
+    key = pool.current() if pool is not None else None
+    if key is not None:
+        kwargs["api_key"] = key
+    return key
 
 
 class LLMClient:
@@ -1524,39 +1549,48 @@ class LLMClient:
         # Expose the run id to the model breaker so a trip during this call
         # can be recorded as a guardrail event against the run.
         run_token = _current_run_id_var.set(getattr(session.run, "id", None))
+        format_token = _response_format_var.set(
+            "json_object"
+            if getattr(session, "response_format", "text") == "json_object"
+            else "text"
+        )
         try:
-            if on_content or on_stream_event:
-                response = await self._call_llm_streaming(
-                    session.messages,
-                    models,
-                    tool_schemas,
-                    on_content,
-                    broken_models=broken_models,
-                    temperature=temperature,
-                    on_stream_event=on_stream_event,
-                    timeout_override=timeout_override,
-                )
-            else:
-                response = await self._call_llm(
-                    session.messages,
-                    models,
-                    tool_schemas,
-                    broken_models=broken_models,
-                    temperature=temperature,
-                    timeout_override=timeout_override,
-                )
-            if response is not None:
-                return response
-            # Every model in the chain is out. The local tier is the reason a
-            # last fallback exists, and the commonest reason a chain ends with
-            # nothing is a conversation that outgrew it — so the one thing not
-            # yet tried is the SHORTEST possible conversation. Unstreamed and
-            # untooled: all that is left to produce is a sentence for whoever
-            # is waiting. (2026-09-16: the local model had answered twelve
-            # steps of the run that ended "All models failed to respond".)
-            return await last_resort_attempt(self, session, models)
+            from robothor.engine.provider_routing import provider_order_scope
+
+            with provider_order_scope(getattr(session, "provider_order", {})):
+                if on_content or on_stream_event:
+                    response = await self._call_llm_streaming(
+                        session.messages,
+                        models,
+                        tool_schemas,
+                        on_content,
+                        broken_models=broken_models,
+                        temperature=temperature,
+                        on_stream_event=on_stream_event,
+                        timeout_override=timeout_override,
+                    )
+                else:
+                    response = await self._call_llm(
+                        session.messages,
+                        models,
+                        tool_schemas,
+                        broken_models=broken_models,
+                        temperature=temperature,
+                        timeout_override=timeout_override,
+                    )
+                if response is not None:
+                    return response
+                # Every model in the chain is out. The local tier is the reason a
+                # last fallback exists, and the commonest reason a chain ends with
+                # nothing is a conversation that outgrew it — so the one thing not
+                # yet tried is the SHORTEST possible conversation. Unstreamed and
+                # untooled: all that is left to produce is a sentence for whoever
+                # is waiting. (2026-09-16: the local model had answered twelve
+                # steps of the run that ended "All models failed to respond".)
+                return await last_resort_attempt(self, session, models)
         finally:
             _current_run_id_var.reset(run_token)
+            _response_format_var.reset(format_token)
 
     # ─── Pre-flight ──────────────────────────────────────────────────
 
@@ -1975,10 +2009,39 @@ class LLMClient:
             kwargs["stream"] = True
         if tools:
             kwargs["tools"] = tools
-            kwargs["tool_choice"] = "auto"
+            kwargs["tool_choice"] = tool_choice(tools)
         kwargs.update(
             thinking_kwargs_for_call(model, kwargs["max_tokens"], reduced=thinking_reduced)
         )
+        from robothor.engine.provider_routing import apply_provider_order
+
+        apply_provider_order(model, kwargs)
+        if isinstance(kwargs.get("tool_choice"), dict):
+            # This trusted workflow turn must invoke a named tool. Its arguments
+            # already have a schema; adding a final-answer JSON format can make
+            # a backend emit plain JSON content instead of a native tool call.
+            # Final-answer formatting resumes when the required tool is done.
+            return kwargs
+        from robothor.engine.response_schema import defers_tool_turns, response_format
+
+        if tools and defers_tool_turns():
+            # Some backends interpret a final JSON schema as the end of tool
+            # collection. Scoped research workflows keep tools available and
+            # validate every final response themselves, including corrections.
+            return kwargs
+
+        schema_format = response_format()
+        if schema_format is not None:
+            kwargs["response_format"] = schema_format
+        elif _response_format_var.get() == "json_object":
+            kwargs["response_format"] = {"type": "json_object"}
+            kwargs["messages"] = [
+                {
+                    "role": "system",
+                    "content": "Return a single JSON object as the final answer. Do not prepend or append commentary or Markdown fences. Tool calls remain available when needed.",
+                },
+                *kwargs["messages"],
+            ]
         return kwargs
 
     # ─── Model error handling ────────────────────────────────────────
@@ -2144,7 +2207,7 @@ class LLMClient:
         model_registry.note_active_model(model)
         async with _local_slot(model):
             try:
-                return await litellm.acompletion(**kwargs)
+                return await bounded_completion(litellm.acompletion, **kwargs)
             except Exception as e:
                 if not is_image_unsupported_error(e):
                     raise
@@ -2157,7 +2220,9 @@ class LLMClient:
                     "the agent is told to inspect the file programmatically",
                     _sanitize(model),
                 )
-                return await litellm.acompletion(**{**kwargs, "messages": stripped})
+                return await bounded_completion(
+                    litellm.acompletion, **{**kwargs, "messages": stripped}
+                )
 
     # ─── Non-streaming call ──────────────────────────────────────────
 
@@ -2283,20 +2348,11 @@ class LLMClient:
                         thinking_reduced=thinking_reduced,
                         nudge=nudge,
                     )
-                    if pool is not None:
-                        # Bound per attempt so the failure handler retires the
-                        # credential this request actually carried. Re-reading
-                        # the pool afterwards retires whatever is current
-                        # *then* — which, with the shared client the daemon
-                        # builds, is the healthy spare another run just
-                        # rotated onto.
-                        attempt_key = pool.current()
-                        if attempt_key is not None:
-                            kwargs["api_key"] = attempt_key
+                    attempt_key = _bind_attempt_key(pool, kwargs)
                     with self._watchdog_wait(f"llm_inflight:{model}", attempt_timeout):
                         async with asyncio.timeout(attempt_timeout):
                             if is_codex_model(model):
-                                result = await codex_acompletion(**kwargs)
+                                result = await bounded_completion(codex_acompletion, **kwargs)
                             else:
                                 result = await self._call_with_image_fallback(
                                     model=model,
@@ -2335,6 +2391,15 @@ class LLMClient:
                     # cost the wall clock this row exists to account for.
                     if not noted:
                         note_outcome(model, attempt_started, error=ce)
+                    raise
+                except RequestRouteUnavailableError as exc:
+                    # No provider request was admitted. Shared workers may have
+                    # excluded this model's last endpoint; do not blame its
+                    # breaker or bypass the next model's own quote/reservation.
+                    last_error = exc
+                    logger.info("No eligible funded route for %s — advancing", _sanitize(model))
+                    break
+                except RequestBudgetError:
                     raise
                 except Exception as e:
                     last_error = e
@@ -2492,14 +2557,11 @@ class LLMClient:
                         stream=True,
                         request_timeout=per_call_timeout,
                     )
-                    if pool is not None:
-                        attempt_key = pool.current()
-                        if attempt_key is not None:
-                            kwargs["api_key"] = attempt_key
+                    attempt_key = _bind_attempt_key(pool, kwargs)
                     if is_codex_model(model):
                         with self._watchdog_wait(f"llm_inflight:{model}", per_call_timeout):
                             async with asyncio.timeout(per_call_timeout):
-                                result = await codex_acompletion(**kwargs)
+                                result = await bounded_completion(codex_acompletion, **kwargs)
                         content = str(result.choices[0].message.content or "")
                         if on_content and content:
                             await on_content(content)
@@ -2611,6 +2673,12 @@ class LLMClient:
                     get_model_breaker().record_success(model)
                     _record_execution_mode(model)
                     return rebuilt
+                except RequestRouteUnavailableError as exc:
+                    last_error = exc
+                    logger.info("No eligible funded route for %s — advancing", _sanitize(model))
+                    break
+                except RequestBudgetError:
+                    raise
                 except TimeoutError as te:
                     note_outcome(model, attempt_started, error=te)
                     self._handle_model_error(te, model, broken_models, streaming=True)

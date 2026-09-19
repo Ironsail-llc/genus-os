@@ -86,6 +86,7 @@ exclude_docs: |
   !/features/goal-pursuit.md
   !/TOOLS.md
   !/AUTONOMOUS_EXECUTION.md
+  !/SALES_INTELLIGENCE.md
   !/PLUGINS.md
   !/channels/telegram.md
   !/CONNECTORS.md
@@ -140,6 +141,7 @@ nav:
       - Goals: features/goal-pursuit.md
       - Tools: TOOLS.md
       - Personal autonomy: AUTONOMOUS_EXECUTION.md
+      - Sales intelligence: SALES_INTELLIGENCE.md
       - Plugins: PLUGINS.md
       - Telegram channel: channels/telegram.md
       - Connectors: CONNECTORS.md

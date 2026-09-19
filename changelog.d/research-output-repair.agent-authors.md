@@ -1,0 +1,1 @@
+Workflows can now validate final output and request up to two corrections within the original run limits. Native research applies this to schema, source excerpts, explicit unknowns and boolean qualification evidence; failed corrections never produce completed research children. See `docs/SALES_INTELLIGENCE.md` and `docs/AGENT_BUILDER.md`.

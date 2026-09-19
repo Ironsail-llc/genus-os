@@ -12,6 +12,7 @@ import inspect
 import logging
 import os
 from datetime import UTC, datetime
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from robothor import __version__
@@ -170,6 +171,10 @@ def _mount_subsystem_routers(
 
     register_admin_providers(app)
 
+    from robothor.engine.admin_sales_deployment import register as register_sales_deployment
+
+    register_sales_deployment(app, scheduler)
+
     # Channel status and verify. A channel is an object in THIS process holding
     # this process's credentials, so nothing outside it can ask one whether it
     # is configured or make it prove it works.
@@ -213,6 +218,11 @@ def _mount_subsystem_routers(
     from robothor.engine.channels.routers import mount_plugin_channel_routers
 
     mount_plugin_channel_routers(app, runner=runner, tenant_id=config.tenant_id)
+
+
+async def _sales_runtime_readiness(scheduler) -> str:
+    runtime = getattr(scheduler, "sales_runtime", None)
+    return await runtime.readiness() if runtime is not None else "ok"
 
 
 async def _fleet_readiness(config: EngineConfig, details: dict[str, Any]) -> str:
@@ -1078,9 +1088,6 @@ def create_health_app(
                 await client.aclose()
             return "ok"
 
-        async def check_fleet() -> str:
-            return await _fleet_readiness(config, readiness_details)
-
         async def check_federation() -> str:
             """Federation is ready when every link that says it is running,
             is. An instance with no connections is ready — most are.
@@ -1113,7 +1120,8 @@ def create_health_app(
                 "database": check_db,
                 "redis": check_redis,
                 "schedules": check_schedules,
-                "fleet": check_fleet,
+                "fleet": partial(_fleet_readiness, config, readiness_details),
+                "sales_runtime": partial(_sales_runtime_readiness, scheduler),
                 "federation": check_federation,
             }
             body, status = await readiness_response(

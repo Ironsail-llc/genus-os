@@ -7,6 +7,7 @@ from typing import Any
 from robothor.engine.prompts import EVIDENCE_OUTRANKS_NAMES
 from robothor.engine.vision_fallback import PROVENANCE_NOTE
 from robothor.goals.legacy_schemas import legacy_goal_schemas
+from robothor.sales.tool_schemas import SALES_SCHEMAS
 
 _BROWSER_DESCRIPTION = (
     "Full browser automation via Playwright. Manages a persistent Chromium session. "
@@ -61,6 +62,39 @@ _BROWSER_DESCRIPTION = (
     "Use managed=true only when configured and local preflight fails. Never put card or credential "
     "values in arguments. Setup is at /account/autonomy."
 )
+
+_WEB_READ_SCHEMAS = {
+    "web_fetch": {
+        "type": "function",
+        "function": {
+            "name": "web_fetch",
+            "description": "Fetch a web page and return its content as markdown text.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "URL to fetch",
+                    },
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    "web_render": {
+        "type": "function",
+        "function": {
+            "name": "web_render",
+            "description": "Read a public JavaScript-rendered page when web_fetch returns an empty shell. Returns visible text, title, links and retrieval limits. Uses an isolated browser with vetted GET-only resource requests; no logins, clicks, forms, or arbitrary scripts.",
+            "parameters": {
+                "type": "object",
+                "properties": {"url": {"type": "string", "description": "Public HTTP(S) page URL"}},
+                "required": ["url"],
+                "additionalProperties": False,
+            },
+        },
+    },
+}
 
 # Long descriptions live out here: get_engine_schemas is already one of the
 # engine's largest functions and the size ratchet only lets it shrink.
@@ -837,23 +871,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             },
         },
     }
-    schemas["web_fetch"] = {
-        "type": "function",
-        "function": {
-            "name": "web_fetch",
-            "description": "Fetch a web page and return its content as markdown text.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "URL to fetch",
-                    },
-                },
-                "required": ["url"],
-            },
-        },
-    }
+    schemas.update(_WEB_READ_SCHEMAS)
     schemas["web_search"] = {
         "type": "function",
         "function": {
@@ -1919,7 +1937,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                     "tools_override": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Optional: replace child's tools_allowed",
+                        "description": "Optional: narrow the child's tools_allowed; cannot add tools outside its declared allowlist. An empty list keeps the manifest unchanged.",
                     },
                     "max_iterations": {
                         "type": "integer",
@@ -1968,7 +1986,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                                 "tools_override": {
                                     "type": "array",
                                     "items": {"type": "string"},
-                                    "description": "Optional tools override",
+                                    "description": "Optional: narrow the child's declared tools_allowed; an empty list keeps the manifest unchanged.",
                                 },
                                 "parent_task_id": {
                                     "type": "string",
@@ -3871,4 +3889,4 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
     from robothor.goals.tools import schemas as pursuit_schemas
 
     schemas.update(pursuit_schemas())
-    return schemas
+    return schemas | SALES_SCHEMAS

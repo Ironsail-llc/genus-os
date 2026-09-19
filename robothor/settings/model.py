@@ -1187,6 +1187,13 @@ class EngineSettings(SettingsGroup):
         "when a site blocks the default.",
         restart_required=False,
     )
+    web_render_sandbox_helper: str = declare(
+        "",
+        "ROBOTHOR_WEB_RENDER_SANDBOX_HELPER",
+        "Optional trusted Chromium setuid sandbox helper for web_render on hosts "
+        "that restrict unprivileged user namespaces. Empty uses Chromium's "
+        "default sandbox setup; rendering never disables the sandbox.",
+    )
 
 
 # ---------------------------------------------------------------------------
