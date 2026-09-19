@@ -892,6 +892,9 @@ and nonsecret interaction. Ordinary `act` also supports `check` and workspace
 file `upload`; protected documents should use resource references.
 
 Status includes available resource field names and enrollment provenance.
+`request={kind:"procedures", origin, action}` finds recent successful templates
+for the same owner and agent. Inspect the current page and prepare a new operation;
+saved procedures do not supply authority or bypass current price/resource checks.
 Inspection discovers fields, narrow billing terms and direct child frame bindings;
 foreign frames require explicit authority and credentials match the frame origin.
 Use `terms_frame_selector` and `terms_frame_origin` when all checkout terms are

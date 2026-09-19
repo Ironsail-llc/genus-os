@@ -32,6 +32,8 @@ from robothor.autonomy.models import (
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
+    from robothor.autonomy.procedures import ProcedureQuery
+
 
 def _validated_payload(resource: ResourceInput) -> str:
     """Validate before encryption without ever echoing an invalid input."""
@@ -445,6 +447,13 @@ class AutonomyStore:
     def operation(self, scope: Scope, operation_id: str) -> dict[str, Any]:
         with self.transaction() as cur:
             return self._operation(cur, scope, operation_id)
+
+    def procedures(
+        self, scope: Scope, agent_id: str, query: ProcedureQuery
+    ) -> list[dict[str, Any]]:
+        from robothor.autonomy.procedures import find_procedures
+
+        return find_procedures(self, scope, agent_id, query)
 
     @staticmethod
     def _operation(cur: Any, scope: Scope, operation_id: str) -> dict[str, Any]:

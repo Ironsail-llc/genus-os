@@ -42,6 +42,15 @@ async def handle(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             return await asyncio.to_thread(
                 store.reserve, scope, str(UUID(args["grant_id"])), ctx.agent_id, proposal
             )
+        if kind == "procedures":
+            from robothor.autonomy.procedures import ProcedureQuery
+
+            query = ProcedureQuery.model_validate(
+                {"origin": args.get("origin"), "action": args.get("action")}
+            )
+            return {
+                "procedures": await asyncio.to_thread(store.procedures, scope, ctx.agent_id, query)
+            }
         operation_id = str(UUID(args["operation_id"]))
         row = await asyncio.to_thread(store.operation, scope, operation_id)
         if row["agent_id"] != ctx.agent_id:

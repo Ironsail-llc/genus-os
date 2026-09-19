@@ -86,6 +86,7 @@ Use the existing `browser` tool with `action="autonomy"` and `request`:
 | `request.kind` | Purpose |
 | --- | --- |
 | `status` | Discover setup state, resource references, grants and recent operations. |
+| `procedures` | Find recent successful plan templates by `origin` and `action`, scoped to the current owner and agent. |
 | `prepare` | Reserve a proposal under `grant_id`; returns a durable operation ID. |
 | `inspect` | Discover field selectors, labels, option labels, billing terms and authorized frame fields, never input values. |
 | `generate_credential` | Create an origin-bound username/password reference using an enrolled profile. |
@@ -127,6 +128,17 @@ during filling, the broker stops before clicking and preserves the operation for
 reconciliation. Discovered confirmations return a fixed rule name and a text hash;
 page text is not returned to the model. Confirmation means the merchant's observed
 message, not settlement or admission.
+
+Successful execution plans persist in the operation journal. `procedures` returns
+up to five distinct templates from confirmed operations in the last 90 days.
+One-time verification links and expiring or revoked resource bindings are excluded;
+saved session references, URL query strings and fragments are removed. Old
+receipt-specific success text is replaced with discovery rather than asserted
+about a new submission. Templates retain active personal-resource references, not
+their values. Inspect the current page, choose the correct resources and fresh
+session for the new task, then prepare a new proposal with a new idempotency key
+and current grant. Existing budgets, price checks, validation and revocation checks
+still apply. A template does not resume or repeat its source operation.
 Payment plans also identify visible current, recurring and annual totals as
 applicable. Recurring plans also require `recurrence_interval_selector` and
 `next_charge_selector`, plus `recurrence_end_selector` when an end date is declared.
@@ -155,7 +167,11 @@ validation. Once actual protected filling starts, failures still require
 reconciliation rather than a blind retry.
 
 Multi-step applications use a separate operation for each meaningful step,
-with the saved account session carried forward. File upload accepts an enrolled
+with the saved account session carried forward. This currently works only when
+the website persists progress outside the page: each broker call closes its
+browser, and cookie/local-storage restoration does not preserve client-only
+wizard state. Persistent workflow sessions remain an implementation gap.
+File upload accepts an enrolled
 document reference; ordinary nonsecret workspace uploads also work through
 `browser(action="act", request={kind:"upload", selector, path})`.
 
