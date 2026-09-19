@@ -113,7 +113,20 @@ returns projections separately from actual settlement; this is not an issuer-sid
 card limit.
 
 An execution plan identifies the URL, field selectors with resource IDs and
-field names, checkboxes, submit selector, and a new, specific success marker.
+field names, checkboxes and submit selector. Supply both `success_selector` and
+`success_text` for a known confirmation, or omit both to discover a new affirmative
+English completion message for the requested action. Examples include “Your account
+has been created” and “Application submitted successfully”; welcome pages, pending
+states and failure messages are insufficient. Discovery checks the main document
+and supports a bounded set of completion phrases, not arbitrary language or page
+layouts. Unsupported or ambiguous results remain reconciling. Verification links
+and reconciliation still require a specific confirmation selector and text.
+
+An already-visible confirmation prevents submission. If a confirmation appears
+during filling, the broker stops before clicking and preserves the operation for
+reconciliation. Discovered confirmations return a fixed rule name and a text hash;
+page text is not returned to the model. Confirmation means the merchant's observed
+message, not settlement or admission.
 Payment plans also identify visible current, recurring and annual totals as
 applicable. Recurring plans also require `recurrence_interval_selector` and
 `next_charge_selector`, plus `recurrence_end_selector` when an end date is declared.
@@ -148,8 +161,9 @@ document reference; ordinary nonsecret workspace uploads also work through
 
 The journal is authoritative:
 
-- `reserved`: no protected fill has begun. A bad plan can be cancelled and
-  prepared again with a new idempotency key.
+- `reserved`: no protected fill has begun. Native validation failures can be
+  corrected within the same operation before its plan is bound. Other bad plans
+  can be cancelled and prepared again with a new idempotency key.
 - `awaiting_input`: the bound plan is waiting for a code before submission.
 - `submitting`: atomically claimed before the first protected fill; scripts
   can initiate requests during input, so even a later failure is uncertain.

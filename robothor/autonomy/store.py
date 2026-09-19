@@ -616,8 +616,24 @@ class AutonomyStore:
         # completion evidence from the model or client.
         if state == "completed" and not evidence:
             raise ValueError("completion_requires_evidence")
-        if evidence and (set(evidence) - {"origin", "confirmation_sha256", "verified_at", "kind"}):
+        if evidence and (
+            set(evidence)
+            - {"origin", "confirmation_sha256", "verified_at", "kind", "confirmation_rule"}
+        ):
             raise ValueError("unsafe_evidence")
+        if (
+            evidence
+            and "confirmation_rule" in evidence
+            and evidence["confirmation_rule"]
+            not in {
+                "account_created",
+                "application_received",
+                "order_confirmed",
+                "membership_active",
+                "login_confirmed",
+            }
+        ):
+            raise ValueError("unsafe_confirmation_rule")
         with self.transaction() as cur:
             self._lock(cur, scope)
             row = self._operation(cur, scope, operation_id)
