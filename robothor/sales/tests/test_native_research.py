@@ -221,7 +221,7 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
                     },
                 }
             else:
-                assert kwargs["response_format"] == {"type": "json_object"}
+                assert "response_format" not in kwargs
             topic = request["topic"]
             if tool_result is None and citation_fault != "no_fetch":
                 tool = (fetch_tool, {"url": "https://clinic.example.com/" + topic})

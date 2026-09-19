@@ -692,6 +692,12 @@ quote and spending reservation; provider restrictions are not relaxed. Exhausted
 funding, unverified pricing and unpriced request features still stop the run.
 The same distinction applies to streaming and auxiliary model calls.
 
+Mandatory named-tool turns omit final-answer `response_format` and its JSON-only
+instruction. The tool argument schema still applies. Once the required tool has
+run, normal final-answer formatting resumes, including the research dossier
+schema after retrieval. Source attestation and local output validation remain
+mandatory; JSON text that resembles tool arguments is never executed as a tool.
+
 Other providers, paid
 server tools, multimodal inputs, tiered pricing and explicit cache-write charges
 need a supported pricing policy before they can run within this envelope. See
