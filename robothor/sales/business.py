@@ -175,7 +175,7 @@ class BusinessObservations:
             for binding in bindings:
                 if self._identity(binding) != binding["identity_hash"]:
                     cur.execute(
-                        "UPDATE sales_customer_bindings SET status='held' WHERE tenant_id=%s AND observation_id=%s",
+                        "UPDATE sales_customer_bindings SET status='held',binding_version=binding_version+1 WHERE tenant_id=%s AND observation_id=%s",
                         (self.tenant, binding["observation_id"]),
                     )
                     self.sales.escalate(
@@ -256,7 +256,7 @@ class BusinessObservations:
             cur.execute(
                 "INSERT INTO sales_customer_bindings(tenant_id,observation_id,prospect_id,reviewed_revision,identity_hash,status,reviewed_by,reason) "
                 "VALUES(%s,%s,%s,%s,%s,'confirmed',%s,%s) ON CONFLICT(tenant_id,observation_id) DO UPDATE SET reviewed_revision=EXCLUDED.reviewed_revision,"
-                "identity_hash=EXCLUDED.identity_hash,status='confirmed',reviewed_by=EXCLUDED.reviewed_by,reason=EXCLUDED.reason,reviewed_at=now()",
+                "identity_hash=EXCLUDED.identity_hash,status='confirmed',reviewed_by=EXCLUDED.reviewed_by,reason=EXCLUDED.reason,reviewed_at=now(),binding_version=sales_customer_bindings.binding_version+1",
                 (
                     self.tenant,
                     observation_id,
@@ -266,6 +266,10 @@ class BusinessObservations:
                     actor,
                     reason.strip(),
                 ),
+            )
+            cur.execute(
+                "UPDATE sales_prospects SET business_attribution_detached=false WHERE tenant_id=%s AND id=%s",
+                (self.tenant, prospect_id),
             )
             self.ops.audit(
                 cur,
@@ -279,6 +283,11 @@ class BusinessObservations:
                 },
             )
             self._changed(cur, prospect_id, "binding:" + str(uuid4()))
+
+    def reassign(self, observation_id, **review):
+        from robothor.sales.business_repair import reassign
+
+        return reassign(self, observation_id, **review)
 
     def commit_page(self, job, data, *, cur=None):
         """Atomically persist a validated read page, state updates and its next cursor."""
@@ -345,7 +354,7 @@ class BusinessObservations:
             raise ValueError("Business resource required")
         with self.ops.transaction() as cur:
             cur.execute(
-                "SELECT o.*,b.prospect_id,b.status AS binding_status,b.reviewed_revision,b.reason AS review_reason "
+                "SELECT o.*,b.prospect_id,b.status AS binding_status,b.reviewed_revision,b.reason AS review_reason,b.binding_version,b.reviewed_by,b.reviewed_at "
                 "FROM sales_business_observations o LEFT JOIN sales_customer_bindings b "
                 "ON b.tenant_id=o.tenant_id AND b.observation_id=o.id WHERE o.tenant_id=%s AND o.kind=%s "
                 "AND (%s::text IS NULL OR o.source=%s) AND (%s::text IS NULL OR o.account_id=%s) "
@@ -360,16 +369,18 @@ class BusinessObservations:
 
     def retention(self, prospect_id, now=None):
         with self.ops.transaction() as cur:
-            self.sales.require(prospect_id, cur)
+            prospect = self.sales.require(prospect_id, cur)
             cur.execute(
                 "SELECT b.status,o.source,o.account_id,o.external_id,o.data AS practice_data FROM sales_customer_bindings b JOIN sales_business_observations o "
                 "ON o.tenant_id=b.tenant_id AND o.id=b.observation_id WHERE b.tenant_id=%s AND b.prospect_id=%s",
                 (self.tenant, prospect_id),
             )
             bindings = list(cur.fetchall())
-            if not bindings:
+            if not bindings and not prospect["business_attribution_detached"]:
                 return None
-            if any(b["status"] != "confirmed" for b in bindings):
+            if prospect["business_attribution_detached"] or any(
+                b["status"] != "confirmed" for b in bindings
+            ):
                 return {
                     **{
                         key: (True if key == "requires_review" else None)

@@ -733,6 +733,11 @@ class Sales:
 
         return BusinessObservations(self).bind(prospect_id, observation_id, revision, actor, reason)
 
+    def reassign_business_customer(self, observation_id, **review):
+        from robothor.sales.business import BusinessObservations
+
+        return BusinessObservations(self).reassign(observation_id, **review)
+
     def bind_customer(self, prospect_id, external_id, actor):
         operator(actor)
         with self.ops.transaction() as cur:
@@ -741,7 +746,7 @@ class Sales:
                 "SELECT 1 FROM sales_customer_bindings WHERE tenant_id=%s AND prospect_id=%s LIMIT 1",
                 (self.tenant, prospect_id),
             )
-            if cur.fetchone():
+            if cur.fetchone() or p["business_attribution_detached"]:
                 raise Conflict("Current business attribution already exists")
             if p["external_company_id"] not in (None, external_id):
                 raise Conflict("Customer association already exists")

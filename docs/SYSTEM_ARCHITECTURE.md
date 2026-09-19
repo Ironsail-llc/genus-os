@@ -412,7 +412,9 @@ Port 6379, 2 GB max. Shared by:
 The opt-in sales workflow uses the durable operation queue and review actions
 from migration 126, tenant-scoped prospect and evidence records from migration
 127, and business observations, revision history and reviewed customer bindings
-from migration 128. Provider-specific adapters belong to the instance. Business
+from migration 128. Migration 129 versions binding reviews and preserves unknown
+attribution when a practice repair removes a customer's final match.
+Provider-specific adapters belong to the instance. Business
 pages commit evidence and cursor progress together under a valid worker lease;
 customer attribution requires an operator's exact-revision review. Current-page
 feeds do not establish complete retention history. See

@@ -30,6 +30,9 @@ def client(monkeypatch):
             calls.append((self.tenant, filters))
             return {"items": [], "next_cursor": None}
 
+        def reassign_business_customer(self, observation_id, **review):
+            calls.append((self.tenant, observation_id, review))
+
         def decide(self, action, approved, actor):
             calls.append((self.tenant, action, approved, actor))
 
@@ -62,6 +65,35 @@ def test_provider_read_inventory_is_human_only_and_filters_cannot_select_writes(
         path + "?state=all&kind=sales.business", headers={"x-test-role": "admin"}
     ).json() == {"items": [], "next_cursor": None}
     assert calls == [("tenant-a", {"state": "all", "kind": "sales.business", "after": None})]
+
+
+def test_reassignment_requires_human_identity_and_exact_review_contract(client):
+    c, calls = client
+    identity = "00000000-0000-4000-8000-000000000001"
+    body = {
+        "expected_revision": "v1",
+        "expected_binding_version": 1,
+        "expected_prospect_id": "00000000-0000-4000-8000-000000000002",
+        "target_prospect_id": "00000000-0000-4000-8000-000000000003",
+        "reason": "Reviewed corrected practice ownership",
+    }
+    path = f"/api/sales/business-observations/{identity}/reassign"
+    for headers in (
+        {},
+        {"x-test-role": "member"},
+        {"x-test-role": "admin", "x-test-service": "yes"},
+    ):
+        assert c.post(path, json=body, headers=headers).status_code == 403
+    headers = {"x-test-role": "admin"}
+    assert (
+        c.post(path, json={**body, "actor": "operator:forged"}, headers=headers).status_code == 422
+    )
+    assert (
+        c.post(path, json={**body, "expected_binding_version": True}, headers=headers).status_code
+        == 422
+    )
+    assert c.post(path, json=body, headers=headers).status_code == 200
+    assert calls == [("tenant-a", identity, {**body, "actor": "operator:user-1"})]
 
 
 @pytest.mark.parametrize(
