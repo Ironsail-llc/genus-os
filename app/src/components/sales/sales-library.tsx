@@ -3,10 +3,11 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { apiFetch } from "@/lib/api/client";
+import { LibraryEntry, type Entry } from "./library-entry";
+import { LibraryPublication } from "./library-publication";
 
 const API = "/api/bridge/api/sales";
 type Kind = "qualification" | "knowledge";
-type Entry = { kind: Kind; version: string; approved_by: string; approved_at: string; data: Record<string, unknown> };
 type Page = { items: Entry[]; next_cursor: string | null };
 type Config = { active_policy_versions?: Record<string, string>; active_knowledge_version?: string };
 type Snapshot = { config: Config; revision: number };
@@ -14,26 +15,6 @@ type Selection = { policy_versions: Record<string, string>; knowledge_version: s
 const label = (value: string) => value.replaceAll("_", " ");
 const ordered = (value: Record<string, string>) => JSON.stringify(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)));
 
-function PublishedEntry({ entry }: { entry: Entry }) {
-  const data = entry.data;
-  const weights = (data.weights ?? {}) as Record<string, number>;
-  const required = (data.required ?? []) as string[];
-  return <article className="rounded border p-3 space-y-2 text-sm">
-    <h5 className="font-medium">{entry.kind === "knowledge" ? "Claims" : label(String(data.buying_case))} · {entry.version}</h5>
-    <p className="text-muted-foreground">Published by {entry.approved_by} · {new Date(entry.approved_at).toLocaleDateString()}</p>
-    {entry.kind === "qualification" ? <>
-      <p>Qualification threshold: {String(data.threshold)} / 100 · Evidence age limit: {String(data.max_evidence_age_days)} days</p>
-      <ul className="space-y-1">{Object.entries(weights).map(([key, points]) => <li key={key}>{label(key)}: {points} points{required.includes(key) ? " · required" : ""}</li>)}</ul>
-    </> : <dl className="space-y-3">{Object.entries((data.claims ?? {}) as Record<string, unknown>).map(([key, claim]) => <div key={key}>
-      <dt className="font-medium">{label(key)}</dt>
-      <dd className="whitespace-pre-wrap break-words">{typeof claim === "string" ? claim : JSON.stringify(claim, null, 2)}</dd>
-    </div>)}</dl>}
-    {entry.kind === "knowledge" && Object.keys(data).some((key) => key !== "claims") && <details>
-      <summary className="cursor-pointer">Published supporting details</summary>
-      <pre className="mt-2 whitespace-pre-wrap break-words">{JSON.stringify(Object.fromEntries(Object.entries(data).filter(([key]) => key !== "claims")), null, 2)}</pre>
-    </details>}
-  </article>;
-}
 
 export function SalesLibrary({ onChanged }: { onChanged: () => void | Promise<void> }) {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
@@ -125,7 +106,7 @@ export function SalesLibrary({ onChanged }: { onChanged: () => void | Promise<vo
       </label>
       {(["qualification", "knowledge"] as Kind[]).map((kind) => pages[kind].next_cursor && <Button key={kind} variant="outline" disabled={busy || held} onClick={() => void more(kind)}>Load more {kind} versions</Button>)}
       {!!selected.length && <details><summary className="cursor-pointer text-sm">Inspect selected records</summary>
-        <div className="mt-3 space-y-3">{selected.map((entry) => <PublishedEntry key={entry.kind + ":" + entry.version} entry={entry} />)}</div>
+        <div className="mt-3 space-y-3">{selected.map((entry) => <LibraryEntry key={entry.kind + ":" + entry.version} entry={entry} />)}</div>
       </details>}
       <label className="block space-y-1 text-sm"><span>Reason for library selection</span><textarea className="w-full rounded border bg-transparent p-2" maxLength={2000} disabled={busy || held} value={reason} onChange={(event) => { setReason(event.target.value); setReview(null); }} /></label>
       <Button variant="outline" disabled={busy || held} onClick={inspect}>Review library selection</Button>
@@ -133,10 +114,11 @@ export function SalesLibrary({ onChanged }: { onChanged: () => void | Promise<vo
         <h4 className="font-medium">Review selected library</h4>
         {cases.map((buyingCase) => <p key={buyingCase} className="text-sm">{label(buyingCase)}: {snapshot.config.active_policy_versions?.[buyingCase] ?? "None"} → {policies[buyingCase] ?? "None"}</p>)}
         <p className="text-sm">Claims: {snapshot.config.active_knowledge_version || "None"} → {knowledge || "None"}</p>
-        {selected.map((entry) => <PublishedEntry key={entry.kind + ":" + entry.version} entry={entry} />)}
+        {selected.map((entry) => <LibraryEntry key={entry.kind + ":" + entry.version} entry={entry} />)}
         <p className="text-sm">{review.reason}</p>
         <Button disabled={busy || held} onClick={() => void save()}>Use reviewed library</Button>
       </section>}
+      <LibraryPublication onChanged={async () => { await reload(); await onChanged(); }} />
     </>}
   </section>;
 }

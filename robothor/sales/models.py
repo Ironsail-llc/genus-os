@@ -74,6 +74,7 @@ class QualificationPolicy(Contract):
     weights: dict[str, int]
     threshold: int = Field(ge=0, le=100)
     max_evidence_age_days: int = Field(default=90, ge=1, le=365)
+    criteria_definitions: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def valid_weights(self):

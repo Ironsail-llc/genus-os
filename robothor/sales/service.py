@@ -257,7 +257,7 @@ class Sales:
         )
         return None
 
-    def _publish(self, kind, version, data, actor):
+    def _publish(self, kind, version, data, actor, *, review=None):
         operator(actor)
         if (
             not isinstance(version, str)
@@ -278,7 +278,25 @@ class Sales:
                 )
                 if cur.fetchone()["data"] != data:
                     raise Conflict("Published versions are immutable")
-            self.ops.audit(cur, version, kind + ".published", actor)
+            self.ops.audit(cur, version, kind + ".published", actor, review)
+
+    def publish_library(self, packet, *, expected_hash, reason, actor):
+        from robothor.sales.library import preview
+
+        operator(actor)
+        if not isinstance(reason, str) or not 10 <= len(reason.strip()) <= 2000:
+            raise ValueError("Publication review reason required")
+        reviewed = preview(packet)
+        if reviewed["content_hash"] != expected_hash:
+            raise Conflict("Library content changed since review")
+        canonical = reviewed["packet"]
+        self._publish(
+            canonical["kind"],
+            canonical["version"],
+            canonical["data"],
+            actor,
+            review={"content_hash": expected_hash, "reason": reason.strip()},
+        )
 
     def publish_policy(self, policy: QualificationPolicy, actor):
         self._publish("qualification", policy.version, policy.model_dump(mode="json"), actor)
@@ -327,6 +345,21 @@ class Sales:
             "items": rows[:limit],
             "next_cursor": rows[limit - 1]["version"] if len(rows) > limit else None,
         }
+
+    def library_record(self, *, kind, version):
+        if kind not in {"knowledge", "qualification"}:
+            raise ValueError("Valid library kind required")
+        with self.ops.transaction() as cur:
+            cur.execute(
+                "SELECT kind,version,data,approved_by,approved_at FROM sales_policies WHERE tenant_id=%s AND kind=%s AND version=%s",
+                (self.tenant, kind, version),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        record = dict(row)
+        record["content_hash"] = digest({key: record[key] for key in ("kind", "version", "data")})
+        return record
 
     def select_library(
         self, *, policy_versions, knowledge_version, expected_revision, reason, actor
