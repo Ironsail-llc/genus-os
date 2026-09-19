@@ -1324,6 +1324,11 @@ async def main() -> int:
     logger.info("Telegram bot: %s", "configured" if config.bot_token else "disabled")
 
     # Create subsystems
+    from robothor.engine.runtime_assets import RuntimeAssets
+
+    # Capture before subsystem constructors import plugin contributions. Managed
+    # releases may only use this cold process identity, never a later refresh.
+    sales_runtime_assets = await asyncio.to_thread(RuntimeAssets.capture)
     runner = AgentRunner(config)
 
     # Resume BEFORE reaping: `_cleanup_stale_runs` marks every interrupted row
@@ -1459,6 +1464,12 @@ async def main() -> int:
         init_permission_manager(bot, config.default_chat_id)
         logger.info("Permission escalation manager wired to Telegram")
     scheduler = CronScheduler(config, runner, workflow_engine=workflow_engine)
+    from robothor.engine.sales_runtime import NativeSalesRuntime
+    from robothor.sales.service import Sales
+
+    scheduler.sales_runtime = NativeSalesRuntime(
+        scheduler, Sales(config.tenant_id), config.workspace, sales_runtime_assets
+    )
     global _ACTIVE_SCHEDULER
     _ACTIVE_SCHEDULER = scheduler
     hooks = EventHooks(config, runner, workflow_engine=workflow_engine)

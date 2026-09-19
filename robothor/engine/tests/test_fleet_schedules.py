@@ -176,7 +176,7 @@ async def test_inflight_context_detects_cutover_and_is_cleared_after_cancellatio
     async def execute(**kwargs):
         entered.set()
         await release.wait()
-        assert_current("test-tenant", snapshot().release_id, "sales-work")
+        await assert_current("test-tenant", snapshot().release_id, "sales-work")
 
     native.workflow_engine.execute.side_effect = execute
     manager.reconcile(snapshot())

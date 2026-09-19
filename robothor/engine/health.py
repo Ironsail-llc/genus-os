@@ -1066,6 +1066,10 @@ def create_health_app(
         async def check_fleet() -> str:
             return await _fleet_readiness(config, readiness_details)
 
+        async def check_sales_runtime() -> str:
+            runtime = getattr(scheduler, "sales_runtime", None)
+            return await runtime.readiness() if runtime is not None else "ok"
+
         async def check_federation() -> str:
             """Federation is ready when every link that says it is running,
             is. An instance with no connections is ready — most are.
@@ -1099,6 +1103,7 @@ def create_health_app(
                 "redis": check_redis,
                 "schedules": check_schedules,
                 "fleet": check_fleet,
+                "sales_runtime": check_sales_runtime,
                 "federation": check_federation,
             }
             body, status = await readiness_response(

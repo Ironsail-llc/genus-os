@@ -60,14 +60,16 @@ native queue admission until verified commit or restoration. Settings have a
 monotonic revision, and managed release selection, agents and workflow bindings
 can only change through this coordinator. Other operator settings remain editable;
 a newer revision makes the prepared selection stale. Deployment and rollback keep
-integration switches off. The native runtime verifier and public controls are
-still pending, so this ledger must not be presented as a live cutover capability.
+integration switches off. The native source-checkout verifier now integrates
+daemon restart recovery, installed service-plugin checks and `/ready`. Public
+deployment controls and real production cutover remain pending.
 
 Managed release queues additionally require the native
 [schedule generation](deployment.md#managed-workflow-schedule-generations)
 context. The scheduler reconciler fences retired callbacks and verifies workflow
-and cron state before admission. It still needs daemon/controller wiring; copying
-workflow YAML into a live directory cannot activate a managed release.
+and cron state before admission. The native runtime also verifies artifact and
+installed-code identity off-loop before workers start. Copying workflow YAML into
+a live directory cannot activate a managed release.
 
 Instance workflow YAML calls `sales_process_queue` in a deterministic tool step.
 `workflow_bindings` explicitly maps each stage to its authorized native service

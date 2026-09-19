@@ -1,8 +1,8 @@
 """Durable cold deployment coordination; native runtime verification is mandatory.
 
-The runtime adapter must reconcile native schedules/plugins and verify its live
-generation before commit or abort. There is deliberately no default verifier and
-no public activation endpoint until that native adapter is implemented.
+The native engine runtime reconciles schedules/plugins and verifies its live
+generation before commit or abort. This coordinator requires that dependency;
+it never accepts runtime proof documents from an external caller.
 """
 
 from __future__ import annotations

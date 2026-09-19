@@ -39,12 +39,13 @@ class FleetSchedules:
     A fresh process starts with no ownership and cannot adopt loose definitions.
     """
 
-    def __init__(self, native_scheduler, *, tenant):
+    def __init__(self, native_scheduler, *, tenant, admission_verifier=None):
         self.native = native_scheduler
         self.engine = native_scheduler.workflow_engine
         if self.engine is None or self.engine.config.tenant_id != tenant:
             raise Conflict("Managed workflow tenant does not match this engine")
         self.tenant = tenant
+        self._admission_verifier = admission_verifier
         self._loop = asyncio.get_running_loop()
         self._owned = {}
         self._release_id = None
@@ -156,7 +157,7 @@ class FleetSchedules:
                 tenant=self.tenant,
                 release_id=release_id,
                 workflow_id=workflow_id,
-                verify_current=lambda: self.verify(release_id, generation),
+                verify_current=lambda: self._verify_admission(release_id, generation),
             )
         )
         try:
@@ -169,3 +170,9 @@ class FleetSchedules:
             )
         finally:
             invocation.reset(token)
+
+    async def _verify_admission(self, release_id, generation):
+        self.verify(release_id, generation)
+        if self._admission_verifier is not None:
+            await self._admission_verifier(release_id, generation)
+        self.verify(release_id, generation)

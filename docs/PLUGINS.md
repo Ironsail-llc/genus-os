@@ -978,6 +978,12 @@ allowed; cache contents and already loaded Python objects are not attested.
 Relocated `.data` layouts and shared namespace packages need separate support.
 This is a verification primitive, not an installation or runtime readiness API.
 
+Managed sales runtime readiness combines this primitive with cold startup
+identity and native service-registry origin checks. It pins the governance file,
+installed-file history and plugin generation. Reinstalling, restoring edited
+files or reloading plugins requires a fresh engine process before managed work
+can resume. This integrated path currently supports service-only fleet plugins.
+
 Keep source-only build and deployment commands out of runtime plugin wheels.
 Native installation scans the actual wheel; bundling a build command can cause
 an otherwise inert adapter to be refused for its subprocess capability.
