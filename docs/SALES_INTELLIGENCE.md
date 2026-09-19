@@ -564,7 +564,9 @@ main, pooled auxiliary, retry and streaming model request reserves a worst-case
 allowance before dispatch. The initial policy supports text-only OpenRouter
 requests with current anonymous endpoint metadata: it reserves the full published
 input context plus capped output, pins one endpoint, sets provider price ceilings,
-and disables hidden SDK retries and provider fallback. Other providers, paid
+and disables hidden SDK retries and provider fallback. JSON-mode calls filter out
+endpoints that do not advertise `response_format` before reserving or dispatching;
+an incompatible cheaper endpoint cannot displace a compatible one. Other providers, paid
 server tools, multimodal inputs, tiered pricing and explicit cache-write charges
 need a supported pricing policy before they can run within this envelope. See
 [OpenRouter provider routing](https://openrouter.ai/docs/guides/routing/provider-selection#max-price).
