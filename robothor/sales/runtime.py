@@ -368,22 +368,56 @@ class DraftWorker(ResearchWorker):
         settings = SalesSettings.model_validate(await asyncio.to_thread(self.sales.settings))
         if not settings.research_enabled:
             return False
+        from robothor.sales.followups import Followups
+
+        await asyncio.to_thread(Followups(self.sales).plan)
         job = await asyncio.to_thread(self.sales.ops.claim, "sales.draft", lease_seconds=360)
         if not job:
             return False
         try:
+            followup = job["payload"].get("purpose") == "followup"
+            basis = None
+            if followup:
+                basis = await asyncio.to_thread(
+                    Followups(self.sales).basis, job["payload"]["prospect_id"]
+                )
+                if basis != job["payload"].get("followup_basis"):
+                    await asyncio.to_thread(
+                        self.sales.ops.complete,
+                        job["id"],
+                        job["lease_token"],
+                        {
+                            "stopped": "Follow-up cadence or conversation changed; new operator review required"
+                        },
+                    )
+                    return True
             context = await asyncio.to_thread(self.sales.context, job["payload"]["prospect_id"])
             if context["prospect"]["owner"] != "agent":
                 raise Conflict("Prospect is under human ownership")
+            if basis:
+                context["followup_basis"] = basis
             draft, context, run_id = await self._generate(
                 job,
                 settings,
                 "draft",
                 Draft,
                 context,
-                "Return one initial email Draft JSON for human review; use only active claims and evidence.",
+                (
+                    "Return one followup Draft JSON for individual human review. Use the exact sender, "
+                    "recipient and reply_to_uuid in followup_basis. Read the existing conversation, "
+                    "use only active claims and evidence, and include the configured address and opt-out link."
+                    if followup
+                    else "Return one initial email Draft JSON for human review; use only active claims and evidence."
+                ),
             )
-            if draft.purpose != "initial" or draft.reply_to_uuid:
+            if followup and (
+                draft.purpose != "followup"
+                or any(
+                    getattr(draft, k) != basis[k] for k in ("sender", "recipient", "reply_to_uuid")
+                )
+            ):
+                raise Conflict("Follow-up draft changed its purpose, participants or thread")
+            if not followup and (draft.purpose != "initial" or draft.reply_to_uuid):
                 raise Conflict("Initial SDR work cannot originate a follow-up or reply")
             await asyncio.to_thread(self._commit_draft, job, context, draft, run_id)
         except (Conflict, BudgetExceeded, ValidationError) as exc:
@@ -397,6 +431,14 @@ class DraftWorker(ResearchWorker):
 
     def _commit_draft(self, job, context, draft, run_id):
         with self.sales.ops.transaction() as cur:
+            if job["payload"].get("purpose") == "followup":
+                from robothor.sales.followups import Followups
+
+                basis = Followups(self.sales).basis(job["payload"]["prospect_id"], cur=cur)
+                if basis != job["payload"].get("followup_basis") or basis != context.get(
+                    "followup_basis"
+                ):
+                    raise Conflict("Follow-up cadence or conversation changed during drafting")
             p = self.sales.require(job["payload"]["prospect_id"], cur)
             if any(
                 p[key] != context["prospect"][key]

@@ -7,8 +7,8 @@ import { apiFetch } from "@/lib/api/client";
 
 const API = "/api/bridge/api/sales/settings";
 type Snapshot = { config: Record<string, unknown>; revision: number };
-type Review = { changes: Record<string, string | number>; expected_revision: number; reason: string };
-type Field = { key: string; label: string; kind: "usd" | "integer" | "timezone"; fallback: number | string; min?: number; max?: number };
+type Review = { changes: Record<string, string | number | number[]>; expected_revision: number; reason: string };
+type Field = { key: string; label: string; kind: "usd" | "integer" | "timezone" | "cadence"; fallback: number | string | number[]; min?: number; max?: number };
 const fields: Field[] = [
   { key: "monthly_limit_units", label: "Monthly spending limit (USD)", kind: "usd", fallback: 0 },
   { key: "daily_limit_units", label: "Daily spending limit (USD)", kind: "usd", fallback: 0 },
@@ -16,6 +16,7 @@ const fields: Field[] = [
   { key: "discovery_daily_limit", label: "New companies per day", kind: "integer", fallback: 20, min: 0, max: 1000 },
   { key: "review_backlog_limit", label: "Maximum review backlog", kind: "integer", fallback: 100, min: 1, max: 10000 },
   { key: "mailbox_daily_limit", label: "Emails per mailbox per day", kind: "integer", fallback: 5, min: 0, max: 100 },
+  { key: "followup_delays_business_days", label: "Follow-up delays (business days; blank disables)", kind: "cadence", fallback: [] },
   { key: "discovery_start_hour", label: "Discovery starts at hour", kind: "integer", fallback: 2, min: 0, max: 23 },
   { key: "discovery_end_hour", label: "Discovery ends at hour", kind: "integer", fallback: 7, min: 1, max: 24 },
   { key: "timezone", label: "Timezone", kind: "timezone", fallback: "America/Chicago" },
@@ -23,11 +24,20 @@ const fields: Field[] = [
 
 function display(field: Field, value: unknown) {
   const current = value ?? field.fallback;
+  if (field.kind === "cadence") return Array.isArray(current) ? current.join(", ") : "";
   return field.kind === "usd" ? (Number(current) / 1e6).toFixed(6).replace(/\.?0+$/, "") || "0" : String(current);
 }
 
-function parse(field: Field, raw: string): string | number {
+function parse(field: Field, raw: string): string | number | number[] {
   const value = raw.trim();
+  if (field.kind === "cadence") {
+    if (!value) return [];
+    const parts = value.split(",").map((part) => part.trim());
+    if (parts.length > 2 || parts.some((part) => !/^\d+$/.test(part) || Number(part) < 1 || Number(part) > 30)) {
+      throw new Error("Follow-ups: enter at most two comma-separated delays of 1–30 business days.");
+    }
+    return parts.map(Number);
+  }
   if (field.kind === "timezone") {
     if (!value) throw new Error("Timezone is required.");
     try { new Intl.DateTimeFormat("en-US", { timeZone: value }); }
@@ -83,7 +93,7 @@ export function PilotSettings({ onChanged }: { onChanged: () => void | Promise<v
     try {
       const parsed = Object.fromEntries(fields.map((field) => [field.key, parse(field, values[field.key]) ]));
       if (Number(parsed.discovery_start_hour) >= Number(parsed.discovery_end_hour)) throw new Error("Discovery must start before it ends in the same local day.");
-      const changes = Object.fromEntries(fields.filter((field) => parsed[field.key] !== (snapshot.config[field.key] ?? field.fallback)).map((field) => [field.key, parsed[field.key]]));
+      const changes = Object.fromEntries(fields.filter((field) => JSON.stringify(parsed[field.key]) !== JSON.stringify(snapshot.config[field.key] ?? field.fallback)).map((field) => [field.key, parsed[field.key]]));
       if (!Object.keys(changes).length) throw new Error("Change at least one limit before review.");
       if (reason.trim().length < 10) throw new Error("Explain the change in at least 10 characters.");
       setReview({ changes, expected_revision: snapshot.revision, reason: reason.trim() });
@@ -109,6 +119,7 @@ export function PilotSettings({ onChanged }: { onChanged: () => void | Promise<v
     </div>
     <p className="text-sm text-muted-foreground">Discovery runs on weekdays within these local hours and stops at the review backlog limit. The mailbox cap includes initial emails, follow-ups and replies. Saving limits leaves integration switches unchanged.</p>
     <p className="text-sm text-muted-foreground">Verification allowance is a cost ceiling per lookup. Set it from your subscription pricing; zero leaves paid verification paused.</p>
+    <p className="text-sm text-muted-foreground">Each follow-up delay starts from the preceding confirmed send and counts Monday through Friday. For example, 3, 4 means wait three business days, then four more after the first follow-up is sent. Every message needs its own approval; any inbound message stops this sequence.</p>
     {error && <p role="alert" className="rounded border border-destructive p-3 text-sm text-destructive">{error}</p>}
     {saved && <p role="status" className="text-sm">Reviewed limits saved.</p>}
     {!snapshot ? <p>Loading current limits…</p> : <>

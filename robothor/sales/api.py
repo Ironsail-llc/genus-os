@@ -104,6 +104,7 @@ class SettingsReview(ReadRepair):
             "discovery_daily_limit",
             "review_backlog_limit",
             "mailbox_daily_limit",
+            "followup_delays_business_days",
             "discovery_start_hour",
             "discovery_end_hour",
             "timezone",

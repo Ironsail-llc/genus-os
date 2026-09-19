@@ -252,6 +252,9 @@ class SalesSettings(Contract):
     daily_limit_units: int = Field(default=0, ge=0, strict=True)
     verification_allowance_units: int = Field(default=0, ge=0, le=1_000_000, strict=True)
     mailbox_daily_limit: int = Field(default=5, ge=0, le=100, strict=True)
+    followup_delays_business_days: list[Annotated[int, Field(strict=True, ge=1, le=30)]] = Field(
+        default_factory=list, max_length=2
+    )
     senders: list[str] = Field(default_factory=list, max_length=100)
     mailbox_approved_until: dict[str, datetime] = Field(default_factory=dict)
     postal_address: str = Field(default="", max_length=1000)

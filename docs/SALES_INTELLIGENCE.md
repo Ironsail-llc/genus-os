@@ -6,10 +6,44 @@ contact, and take over a conversation. Agents can research and propose work;
 they cannot approve messages or select another tenant.
 
 Structured workers cover discovery, research, independent evidence assessment and deterministic qualification,
-contact research, provider verification, initial drafting, inbound conversation
+contact research, provider verification, initial and follow-up drafting, inbound conversation
 classification and activation guidance. Discovery admits at most 20 new domains
 per configured local day by default and stops at the review backlog limit.
 Candidates already known to Genus do not consume another admission.
+
+### Reviewed follow-ups
+
+The existing draft workflow can plan cold follow-ups when
+`followup_delays_business_days` is explicitly configured. The default empty list
+disables them. The settings review accepts at most two integer delays of 1–30
+business days; each delay starts from the preceding **confirmed send**. For
+example, `[3, 4]` waits three business days after the initial send, then four after
+the first follow-up is actually sent. Business days mean Monday through Friday,
+preserving the local hour across daylight-saving changes; holidays are not excluded.
+
+An activated campaign or provider acceptance is insufficient. Planning verifies
+the original human-approved action, owned campaign and activation, canonical
+message receipt, participants and any subsequent approved follow-up chain. It
+requires current qualification, evidence, verified contact, sender, ownership and
+knowledge. A completed campaign scan must cover the last 15 minutes, with a full
+scan within a day. Pending events or unfinished scans hold work. Any inbound
+message, including an automatic reply, or customer milestone ends the cold
+sequence. Rejected, cancelled or uncertain email work prevents automatic retries.
+
+The native SDR receives a code-generated follow-up basis with the exact thread
+and participants. It cannot choose the cadence or grant permission to send. The
+queue deduplicates each campaign/ordinal, rechecks eligibility before generation
+and commit, and produces a new immutable action for individual human review.
+Sending rechecks the same basis and the current provider workspace. Follow-ups
+share the existing mailbox quota, health checks and weekday sending window with
+initial messages and replies. Changing queued cadence values stops that job for
+operator review; it does not replace approved content or regenerate failed work.
+
+These conservative holds can require manual handling. For example, a scan that
+becomes stale after approval causes delivery to cancel before a provider write;
+the cold planner will not recreate that message. Inspect provider reads and the
+action receipt before preparing a separately reviewed manual reply. Local tests
+use simulated provider responses; live scheduling and delivery remain pilot gates.
 
 Native scouts must complete a real `web_search` before returning a candidate
 batch. The required tool turn precedes final-answer JSON formatting; afterward,

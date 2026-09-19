@@ -688,6 +688,16 @@ class Sales:
             with self.ops.transaction() as cursor:
                 return self.draft(prospect_id, data, cur=cursor)
         draft = Draft.model_validate(data)
+        followup_basis = None
+        if draft.purpose == "followup":
+            from robothor.sales.followups import Followups
+
+            followup_basis = Followups(self).basis(prospect_id, cur=cur)
+            if any(
+                getattr(draft, k) != followup_basis[k]
+                for k in ("sender", "recipient", "reply_to_uuid")
+            ):
+                raise Conflict("Follow-up participants or preceding message changed")
         p = self.require(prospect_id, cur)
         self.require_assessment(prospect_id, cur=cur)
         if (
@@ -734,6 +744,8 @@ class Sales:
         cur.execute("SELECT config FROM sales_settings WHERE tenant_id=%s", (self.tenant,))
         row = cur.fetchone()
         payload["library_revision"] = (row["config"] if row else {}).get("library_revision", 0)
+        if followup_basis:
+            payload["followup_basis"] = followup_basis
         return self.ops.propose("sales.email", str(uuid4()), payload, cur=cur)
 
     def validate_send(self, action, *, cur=None):
@@ -838,6 +850,12 @@ class Sales:
                 payload["recipient"],
             }:
                 raise Conflict("Thread participants do not match approved message")
+        if payload.get("purpose") == "followup":
+            from robothor.sales.followups import Followups
+
+            basis = Followups(self).basis(p["id"], cur=cur, exclude_action=live["id"])
+            if basis != payload.get("followup_basis"):
+                raise Conflict("Follow-up cadence or conversation basis changed since approval")
         return settings
 
     def history(self, prospect_id):
