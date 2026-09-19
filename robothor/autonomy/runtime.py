@@ -47,6 +47,32 @@ async def run_browser(
         return {"error": "managed_browser_not_enabled"}
     if not reconcile:
         await asyncio.to_thread(store.check_authority, scope, operation_id, agent_id)
+    if row.get("workflow_id") and not reconcile:
+        # Only the authenticated secure-input route supplies a transient code.
+        # Attached operations must never reopen a one-shot browser.
+        if verification_code is None or plan is None:
+            return {"error": "workflow_required", "workflow_id": row["workflow_id"]}
+        from uuid import uuid4
+
+        from robothor.autonomy.workflows.client import invoke
+        from robothor.autonomy.workflows.store import WorkflowStore
+
+        pending = await asyncio.to_thread(
+            WorkflowStore(store).code_resume, scope, agent_id, row["workflow_id"]
+        )
+        return await invoke(
+            scope,
+            agent_id,
+            {
+                "kind": "execute",
+                "workflow_id": row["workflow_id"],
+                "command_id": str(uuid4()),
+                "revision": pending["revision"],
+                "advance": pending["advance"],
+                "plan": plan.model_dump(mode="json"),
+                "verification_code": verification_code,
+            },
+        )
     from robothor import vault
     from robothor.config import get_config
 

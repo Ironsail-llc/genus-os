@@ -421,10 +421,17 @@ class BrowserBroker:
         *,
         allowed_frames: frozenset[str] = frozenset(),
         verification_code: str | None = None,
+        workflow_id: str | None = None,
+        navigate: bool = True,
+        advance: bool = False,
     ) -> dict[str, Any]:
         if plan.verification_link_id:
+            if workflow_id:
+                raise PermissionError("workflow_verification_link_not_supported")
             return await self.verify_link_on_page(scope, operation_id, agent_id, plan, page)
         row = await asyncio.to_thread(self.store.operation, scope, operation_id)
+        if row.get("workflow_id") != workflow_id:
+            raise PermissionError("workflow_required")
         if row["agent_id"] != agent_id:
             raise PermissionError("agent_not_allowed")
         if row["state"] != "reserved":
@@ -437,7 +444,16 @@ class BrowserBroker:
         try:
             if url_origin(plan.url) != proposal.origin:
                 raise PermissionError("destination_mismatch")
-            await page.goto(plan.url, wait_until="domcontentloaded", timeout=30000)
+            if advance and (
+                not workflow_id
+                or proposal.action not in {"account", "login", "application"}
+                or proposal.amount_minor
+                or proposal.recurring_minor
+                or proposal.annual_commitment_minor
+            ):
+                raise PermissionError("intermediate_step_not_allowed")
+            if navigate:
+                await page.goto(plan.url, wait_until="domcontentloaded", timeout=30000)
             if url_origin(page.url) != proposal.origin:
                 raise PermissionError("destination_changed")
             from robothor.autonomy.confirmation import observe, wait_for_confirmation
@@ -503,7 +519,9 @@ class BrowserBroker:
             # Keep the actual document origin fixed across decryption and fill.
             await self._guard_origin(page, page.main_frame, proposal.origin)
             # Claim once, before any credential fill can trigger site scripts.
-            await asyncio.to_thread(self.store.begin_submit, scope, operation_id, agent_id)
+            await asyncio.to_thread(
+                self.store.begin_submit, scope, operation_id, agent_id, workflow_id=workflow_id
+            )
             started = True
             for binding in plan.fields:
                 if binding.kind == "payment_card" and proposal.action not in (
@@ -528,8 +546,36 @@ class BrowserBroker:
             )
             if confirmed_before_click:
                 raise ValueError("confirmation_before_submit")
+            before_step = set()
+            if advance:
+                from robothor.autonomy.inspection import inspect_page
+                from robothor.autonomy.workflows.transition import signature, wait_for_step
+
+                before_step = signature(
+                    await inspect_page(
+                        page, destination=proposal.origin, allowed_frames=allowed_frames
+                    )
+                )
             await (await self._unique(page.locator(plan.submit_selector))).click(timeout=15000)
-            if plan.success_selector:
+            if advance:
+                transition = await wait_for_step(
+                    page, proposal.origin, proposal.action, allowed_frames, before_step
+                )
+                if transition["kind"] == "step":
+                    from robothor.autonomy.workflows.store import WorkflowStore
+
+                    assert workflow_id is not None
+                    await asyncio.to_thread(
+                        WorkflowStore(self.store).checkpoint, scope, agent_id, workflow_id
+                    )
+                    return {
+                        "operation_id": operation_id,
+                        "state": "reserved",
+                        "reason": "workflow_step_completed",
+                        **transition["inspection"],
+                    }
+                confirmation_evidence = transition["evidence"]
+            elif plan.success_selector:
                 confirmation = page.locator(plan.success_selector)
                 await confirmation.wait_for(state="visible", timeout=30000)
                 text = await (await self._unique(confirmation)).inner_text()

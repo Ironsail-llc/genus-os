@@ -458,7 +458,7 @@ class AutonomyStore:
     @staticmethod
     def _operation(cur: Any, scope: Scope, operation_id: str) -> dict[str, Any]:
         cur.execute(
-            "SELECT id::text,grant_id::text,grant_version,agent_id,proposal,state,evidence,execution_plan,input_reason,extract(epoch FROM created_at)::bigint AS created_epoch "
+            "SELECT id::text,grant_id::text,grant_version,agent_id,proposal,state,evidence,execution_plan,input_reason,workflow_id::text,extract(epoch FROM created_at)::bigint AS created_epoch "
             "FROM autonomy_operations WHERE id=%s AND tenant_id=%s AND owner_id=%s",
             (operation_id, scope.tenant_id, scope.owner_id),
         )
@@ -467,10 +467,14 @@ class AutonomyStore:
             raise PermissionError("operation_not_found")
         return dict(row)
 
-    def begin_submit(self, scope: Scope, operation_id: str, agent_id: str) -> None:
+    def begin_submit(
+        self, scope: Scope, operation_id: str, agent_id: str, *, workflow_id: str | None = None
+    ) -> None:
         with self.transaction() as cur:
             self._lock(cur, scope)
             row = self._operation(cur, scope, operation_id)
+            if row.get("workflow_id") != workflow_id:
+                raise PermissionError("workflow_required")
             if row["state"] != "reserved":
                 raise PermissionError("reconciliation_required")
             if row["agent_id"] != agent_id:

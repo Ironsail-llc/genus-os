@@ -131,3 +131,4 @@ crm/125_agent_run_step_batch.sql
 crm/126_goal_pursuit.sql
 crm/127_autonomous_execution.sql
 crm/128_autonomy_resource_descriptors.sql
+crm/129_autonomy_workflows.sql
