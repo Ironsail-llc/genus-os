@@ -280,62 +280,65 @@ class BusinessObservations:
             )
             self._changed(cur, prospect_id, "binding:" + str(uuid4()))
 
-    def commit_page(self, job, data):
+    def commit_page(self, job, data, *, cur=None):
         """Atomically persist a validated read page, state updates and its next cursor."""
         page = BusinessPage.model_validate(data)
-        with self.ops.transaction() as cur:
-            cur.execute(
-                "SELECT payload FROM operation_jobs WHERE tenant_id=%s AND id=%s AND kind='sales.business' "
-                "AND status='running' AND lease_token=%s AND lease_until>clock_timestamp() FOR UPDATE",
-                (self.tenant, job["id"], job["lease_token"]),
-            )
-            row = cur.fetchone()
-            if not row:
-                raise Conflict("Business read lease expired or replaced")
-            scan = BusinessScan.model_validate(row["payload"])
-            if any(
-                getattr(page, key) != getattr(scan, key)
-                for key in ("source", "account_id", "kind", "practice_id", "after")
-            ):
-                raise Conflict("Business page identity changed during the read")
-            if page.next_cursor is not None and (
-                not page.items
-                or page.next_cursor == scan.after
-                or page.next_cursor in scan.seen_cursors
-                or len(scan.seen_cursors) >= 999
-            ):
-                raise Conflict("Business page cursor requires reconciliation")
-            for item in page.items:
-                if page.kind == "order" and item.data.get("practice_id") != scan.practice_id:
-                    raise Conflict("Order page practice identity changed")
-                self.observe(
-                    page.source,
-                    page.account_id,
-                    page.kind,
-                    item.external_id,
-                    item.revision,
-                    page.observed_at,
-                    item.data,
-                    cur=cur,
-                )
-            if page.next_cursor:
-                following = scan.model_dump(mode="json")
-                following.update(
-                    after=page.next_cursor, seen_cursors=[*scan.seen_cursors, page.next_cursor]
-                )
-                self.ops.enqueue("sales.business", digest(following), following, cur=cur)
-            self.ops.complete(
-                job["id"],
-                job["lease_token"],
-                {
-                    "records": len(page.items),
-                    "next_cursor": page.next_cursor,
-                    "observed_at": page.observed_at.isoformat(),
-                    "scan_id": scan.scan_id,
-                    "final": page.next_cursor is None,
-                },
+        if cur is None:
+            with self.ops.transaction() as cursor:
+                return self.commit_page(job, page, cur=cursor)
+        cur.execute(
+            "SELECT payload FROM operation_jobs WHERE tenant_id=%s AND id=%s AND kind='sales.business' "
+            "AND status='running' AND lease_token=%s AND lease_until>clock_timestamp() FOR UPDATE",
+            (self.tenant, job["id"], job["lease_token"]),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise Conflict("Business read lease expired or replaced")
+        scan = BusinessScan.model_validate(row["payload"])
+        if any(
+            getattr(page, key) != getattr(scan, key)
+            for key in ("source", "account_id", "kind", "practice_id", "after")
+        ):
+            raise Conflict("Business page identity changed during the read")
+        if page.next_cursor is not None and (
+            not page.items
+            or page.next_cursor == scan.after
+            or page.next_cursor in scan.seen_cursors
+            or len(scan.seen_cursors) >= 999
+        ):
+            raise Conflict("Business page cursor requires reconciliation")
+        for item in page.items:
+            if page.kind == "order" and item.data.get("practice_id") != scan.practice_id:
+                raise Conflict("Order page practice identity changed")
+            self.observe(
+                page.source,
+                page.account_id,
+                page.kind,
+                item.external_id,
+                item.revision,
+                page.observed_at,
+                item.data,
                 cur=cur,
             )
+        if page.next_cursor:
+            following = scan.model_dump(mode="json")
+            following.update(
+                after=page.next_cursor, seen_cursors=[*scan.seen_cursors, page.next_cursor]
+            )
+            self.ops.enqueue("sales.business", digest(following), following, cur=cur)
+        self.ops.complete(
+            job["id"],
+            job["lease_token"],
+            {
+                "records": len(page.items),
+                "next_cursor": page.next_cursor,
+                "observed_at": page.observed_at.isoformat(),
+                "scan_id": scan.scan_id,
+                "final": page.next_cursor is None,
+            },
+            cur=cur,
+        )
+        return None
 
     def records(self, *, kind="practice", source=None, account_id=None, after=None):
         if kind not in {"practice", "signup", "order"}:

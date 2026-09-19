@@ -23,7 +23,7 @@ Instance workflow YAML calls `sales_process_queue` in a deterministic tool step.
 `workflow_bindings` explicitly maps each stage to its authorized native service
 workflow. No agent has this execution authority. Stages are `plan`, `scout`,
 `research`, `qualify`, `contacts`, `verify`, `promotion`, `draft`, `conversation`,
-`activation`, `delivery`, `stop`, `inbox`, and `reconcile`. Most calls handle one work
+`activation`, `delivery`, `stop`, `inbox`, `reconcile`, and `business`. Most calls handle one work
 item; reconciliation reads up to five pages, and the planner creates a bounded set
 of discovery jobs. There is no separate daemon.
 
@@ -264,12 +264,44 @@ commercial fulfillment can establish activation; a partial empty history instead
 leaves the prospect `awaiting_outcome_evidence` and cannot create an onboarding
 message in the activation stage.
 
-The storage, operator API and page transaction are implemented. Native source
-registration, scheduled scan planning/dispatch, association/repair controls in the
-Sales view, complete-history certification and production connection checks remain
-before activating this importer. No background process is started by importing
-these modules. Job completion now checks the database wall clock so time spent
-waiting inside a transaction cannot preserve an expired lease.
+### Native business source registration and polling
+
+An instance plugin contributes a tenant-bound adapter factory through the existing
+`genus.services` group under `sales.business.<source>`. The factory takes the
+tenant ID and returns an object with async `business_page(scan)`. It returns a
+validated `BusinessPage` (or equivalent dictionary) for that exact `BusinessScan`.
+The adapter owns scoped authentication and allowlisted provider payload validation;
+Genus owns persistence, review, cursor progress and worker recovery. Plugins retain
+the existing manifest, contract-version, lockfile and disabled-plugin checks.
+
+The operator must configure `business_sources`, enable `outcomes_enabled`, and bind
+the `business` stage to an installed native workflow. Sources have `source`,
+`account_id` and `refresh_seconds` (default six hours; minimum ten minutes). Only
+one account per source can be configured. Empty sources and the default disabled
+outcome switch perform no reads. Installation/import alone starts no work.
+
+Each workflow invocation plans at most 25 new scan roots and advances one page.
+Practice and signup scans cover the configured source account; order scans cover
+only currently reviewed practice bindings. The planner serializes concurrent
+invocations, resumes existing cursor chains, and waits the refresh interval after
+a terminal page. Failed chains require the existing operator read-retry action;
+the planner cannot replace them with fresh roots. An empty page is not evidence
+of deletion or full historical coverage.
+
+The worker limits admission to 20 page attempts per source/account/minute across
+workers (an adapter may make multiple HTTP calls per page). Reads time out after
+75 seconds under a 120-second lease. Give the workflow tool step at least 100
+seconds and its enclosing workflow more time. Provider rate limits preserve the
+page and retry delay without consuming an attempt. Other failures have redacted
+diagnostics and bounded retries; a replacement lease owns recovery after expiry.
+Account, outcome switch and practice review are checked before reading and again
+in the page transaction, so pausing or changing identity during a read cannot
+commit its results. Job completion checks wall-clock lease expiry.
+
+Association/repair controls in the Sales view, complete-history certification,
+atomic instance deployment and production connection checks remain before live
+activation. The native workflow and provider tests use synthetic business data;
+they do not establish deployed-runtime or customer-pilot success.
 
 ## Native agent deployment
 
