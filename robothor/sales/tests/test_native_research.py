@@ -14,8 +14,9 @@ from robothor.templates.tests.test_fleet_release import spec
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("ignore_requirement", [False, True])
 async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_children(
-    sales, source, tmp_path, monkeypatch
+    sales, source, tmp_path, monkeypatch, ignore_requirement
 ):
     from litellm import ModelResponse
 
@@ -88,7 +89,7 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
     monkeypatch.setattr(dispatch, "_handler_map", None)
     monkeypatch.setattr(spawn, "_spawn_semaphore", None)
     monkeypatch.setattr(spawn, "_spawn_limit_override", 3)
-    fetched, provider_calls = [], []
+    fetched, provider_calls, ignored_answers = [], [], []
 
     async def fetch(args, ctx):
         assert ctx.tenant_id == sales.tenant
@@ -136,11 +137,20 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
         tool = None
         if names == {"sales_research_parallel"}:
             if tool_result is None:
-                tool = ("sales_research_parallel", {"buying_case": "network_access"})
+                assert kwargs["tool_choice"] == {
+                    "type": "function",
+                    "function": {"name": "sales_research_parallel"},
+                }
+                if ignore_requirement:
+                    ignored_answers.append(True)
+                else:
+                    tool = ("sales_research_parallel", {"buying_case": "network_access"})
             else:
+                assert kwargs["tool_choice"] == "auto"
                 assert "dossier" in json.loads(tool_result["content"]), tool_result
             content = '{"untrusted_parent_narrative": true}'
         else:
+            assert kwargs["tool_choice"] == "auto"
             topic = request["topic"]
             if tool_result is None:
                 tool = ("web_fetch", {"url": "https://clinic.example.com/" + topic})
@@ -202,6 +212,14 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
             ),
         )
         await get_task_registry().drain(timeout=10)
+    if ignore_requirement:
+        assert ignored_answers == [True]
+        assert result.status == "failed"
+        assert result.output_text is None
+        assert result.stage_provenance == {}
+        assert fetched == []
+        assert recovery.store.read(job, recovery.input_hash) == {}
+        return
     assert result.status == "completed", result.error_message
     assert len(Dossier.model_validate_json(result.output_text).evidence) == 3
     assert len([call for call in provider_calls if call.get("tools")]) == 8

@@ -567,6 +567,15 @@ constrained status writes; generic spawn tools are refused at stage admission.
 The broker is available only within the matching tenant's active native research
 stage. It accepts only a buying case from that stage's approved policy context.
 
+Until the broker starts, the native stage requires that exact function in the
+provider's `tool_choice` contract. This is a scoped runtime requirement, not an
+instruction supplied by a web page or a permission grant. It can select only a
+tool already available to the parent. Auxiliary requests without tools are
+unchanged; child calls and later parent calls use normal selection. The requirement
+closes with the stage, including for tasks that inherited its context. Endpoint
+quotes must support both tools and forced tool selection. A provider that ignores
+the request still cannot bypass the validated-child merge required for success.
+
 Genus supplies the company context and dispatches three native children for
 services, providers/locations, and ownership/business signals. The parent and
 children share one funded request envelope and the research job's 300-second

@@ -297,6 +297,10 @@ def openrouter_quote(kwargs, endpoints):
                 and "response_format" not in endpoint["supported_parameters"]
             ):
                 continue
+            if isinstance(kwargs.get("tool_choice"), dict) and not {"tools", "tool_choice"} <= set(
+                endpoint["supported_parameters"]
+            ):
+                continue
             price = endpoint["pricing"]
             # Tiered/time-varying and explicit cache-write pricing need their
             # own reviewed quote policy. Do not guess the maximum surcharge.
