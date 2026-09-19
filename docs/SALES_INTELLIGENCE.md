@@ -17,6 +17,11 @@ package does not install a schedule, activate integrations or send email.
 Automated deployment, provider-state and subscription reconciliation,
 provider billing reconciliation, and the real pilot remain deployment gates. Keep integration switches off until those gates are satisfied.
 
+The [fleet artifact compiler](deployment.md#verified-fleet-artifacts) can package
+the instance agents, workflows, shared knowledge, inactive settings and adapter
+wheels as one verified candidate. Its fingerprint detects artifact drift; it does
+not establish runtime deployment, provider connectivity or pilot approval.
+
 ## Native workflow execution
 
 Instance workflow YAML calls `sales_process_queue` in a deterministic tool step.
