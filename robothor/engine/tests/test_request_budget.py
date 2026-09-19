@@ -213,9 +213,7 @@ async def test_unsupported_json_mode_fails_before_reserving_or_dispatching():
     provider = AsyncMock(return_value=response(None))
     budget = RequestBudget(10_000, quote=unsupported_quote)
     with budget_scope(budget), pytest.raises(RequestBudgetError):
-        await bounded_completion(
-            provider, max_tokens=100, response_format={"type": "json_object"}
-        )
+        await bounded_completion(provider, max_tokens=100, response_format={"type": "json_object"})
     provider.assert_not_called()
     assert budget.charged_units == 0
 
@@ -267,6 +265,12 @@ async def test_unpriced_search_provider_is_skipped_in_bounded_scope(monkeypatch)
     local = AsyncMock(return_value={"results": [], "provider": "searxng"})
     monkeypatch.setattr(web, "_brave_search", paid)
     monkeypatch.setattr(web, "_scraped_search_with_fallback", local)
+    monkeypatch.setattr("robothor.engine.search_config.brave_search_key", lambda: "test-key")
+    monkeypatch.setattr(web.QUOTA, "skip_reason", lambda: None)
+    monkeypatch.setattr(
+        "robothor.engine.brave_budget.current_search_price",
+        AsyncMock(side_effect=RequestBudgetError("Current Search price unavailable")),
+    )
     with budget_scope(RequestBudget(100, quote=quote)):
         result = await web._search_with_fallback("example", 1, "auto", ToolContext())
         assert result["provider"] == "searxng"
