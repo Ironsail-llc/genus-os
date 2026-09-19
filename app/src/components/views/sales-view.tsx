@@ -8,6 +8,7 @@ import { apiFetch } from "@/lib/api/client";
 import { BusinessReview, type BusinessSource } from "@/components/sales/business-review";
 import { ReadRecovery } from "@/components/sales/read-recovery";
 import { DeploymentControls } from "@/components/sales/deployment-controls";
+import { PilotSettings } from "@/components/sales/pilot-settings";
 
 const API = "/api/bridge/api/sales";
 type Evidence = { id: string; field: string; value: unknown; url: string; excerpt: string; retrieved_at: string; confidence: string };
@@ -34,6 +35,7 @@ export function SalesView({ visible, role }: { visible: boolean; role?: string |
   const [showBusiness, setShowBusiness] = useState(false);
   const [showReads, setShowReads] = useState(false);
   const [showDeployment, setShowDeployment] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const permitted = isOperatorRole(role);
   const refresh = useCallback(async () => {
     const latest = await apiFetch<Overview>(API);
@@ -78,11 +80,13 @@ export function SalesView({ visible, role }: { visible: boolean; role?: string |
         <Button variant="outline" aria-expanded={showBusiness} onClick={() => setShowBusiness(!showBusiness)}>Review imported practices</Button>
         <Button variant="outline" aria-expanded={showReads} onClick={() => setShowReads(!showReads)}>Inspect provider reads</Button>
         <Button variant="outline" aria-expanded={showDeployment} onClick={() => setShowDeployment(!showDeployment)}>Manage sales deployment</Button>
+        <Button variant="outline" aria-expanded={showSettings} onClick={() => setShowSettings(!showSettings)}>Review pilot settings</Button>
       </div>
       {showBusiness && <BusinessReview prospects={data.prospects} sources={(data.settings.business_sources as BusinessSource[] | undefined) ?? []}
         onChanged={async () => { await refresh(); if (detail) setDetail(await apiFetch<Detail>(`${API}/prospects/${detail.prospect.id}`)); }} />}
       {showReads && <ReadRecovery />}
       {showDeployment && <DeploymentControls onChanged={refresh} />}
+      {showSettings && <PilotSettings onChanged={refresh} />}
       <div className="grid gap-5 xl:grid-cols-2">
         <div className="space-y-3">
           <h3 className="font-medium">Prospects ({data.prospects.length} shown)</h3>

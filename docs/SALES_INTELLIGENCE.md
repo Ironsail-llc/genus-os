@@ -152,6 +152,22 @@ monthly allowances in integer micro-USD; active policy/knowledge versions; and
 stage-to-agent mappings. All integration switches default off and spend limits
 default to zero. `mailbox_approved_until` records readiness review expiry.
 
+Open **Sales → Review pilot settings** to edit daily/monthly spending ceilings,
+the per-verification allowance, daily discovery and mailbox limits, review backlog,
+timezone and discovery hours. The form previews changed values before saving;
+amounts are converted to integer micro-USD without rounding the entered decimals.
+This editor does not change integration switches, senders, active knowledge,
+qualification policies or managed fleet bindings.
+
+`GET /api/sales/settings` returns the current `config` and `revision` in one
+snapshot. `POST /api/sales/settings/review` accepts `changes`, `expected_revision`
+and a human reason, and allows only the pilot fields above. The domain checks the
+revision while holding the same settings lock used for configuration changes.
+A stale review returns 409 without mutation. Successful writes audit the verified
+operator, reason, revision and before/after values. An uncertain dashboard response
+requires reloading current limits and reviewing again; the UI never retries a save
+automatically. Existing partial `PATCH /api/sales/settings` clients remain supported.
+
 `verification_allowance_units` must be configured from the actual subscription's
 credit economics before paid verification runs. The worker books that complete
 allowance per lookup; provider credits are not assumed to be dollars. A pending

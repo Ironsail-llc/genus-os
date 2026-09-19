@@ -56,3 +56,14 @@ it("loads deployment state only when the operator opens its controls", async () 
   fireEvent.click(screen.getByRole("button", { name: "Manage sales deployment" }));
   expect(await screen.findByText("No fleet selected")).toBeVisible();
 });
+
+
+it("loads pilot settings only when the operator opens the editor", async () => {
+  const fetcher = vi.spyOn(global, "fetch").mockImplementation(async (url) => Response.json(String(url).endsWith("/settings")
+    ? { config: {}, revision: 0 } : data));
+  render(<SalesView visible role="admin" />);
+  await screen.findByText("Exact approved message");
+  expect(fetcher.mock.calls.every(([url]) => !String(url).endsWith("/settings"))).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Review pilot settings" }));
+  expect(await screen.findByLabelText("Monthly spending limit (USD)")).toHaveValue("0");
+});

@@ -11,7 +11,7 @@ from typing import Literal
 from uuid import UUID  # noqa: TC003 — FastAPI resolves this annotation at runtime.
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import Field, StrictBool, ValidationError
+from pydantic import Field, StrictBool, ValidationError, field_validator
 
 from robothor.operations.store import Conflict
 from robothor.sales.business_repair import (
@@ -85,6 +85,29 @@ class ReadRepair(Contract):
     reason: str = Field(min_length=10, max_length=2000)
 
 
+class SettingsReview(ReadRepair):
+    expected_revision: int = Field(ge=0, strict=True)
+    changes: dict = Field(min_length=1)
+
+    @field_validator("changes")
+    @classmethod
+    def pilot_limits_only(cls, changes):
+        allowed = {
+            "monthly_limit_units",
+            "daily_limit_units",
+            "verification_allowance_units",
+            "discovery_daily_limit",
+            "review_backlog_limit",
+            "mailbox_daily_limit",
+            "discovery_start_hour",
+            "discovery_end_hour",
+            "timezone",
+        }
+        if not changes.keys() <= allowed:
+            raise ValueError("Only pilot limits and discovery hours can change in this review")
+        return changes
+
+
 @router.get("")
 def overview(request: Request):
     service, _ = require_sales_operator(request)
@@ -117,6 +140,23 @@ def configure(body: SalesSettings, request: Request):
     service, actor = require_sales_operator(request)
     service.configure(body.model_dump(exclude_unset=True), actor)
     return service.settings()
+
+
+@router.get("/settings")
+@domain_errors
+def settings_snapshot(request: Request):
+    service, _ = require_sales_operator(request)
+    return service.settings_snapshot()
+
+
+@router.post("/settings/review")
+@domain_errors
+def review_settings(body: SettingsReview, request: Request):
+    service, actor = require_sales_operator(request)
+    service.configure(
+        body.changes, actor, expected_revision=body.expected_revision, reason=body.reason
+    )
+    return service.settings_snapshot()
 
 
 @router.post("/prospects")

@@ -48,9 +48,14 @@ class Sales:
         self.ops = Operations(tenant_id)
         self.tenant = tenant_id
 
-    def configure(self, config, actor):
+    def configure(self, config, actor, *, expected_revision=None, reason=None):
         """Set explicit switches. Unconfigured instances have no active capabilities."""
         operator(actor)
+        if expected_revision is not None:
+            if type(expected_revision) is not int or expected_revision < 0:
+                raise ValueError("Nonnegative settings revision required")
+            if not isinstance(reason, str) or not 10 <= len(reason.strip()) <= 2000:
+                raise ValueError("Settings review reason required")
         with self.ops.transaction() as cur:
             # Row locks cannot serialize the first configuration when no row
             # exists yet. Preserve concurrent partial operator changes as well.
@@ -59,9 +64,13 @@ class Sales:
                 (self.tenant + ":sales-settings",),
             )
             cur.execute(
-                "SELECT config FROM sales_settings WHERE tenant_id=%s FOR UPDATE", (self.tenant,)
+                "SELECT config,revision FROM sales_settings WHERE tenant_id=%s FOR UPDATE",
+                (self.tenant,),
             )
             previous = cur.fetchone()
+            revision = previous["revision"] if previous else 0
+            if expected_revision is not None and expected_revision != revision:
+                raise Conflict("Settings changed; refresh and review the current values")
             from robothor.sales.deployment import assert_structure_editable
 
             assert_structure_editable(cur, self, previous["config"] if previous else {}, config)
@@ -73,7 +82,17 @@ class Sales:
                 "ON CONFLICT(tenant_id) DO UPDATE SET config=EXCLUDED.config,revision=sales_settings.revision+1,updated_at=now()",
                 (self.tenant, Json(merged)),
             )
-            self.ops.audit(cur, self.tenant, "sales.configured", actor, {"fields": sorted(config)})
+            detail = {"fields": sorted(config), "revision": revision + 1}
+            if expected_revision is not None:
+                detail.update(reason=reason.strip(), expected_revision=expected_revision)
+                detail["changes"] = {
+                    key: {
+                        "before": (previous["config"] if previous else {}).get(key),
+                        "after": merged[key],
+                    }
+                    for key in config
+                }
+            self.ops.audit(cur, self.tenant, "sales.configured", actor, detail)
             if (
                 config.get("sending_enabled") is False
                 and previous
@@ -82,10 +101,16 @@ class Sales:
                 self.ops.enqueue("sales.stop", str(uuid4()), {"scope": "all"}, cur=cur)
 
     def settings(self):
+        return self.settings_snapshot()["config"]
+
+    def settings_snapshot(self):
+        """Read values and their review revision from the same database row."""
         with self.ops.transaction() as cur:
-            cur.execute("SELECT config FROM sales_settings WHERE tenant_id=%s", (self.tenant,))
+            cur.execute(
+                "SELECT config,revision FROM sales_settings WHERE tenant_id=%s", (self.tenant,)
+            )
             row = cur.fetchone()
-            return row["config"] if row else {}
+            return dict(row) if row else {"config": {}, "revision": 0}
 
     def discover(self, name, website, source_url, *, cur=None):
         """Resolve a CRM company and enqueue research once for this domain."""
