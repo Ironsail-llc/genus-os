@@ -99,7 +99,10 @@ class Pipedrive(Provider):
         if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", domain):
             raise ProviderError("Invalid Pipedrive company domain")
         token = await self.secret(provider_key(self.provider))
-        return f"https://{domain}.pipedrive.com", {"x-api-token": token}
+        origin = f"https://{domain}.pipedrive.com"
+        if getattr(self, "expected_scope", origin) != origin:
+            raise ProviderError("Pipedrive account changed during the operation")
+        return origin, {"x-api-token": token}
 
     async def data(self, method, path, **kwargs):
         result = await self.request(method, path, **kwargs)
@@ -110,6 +113,25 @@ class Pipedrive(Provider):
 
     async def identity(self):
         return await self.data("GET", "/api/v1/users/me")
+
+    async def identity_scope(self):
+        origin, _ = await self.connection()
+        return origin
+
+    async def organization(self, organization_id):
+        if type(organization_id) is not int or organization_id <= 0:
+            raise ProviderError("Positive organization ID required")
+        return await self.data("GET", f"/api/v2/organizations/{organization_id}")
+
+    async def person_record(self, person_id):
+        if type(person_id) is not int or person_id <= 0:
+            raise ProviderError("Positive person ID required")
+        return await self.data("GET", f"/api/v2/persons/{person_id}")
+
+    async def lead(self, lead_id):
+        from uuid import UUID
+
+        return await self.data("GET", "/api/v1/leads/" + str(UUID(str(lead_id))))
 
     async def search_organizations(self, name):
         return await self.data(

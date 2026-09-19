@@ -24,6 +24,7 @@ def sales():
                 "130_sales_deployments.sql",
                 "133_operation_fragments.sql",
                 "135_sales_requests.sql",
+                "136_sales_pipedrive_scope.sql",
             ):
                 cur.execute((Path(__file__).parents[3] / "crm/migrations" / filename).read_text())
         conn.commit()

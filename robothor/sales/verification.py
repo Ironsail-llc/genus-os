@@ -139,10 +139,3 @@ class VerificationWorker:
                 "contact.verified",
                 detail={"verification": verification},
             )
-            if verification == "valid" and p["status"] == "promoted":
-                self.sales.ops.enqueue(
-                    "sales.draft",
-                    str(p["id"]) + ":" + str(p["version"]),
-                    {"prospect_id": str(p["id"])},
-                    cur=cur,
-                )

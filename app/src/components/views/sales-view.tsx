@@ -12,6 +12,7 @@ import { PilotSettings } from "@/components/sales/pilot-settings";
 import { SalesLibrary } from "@/components/sales/sales-library";
 import { CalibrationReview } from "@/components/sales/calibration-review";
 import { QualificationAssessment, type Assessment } from "@/components/sales/qualification-assessment";
+import { PipedriveIdentity } from "@/components/sales/pipedrive-identity";
 import { ProspectRecovery } from "@/components/sales/prospect-recovery";
 import { ResearchRequests } from "@/components/sales/research-requests";
 
@@ -119,6 +120,7 @@ export function SalesView({ visible, role }: { visible: boolean; role?: string |
               <Button variant="outline" disabled={busy} onClick={() => void mutate(`/prospects/${detail.prospect.id}/review`, { approved: false, expected_version: detail.prospect.version, expected_policy_version: detail.prospect.qualification?.policy_version ?? null })}>Reject prospect</Button>
               <Button variant="outline" disabled={busy} onClick={() => void mutate(`/prospects/${detail.prospect.id}/takeover`, {})}>Take over conversation</Button>
             </div>
+            <PipedriveIdentity key={`pipedrive-${detail.prospect.id}`} prospectId={detail.prospect.id} onChanged={async () => { await refresh(); setDetail(await apiFetch<Detail>(`${API}/prospects/${detail.prospect.id}`)); }} />
             <ProspectRecovery key={detail.prospect.id} prospectId={detail.prospect.id} onChanged={async () => { await refresh(); setDetail(await apiFetch<Detail>(`${API}/prospects/${detail.prospect.id}`)); }} />
             <QualificationAssessment assessment={detail.prospect.qualification?.assessment} evidence={detail.prospect.dossier?.evidence ?? []} />
             <h4 className="font-medium">Original research evidence</h4>

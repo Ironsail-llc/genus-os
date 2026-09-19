@@ -23,6 +23,12 @@ from robothor.sales.library import (  # noqa: TC001 — FastAPI resolves annotat
     preview,
 )
 from robothor.sales.models import Contract, Draft, QualificationPolicy, SalesSettings
+from robothor.sales.pipedrive_identity import (  # noqa: TC001
+    IdentityAdoption,
+    IdentityReview,
+    IdentitySelection,
+)
+from robothor.sales.providers import ProviderError
 from robothor.sales.recovery import Recovery, RecoveryChange  # noqa: TC001
 from robothor.sales.requests import RequestChange, Requests, ResearchRequest  # noqa: TC001
 from robothor.sales.service import Sales
@@ -463,3 +469,40 @@ def knowledge(body: Knowledge, request: Request):
     service, actor = require_sales_operator(request)
     service.publish_knowledge(body.version, body.data, actor)
     return {"ok": True}
+
+
+@router.get("/prospects/{prospect_id}/pipedrive/matches")
+async def pipedrive_matches(prospect_id: UUID, request: Request):
+    service, _ = require_sales_operator(request)
+    try:
+        return await IdentityReview(service).search(str(prospect_id))
+    except Conflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except ProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
+
+
+@router.post("/prospects/{prospect_id}/pipedrive/inspect")
+async def inspect_pipedrive_identity(prospect_id: UUID, body: IdentitySelection, request: Request):
+    service, _ = require_sales_operator(request)
+    try:
+        return await IdentityReview(service).inspect(
+            str(prospect_id), **body.model_dump(mode="json")
+        )
+    except Conflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except ProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
+
+
+@router.post("/prospects/{prospect_id}/pipedrive/adopt")
+async def adopt_pipedrive_identity(prospect_id: UUID, body: IdentityAdoption, request: Request):
+    service, actor = require_sales_operator(request)
+    try:
+        return await IdentityReview(service).adopt(
+            str(prospect_id), actor=actor, **body.model_dump(mode="json")
+        )
+    except Conflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except ProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
