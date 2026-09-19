@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from playwright.async_api import Browser, BrowserContext, Locator, Page
+    from playwright.async_api import Browser, BrowserContext, FilePayload, Locator, Page
 
     from robothor.engine.tools.dispatch import ToolContext
 
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 HANDLERS: dict[str, Any] = {}
 
 
-def _upload_payload(workspace: str, requested: str) -> dict[str, Any]:
+def _upload_payload(workspace: str, requested: str) -> FilePayload:
     """Validate the opened file, so a pathname race cannot change the source."""
     import mimetypes
     import stat
