@@ -43,6 +43,18 @@ def _cost_units(response):
         response.get("usage") if isinstance(response, dict) else getattr(response, "usage", None)
     )
     value = usage.get("cost") if isinstance(usage, dict) else getattr(usage, "cost", None)
+    if value is None:
+        # LiteLLM's OpenRouter adapter copies the provider's usage.cost here
+        # for non-streaming responses. Do not use response_cost: that can be
+        # a local model-price estimate rather than a provider-reported charge.
+        hidden = (
+            response.get("_hidden_params")
+            if isinstance(response, dict)
+            else getattr(response, "_hidden_params", None)
+        )
+        headers = hidden.get("additional_headers") if isinstance(hidden, dict) else None
+        if isinstance(headers, dict):
+            value = headers.get("llm_provider-x-litellm-response-cost")
     try:
         return int((_decimal(value) * _MICRO).to_integral_value(rounding=ROUND_CEILING))
     except ValueError:

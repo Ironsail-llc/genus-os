@@ -15,6 +15,10 @@ def validate_assertions(checks):
             return "json_assertions entries must be mappings"
         op = check.get("op")
         keys = {"path", "op"} if op == "absent" else {"path", "op", "value"}
+        if "optional" in check:
+            if type(check["optional"]) is not bool or op == "absent":
+                return "json_assertions optional must be a boolean on a value check"
+            keys.add("optional")
         if (
             set(check) != keys
             or not isinstance(op, str)
@@ -88,7 +92,7 @@ def _matches(value, check):
     if op == "absent":
         return value is _MISSING
     if value is _MISSING:
-        return False
+        return check.get("optional", False)
     if op == "equals":
         return _equal(value, wanted)
     if op == "length":

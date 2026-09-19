@@ -69,6 +69,36 @@ async def test_missing_or_invalid_cost_is_never_free(cost):
 
 
 @pytest.mark.asyncio
+async def test_provider_reported_sdk_header_settles_cost_but_local_estimates_do_not():
+    reported = response(None)
+    reported._hidden_params = {
+        "additional_headers": {"llm_provider-x-litellm-response-cost": "0.000020"}
+    }
+    budget = RequestBudget(100, quote=quote)
+    with budget_scope(budget):
+        await bounded_completion(AsyncMock(return_value=reported), model="example/model")
+    assert budget.charged_units == 20
+
+    estimated = response(None)
+    estimated._hidden_params = {"response_cost": 0.000020}
+    budget = RequestBudget(100, quote=quote)
+    with budget_scope(budget):
+        await bounded_completion(AsyncMock(return_value=estimated), model="example/model")
+    assert budget.charged_units == 60
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cost", ["NaN", "-1", True])
+async def test_invalid_provider_reported_sdk_cost_keeps_reservation(cost):
+    reported = response(None)
+    reported._hidden_params = {"additional_headers": {"llm_provider-x-litellm-response-cost": cost}}
+    budget = RequestBudget(100, quote=quote)
+    with budget_scope(budget):
+        await bounded_completion(AsyncMock(return_value=reported), model="example/model")
+    assert budget.charged_units == 60
+
+
+@pytest.mark.asyncio
 async def test_stream_only_releases_allowance_on_clean_completion_and_closes_source():
     closed = []
 
