@@ -19,6 +19,11 @@ are `equals` (structural JSON equality), `absent`, `contains` (an exact array
 member), `length` (array/object/string), and `type` (object, array, string,
 boolean, integer, number or null). Booleans do not equal numeric 0/1. Missing
 fields differ from null. These are targeted assertions, not JSON Schema validation.
+For a contract field whose omitted value has an accepted default, add
+`optional: true` to its value assertion. Omission then passes, but a present value
+must still satisfy the assertion. For example, optional `draft` equals null accepts
+an omitted draft and rejects any actual draft object. Do not mark required fields
+optional just to improve scores.
 
 Malformed assertions are rejected before execution. A present assertion set must
 have 1–100 checks. Both assertion data and output have a 128,000-character limit;
@@ -59,6 +64,10 @@ attempts. The response and stored run record carry `request_budget` with the lim
 charged units and `actual_or_reserved_unknown` accounting label: unknown requests
 retain their full reservation, so the total is conservative rather than necessarily
 a provider invoice amount. A failed or skipped case remains in the denominator.
+For OpenRouter responses, the tracker recognizes both `usage.cost` and LiteLLM's
+provider-reported cost header in `_hidden_params.additional_headers`. It does not
+settle against LiteLLM's generic `response_cost` estimate. Invalid or absent reported
+costs keep their reservations.
 This is a per-invocation ceiling, not a durable monthly allowance. Process death
 can interrupt result persistence; retain the original authorized allowance for an
 interrupted run until provider charges are reconciled before funding another run.

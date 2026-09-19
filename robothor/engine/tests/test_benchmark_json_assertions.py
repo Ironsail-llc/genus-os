@@ -94,6 +94,23 @@ def test_valid_contract_is_accepted():
     )
 
 
+def test_explicit_optional_default_allows_omission_but_never_a_draft_value():
+    contract = {
+        "json_assertions": [{"path": "/draft", "op": "equals", "value": None, "optional": True}]
+    }
+    assert _score_task("{}", contract, {}) == 1
+    assert _score_task('{"draft":null}', contract, {}) == 1
+    assert _score_task('{"draft":{"body":"Send this"}}', contract, {}) == 0
+    assert _validate_task({"id": "optional", "prompt": "Return JSON", "expected": contract}) is None
+
+
+def test_optional_flag_cannot_be_a_truthy_string():
+    contract = {
+        "json_assertions": [{"path": "/draft", "op": "equals", "value": None, "optional": "true"}]
+    }
+    assert _validate_task({"id": "optional", "prompt": "Return JSON", "expected": contract})
+
+
 async def test_strict_mode_requires_semantics_not_just_valid_fields(monkeypatch):
     from robothor.engine.tools.handlers import benchmark
 
