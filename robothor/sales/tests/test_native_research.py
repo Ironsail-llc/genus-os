@@ -15,19 +15,27 @@ from robothor.templates.tests.test_fleet_release import spec
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "ignore_requirement,citation_fault,fetch_tool",
+    "ignore_requirement,citation_fault,fetch_tool,required_endpoint",
     [
-        (False, None, "web_fetch"),
-        (True, None, "web_fetch"),
-        (False, "no_fetch", "web_fetch"),
-        (False, "excerpt", "web_fetch"),
-        (False, "repair_excerpt", "web_fetch"),
-        (False, "url", "web_fetch"),
-        (False, None, "web_render"),
+        (False, None, "web_fetch", False),
+        (True, None, "web_fetch", False),
+        (False, "no_fetch", "web_fetch", False),
+        (False, "excerpt", "web_fetch", False),
+        (False, "repair_excerpt", "web_fetch", False),
+        (False, "url", "web_fetch", False),
+        (False, None, "web_render", False),
+        (False, None, "web_fetch", True),
     ],
 )
 async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_children(
-    sales, source, tmp_path, monkeypatch, ignore_requirement, citation_fault, fetch_tool
+    sales,
+    source,
+    tmp_path,
+    monkeypatch,
+    ignore_requirement,
+    citation_fault,
+    fetch_tool,
+    required_endpoint,
 ):
     from litellm import ModelResponse
 
@@ -114,6 +122,28 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
         return {"url": args["url"], "content": "Public business information", "status": 200}
 
     async def quote(kwargs):
+        if required_endpoint:
+            from robothor.engine.request_budget import openrouter_quote
+            from robothor.engine.tests.test_request_budget import endpoint
+
+            return openrouter_quote(
+                kwargs,
+                [
+                    endpoint(
+                        tag="preferred/fp8",
+                        context_length=100000,
+                        max_completion_tokens=65536,
+                        supported_parameters=[
+                            "max_tokens",
+                            "tools",
+                            "tool_choice",
+                            "response_format",
+                            "structured_outputs",
+                        ],
+                        supports_tool_choice={"function": False, "required": True},
+                    )
+                ],
+            )
         return 2_000, kwargs
 
     async def provider(**kwargs):
@@ -152,10 +182,14 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
         tool = None
         if names == {"sales_research_parallel"}:
             if tool_result is None:
-                assert kwargs["tool_choice"] == {
-                    "type": "function",
-                    "function": {"name": "sales_research_parallel"},
-                }
+                assert kwargs["tool_choice"] == (
+                    "required"
+                    if required_endpoint
+                    else {
+                        "type": "function",
+                        "function": {"name": "sales_research_parallel"},
+                    }
+                )
                 if ignore_requirement:
                     ignored_answers.append(True)
                 else:
@@ -169,7 +203,11 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
         else:
             assert kwargs["extra_body"]["provider"]["only"] == ["preferred/fp8"]
             assert kwargs["tool_choice"] == (
-                {"type": "function", "function": {"name": fetch_tool}}
+                (
+                    "required"
+                    if required_endpoint
+                    else {"type": "function", "function": {"name": fetch_tool}}
+                )
                 if tool_result is None
                 else "auto"
             )

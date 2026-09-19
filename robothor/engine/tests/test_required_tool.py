@@ -60,7 +60,7 @@ def test_bounded_quote_requires_endpoint_support_for_forced_tool_choice():
 
 
 @pytest.mark.parametrize(
-    "capabilities", [None, {}, {"function": False}, {"function": "true"}, {"required": True}]
+    "capabilities", [None, {}, {"function": False}, {"function": "true"}, {"required": "true"}]
 )
 def test_general_tool_support_does_not_prove_named_function_support(capabilities):
     from robothor.engine.request_budget import openrouter_quote
@@ -85,3 +85,48 @@ def test_general_tool_support_does_not_prove_named_function_support(capabilities
         [cheap, capable],
     )
     assert request["extra_body"]["provider"]["only"] == ["capable"]
+
+
+def test_required_only_endpoint_can_honor_named_tool_by_narrowing_available_schema():
+    from copy import deepcopy
+
+    from robothor.engine.request_budget import openrouter_quote
+    from robothor.engine.tests.test_request_budget import endpoint
+
+    kwargs = {
+        "max_tokens": 100,
+        "tools": TOOLS + [{"type": "function", "function": {"name": "other"}}],
+        "tool_choice": {"type": "function", "function": {"name": "research"}},
+    }
+    original = deepcopy(kwargs)
+    supported = endpoint(
+        supported_parameters=["max_tokens", "tools", "tool_choice"],
+        supports_tool_choice={"function": False, "required": True},
+    )
+    _, request = openrouter_quote(kwargs, [supported])
+    assert request["tool_choice"] == "required"
+    assert request["tools"] == TOOLS
+    assert kwargs == original
+
+
+@pytest.mark.parametrize(
+    "tools", [[], [{"type": "function", "function": {"name": "other"}}], TOOLS * 2]
+)
+def test_required_emulation_never_adds_missing_or_ambiguous_named_tool(tools):
+    from robothor.engine.request_budget import RequestBudgetError, openrouter_quote
+    from robothor.engine.tests.test_request_budget import endpoint
+
+    with pytest.raises(RequestBudgetError):
+        openrouter_quote(
+            {
+                "max_tokens": 100,
+                "tools": tools,
+                "tool_choice": {"type": "function", "function": {"name": "research"}},
+            },
+            [
+                endpoint(
+                    supported_parameters=["max_tokens", "tools", "tool_choice"],
+                    supports_tool_choice={"function": False, "required": True},
+                )
+            ],
+        )

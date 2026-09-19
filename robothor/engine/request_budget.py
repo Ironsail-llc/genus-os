@@ -302,16 +302,11 @@ def openrouter_quote(kwargs, endpoints):
                 and "structured_outputs" not in endpoint["supported_parameters"]
             ):
                 continue
-            choice = kwargs.get("tool_choice")
-            choice_kind = "function" if isinstance(choice, dict) else choice
-            if choice_kind in ("function", "required"):
-                capabilities = endpoint.get("supports_tool_choice")
-                if (
-                    not {"tools", "tool_choice"} <= set(endpoint["supported_parameters"])
-                    or not isinstance(capabilities, dict)
-                    or capabilities.get(choice_kind) is not True
-                ):
-                    continue
+            from robothor.engine.required_tool import endpoint_tool_contract
+
+            tool_contract = endpoint_tool_contract(kwargs, endpoint)
+            if tool_contract is None:
+                continue
             price = endpoint["pricing"]
             # Tiered/time-varying and explicit cache-write pricing need their
             # own reviewed quote policy. Do not guess the maximum surcharge.
@@ -352,7 +347,7 @@ def openrouter_quote(kwargs, endpoints):
                     rounding=ROUND_CEILING
                 )
             )
-            choices.append((units, tag, ceiling))
+            choices.append((units, tag, ceiling, tool_contract))
         except (KeyError, TypeError, ValueError):
             continue
     if not choices:
@@ -370,7 +365,7 @@ def openrouter_quote(kwargs, endpoints):
         )
         return rank, row[0], row[1]
 
-    units, tag, ceiling = min(choices, key=preference)
+    units, tag, ceiling, tool_contract = min(choices, key=preference)
     extra["provider"] = {
         **routing,
         "only": [tag],
@@ -381,6 +376,7 @@ def openrouter_quote(kwargs, endpoints):
     }
     return units, {
         **kwargs,
+        **tool_contract,
         "extra_body": extra,
         "max_tokens": requested,
         "num_retries": 0,

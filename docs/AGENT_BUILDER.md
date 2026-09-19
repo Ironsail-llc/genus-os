@@ -1318,3 +1318,13 @@ Before deploying any unit agent:
 - [ ] Model tier matches the unit's complexity (don't use T2 for classification)
 - [ ] Version date is today's date
 - [ ] Department matches the agent's function
+
+### Required-tool provider compatibility
+
+For bounded OpenRouter requests, a named function can also use an endpoint that
+explicitly supports `tool_choice=required` plus tools, even if it lacks named
+function choice. Genus narrows that request's tool schemas to the single already
+available named function and sends `required`. It never substitutes `auto`, adds
+a tool, or grants permission. Missing or duplicate target schemas are refused.
+Subsequent ordinary requests retain their normal tool list. Native dispatch and
+domain result validation remain authoritative if a provider disobeys the request.
