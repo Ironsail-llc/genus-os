@@ -133,3 +133,4 @@ crm/128_autonomy_resource_descriptors.sql
 crm/129_autonomy_workflows.sql
 crm/130_autonomy_request_context.sql
 crm/131_autonomy_enrollments.sql
+crm/132_autonomy_enrollment_rls.sql
