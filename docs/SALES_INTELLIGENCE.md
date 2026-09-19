@@ -612,9 +612,16 @@ Native research also requires retrieval evidence from each child. A scoped engin
 observer captures successful `web_fetch` and `web_render` results after the permission gate and
 native handler, before verification annotations. It does not treat search snippets,
 model output, another child's fetches, or cached-repeat responses as new sources.
-Each citation must use the fetch's returned URL and quote its text verbatim
-(Unicode NFC and whitespace normalization are allowed). Genus sets `retrieved_at`
-from the observation time. Missing retrievals or unmatched citations refuse the
+The observer adds engine-issued passage references under `_workflow_context` in
+the tool result. Each passage is a continuous slice of at most 800 characters.
+Native workers return `ResearchDossier` selections containing `source_ref` and
+`passage_ref`, with the evidence field, value and criterion references. They do
+not author quotation text, URLs or capture dates. Genus resolves the selection
+against that child's own captures and creates the normal CRM `Dossier`, including
+the exact returned URL, passage text and engine-observed `retrieved_at`. Invented
+or foreign references fail. Both fetched and rendered content, including passage
+metadata, remain wrapped as untrusted external data in model context.
+Missing retrievals or unmatched citations refuse the
 child before its output is saved. Even a dossier with no citations requires at
 least one successful retrieval; an inaccessible site remains unresolved.
 
@@ -622,7 +629,10 @@ The immutable child fragment retains up to 32 returned source texts of at most
 8,000 characters each, their hashes and retrieval times, and the tenant/agent/run
 identity. These business-source texts stay in the tenant-scoped operations store;
 the merged provenance carries only a source-proof hash. Recovery rechecks the
-texts, citations, timestamps and output hash. Legacy fragments without this proof
+texts, citations, timestamps and output hash. Version-2 proofs also retain the
+worker's selections and resolve them again during recovery; a changed selection
+cannot silently change the saved dossier. Existing version-1 proofs with full
+attested quotations remain valid. Legacy fragments without this proof
 cannot enter a native research stage. The input contract version is changed, so
 old fragments require review/new research rather than silent reuse. Raw failed
 agent output remains diagnostic material, not accepted sales evidence.
@@ -757,7 +767,7 @@ relax child deadlines or source attestation. See the model configuration guidanc
 in [Agent Builder](AGENT_BUILDER.md).
 
 After its first actual page-read attempt, each native research child sends the
-trusted Dossier schema as `response_format.type=json_schema` with strict mode.
+trusted ResearchDossier selection schema as `response_format.type=json_schema` with strict mode.
 The initial required retrieval call keeps its normal tool contract. Only
 endpoints advertising both JSON formatting and structured outputs are admitted
 for subsequent schema requests. This requests provider-side structure, not a
@@ -766,12 +776,15 @@ every citation against that child's successful retrievals. Unsupported schema
 requests, invalid JSON, missing evidence and invented quotations fail normally.
 
 Research workers validate their proposed final output before ending the native
-run. Invalid schemas, unmatched quotations, unexplained empty dossiers and
+run. Invalid schemas, invented passage references, unexplained empty dossiers and
 non-boolean scored evidence produce bounded correction feedback: at most two
 additional ordinary iterations, subject to the existing time, iteration and
 spending ceilings. Exhaustion fails the child. Completion after a budget or
 finalizer exit rechecks the same validator. Only locally accepted output can
 become a durable fragment; recovery reapplies source and criterion checks.
+Research fleets should keep passage-bearing tool output in context; disable
+tool offloading and eager compression for workers that cannot read offloaded
+files. Provider context limits and the existing source/run limits still apply.
 An evidence-free result must explain its unknowns and cannot establish fit.
 Provider JSON conformance and successful correction do not establish semantic
 research quality; human qualification calibration remains required.

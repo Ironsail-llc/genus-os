@@ -9,6 +9,7 @@ import yaml
 
 from robothor.db.connection import get_connection, tenant_scope
 from robothor.sales.models import Dossier
+from robothor.sales.research_contract import ResearchDossier
 from robothor.templates.tests.test_fleet_release import source as source
 from robothor.templates.tests.test_fleet_release import spec
 
@@ -217,7 +218,7 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
                     "json_schema": {
                         "name": "research_dossier",
                         "strict": True,
-                        "schema": Dossier.model_json_schema(),
+                        "schema": ResearchDossier.model_json_schema(),
                     },
                 }
             else:
@@ -227,17 +228,32 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
                 tool = (fetch_tool, {"url": "https://clinic.example.com/" + topic})
             elif tool_result is not None:
                 assert "Public business information" in tool_result["content"]
-            part = fragment(topic)
+            part = fragment(topic).model_dump(mode="json")
+            packet = (
+                json.loads(tool_result["content"].split("\n", 1)[1].rsplit("\n", 1)[0])[
+                    "_workflow_context"
+                ]
+                if tool_result is not None
+                else {"source_ref": "unretrieved"}
+            )
+            fact = part["evidence"][0]
+            part["evidence"] = [
+                {
+                    **{k: fact[k] for k in ("id", "field", "value", "confidence")},
+                    "source_ref": packet["source_ref"],
+                    "passage_ref": "p0",
+                }
+            ]
             repaired = any(
                 m.get("role") == "developer"
                 and "[workflow output validation]" in str(m.get("content", ""))
                 for m in kwargs["messages"]
             )
             if citation_fault == "excerpt" or (citation_fault == "repair_excerpt" and not repaired):
-                part.evidence[0].excerpt = "Made-up quotation"
+                part["evidence"][0]["passage_ref"] = "invented"
             elif citation_fault == "url":
-                part.evidence[0].url = "https://different.example.com/"
-            content = part.model_dump_json()
+                part["evidence"][0]["source_ref"] = "foreign-capture"
+            content = json.dumps(part)
         message = {"role": "assistant", "content": content if tool is None else None}
         if tool is not None:
             message["tool_calls"] = [
@@ -342,6 +358,7 @@ async def test_native_research_broker_uses_rbac_and_persists_one_parent_three_ch
 
     saved = recovery.store.read(job, recovery.input_hash)
     assert set(saved) == {"plan", *TOPICS}
+    assert all(saved[topic]["source_proof"]["version"] == 2 for topic in TOPICS)
     assert {saved[topic]["run_id"] for topic in TOPICS} == {str(row["id"]) for row in children}
 
     # Simulate losing the parent-stage result after all three topics were saved.

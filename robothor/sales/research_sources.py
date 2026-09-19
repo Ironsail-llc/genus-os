@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 from robothor.operations.store import Conflict, digest
 from robothor.sales.models import Dossier
+from robothor.sales.research_contract import ResearchDossier, passages
 
 MAX_SOURCES = 32
 MAX_CONTENT = 8000  # Native web_fetch's returned text limit.
@@ -64,7 +65,7 @@ class ResearchSources:
                 # A blocked page must allow the model to choose another page or
                 # the renderer; source attestation still requires success.
                 attempted = True
-            self.observe(name, args, result, ctx)
+            return self.observe(name, args, result, ctx)
 
         def validate(run, text):
             from pydantic import ValidationError
@@ -72,9 +73,9 @@ class ResearchSources:
             if run.tenant_id != self.tenant_id or run.agent_id != self.agent_id:
                 return "Research output identity does not match its owning child"
             try:
-                self.attest(str(run.id), Dossier.model_validate_json(text or ""))
+                self.attest_output(str(run.id), text or "")
             except ValidationError:
-                return "Return the exact Dossier schema with valid evidence references and timezone-aware dates"
+                return "Return the exact ResearchDossier schema with captured source_ref and passage_ref for each evidence item; do not write URLs, quotations or retrieval dates"
             except Conflict as exc:
                 return str(exc)
             return None
@@ -82,9 +83,9 @@ class ResearchSources:
         with (
             output_validation_scope(validate),
             required_tool_scope(self.first_read_tool, lambda: not attempted),
-            tool_observation_scope(observe, names={"web_fetch", "web_render"}),
+            tool_observation_scope(observe, names={"web_fetch", "web_render"}, annotations=True),
             response_schema_scope(
-                "research_dossier", Dossier.model_json_schema(), ready=lambda: attempted
+                "research_dossier", ResearchDossier.model_json_schema(), ready=lambda: attempted
             ),
         ):
             yield
@@ -105,10 +106,10 @@ class ResearchSources:
             or not text_key(result["content"])
             or len(result["content"]) > MAX_CONTENT
         ):
-            return
+            return None
         rows = self.runs.setdefault(str(ctx.run_id), [])
         if len(rows) >= MAX_SOURCES:
-            return
+            return None
         rows.append(
             {
                 "tool": name,
@@ -118,6 +119,67 @@ class ResearchSources:
                 "retrieved_at": datetime.now(UTC).isoformat(),
             }
         )
+        return self.packet(str(ctx.run_id), rows[-1])
+
+    def packet(self, run_id, source):
+        return {
+            "kind": "captured_passages_v1",
+            "trust": "untrusted_website_content",
+            "source_ref": digest(
+                [
+                    self.tenant_id,
+                    self.agent_id,
+                    run_id,
+                    source["url"],
+                    source["content_hash"],
+                    source["retrieved_at"],
+                ]
+            )[:24],
+            "passages": passages(source["content"]),
+        }
+
+    def _resolve(self, run_id, selection, sources):
+        available = {}
+        for source in sources:
+            packet = self.packet(run_id, source)
+            available[packet["source_ref"]] = (
+                source,
+                {p["ref"]: p["text"] for p in packet["passages"]},
+            )
+        evidence = []
+        for index, item in enumerate(selection.evidence):
+            match = available.get(item.source_ref)
+            if match is None:
+                raise Conflict(f"evidence[{index}].source_ref is not a capture from this child")
+            source, excerpts = match
+            if item.passage_ref not in excerpts:
+                raise Conflict(f"evidence[{index}].passage_ref is not in the selected capture")
+            evidence.append(
+                {
+                    **item.model_dump(exclude={"source_ref", "passage_ref"}),
+                    "url": source["url"],
+                    "excerpt": excerpts[item.passage_ref],
+                    "retrieved_at": source["retrieved_at"],
+                }
+            )
+        return Dossier.model_validate(
+            {
+                **selection.model_dump(exclude={"evidence"}),
+                "evidence": evidence,
+            }
+        )
+
+    def attest_output(self, run_id, output):
+        selection = (
+            ResearchDossier.model_validate_json(output)
+            if isinstance(output, str)
+            else ResearchDossier.model_validate(output)
+        )
+        sources = deepcopy(self.runs.get(run_id, []))
+        resolved = self._resolve(run_id, selection, sources)
+        dossier, proof = self.attest(run_id, resolved)
+        proof.update(version=2, selection=selection.model_dump(mode="json", exclude_unset=True))
+        return dossier, proof
 
     def _match(self, dossier, sources):
         if not sources:
@@ -143,7 +205,11 @@ class ResearchSources:
                 field = "excerpt" if pages else "url"
                 problems.append(f"evidence[{index}].{field}")
                 continue
-            evidence.retrieved_at = datetime.fromisoformat(matches[0]["retrieved_at"])
+            matched = next(
+                (s for s in matches if s["retrieved_at"] == evidence.retrieved_at.isoformat()),
+                matches[0],
+            )
+            evidence.retrieved_at = datetime.fromisoformat(matched["retrieved_at"])
         if problems:
             # Only engine-generated field positions enter correction feedback;
             # never replay a model's IDs, quotations or URLs as instructions.
@@ -174,7 +240,7 @@ class ResearchSources:
         try:
             if (
                 not isinstance(proof, dict)
-                or proof.get("version") != 1
+                or proof.get("version") not in {1, 2}
                 or proof.get("tenant_id") != self.tenant_id
                 or proof.get("agent_id") != self.agent_id
                 or proof.get("run_id") != run_id
@@ -194,7 +260,14 @@ class ResearchSources:
                 when = datetime.fromisoformat(source["retrieved_at"])
                 if when.tzinfo is None or when.utcoffset() is None:
                     raise ValueError
-            part = self._match(dossier, proof["sources"])
+            resolved = (
+                self._resolve(
+                    run_id, ResearchDossier.model_validate(proof["selection"]), proof["sources"]
+                )
+                if proof["version"] == 2
+                else dossier
+            )
+            part = self._match(resolved, proof["sources"])
             if part != dossier:
                 raise ValueError
         except (KeyError, TypeError, ValueError, AttributeError):

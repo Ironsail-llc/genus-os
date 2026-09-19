@@ -1931,6 +1931,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Native research selects engine-issued captured-passage references; Genus materializes exact CRM quotations and verifies selections again during recovery. Rendered pages receive the same untrusted-content boundary as fetched pages.
 - Research citation feedback identifies invalid evidence fields and distinguishes unread URLs from non-verbatim excerpts without replaying untrusted text as instructions.
 - Mandatory workflow tool turns omit final-answer JSON formatting until the required tool runs, avoiding competing tool-call and answer contracts. Final dossier schema and source validation remain enforced.
 - Funded model calls advance through the configured fallback chain when no eligible endpoint remains, including shared worker route exclusions. Streaming and auxiliary calls follow the same rule; exhausted funding and unpriced features remain fatal.

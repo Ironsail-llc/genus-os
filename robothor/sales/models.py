@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Literal
+from typing import Annotated, Generic, Literal, TypeVar
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
@@ -13,16 +13,19 @@ class Contract(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class Evidence(Contract):
+class EvidenceFact(Contract):
     id: str = Field(min_length=1, max_length=100)
     field: str = Field(min_length=1, max_length=100)
     value: str | bool | int
+    confidence: Literal["supported", "inferred", "contradicted"] = "supported"
+
+
+class Evidence(EvidenceFact):
     url: str
     excerpt: str = Field(min_length=1, max_length=4000)
     retrieved_at: datetime
     published_at: datetime | None = None
     expires_at: datetime | None = None
-    confidence: Literal["supported", "inferred", "contradicted"] = "supported"
 
     @field_validator("url")
     @classmethod
@@ -45,9 +48,12 @@ class Evidence(Contract):
         return value
 
 
-class Dossier(Contract):
+Fact = TypeVar("Fact", bound=EvidenceFact)
+
+
+class DossierFields(Contract, Generic[Fact]):
     buying_case: str = Field(min_length=1, max_length=80)
-    evidence: list[Evidence] = Field(default_factory=list, max_length=200)
+    evidence: list[Fact] = Field(default_factory=list, max_length=200)
     criteria: dict[str, Annotated[list[str], Field(min_length=1)]] = Field(default_factory=dict)
     services: list[str] = Field(default_factory=list)
     locations: list[str] = Field(default_factory=list)
@@ -65,6 +71,10 @@ class Dossier(Contract):
             if not references or not set(references) <= ids:
                 raise ValueError("Every criterion needs existing evidence")
         return self
+
+
+class Dossier(DossierFields[Evidence]):
+    """Persisted CRM evidence includes materialized source URLs and quotations."""
 
 
 class QualificationPolicy(Contract):

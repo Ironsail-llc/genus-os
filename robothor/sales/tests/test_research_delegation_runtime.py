@@ -79,14 +79,26 @@ async def test_native_parent_commits_only_the_actual_child_merge_and_closes_scop
         from robothor.engine.tool_observation import observe_tool_result
 
         children = response(args["agents"])
-        for item in children["results"]:
-            evidence = Dossier.model_validate_json(item["output_text"]).evidence[0]
-            observe_tool_result(
-                "web_fetch",
-                {},
-                {"url": evidence.url, "content": evidence.excerpt, "status": 200},
-                tool_context(agent_id="research-worker", run_id=item["run_id"]),
-            )
+        for index, item in enumerate(children["results"]):
+            data = json.loads(item["output_text"])
+            evidence = Dossier.model_validate(data).evidence[0]
+            with _child_scope(index):
+                packet = observe_tool_result(
+                    "web_fetch",
+                    {},
+                    {"url": evidence.url, "content": evidence.excerpt, "status": 200},
+                    tool_context(agent_id="research-worker", run_id=item["run_id"]),
+                )
+            data["evidence"] = [
+                {
+                    "id": evidence.id,
+                    "field": evidence.field,
+                    "value": evidence.value,
+                    "source_ref": packet["source_ref"],
+                    "passage_ref": "p0",
+                }
+            ]
+            item["output_text"] = json.dumps(data)
         return children
 
     native = AsyncMock(side_effect=spawn)
