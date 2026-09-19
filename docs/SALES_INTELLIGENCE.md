@@ -1030,3 +1030,17 @@ API observations and incomplete historical coverage cannot establish retention;
 unknown/immature windows are shown as unknown. Recorded operation cost excludes
 existing subscriptions, product cost, revenue and invoice adjustments. Each native
 analysis uses the shared finite model allowance and spending caps.
+
+## Business contact review
+
+A prospect's **Review business contacts** panel shows the public source, identity
+review and provider deliverability separately. Operators can correct names,
+business roles and source URLs against the displayed identity hash. They can add
+a public business contact for provider verification without asserting that the
+address is valid. Existing emails cannot silently replace a different identity.
+
+Identity corrections update Genus CRM, cancel pending drafts and request a stop.
+Drafts retain an identity hash which is rechecked before sending. Later automated
+contact research cannot overwrite a current human-reviewed identity. Missing
+contacts remain visible and can be handled through preparation recovery or manual
+entry; there is no requirement to buy an enrichment subscription.

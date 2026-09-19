@@ -602,6 +602,17 @@ class Sales:
             raise Conflict("Contact enrichment requires qualification")
         self.require_request_open(prospect_id, cur=cur)
         self.require_assessment(prospect_id, cur=cur)
+        from robothor.sales.contacts import identity_hash
+
+        cur.execute(
+            "SELECT c.id,c.data,a.detail FROM sales_contacts c JOIN LATERAL(SELECT detail FROM operation_audit WHERE tenant_id=c.tenant_id AND entity_id=c.id::text AND event='contact.identity_reviewed' ORDER BY id DESC LIMIT 1) a ON true WHERE c.tenant_id=%s AND c.prospect_id=%s AND c.email=%s",
+            (self.tenant, prospect_id, contact.email),
+        )
+        reviewed = cur.fetchone()
+        if reviewed and reviewed["detail"].get("identity_hash") == identity_hash(reviewed["data"]):
+            if identity_hash(contact.model_dump(mode="json")) != identity_hash(reviewed["data"]):
+                raise Conflict("Contact has a human-reviewed identity; review conflicting research")
+            return str(reviewed["id"])
         cur.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
             (self.tenant + ":" + contact.email,),
@@ -761,7 +772,10 @@ class Sales:
         evidence = {e.id: e for e in dossier.evidence}
         if not set(draft.evidence_ids) <= evidence.keys():
             raise Conflict("Missing supporting evidence")
+        from robothor.sales.contacts import identity_hash
+
         payload = draft.model_dump(mode="json") | {
+            "contact_identity_hash": identity_hash(contact.model_dump(mode="json")),
             "prospect_id": str(prospect_id),
             "dossier_version": p["version"],
             "conversation_version": p["conversation_version"],
@@ -849,6 +863,10 @@ class Sales:
         if not contact_row:
             raise Conflict("Contact no longer exists")
         contact = Contact.model_validate(contact_row["data"])
+        from robothor.sales.contacts import identity_hash
+
+        if payload.get("contact_identity_hash") != identity_hash(contact.model_dump(mode="json")):
+            raise Conflict("Contact identity changed since approval")
         if (
             contact.verification != "valid"
             or not contact.verified_at

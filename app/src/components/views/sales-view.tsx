@@ -12,6 +12,7 @@ import { PilotSettings } from "@/components/sales/pilot-settings";
 import { SalesLibrary } from "@/components/sales/sales-library";
 import { CalibrationReview } from "@/components/sales/calibration-review";
 import { QualificationAssessment, type Assessment } from "@/components/sales/qualification-assessment";
+import { ContactReview } from "@/components/sales/contact-review";
 import { PipedriveIdentity } from "@/components/sales/pipedrive-identity";
 import { ProspectRecovery } from "@/components/sales/prospect-recovery";
 import { SalesReports } from "@/components/sales/sales-reports";
@@ -135,6 +136,7 @@ export function SalesView({ visible, role }: { visible: boolean; role?: string |
             </div>)}
             {!!detail.prospect.dossier?.unanswered.length && <p className="text-sm">Unknown: {detail.prospect.dossier.unanswered.join("; ")}</p>}
             <h4 className="font-medium">Contacts</h4>
+            <ContactReview key={`contacts-${detail.prospect.id}`} prospectId={detail.prospect.id} onChanged={async () => { await refresh(); setDetail(await apiFetch<Detail>(`${API}/prospects/${detail.prospect.id}`)); }} />
             {detail.contacts.map((c) => <div key={c.id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
               <span>{c.data.name} · {c.data.role} · {c.email} · {c.data.verification}</span>
               <Button variant="outline" disabled={busy} onClick={() => void mutate("/suppression", { email: c.email, reason: "Operator suppression" })}>Stop outreach</Button>
