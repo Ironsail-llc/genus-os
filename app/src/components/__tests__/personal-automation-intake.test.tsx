@@ -38,6 +38,19 @@ describe("scoped private enrollment", () => {
     expect(screen.queryByText(/private-ui-canary/)).toBeNull();
   });
 
+  it("handles an enrollment link opened on the current page and clears fields for the next link", async () => {
+    window.history.replaceState({}, "", "/account/autonomy");
+    render(<PersonalAutomationPanel />);
+    await waitFor(() => expect((screen.getByLabelText("Information type") as HTMLSelectElement).disabled).toBe(false));
+    window.location.hash = "enroll=" + token;
+    await screen.findByLabelText("Password");
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "previous-website-secret" } });
+    window.location.hash = "enroll=" + "y".repeat(43);
+    await waitFor(() => expect(calls.some(c => c.body.token === "y".repeat(43))).toBe(true));
+    await waitFor(() => expect(screen.queryByDisplayValue("previous-website-secret")).toBeNull());
+    expect(window.location.hash).toBe("");
+  });
+
   it("keeps enrollment unavailable when its token is rejected", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, json: async () => ({ detail: "Enrollment expired" }) })));
     render(<PersonalAutomationPanel />);

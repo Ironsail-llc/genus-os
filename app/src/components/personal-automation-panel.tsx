@@ -32,18 +32,33 @@ async function api(path: string, method = "GET", data?: unknown) {
 
 export function PersonalAutomationPanel() {
   const intakeStarted = useRef(false);
+  const intakeGeneration = useRef(0);
   const [intake, setIntake] = useState<{ token: string; origin: string | null } | null>(null);
   const [intakeState, setIntakeState] = useState("loading");
   useEffect(() => {
-    if (intakeStarted.current) return;
-    intakeStarted.current = true;
-    const token = new URLSearchParams(window.location.hash.slice(1)).get("enroll");
-    if (token === null) { setIntakeState("none"); return; }
-    window.history.replaceState(window.history.state, "", window.location.pathname + window.location.search);
-    api("enrollments/inspect", "POST", { token }).then(result => {
-      if (result.resource_id) { setIntakeState("complete"); setMessage("This information has already been saved."); return; }
-      setKind(result.kind); setIntake({ token, origin: result.origin }); setIntakeState("ready");
-    }).catch(error => { setIntakeState("unavailable"); setMessage(error.message); });
+    function loadIntake() {
+      const token = new URLSearchParams(window.location.hash.slice(1)).get("enroll");
+      if (token === null) {
+        if (!intakeStarted.current) setIntakeState("none");
+        intakeStarted.current = true;
+        return;
+      }
+      intakeStarted.current = true;
+      const generation = ++intakeGeneration.current;
+      setIntake(null); setIntakeState("loading"); setMessage("");
+      window.history.replaceState(window.history.state, "", window.location.pathname + window.location.search);
+      api("enrollments/inspect", "POST", { token }).then(result => {
+        if (generation !== intakeGeneration.current) return;
+        if (result.resource_id) { setIntakeState("complete"); setMessage("This information has already been saved."); return; }
+        setKind(result.kind); setIntake({ token, origin: result.origin }); setIntakeState("ready");
+      }).catch(error => {
+        if (generation !== intakeGeneration.current) return;
+        setIntakeState("unavailable"); setMessage(error.message);
+      });
+    }
+    loadIntake();
+    window.addEventListener("hashchange", loadIntake);
+    return () => window.removeEventListener("hashchange", loadIntake);
   }, []);
   const [status, setStatus] = useState<Status | null>(null);
   const [message, setMessage] = useState("");
@@ -151,7 +166,7 @@ export function PersonalAutomationPanel() {
         <option value="payment_card">Payment card</option><option value="document">Photo or document</option>
         <option value="totp">Website authenticator</option>
       </select>
-      <form key={kind} className="space-y-3" autoComplete="off" onSubmit={event => {
+      <form key={`${kind}:${intake?.token || intakeState}`} className="space-y-3" autoComplete="off" onSubmit={event => {
         event.preventDefault(); const form = event.currentTarget; void act(() => enroll(form));
       }}>
         <label className="block">Label<input className={inputClass} name="label" required maxLength={100} /></label>
