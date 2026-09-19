@@ -966,6 +966,22 @@ there is nothing to force.
 
 ## A worked example
 
+### Installed payload verification
+
+`robothor.plugins.installed.verify_installed_wheel` compares an installed
+distribution with a separately fingerprinted wheel and its enabled governance
+record. It checks payload bytes, declared files, extra package members and
+symlinks without importing plugin code. The wheel is captured before inspection
+so replacing the input during verification cannot substitute different bytes.
+Installer metadata and caches corresponding to declared Python sources are
+allowed; cache contents and already loaded Python objects are not attested.
+Relocated `.data` layouts and shared namespace packages need separate support.
+This is a verification primitive, not an installation or runtime readiness API.
+
+Keep source-only build and deployment commands out of runtime plugin wheels.
+Native installation scans the actual wheel; bundling a build command can cause
+an otherwise inert adapter to be refused for its subprocess capability.
+
 `plugins/genus-hostinfo` is a first-party plugin carried in this repo: host
 thermal, GPU and memory state, which core deliberately does not ship because it
 is a fact about one machine. It is a complete, installable reference — manifest,
