@@ -521,8 +521,51 @@ def test_pipedrive_identity_api_requires_human_and_exact_packet(client, monkeypa
 
 def test_report_api_requires_a_human_operator_and_uses_authenticated_tenant(client, monkeypatch):
     from robothor.sales.reporting import Reports
+
     c, calls = client
     monkeypatch.setattr(Reports, "latest", lambda self: {"tenant": self.tenant})
-    for headers in ({}, {"x-test-role": "member"}, {"x-test-role": "admin", "x-test-service": "yes"}):
+    for headers in (
+        {},
+        {"x-test-role": "member"},
+        {"x-test-role": "admin", "x-test-service": "yes"},
+    ):
         assert c.get("/api/sales/reports/latest", headers=headers).status_code == 403
-    assert c.get("/api/sales/reports/latest", headers={"x-test-role": "admin"}).json() == {"tenant": "tenant-a"}
+    assert c.get("/api/sales/reports/latest", headers={"x-test-role": "admin"}).json() == {
+        "tenant": "tenant-a"
+    }
+
+
+def test_contact_entry_cannot_assert_verification_or_caller_identity(client, monkeypatch):
+    from robothor.sales.contacts import Contacts
+
+    c, calls = client
+    monkeypatch.setattr(
+        Contacts,
+        "add",
+        lambda self, prospect_id, data, actor, reason: (
+            calls.append((self.tenant, actor, data)) or {}
+        ),
+    )
+    path = "/api/sales/prospects/00000000-0000-4000-8000-000000000001/contacts"
+    body = {
+        "contact": {
+            "name": "Alice",
+            "role": "Owner",
+            "email": "alice@example.com",
+            "source_url": "https://clinic.example.com/team",
+        },
+        "reason": "Reviewed the public business contact",
+    }
+    assert c.post(path, json=body).status_code == 403
+    headers = {"x-test-role": "admin"}
+    assert (
+        c.post(
+            path,
+            headers=headers,
+            json={**body, "contact": {**body["contact"], "verification": "valid"}},
+        ).status_code
+        == 422
+    )
+    assert c.post(path, headers=headers, json={**body, "actor": "forged"}).status_code == 422
+    assert c.post(path, headers=headers, json=body).status_code == 200
+    assert calls[0][:2] == ("tenant-a", "operator:user-1")

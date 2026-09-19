@@ -18,6 +18,7 @@ from robothor.sales.business_repair import (
     Reassignment,  # noqa: TC001 — FastAPI resolves at runtime.
 )
 from robothor.sales.calibration import Calibration
+from robothor.sales.contacts import ContactEntry, ContactReview, Contacts  # noqa: TC001
 from robothor.sales.library import (  # noqa: TC001 — FastAPI resolves annotations.
     LibraryPacket,
     preview,
@@ -528,3 +529,24 @@ def latest_sales_report(request: Request):
 def sales_report(report_id: UUID, request: Request):
     service, _ = require_sales_operator(request)
     return Reports(service).get(str(report_id))
+
+
+@router.get("/prospects/{prospect_id}/contacts")
+@domain_errors
+def business_contacts(prospect_id: UUID, request: Request):
+    service, _ = require_sales_operator(request)
+    return Contacts(service).list(str(prospect_id))
+
+
+@router.post("/prospects/{prospect_id}/contacts")
+@domain_errors
+def add_business_contact(prospect_id: UUID, body: ContactEntry, request: Request):
+    service, actor = require_sales_operator(request)
+    return Contacts(service).add(str(prospect_id), body.contact, actor, body.reason)
+
+
+@router.post("/prospects/{prospect_id}/contacts/{contact_id}/review")
+@domain_errors
+def review_business_contact(prospect_id: UUID, contact_id: UUID, body: ContactReview, request: Request):
+    service, actor = require_sales_operator(request)
+    return Contacts(service).review(str(prospect_id), str(contact_id), actor=actor, **body.model_dump())
