@@ -81,6 +81,26 @@ def test_real_empty_search_allows_empty_batch_but_not_fabricated_candidates():
         sources.attest("run-1", candidate())
 
 
+def test_rejecting_observed_results_requires_an_auditable_explanation():
+    sources = ScoutSources("test", "scout", 1)
+    observed(sources)
+    with pytest.raises(Conflict, match="explain"):
+        sources.attest("run-1", '{"companies": []}')
+    batch, proof = sources.attest(
+        "run-1",
+        json.dumps(
+            {
+                "companies": [],
+                "empty_reason": "The listed business is outside the assigned geography; no local practice was established.",
+            }
+        ),
+    )
+    assert batch.empty_reason
+    from robothor.operations.store import digest
+
+    assert proof["output_hash"] == digest(batch.model_dump(mode="json"))
+
+
 def test_degraded_search_requires_bounded_distinct_query_refinement():
     sources = ScoutSources("test", "scout", 1)
     ctx = SimpleNamespace(tenant_id="test", agent_id="scout", run_id="run-1")

@@ -333,6 +333,7 @@ class Candidate(Contract):
 
 class CandidateBatch(Contract):
     companies: list[Candidate] = Field(max_length=20)
+    empty_reason: str | None = Field(default=None, min_length=1, max_length=2000)
 
 
 class ContactBatch(Contract):
