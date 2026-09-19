@@ -132,10 +132,16 @@ def deploy(workspace: Path, revision: str, job_path: Path) -> dict[str, Any]:
             raise RuntimeError("Snapshot revision collision")
         # Test the EXACT snapshot, with production database writes prohibited.
         test_env = {**os.environ, "PYTHONPATH": str(snapshot), "ROBOTHOR_DB_NAME": "robothor_test"}
+        # Runtime releases intentionally omit pytest. Use the instance's dev
+        # interpreter against the candidate's exact code, then import the
+        # entrypoints with the runtime interpreter before any service switch.
+        test_python = os.environ.get("ROBOTHOR_DEPLOY_TEST_PYTHON") or str(
+            workspace / "venv/bin/python"
+        )
         with (job_path.parent / "tests.log").open("w") as test_log:
             subprocess.run(
                 [
-                    str(snapshot / "venv/bin/python"),
+                    test_python,
                     "-m",
                     "pytest",
                     "-q",
@@ -154,6 +160,17 @@ def deploy(workspace: Path, revision: str, job_path: Path) -> dict[str, Any]:
                 check=True,
                 timeout=300,
             )
+        subprocess.run(
+            [
+                str(snapshot / "venv/bin/python"),
+                "-c",
+                "import robothor.engine.daemon; import robothor.engine.host_execution",
+            ],
+            cwd=snapshot,
+            env={**os.environ, "PYTHONPATH": str(snapshot)},
+            check=True,
+            timeout=60,
+        )
         job.update(status="tested", revision=commit, snapshot=str(snapshot))
         save(job_path, job)
         wait_idle()
