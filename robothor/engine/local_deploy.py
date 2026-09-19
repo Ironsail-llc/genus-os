@@ -273,6 +273,8 @@ def queue(workspace: str, revision: str, context: dict[str, Any]) -> dict[str, A
                 "--collect",
                 "--unit=robothor-repair-" + job_id,
                 "--uid=" + str(os.getuid()),
+                "--property=EnvironmentFile=/etc/robothor/robothor.env",
+                "--property=EnvironmentFile=-/run/robothor/secrets.env",
                 "--property=WorkingDirectory=" + str(Path(__file__).resolve().parents[2]),
                 "--setenv=ROBOTHOR_WORKSPACE=" + workspace,
                 "--setenv=PYTHONPATH=" + str(Path(__file__).resolve().parents[2]),
