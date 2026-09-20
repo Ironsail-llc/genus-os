@@ -31,6 +31,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const engine = {
   chatSend: vi.fn(),
   chatAbort: vi.fn(),
+  chatOutcome: vi.fn(),
   chatHistory: vi.fn(),
   planStart: vi.fn(),
   planApprove: vi.fn(),
@@ -78,6 +79,7 @@ async function routes() {
   return {
     send: (await import("../send/route")).POST,
     abort: (await import("../abort/route")).POST,
+    outcome: (await import("../outcome/route")).GET,
     history: (await import("../history/route")).GET,
     planStart: (await import("../plan/start/route")).POST,
     planApprove: (await import("../plan/approve/route")).POST,
@@ -94,6 +96,7 @@ async function callEachWithAgent(): Promise<Response[]> {
   return [
     await r.send(post("http://helm.test/x", { message: "hi", agent: "scheduler" })),
     await r.history(new Request("http://helm.test/x?agent=scheduler")),
+    await r.outcome(new Request("http://helm.test/x?agent=scheduler&request_id=request-1")),
     await r.abort(post("http://helm.test/x", { agent: "scheduler", request_id: "request-1" })),
     await r.planStart(post("http://helm.test/x", { message: "hi", agent: "scheduler" })),
     await r.planApprove(post("http://helm.test/x", { plan_id: "p-1", agent: "scheduler" })),
@@ -249,7 +252,7 @@ describe("the chat BFF routes refuse an agent rather than falling through to mai
 
     const responses = await callEachWithAgent();
 
-    expect(responses.map((res) => res.status)).toEqual([403, 403, 403, 403, 403, 403, 403, 403, 403]);
+    expect(responses.map((res) => res.status)).toEqual([403, 403, 403, 403, 403, 403, 403, 403, 403, 403]);
     for (const call of Object.values(engine)) {
       expect(call).not.toHaveBeenCalled();
     }
@@ -260,7 +263,7 @@ describe("the chat BFF routes refuse an agent rather than falling through to mai
 
     const responses = await callEachWithAgent();
 
-    expect(responses.map((res) => res.status)).toEqual([400, 400, 400, 400, 400, 400, 400, 400, 400]);
+    expect(responses.map((res) => res.status)).toEqual([400, 400, 400, 400, 400, 400, 400, 400, 400, 400]);
     for (const call of Object.values(engine)) {
       expect(call).not.toHaveBeenCalled();
     }
@@ -294,4 +297,17 @@ describe("the chat BFF routes refuse an agent rather than falling through to mai
     expect(read.status).toBe(200);
     expect(engine.chatSend).toHaveBeenCalledWith("hi", "");
   });
+});
+
+
+it("recovers through a scoped read of the original request, without sending work", async () => {
+  vi.clearAllMocks();
+  resolveChatAgent.mockResolvedValue({ ok: true, key: KEY });
+  engine.chatOutcome.mockResolvedValue({ terminal: true, state: "completed", text: "Recorded answer" });
+  const { outcome } = await routes();
+  const response = await outcome(new Request("http://helm.test/x?agent=scheduler&request_id=original"));
+  expect(engine.chatOutcome).toHaveBeenCalledWith("original", KEY);
+  expect(response.headers.get("Cache-Control")).toBe("no-store");
+  expect((await response.json()).text).toBe("Recorded answer");
+  expect(engine.chatSend).not.toHaveBeenCalled();
 });

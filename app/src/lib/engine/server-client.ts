@@ -115,6 +115,16 @@ class EngineClient {
     return res.json();
   }
 
+  /** Read the original run after a delivery failure; never resubmit it. */
+  async chatOutcome(requestId: string, sessionKey = ""): Promise<unknown> {
+    const res = await fetch(
+      `${ENGINE_URL}/chat/outcome?request_id=${encodeURIComponent(requestId)}${keyedQuery(sessionKey)}`,
+      { headers: await engineHeaders(), signal: AbortSignal.timeout(10_000), cache: "no-store" },
+    );
+    if (!res.ok) throw new Error("Recorded chat outcome unavailable");
+    return res.json();
+  }
+
   /** Inject a system message into a session. */
   async chatInject(message: string, label?: string): Promise<{ ok: boolean }> {
     const res = await fetch(`${ENGINE_URL}/chat/inject`, {

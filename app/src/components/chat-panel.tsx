@@ -15,6 +15,7 @@ import {
 import { useVisualState } from "@/hooks/use-visual-state";
 import { useThrottle } from "@/hooks/use-throttle";
 import { MarkerInterceptor, stripMarkers } from "@/lib/engine/marker-interceptor";
+import { ChatRecovery, type ChatRecoveryRequest } from "@/components/chat-recovery";
 import { ChatAskCard, type ApprovalKind } from "@/components/chat-ask-card";
 import {
   isKeyableAgentId,
@@ -30,6 +31,7 @@ interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   timestamp: Date;
+  recovery?: ChatRecoveryRequest;
 }
 
 interface ActivePlan {
@@ -77,6 +79,10 @@ interface ChatPanelProps {
 
 export function ChatPanel({ mobile = false }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const recoverMessage = useCallback((id: string, text: string) => {
+    setMessages((prev) => prev.map((item) => item.id === id
+      ? { ...item, content: text, recovery: undefined } : item));
+  }, []);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState("");
@@ -566,6 +572,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
             id: `asst-${Date.now()}`,
             role: "assistant",
             content: stripResidualMarkers(fullResponse).trim(),
+        ...(fullResponse === OUTCOME_UNKNOWN ? { recovery: { requestId: requestIdRef.current!, agent } } : {}),
             timestamp: new Date(),
           },
         ]);
@@ -632,6 +639,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
         const errorMsg: ChatMessage = {
           id: `err-${Date.now()}`, role: "assistant",
           content: errorText, timestamp: new Date(),
+          recovery: { requestId: requestIdRef.current!, agent },
         };
         setMessages((prev) => [...prev, errorMsg]);
         setIsStreaming(false);
@@ -787,6 +795,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
         id: `asst-${Date.now()}`,
         role: "assistant",
         content: stripResidualMarkers(fullResponse).trim(),
+        ...(fullResponse === OUTCOME_UNKNOWN ? { recovery: { requestId: requestIdRef.current!, agent } } : {}),
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, assistantMsg]);
@@ -813,6 +822,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
           id: `err-${Date.now()}`,
           role: "assistant",
           content: OUTCOME_UNKNOWN,
+          recovery: { requestId: requestIdRef.current!, agent },
           timestamp: new Date(),
         };
         setMessages((prev) => [...prev, errorMsg]);
@@ -959,6 +969,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
             id: `asst-${Date.now()}`,
             role: "assistant",
             content: stripResidualMarkers(fullResponse).trim() + costSuffix,
+            ...(fullResponse === OUTCOME_UNKNOWN ? { recovery: { requestId: requestIdRef.current!, agent } } : {}),
             timestamp: new Date(),
           },
         ]);
@@ -970,6 +981,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
           id: `err-${Date.now()}`,
           role: "assistant",
           content: OUTCOME_UNKNOWN,
+          recovery: { requestId: requestIdRef.current!, agent },
           timestamp: new Date(),
         }]);
       }
@@ -1162,9 +1174,11 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
               >
                 {msg.role === "assistant" ? (
                   <div className="prose prose-sm prose-invert max-w-none">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {msg.content}
-                    </ReactMarkdown>
+                    {msg.recovery ? (
+                      <ChatRecovery request={msg.recovery} messageId={msg.id} onRecovered={recoverMessage} />
+                    ) : (
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                    )}
                   </div>
                 ) : (
                   <p>{msg.content}</p>

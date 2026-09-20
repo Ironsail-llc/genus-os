@@ -172,9 +172,17 @@ describe("ordinary chat terminal outcomes", () => {
     "does not mistake partial text for completion after %s",
     async (outcome) => {
       let sends = 0;
-      global.fetch = vi.fn().mockImplementation(async (url: string) => {
+      let originalRequestId = "";
+      let reads = 0;
+      global.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+        if (url.startsWith("/api/chat/outcome?")) {
+          reads += 1;
+          expect(new URL(url, "http://test").searchParams.get("request_id")).toBe(originalRequestId);
+          return { ok: true, json: async () => ({ terminal: true, state: "completed", text: "Recovered recorded result" }) };
+        }
         if (url === "/api/chat/send") {
           sends += 1;
+          originalRequestId = JSON.parse(init!.body as string).request_id;
           if (outcome === "transport") throw new TypeError("Failed to fetch");
           const events = [{ event: "delta", data: { text: "Everything is done." } }];
           if (outcome !== "eof") {
@@ -193,10 +201,11 @@ describe("ordinary chat terminal outcomes", () => {
       });
       render(<ChatPanel />);
       await typeAndSend(screen.getByTestId("chat-input") as HTMLTextAreaElement, "Do the work");
-      const expected = outcome === "completed" ? "Verified result" : "I couldn’t confirm the outcome.";
+      const expected = outcome === "completed" ? "Verified result" : "Recovered recorded result";
       await waitFor(() => expect(screen.getByTestId("message-assistant").textContent).toContain(expected));
       expect(screen.queryByText("Everything is done.")).toBeNull();
       expect(sends).toBe(1);
+      expect(reads).toBe(outcome === "completed" ? 0 : 1);
     },
   );
 });

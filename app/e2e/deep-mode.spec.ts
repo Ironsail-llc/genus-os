@@ -513,11 +513,21 @@ for (const deep of [false, true]) {
         body: mockPlanSSE("Check the requested result", "terminal-plan", deep),
       }));
       const explanation = ["disconnected", "transport_error"].includes(status)
-        ? "I couldn’t confirm the outcome. Some actions may have finished; check their status before trying again."
+        ? "Recovered from the original run record."
         : `[Run ${status}: Outcome unresolved; reconcile the dispatched action before retrying]`;
       let approvals = 0;
+      let originalRequestId = "";
+      let lookups = 0;
+      await page.route("**/api/chat/outcome?*", (route) => {
+        expect(new URL(route.request().url()).searchParams.get("request_id")).toBe(originalRequestId);
+        lookups += 1;
+        return route.fulfill({ json: lookups === 1
+          ? { state: "running", terminal: false }
+          : { state: "completed", terminal: true, text: "Recovered from the original run record." } });
+      });
       await page.route("**/api/chat/plan/approve", (route) => {
         approvals += 1;
+        originalRequestId = route.request().postDataJSON().request_id;
         if (status === "transport_error") return route.abort("connectionfailed");
         return route.fulfill({
           status: 200,
@@ -541,6 +551,7 @@ for (const deep of [false, true]) {
       await expect(page.getByTestId("plan-card")).toHaveCount(0);
       await expect(page.getByTestId("chat-input")).toBeEnabled();
       expect(approvals).toBe(1);
+      expect(lookups).toBe(["disconnected", "transport_error"].includes(status) ? 2 : 0);
     });
   }
 }
@@ -549,8 +560,18 @@ for (const outcome of ["eof", "transport", "aborted", "failed", "completed"]) {
   test(`ordinary chat reports its terminal outcome after ${outcome}`, async ({ page }) => {
     await setupMocks(page);
     let sends = 0;
+    let originalRequestId = "";
+    let lookups = 0;
+    await page.route("**/api/chat/outcome?*", (route) => {
+      expect(new URL(route.request().url()).searchParams.get("request_id")).toBe(originalRequestId);
+      lookups += 1;
+      return route.fulfill({ json: lookups === 1
+        ? { state: "running", terminal: false }
+        : { state: "completed", terminal: true, text: "Recovered recorded result" } });
+    });
     await page.route("**/api/chat/send", (route) => {
       sends += 1;
+      originalRequestId = route.request().postDataJSON().request_id;
       if (outcome === "transport") return route.abort("connectionfailed");
       const terminal = outcome === "aborted" ? { text: "", aborted: true }
         : outcome === "failed" ? { text: "", status: "failed" }
@@ -567,9 +588,10 @@ for (const outcome of ["eof", "transport", "aborted", "failed", "completed"]) {
     await page.getByTestId("chat-input").fill("Do the requested work");
     await page.getByTestId("send-button").click();
     const answer = page.getByTestId("message-assistant").last();
-    await expect(answer).toContainText(outcome === "completed" ? "Verified result" : "I couldn’t confirm the outcome.");
+    await expect(answer).toContainText(outcome === "completed" ? "Verified result" : "Recovered recorded result");
     await expect(page.getByTestId("message-assistant").filter({ hasText: "Everything is done." })).toHaveCount(0);
     await expect(page.getByTestId("chat-input")).toBeEnabled();
     expect(sends).toBe(1);
+    expect(lookups).toBe(outcome === "completed" ? 0 : 2);
   });
 }

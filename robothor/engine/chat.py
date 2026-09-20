@@ -564,6 +564,17 @@ async def chat_inject(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
+@router.get("/outcome")
+async def chat_outcome(request: Request, request_id: str, session_key: str = "") -> JSONResponse:
+    """Read only the authenticated caller's original request record."""
+    from robothor.engine.chat_recovery import read_outcome
+
+    auth = _auth_context(request)
+    key = _effective_session_key(auth, session_key)
+    result = await asyncio.to_thread(read_outcome, auth, key, request_id)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/abort")
 async def chat_abort(request: Request) -> JSONResponse:
     """Cancel the running response for a session."""

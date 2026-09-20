@@ -1,6 +1,6 @@
 /** A lost response is not permission to repeat a possibly dispatched action. */
 export const OUTCOME_UNKNOWN =
-  "I couldn’t confirm the outcome. Some actions may have finished; check their status before trying again.";
+  "Connection interrupted. Checking the recorded result…";
 
 export function terminalOutcome(
   data: { text?: unknown; status?: unknown; aborted?: unknown },

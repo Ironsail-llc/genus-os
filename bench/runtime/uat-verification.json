@@ -526,7 +526,7 @@
       "provider_calls": 0,
       "business_effects": 0,
       "manual_acceptance": false,
-      "manual_review": "Requested in normal chat; answer pending"
+      "manual_review": "User rejected asking them to check status; superseded by automatic original-request audit recovery."
     },
     "watchdog_evidence_correction": {
       "reproduction": "Stronger assertion failed because mock returned an unawaited coroutine",
@@ -534,6 +534,31 @@
       "seconds": 12.47,
       "warnings": 1,
       "production_behavior_changed": false
+    },
+    "automatic_chat_audit_recovery": {
+      "manual_acceptance": false,
+      "user_feedback": "Robothor should use its audit log to recover outcomes itself.",
+      "backend": {
+        "passed": 80,
+        "seconds": 7.62
+      },
+      "client_route_components": {
+        "passed": 77,
+        "seconds": 1.44
+      },
+      "browser": {
+        "passed": 25,
+        "seconds": 43.7
+      },
+      "build": "passed",
+      "eslint": "passed",
+      "ruff": "passed",
+      "scope": "Original request result delivery from durable agent_runs; no action replay, scoped by tenant/principal/session",
+      "limitations": [
+        "Full-page reload preservation not established",
+        "Run records do not independently verify every external effect; general provider receipt reconciliation remains incomplete"
+      ],
+      "production_deployed": false
     }
   },
   "calendar": {
