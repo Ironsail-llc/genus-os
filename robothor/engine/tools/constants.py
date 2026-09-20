@@ -55,6 +55,7 @@ GWS_TOOLS = frozenset(
         "gws_gmail_modify",
         "gws_calendar_list",
         "gws_calendar_create",
+        "gws_calendar_add_attendees",
         "gws_calendar_delete",
         "gws_chat_send",
         "gws_chat_list_spaces",
@@ -366,6 +367,7 @@ TOOLSEARCH_TOOLS = frozenset({"tool_search", "tool_describe", "tool_call"})
 # GOAL_TOOLS are force-added by the registry filter, so they're omitted here.
 CORE_TOOLS: frozenset[str] = frozenset(
     {
+        "gws_calendar_add_attendees",
         # File / shell
         "read_file",
         "write_file",

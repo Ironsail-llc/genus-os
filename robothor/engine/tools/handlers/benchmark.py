@@ -2173,6 +2173,9 @@ async def _execute_suite_tasks(
                     judge_error,
                 )
             results.append(task_result)
+            from robothor.engine.performance import run_measurements
+
+            task_result["performance"] = run_measurements(run)
 
         except Exception as e:
             logger.warning("Benchmark task %s failed: %s", task["id"], e)
@@ -2231,7 +2234,11 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     (pattern matching).  Returns per-task scores, per-category breakdown,
     and a weighted aggregate score (0.0-1.0).
     """
+    import time
+
     from robothor.engine.tools.handlers.spawn import get_runner
+
+    suite_started = time.monotonic()
 
     agent_id = args.get("agent_id", "").strip()
     suite_id = args.get("suite_id", "").strip()
@@ -2337,6 +2344,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
 
     # Build run record
     run_record: dict[str, Any] = {
+        "duration_ms": int((time.monotonic() - suite_started) * 1000),
         "suite_id": suite_id,
         "agent_id": agent_id,
         "tag": tag,
@@ -2382,24 +2390,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     # The counts describe the GRADED set so the row stays self-consistent with
     # pass_rate; every failing case is still listed in `failures`, each
     # labelled with whether it moved the grade.
-    graded_ids = {r.get("task_id") for r in graded}
-    failures_brief = [
-        {
-            "case_id": r.get("task_id"),
-            "category": r.get("category"),
-            "score": r.get("score"),
-            "reason": r.get("judge_error") or r.get("reason") or r.get("error"),
-            "output_preview": r.get("output_preview", ""),
-            "counted": r.get("task_id") in graded_ids,
-            **(
-                {"honesty_verdict": r["honesty"].get("verdict")}
-                if isinstance(r.get("honesty"), dict)
-                else {}
-            ),
-        }
-        for r in results
-        if r.get("score", 0) < PASS_THRESHOLD or r.get("judge_error") or r.get("skipped")
-    ]
+    failures_brief = _failure_summaries(results, graded)
     _write_benchmark_result_row(
         agent_id=agent_id,
         suite_id=suite_id,
@@ -2415,6 +2406,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         triggered_by=(args.get("triggered_by") or "").strip() or "manual",
         experiment_id=(args.get("experiment_id") or "").strip() or None,
         total_cost=total_cost,
+        duration_ms=run_record["duration_ms"],
     )
 
     return {
@@ -2435,6 +2427,29 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         "tasks_skipped": skipped_count,
         "task_results": results,
     }
+
+
+def _failure_summaries(
+    results: list[dict[str, Any]], graded: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    graded_ids = {r.get("task_id") for r in graded}
+    return [
+        {
+            "case_id": r.get("task_id"),
+            "category": r.get("category"),
+            "score": r.get("score"),
+            "reason": r.get("judge_error") or r.get("reason") or r.get("error"),
+            "output_preview": r.get("output_preview", ""),
+            "counted": r.get("task_id") in graded_ids,
+            **(
+                {"honesty_verdict": r["honesty"].get("verdict")}
+                if isinstance(r.get("honesty"), dict)
+                else {}
+            ),
+        }
+        for r in results
+        if r.get("score", 0) < PASS_THRESHOLD or r.get("judge_error") or r.get("skipped")
+    ]
 
 
 def _summarise_honesty(scored: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2494,6 +2509,7 @@ def _write_benchmark_result_row(
     triggered_by: str,
     experiment_id: str | None,
     total_cost: float,
+    duration_ms: int | None = None,
 ) -> None:
     """Insert one ``benchmark_results`` row. Never fatal except on the DB guard."""
     try:
@@ -2515,9 +2531,9 @@ def _write_benchmark_result_row(
                 INSERT INTO benchmark_results
                   (agent_id, suite_id, suite_path, total_cases, passed, failed,
                    pass_rate, aggregate_score, judge_errors, category_scores,
-                   failures, triggered_by, experiment_id, cost_usd)
+                   failures, triggered_by, experiment_id, cost_usd, duration_ms)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb,
-                        %s, %s, %s)
+                        %s, %s, %s, %s)
                 """,
                 (
                     agent_id,
@@ -2534,6 +2550,7 @@ def _write_benchmark_result_row(
                     triggered_by,
                     experiment_id,
                     float(round(total_cost, 4)),
+                    duration_ms,
                 ),
             )
             conn.commit()

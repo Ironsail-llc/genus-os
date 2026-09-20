@@ -71,7 +71,7 @@ CAPS = {
     # four had already drifted -- `ask_user` was in this one alone). That is
     # what paid for teaching the resolver about self-timed tools, instead of
     # raising this number for it.
-    "robothor/engine/runner.py": 2224,
+    "robothor/engine/runner.py": 2219,
     # 3850 -> 3150 after the plan-mode cluster left (phase 3), then again after
     # phase 3b (_setup_handlers closures -> methods), and 3150 -> 2000 as the
     # handler and attachment clusters left for telegram_handlers.py and
