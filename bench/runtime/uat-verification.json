@@ -809,6 +809,17 @@
       "failed": 0,
       "scope": "Explicit trusted deadlines include checkpoint loading and acceptance delivery; late dispatch denied even after suppressed cancellation. Existing native cancellation persistence verified.",
       "remaining": "Automatic 60-second classification/assignment across all simple actions remains incomplete; prior broad run predates adapter change."
+    },
+    "confirmed_action_admission_policy": {
+      "runner_deadline_policy_passed": 110,
+      "runner_deadline_policy_seconds": 7.58,
+      "benchmark_policy_contract_size_passed": 29,
+      "benchmark_policy_contract_size_seconds": 4.48,
+      "failed": 0,
+      "artifact": "uat-confirmed-admission-summary.json",
+      "raw": "uat-confirmed-admission.jsonl",
+      "scope": "Supported ordinary calendar confirmations receive a 60-second deadline at current-runtime admission, before setup. Existing shorter deadlines preserved; goal/delegated/resume/planning/benchmark requests retain prior policy. Authorization still occurs in native dispatch.",
+      "remaining": "General conversational simple-action classification and ingress-to-admission timing remain incomplete."
     }
   },
   "calendar": {

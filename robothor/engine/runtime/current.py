@@ -32,8 +32,10 @@ class CurrentRuntime:
         self._execute = execute
 
     async def run(self, request: RunRequest, on_event=None) -> RuntimeResult:
+        from robothor.engine.runtime.action_policy import apply_action_deadline
         from robothor.engine.runtime.deadlines import constrain_context, execute_before_deadline
 
+        request = apply_action_deadline(request)
         # Admission reads and progress delivery consume the same deadline as
         # execution; a stalled checkpoint must not defer the start of the clock.
         return await execute_before_deadline(

@@ -1,0 +1,37 @@
+{
+  "current": {
+    "samples": 30,
+    "completed": 30,
+    "model_calls": [
+      2
+    ],
+    "state_checks_passed": true,
+    "duration_ms": {
+      "samples": 30,
+      "p50": 41.59325299951888,
+      "p95": 50.185279000288574,
+      "p95_ci95": [
+        46.58189799920365,
+        50.29801699856762
+      ]
+    }
+  },
+  "optimized": {
+    "samples": 30,
+    "completed": 30,
+    "model_calls": [
+      0
+    ],
+    "state_checks_passed": true,
+    "duration_ms": {
+      "samples": 30,
+      "p50": 21.338976001061383,
+      "p95": 33.52880100101174,
+      "p95_ci95": [
+        29.12096199906955,
+        71.92429200040351
+      ]
+    }
+  },
+  "scope": "Same-checkout feature-off versus confirmed deterministic path; native runner and private PostgreSQL with synthetic model/calendar. Not a matched live framework comparison or accepted-baseline rerun."
+}

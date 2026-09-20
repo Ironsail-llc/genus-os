@@ -77,7 +77,13 @@ async def test_runner_measurements(request, sample_agent_config, monkeypatch, fa
         api.calls.clear()
 
         async def execute(name, args, **kwargs):
+            from robothor.engine.runtime.current import active_context
+            from robothor.engine.runtime.deadlines import remaining
+
             assert name == TOOL
+            if fast:
+                assert active_context.get().deadline is not None
+                assert 0 < remaining() <= 60
             return await asyncio.to_thread(perform, args, context)
 
         engine.registry.execute = AsyncMock(side_effect=execute)
