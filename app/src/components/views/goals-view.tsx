@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 type GoalStatus = "queued" | "running" | "waiting" | "blocked" | "paused" | "review" | "complete" | "canceled";
-interface Evidence { criterion: number; summary: string; reference: string; satisfied: boolean }
+interface Evidence { criterion: number; summary: string; reference: string; satisfied: boolean; verification?: { independent: boolean; criterion_verified?: boolean; method: string } }
 interface Goal {
   id: string; objective: string; kind: "short" | "long"; mode: "finite" | "ongoing";
   status: GoalStatus; version: number; success_criteria: string[]; parent_goal_id: string | null;
@@ -11,6 +11,7 @@ interface Goal {
   tokens_used: number; token_budget: number | null; cost_usd: number;
   evidence: Evidence[]; wait: { reason: string; event_type?: string; task_id?: string } | null;
   assessment: { status: string; note: string; at: string } | null;
+  recovery_required?: boolean;
   children?: Goal[];
   tasks?: { id: string; title: string; status: string }[];
   runs?: { id: string; run_id: string | null; status: string; tokens: number }[];
@@ -45,6 +46,11 @@ export function GoalsView({ visible }: { visible: boolean }) {
   const [resumeBudget, setResumeBudget] = useState("");
   const [cadence, setCadence] = useState("24");
   const [steer, setSteer] = useState("");
+  const [revisionObjective, setRevisionObjective] = useState("");
+  const [revisionCriteria, setRevisionCriteria] = useState("");
+  const [revisionReason, setRevisionReason] = useState("");
+  const [childObjective, setChildObjective] = useState("");
+  const [childCriteria, setChildCriteria] = useState("");
 
   const refresh = useCallback(async () => {
     const data = await api();
@@ -139,11 +145,16 @@ export function GoalsView({ visible }: { visible: boolean }) {
           <p>{selected.status} · {selected.tokens_used.toLocaleString()} tokens{selected.token_budget ? ` / ${selected.token_budget.toLocaleString()}` : ""} · ${selected.cost_usd.toFixed(4)}</p>
           {selected.parent_goal_id && <button className="underline" onClick={() => void select(selected.parent_goal_id!)}>Open parent goal</button>}
           <p>{selected.checkpoint}</p><p>{selected.next_action}</p>
+          {selected.recovery_required && <p role="status">External effects need reconciliation before more actions or completion.</p>}
+          {selected.blocker && <p>Blocker: {selected.blocker}</p>}
+          {selected.token_budget !== null && <p>Remaining family budget: {Math.max(0, selected.token_budget - selected.tokens_used).toLocaleString()} tokens</p>}
+          {["paused", "canceled"].includes(selected.status) && <p>New work has stopped for this goal and relevant children. Already dispatched external requests may finish; check receipts before retrying.</p>}
+          {!["complete", "canceled", "paused"].includes(selected.status) && new Date(selected.ready_at).getTime() <= Date.now() && <p>Review due</p>}
           {selected.wait && <p>Waiting: {selected.wait.reason}. Next review: {new Date(selected.ready_at).toLocaleString()}</p>}
           {selected.assessment && <p>Assessment: {selected.assessment.status} — {selected.assessment.note}</p>}
           <h3 className="font-medium">Criteria and evidence</h3>
           <ol className="list-decimal pl-5 space-y-2">{selected.success_criteria.map((criterion, i) => <li key={i}>{criterion}
-            {selected.evidence.filter(e => e.criterion === i).map((e, j) => <p key={j} className="text-sm">{e.satisfied ? "Verified" : "Unmet"}: {e.summary} ({e.reference})</p>)}
+            {selected.evidence.filter(e => e.criterion === i).map((e, j) => <p key={j} className="text-sm">{e.satisfied ? (e.verification?.criterion_verified ? "Independently checked" : e.verification?.independent ? "Receipt checked; criterion needs review" : "Agent assessed") : "Unmet"}: {e.summary} ({e.reference})</p>)}
           </li>)}</ol>
           {selected.status === "blocked" && <label>Updated token budget (optional)<input type="number" min="1" value={resumeBudget} onChange={e => setResumeBudget(e.target.value)} className="block border rounded p-2 bg-background" /></label>}
           <div className="flex flex-wrap gap-2">
@@ -159,7 +170,38 @@ export function GoalsView({ visible }: { visible: boolean }) {
             <label>Direction for the agent<textarea required value={steer} onChange={e => setSteer(e.target.value)} className="block w-full border rounded p-2 bg-background" /></label>
             <button disabled={busy} className="border rounded px-2 py-1 mt-2">Update direction</button>
           </form>}
-          <h3 className="font-medium">Execution goals</h3>
+          {!["complete", "canceled"].includes(selected.status) && <details>
+            <summary>Revise objective or criteria</summary>
+            <p>Changes are explicit and clear the current evidence. Review the complete replacement before saving.</p>
+            <form onSubmit={e => { e.preventDefault(); void perform(async () => {
+              const data = await api(`/${selected.id}`, { method: "PATCH", body: JSON.stringify({
+                action: "revise", version: selected.version, note: revisionReason,
+                objective: revisionObjective || selected.objective,
+                success_criteria: revisionCriteria ? revisionCriteria.split("\n").map(s => s.trim()).filter(Boolean) : selected.success_criteria,
+              }) }); setSelected((await api(`/${data.goal.id}`)).goal);
+              setRevisionObjective(""); setRevisionCriteria(""); setRevisionReason("");
+            }); }} className="space-y-2">
+              <label className="block">Revised objective<input value={revisionObjective} placeholder={selected.objective} onChange={e => setRevisionObjective(e.target.value)} className="block w-full border p-2 bg-background" /></label>
+              <label className="block">Replacement criteria<textarea value={revisionCriteria} placeholder={selected.success_criteria.join("\n")} onChange={e => setRevisionCriteria(e.target.value)} className="block w-full border p-2 bg-background" /></label>
+              <label className="block">Reason for revision<input required value={revisionReason} onChange={e => setRevisionReason(e.target.value)} className="block w-full border p-2 bg-background" /></label>
+              <button disabled={busy} className="border rounded px-2 py-1">Save revision</button>
+            </form>
+          </details>}
+          <h3 className="font-medium">Milestones and execution goals</h3>
+          {selected.kind === "long" && !["complete", "canceled", "paused", "blocked", "review"].includes(selected.status) && <details>
+            <summary>Add an execution milestone</summary>
+            <p>This creates authorized child work under this goal and its shared budget. Review its objective and criteria before adding it.</p>
+            <form onSubmit={e => { e.preventDefault(); void perform(async () => {
+              await api("", { method: "POST", body: JSON.stringify({ objective: childObjective,
+                success_criteria: childCriteria.split("\n").map(s => s.trim()).filter(Boolean),
+                parent_goal_id: selected.id, kind: "short", human_review: true,
+              }) }); setSelected((await api(`/${selected.id}`)).goal); setChildObjective(""); setChildCriteria("");
+            }); }} className="space-y-2">
+              <label className="block">Milestone objective<input required value={childObjective} onChange={e => setChildObjective(e.target.value)} className="block w-full border p-2 bg-background" /></label>
+              <label className="block">Milestone criteria<textarea required value={childCriteria} onChange={e => setChildCriteria(e.target.value)} className="block w-full border p-2 bg-background" /></label>
+              <button disabled={busy} className="border rounded px-2 py-1">Authorize milestone</button>
+            </form>
+          </details>}
           {selected.children?.map(child => <button key={child.id} className="block underline text-left" onClick={() => void select(child.id)}>{child.objective} · {child.status}</button>)}
           <h3 className="font-medium">Linked tasks</h3>
           {selected.tasks?.map(task => <p key={task.id}>{task.title} · {task.status}</p>)}

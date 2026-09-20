@@ -27,6 +27,9 @@ def interrupt_session(run_id: str, message: str | None = None) -> bool:
     if session is None:
         logger.debug("interrupt_session: no active session for run_id=%s", sanitize_log(run_id))
         return False
+    from robothor.engine.runtime.controls import issue
+
+    issue(session.run.tenant_id, run_id, "cancel", message or "Operator stopped execution")
     session.interrupt(message)
     _record_intervention(session, "interrupt", message)
     return True

@@ -194,7 +194,9 @@ def test_parent_reassesses_and_pause_cascades(db):
     child = change(
         db, child, "evidence", criterion=0, reference="report:1", satisfied=True, note="Verified"
     )
-    change(db, child, "complete", note="Delivered")
+    child = change(db, child, "complete", note="Delivered")
+    assert child["status"] == "review"
+    child = change(db, child, "approve")
     assert store.get(db, parent["id"])["status"] == "queued"
     child2 = create(db, parent_goal_id=parent["id"], request_key="second-child")
     parent = store.get(db, parent["id"])
@@ -325,3 +327,21 @@ def test_task_creation_retry_reuses_linked_task(db):
             assert prepare_task(cur, db, "Different report", "Draft", "writer") is None
     finally:
         binding.reset(token)
+
+
+def test_provider_reservation_survives_lost_worker_and_stale_attempt_cannot_spend(db):
+    g = create(db, token_budget=1000)
+    _, attempt = store.claim(db)
+    store.reserve_provider_usage(db, g["id"], attempt, 700)
+    with pytest.raises(ValueError, match="budget"):
+        store.reserve_provider_usage(db, g["id"], attempt, 1001)
+    with store.transaction() as cur:
+        cur.execute(
+            "UPDATE pursuit_goals SET lease_until=now()-interval '1 minute' WHERE tenant_id=%s",
+            (db,),
+        )
+    _, next_attempt = store.claim(db)
+    assert next_attempt != attempt
+    assert store.get(db, g["id"])["tokens_used"] == 700
+    with pytest.raises(ValueError, match="lease"):
+        store.reserve_provider_usage(db, g["id"], attempt, 100)

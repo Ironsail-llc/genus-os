@@ -1,0 +1,6 @@
+{
+  "concurrent_tenants": 20,
+  "status": "harness_timeout",
+  "timeout_seconds": 30,
+  "reason": "Default pytest per-test timeout expired during the 30-round mixed workload. Final harness gives the batch 300s; individual simple-action SLO remains 30s and uncontended warm-harness SLO remains 2s."
+}

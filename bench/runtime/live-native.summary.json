@@ -1,0 +1,47 @@
+{
+  "scope": "Configured model chain through the actual native runner with synthetic business dispatch. Native prompts differ from candidate smoke prompts: do not compare these as a replacement benchmark.",
+  "models": {
+    "openrouter/deepseek/deepseek-v4-flash": {
+      "duration_ms": {
+        "samples": 30,
+        "p50": 6357.3387960204855,
+        "p95": 19613.376261957455,
+        "p95_ci95": [
+          13023.47814902896,
+          24541.049664956518
+        ]
+      },
+      "verified_outcomes": 30,
+      "runtime_failures": 0,
+      "engine_cost_usd": 0.00888335924
+    },
+    "openrouter/deepseek/deepseek-v4.1-flash": {
+      "duration_ms": {
+        "samples": 30,
+        "p50": 8747.132618969772,
+        "p95": 19933.75757301692,
+        "p95_ci95": [
+          16562.280329992063,
+          21488.47433697665
+        ]
+      },
+      "verified_outcomes": 30,
+      "runtime_failures": 0,
+      "engine_cost_usd": 0.017061888
+    },
+    "openrouter/xiaomi/mimo-v2.5": {
+      "duration_ms": {
+        "samples": 30,
+        "p50": 8372.478975041304,
+        "p95": 19820.213049009908,
+        "p95_ci95": [
+          13085.056008014362,
+          19837.385052989703
+        ]
+      },
+      "verified_outcomes": 15,
+      "runtime_failures": 1,
+      "engine_cost_usd": 0.007095116
+    }
+  }
+}

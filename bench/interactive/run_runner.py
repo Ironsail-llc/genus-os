@@ -43,18 +43,22 @@ def main() -> int:
             env=env,
             check=False,
         )
-        if completed.returncode:
-            return completed.returncode
-        rows = [json.loads(line) for line in samples.read_text().splitlines()]
+        rows = (
+            [json.loads(line) for line in samples.read_text().splitlines()]
+            if samples.exists()
+            else []
+        )
     report = {
         "scope": "Actual runner and PostgreSQL operations; model/Google are deterministic fixtures. Token counts are synthetic, not provider billing.",
         "measurements": rows,
-        "comparison": compare(rows),
+        "exit_code": completed.returncode,
+        "complete": completed.returncode == 0,
+        "comparison": compare(rows) if rows else None,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report["comparison"], indent=2))
-    return 0
+    return completed.returncode
 
 
 if __name__ == "__main__":

@@ -1,0 +1,82 @@
+{
+  "scope": "Configured cloud models, synthetic business gateway, no matched native-runner cohort; not a promotion result",
+  "versions": {
+    "pydantic-ai-slim": "2.46.0",
+    "deepagents": "0.7.15",
+    "langchain-openai": "1.6.2"
+  },
+  "scenarios": {
+    "openrouter/deepseek/deepseek-v4.1-flash:pydantic-ai": {
+      "duration_ms": {
+        "samples": 30,
+        "p50": 3051.752678002231,
+        "p95": 8056.659173977096,
+        "p95_ci95": [
+          5814.2356559983455,
+          11689.399091002997
+        ]
+      },
+      "failures": 0
+    },
+    "openrouter/deepseek/deepseek-v4.1-flash:deepagents": {
+      "duration_ms": {
+        "samples": 30,
+        "p50": 2954.310387955047,
+        "p95": 9743.120992963668,
+        "p95_ci95": [
+          7192.6621940219775,
+          11260.298762004822
+        ]
+      },
+      "failures": 0
+    },
+    "openrouter/xiaomi/mimo-v2.5:pydantic-ai": {
+      "duration_ms": {
+        "samples": 30,
+        "p50": 3587.3724470147863,
+        "p95": 5355.8175069629215,
+        "p95_ci95": [
+          4598.296641954221,
+          5622.541521966923
+        ]
+      },
+      "failures": 0
+    },
+    "openrouter/xiaomi/mimo-v2.5:deepagents": {
+      "duration_ms": {
+        "samples": 30,
+        "p50": 3358.9888219721615,
+        "p95": 4975.79975501867,
+        "p95_ci95": [
+          4133.468318032101,
+          9744.34942100197
+        ]
+      },
+      "failures": 0
+    },
+    "openrouter/deepseek/deepseek-v4-flash:pydantic-ai": {
+      "duration_ms": {
+        "samples": 30,
+        "p50": 1907.1845129947178,
+        "p95": 3853.7953549530357,
+        "p95_ci95": [
+          2216.3815749809146,
+          10330.995700031053
+        ]
+      },
+      "failures": 0
+    },
+    "openrouter/deepseek/deepseek-v4-flash:deepagents": {
+      "duration_ms": {
+        "samples": 30,
+        "p50": 1826.7586680012755,
+        "p95": 4694.918741995934,
+        "p95_ci95": [
+          2273.229233978782,
+          4849.220125004649
+        ]
+      },
+      "failures": 0
+    }
+  }
+}

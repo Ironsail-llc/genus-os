@@ -1,0 +1,98 @@
+{
+  "scope": "One availability probe per configured cloud model; synthetic input; zero business dispatch",
+  "models": [
+    {
+      "model": "openrouter/deepseek/deepseek-v4.1-flash",
+      "status": "available",
+      "http_status": 200,
+      "duration_ms": 3027.408263005782,
+      "usage": {
+        "prompt_tokens": 331,
+        "completion_tokens": 87,
+        "total_tokens": 418,
+        "cost": 8.827e-05,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 8.827e-05,
+          "upstream_inference_prompt_cost": 4.303e-05,
+          "upstream_inference_completions_cost": 4.524e-05
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 33,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      },
+      "tool_call_received": true,
+      "error": null
+    },
+    {
+      "model": "openrouter/xiaomi/mimo-v2.5",
+      "status": "available",
+      "http_status": 200,
+      "duration_ms": 3020.706208946649,
+      "usage": {
+        "prompt_tokens": 303,
+        "completion_tokens": 74,
+        "total_tokens": 377,
+        "cost": 6.314e-05,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 6.314e-05,
+          "upstream_inference_prompt_cost": 4.242e-05,
+          "upstream_inference_completions_cost": 2.072e-05
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 44,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      },
+      "tool_call_received": true,
+      "error": null
+    },
+    {
+      "model": "openrouter/deepseek/deepseek-v4-flash",
+      "status": "available",
+      "http_status": 200,
+      "duration_ms": 1613.8437149929814,
+      "usage": {
+        "prompt_tokens": 320,
+        "completion_tokens": 89,
+        "total_tokens": 409,
+        "cost": 1.77786e-05,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 1.77786e-05,
+          "upstream_inference_prompt_cost": 1.1424e-05,
+          "upstream_inference_completions_cost": 6.3546e-06
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 28,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      },
+      "tool_call_received": true,
+      "error": null
+    }
+  ]
+}

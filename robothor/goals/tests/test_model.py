@@ -30,6 +30,12 @@ def test_completion_requires_observed_criteria_not_git():
         satisfied=True,
         note="Verified report receipt",
     )
+    reviewed = update(g, "complete", note="Delivered")
+    assert reviewed["status"] == "review"
+    assert update(reviewed, "approve")["status"] == "complete"
+    g["evidence"][-1]["verification"] = {"independent": True, "criterion_verified": False}
+    assert update(g, "complete", note="Receipt exists")["status"] == "review"
+    g["evidence"][-1]["verification"] = {"independent": True, "criterion_verified": True}
     assert update(g, "complete", note="Delivered")["status"] == "complete"
 
 
@@ -105,7 +111,9 @@ def test_ongoing_assessment_needs_fresh_evidence_each_period():
         g, "evidence", criterion=0, reference="metric:today", satisfied=True, note="Measured"
     )
     g = update(g, "assess", assessment="meeting", note="Target met today")
-    assert g["status"] == "waiting" and g["assessment"]["status"] == "meeting"
+    assert g["status"] == "review" and g["assessment"]["status"] == "meeting"
+    g = update(g, "approve")
+    assert g["status"] == "waiting"
     assert not g["evidence"]
     with pytest.raises(ValueError, match="requires evidence"):
         update(g, "assess", assessment="meeting", note="Still met")

@@ -1,0 +1,611 @@
+{
+  "scope": "Synthetic gateway smoke screening; not a matched production workload or promotion result",
+  "versions": {
+    "pydantic-ai-slim": "2.45.0",
+    "deepagents": "0.7.14",
+    "langchain": "1.4.2",
+    "langgraph": "1.2.11"
+  },
+  "samples": [
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 1,
+      "duration_ms": 3.951209015212953,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 2,
+      "duration_ms": 2.216517983470112,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 3,
+      "duration_ms": 2.2357830312103033,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 4,
+      "duration_ms": 1.821603043936193,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 5,
+      "duration_ms": 1.6367679927498102,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 6,
+      "duration_ms": 2.0849659922532737,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 7,
+      "duration_ms": 2.2233659983612597,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 8,
+      "duration_ms": 1.714913989417255,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 9,
+      "duration_ms": 1.5195829910226166,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 10,
+      "duration_ms": 1.5011189971119165,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 11,
+      "duration_ms": 2.0781330531463027,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 12,
+      "duration_ms": 2.2002789773978293,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 13,
+      "duration_ms": 2.1927740308456123,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 14,
+      "duration_ms": 2.202118979766965,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 15,
+      "duration_ms": 2.2378949797712266,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 16,
+      "duration_ms": 1.6818090225569904,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 17,
+      "duration_ms": 1.5321440296247602,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 18,
+      "duration_ms": 1.6200650134123862,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 19,
+      "duration_ms": 1.574575959239155,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 20,
+      "duration_ms": 1.5706719714216888,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 21,
+      "duration_ms": 1.5599680482409894,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 22,
+      "duration_ms": 1.7131050117313862,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 23,
+      "duration_ms": 1.4466550201177597,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 24,
+      "duration_ms": 1.5798719832673669,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 25,
+      "duration_ms": 2.0119569962844253,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 26,
+      "duration_ms": 1.8130909884348512,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 27,
+      "duration_ms": 1.7646910273469985,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 28,
+      "duration_ms": 1.987125026062131,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 29,
+      "duration_ms": 2.2190779563970864,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 30,
+      "duration_ms": 2.1601829794235528,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 1,
+      "duration_ms": 47.985961951781064,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 2,
+      "duration_ms": 33.004337979946285,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 3,
+      "duration_ms": 32.13205700740218,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 4,
+      "duration_ms": 33.71002495987341,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 5,
+      "duration_ms": 32.513547979760915,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 6,
+      "duration_ms": 34.14337302092463,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 7,
+      "duration_ms": 34.337023040279746,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 8,
+      "duration_ms": 32.128440972883254,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 9,
+      "duration_ms": 31.26129601150751,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 10,
+      "duration_ms": 34.08274898538366,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 11,
+      "duration_ms": 33.83437800221145,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 12,
+      "duration_ms": 36.02894500363618,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 13,
+      "duration_ms": 34.17247801553458,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 14,
+      "duration_ms": 34.92093301611021,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 15,
+      "duration_ms": 33.702649001497775,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 16,
+      "duration_ms": 34.39385601086542,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 17,
+      "duration_ms": 33.45035796519369,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 18,
+      "duration_ms": 33.44848600681871,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 19,
+      "duration_ms": 31.75595699576661,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 20,
+      "duration_ms": 31.718756014015526,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 21,
+      "duration_ms": 25.444835948292166,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 22,
+      "duration_ms": 21.345034008845687,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 23,
+      "duration_ms": 15.113066998310387,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 24,
+      "duration_ms": 18.90494499821216,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 25,
+      "duration_ms": 17.67872500931844,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 26,
+      "duration_ms": 17.814038030337542,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 27,
+      "duration_ms": 22.85460097482428,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 28,
+      "duration_ms": 15.697936003562063,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 29,
+      "duration_ms": 22.163779009133577,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 30,
+      "duration_ms": 43.107560952194035,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    }
+  ]
+}

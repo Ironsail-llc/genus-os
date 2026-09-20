@@ -43,3 +43,34 @@ def test_cannot_report_mixed_model_improvement():
     rows[-1]["model"] = "different"
     with pytest.raises(ValueError, match="cohort"):
         compare(rows)
+
+
+def test_pooled_speedup_cannot_hide_scenario_regression():
+    baseline = samples("optimized", 1000) + [
+        dict(r, case="critical", duration_ms=10) for r in samples("optimized", 10)
+    ]
+    candidate = samples("pydantic-ai", 500) + [
+        dict(r, case="critical", duration_ms=12) for r in samples("pydantic-ai", 12)
+    ]
+    result = compare(baseline + candidate)
+    assert result["replacement_latency_gate"]["pydantic-ai"] is False
+    assert result["harnesses"]["pydantic-ai"]["scenarios"]["critical"]["duration_ms"][
+        "p95_ci95"
+    ] == [12, 12]
+
+
+def test_failure_and_timeout_are_retained_and_disqualify():
+    rows = samples("optimized", 100) + samples("deepagents", 70)
+    rows[-1].update(status="timeout", duration_ms=60000, cost_usd=0.02, queue_ms=30)
+    result = compare(rows)
+    assert result["replacement_latency_gate"]["deepagents"] is False
+    candidate = result["harnesses"]["deepagents"]
+    assert candidate["samples"] == 30 and candidate["outcomes"]["timeout"] == 1
+    assert candidate["scenarios"]["add"]["cost_usd"]["samples"] == 1
+    assert result["finalist_latency_gate"]["deepagents"] is False
+
+
+def test_finalist_requires_one_hundred_repetitions():
+    rows = samples("optimized", 100) + samples("deepagents", 70)
+    assert compare(rows)["replacement_latency_gate"]["deepagents"]
+    assert not compare(rows)["finalist_latency_gate"]["deepagents"]

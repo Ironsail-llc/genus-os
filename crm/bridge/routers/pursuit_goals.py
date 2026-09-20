@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Literal
 from uuid import UUID  # noqa: TC003 — FastAPI resolves annotations at runtime
 
 from deps import get_tenant_id
@@ -80,3 +81,20 @@ def update_goal(
     actor: str = Depends(goal_operator),
 ):
     return {"goal": call(store.update, tenant, str(goal_id), body, actor, operator=True)}
+
+
+class RuntimeControl(BaseModel):
+    action: Literal["pause", "cancel"]
+    note: str = ""
+
+
+@router.post("/runs/{run_id}/control")
+def control_runtime(
+    run_id: UUID,
+    body: RuntimeControl,
+    tenant: str = Depends(get_tenant_id),
+    actor: str = Depends(goal_operator),
+):
+    from robothor.engine.runtime.controls import issue
+
+    return call(issue, tenant, str(run_id), body.action, body.note)

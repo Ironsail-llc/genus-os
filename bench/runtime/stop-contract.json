@@ -1,0 +1,143 @@
+{
+  "scope": "private PostgreSQL durable parent stop with an active descendant; synthetic wait, no provider",
+  "measurements": [
+    {
+      "stop_ack_ms": 7.819928985554725,
+      "descendant_control_ms": 7.861736987251788
+    },
+    {
+      "stop_ack_ms": 7.645527017302811,
+      "descendant_control_ms": 7.680310984142125
+    },
+    {
+      "stop_ack_ms": 7.206018024589866,
+      "descendant_control_ms": 7.240371021907777
+    },
+    {
+      "stop_ack_ms": 5.281547957565635,
+      "descendant_control_ms": 5.309292988386005
+    },
+    {
+      "stop_ack_ms": 5.834595009218901,
+      "descendant_control_ms": 5.85757102817297
+    },
+    {
+      "stop_ack_ms": 6.142821977846324,
+      "descendant_control_ms": 6.177510018460453
+    },
+    {
+      "stop_ack_ms": 6.227863021194935,
+      "descendant_control_ms": 6.243063020519912
+    },
+    {
+      "stop_ack_ms": 6.85695797437802,
+      "descendant_control_ms": 6.889021955430508
+    },
+    {
+      "stop_ack_ms": 5.874274997040629,
+      "descendant_control_ms": 5.909874977078289
+    },
+    {
+      "stop_ack_ms": 7.272274000570178,
+      "descendant_control_ms": 7.291761983651668
+    },
+    {
+      "stop_ack_ms": 6.119044963270426,
+      "descendant_control_ms": 6.127284956164658
+    },
+    {
+      "stop_ack_ms": 6.335143989417702,
+      "descendant_control_ms": 6.3603289891034365
+    },
+    {
+      "stop_ack_ms": 5.524607026018202,
+      "descendant_control_ms": 5.548478977289051
+    },
+    {
+      "stop_ack_ms": 6.5854990389198065,
+      "descendant_control_ms": 6.616555037908256
+    },
+    {
+      "stop_ack_ms": 6.521482020616531,
+      "descendant_control_ms": 6.552906008437276
+    },
+    {
+      "stop_ack_ms": 5.238011013716459,
+      "descendant_control_ms": 5.267723987344652
+    },
+    {
+      "stop_ack_ms": 6.815805041696876,
+      "descendant_control_ms": 6.845886004157364
+    },
+    {
+      "stop_ack_ms": 5.689263984095305,
+      "descendant_control_ms": 5.716400977689773
+    },
+    {
+      "stop_ack_ms": 7.528005982749164,
+      "descendant_control_ms": 7.558997953310609
+    },
+    {
+      "stop_ack_ms": 6.534633983392268,
+      "descendant_control_ms": 6.567818985786289
+    },
+    {
+      "stop_ack_ms": 8.137020049616694,
+      "descendant_control_ms": 8.1727160140872
+    },
+    {
+      "stop_ack_ms": 6.951599032618105,
+      "descendant_control_ms": 6.984831008594483
+    },
+    {
+      "stop_ack_ms": 4.837062966544181,
+      "descendant_control_ms": 4.86943096620962
+    },
+    {
+      "stop_ack_ms": 6.0303250211291015,
+      "descendant_control_ms": 6.053700984921306
+    },
+    {
+      "stop_ack_ms": 6.7419810220599174,
+      "descendant_control_ms": 6.773181026801467
+    },
+    {
+      "stop_ack_ms": 7.64960702508688,
+      "descendant_control_ms": 7.67275900579989
+    },
+    {
+      "stop_ack_ms": 7.520437007769942,
+      "descendant_control_ms": 7.539413985796273
+    },
+    {
+      "stop_ack_ms": 8.38067103177309,
+      "descendant_control_ms": 8.408110996242613
+    },
+    {
+      "stop_ack_ms": 7.634422974660993,
+      "descendant_control_ms": 7.6619909959845245
+    },
+    {
+      "stop_ack_ms": 6.437625037506223,
+      "descendant_control_ms": 6.459257041569799
+    }
+  ],
+  "stop_ack_ms": {
+    "samples": 30,
+    "p50": 6.534633983392268,
+    "p95": 8.137020049616694,
+    "p95_ci95": [
+      7.645527017302811,
+      8.38067103177309
+    ]
+  },
+  "descendant_control_ms": {
+    "samples": 30,
+    "p50": 6.567818985786289,
+    "p95": 8.1727160140872,
+    "p95_ci95": [
+      7.67275900579989,
+      8.408110996242613
+    ]
+  }
+}

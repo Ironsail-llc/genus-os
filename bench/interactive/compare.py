@@ -19,7 +19,16 @@ from typing import Any
 
 METRICS = ("duration_ms", "harness_ms", "model_calls", "input_tokens", "post_completion_tool_calls")
 COHORT = ("cohort", "model", "reasoning", "startup", "machine", "prompt_hash", "tools_hash")
-HARNESSES = {"current", "optimized", "minimal", "opencode", "pi"}
+HARNESSES = {"current", "optimized", "minimal", "opencode", "pi", "pydantic-ai", "deepagents"}
+EXTRA_METRICS = (
+    "output_tokens",
+    "cost_usd",
+    "queue_ms",
+    "ack_ms",
+    "stop_ack_ms",
+    "recovery_ms",
+    "descendant_control_ms",
+)
 
 
 def percentile(values: list[float], p: float) -> float:
@@ -35,16 +44,34 @@ def compare(records: list[dict[str, Any]]) -> dict[str, Any]:
         cohorts.add(tuple(row[k] for k in COHORT))
         for metric in METRICS:
             if (
-                not isinstance(row.get(metric), (int, float))
+                isinstance(row.get(metric), bool)
+                or not isinstance(row.get(metric), (int, float))
                 or not math.isfinite(row[metric])
                 or row[metric] < 0
             ):
                 raise ValueError(f"Missing/invalid measurement: {metric}")
         if not isinstance(row.get("state_checks"), dict) or not row["state_checks"]:
             raise ValueError("Independent state checks are required")
+        if row.get("status", "completed") not in {
+            "completed",
+            "failed",
+            "timeout",
+            "cancelled",
+            "unresolved",
+        }:
+            raise ValueError("Unknown terminal status")
+        for metric in EXTRA_METRICS:
+            if metric in row and (
+                type(row[metric]) not in (int, float)
+                or not math.isfinite(row[metric])
+                or row[metric] < 0
+            ):
+                raise ValueError(f"Invalid measurement: {metric}")
         groups[row["harness"]].append(row)
     if len(cohorts) != 1:
         raise ValueError("Compare exactly one matching model/tool/prompt/machine cohort at a time")
+    from bench.interactive.statistics import summary
+
     report: dict[str, Any] = {}
     for harness, rows in groups.items():
         if len({r["version"] for r in rows}) != 1:
@@ -52,6 +79,24 @@ def compare(records: list[dict[str, Any]]) -> dict[str, Any]:
         report[harness] = {
             "sufficient_samples": min(Counter(r["case"] for r in rows).values()) >= 30,
             "samples": len(rows),
+            "finalist_samples": min(Counter(r["case"] for r in rows).values()) >= 100,
+            "outcomes": dict(Counter(r.get("status", "completed") for r in rows)),
+            "all_completed": all(r.get("status", "completed") == "completed" for r in rows),
+            "scenarios": {
+                case: {
+                    "samples": len(case_rows),
+                    "outcomes": dict(Counter(r.get("status", "completed") for r in case_rows)),
+                    "all_state_checks_pass": all(
+                        v is True for r in case_rows for v in r["state_checks"].values()
+                    ),
+                    **{
+                        metric: summary([r[metric] for r in case_rows if metric in r])
+                        for metric in (*METRICS, *EXTRA_METRICS)
+                    },
+                }
+                for case in sorted({r["case"] for r in rows})
+                for case_rows in [[r for r in rows if r["case"] == case]]
+            },
             "version": sorted({r["version"] for r in rows}),
             "all_state_checks_pass": all(
                 v is True for r in rows for v in r["state_checks"].values()
@@ -87,22 +132,35 @@ def compare(records: list[dict[str, Any]]) -> dict[str, Any]:
             }
         )
     replacements = {}
-    for name in ("opencode", "pi"):
+    for name in ("opencode", "pi", "pydantic-ai", "deepagents"):
         candidate = report.get(name)
         if optimized and candidate and case_counts[name] == case_counts["optimized"]:
             replacements[name] = (
-                candidate["sufficient_samples"]
+                candidate["all_completed"]
+                and optimized["all_completed"]
+                and candidate["sufficient_samples"]
                 and optimized["sufficient_samples"]
                 and candidate["all_state_checks_pass"]
                 and optimized["all_state_checks_pass"]
                 and candidate["duration_ms"]["p95"] <= optimized["duration_ms"]["p95"] * 0.8
                 and all(r["post_completion_tool_calls"] == 0 for r in groups[name])
+                and all(
+                    candidate["scenarios"][case]["duration_ms"]["p95"]
+                    <= baseline["duration_ms"]["p95"] * 1.1
+                    for case, baseline in optimized["scenarios"].items()
+                )
             )
     return {
         "cohort": dict(zip(COHORT, next(iter(cohorts)), strict=True)),
         "harnesses": report,
         "optimization_gates": gates,
         "replacement_latency_gate": replacements,
+        "finalist_latency_gate": {
+            name: passed
+            and report[name]["finalist_samples"]
+            and report["optimized"]["finalist_samples"]
+            for name, passed in replacements.items()
+        },
         "note": "Latency gate alone does not approve replacement; permission, identity, cancellation and recovery parity are required.",
     }
 

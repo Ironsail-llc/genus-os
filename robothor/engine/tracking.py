@@ -56,6 +56,7 @@ def create_run(run: AgentRun) -> str:
     Retries up to 3 times on transient DB errors (connection drops, pool exhaustion).
     """
     from robothor.engine.retry import retry_sync
+    from robothor.engine.runtime.current import run_identity
 
     def _insert() -> str:
         with get_connection() as conn:
@@ -67,10 +68,10 @@ def create_run(run: AgentRun) -> str:
                     trigger_detail, correlation_id, status, started_at,
                     model_used, system_prompt_chars, user_prompt_chars,
                     task_text, tools_provided, delivery_mode, parent_run_id,
-                    nesting_depth, task_id, person_id
+                    nesting_depth, task_id, person_id, runtime_context
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s
                 )
                 """,
                 (
@@ -108,6 +109,7 @@ def create_run(run: AgentRun) -> str:
                     run.nesting_depth,
                     run.task_id,
                     getattr(run, "person_id", None),
+                    json.dumps(run_identity(run)),
                 ),
             )
         return run.id

@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "base_revision": "eea3252b15",
+  "branch": "feat/runtime-modernization",
+  "production_deployed": false,
+  "replacement_selected": false,
+  "full_acceptance_passed": false,
+  "engine_regression": {
+    "passed": 10828,
+    "failed": 10,
+    "skipped": 29,
+    "deselected": 177,
+    "failures_reproduced_on_base": true,
+    "failures": [
+      "robothor/engine/tests/test_benchmark_funding.py::test_task_loop_accounts_for_judge_and_refuses_unfunded_next_request",
+      "robothor/engine/tests/test_benchmark_harness_fairness.py::TestToolClassificationParity::test_every_registered_tool_is_classified",
+      "robothor/engine/tests/test_declared_deliverables.py::TestItReadsTheTaskNotTheSystemPrompt::test_the_runner_uses_the_helper_not_an_index",
+      "robothor/engine/tests/test_extension_watcher.py::test_telegram_wires_bundle_resolution",
+      "robothor/engine/tests/test_function_size_ratchet.py::test_no_new_oversized_function",
+      "robothor/engine/tests/test_function_size_ratchet.py::test_known_large_functions_do_not_grow",
+      "robothor/engine/tests/test_step_efficiency_pacing.py::TestTheRunnerWiring::test_the_runner_delegates_to_the_pacer",
+      "robothor/engine/tests/test_tool_admission.py::TestPlanModeGate::test_the_run_continues_after_a_refusal",
+      "robothor/engine/tests/test_tool_search_ranking.py::test_a_shell_command_query_finds_exec",
+      "robothor/engine/tests/test_tool_search_ranking.py::test_looking_up_a_company_finds_the_getter"
+    ]
+  },
+  "focused_goal_runtime_budget": {
+    "passed": 101,
+    "failed": 0
+  },
+  "goals_ui": {
+    "passed": 6,
+    "failed": 0,
+    "typescript": "passed"
+  },
+  "lint": "passed",
+  "live_native": {
+    "models": "existing main manifest cloud selections, tested separately",
+    "screening": "live-native.summary.json",
+    "diagnostic_samples": 5,
+    "diagnostic_verified": 1,
+    "diagnostic_observation": "MiMo sometimes asks for key/value already supplied in the request; no state verification is inferred from its terminal prose."
+  },
+  "unmet_gates": [
+    "Native MiMo cohort verified only 15/30 outcomes; live everyday correctness acceptance is not passed.",
+    "Candidate action prototypes have not established full checkpoint, delegated authority, memory, goal-family accounting and fallback parity.",
+    "No candidate has a matched representative-workload p95 replacement result or a 100-sample finalist qualification.",
+    "Local Ollama/GPU cohort and deployment admission queues are not load-certified.",
+    "Network acknowledgement/progress SLOs and staged deployment rollback remain unverified.",
+    "Ten inherited engine test failures remain unresolved.",
+    "20-tenant mixed workload exceeded 2s warm-harness target under contention (2.82s interactive p95); five tenants was the largest tested load below 2s."
+  ],
+  "upgrade_drills": {
+    "pydantic_ai": [
+      "2.45.0",
+      "2.46.0"
+    ],
+    "deep_agents": [
+      "0.7.14",
+      "0.7.15"
+    ],
+    "samples_each_before_after": 30,
+    "scope": "synthetic action/public API compatibility; no checkpoint migration claim"
+  },
+  "rollback_drill": "private database new-admission contract preserves existing durable stops; no production rollback performed",
+  "mixed_native_goal_workload": {
+    "tests_passed": 3,
+    "verified_actions": 1560,
+    "largest_tested_tenant_count_under_2s": 5,
+    "concurrent_tenant_results": [
+      {
+        "tenants": 1,
+        "interactive_p95_ms": 148.56688800500706,
+        "interactive_p95_ci95_ms": [
+          118.57081000925973,
+          214.63226102059707
+        ],
+        "ack_p95_ms": 0.13699301052838564
+      },
+      {
+        "tenants": 5,
+        "interactive_p95_ms": 863.696357992012,
+        "interactive_p95_ci95_ms": [
+          808.7483029812574,
+          892.6098489901051
+        ],
+        "ack_p95_ms": 0.10379304876551032
+      },
+      {
+        "tenants": 20,
+        "interactive_p95_ms": 2818.412230000831,
+        "interactive_p95_ci95_ms": [
+          2806.426487979479,
+          2885.255955043249
+        ],
+        "ack_p95_ms": 0.10056101018562913
+      }
+    ]
+  }
+}

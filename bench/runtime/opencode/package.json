@@ -1,0 +1,8 @@
+{
+  "name": "robothor-opencode-feasibility",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@opencode-ai/sdk": "1.18.31"
+  }
+}

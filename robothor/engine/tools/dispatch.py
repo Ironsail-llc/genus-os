@@ -439,6 +439,29 @@ def _audit_tool_call(
         pass
 
 
+async def _runtime_denial(
+    name: str, args: dict[str, Any], ctx: ToolContext
+) -> dict[str, Any] | None:
+    from robothor.goals.runtime import admit_tool
+
+    try:
+        from robothor.engine.runtime.controls import stopped
+
+        if ctx.run_id and await asyncio.to_thread(stopped, ctx.tenant_id, ctx.run_id):
+            raise ValueError(
+                "durable stop denies further tool dispatch; reconcile in-flight effects"
+            )
+        await asyncio.to_thread(admit_tool, name, args, ctx)
+    except Exception as exc:
+        err_msg, crashed = _describe_exception(exc)
+        _audit_tool_call(
+            name, ctx.agent_id, ctx.tenant_id, user_id=ctx.user_id, status="denied", error=err_msg
+        )
+        return {"error": err_msg, "tool_crashed": True} if crashed else {"error": err_msg}
+
+    return None
+
+
 async def _execute_tool(
     name: str,
     args: dict[str, Any],
@@ -495,14 +518,9 @@ async def _execute_tool(
         is_benchmark=is_benchmark,
         identity=identity,
     )
-    from robothor.goals.runtime import admit_tool
-
-    try:
-        await asyncio.to_thread(admit_tool, name, args, ctx)
-    except Exception as exc:
-        err_msg, crashed = _describe_exception(exc)
-        _audit_tool_call(name, agent_id, tenant_id, user_id=user_id, status="denied", error=err_msg)
-        return {"error": err_msg, "tool_crashed": True} if crashed else {"error": err_msg}
+    denial = await _runtime_denial(name, args, ctx)
+    if denial:
+        return denial
 
     from robothor.engine.tools import get_registry
 

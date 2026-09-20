@@ -78,3 +78,33 @@ it("refreshes selected goal progress and uses its latest version for controls", 
     method: "PATCH", body: JSON.stringify({ action: "pause", version: 7 }),
   })));
 });
+
+it("submits an explicit revision with a reason and current version", async () => {
+  const fetch = vi.fn((path: string, options?: RequestInit) => options?.method === "PATCH"
+    ? response({ goal }) : path.endsWith("/g1") ? response({ goal }) : response({ goals: [goal], enabled: true }));
+  vi.stubGlobal("fetch", fetch);
+  render(<GoalsView visible />);
+  fireEvent.click(await screen.findByRole("button", { name: /Deliver report/ }));
+  fireEvent.change(await screen.findByLabelText("Revised objective"), { target: { value: "Deliver revised report" } });
+  fireEvent.change(screen.getByLabelText("Replacement criteria"), { target: { value: "New receipt checked" } });
+  fireEvent.change(screen.getByLabelText("Reason for revision"), { target: { value: "Operator changed the destination" } });
+  fireEvent.submit(screen.getByLabelText("Reason for revision").closest("form")!);
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/bridge/api/goals/g1", expect.objectContaining({
+    method: "PATCH", body: JSON.stringify({ action: "revise", version: 4, note: "Operator changed the destination", objective: "Deliver revised report", success_criteria: ["New receipt checked"] }),
+  })));
+});
+
+it("creates reviewed child work only after explicit authorization", async () => {
+  const fetch = vi.fn((path: string, options?: RequestInit) => options?.method === "POST"
+    ? response({ goal }) : path.endsWith("/g1") ? response({ goal }) : response({ goals: [goal], enabled: true }));
+  vi.stubGlobal("fetch", fetch);
+  render(<GoalsView visible />);
+  fireEvent.click(await screen.findByRole("button", { name: /Deliver report/ }));
+  fireEvent.change(await screen.findByLabelText("Milestone objective"), { target: { value: "Check delivery" } });
+  fireEvent.change(screen.getByLabelText("Milestone criteria"), { target: { value: "Recipient receipt recorded" } });
+  expect(fetch.mock.calls.filter(([, opts]) => opts?.method === "POST")).toHaveLength(0);
+  fireEvent.submit(screen.getByLabelText("Milestone criteria").closest("form")!);
+  await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/bridge/api/goals", expect.objectContaining({
+    method: "POST", body: expect.stringContaining('"parent_goal_id":"g1","kind":"short","human_review":true'),
+  })));
+});

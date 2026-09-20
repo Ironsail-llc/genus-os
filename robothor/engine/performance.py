@@ -20,7 +20,10 @@ class ProgressReporter:
 
     async def status(self, event: dict[str, Any]) -> None:
         kind = event.get("event")
-        if kind == "iteration_start":
+        if kind in {"accepted", "queued", "waiting", "stopping"}:
+            self.phase = str(kind)
+            self.activity = str(event.get("text") or kind.capitalize())
+        elif kind == "iteration_start":
             self.phase, self.activity = "reasoning", "Working out the next step"
         elif kind == "tools_start":
             self.phase = "tools"
@@ -47,14 +50,16 @@ class ProgressReporter:
 async def periodic_progress(
     session: Any,
     callback: Any,
-    interval: float = 30.0,
+    interval: float = 10.0,
     reporter: ProgressReporter | None = None,
 ) -> None:
     if callback is None:
         return
     started = time.monotonic()
+    next_tick = started + interval
     while True:
-        await asyncio.sleep(interval)
+        await asyncio.sleep(max(0, next_tick - time.monotonic()))
+        next_tick = time.monotonic() + interval
         tools = sum(s.step_type == StepType.TOOL_CALL for s in session.run.steps)
         event = {
             "event": "progress",

@@ -43,8 +43,10 @@ state BEFORE repeating any action. Record reconciled with the observed outcome.
 
 
 class GoalController:
-    def __init__(self, runner: AgentRunner, config: EngineConfig) -> None:
-        self.runner = runner
+    def __init__(self, runner: AgentRunner, config: EngineConfig, *, runtime: Any = None) -> None:
+        from robothor.engine.runtime import CurrentRuntime
+
+        self.runtime = runtime or (CurrentRuntime(runner.execute) if runner is not None else None)
         self.config = config
         self._lock = asyncio.Lock()
         self._last_capture = 0.0
@@ -60,6 +62,8 @@ class GoalController:
                 await asyncio.sleep(1)
 
     async def tick(self) -> None:
+        if self.runtime is None:
+            return
         if self._lock.locked():
             return
         async with self._lock:
@@ -88,6 +92,7 @@ class GoalController:
     async def execute(self, goal: dict[str, Any], attempt: str) -> None:
         from robothor.engine.config import load_agent_config_or_broken
         from robothor.engine.models import TriggerType
+        from robothor.engine.runtime import ExecutionContext, RunRequest
 
         tenant = self.config.tenant_id
         remaining = goal["token_budget"] - goal["tokens_used"] if goal["token_budget"] else None
@@ -115,19 +120,32 @@ class GoalController:
             detail = await asyncio.to_thread(store.get, tenant, goal["id"])
             prompt = PURSUIT_INSTRUCTIONS + "\nCurrent goal:\n" + json.dumps(detail, default=str)
             work = asyncio.create_task(
-                self.runner.execute(
-                    agent_id="main",
-                    message=prompt,
-                    trigger_type=TriggerType.CRON,
-                    trigger_detail=f"goal:{goal['id']}",
-                    correlation_id=attempt,
-                    agent_config=config,
-                    tenant_id=tenant,
+                self.runtime.run(
+                    RunRequest(
+                        context=ExecutionContext(
+                            tenant,
+                            "service:main",
+                            attempt,
+                            parent_goal_id=goal["parent_goal_id"],
+                            goal_id=goal["id"],
+                            attempt_id=attempt,
+                            budget_id=goal["parent_goal_id"] or goal["id"],
+                        ),
+                        agent_id="main",
+                        message=prompt,
+                        options={
+                            "trigger_type": TriggerType.CRON,
+                            "trigger_detail": f"goal:{goal['id']}",
+                            "correlation_id": attempt,
+                            "agent_config": config,
+                            "tenant_id": tenant,
+                        },
+                    )
                 )
             )
             seen_steer = goal.get("steer_version", 0)
             while not work.done():
-                done, _ = await asyncio.wait({work}, timeout=5)
+                done, _ = await asyncio.wait({work}, timeout=1)
                 if done:
                     break
                 control = await asyncio.to_thread(store.control, tenant, goal["id"])
@@ -145,13 +163,17 @@ class GoalController:
                     tenant,
                     goal["id"],
                     attempt,
-                    tokens=sum(r.input_tokens + r.output_tokens for r in current.runs.values()),
+                    tokens=max(
+                        sum(r.input_tokens + r.output_tokens for r in current.runs.values()),
+                        current.provider_budget.charged if current.provider_budget else 0,
+                    ),
                     cost=sum(r.total_cost_usd for r in current.runs.values()),
                 ):
                     work.cancel()
                     break
             with suppress(asyncio.CancelledError):
-                run = await work
+                result = await work
+                run = result.run
             if run is not None and str(run.status) in {"failed", "timeout", "skipped"}:
                 error = run.error_message or str(run.status)
         except asyncio.CancelledError:
@@ -179,7 +201,10 @@ class GoalController:
                 goal["id"],
                 attempt,
                 run_id=run.id if run else current.run_id or None,
-                tokens=sum(r.input_tokens + r.output_tokens for r in all_runs),
+                tokens=max(
+                    sum(r.input_tokens + r.output_tokens for r in all_runs),
+                    current.provider_budget.charged if current.provider_budget else 0,
+                ),
                 cost=sum(r.total_cost_usd for r in all_runs),
                 budget_exhausted=any(r.budget_exhausted for r in all_runs),
                 checkpoint=live_run.output_text or "" if live_run else "",

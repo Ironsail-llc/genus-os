@@ -107,6 +107,14 @@ from robothor.engine.run_lifecycle import RunLifecycleMixin, spawn_post_stall_au
 from robothor.engine.run_llm_calls import LLMCallMixin  # noqa: E402
 from robothor.engine.run_pacing import DeadlinePacer, checkin_note, mode_for_run  # noqa: E402
 from robothor.engine.run_replan import maybe_replan  # noqa: E402
+from robothor.engine.runtime.current import runtime_entrypoint
+from robothor.engine.runtime.setup import (
+    attach_session,
+    bounded_timeout,
+    initialize_budget,
+    principal,
+    restored_context,
+)
 from robothor.engine.sandbox_policy import agent_holds_exec, resolve_sandbox_decision
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.session import ENGINE_CONTEXT_ROLE, AgentSession
@@ -471,6 +479,7 @@ class AgentRunner(
         # from this class (Phase A / Slice 1); stateless across runs.
         self._llm = LLMClient()
 
+    @runtime_entrypoint
     async def execute(
         self,
         agent_id: str,
@@ -522,37 +531,17 @@ class AgentRunner(
         message = protect_payment_text(message)
         resolved_tenant = tenant_id or current_tenant_scope() or self.config.tenant_id
 
-        # Restore the execution mode BEFORE constructing tools. A plan-only
-        # checkpoint must never acquire mutating tools after a daemon restart.
-        if resume_from_run_id:
-            from robothor.engine.checkpoint import CheckpointManager
-            from robothor.engine.task_context import read_context
-
-            saved = await asyncio.to_thread(CheckpointManager.load_latest, resume_from_run_id)
-            saved_context = read_context((saved or {}).get("messages") or [])
-            if saved_context and saved_context.get("mode") == "plan":
-                readonly_mode = True
-                execution_mode = False
-            if (
-                saved_context
-                and trigger_type == TriggerType.EVENT
-                and identity is None
-                and saved_context.get("agent_id") == agent_id
-            ):
-                from robothor.identity import resolve_identity
-
-                original = saved_context.get("identity") or {}
-                if original.get("tenant_id") == resolved_tenant:
-                    restored_identity = await asyncio.to_thread(
-                        resolve_identity,
-                        original.get("channel", ""),
-                        original.get("identifier", ""),
-                        tenant_id=resolved_tenant,
-                    )
-                    if restored_identity and restored_identity.verified:
-                        identity = restored_identity
-                        user_id = identity.user_account_id or identity.tenant_user_id or ""
-                        user_role = identity.role
+        readonly_mode, execution_mode, identity, user_id, user_role = await restored_context(
+            resume_from_run_id,
+            agent_id,
+            resolved_tenant,
+            trigger_type,
+            readonly_mode,
+            execution_mode,
+            identity,
+            user_id,
+            user_role,
+        )
 
         reason = f"Agent config not found: {agent_id}"
         if agent_config is None:
@@ -563,36 +552,20 @@ class AgentRunner(
             session.start("", message, [])
             return session.fail(reason)
 
-        # Resolve a concrete execution identity before creating the run.  An
-        # empty role used to mean "system" and silently bypass every per-user
-        # permission check.  System triggers now receive the manifest's explicit
-        # service role; interactive triggers must carry a verified caller (with
-        # the sole exception of explicit loopback insecure-development mode).
-        effective_user_id = user_id
-        effective_user_role = user_role
-        if spawn_context and not effective_user_id and spawn_context.user_id:
-            effective_user_id = spawn_context.user_id
-            effective_user_role = spawn_context.user_role
-
-        if trigger_type in _SYSTEM_TRIGGER_TYPES:
-            effective_user_id = effective_user_id or f"service:{agent_id}"
-            effective_user_role = effective_user_role or agent_config.service_role or "service"
-        elif not effective_user_id or not effective_user_role:
-            from robothor.auth.runtime import auth_required
-
-            bind_host = os.environ.get("ROBOTHOR_ENGINE_HOST", "127.0.0.1")
-            if not auth_required(bind_host=bind_host):
-                effective_user_id = effective_user_id or "loopback-development-operator"
-                effective_user_role = effective_user_role or "owner"
-            else:
-                logger.warning(
-                    "Rejected interactive run without verified identity: agent=%s trigger=%s",
-                    _sanitize(agent_id),
-                    trigger_type.value,
-                )
-                session = AgentSession(agent_id, trigger_type, trigger_detail, resolved_tenant)
-                session.start("", message, [])
-                return session.fail("Authentication identity required for interactive run")
+        actor = principal(
+            agent_config,
+            agent_id,
+            trigger_type,
+            user_id,
+            user_role,
+            spawn_context,
+            _SYSTEM_TRIGGER_TYPES,
+        )
+        if actor is None:
+            session = AgentSession(agent_id, trigger_type, trigger_detail, resolved_tenant)
+            session.start("", message, [])
+            return session.fail("Authentication identity required for interactive run")
+        effective_user_id, effective_user_role = actor
 
         # ── Identity — who is this run's message addressed to? ────────────
         # Precedence and its reasoning live in robothor/engine/run_identity.py:
@@ -615,7 +588,6 @@ class AgentRunner(
 
         set_reasoning_effort(agent_config.reasoning_effort)
 
-        # Create session
         session = AgentSession(
             agent_id=agent_id,
             trigger_type=trigger_type,
@@ -625,9 +597,7 @@ class AgentRunner(
             tool_offload_threshold=agent_config.tool_offload_threshold,
         )
 
-        from robothor.goals.runtime import attach_run
-
-        await asyncio.to_thread(attach_run, session.run)
+        await attach_session(session)
         session.response_format = agent_config.response_format
         session.provider_order = agent_config.provider_order
 
@@ -1025,9 +995,7 @@ class AgentRunner(
 
         watchdog.touch("session_started")
 
-        from robothor.goals.runtime import initialize_token_budget
-
-        initialize_token_budget(session.run, agent_config, spawn_context)
+        initialize_budget(session.run, agent_config, spawn_context)
 
         # Stage 5 — propagate the CRM task this run is advancing so the
         # agent_runs row carries it from INSERT time. Previously only the
@@ -1043,7 +1011,7 @@ class AgentRunner(
         # This lets agents run for hours on complex tasks without being killed.
         trace = None  # initialized inside timeout block, but referenced in except handlers
         try:
-            async with asyncio.timeout(hard_timeout):
+            async with asyncio.timeout(bounded_timeout(hard_timeout, session)):
                 # Record run in database (sync DB call — run in executor to avoid blocking event loop)
                 import psycopg2
 

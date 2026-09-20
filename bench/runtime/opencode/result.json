@@ -1,0 +1,48 @@
+{
+  "scope": "SDK serialization against synthetic transport; no server-side enforcement claim",
+  "transport_contract": "passed",
+  "promotion_eligible": false,
+  "unverified": [
+    "all built-in tools denied at dispatch",
+    "trusted tenant and principal binding",
+    "pre-provider shared budget reservation",
+    "durable stop and compatible recovery"
+  ],
+  "requests": [
+    {
+      "method": "POST",
+      "path": "/session",
+      "body": {
+        "title": "Synthetic runtime feasibility"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/session/fixture-session/message",
+      "body": {
+        "model": {
+          "providerID": "fixture",
+          "modelID": "fixture"
+        },
+        "tools": {
+          "bash": false,
+          "edit": false,
+          "write": false,
+          "task": false,
+          "record": true
+        },
+        "parts": [
+          {
+            "type": "text",
+            "text": "Use only the authorized record gateway."
+          }
+        ]
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/session/fixture-session/abort",
+      "body": null
+    }
+  ]
+}

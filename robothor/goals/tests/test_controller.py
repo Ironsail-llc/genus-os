@@ -76,7 +76,15 @@ async def test_actual_controller_continues_then_verifies_completion(db):  # noqa
     ):
         await controller.tick()
     result = store.get(db, g["id"])
-    assert result["status"] == "complete" and result["tokens_used"] == 16
+    assert result["status"] == "review" and result["tokens_used"] == 16
+    approved = store.update(
+        db,
+        g["id"],
+        GoalUpdate(action="approve", version=result["version"]),
+        "operator",
+        operator=True,
+    )
+    assert approved["status"] == "complete"
     assert len(prompts) == 2 and "Draft saved" in prompts[1]
     assert binding.get() is None
 

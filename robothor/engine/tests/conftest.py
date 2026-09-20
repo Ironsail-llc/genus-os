@@ -337,3 +337,12 @@ def voice_notes(*, enabled: bool):
 
     with patch.object(telegram_attachments, "_voice_notes_enabled", return_value=enabled) as flag:
         yield flag
+
+
+@pytest.fixture(autouse=True)
+def isolated_runtime_control_store(monkeypatch):
+    """Unit runs have no persisted run row. Durable-control integration tests replace this stub."""
+    monkeypatch.setattr("robothor.engine.runtime.controls.stopped", lambda tenant, run_id: False)
+    monkeypatch.setattr(
+        "robothor.engine.runtime.controls.issue", lambda *args, **kwargs: {"status": "stopping"}
+    )

@@ -1,0 +1,491 @@
+{
+  "scope": "Synthetic gateway smoke screening; not a matched production workload or promotion result",
+  "versions": {
+    "pydantic-ai-slim": "2.46.0",
+    "deepagents": "0.7.15",
+    "langchain": "1.4.2",
+    "langgraph": "1.2.11"
+  },
+  "samples": [
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 1,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 2,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 3,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 4,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 5,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 6,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 7,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 8,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 9,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 10,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 11,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 12,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 13,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 14,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 15,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 16,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 17,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 18,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 19,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 20,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 21,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 22,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 23,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 24,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 25,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 26,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 27,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 28,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 29,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "pydantic-ai",
+      "repetition": 30,
+      "status": "failed",
+      "error": "TypeError: 'RunUsage' object is not callable"
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 1,
+      "duration_ms": 23.16855499520898,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 2,
+      "duration_ms": 32.26922400062904,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 3,
+      "duration_ms": 32.203976006712765,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 4,
+      "duration_ms": 18.068486999254674,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 5,
+      "duration_ms": 26.530286006163806,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 6,
+      "duration_ms": 24.03309301007539,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 7,
+      "duration_ms": 35.25447100400925,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 8,
+      "duration_ms": 66.22633803635836,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 9,
+      "duration_ms": 15.911474009044468,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 10,
+      "duration_ms": 16.17674098815769,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 11,
+      "duration_ms": 20.852611982263625,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 12,
+      "duration_ms": 16.76717901136726,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 13,
+      "duration_ms": 21.709708962589502,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 14,
+      "duration_ms": 35.648090997710824,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 15,
+      "duration_ms": 34.10959499888122,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 16,
+      "duration_ms": 37.06416999921203,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 17,
+      "duration_ms": 33.77968800486997,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 18,
+      "duration_ms": 33.70008699130267,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 19,
+      "duration_ms": 34.457998001016676,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 20,
+      "duration_ms": 34.80433800723404,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 21,
+      "duration_ms": 35.66184994997457,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 22,
+      "duration_ms": 34.357166034169495,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 23,
+      "duration_ms": 35.136948979925364,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 24,
+      "duration_ms": 34.55996699631214,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 25,
+      "duration_ms": 35.699531028512865,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 26,
+      "duration_ms": 36.91848804010078,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 27,
+      "duration_ms": 35.58242600411177,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 28,
+      "duration_ms": 36.65691701462492,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 29,
+      "duration_ms": 36.891206982545555,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    },
+    {
+      "runtime": "deepagents",
+      "repetition": 30,
+      "duration_ms": 34.71790504409,
+      "model_calls": 1,
+      "verified": true,
+      "status": "completed",
+      "single_write": true,
+      "dispatches": 1
+    }
+  ]
+}

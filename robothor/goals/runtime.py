@@ -21,6 +21,13 @@ class Binding:
     run_id: str = ""
     yield_requested: bool = False
     runs: dict[str, AgentRun] = field(default_factory=dict)
+    provider_budget: Any = field(default=None, init=False)
+
+    def __post_init__(self) -> None:
+        if self.token_remaining is not None:
+            from robothor.engine.runtime.budget import SharedBudget
+
+            self.provider_budget = SharedBudget(self.token_remaining)
 
 
 binding: ContextVar[Binding | None] = ContextVar("pursuit_goal", default=None)
@@ -57,7 +64,10 @@ def budget_hit() -> bool:
     return bool(
         current
         and current.token_remaining is not None
-        and sum(r.input_tokens + r.output_tokens for r in current.runs.values())
+        and max(
+            sum(r.input_tokens + r.output_tokens for r in current.runs.values()),
+            current.provider_budget.charged if current.provider_budget else 0,
+        )
         >= current.token_remaining
     )
 

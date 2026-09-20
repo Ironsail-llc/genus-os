@@ -193,6 +193,14 @@ def update(
                     "finish or cancel outstanding execution children before completing"
                 )
         g = transition(before, change, operator=operator)
+        if change.action == "evidence":
+            from robothor.goals.evidence import verify
+
+            g["evidence"][-1]["verification"] = (
+                verify(cur, tenant, before, change.reference, change.criterion)
+                if change.satisfied
+                else {"method": "negative_assessment", "independent": False}
+            )
         if change.action == "block":
             from robothor.goals.runtime import binding
 
@@ -227,7 +235,13 @@ def update(
         if before["kind"] != g["kind"]:
             notify(cur, tenant, g, "promoted to long-term", change.note)
             journal(cur, tenant, g, "promoted", "engine", {"reason": change.note})
-        if g["parent_goal_id"] and g["status"] in {"waiting", "complete", "blocked", "canceled"}:
+        if g["parent_goal_id"] and g["status"] in {
+            "waiting",
+            "complete",
+            "blocked",
+            "canceled",
+            "review",
+        }:
             parent = locked(cur, tenant, g["parent_goal_id"])
             if parent["status"] not in INACTIVE:
                 parent.update(status="queued", ready_at=now_iso(), version=parent["version"] + 1)
@@ -271,7 +285,11 @@ def update(
                     child.update(status=g["status"], version=child["version"] + 1)
                     save(cur, tenant, child)
                     journal(cur, tenant, child, change.action, actor, {"parent": goal_id})
-        return g
+    if change.action in {"pause", "cancel"}:
+        from robothor.engine.runtime.activity import stop_goal
+
+        stop_goal(tenant, goal_id)
+    return g
 
 
 def ingest_event(tenant: str, event_id: str, event_type: str, payload: dict[str, Any]) -> None:
@@ -576,3 +594,35 @@ def adopt(tenant: str, task_id: str, actor: str) -> dict[str, Any]:
             {"legacy_task_id": task_id, "evidence": goal["legacy_evidence"]},
         )
     return goal
+
+
+def reserve_provider_usage(tenant: str, goal_id: str, attempt: str, tokens: int) -> None:
+    """Durably retain worst-case attempt usage before a provider request can leave."""
+    with transaction() as cur:
+        cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("goals:" + tenant,))
+        cur.execute(
+            """SELECT g.data FROM pursuit_goals g JOIN goal_pursuit_settings s
+                    ON s.tenant_id=g.tenant_id WHERE g.tenant_id=%s AND g.id=%s AND g.lease_id=%s
+                    AND g.lease_until>now() AND s.enabled AND g.status IN ('running','queued') FOR UPDATE OF g""",
+            (tenant, goal_id, attempt),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise ValueError("goal lease no longer authorizes provider spending")
+        goal = row["data"]
+        budgets = [goal]
+        if goal["parent_goal_id"]:
+            budgets.append(locked(cur, tenant, goal["parent_goal_id"]))
+        if any(
+            g["status"] in INACTIVE
+            or (g["token_budget"] and g["tokens_used"] + tokens > g["token_budget"])
+            for g in budgets
+        ):
+            raise ValueError("goal family budget or authority exhausted")
+        cur.execute(
+            """UPDATE pursuit_goal_attempts SET tokens=GREATEST(tokens,%s)
+                    WHERE tenant_id=%s AND id=%s AND status='running' RETURNING id""",
+            (tokens, tenant, attempt),
+        )
+        if not cur.fetchone():
+            raise ValueError("goal attempt no longer active")

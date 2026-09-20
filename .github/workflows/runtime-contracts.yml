@@ -1,0 +1,44 @@
+name: Runtime compatibility
+on:
+  pull_request:
+    paths:
+      - 'robothor/engine/**'
+      - 'robothor/goals/**'
+      - 'crm/migrations/**'
+      - 'crm/bridge/routers/pursuit_goals.py'
+      - 'pyproject.toml'
+      - 'bench/runtime/**'
+      - 'bench/interactive/**'
+      - '.github/workflows/runtime-contracts.yml'
+  schedule:
+    - cron: '15 9 1 * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+      - run: pip install -e '.[dev,api]'
+      - run: sudo apt-get update && sudo apt-get install -y postgresql-16
+      - name: Native execution and product contracts
+        run: >-
+          python -m pytest -q --no-cov robothor/goals/tests
+          robothor/engine/tests/test_runtime_contracts.py
+          robothor/engine/tests/test_runtime_controls.py
+          robothor/engine/tests/test_runtime_mixed.py
+          robothor/engine/tests/test_request_budget.py
+          robothor/engine/tests/test_checkpoint.py
+          robothor/engine/tests/test_runner.py
+          robothor/engine/tests/test_interactive_benchmark_compare.py
+      - name: Pinned candidate compatibility (synthetic tools only)
+        run: |
+          python -m venv /tmp/runtime-candidates
+          /tmp/runtime-candidates/bin/pip install -r bench/runtime/candidates.lock
+          PYDANTIC_AI_NO_BANNER=1 /tmp/runtime-candidates/bin/python -m bench.runtime.screen_candidates --output /tmp/screening.json
+          python -c 'import json; r=json.load(open("/tmp/screening.json")); assert all(s["status"]=="completed" and s["verified"] and s["single_write"] for s in r["samples"])'

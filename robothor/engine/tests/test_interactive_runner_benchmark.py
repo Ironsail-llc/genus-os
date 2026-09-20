@@ -19,6 +19,7 @@ import pytest
 from robothor.engine.calendar_operations import perform
 from robothor.engine.performance import run_measurements
 from robothor.engine.routine_request import TOOL
+from robothor.engine.runtime.controls import stopped as real_runtime_stopped
 from robothor.engine.tests.test_calendar_operations import (  # noqa: F401
     calendar_api,
     ctx,
@@ -27,13 +28,30 @@ from robothor.engine.tests.test_calendar_operations import (  # noqa: F401
 )
 from robothor.engine.tests.test_runner import runner  # noqa: F401
 from robothor.engine.tools.schemas import get_engine_schemas
+from robothor.goals.tests.test_store import private_database  # noqa: F401
 from robothor.settings import get_settings
+
+
+@pytest.fixture
+def db_dsn(private_database):  # noqa: F811
+    return private_database
 
 
 @pytest.mark.integration
 @pytest.mark.parametrize("fast", [False, True])
 async def test_runner_measurements(request, sample_agent_config, monkeypatch, fast, tmp_path):
-    request.getfixturevalue("store")
+    connection = request.getfixturevalue("store")
+    from pathlib import Path
+
+    with connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "CREATE TABLE agent_runs(id UUID PRIMARY KEY,tenant_id TEXT,parent_run_id UUID)"
+        )
+        cur.execute(
+            (Path(__file__).parents[3] / "crm/migrations/127_runtime_contract.sql").read_text()
+        )
+    monkeypatch.setattr("robothor.engine.runtime.controls.get_connection", connection)
+    monkeypatch.setattr("robothor.engine.runtime.controls.stopped", real_runtime_stopped)
     api = request.getfixturevalue("google")
     context = request.getfixturevalue("ctx")
     engine = request.getfixturevalue("runner")
@@ -120,20 +138,16 @@ async def test_runner_measurements(request, sample_agent_config, monkeypatch, fa
                 ],
             )
             elapsed = (time.perf_counter() - start) * 1000
-        assert run.status.value == "completed", run.error_message
-        assert model.await_count == (0 if fast else 2)
-        assert api.calls and [c[0] for c in api.calls] == ["GET", "PATCH", "GET"]
-        assert api.event["attendees"][0] == original["attendees"][0]
-        assert len(api.event["attendees"]) == 2
-        assert api.event["start"] == original["start"]
-        assert api.event["end"] == original["end"]
         metrics = run_measurements(run)
         if iteration == 0:
             continue  # Equal unmeasured warmup for both execution paths.
         records.append(
             {
                 "harness": "optimized" if fast else "current",
-                "version": "same-checkout",
+                "version": "current-runtime-v1",
+                "status": "completed" if run.status.value == "completed" else "failed",
+                "cost_usd": run.total_cost_usd,
+                "output_tokens": run.output_tokens,
                 "case": "confirmed-attendee-add",
                 "cohort": "fixture",
                 "model": "deterministic-two-turn",
@@ -148,16 +162,24 @@ async def test_runner_measurements(request, sample_agent_config, monkeypatch, fa
                 "input_tokens": metrics["input_tokens"],
                 "post_completion_tool_calls": metrics["post_completion_tool_calls"],
                 "state_checks": {
-                    "attendee_set": True,
-                    "rsvp_preserved": True,
-                    "time_preserved": True,
-                    "single_write": True,
+                    "attendee_set": len(api.event["attendees"]) == 2,
+                    "rsvp_preserved": api.event["attendees"][0] == original["attendees"][0],
+                    "time_preserved": api.event["start"] == original["start"]
+                    and api.event["end"] == original["end"],
+                    "single_write": [c[0] for c in api.calls] == ["GET", "PATCH", "GET"],
                 },
             }
         )
-    output = os.environ.get("ROBOTHOR_INTERACTIVE_BENCH_OUTPUT")
-    if output:
-        from pathlib import Path
+        output = os.environ.get("ROBOTHOR_INTERACTIVE_BENCH_OUTPUT")
+        if output:
+            from pathlib import Path
 
-        with Path(output).open("a") as file:
-            file.writelines(json.dumps(record) + "\n" for record in records)
+            with Path(output).open("a") as file:
+                file.write(json.dumps(records[-1]) + "\n")
+        assert run.status.value == "completed", run.error_message
+        assert model.await_count == (0 if fast else 2)
+        assert api.calls and [c[0] for c in api.calls] == ["GET", "PATCH", "GET"]
+        assert api.event["attendees"][0] == original["attendees"][0]
+        assert len(api.event["attendees"]) == 2
+        assert api.event["start"] == original["start"]
+        assert api.event["end"] == original["end"]
