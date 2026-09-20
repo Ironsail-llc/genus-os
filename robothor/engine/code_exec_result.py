@@ -230,7 +230,10 @@ def _http_call_entries(calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
     and one marker for the rest."""
     grouped: dict[tuple[Any, ...], dict[str, Any]] = {}
     for call in calls:
-        extra = {
+        # Annotated, not inferred: a comprehension over a literal tuple of
+        # keys infers `dict[Literal[...], Any]`, which is not a
+        # `SupportsKeysAndGetItem[str, Any]` and so cannot be `**`-unpacked.
+        extra: dict[str, Any] = {
             k: call[k]
             for k in ("via", "returncode", "refused", "outcome", "unobserved")
             if k in call

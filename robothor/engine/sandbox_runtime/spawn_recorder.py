@@ -927,7 +927,9 @@ def _finish(rec: dict[str, Any], returncode: Any, stdout: Any) -> None:
     flush()
 
 
-def _popen_arg(args: tuple, kwargs: dict, name: str, index: int, default: Any) -> Any:
+def _popen_arg(
+    args: tuple[Any, ...], kwargs: dict[str, Any], name: str, index: int, default: Any
+) -> Any:
     if name in kwargs:
         return kwargs[name]
     return args[index] if len(args) > index else default
@@ -1003,7 +1005,7 @@ def install(path: str) -> None:
         popen.communicate = communicate  # type: ignore[method-assign]
         popen.wait = wait  # type: ignore[method-assign]
         popen.__del__ = finalize  # type: ignore[method-assign]
-        os.system = system  # type: ignore[assignment]
+        os.system = system
         atexit.register(_flush_at_exit)
         flush()  # an empty record, so "absent" means the recorder never ran
         _installed = True

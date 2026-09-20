@@ -394,7 +394,11 @@ CAPS = {
     # through `clean_url`, a program name is reduced to its safe characters,
     # and the recorder's `{"dropped": N}` marker is read (I3, M1).
     # 312 -> 318 (round 2, N4): that marker is bounded engine-side too.
-    "robothor/engine/code_exec_result.py": 318,
+    # 318 -> 321: `extra` is annotated rather than inferred, because a
+    # comprehension over a literal tuple of keys infers a `Literal` key type
+    # that cannot be `**`-unpacked (mypy, dict-item). Three lines: the
+    # annotation and the reason, so nobody "simplifies" it back.
+    "robothor/engine/code_exec_result.py": 321,
     # The observation cluster (2026-09-16), each piece capped at the size it was
     # written to and each one a separate question, for the reason the code-
     # sandbox cluster above is four modules: what the model SEES of a command's
@@ -670,7 +674,11 @@ CAPS = {
     # after unwrapping decides `unclassified`, with the runner list that
     # says which programs execute their arguments. Fifty-five lines, each
     # one a reviewer's probe; the option-table move stands as the next step.
-    "robothor/engine/sandbox_runtime/spawn_recorder.py": 1038,
+    # 1038 -> 1040: `_popen_arg`'s bare `tuple`/`dict` gained their type
+    # parameters (mypy, type-arg), which wraps the signature over three
+    # lines. Valid under `from __future__ import annotations`, which is what
+    # lets this in-sandbox module use them on an older interpreter.
+    "robothor/engine/sandbox_runtime/spawn_recorder.py": 1040,
     # The engine-side merge and summary of the spawn record: two pure
     # functions and the refusal/unobserved rules. Pinned at merge (M5).
     "robothor/engine/code_exec_spawns.py": 159,
