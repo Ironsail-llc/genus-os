@@ -559,3 +559,28 @@ payment writes. A submission is explicitly labeled as not yet a verified charge.
 
 Encrypted receipt capture, validated evidence ingestion and budget reconciliation
 remain integration work before this capability can be considered complete.
+
+
+### Private receipt observations
+
+Migration 139 extends the existing encrypted observation archive with an
+`after_confirmation` phase. Receipt observations are limited to completed
+`purchase` or `subscription` operations, the assigned agent, the original origin,
+and the exact confirmation digest already recorded on the operation. Revocation
+does not discard evidence for an already completed payment. These observations
+remain merchant page evidence, not proof of issuer settlement.
+
+An encrypted `capture_status` distinguishes captured content from content withheld
+after verification-code entry or unavailable content. Non-captured records cannot
+contain page text or links. The broker captures bounded rendered main-page text
+only after durable confirmation, including read-only reconciliation. It checks
+the original origin and confirmation witness before and after extraction, masks
+known private values, and returns only archive metadata to the agent. Capture or
+storage failure leaves the completed operation intact and never retries submission.
+After transient-code entry it does not access the page or browser storage.
+
+The owner can open “Submission and receipts” for a purchase or subscription and
+view “Receipt after confirmation” observations. Withheld or unavailable text is
+explicitly identified. These are rendered page observations, not complete merchant
+PDF receipts or issuer settlement records; embedded pages are not captured. Receipt
+retrieval from other sources and issuer reconciliation remain separate work.

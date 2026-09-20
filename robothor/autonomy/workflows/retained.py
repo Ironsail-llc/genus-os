@@ -143,12 +143,23 @@ async def reconcile(
                 await asyncio.to_thread(
                     manager.store.finish, scope, row["operation_id"], "completed", evidence
                 )
+                from robothor.autonomy.receipt_capture import capture_receipt
+
+                receipt = await capture_receipt(
+                    live.broker,
+                    scope,
+                    row["operation_id"],
+                    agent_id,
+                    live.page,
+                    retained_selector=selector,
+                )
                 result = {
                     "workflow_id": workflow_id,
                     "operation_id": row["operation_id"],
                     "revision": revision + 1,
                     "state": "completed",
                     "evidence": evidence,
+                    **({"receipt": receipt} if receipt is not None else {}),
                 }
             completed = result["state"] == "completed"
             await asyncio.to_thread(

@@ -50,14 +50,27 @@ class TermsDocument(StrictModel):
 
 class TermsSnapshot(StrictModel):
     origin: str
-    phase: Literal["before_input", "before_submit"]
+    phase: Literal["before_input", "before_submit", "after_confirmation"]
     documents: list[TermsDocument] = Field(min_length=1, max_length=26)
+    confirmation_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     coverage: Literal["visible_text_only", "visible_text_and_selected_documents"] = (
         "visible_text_only"
     )
+    capture_status: Literal["captured", "withheld_after_code", "unavailable"] = "captured"
     omitted_frames: int = Field(default=0, ge=0)
 
     _origin = field_validator("origin")(validate_origin)
+
+    @model_validator(mode="after")
+    def receipt_proof(self) -> TermsSnapshot:
+        if (self.phase == "after_confirmation") != bool(self.confirmation_sha256):
+            raise ValueError("receipt_confirmation_required")
+        if self.capture_status != "captured" and (
+            self.phase != "after_confirmation"
+            or any(doc.text or doc.links or doc.source != "rendered" for doc in self.documents)
+        ):
+            raise ValueError("withheld_receipt_cannot_contain_page_data")
+        return self
 
 
 _COLUMNS = "id::text,version,grant_version,phase,coverage,document_count,created_at::text"
@@ -66,6 +79,39 @@ _COLUMNS = "id::text,version,grant_version,phase,coverage,document_count,created
 class TermsAudit:
     def __init__(self, store: AutonomyStore) -> None:
         self.store = store
+
+    def _authorize(
+        self, cur: Any, scope: Scope, op: dict[str, Any], agent_id: str, snapshot: TermsSnapshot
+    ) -> int:
+        if op["agent_id"] != agent_id or snapshot.origin != op["proposal"]["origin"]:
+            raise PermissionError("audit_not_authorized")
+        if snapshot.phase == "after_confirmation":
+            if (
+                op["state"] != "completed"
+                or op["proposal"]["action"] not in {"purchase", "subscription"}
+                or (op["evidence"] or {}).get("confirmation_sha256") != snapshot.confirmation_sha256
+                or snapshot.coverage == "visible_text_and_selected_documents"
+                or any(
+                    doc.origin != snapshot.origin or doc.source != "rendered"
+                    for doc in snapshot.documents
+                )
+            ):
+                raise PermissionError("audit_not_authorized")
+            # Reading a completed payment's receipt does not spend or extend authority.
+            return int(op["grant_version"])
+        if op["state"] not in {"reserved", "submitting"}:
+            raise PermissionError("audit_not_authorized")
+        policy, version = self.store._policy(cur, scope, op["grant_id"])
+        if version != op["grant_version"] or any(
+            (doc.origin not in policy.frame_origins | {snapshot.origin})
+            and not (
+                doc.source == "linked_document"
+                and (policy.allow_any_website or doc.origin in policy.origins)
+            )
+            for doc in snapshot.documents
+        ):
+            raise PermissionError("audit_not_authorized")
+        return version
 
     def record(
         self, scope: Scope, operation_id: str, agent_id: str, snapshot: TermsSnapshot
@@ -81,20 +127,7 @@ class TermsAudit:
         with self.store.transaction() as cur:
             self.store._lock(cur, scope)
             op = self.store._operation(cur, scope, operation_id)
-            if op["agent_id"] != agent_id or op["state"] not in {"reserved", "submitting"}:
-                raise PermissionError("audit_not_authorized")
-            policy, version = self.store._policy(cur, scope, op["grant_id"])
-            if version != op["grant_version"] or snapshot.origin != op["proposal"]["origin"]:
-                raise PermissionError("audit_not_authorized")
-            if any(
-                (doc.origin not in policy.frame_origins | {snapshot.origin})
-                and not (
-                    doc.source == "linked_document"
-                    and (policy.allow_any_website or doc.origin in policy.origins)
-                )
-                for doc in snapshot.documents
-            ):
-                raise PermissionError("audit_not_authorized")
+            version = self._authorize(cur, scope, op, agent_id, snapshot)
             cur.execute(
                 "SELECT COALESCE(max(version),0)+1 AS next FROM autonomy_terms_snapshots WHERE operation_id=%s",
                 (operation_id,),
@@ -117,7 +150,12 @@ class TermsAudit:
                 ),
             )
             result = dict(cur.fetchone())
-            self.store._event(cur, scope, operation_id, "terms_recorded")
+            self.store._event(
+                cur,
+                scope,
+                operation_id,
+                "receipt_recorded" if snapshot.phase == "after_confirmation" else "terms_recorded",
+            )
         return result
 
     def list(self, scope: Scope, operation_id: str) -> list[dict[str, Any]]:
