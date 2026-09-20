@@ -781,10 +781,22 @@ configure a trusted installed setuid sandbox helper with
 `ROBOTHOR_WEB_RENDER_SANDBOX_HELPER` before starting the engine. A sandbox launch
 failure returns an error; the tool never retries with sandboxing disabled.
 
-Add `web_render` explicitly to an agent's tools and role permissions. Migration 134
-grants it to `sales_research_agent`; it does not grant the interactive `browser`
-tool. Native sales research checks citations against its returned text and records
-the retrieval time, just as it does for `web_fetch`.
+Add `web_render` explicitly to an agent's tools and role permissions; both halves
+are required, and neither is a default. It is an opt-in tool
+(`OPT_IN_TOOLS` in `robothor/engine/tools/constants.py`), so an agent that
+declares no `tools_allowed` is not offered it and must name it. Migration 134
+grants it to `sales_research_agent`, and migration 138 denies it to the
+`__default__` `service`, `user` and `member` roles, which previously reached it
+through their catch-all allow. Neither grants the interactive `browser` tool.
+Native sales research checks citations against its returned text and records the
+retrieval time, just as it does for `web_fetch`.
+
+The ten `sales_*` tools are opt-in on both halves for the same reasons: name one
+in `tools_allowed` to be offered it, and give the agent a role that allows it.
+`sales_process_queue` is the exception RBAC still allows for `service`, because
+the native workflow runner IS that role; its gate is the handler's
+service-workflow identity check. See
+[Native sales intelligence](SALES_INTELLIGENCE.md).
 
 ### Everything else
 

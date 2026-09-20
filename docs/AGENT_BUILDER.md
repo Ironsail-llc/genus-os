@@ -291,6 +291,17 @@ an unapproved helper from the live workspace or bypass an exhausted allowance.
 first children use one. The runner persists that value without incrementing it
 again; benchmark child contexts use the same convention.
 
+`spawn_allowed_agents` and `max_spawn_total` — like every other security field
+on the manifest — are carried into a `heartbeat:` or `worker:` override run
+unchanged. The override blocks name what they CHANGE (schedule, instructions,
+delivery, warmup, budget, model, tools) and everything else is inherited, so a
+field nobody remembered to list cannot silently reset to its permissive default
+on the runs nobody is watching. That is not automatic: both builders once
+reconstructed the config field by field, and the fields they forgot took the
+dataclass default — which is how every drain run came to execute with no
+guardrails in a local sandbox, and how these two allowances came to be absent
+from every heartbeat and drain run.
+
 Native integrations may attach an internal per-result callback to the parallel
 spawn handler to checkpoint completed children before siblings finish. It receives
 the input index and native result; it does not alter spawn admission, identities,
