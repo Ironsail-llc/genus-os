@@ -52,6 +52,11 @@ class PaymentPosition:
     authorization_exceeded: bool = False
 
     @property
+    def authorization_open_minor(self) -> int:
+        # Refunds return captured funds; they never recreate an authorization.
+        return max(0, self.authorized_minor - self.charged_minor - self.reversed_minor)
+
+    @property
     def net_charged_minor(self) -> int:
         return self.charged_minor - self.refunded_minor
 
@@ -75,8 +80,6 @@ def _apply(position: PaymentPosition, fact: PaymentFact) -> None:
         if not position.charged_minor:
             position.state = "authorized"
     elif fact.kind == "charged":
-        if position.reversed_minor:
-            raise ValueError("charge_after_reversal")
         total = position.charged_minor + amount
         position.charged_minor = total
         position.state = "partially_refunded" if position.refunded_minor else "charged"
@@ -87,10 +90,14 @@ def _apply(position: PaymentPosition, fact: PaymentFact) -> None:
         position.refunded_minor = total
         position.state = "refunded" if total == position.charged_minor else "partially_refunded"
     else:
-        if position.charged_minor or position.reversed_minor or amount != position.authorized_minor:
+        total = position.reversed_minor + amount
+        if position.charged_minor and total == position.authorized_minor:
+            raise ValueError("charge_after_reversal")
+        if total > position.authorized_minor - position.charged_minor:
             raise ValueError("invalid_authorization_reversal")
-        position.reversed_minor = amount
-        position.state = "reversed"
+        position.reversed_minor = total
+        if not position.charged_minor:
+            position.state = "reversed" if total == position.authorized_minor else "authorized"
 
 
 def project_payment(
@@ -117,7 +124,7 @@ def project_payment(
     # Conflicting captures/reversals remain invalid whichever arrived first.
     if len({(fact.renewal_id, fact.renewal_on) for fact in seen.values()}) > 1:
         raise ValueError("payment_group_mismatch")
-    priority = {"submitted": 0, "authorized": 1, "charged": 2, "reversed": 2, "refunded": 3}
+    priority = {"submitted": 0, "authorized": 1, "charged": 2, "reversed": 3, "refunded": 4}
     for fact in sorted(seen.values(), key=lambda value: priority[value.kind]):
         _apply(position, fact)
     position.limit_exceeded = max(position.authorized_minor, position.charged_minor) > limit_minor

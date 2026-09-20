@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 type Position = {state: string; authorized_minor: number; charged_minor: number;
-  refunded_minor: number; net_charged_minor: number};
+  refunded_minor: number; net_charged_minor: number; reversed_minor?: number; authorization_open_minor?: number};
 type Payment = {
   event_count: number; reconciliation_required: boolean;
   position: Position | null;
@@ -53,7 +53,7 @@ export function PersonalAutomationPayment({ operationId, currency }: {operationI
           {renewal.period_limit_exceeded && <p>Recorded charges exceed the recurring allowance for this billing period.</p>}
           {renewal.position && <PaymentAmounts position={renewal.position} money={money} />}
         </div>)}
-        <p className="text-muted-foreground">Recorded refunds do not automatically change your spending allowance or cancel a membership.</p>
+        <p className="text-muted-foreground">Recorded refunds and authorization releases do not automatically change your spending allowance or cancel a membership.</p>
       </>}
     </div>}
   </div>;
@@ -63,6 +63,8 @@ function PaymentAmounts({position, money}: {position: Position; money: (minor: n
   return <>
     <p>{labels[position.state] || "Payment status unresolved"}</p>
     {position.authorized_minor > 0 && <p>Authorized: {money(position.authorized_minor)}</p>}
+    {(position.reversed_minor ?? 0) > 0 && <p>Authorization released: {money(position.reversed_minor ?? 0)}</p>}
+    {position.authorized_minor > 0 && position.authorization_open_minor !== undefined && <p>Authorization remaining: {money(position.authorization_open_minor)}</p>}
     {position.charged_minor > 0 && <>
       <p>Charged: {money(position.charged_minor)}</p>
       <p>Refunded: {money(position.refunded_minor)}</p>
