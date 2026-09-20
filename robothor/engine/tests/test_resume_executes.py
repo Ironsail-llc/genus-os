@@ -40,6 +40,7 @@ class TestTheLoopActuallyExecutes:
             agent_id="devops-analyst",
             resume_attempts=0,
             has_checkpoint=True,
+            tenant_id="tenant-a",
         )
         # Patch the real seams the function uses, not invented ones: an
         # attribute that does not exist would monkeypatch nothing and let this
@@ -47,10 +48,13 @@ class TestTheLoopActuallyExecutes:
         import robothor.engine.resume as resume_mod
 
         monkeypatch.setattr(resume_mod, "resume_batch", lambda c: [candidate])
-        monkeypatch.setattr(daemon, "_resume_scan", lambda: [candidate])
-        monkeypatch.setattr(daemon, "_charge_resume_attempt", lambda rid: True)
+        monkeypatch.setattr(daemon, "_resume_scan", lambda tenant: [candidate])
+        monkeypatch.setattr(daemon, "_charge_resume_attempt", lambda rid, tenant: True)
 
         runner = AsyncMock()
+        from types import SimpleNamespace
+
+        runner.config = SimpleNamespace(tenant_id="tenant-a")
         started = await daemon.resume_interrupted_runs(runner)
         # The run is LAUNCHED, not awaited inline — the daemon is still coming
         # up. Yield once so the task actually reaches the runner.
@@ -61,6 +65,7 @@ class TestTheLoopActuallyExecutes:
         kwargs = runner.execute.await_args.kwargs
         assert kwargs.get("resume_from_run_id") == candidate.run_id
         assert kwargs.get("agent_id") == candidate.agent_id
+        assert kwargs["tenant_id"] == "tenant-a"
 
     def test_the_scan_is_a_real_seam_that_returns_a_list(self, monkeypatch):
         """`_resume_scan` must exist and swallow a dead database.
@@ -77,7 +82,7 @@ class TestTheLoopActuallyExecutes:
             raise OSError("no database")
 
         monkeypatch.setattr(conn_mod, "get_connection", _dead)
-        assert daemon._resume_scan() == []
+        assert daemon._resume_scan("tenant-a") == []
 
     @pytest.mark.asyncio
     async def test_nothing_is_counted_when_there_is_no_runner(self, monkeypatch):
@@ -164,14 +169,32 @@ def test_resume_scan_filters_durable_stops_before_checkpoint_access(monkeypatch)
     cursor = connection.return_value.__enter__.return_value.cursor.return_value
     cursor.fetchall.return_value = [
         ("stopped", "main", 0, "daemon_restart", "tenant-a"),
-        ("allowed", "main", 0, "daemon_restart", "tenant-b"),
+        ("allowed", "main", 0, "daemon_restart", "tenant-a"),
     ]
     monkeypatch.setattr("robothor.db.connection.get_connection", connection)
     stopped = Mock(side_effect=lambda tenant, run: run == "stopped")
     monkeypatch.setattr("robothor.engine.runtime.controls.stopped", stopped)
     checkpoint = Mock(return_value={"messages": []})
     monkeypatch.setattr("robothor.engine.checkpoint.CheckpointManager.load_latest", checkpoint)
-    candidates = daemon._resume_scan()
+    candidates = daemon._resume_scan("tenant-a")
     assert [candidate.run_id for candidate in candidates] == ["allowed"]
     assert stopped.call_args_list[0].args == ("tenant-a", "stopped")
-    checkpoint.assert_called_once_with("allowed", tenant_id="tenant-b")
+    checkpoint.assert_called_once_with("allowed", tenant_id="tenant-a")
+    assert cursor.execute.call_args.args[1][0] == "tenant-a"
+    assert "WHERE tenant_id = %s" in cursor.execute.call_args.args[0]
+
+
+@pytest.mark.parametrize("matched", [0, 1])
+def test_resume_charge_requires_a_row_in_the_same_tenant(monkeypatch, matched):
+    from unittest.mock import MagicMock
+
+    from robothor.engine import daemon
+
+    connection = MagicMock()
+    cursor = connection.return_value.__enter__.return_value.cursor.return_value
+    cursor.rowcount = matched
+    monkeypatch.setattr("robothor.db.connection.get_connection", connection)
+    assert daemon._charge_resume_attempt("run", "tenant-a") is bool(matched)
+    statement, parameters = cursor.execute.call_args.args
+    assert "WHERE id = %s AND tenant_id = %s" in statement
+    assert parameters == ("run", "tenant-a")

@@ -35,11 +35,23 @@ def seed(dsn):
                 Json({"verification": "unverified", "error": "Synthetic unresolved outcome"}),
             ),
         )
-    return run, goal, operation
+        foreign = str(uuid4())
+        cur.execute(
+            "INSERT INTO crm_tenants(id,display_name) VALUES ('foreign-fixture','Foreign synthetic tenant')"
+        )
+        cur.execute(
+            "INSERT INTO agent_runs(id,tenant_id,user_id,user_role,agent_id,trigger_type,status,error_message) VALUES (%s,'foreign-fixture','other','owner','main','manual','cancelled','daemon_restart')",
+            (foreign,),
+        )
+        cur.execute(
+            "INSERT INTO agent_run_checkpoints(run_id,step_number,messages,schema_version) VALUES (%s,1,'[]',1)",
+            (foreign,),
+        )
+    return run, goal, operation, foreign
 
 
 def verify(dsn, identifiers):
-    run, goal, operation = identifiers
+    run, goal, operation, foreign = identifiers
     with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("SELECT status,COALESCE(resume_attempts,0) FROM agent_runs WHERE id=%s", (run,))
         assert cur.fetchone() == ("cancelled", 0), (
@@ -58,3 +70,7 @@ def verify(dsn, identifiers):
         )
         cur.execute("SELECT count(*) FROM agent_run_steps WHERE run_id=%s", (run,))
         assert cur.fetchone()[0] == 0
+        cur.execute(
+            "SELECT status,COALESCE(resume_attempts,0) FROM agent_runs WHERE id=%s", (foreign,)
+        )
+        assert cur.fetchone() == ("cancelled", 0), "Daemon selected another tenant for resume"

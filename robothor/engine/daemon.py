@@ -188,7 +188,7 @@ _RESUME_TASKS: set[asyncio.Task[Any]] = set()
 MAX_RESUME_ATTEMPTS_DISPLAY = 3
 
 
-def _charge_resume_attempt(run_id: str) -> bool:
+def _charge_resume_attempt(run_id: str, tenant_id: str) -> bool:
     """Charge one resume attempt. False means do not resume this run.
 
     Separated from the loop so the loop's real work — executing the run — can
@@ -201,11 +201,12 @@ def _charge_resume_attempt(run_id: str) -> bool:
             cur = conn.cursor()
             cur.execute(
                 "UPDATE agent_runs SET resume_attempts = COALESCE(resume_attempts, 0) + 1 "
-                "WHERE id = %s",
-                (run_id,),
+                "WHERE id = %s AND tenant_id = %s",
+                (run_id, tenant_id),
             )
+            charged = cur.rowcount == 1
             conn.commit()
-        return True
+        return charged
     except Exception as e:  # noqa: BLE001 - one uncharged run must not stop the rest
         logger.warning("Could not charge resume attempt for %s: %s", run_id, e)
         return False
@@ -233,13 +234,14 @@ async def _execute_resume(runner: Any, candidate: Any) -> None:
             trigger_type=TriggerType.EVENT,
             trigger_detail=f"resume:{candidate.run_id}",
             resume_from_run_id=candidate.run_id,
+            tenant_id=candidate.tenant_id,
         )
     except Exception:
         logger.exception("Resume of run %s failed", candidate.run_id)
 
 
-def _resume_scan() -> list[ResumeCandidate]:
-    """Every interrupted run the database knows about. [] when the scan fails.
+def _resume_scan(tenant_id: str) -> list[ResumeCandidate]:
+    """Interrupted runs belonging to this daemon tenant. [] when the scan fails.
 
     A named seam, not just tidiness: this is the ONE step in resume that needs
     a database, and while it was inline the only way for a test to reach the
@@ -268,8 +270,8 @@ def _resume_scan() -> list[ResumeCandidate]:
             cur.execute(
                 "SELECT id, agent_id, COALESCE(resume_attempts, 0), "
                 "COALESCE(error_message, ''), tenant_id FROM agent_runs "
-                "WHERE status = ANY(%s) ORDER BY id",
-                (sorted(RESUMABLE_STATUSES),),
+                "WHERE tenant_id = %s AND status = ANY(%s) ORDER BY id",
+                (tenant_id, sorted(RESUMABLE_STATUSES)),
             )
             rows = cur.fetchall()
         from robothor.engine.runtime.controls import stopped
@@ -288,6 +290,7 @@ def _resume_scan() -> list[ResumeCandidate]:
             resume_attempts=int(r[2] or 0),
             has_checkpoint=bool(CheckpointManager.load_latest(str(r[0]), tenant_id=str(r[4]))),
             error_message=str(r[3] or "") if len(r) > 3 else "",
+            tenant_id=str(r[4]),
         )
         for r in rows
     ]
@@ -308,10 +311,6 @@ async def resume_interrupted_runs(runner: Any = None) -> int:
     if not resume_enabled():
         return 0
 
-    batch = resume_batch(_resume_scan())
-    if not batch:
-        return 0
-
     if runner is None:
         # Without a runner there is nothing to resume WITH. Returning 0 rather
         # than counting is the whole point: this function used to charge the
@@ -321,11 +320,17 @@ async def resume_interrupted_runs(runner: Any = None) -> int:
         logger.warning("Resume skipped: no runner available to execute with")
         return 0
 
+    tenant = getattr(getattr(runner, "config", None), "tenant_id", None)
+    if not isinstance(tenant, str) or not tenant:
+        logger.warning("Resume skipped: runner tenant is unavailable")
+        return 0
+    batch = resume_batch([c for c in _resume_scan(tenant) if c.tenant_id == tenant])
+
     started = 0
     for candidate in batch:
         # Charge the attempt BEFORE resuming: a run that dies during resume
         # must still have paid, or a crash loop resumes forever.
-        if not _charge_resume_attempt(candidate.run_id):
+        if not _charge_resume_attempt(candidate.run_id, candidate.tenant_id):
             continue
         logger.info(
             "Resuming run %s (agent %s, attempt %d/%d)",

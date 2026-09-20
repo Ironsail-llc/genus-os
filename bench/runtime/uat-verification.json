@@ -956,6 +956,33 @@
       "scope": "Real daemon, two isolated restart cycles; synthetic stopped records. Eligible unstopped scan remains covered by a unit control. No live provider or production goal was resumed.",
       "remaining": "Active-goal recovery, useful checkpoint continuation under load, and full application rollback are not certified.",
       "artifact": "uat-stopped-restart.json"
+    },
+    "resume_tenant_isolation": {
+      "command": ".venv/bin/python -m bench.runtime.migrated_integration --daemon --restart",
+      "cycles": [
+        {
+          "health_ready": true,
+          "shutdown_exit_code": 0,
+          "shutdown_seconds": 1.1656177150016447,
+          "recovery_worker_spawns": 1
+        },
+        {
+          "health_ready": true,
+          "shutdown_exit_code": 0,
+          "shutdown_seconds": 0.865113059999203,
+          "recovery_worker_spawns": 1
+        }
+      ],
+      "foreign_tenant_resume_attempts": 0,
+      "stopped_run_resume_attempts": 0,
+      "unit_contract_passed": 33,
+      "unit_contract_seconds": 5.21,
+      "tracking_integration_passed": 13,
+      "tracking_integration_seconds": 0.48,
+      "initial_failure": "Daemon startup charged a resume attempt to an eligible cancelled run from another tenant.",
+      "fix": "Configured-tenant scan, tenant-bearing candidates, tenant-scoped charge with affected-row check, explicit tenant passed to resumed execution.",
+      "limits": "Synthetic cancelled runs and compatible checkpoints in a private superuser database. Does not certify tenant isolation of every other startup maintenance/reaper path or active-goal continuation.",
+      "artifact": "uat-resume-tenant-isolation.json"
     }
   },
   "calendar": {
