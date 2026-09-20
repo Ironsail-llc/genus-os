@@ -413,21 +413,37 @@ class TestTheBounds:
         _reap(pid)
         assert not survived
 
-    async def test_a_snippet_can_force_the_escape_deliberately(self, workspace):
-        """The limit, pinned as a FACT rather than described as a risk.
+    async def test_a_snippet_can_force_the_escape_deliberately(self, workspace, monkeypatch):
+        """A detached child that exits the parent chain between samples can escape.
 
-        `start_new_session=True` puts the child outside the process group, and
-        `os._exit` skips the `finally` in which the snippet would have reaped
-        it — so the boot reaper never runs and the engine's census, which
-        samples on a tick, has nothing to have seen. This is not a race a
-        snippet might win; it is a thing a snippet can decide to do, and it
-        works every time. The test exists so that nobody later writes a
-        containment sentence this cannot back.
+        Pin the census cadence so this run exercises the unobserved window,
+        rather than asking the host scheduler to supply it. The initial and
+        final real procfs samples still run; the boot script, subprocess,
+        process-group cleanup and survivor assertion are unchanged. Catching a
+        child on one favorable tick is not proof of complete containment.
         """
+        from robothor.engine import code_exec_process
+
+        monkeypatch.setattr(code_exec_process, "FAST_SAMPLE_TICKS", 0)
+        monkeypatch.setattr(code_exec_process, "SLOW_SAMPLE_EVERY_TICKS", 10_000)
+        gate = workspace / "census-sampled"
+        original_tick = code_exec_process.DescendantCensus.sample_on_tick
+
+        def sample_then_release(census, tick):
+            original_tick(census, tick)
+            if tick == 0:
+                gate.touch()
+
+        monkeypatch.setattr(
+            code_exec_process.DescendantCensus, "sample_on_tick", sample_then_release
+        )
         marker = workspace / "forced.pid"
         await _run(
             f"""
-            import os, subprocess
+            import os, subprocess, time
+            from pathlib import Path
+            while not Path({str(gate)!r}).exists():
+                time.sleep(0.001)
             p = subprocess.Popen(['sleep', '120'], start_new_session=True)
             open({str(marker)!r}, 'w').write(str(p.pid))
             os._exit(0)
@@ -438,6 +454,7 @@ class TestTheBounds:
         pid = int(marker.read_text())
         survived = _alive(pid)
         _reap(pid)
+        await asyncio.sleep(0.1)  # Let the inherited-pipe transports close on this loop.
         assert survived, (
             "a snippet could no longer force an escape — if that is a real "
             "improvement, say so in docs/TOOLS.md, the timeout message and "
