@@ -181,3 +181,146 @@ def test_background_job_rechecks_run_state_before_provider_access(monkeypatch, t
     )
     calendar_reconciliation.reconcile_outcome(object(), "session", "request")
     readback.assert_not_called()
+
+
+def test_unattended_sweep_recovers_from_durable_state_without_chat(store, google, ctx):  # noqa: F811
+    from robothor.engine.calendar_recovery_worker import sweep
+
+    operation_id = draft(ctx)["operation_id"]
+    with store() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE calendar_operations SET status='executing' WHERE id=%s", (operation_id,)
+        )
+    age_operation(store, operation_id)
+    google.event["attendees"].append({"email": "sam@example.com"})
+    before = len(google.calls)
+    assert sweep("other-tenant") == 0
+    assert len(google.calls) == before
+    assert sweep(ctx.tenant_id) == 1
+    recovered = operations.load_operation(operation_id, ctx.tenant_id, ctx.user_id, ctx.agent_id)
+    assert recovered["result"]["attendees_present"] == ["sam@example.com"]
+    assert sweep(ctx.tenant_id) == 0
+    assert len(google.calls) == before + 1
+    assert all(method == "GET" for method, _ in google.calls)
+
+
+async def test_recovery_loop_survives_batch_failure_and_propagates_shutdown(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from robothor.engine import calendar_recovery_worker as worker
+
+    launch = AsyncMock(
+        side_effect=[
+            OSError("spawn failed"),
+            SimpleNamespace(wait=AsyncMock(return_value=0), returncode=0),
+        ]
+    )
+    sleeps = []
+
+    async def sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) == 2:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(worker.asyncio, "create_subprocess_exec", launch)
+    monkeypatch.setattr(worker.asyncio, "sleep", sleep)
+    with pytest.raises(asyncio.CancelledError):
+        await worker.run("fixture")
+    assert sleeps == [30, 30]
+    assert launch.call_count == 2
+    assert all(call.args[-2:] == ("--tenant", "fixture") for call in launch.call_args_list)
+
+
+async def test_recovery_shutdown_terminates_a_live_batch(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+
+    from robothor.engine import calendar_recovery_worker as worker
+
+    started = asyncio.Event()
+
+    async def wait():
+        started.set()
+        await asyncio.Event().wait()
+
+    process = SimpleNamespace(
+        returncode=None, wait=AsyncMock(side_effect=wait), terminate=Mock(), kill=Mock()
+    )
+    monkeypatch.setattr(worker.asyncio, "create_subprocess_exec", AsyncMock(return_value=process))
+    task = asyncio.create_task(worker.run("fixture"))
+    await started.wait()
+    process.wait.side_effect = None
+    process.wait.return_value = -15
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    process.terminate.assert_called_once()
+    process.kill.assert_not_called()
+
+
+async def test_recovery_shutdown_reaps_a_real_isolated_process(monkeypatch):
+    import asyncio
+    import sys
+
+    from robothor.engine import calendar_recovery_worker as worker
+
+    spawn = asyncio.create_subprocess_exec
+    started = asyncio.Event()
+    children = []
+
+    async def launch(*args):
+        assert args[1:3] == ("-m", "robothor.engine.calendar_recovery_worker")
+        child = await spawn(sys.executable, "-c", "import time; time.sleep(60)")
+        children.append(child)
+        started.set()
+        return child
+
+    monkeypatch.setattr(worker.asyncio, "create_subprocess_exec", launch)
+    task = asyncio.create_task(worker.run("isolated-test"))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=2)
+        assert children[0].returncode is not None
+    finally:
+        task.cancel()
+        for child in children:
+            if child.returncode is None:
+                child.kill()
+                await child.wait()
+
+
+def test_unattended_batches_are_bounded_and_rotate_after_failed_reads(
+    store,  # noqa: F811
+    google,  # noqa: F811
+    ctx,  # noqa: F811
+    monkeypatch,
+):
+    from robothor.engine.calendar_recovery_worker import sweep
+
+    operation_id = draft(ctx)["operation_id"]
+    with store() as conn, conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO calendar_operations
+               (tenant_id,user_id,agent_id,calendar_id,event_id,arguments,status,updated_at)
+               SELECT tenant_id,user_id,agent_id,calendar_id,event_id,arguments,'executing',
+                      now()-interval '1 minute' * n
+               FROM calendar_operations CROSS JOIN generate_series(1,7) n WHERE id=%s""",
+            (operation_id,),
+        )
+    reads = []
+
+    def unavailable(method, *args):
+        reads.append(method)
+        return {"error": "offline"}
+
+    monkeypatch.setattr(google, "request", unavailable)
+    assert sweep(ctx.tenant_id) == 5
+    assert len(reads) == 5
+    assert sweep(ctx.tenant_id) == 2
+    assert reads == ["GET"] * 7
+    assert sweep(ctx.tenant_id) == 0

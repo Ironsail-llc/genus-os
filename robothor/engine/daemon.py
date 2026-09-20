@@ -1522,8 +1522,11 @@ async def main() -> int:
     # Federation — start NATS if connections exist (no-op otherwise)
     nats_mgr = await _start_federation(config, runner=runner)
 
+    from robothor.engine.calendar_recovery_worker import run as recover_calendar
+
     # Start all subsystems concurrently
     tasks = [
+        asyncio.create_task(recover_calendar(config.tenant_id), name="calendar-recovery"),
         asyncio.create_task(scheduler.start(), name="scheduler"),
         asyncio.create_task(hooks.start(), name="hooks"),
         asyncio.create_task(

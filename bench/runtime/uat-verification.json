@@ -625,6 +625,14 @@
       "evidence": "Private PostgreSQL HTTP background recovery, fake Google readback, scoped ownership, cooldown, nonblocking writer lock, no agent execution or write replay",
       "limitations": "Triggered by chat polling; unattended scheduling, browser reload, other providers, notification delivery verification and full acceptance remain incomplete",
       "production_deployed": false
+    },
+    "unattended_calendar_recovery": {
+      "backend": "70 passed in 12.11s; 18 focused readback cases passed in 1.54s after adding batch fairness coverage",
+      "lifecycle": "Real isolated child terminated and reaped within a two-second test deadline; spawn failure and cancellation tested",
+      "batch": "Tenant-scoped oldest-first limit 5, 30-second eligibility; seven failed reads rotate through batches of five then two without writes",
+      "checks": "Module CLI bootstrap, Ruff, formatting and diff checks pass",
+      "limitations": "No production daemon startup/deployment or operating-limit measurement. Other providers, browser reload and full acceptance remain incomplete.",
+      "production_deployed": false
     }
   },
   "calendar": {
