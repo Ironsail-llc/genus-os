@@ -11,7 +11,7 @@ from psycopg2.extras import RealDictCursor
 pytest.importorskip("pydantic_ai")
 pytest.importorskip("deepagents")
 
-from bench.runtime import store_host
+from bench.runtime import recovery, store_host
 from bench.runtime.adapter import CandidateRuntime
 from bench.runtime.candidates import FixtureGateway
 from bench.runtime.test_candidate_boundaries import candidate
@@ -50,6 +50,7 @@ def database(private_database, monkeypatch):
         tenant = str(uuid4())
         cur.execute("INSERT INTO crm_tenants(id) VALUES (%s)", (tenant,))
     monkeypatch.setattr(store_host, "get_connection", connect)
+    monkeypatch.setattr(recovery, "get_connection", connect)
     monkeypatch.setattr(controls, "get_connection", connect)
     return tenant, connect
 
@@ -232,3 +233,109 @@ async def test_cancelled_admission_reconciles_late_database_insert(
     assert saved["status"] == "cancelled"
     assert saved["runtime_context"]["usage"]["model_calls"] == 0
     assert not calls and gateway.writes == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["pydantic-ai", "deepagents"])
+async def test_crashed_worker_is_recovered_without_repeating_committed_effect(
+    database, private_database, name
+):
+    import asyncio
+    import sys
+
+    tenant, connect = database
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute("CREATE TABLE IF NOT EXISTS synthetic_crash_receipts(tenant_id TEXT)")
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "bench.runtime.crash_fixture",
+        private_database,
+        tenant,
+        name,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), 15)
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
+    assert process.returncode == 23, (stdout, stderr)
+    (saved,) = rows(connect, tenant)
+    assert saved["status"] == "running"
+    replacement, _, gateway, calls = setup(tenant, name)
+    assert await replacement.host.recover_expired(tenant) == []  # Active deadline is respected.
+    with connect() as conn, conn.cursor() as cur:
+        # Expire only the private fixture's deadline to exercise recovery.
+        cur.execute(
+            """UPDATE agent_runs SET runtime_context=jsonb_set(runtime_context,'{deadline}',
+                       to_jsonb((now()-interval '1 second')::text)) WHERE tenant_id=%s""",
+            (tenant,),
+        )
+    other, _, _, _ = setup(tenant, name)
+    results = await asyncio.gather(
+        replacement.host.recover_expired(tenant), other.host.recover_expired(tenant)
+    )
+    assert sum(len(result) for result in results) == 1
+    (recovered,) = rows(connect, tenant)
+    assert recovered["status"] == "timeout"
+    assert recovered["runtime_context"]["unresolved"]
+    assert recovered["runtime_context"]["usage"]["model_calls"] is None
+    assert controls.stopped(tenant, str(saved["id"]))
+    assert await other.host.recover_expired(tenant) == []
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM synthetic_crash_receipts WHERE tenant_id=%s", (tenant,))
+        assert cur.fetchone()[0] == 1
+    assert not calls and gateway.writes == 0
+    replay = RunRequest(
+        ExecutionContext(tenant, "operator", saved["runtime_context"]["request_id"]),
+        "synthetic",
+        "repeat original action",
+    )
+    with pytest.raises(ValueError, match="already stopped"):
+        await replacement.run(replay)
+    assert not calls and len(rows(connect, tenant)) == 1
+
+
+@pytest.mark.asyncio
+async def test_recovery_preserves_known_usage_and_excludes_other_tenants_and_native_runs(database):
+    from psycopg2.extras import Json
+
+    tenant, connect = database
+    outsider = str(uuid4())
+    ids = [str(uuid4()) for _ in range(3)]
+    usage = {"model_calls": 1, "input_tokens": 10, "output_tokens": 3, "cost_usd": None}
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute("INSERT INTO crm_tenants(id) VALUES (%s)", (outsider,))
+        for run_id, owner, engine in zip(
+            ids, [tenant, tenant, outsider], ["pydantic-ai", "current", "deepagents"], strict=True
+        ):
+            cur.execute(
+                """INSERT INTO agent_runs(id,tenant_id,agent_id,trigger_type,status,started_at,
+                   input_tokens,output_tokens,total_cost_usd,runtime_context)
+                   VALUES (%s,%s,'synthetic','manual','running',now()-interval '2 seconds',10,3,NULL,%s)""",
+                (
+                    run_id,
+                    owner,
+                    Json(
+                        {
+                            "runtime_id": engine,
+                            "deadline": "2000-01-01T00:00:00+00:00",
+                            "request_id": str(uuid4()),
+                            "usage": usage,
+                        }
+                    ),
+                ),
+            )
+    runtime, _, _, calls = setup(tenant, "pydantic-ai")
+    assert await runtime.host.recover_expired(tenant) == [ids[0]]
+    saved = {str(row["id"]): row for row in rows(connect, tenant)}
+    assert saved[ids[0]]["runtime_context"]["usage"] == usage
+    assert saved[ids[0]]["input_tokens"] == 10
+    assert saved[ids[1]]["status"] == "running"
+    assert rows(connect, outsider)[0]["status"] == "running"
+    assert not controls.stopped(tenant, ids[1])
+    assert not controls.stopped(outsider, ids[2])
+    assert not calls

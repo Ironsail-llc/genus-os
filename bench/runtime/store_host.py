@@ -188,5 +188,13 @@ class StoreHost:
             if not cur.fetchone():
                 raise ValueError("candidate run identity unavailable for finalization")
 
+    async def recover_expired(self, tenant):
+        from bench.runtime.recovery import recover_expired
+
+        recovered = await asyncio.to_thread(recover_expired, tenant)
+        if recovered:
+            await asyncio.to_thread(controls.signal_stopped, tenant, "Expired candidate worker")
+        return recovered
+
     async def control(self, tenant, run_id, action, note):
         return await asyncio.to_thread(controls.issue, tenant, run_id, action, note)

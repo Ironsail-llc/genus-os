@@ -235,6 +235,12 @@
       "failed": 0,
       "seconds": 6.62,
       "scope": "Candidate suite including delayed insert after cancellation/deadline and lost commit acknowledgement. Retained reconciliation records cancellation without provider/business effects; process-crash recovery and production shutdown wiring incomplete."
+    },
+    "candidate_process_loss_recovery": {
+      "passed": 72,
+      "failed": 0,
+      "seconds": 10.53,
+      "scope": "Both frameworks exit immediately after one private-database synthetic receipt; fresh concurrent recovery preserves the effect and denies replay. Includes tenant/native exclusion and usage retention. Checkpoint continuation and production recovery scheduling incomplete."
     }
   },
   "calendar": {
