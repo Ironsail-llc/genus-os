@@ -1,0 +1,16 @@
+{
+  "passed": 13,
+  "failed": 0,
+  "seconds": 0.55,
+  "migrations_applied": 150,
+  "runtime_migrations": [
+    "127_runtime_contract",
+    "138_goal_provider_reservations",
+    "139_goal_task_family_controls"
+  ],
+  "repeat_apply_noop": true,
+  "cluster": "Disposable PostgreSQL 16 with pgvector, UTF-8, Unix socket only",
+  "command": ".venv/bin/python -m bench.runtime.migrated_integration",
+  "scope": "Canonical complete fresh schema, real tracking identity and person/timeline integration tests. Not a populated-database upgrade, daemon startup or rollback drill.",
+  "initial_harness_issue": "First private initdb defaulted to SQL_ASCII and migration SQL could not encode Unicode; recreated fresh cluster explicitly as UTF-8."
+}

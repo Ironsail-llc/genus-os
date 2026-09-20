@@ -151,3 +151,6 @@ crm/133_autonomy_terms_audit.sql
 crm/134_autonomy_material_documents.sql
 
 crm/126_calendar_operations.sql
+crm/127_runtime_contract.sql
+crm/138_goal_provider_reservations.sql
+crm/139_goal_task_family_controls.sql

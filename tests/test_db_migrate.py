@@ -866,3 +866,12 @@ def test_agent_questions_migration_is_manifested_after_the_benchmark_digest_type
     assert "DROP POLICY IF EXISTS tenant_isolation ON agent_questions" in sql
 
     assert "117_agent_questions" in [m.migration_id for m in migrate._discover()]
+
+
+def test_runtime_and_goal_control_migrations_are_in_canonical_chain():
+    identities = [migration.migration_id for migration in migrate._discover()]
+    assert "127_runtime_contract" in identities
+    assert identities.index("126_goal_pursuit") < identities.index("138_goal_provider_reservations")
+    assert identities.index("138_goal_provider_reservations") < identities.index(
+        "139_goal_task_family_controls"
+    )
