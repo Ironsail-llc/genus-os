@@ -209,7 +209,9 @@ async def _double_click(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
     agent_id = ctx.agent_id or ""
 
     def _run() -> dict[str, Any]:
-        return _run_xdotool("mousemove", str(x), str(y), "click", "--repeat", "2", "1", agent_id=agent_id)
+        return _run_xdotool(
+            "mousemove", str(x), str(y), "click", "--repeat", "2", "1", agent_id=agent_id
+        )
 
     return await asyncio.to_thread(_run)
 

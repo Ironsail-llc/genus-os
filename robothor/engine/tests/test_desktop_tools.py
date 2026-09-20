@@ -274,9 +274,7 @@ class TestDesktopScroll:
         with patch("robothor.engine.tools.handlers.desktop._run_xdotool") as mock_xdo:
             mock_xdo.return_value = {"stdout": "", "exit_code": 0}
             await _scroll({"direction": "down", "clicks": 5}, ctx)
-            mock_xdo.assert_called_once_with(
-                "click", "--repeat", "5", "5", agent_id="computer-use"
-            )
+            mock_xdo.assert_called_once_with("click", "--repeat", "5", "5", agent_id="computer-use")
 
     @pytest.mark.asyncio
     async def test_scroll_up(self, ctx, mock_cfg):
@@ -285,9 +283,7 @@ class TestDesktopScroll:
         with patch("robothor.engine.tools.handlers.desktop._run_xdotool") as mock_xdo:
             mock_xdo.return_value = {"stdout": "", "exit_code": 0}
             await _scroll({"direction": "up", "clicks": 3}, ctx)
-            mock_xdo.assert_called_once_with(
-                "click", "--repeat", "3", "4", agent_id="computer-use"
-            )
+            mock_xdo.assert_called_once_with("click", "--repeat", "3", "4", agent_id="computer-use")
 
     @pytest.mark.asyncio
     async def test_scroll_caps_at_20(self, ctx, mock_cfg):

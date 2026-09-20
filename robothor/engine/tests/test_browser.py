@@ -150,7 +150,9 @@ class TestBrowserEnv:
         from robothor.engine.tools.handlers.browser import _browser_env
 
         monkeypatch.setattr(exec_env_mod, "exec_env_mode", lambda: "enforce")
-        monkeypatch.setitem(__import__("os").environ, "ACME_API_KEY", "placeholder-value-1234567890")
+        monkeypatch.setitem(
+            __import__("os").environ, "ACME_API_KEY", "placeholder-value-1234567890"
+        )
 
         profile = str(workspace / "local" / "browser-profiles" / "main")
         env = _browser_env(profile, "main")
@@ -190,9 +192,7 @@ async def test_host_launch_passes_the_workspace_profile(monkeypatch, workspace):
 
     page = MagicMock()
     ctx_obj = SimpleNamespace(pages=[page], new_page=AsyncMock(return_value=page))
-    fake_browser = SimpleNamespace(
-        contexts=[ctx_obj], new_context=AsyncMock(return_value=ctx_obj)
-    )
+    fake_browser = SimpleNamespace(contexts=[ctx_obj], new_context=AsyncMock(return_value=ctx_obj))
     chromium = SimpleNamespace(
         connect_over_cdp=AsyncMock(return_value=fake_browser),
         launch=AsyncMock(return_value=fake_browser),
@@ -243,9 +243,7 @@ async def test_host_launch_env_has_no_credential_names_under_enforce(monkeypatch
 
     page = MagicMock()
     ctx_obj = SimpleNamespace(pages=[page], new_page=AsyncMock(return_value=page))
-    fake_browser = SimpleNamespace(
-        contexts=[ctx_obj], new_context=AsyncMock(return_value=ctx_obj)
-    )
+    fake_browser = SimpleNamespace(contexts=[ctx_obj], new_context=AsyncMock(return_value=ctx_obj))
     chromium = SimpleNamespace(
         connect_over_cdp=AsyncMock(return_value=fake_browser),
         launch=AsyncMock(return_value=fake_browser),
