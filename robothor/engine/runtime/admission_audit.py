@@ -34,7 +34,6 @@ async def record_timeout(request):
             status=run.status.value,
             completed_at=now,
             error_message=run.error_message,
-            tenant_id=run.tenant_id,
         )
 
     token = active_context.set(request.context)

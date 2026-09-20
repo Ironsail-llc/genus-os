@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from psycopg2.extras import Json
 
 from robothor.engine.chat_recovery import read_outcome
 from robothor.engine.runtime import CurrentRuntime, ExecutionContext, RunRequest
@@ -19,34 +18,24 @@ from robothor.goals.tests.test_store import private_database  # noqa: F401
 
 @pytest.fixture
 def audit_store(records, monkeypatch):  # noqa: F811
-    from robothor.engine.runtime.current import run_identity
-
-    def create(run):
-        with records() as conn, conn.cursor() as cur:
-            cur.execute(
-                """INSERT INTO agent_runs(id,tenant_id,user_id,agent_id,correlation_id,
-                runtime_context,status,error_message) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
-                (
-                    run.id,
-                    run.tenant_id,
-                    run.user_id,
-                    run.agent_id,
-                    run.correlation_id,
-                    Json(run_identity(run)),
-                    run.status.value,
-                    None,
-                ),
-            )
-
-    def update(run_id, *, error_message, tenant_id, **kwargs):
-        with records() as conn, conn.cursor() as cur:
-            cur.execute(
-                "UPDATE agent_runs SET error_message=%s WHERE id=%s AND tenant_id=%s",
-                (error_message, run_id, tenant_id),
-            )
-
-    monkeypatch.setattr("robothor.engine.tracking.create_run", create)
-    monkeypatch.setattr("robothor.engine.tracking.update_run", update)
+    # Keep the real tracking DAL. The shared recovery fixture has a minimal
+    # run table; add the other columns required by create_run/update_run.
+    with records() as conn, conn.cursor() as cur:
+        cur.execute("""ALTER TABLE agent_runs
+            ADD COLUMN IF NOT EXISTS user_role TEXT DEFAULT '',
+            ADD COLUMN IF NOT EXISTS trigger_type TEXT,
+            ADD COLUMN IF NOT EXISTS trigger_detail TEXT,
+            ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ,
+            ADD COLUMN IF NOT EXISTS model_used TEXT,
+            ADD COLUMN IF NOT EXISTS system_prompt_chars INTEGER DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS user_prompt_chars INTEGER DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS task_text TEXT,
+            ADD COLUMN IF NOT EXISTS tools_provided TEXT[],
+            ADD COLUMN IF NOT EXISTS delivery_mode TEXT,
+            ADD COLUMN IF NOT EXISTS nesting_depth INTEGER DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS task_id UUID,
+            ADD COLUMN IF NOT EXISTS person_id UUID""")
+    monkeypatch.setattr("robothor.engine.tracking.get_connection", records)
 
 
 @pytest.mark.parametrize("seconds", [-1, 0.02])
@@ -74,6 +63,17 @@ async def test_expired_admission_is_recovered_without_execution(records, audit_s
     assert outcome["terminal"] and outcome["state"] == "timeout"
     assert "expired before execution began" in outcome["text"]
     assert not outcome["verified"] and outcome["effects"] == []
+    with records() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT completed_at,runtime_context FROM agent_runs WHERE id=%s",
+            (outcome["run_id"],),
+        )
+        completed_at, context = cur.fetchone()
+    assert completed_at is not None
+    assert context["tenant_id"] == auth.tenant_id
+    assert context["principal_id"] == auth.user_id
+    assert context["request_id"] == request.context.request_id
+    assert context["deadline"] == request.context.deadline.isoformat()
     assert read_outcome(identity(), "web:main", client)["state"] == "not_found"
     assert read_outcome(auth, "other-session", client)["state"] == "not_found"
 

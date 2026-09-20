@@ -829,6 +829,16 @@
       "failed": 0,
       "scope": "Host native-entrypoint pre-execution expiry audit; private PostgreSQL scoped outcome recovery; ASGI send/outcome without replay; existing tracking and native cancellation regressions.",
       "limitations": "Audit persistence waits at most one second and can fail or finish later. Minimal private schema uses replacement DAL functions. Native setup after execution entry and non-deadline early cancellation are outside this new path."
+    },
+    "admission_timeout_real_tracking": {
+      "regression_passed": 92,
+      "regression_seconds": 4.91,
+      "final_metadata_passed": 6,
+      "final_metadata_seconds": 1.45,
+      "failed": 0,
+      "initial_failure": "Real update_run rejected unsupported tenant_id argument; expiry recovered only generic text.",
+      "fix": "Use actual update_run signature; update newly created run UUID. Replace fake tracking functions with actual DAL over isolated PostgreSQL.",
+      "scope": "Actual tracking SQL, scoped audit recovery, durable runtime metadata and ASGI send/outcome; compatible minimal schema, not full migration stack."
     }
   },
   "calendar": {
