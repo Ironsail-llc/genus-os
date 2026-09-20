@@ -75,6 +75,13 @@ async def handle(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
                 "operations": await asyncio.to_thread(store.recent_operations, scope),
                 "setup_path": "/account/autonomy",
             }
+        if kind == "readiness":
+            from robothor.autonomy.readiness import ReadinessRequest, task_readiness
+
+            spec = ReadinessRequest.model_validate(
+                {key: args[key] for key in ("grant_id", "proposal", "requirements") if key in args}
+            )
+            return await asyncio.to_thread(task_readiness, store, scope, ctx.agent_id, spec)
         if kind == "prepare":
             proposal = WebOperation.model_validate(args["proposal"])
             return await asyncio.to_thread(
