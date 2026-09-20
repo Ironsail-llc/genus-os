@@ -68,10 +68,11 @@ def create_run(run: AgentRun) -> str:
                     trigger_detail, correlation_id, status, started_at,
                     model_used, system_prompt_chars, user_prompt_chars,
                     task_text, tools_provided, delivery_mode, parent_run_id,
-                    nesting_depth, task_id, person_id, runtime_context
+                    nesting_depth, task_id, person_id, runtime_context,
+                    completed_at, error_message
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 """,
                 (
@@ -110,6 +111,8 @@ def create_run(run: AgentRun) -> str:
                     run.task_id,
                     getattr(run, "person_id", None),
                     json.dumps(run_identity(run)),
+                    run.completed_at,
+                    run.error_message,
                 ),
             )
         return run.id

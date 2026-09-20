@@ -185,3 +185,68 @@ async def test_chat_recovers_admission_expiry_without_repeating_request(
     assert "expired before execution began" in outcome.json()["text"]
     mock_runner.execute.assert_awaited_once()
     execute.assert_not_awaited()
+
+
+async def test_timeout_explanation_is_visible_with_first_committed_record(
+    records,  # noqa: F811
+    audit_store,
+    monkeypatch,
+):
+    from threading import Event
+
+    from robothor.engine import tracking
+    from robothor.engine.runtime.admission_audit import record_timeout
+
+    auth, client = identity(), str(uuid4())
+    request = RunRequest(
+        ExecutionContext(auth.tenant_id, auth.user_id, request_key(auth, "web:main", client)),
+        "main",
+        "Go",
+    )
+    committed, release = Event(), Event()
+    original = tracking.create_run
+
+    def pause_after_insert(run):
+        result = original(run)
+        committed.set()
+        release.wait(2)
+        return result
+
+    monkeypatch.setattr(tracking, "create_run", pause_after_insert)
+    pending = asyncio.create_task(record_timeout(request))
+    try:
+        assert await asyncio.to_thread(committed.wait, 1)
+        outcome = read_outcome(auth, "web:main", client)
+        assert outcome["terminal"]
+        assert "expired before execution began" in outcome["text"]
+        with records() as conn, conn.cursor() as cur:
+            cur.execute("SELECT completed_at FROM agent_runs WHERE id=%s", (outcome["run_id"],))
+            assert cur.fetchone()[0] is not None
+    finally:
+        release.set()
+        await pending
+
+
+@pytest.mark.parametrize(
+    "user,role", [("operator", "owner"), ("federation:conn", "federation_parent"), ("", "")]
+)
+def test_ordinary_run_creation_preserves_identity_and_empty_terminal_fields(
+    audit_store, user, role
+):
+    from robothor.engine.models import AgentRun
+    from robothor.engine.tracking import create_run, get_run
+
+    run = AgentRun(
+        tenant_id=str(uuid4()),
+        user_id=user,
+        user_role=role,
+        agent_id="main",
+        person_id=str(uuid4()),
+    )
+    create_run(run)
+    stored = get_run(run.id)
+    assert stored["user_id"] == user and stored["user_role"] == role
+    assert stored["tenant_id"] == run.tenant_id
+    assert str(stored["person_id"]) == run.person_id
+    assert stored["status"] == "pending"
+    assert stored["completed_at"] is None and stored["error_message"] is None

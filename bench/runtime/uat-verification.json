@@ -839,6 +839,22 @@
       "initial_failure": "Real update_run rejected unsupported tenant_id argument; expiry recovered only generic text.",
       "fix": "Use actual update_run signature; update newly created run UUID. Replace fake tracking functions with actual DAL over isolated PostgreSQL.",
       "scope": "Actual tracking SQL, scoped audit recovery, durable runtime metadata and ASGI send/outcome; compatible minimal schema, not full migration stack."
+    },
+    "atomic_admission_timeout": {
+      "focused_passed": 39,
+      "focused_seconds": 1.29,
+      "runtime_regression_passed": 173,
+      "runtime_regression_seconds": 11.55,
+      "private_identity_and_recording_passed": 58,
+      "private_identity_and_recording_seconds": 3.43,
+      "initial_failure": "A reader between INSERT and UPDATE saw terminal timeout without its explanation.",
+      "fix": "Insert completed_at and error_message with initial run record; remove follow-up admission update.",
+      "integration_attempt": {
+        "passed": 55,
+        "failed": 6,
+        "cause": "Configured test DB lacks pre-existing runtime_context column; shared schema left unchanged.",
+        "remaining": "Full timeline integration requires a compatible isolated schema."
+      }
     }
   },
   "calendar": {
