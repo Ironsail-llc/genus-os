@@ -80,6 +80,24 @@ def seed(dsn):
                     (str(uuid4()), goal, goal_run),
                 )
 
+        # Legacy delegated runs retain parent links but no runtime goal identity.
+        for parent in list(goal_runs):
+            for _ in range(2):
+                child = str(uuid4())
+                cur.execute(
+                    "INSERT INTO agent_runs(id,tenant_id,agent_id,trigger_type,status,error_message,parent_run_id,runtime_context) VALUES (%s,'default','main','event','cancelled','daemon_restart',%s,'{}')",
+                    (child, parent),
+                )
+                cur.execute(
+                    "INSERT INTO agent_run_checkpoints(run_id,step_number,messages,schema_version) VALUES (%s,1,%s,1)",
+                    (
+                        child,
+                        Json([{"role": "user", "content": "Continue delegated synthetic work"}]),
+                    ),
+                )
+                goal_runs.append(child)
+                parent = child
+
     return (
         run,
         goal,

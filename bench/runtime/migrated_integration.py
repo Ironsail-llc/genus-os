@@ -103,6 +103,7 @@ def main():
                     "-q",
                     "robothor/engine/tests/test_run_identity_is_persisted.py",
                     "robothor/engine/tests/test_runner_person_link.py",
+                    "bench/runtime/test_resume_family.py",
                 ],
                 env=env,
                 check=False,

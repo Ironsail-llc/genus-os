@@ -1093,6 +1093,35 @@
         "waiting_tick_does_not_execute": true
       },
       "limits": "Real daemon drill verifies paused goal runs are not admitted through generic recovery. Positive continuation uses actual controller/private store with scripted executor; full native active-goal checkpoint continuation remains unverified. Legacy descendants without goal attribution are not covered."
+    },
+    "goal_descendant_recovery": {
+      "initial_failure": "Legacy children of a paused goal were selected and charged for generic restart recovery.",
+      "fix": "Recursive tenant-scoped goal-family exclusion using UNION over run IDs.",
+      "restart_cycles": [
+        {
+          "health_ready": true,
+          "shutdown_exit_code": 0,
+          "shutdown_seconds": 1.3178525780003838,
+          "recovery_worker_spawns": 1
+        },
+        {
+          "health_ready": true,
+          "shutdown_exit_code": 0,
+          "shutdown_seconds": 1.2683121909994952,
+          "recovery_worker_spawns": 1
+        }
+      ],
+      "focused_passed": 26,
+      "focused_seconds": 5.28,
+      "canonical_integration_passed": 14,
+      "canonical_integration_seconds": 3.65,
+      "positive_selection_checks": [
+        "ordinary interrupted run selected",
+        "cross-tenant parent does not confer goal ownership",
+        "goal descendant cycle terminates",
+        "legacy children and grandchildren excluded"
+      ],
+      "limits": "Preserves goal ownership during generic startup selection; full native active-goal continuation and application rollback remain unverified."
     }
   },
   "calendar": {

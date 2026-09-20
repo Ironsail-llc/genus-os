@@ -268,18 +268,24 @@ def _resume_scan(tenant_id: str) -> list[ResumeCandidate]:
             # restart casualty: a workflow-budget kill is a DECISION, and
             # `resumable` needs the reason to tell them apart.
             cur.execute(
+                # GoalController owns recovery for the entire delegated family,
+                # including legacy children without their own runtime metadata.
+                # UNION over IDs terminates even if parent links contain a cycle.
+                "WITH RECURSIVE goal_family AS ("
+                "SELECT id FROM agent_runs WHERE tenant_id=%s AND ("
+                "runtime_context->>'goal_id' IS NOT NULL "
+                "OR COALESCE(trigger_detail, '') LIKE 'goal:%%' "
+                "OR EXISTS (SELECT 1 FROM pursuit_goal_attempts a "
+                "WHERE a.tenant_id=agent_runs.tenant_id AND a.run_id=agent_runs.id)) "
+                "UNION SELECT child.id FROM agent_runs child "
+                "JOIN goal_family parent ON child.parent_run_id=parent.id "
+                "WHERE child.tenant_id=%s) "
                 "SELECT id, agent_id, COALESCE(resume_attempts, 0), "
                 "COALESCE(error_message, ''), tenant_id FROM agent_runs "
                 "WHERE tenant_id = %s AND status = ANY(%s) "
-                # GoalController owns lease recovery, reconciliation and budgets.
-                # A generic resume would drop that trusted binding (including
-                # for delegated runs whose trigger is not goal:<id>).
-                "AND runtime_context->>'goal_id' IS NULL "
-                "AND COALESCE(trigger_detail, '') NOT LIKE 'goal:%%' "
-                "AND NOT EXISTS (SELECT 1 FROM pursuit_goal_attempts a "
-                "WHERE a.tenant_id=agent_runs.tenant_id AND a.run_id=agent_runs.id) "
+                "AND NOT EXISTS (SELECT 1 FROM goal_family g WHERE g.id=agent_runs.id) "
                 "ORDER BY id",
-                (tenant_id, sorted(RESUMABLE_STATUSES)),
+                (tenant_id, tenant_id, tenant_id, sorted(RESUMABLE_STATUSES)),
             )
             rows = cur.fetchall()
         from robothor.engine.runtime.controls import stopped
