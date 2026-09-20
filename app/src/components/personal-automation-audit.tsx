@@ -3,9 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 
 type Entry = { id: string; version: number; grant_version: number; phase: string; created_at: string };
-type Snapshot = { omitted_frames: number; documents: { origin: string; text: string; links: string[]; source?: string; source_url?: string; requested_url?: string; text_truncated: boolean; links_truncated: boolean }[] };
+type Snapshot = { phase?: string; capture_status?: "captured" | "withheld_after_code" | "unavailable"; omitted_frames: number; documents: { origin: string; text: string; links: string[]; source?: string; source_url?: string; requested_url?: string; text_truncated: boolean; links_truncated: boolean }[] };
 
-export function PersonalAutomationAudit({ operationId }: { operationId: string }) {
+export function PersonalAutomationAudit({ operationId, includeReceipts = false }: { operationId: string; includeReceipts?: boolean }) {
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState<Entry[]>([]);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
@@ -35,19 +35,22 @@ export function PersonalAutomationAudit({ operationId }: { operationId: string }
     pending.current?.abort(); setOpen(false); setRows([]); setSnapshot(null); setMessage(""); setBusy(false);
   }
   const capturedUrls = new Set(snapshot?.documents.flatMap(document => [document.source_url, document.requested_url]).filter(Boolean));
-  if (!open) return <button className="text-sm underline" onClick={() => void load()}>Submission record</button>;
+  if (!open) return <button className="text-sm underline" onClick={() => void load()}>{includeReceipts ? "Submission and receipts" : "Submission record"}</button>;
   return <div className="space-y-3 rounded border p-3">
-    <button className="text-sm underline" onClick={close}>Close submission record</button>
-    <p className="text-sm text-muted-foreground">These are private observations from the browser. They do not prove acceptance or payment. Capture stops after a verification code is entered.</p>
+    <button className="text-sm underline" onClick={close}>{includeReceipts ? "Close submission and receipts" : "Close submission record"}</button>
+    <p className="text-sm text-muted-foreground">These are private observations from the browser. They do not prove acceptance or payment. Page text capture stops after a verification code is entered.</p>
     {busy && <p role="status">Loading submission record…</p>}
     {message && <p role="status">{message}</p>}
     {rows.map(row => <div key={row.id} className="text-sm">
       <button disabled={busy} className="underline" onClick={() => void load(row.id)}>View snapshot {row.version}</button>
-      <span> · {row.phase === "before_input" ? "Before filling" : "Before submission"} · Grant version {row.grant_version} · {row.created_at}</span>
+      <span> · {row.phase === "after_confirmation" ? "Receipt after confirmation" : row.phase === "before_input" ? "Before filling" : "Before submission"} · Grant version {row.grant_version} · {row.created_at}</span>
     </div>)}
     {snapshot && <div className="space-y-3">
+      {snapshot.phase === "after_confirmation" && snapshot.capture_status === "captured" && <p>Receipt record contains rendered page text only.</p>}
+      {snapshot.capture_status === "withheld_after_code" && <p>Receipt text was not saved because a verification code was used.</p>}
+      {snapshot.capture_status === "unavailable" && <p>Receipt text could not be captured. The recorded task outcome is unchanged.</p>}
       {snapshot.omitted_frames > 0 && <p className="text-sm">Some embedded pages were not captured.</p>}
-      {snapshot.documents.map((document, index) => {
+      {(!snapshot.capture_status || snapshot.capture_status === "captured") && snapshot.documents.map((document, index) => {
         const uncapturedLinks = document.links.filter(link => !capturedUrls.has(link));
         return <section key={index} className="space-y-2">
         <p className="font-medium">{document.origin}</p>

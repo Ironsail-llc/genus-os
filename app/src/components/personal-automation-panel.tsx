@@ -158,7 +158,7 @@ export function PersonalAutomationPanel() {
       {operations.slice(0,10).map(operation => <div key={operation.id} className="space-y-2 rounded border p-3">
         <p>{operation.proposal.purpose} · {operation.state.replaceAll("_", " ")}</p>
         <p className="text-sm text-muted-foreground">{operation.proposal.origin}</p>
-        <PersonalAutomationAudit operationId={operation.id} />
+        <PersonalAutomationAudit operationId={operation.id} includeReceipts={["purchase", "subscription"].includes(operation.proposal.action)} />
         {["purchase", "subscription"].includes(operation.proposal.action) && <PersonalAutomationPayment key={operation.id} operationId={operation.id} currency={operation.proposal.currency} />}
         {operation.state === "awaiting_input" && <form className="flex gap-2" autoComplete="off" onSubmit={event => {
           event.preventDefault(); const form = event.currentTarget;

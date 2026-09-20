@@ -137,3 +137,4 @@ crm/132_autonomy_enrollment_rls.sql
 crm/133_autonomy_terms_audit.sql
 crm/134_autonomy_material_documents.sql
 crm/138_autonomy_payment_events.sql
+crm/139_autonomy_receipt_observations.sql

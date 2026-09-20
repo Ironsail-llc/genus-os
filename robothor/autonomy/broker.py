@@ -308,7 +308,15 @@ class BrowserBroker:
                 "kind": "reconciled_confirmation",
             }
             await asyncio.to_thread(self.store.finish, scope, operation_id, "completed", evidence)
-            return {"operation_id": operation_id, "state": "completed", "evidence": evidence}
+            from robothor.autonomy.receipt_capture import capture_receipt
+
+            receipt = await capture_receipt(self, scope, operation_id, agent_id, page, plan=plan)
+            return {
+                "operation_id": operation_id,
+                "state": "completed",
+                "evidence": evidence,
+                **({"receipt": receipt} if receipt is not None else {}),
+            }
         except Exception:
             return {
                 "operation_id": operation_id,
@@ -683,6 +691,9 @@ class BrowserBroker:
                 "kind": "merchant_confirmation",
             }
             await asyncio.to_thread(self.store.finish, scope, operation_id, "completed", evidence)
+            from robothor.autonomy.receipt_capture import capture_receipt
+
+            receipt = await capture_receipt(self, scope, operation_id, agent_id, page, plan=plan)
             # Save authentication after confirmed completion; no cookie value
             # leaves the broker. Failure to save must not undo a completed purchase.
             # A merchant can copy a verification code into cookies/localStorage.
@@ -697,6 +708,7 @@ class BrowserBroker:
                     "state": "completed",
                     "evidence": evidence,
                     "session_resource_id": None,
+                    **({"receipt": receipt} if receipt is not None else {}),
                 }
             session_ref = None
             try:
