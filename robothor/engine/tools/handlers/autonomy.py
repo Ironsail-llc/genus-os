@@ -107,6 +107,22 @@ async def handle(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         row = await asyncio.to_thread(store.operation, scope, operation_id)
         if row["agent_id"] != ctx.agent_id:
             raise PermissionError("agent_not_allowed")
+        if kind in {"handoff", "handoffs"}:
+            from robothor.autonomy.handoffs import HandoffRequest, HandoffStore
+
+            handoffs = HandoffStore(store)
+            if kind == "handoffs":
+                rows = await asyncio.to_thread(handoffs.list, scope, ctx.agent_id)
+                return {"handoffs": [item for item in rows if item["operation_id"] == operation_id]}
+            spec = HandoffRequest.model_validate(args.get("handoff", {}))
+            result = await asyncio.to_thread(
+                handoffs.create, scope, operation_id, ctx.agent_id, spec
+            )
+            return {
+                **result,
+                "setup_path": "/account/autonomy",
+                "next_step": "external_verification_then_read_only_check",
+            }
         if kind == "payment_status":
             from robothor.autonomy.payment_journal import PaymentJournal
 

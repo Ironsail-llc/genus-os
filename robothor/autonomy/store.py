@@ -689,4 +689,10 @@ class AutonomyStore:
                 from robothor.autonomy.payment_journal import record_submission
 
                 record_submission(cur, self, scope, row)
+                cur.execute(
+                    "UPDATE autonomy_handoffs SET state='resolved',updated_at=now() "
+                    "WHERE tenant_id=%s AND owner_id=%s AND operation_id=%s "
+                    "AND state<>'resolved'",
+                    (scope.tenant_id, scope.owner_id, operation_id),
+                )
             self._event(cur, scope, operation_id, state)

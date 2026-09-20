@@ -93,7 +93,7 @@ class PaymentJournal:
             op = self.store._operation(cur, scope, operation_id)
             cur.execute(
                 "SELECT 1 FROM autonomy_events WHERE tenant_id=%s AND owner_id=%s "
-                "AND subject_id=%s AND event='submitting' LIMIT 1",
+                "AND subject_id=%s AND event IN ('submitting','external_action_requested') LIMIT 1",
                 (scope.tenant_id, scope.owner_id, operation_id),
             )
             if not cur.fetchone():
