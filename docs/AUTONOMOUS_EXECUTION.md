@@ -523,3 +523,10 @@ also suppresses recovery text. Missing evidence, unsupported protected challenge
 expiry or service loss still require external/status-page reconciliation; this
 feature does not make uncertain effects safe to repeat. The existing 15-minute
 idle and one-hour absolute browser limits still apply.
+
+Private workflow errors expose only fixed retry reasons, never arbitrary browser
+or database exception text. `command_changed` means an ID was reused for different
+arguments: a new logical command (such as reconciliation) needs its own ID, while
+an identical retry keeps the original ID. On `workflow_revision_changed`, read
+`workflow_status` and use its revision. `command_in_progress` requires waiting;
+`workflow_lost` requires external/status-page reconciliation, not a blind repeat.

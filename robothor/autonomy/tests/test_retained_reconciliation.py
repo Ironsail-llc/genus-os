@@ -65,7 +65,8 @@ async def test_uncertain_account_retains_confirmation_for_read_only_reconciliati
             )
             wid = opened["workflow_id"]
             plan = ExecutionPlan(url="https://account.example/register", submit_selector="#submit")
-            result = await manager.execute(identity, "main", wid, str(uuid4()), 0, plan)
+            submit_command = str(uuid4())
+            result = await manager.execute(identity, "main", wid, submit_command, 0, plan)
             assert result["state"] == "reconciling"
             assert sum(method == "POST" for method, _ in requests) == 1
             assert manager.active_count == 1, "The only confirmation page was discarded"
@@ -126,6 +127,21 @@ async def test_uncertain_account_retains_confirmation_for_read_only_reconciliati
             from robothor.autonomy.workflows.client import invoke
 
             monkeypatch.setattr(tokens, "signing_key", lambda: "fixture-only-key-" * 3)
+            wrong_id = await invoke(
+                identity,
+                "main",
+                {
+                    "kind": "reconcile",
+                    "workflow_id": wid,
+                    "command_id": submit_command,
+                    "revision": 0,
+                    "selector": confirmation["selector"],
+                    "text": confirmation["text"],
+                },
+                transport=httpx.ASGITransport(app=create_app(manager)),
+            )
+            assert wrong_id["reason"] == "command_changed"
+            assert manager.active_count == 1 and requests == before
             recovered = await invoke(
                 identity,
                 "main",
