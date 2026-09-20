@@ -193,6 +193,10 @@ def update(
                     "finish or cancel outstanding execution children before completing"
                 )
         g = transition(before, change, operator=operator)
+        if change.action == "resume" and g["parent_goal_id"]:
+            parent = locked(cur, tenant, g["parent_goal_id"])
+            if parent["status"] in INACTIVE:
+                raise ValueError("make the parent active before resuming this child goal")
         if change.action == "evidence":
             from robothor.goals.evidence import verify
 

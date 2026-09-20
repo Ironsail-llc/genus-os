@@ -86,6 +86,14 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
     seed_unfinished_work(db, kind="long" if hierarchy else "short")
     (goal,) = store.list_goals(db)
     child = test_store.create(db, parent_goal_id=goal["id"]) if hierarchy else None
+    controls = {"Pause that work.": ("pause", goal["id"])}
+    if hierarchy:
+        controls.update(
+            {
+                "Keep the child paused separately.": ("pause", child["id"]),
+                "Resume the parent, keeping that child paused.": ("resume", goal["id"]),
+            }
+        )
     calls = []
     active_message = ""
 
@@ -102,8 +110,8 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
     async def dispatch(name, arguments, **context):
         assert name in sample_agent_config.tools_allowed
         if name == "update_pursuit_goal":
-            assert active_message == "Pause that work."
-            assert arguments.get("action") == "pause" and arguments.get("goal_id") == goal["id"]
+            assert active_message in controls
+            assert (arguments.get("action"), arguments.get("goal_id")) == controls[active_message]
         calls.append(name)
         return await HANDLERS[name](
             arguments,
@@ -121,32 +129,40 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
 
     async def provider(self, messages, models, tools, on_content=None, **kwargs):
         latest = max(i for i, message in enumerate(messages) if message["role"] == "user")
-        pausing = "Pause that work" in messages[latest]["content"]
+        command = controls.get(active_message)
+        target = command[1] if command else goal["id"]
         results = [json.loads(m["content"]) for m in messages[latest:] if m["role"] == "tool"]
         name, args, text = None, None, None
         if not results:
-            name, args = "get_pursuit_goal", {"goal_id": goal["id"]}
-        elif pausing and len(results) == 1:
+            name, args = "get_pursuit_goal", {"goal_id": target}
+        elif command and len(results) == 1:
             name, args = (
                 "update_pursuit_goal",
                 {
-                    "goal_id": goal["id"],
+                    "goal_id": target,
                     "version": results[0]["goal"]["version"],
-                    "action": "pause",
-                    "note": "User asked to pause in chat",
+                    "action": command[0],
+                    "note": active_message,
                 },
             )
-        elif pausing and hierarchy and len(results) == 2:
-            name, args = "get_pursuit_goal", {"goal_id": goal["id"]}
-        elif pausing:
-            assert results[-1]["goal"]["status"] == "paused"
-            text = "Paused the goal. The unfinished task is still open; I haven't marked the goal complete."
-            if hierarchy:
-                observed = results[-1]["goal"]
+        elif command and hierarchy and len(results) == 2:
+            name, args = "get_pursuit_goal", {"goal_id": target}
+        elif command:
+            observed = results[-1]["goal"]
+            assert observed["status"] == ("queued" if command[0] == "resume" else "paused")
+            if hierarchy and target == child["id"]:
+                assert "paused_by_parent" not in observed
+                text = "Kept the child goal paused separately. Resuming its parent will not resume this child."
+            elif hierarchy:
                 assert observed["children"][0]["id"] == child["id"]
                 assert observed["children"][0]["status"] == "paused"
                 assert sorted(task["status"] for task in observed["tasks"]) == ["DONE", "TODO"]
                 text = "Paused the goal and its unfinished child goal. The remaining task is still open; neither goal is complete."
+                if command[0] == "resume":
+                    assert results[-1]["execution_enabled"] is False
+                    text = "The parent is queued to continue, and the child remains paused as requested. Goal execution is disabled, so no background work has started."
+            else:
+                text = "Paused the goal. The unfinished task is still open; I haven't marked the goal complete."
         else:
             snapshot = results[-1]["goal"]
             assert results[-1]["execution_enabled"] is False
@@ -223,7 +239,7 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
         status_question = (live or {}).get(
             "status_question", "What's finished, and what's still left?"
         )
-        for message in (status_question, "Pause that work."):
+        for message in (status_question, *controls):
             active_message = message
             token = active_context.set(
                 ExecutionContext(
@@ -274,20 +290,27 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
                 )
             assert done["status"] == "completed", done
             assert done["duration_ms"] <= 60_000, "completed response exceeded the host deadline"
-            assert snapshot["status"] == ("paused" if message.startswith("Pause") else "waiting")
+            expected_parent = (
+                "waiting"
+                if message == status_question
+                else ("queued" if controls[message][0] == "resume" else "paused")
+            )
+            assert snapshot["status"] == expected_parent
             assert sorted(task["status"] for task in snapshot["tasks"]) == ["DONE", "TODO"]
             if hierarchy:
                 child_state = store.get(db, child["id"])
                 assert child_state["status"] == (
-                    "paused" if message.startswith("Pause") else "queued"
+                    "queued" if message == status_question else "paused"
                 )
                 assert child_state["evidence"] == []
     if live:
         assert "get_pursuit_goal" in calls and calls.count("update_pursuit_goal") == 1
         assert outbound.call_count > 0
     else:
-        assert calls == ["get_pursuit_goal", "get_pursuit_goal", "update_pursuit_goal"] + (
-            ["get_pursuit_goal"] if hierarchy else []
+        assert calls == ["get_pursuit_goal"] + (
+            ["get_pursuit_goal", "update_pursuit_goal", "get_pursuit_goal"] * 3
+            if hierarchy
+            else ["get_pursuit_goal", "update_pursuit_goal"]
         )
         outbound.assert_not_called()
         assert "isn't complete" in transcript[0]["robothor"]

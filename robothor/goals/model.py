@@ -286,6 +286,11 @@ def transition(
         g.update(recovery_required=False, checkpoint=change.note)
     if action in {"steer", "revise"}:
         g["steer_version"] = g["version"] + 1
+    if action in {"pause", "cancel", "resume"}:
+        # A direct control command supersedes inherited pause ownership.
+        # Parent propagation sets these markers in the store, not here.
+        g.pop("paused_by_parent", None)
+        g.pop("before_parent_pause", None)
     g["version"] += 1
     g["updated_at"] = now_iso()
     return g

@@ -1,0 +1,80 @@
+{
+  "scope": "Native chat route/runner and goal handlers; scripted model, private PostgreSQL, no business connectors or scheduler.",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "One of the two tasks is done. \u2018Check the remaining item\u2019 is still open, so the goal isn't complete. It's waiting for that check, and no completion evidence has been recorded.",
+      "run": {
+        "text": "One of the two tasks is done. \u2018Check the remaining item\u2019 is still open, so the goal isn't complete. It's waiting for that check, and no completion evidence has been recorded.",
+        "status": "completed",
+        "model": "openrouter/test/model",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "duration_ms": 21,
+        "total_cost_usd": 0.0,
+        "run_id": "980bc4b5-3458-4a4b-9be9-34a187a0749f"
+      }
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Paused the goal and its unfinished child goal. The remaining task is still open; neither goal is complete.",
+      "run": {
+        "text": "Paused the goal and its unfinished child goal. The remaining task is still open; neither goal is complete.",
+        "status": "completed",
+        "model": "openrouter/test/model",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "duration_ms": 53,
+        "total_cost_usd": 0.0,
+        "run_id": "2eda7dc6-96ff-4662-891e-45a76813d835"
+      }
+    },
+    {
+      "user": "Keep the child paused separately.",
+      "robothor": "Kept the child goal paused separately. Resuming its parent will not resume this child.",
+      "run": {
+        "text": "Kept the child goal paused separately. Resuming its parent will not resume this child.",
+        "status": "completed",
+        "model": "openrouter/test/model",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "duration_ms": 52,
+        "total_cost_usd": 0.0,
+        "run_id": "a0c46ce6-cffd-405d-97b5-751bbf1f8a3d"
+      }
+    },
+    {
+      "user": "Resume the parent, keeping that child paused.",
+      "robothor": "The parent is queued to continue, and the child remains paused as requested. Goal execution is disabled, so no background work has started.",
+      "run": {
+        "text": "The parent is queued to continue, and the child remains paused as requested. Goal execution is disabled, so no background work has started.",
+        "status": "completed",
+        "model": "openrouter/test/model",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "duration_ms": 47,
+        "total_cost_usd": 0.0,
+        "run_id": "cf7a83fa-5b42-4926-aeb9-cb4a957e9586"
+      }
+    }
+  ],
+  "tool_calls": [
+    "get_pursuit_goal",
+    "get_pursuit_goal",
+    "update_pursuit_goal",
+    "get_pursuit_goal",
+    "get_pursuit_goal",
+    "update_pursuit_goal",
+    "get_pursuit_goal",
+    "get_pursuit_goal",
+    "update_pursuit_goal",
+    "get_pursuit_goal"
+  ],
+  "final_goal_status": "queued",
+  "final_task_statuses": [
+    "DONE",
+    "TODO"
+  ],
+  "final_child_status": "paused"
+}

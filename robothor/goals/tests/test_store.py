@@ -348,3 +348,54 @@ def test_provider_reservation_survives_lost_worker_and_stale_attempt_cannot_spen
     assert store.get(db, g["id"])["tokens_used"] == 700
     with pytest.raises(ValueError, match="lease"):
         store.reserve_provider_usage(db, g["id"], attempt, 100)
+
+
+@pytest.mark.parametrize("pause_child_first", [True, False])
+def test_parent_resume_preserves_an_explicit_child_pause(db, pause_child_first):
+    from robothor.goals.runtime import task_runnable
+
+    parent = create(db, kind="long")
+    child = create(db, parent_goal_id=parent["id"])
+    task_id = str(uuid4())
+    with store.transaction() as cur:
+        cur.execute(
+            "INSERT INTO crm_tasks(id,tenant_id,title,status) VALUES (%s,%s,'Still open','TODO')",
+            (task_id, db),
+        )
+    child = change(db, child, "link_task", task_id=task_id)
+    if pause_child_first:
+        child = change(db, child, "pause", note="Keep this child paused separately")
+    parent = change(db, parent, "pause")
+    if not pause_child_first:
+        child = change(
+            db, store.get(db, child["id"]), "pause", note="Keep this child paused separately"
+        )
+    parent = change(db, parent, "resume")
+    assert parent["status"] == "queued"
+    child = store.get(db, child["id"])
+    assert child["status"] == "paused"
+    assert not task_runnable(task_id, db)
+    assert child["tasks"][0]["status"] == "TODO"
+    assert child["evidence"] == []
+    change(db, child, "resume")
+    assert task_runnable(task_id, db)
+
+
+def test_child_resume_cannot_bypass_a_paused_parent(db):
+    from robothor.goals.runtime import task_runnable
+
+    parent = create(db, kind="long")
+    child = create(db, parent_goal_id=parent["id"])
+    task_id = str(uuid4())
+    with store.transaction() as cur:
+        cur.execute(
+            "INSERT INTO crm_tasks(id,tenant_id,title,status) VALUES (%s,%s,'Work','TODO')",
+            (task_id, db),
+        )
+    change(db, child, "link_task", task_id=task_id)
+    change(db, parent, "pause")
+    child = store.get(db, child["id"])
+    with pytest.raises(ValueError, match="parent"):
+        change(db, child, "resume")
+    assert store.get(db, child["id"])["status"] == "paused"
+    assert not task_runnable(task_id, db)

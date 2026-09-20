@@ -716,6 +716,16 @@
       "manual_acceptance": false,
       "limitations": "Scripted provider, not live language understanding. Existing single-goal user acceptance preserved.",
       "production_deployed": false
+    },
+    "selective_goal_resume": {
+      "initial": "Explicit child pause after inherited pause was lost on parent resume; direct child resume bypassed paused parent",
+      "final": "80 passed in 17.74s; three dependency warnings",
+      "chat": "2 scripted native-chat cases passed in 4.12s",
+      "artifact": "uat-chat-goal-selective-resume.json",
+      "evidence": "Independent child pause retained; inactive parent blocks direct child resume; linked tasks and evidence preserved; fresh normal-chat state checks",
+      "checks": "Ruff, formatting and diff checks pass",
+      "manual_acceptance": false,
+      "production_deployed": false
     }
   },
   "calendar": {
