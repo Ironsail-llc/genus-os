@@ -1233,6 +1233,27 @@
       "integration_command": ".venv/bin/python -m bench.runtime.migrated_integration",
       "limits": "Setup checkpoint isolation tested against private canonical database. Full native saved-message checkpoint continuation and general identity revalidation remain separate checks.",
       "integration_summary": "19 passed, 1 skipped, 1 warning in 5.78s"
+    },
+    "native_checkpoint_continuation": {
+      "initial_failure": "Resumed native run restored task text in memory but persisted generic Resume from checkpoint in its audit row.",
+      "fix": "Persist restored task_text before execution continues; stop if that update fails.",
+      "native_checkpoint_checks": [
+        "saved original task context reaches provider",
+        "saved assistant/tool result pair reaches provider",
+        "one model call and no repeated tools",
+        "checkpoint unchanged",
+        "restored task is durably visible before provider call",
+        "completed resumed run retains task and tenant/runtime identity"
+      ],
+      "focused_passed": 38,
+      "focused_seconds": 2.97,
+      "runner_resume_passed": 104,
+      "runner_resume_seconds": 5.84,
+      "integration_passed": 20,
+      "integration_skipped": 1,
+      "integration_seconds": 7.68,
+      "integration_warnings": 1,
+      "limits": "Real native resume and canonical private database with scripted provider and seeded test permissions. Does not establish checkpoint compatibility of candidate frameworks, real provider latency, or full application rollback."
     }
   },
   "calendar": {

@@ -85,3 +85,33 @@ async def test_native_runner_records_failed_recovery_without_model_or_business_c
     assert "Failed to restore checkpoint" in result.error_message
     provider.assert_not_awaited()
     engine.registry.execute.assert_not_awaited()
+
+
+async def test_native_resume_stops_if_restored_task_cannot_be_audited(request, sample_agent_config):
+    engine = request.getfixturevalue("runner")
+    engine.registry.execute = AsyncMock()
+    checkpoint = {
+        "messages": [
+            {"role": "system", "content": "Saved task"},
+            {"role": "user", "content": "Continue saved work"},
+        ]
+    }
+    with (
+        patch("robothor.engine.checkpoint.CheckpointManager.load_latest", return_value=checkpoint),
+        patch("robothor.engine.runtime.controls.stopped", return_value=False),
+        patch("robothor.engine.runner.create_run"),
+        patch("robothor.engine.runner.update_run", return_value=False),
+        patch("robothor.engine.run_finalizer.create_step"),
+        patch("litellm.acompletion", new_callable=AsyncMock) as provider,
+    ):
+        result = await engine.execute(
+            "test-agent",
+            "Continue saved work",
+            agent_config=sample_agent_config,
+            tenant_id="fixture",
+            resume_from_run_id="previous",
+        )
+    assert result.status == RunStatus.FAILED
+    assert "persist restored task" in result.error_message
+    provider.assert_not_awaited()
+    engine.registry.execute.assert_not_awaited()
