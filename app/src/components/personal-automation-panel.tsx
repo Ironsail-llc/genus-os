@@ -7,7 +7,7 @@ import { PersonalAutomationAudit } from "./personal-automation-audit";
 
 type Resource = { id: string; kind: string; label: string; origin?: string;
   descriptor?: { version?: number; fields?: string[]; source?: string } };
-type Grant = { id: string; revoked: boolean; policy: { origins: string[]; allow_any_website?: boolean; allowed_purposes?: string[];
+type Grant = { id: string; revoked: boolean; payment_hold?: boolean; policy: { origins: string[]; allow_any_website?: boolean; allowed_purposes?: string[];
   verification_senders?: Record<string, string[]>;
   currency: string; per_purchase_minor: number; monthly_minor: number; recurring_minor: number; annual_minor: number } };
 type Settings = { enabled: boolean; managed_browser: boolean; payment_processing: boolean;
@@ -260,8 +260,13 @@ export function PersonalAutomationPanel() {
             <p className="text-sm" key={website}>Verification for {website}: {domains.join(", ")}</p>)}
           <p className="text-sm">Per purchase: {moneyDisplay(grant.policy.per_purchase_minor, grant.policy.currency)} · Monthly total: {moneyDisplay(grant.policy.monthly_minor, grant.policy.currency)}</p>
           <p className="text-sm">Per recurring charge: {moneyDisplay(grant.policy.recurring_minor, grant.policy.currency)} · Annual commitment: {moneyDisplay(grant.policy.annual_minor, grant.policy.currency)}</p>
-        </div><button disabled={busy} onClick={() => void act(() => api(`grants/${grant.id}`, "DELETE"))}>Revoke</button>
+          {grant.payment_hold && <p className="text-sm" role="status">Spending paused: a recorded charge went above this authority. Review it under Payment status, then clear the hold to resume.</p>}
+        </div><div className="flex flex-col gap-2">
+          {grant.payment_hold && <button disabled={busy} onClick={() => void act(() => api(`grants/${grant.id}/payment-hold`, "DELETE"))}>Clear payment hold</button>}
+          <button disabled={busy} onClick={() => void act(() => api(`grants/${grant.id}`, "DELETE"))}>Revoke</button>
+        </div>
       </div>)}
+      <p className="text-sm text-muted-foreground">Revoking withdraws Robothor’s authority to act. It does not cancel a scheduled renewal: the merchant keeps the recurring mandate on your card and will keep charging it. Cancel a membership with the merchant directly.</p>
     </section>
     {status?.spending && Object.keys(status.spending.months).length > 0 && <section className="space-y-3">
       <h2 className="text-lg font-medium">Projected charges</h2>

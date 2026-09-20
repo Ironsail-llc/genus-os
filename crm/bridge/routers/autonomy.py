@@ -195,6 +195,22 @@ async def revoke_grant(grant_id: UUID, request: Request):
     return _safe({"revoked": True})
 
 
+@router.delete("/grants/{grant_id}/payment-hold")
+async def clear_payment_hold(grant_id: UUID, request: Request):
+    """Owner-only: resume spending on a grant frozen after an overspend.
+
+    Clearing records that the operator has looked at the charge. It never
+    touches the payment evidence, which stays exactly as the issuer delivered
+    it, and no agent, tool or broker path reaches this route.
+    """
+    scope = await require_personal_owner(request)
+    try:
+        await asyncio.to_thread(AutonomyStore().clear_payment_hold, scope, str(grant_id))
+    except PermissionError:
+        raise HTTPException(404, "Grant not found") from None
+    return _safe({"payment_hold": False})
+
+
 @router.put("/settings")
 async def configure(request: Request):
     scope = await require_personal_owner(request)

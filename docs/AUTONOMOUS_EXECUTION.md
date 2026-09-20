@@ -168,6 +168,33 @@ month. Missing legacy renewal dates block new spending until resolved. Status
 returns projections separately from actual settlement; this is not an issuer-side
 card limit.
 
+### Overspend freezes the grant
+
+Projections bind what is *proposed*. What an issuer actually charged is a
+separate fact, and it can be larger. When issuer evidence shows a charge or
+authorization above the reservation it was given, a capture above its own
+authorization, or a renewal above its saved period allowance, the grant goes on
+a **payment hold**:
+
+- The operator is notified immediately, as a `crm_agent_notifications`
+  escalation addressed to the main agent -- the same surface guardrail and
+  provider alerts use. The alert names the operation, the grant and the
+  signals; it never carries the issuer's transaction reference.
+- The grant authorises no further `purchase` or `subscription`. `reserve`,
+  `begin_submit` and `check_authority` all refuse with `grant_payment_hold`.
+  Other actions (`login`, `account`, `application`) are unaffected: a hold is
+  about money, not about access.
+- Reconciliation is deliberately **not** blocked. Money that has already moved
+  must still be recorded and the operation finished; freezing that would strand
+  the very operation the hold exists to surface.
+- The hold is durable (an `autonomy_events` pair on the grant, latest wins) and
+  survives a restart. Only the authenticated owner clears it, from
+  **Account -> Personal automation**; clearing records that the operator looked
+  at the charge and never alters the evidence.
+
+A discrepancy flag on a panel the operator has not opened is not a control.
+This is the control.
+
 An execution plan identifies the URL, field selectors with resource IDs and
 field names, checkboxes and submit selector. Supply both `success_selector` and
 `success_text` for a known confirmation, or omit both to discover a new affirmative
@@ -364,6 +391,16 @@ network egress enforcement. Agent shell execution must remain in its configured
 sandbox; a privileged host process can bypass an application-level vault.
 Disable execution or revoke a grant to stop new submissions; preserve uncertain
 operations and reconcile them rather than deleting their reservations.
+
+**Revoking a grant does not cancel a scheduled renewal.** Revocation withdraws
+*this system's* authority to act. It does not reach the merchant, who holds a
+recurring mandate against the card and will keep charging it. Disabling
+execution does not reach the merchant either. There is no cancel path in
+`robothor/autonomy/`: nothing here contacts a merchant to end a subscription.
+To stop a recurring charge the operator must cancel with the merchant directly
+(or have the card issuer stop it). Recorded renewal charges that arrive after a
+revocation are still journalled, and one above its allowance still places a
+payment hold and pages the operator -- an alert, not a cancellation.
 
 ## Validation
 
@@ -679,6 +716,13 @@ separately, as described below; corrections remain unfinished. Conflicting
 captures/reversals, excess refunds and multiple authorizations still require
 reconciliation.
 
+A *refused* append is recorded too. Conflicting issuer evidence, a fact for an
+unstarted payment or a merchant claim without confirmation all roll their
+transaction back, so the refusal is written afterwards on a separate connection
+as `payment_evidence_refused:<reason>` against the operation. The reason is a
+fixed code-level token, never caller data, and the refused fact itself is not
+stored. A probe from a scope that cannot see the operation writes nothing.
+
 The journal is not yet an issuer integration. Its provenance field is descriptive, not authentication: only trusted adapters may
 supply facts after validating their evidence. Agent claims and unauthenticated
 callbacks must never become issuer facts. The Personal automation operation list includes a private Payment status view.
@@ -773,6 +817,15 @@ money that has already moved, and evidence never releases the existing budget
 reservation or changes a membership. This adds no issuer connection or automatic
 renewal execution: authenticated ingestion, corrections and verified membership
 changes remain integration work.
+
+A renewal above its period allowance now places a payment hold on the grant and
+notifies the operator, as described under **Overspend freezes the grant**. That
+stops *this system* from authorising more spend on that grant. It does not stop
+the renewal: the recurring commitment is counted against the budget at
+authorisation only, nothing touches the budget at charge time, and there is no
+cancel path. Revoking the grant and disabling the feature both leave the
+projection and the merchant's mandate untouched. The operator must cancel with
+the merchant.
 
 ### Durable external verification handoffs
 
