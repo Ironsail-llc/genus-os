@@ -461,6 +461,23 @@
       "provider_calls_on_failed_restore": 0,
       "business_calls_on_failed_restore": 0,
       "candidate_resumption_supported": false
+    },
+    "approved_plan_terminal_chat": {
+      "initial_route_failures": 8,
+      "route_cases": 16,
+      "regression_passed": 144,
+      "seconds": 9.87,
+      "coverage": [
+        "normal and deep approved plans",
+        "completed failed timeout cancelled",
+        "partial and empty output",
+        "SSE terminal status and explanation",
+        "history and persistence",
+        "no deep success event for failed runs"
+      ],
+      "provider_calls": 0,
+      "business_effects": 0,
+      "manual_acceptance": false
     }
   },
   "calendar": {

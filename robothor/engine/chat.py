@@ -61,7 +61,7 @@ from robothor.engine.chat_store import (
     save_plan_state_async,
 )
 from robothor.engine.feature_flags import per_user_sessions_mode
-from robothor.engine.models import PLAN_TTL_SECONDS, DeepRunState, PlanState, TriggerType
+from robothor.engine.models import PLAN_TTL_SECONDS, DeepRunState, PlanState, RunStatus, TriggerType
 from robothor.engine.runtime.chat_control import start, stop
 from robothor.engine.sanitize import sanitize_log
 
@@ -942,6 +942,8 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                     identity=identity,
                 )
 
+                final_text = result_text(run)
+
                 # Track execution run ID
                 plan.execution_run_id = run.id
 
@@ -949,23 +951,16 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                 append_turn(
                     session,
                     user_message=f"[Deep plan executed] {plan.original_message}",
-                    assistant_text=(
-                        run.output_text
-                        or (
-                            f"[Deep reasoning failed: {run.error_message}]"
-                            if run.error_message
-                            else None
-                        )
-                    ),
+                    assistant_text=final_text,
                 )
 
                 # Persist to DB
-                if run.output_text and _config:
+                if final_text and _config:
                     asyncio.create_task(
                         save_exchange_async(
                             session_key,
                             plan.original_message,
-                            run.output_text,
+                            final_text,
                             channel="webchat",
                             model_override=session.model_override,
                             tenant_id=auth.tenant_id,
@@ -983,37 +978,33 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                 duration_s = (run.duration_ms or 0) / 1000
                 cost_usd = run.total_cost_usd or 0.0
 
-                if run.output_text:
+                if run.status == RunStatus.COMPLETED and final_text:
                     await queue.put(
                         {
                             "event": "deep_result",
                             "data": {
-                                "response": run.output_text,
+                                "response": final_text,
                                 "execution_time_s": round(duration_s, 1),
                                 "cost_usd": round(cost_usd, 2),
                             },
                         }
                     )
+                elif run.status != RunStatus.COMPLETED:
                     await queue.put(
-                        {
-                            "event": "done",
-                            "data": {
-                                "text": run.output_text,
-                                "execution_time_s": round(duration_s, 1),
-                                "cost_usd": round(cost_usd, 2),
-                                "duration_ms": run.duration_ms,
-                            },
-                        }
+                        {"event": "error", "data": {"error": run.error_message or final_text}}
                     )
-                elif run.error_message:
-                    await queue.put({"event": "error", "data": {"error": run.error_message}})
-                    await queue.put(
-                        {"event": "done", "data": {"text": "", "error": run.error_message}}
-                    )
-                else:
-                    await queue.put(
-                        {"event": "done", "data": {"text": "", "duration_ms": run.duration_ms}}
-                    )
+                await queue.put(
+                    {
+                        "event": "done",
+                        "data": {
+                            "text": final_text,
+                            "status": run.status.value,
+                            "execution_time_s": round(duration_s, 1),
+                            "cost_usd": round(cost_usd, 2),
+                            "duration_ms": run.duration_ms,
+                        },
+                    }
+                )
             else:
                 # ── Normal plan execution with full tools ──
                 last_sent_len = 0
@@ -1062,6 +1053,8 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                     identity=identity,
                 )
 
+                final_text = result_text(run)
+
                 # Track execution run ID
                 plan.execution_run_id = run.id
 
@@ -1069,23 +1062,16 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                 append_turn(
                     session,
                     user_message=f"[Plan executed] {plan.original_message}",
-                    assistant_text=(
-                        run.output_text
-                        or (
-                            f"[Execution failed: {run.error_message}]"
-                            if run.error_message
-                            else None
-                        )
-                    ),
+                    assistant_text=final_text,
                 )
 
                 # Persist to DB
-                if run.output_text and _config:
+                if final_text and _config:
                     asyncio.create_task(
                         save_exchange_async(
                             session_key,
                             plan.original_message,
-                            run.output_text,
+                            final_text,
                             channel="webchat",
                             model_override=session.model_override,
                             tenant_id=auth.tenant_id,
@@ -1103,7 +1089,8 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                     {
                         "event": "done",
                         "data": {
-                            "text": run.output_text or "",
+                            "text": final_text,
+                            "status": run.status.value,
                             "model": run.model_used,
                             "input_tokens": run.input_tokens,
                             "output_tokens": run.output_tokens,
