@@ -10,7 +10,9 @@ export default defineConfig({
   webServer: {
     command: "node scripts/start-standalone.mjs",
     url: baseURL,
-    reuseExistingServer: !process.env.CI,
+    // Never reuse a developer or production dashboard on the test port.
+    // Only the server below carries the isolated URLs and test auth settings.
+    reuseExistingServer: false,
     timeout: 120000,
     env: {
       AUTH_SECRET:

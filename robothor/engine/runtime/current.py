@@ -33,8 +33,9 @@ class CurrentRuntime:
 
     async def run(self, request: RunRequest, on_event=None) -> RuntimeResult:
         from robothor.engine.models import StepType
+        from robothor.engine.runtime.deadlines import constrain_context
 
-        context = request.context
+        context = constrain_context(request.context)
         from robothor.goals.runtime import binding
 
         goal = binding.get()
@@ -113,8 +114,15 @@ class CurrentRuntime:
         )
         activity_token = current.set(activity)
         token = active_context.set(context)
+        from robothor.engine.runtime.deadlines import execute_before_deadline
+
         try:
-            run = await self._execute(agent_id=request.agent_id, message=request.message, **options)
+            run = await execute_before_deadline(
+                context,
+                lambda: self._execute(
+                    agent_id=request.agent_id, message=request.message, **options
+                ),
+            )
         finally:
             remove(activity)
             current.reset(activity_token)

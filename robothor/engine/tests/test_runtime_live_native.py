@@ -1,4 +1,4 @@
-"""Opt-in current runner timing with configured cloud models and synthetic business tools."""
+"""Opt-in current runner timing with configured models and synthetic business tools."""
 
 from __future__ import annotations
 
@@ -32,9 +32,9 @@ async def test_configured_native_provider_cohort(request, sample_agent_config):
     assert samples >= 30 or settings.get("diagnostics"), "smaller runs are diagnostics only"
     config = yaml.safe_load(Path(settings["manifest"]).read_text())["model"]
     models = list(dict.fromkeys([config["primary"], *config.get("fallbacks", [])]))
-    models = [model for model in models if model.startswith("openrouter/")]
-    selected = settings.get("models", models)
+    selected = settings.get("models", [m for m in models if m.startswith("openrouter/")])
     assert selected and set(selected).issubset(models), "use existing configured models only"
+    assert all(m.startswith(("openrouter/", "ollama_chat/")) for m in selected)
     models = selected
     schema = {
         "type": "function",

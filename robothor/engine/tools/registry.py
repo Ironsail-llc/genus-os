@@ -8,6 +8,7 @@ import math
 import re
 from typing import TYPE_CHECKING, Any, NamedTuple, TypedDict
 
+from robothor.engine.runtime.deadlines import RuntimeDeadlineError
 from robothor.engine.spawn_cancel import tool_deadline
 from robothor.engine.tools.constants import (
     CORE_TOOLS,
@@ -1135,7 +1136,7 @@ class ToolRegistry:
                     is_benchmark=is_benchmark,
                     identity=identity,
                 )
-        except WorkflowDeadlineError:
+        except (WorkflowDeadlineError, RuntimeDeadlineError):
             # NOT this tool's timeout. `spawn_agent` runs a child
             # `runner.execute` INLINE in the parent's task, so it inherits the
             # workflow's deadline scope and its chain walk can raise here.

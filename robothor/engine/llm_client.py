@@ -104,6 +104,7 @@ from robothor.engine.request_budget import (
 )
 from robothor.engine.required_tool import tool_choice
 from robothor.engine.retry import retry_async
+from robothor.engine.runtime.deadlines import RuntimeDeadlineError
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.stall_watchdog import _active_watchdog_var
 from robothor.engine.workflow_budget import bound_call_timeout
@@ -1252,7 +1253,7 @@ async def llm_call(
         except RequestRouteUnavailableError as exc:
             last = exc
             logger.info("No eligible funded route for %s — advancing", _sanitize(candidate))
-        except RequestBudgetError:
+        except (RequestBudgetError, RuntimeDeadlineError):
             raise
         except Exception as exc:  # noqa: BLE001 - the next model is the point
             last = exc
@@ -2414,7 +2415,7 @@ class LLMClient:
                     last_error = exc
                     logger.info("No eligible funded route for %s — advancing", _sanitize(model))
                     break
-                except RequestBudgetError:
+                except (RequestBudgetError, RuntimeDeadlineError):
                     raise
                 except Exception as e:
                     last_error = e
@@ -2608,6 +2609,8 @@ class LLMClient:
                             )
                         except StopAsyncIteration:
                             break
+                        except RuntimeDeadlineError:
+                            raise
                         except TimeoutError:
                             logger.warning(
                                 "Stream stalled for %ds, aborting model=%s",
@@ -2679,7 +2682,7 @@ class LLMClient:
                     last_error = exc
                     logger.info("No eligible funded route for %s — advancing", _sanitize(model))
                     break
-                except RequestBudgetError:
+                except (RequestBudgetError, RuntimeDeadlineError):
                     raise
                 except TimeoutError as te:
                     note_outcome(model, attempt_started, error=te)

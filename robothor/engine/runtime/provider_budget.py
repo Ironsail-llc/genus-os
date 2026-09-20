@@ -107,7 +107,9 @@ async def assert_provider_authorized():
     from robothor.engine.runtime.activity import current
     from robothor.engine.runtime.controls import stopped
     from robothor.engine.runtime.current import active_context
+    from robothor.engine.runtime.deadlines import require_time
 
+    require_time()
     activity = current.get()
     context = active_context.get()
     if activity and activity.sessions:

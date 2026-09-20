@@ -95,7 +95,7 @@ test.describe("Chat — another agent, and an escalation answered in place", () 
     await input.fill("morning");
     await page.locator('[data-testid="send-button"]').click();
     await expect.poll(() => bodies.length).toBe(1);
-    expect(bodies[0]).toEqual({ message: "morning" });
+    expect(bodies[0]).toEqual({ message: "morning", request_id: expect.any(String) });
 
     const switcher = page.locator('[data-testid="agent-switcher"]');
     await expect(switcher).toBeVisible();
@@ -108,14 +108,15 @@ test.describe("Chat — another agent, and an escalation answered in place", () 
     await input.fill("what's on today?");
     await page.locator('[data-testid="send-button"]').click();
     await expect.poll(() => bodies.length).toBe(2);
-    expect(bodies[1]).toEqual({ message: "what's on today?", agent: "scheduler" });
+    expect(bodies[1]).toEqual({ message: "what's on today?", agent: "scheduler", request_id: expect.any(String) });
 
     // And back: the operator can always return to their own conversation.
     await switcher.selectOption("");
     await input.fill("back to you");
     await page.locator('[data-testid="send-button"]').click();
     await expect.poll(() => bodies.length).toBe(3);
-    expect(bodies[2]).toEqual({ message: "back to you" });
+    expect(bodies[2]).toEqual({ message: "back to you", request_id: expect.any(String) });
+    expect(new Set(bodies.map(body => body.request_id)).size).toBe(3);
   });
 
   test("an escalation on the stream is answered at the escalation route", async ({ page }) => {

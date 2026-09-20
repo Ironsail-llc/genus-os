@@ -47,7 +47,48 @@
     "typescript": "passed",
     "changed_python_ruff": "passed",
     "changed_frontend_eslint": "passed",
-    "git_diff_check": "passed"
+    "git_diff_check": "passed",
+    "application_build": "passed",
+    "production_browser_suite": {
+      "initial_isolated_run": {
+        "passed": 61,
+        "failed": 1
+      },
+      "repaired_request_id_expectation_rerun": {
+        "passed": 2,
+        "failed": 0
+      },
+      "scope": "62 scenarios; the sole failure was the old exact request-body expectation, repaired and rerun with the agent-switching/escalation scenarios"
+    },
+    "runtime_deadlines_focused": {
+      "passed": 49,
+      "failed": 0,
+      "scope": "native deadline cancellation, refusal after expiry, one deadline owner, workflow propagation, request budgets and size ratchets"
+    },
+    "engine_after_deadlines": {
+      "passed": 10857,
+      "failed": 1,
+      "skipped": 29,
+      "deselected": 173,
+      "seconds": 335.3,
+      "sole_failure": "cancel_outcome.py exceeded its module-size cap; moved the new deadline classifier into the deadline module and reran affected contracts/ratchets successfully"
+    },
+    "runtime_controls_after_deadlines": {
+      "passed": 23,
+      "failed": 0
+    },
+    "deadline_and_workflow_after_module_move": {
+      "passed": 21,
+      "failed": 0
+    },
+    "deadline_retry_streaming_regression": {
+      "passed": 159,
+      "failed": 0
+    },
+    "runtime_deadline_controls_and_ratchets": {
+      "passed": 46,
+      "failed": 0
+    }
   },
   "calendar": {
     "ordinary": {
@@ -241,14 +282,236 @@
     "calendar": "uat-current-runtime-final.json",
     "mixed": "uat-mixed-runtime-final.jsonl",
     "baseline_live_mimo": "uat-live-native-baseline.jsonl",
-    "reverted_prompt_trial": "uat-mimo-clarification-screen.jsonl"
+    "reverted_prompt_trial": "uat-mimo-clarification-screen.jsonl",
+    "deadline_calendar": "uat-deadline-calendar.json"
   },
   "remaining": [
     "Native live MiMo reliability: initial implementation 15/30 verified; accepted baseline 14/30; discarded prompt trial 13/30.",
-    "Configured local Ollama cohort and live fallback under mixed load unqualified.",
+    "Local Ollama verified 30/30, but one action took 74.7s/20 model calls. Enforced simple-action deadlines, stopping after verified success, and live fallback under mixed load remain unqualified.",
     "Network queue/progress/acknowledgement SLOs not certified.",
     "Candidate full-runtime contract parity and matched finalist comparison incomplete; keep current runtime.",
     "Deployment/rollback drill unperformed; no production deployment authorized.",
     "Manual user acceptance pending."
-  ]
+  ],
+  "local_model_screening": {
+    "artifact": "uat-local-native-summary.json",
+    "verified": 30,
+    "samples": 30,
+    "deadline_breaches": 1,
+    "full_acceptance_passed": false
+  },
+  "diagnostic_prompt_probes": {
+    "artifacts": [
+      "uat-mimo-prompt-diagnostics.jsonl",
+      "uat-mimo-role-diagnostics.jsonl"
+    ],
+    "requests": 35,
+    "scope": "First-turn tool proposals only, 5 repetitions per variant; no tool execution and no change to product prompts/models. Not an acceptance screening cohort."
+  },
+  "calendar_after_deadlines": {
+    "current": {
+      "confirmed-attendee-add": {
+        "samples": 100,
+        "outcomes": {
+          "completed": 100
+        },
+        "all_state_checks_pass": true,
+        "duration_ms": {
+          "samples": 100,
+          "p50": 45.26775603881106,
+          "p95": 56.299104006029665,
+          "p95_ci95": [
+            53.814944985788316,
+            59.82541700359434
+          ]
+        },
+        "harness_ms": {
+          "samples": 100,
+          "p50": 30.55083601269871,
+          "p95": 40.960863024462014,
+          "p95_ci95": [
+            38.99161500483751,
+            43.82541700359434
+          ]
+        },
+        "model_calls": {
+          "samples": 100,
+          "p50": 2,
+          "p95": 2,
+          "p95_ci95": [
+            2,
+            2
+          ]
+        },
+        "input_tokens": {
+          "samples": 100,
+          "p50": 200,
+          "p95": 200,
+          "p95_ci95": [
+            200,
+            200
+          ]
+        },
+        "post_completion_tool_calls": {
+          "samples": 100,
+          "p50": 0,
+          "p95": 0,
+          "p95_ci95": [
+            0,
+            0
+          ]
+        },
+        "output_tokens": {
+          "samples": 100,
+          "p50": 40,
+          "p95": 40,
+          "p95_ci95": [
+            40,
+            40
+          ]
+        },
+        "cost_usd": {
+          "samples": 100,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p95_ci95": [
+            0.0,
+            0.0
+          ]
+        },
+        "queue_ms": {
+          "samples": 0,
+          "p50": null,
+          "p95": null,
+          "p95_ci95": null
+        },
+        "ack_ms": {
+          "samples": 0,
+          "p50": null,
+          "p95": null,
+          "p95_ci95": null
+        },
+        "stop_ack_ms": {
+          "samples": 0,
+          "p50": null,
+          "p95": null,
+          "p95_ci95": null
+        },
+        "recovery_ms": {
+          "samples": 0,
+          "p50": null,
+          "p95": null,
+          "p95_ci95": null
+        },
+        "descendant_control_ms": {
+          "samples": 0,
+          "p50": null,
+          "p95": null,
+          "p95_ci95": null
+        }
+      }
+    },
+    "optimized": {
+      "confirmed-attendee-add": {
+        "samples": 100,
+        "outcomes": {
+          "completed": 100
+        },
+        "all_state_checks_pass": true,
+        "duration_ms": {
+          "samples": 100,
+          "p50": 29.971445037517697,
+          "p95": 35.79780203290284,
+          "p95_ci95": [
+            34.465994976926595,
+            36.48467501625419
+          ]
+        },
+        "harness_ms": {
+          "samples": 100,
+          "p50": 23.181339021306485,
+          "p95": 27.729182021692395,
+          "p95_ci95": [
+            27.387934032361954,
+            28.298128019552678
+          ]
+        },
+        "model_calls": {
+          "samples": 100,
+          "p50": 0,
+          "p95": 0,
+          "p95_ci95": [
+            0,
+            0
+          ]
+        },
+        "input_tokens": {
+          "samples": 100,
+          "p50": 0,
+          "p95": 0,
+          "p95_ci95": [
+            0,
+            0
+          ]
+        },
+        "post_completion_tool_calls": {
+          "samples": 100,
+          "p50": 0,
+          "p95": 0,
+          "p95_ci95": [
+            0,
+            0
+          ]
+        },
+        "output_tokens": {
+          "samples": 100,
+          "p50": 0,
+          "p95": 0,
+          "p95_ci95": [
+            0,
+            0
+          ]
+        },
+        "cost_usd": {
+          "samples": 100,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p95_ci95": [
+            0.0,
+            0.0
+          ]
+        },
+        "queue_ms": {
+          "samples": 0,
+          "p50": null,
+          "p95": null,
+          "p95_ci95": null
+        },
+        "ack_ms": {
+          "samples": 0,
+          "p50": null,
+          "p95": null,
+          "p95_ci95": null
+        },
+        "stop_ack_ms": {
+          "samples": 0,
+          "p50": null,
+          "p95": null,
+          "p95_ci95": null
+        },
+        "recovery_ms": {
+          "samples": 0,
+          "p50": null,
+          "p95": null,
+          "p95_ci95": null
+        },
+        "descendant_control_ms": {
+          "samples": 0,
+          "p50": null,
+          "p95": null,
+          "p95_ci95": null
+        }
+      }
+    }
+  }
 }

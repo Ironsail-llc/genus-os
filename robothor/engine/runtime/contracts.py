@@ -82,6 +82,8 @@ class RuntimeResult:
 
 
 class AgentRuntime(Protocol):
+    """Host expiry raises RuntimeDeadlineError; native cancellation records remain authoritative."""
+
     identity: StateEnvelope
 
     async def run(

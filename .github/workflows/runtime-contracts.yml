@@ -32,6 +32,7 @@ jobs:
           python -m pytest -q --no-cov robothor/goals/tests
           robothor/engine/tests/test_runtime_contracts.py
           robothor/engine/tests/test_runtime_controls.py
+          robothor/engine/tests/test_runtime_deadlines.py
           robothor/engine/tests/test_runtime_mixed.py
           robothor/engine/tests/test_request_budget.py
           robothor/engine/tests/test_checkpoint.py

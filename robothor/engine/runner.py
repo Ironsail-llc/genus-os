@@ -109,6 +109,7 @@ from robothor.engine.run_llm_calls import LLMCallMixin  # noqa: E402
 from robothor.engine.run_pacing import DeadlinePacer, checkin_note, mode_for_run  # noqa: E402
 from robothor.engine.run_replan import maybe_replan  # noqa: E402
 from robothor.engine.runtime.current import runtime_entrypoint
+from robothor.engine.runtime.deadlines import enclosing_deadline_reason
 from robothor.engine.runtime.setup import (
     attach_session,
     bounded_timeout,
@@ -141,7 +142,7 @@ from robothor.engine.toolset_prep import (
 )
 from robothor.engine.tracking import create_run, update_run
 from robothor.engine.warmup_steps import record_warmup_steps
-from robothor.engine.workflow_budget import WorkflowDeadlineError, propagates_to_caller
+from robothor.engine.workflow_budget import propagates_to_caller
 from robothor.engine.workflow_completion import finish_after_tools
 
 # Per-tool wall-clock caps. The tables and the rule live in
@@ -1356,7 +1357,7 @@ class AgentRunner(
             # run's clock never fired, and the exception already names the
             # workflow, step and model. It outranks abort_reason, which would
             # otherwise both mask the message and re-stamp the row a timeout.
-            _deadline = str(_cancel_exc) if isinstance(_cancel_exc, WorkflowDeadlineError) else ""
+            _deadline = enclosing_deadline_reason(_cancel_exc)
             _outcome = _cancel_outcome(
                 timed_out=isinstance(_cancel_exc, TimeoutError),
                 declared_timeout_seconds=agent_config.timeout_seconds,

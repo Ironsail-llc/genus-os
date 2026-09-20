@@ -1,0 +1,30 @@
+{
+  "scope": "Native runner; configured local model; synthetic business tools; manifest timeout 60s, no explicit runtime deadline supplied in this cohort",
+  "model": "ollama_chat/qwen3.8:27b",
+  "samples": 30,
+  "verified": 30,
+  "single_write": true,
+  "duration_ms": {
+    "samples": 30,
+    "p50": 9224.323816015385,
+    "p95": 20443.918773031328,
+    "p95_ci95": [
+      10453.860415960662,
+      74678.89058199944
+    ]
+  },
+  "model_calls": {
+    "samples": 30,
+    "p50": 2,
+    "p95": 3,
+    "p95_ci95": [
+      2,
+      20
+    ]
+  },
+  "over_60_seconds": [
+    16
+  ],
+  "acceptance_passed": false,
+  "note": "All actions verified, but repetition 16 took 74.7 seconds and 20 model calls. Provider/tool traces were not captured for that repetition; do not infer when its write occurred. Strict deadline and stop-after-success verification remains open."
+}

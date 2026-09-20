@@ -446,7 +446,9 @@ async def _runtime_denial(
 
     try:
         from robothor.engine.runtime.controls import stopped
+        from robothor.engine.runtime.deadlines import require_time
 
+        require_time()
         if ctx.run_id and await asyncio.to_thread(stopped, ctx.tenant_id, ctx.run_id):
             raise ValueError(
                 "durable stop denies further tool dispatch; reconcile in-flight effects"
