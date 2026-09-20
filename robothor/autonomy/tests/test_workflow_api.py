@@ -78,3 +78,39 @@ async def test_private_errors_do_not_cross_rpc_boundary(signing, identity):
         transport=httpx.ASGITransport(app=create_app(manager)),
     )
     assert result == {"error": "workflow_request_failed"}
+
+
+@pytest.mark.parametrize(
+    "reason",
+    ["command_changed", "workflow_revision_changed", "command_in_progress", "workflow_lost"],
+)
+async def test_fixed_recovery_reasons_survive_private_rpc(signing, identity, reason):
+    manager = AsyncMock()
+    manager.reconcile.side_effect = PermissionError(reason)
+    result = await invoke(
+        identity,
+        "main",
+        {
+            "kind": "reconcile",
+            "workflow_id": str(uuid4()),
+            "command_id": str(uuid4()),
+            "revision": 0,
+            "selector": "p",
+            "text": "Account created",
+        },
+        transport=httpx.ASGITransport(app=create_app(manager)),
+    )
+    assert result["reason"] == reason
+    assert result["error"] == "workflow_not_authorized_or_unavailable"
+
+
+async def test_private_permission_error_remains_generic(signing, identity):
+    manager = AsyncMock()
+    manager.inspect.side_effect = PermissionError("private-browser-value")
+    result = await invoke(
+        identity,
+        "main",
+        {"kind": "inspect", "workflow_id": str(uuid4())},
+        transport=httpx.ASGITransport(app=create_app(manager)),
+    )
+    assert result == {"error": "workflow_not_authorized_or_unavailable"}

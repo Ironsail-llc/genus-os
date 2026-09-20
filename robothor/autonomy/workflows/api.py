@@ -114,9 +114,23 @@ def create_app(manager: WorkflowManager) -> FastAPI:
                 else:
                     result = await manager.inspect(scope, agent_id, str(command.workflow_id))
             return JSONResponse(result, headers=headers)
-        except PermissionError:
+        except PermissionError as exc:
+            # Only fixed state-machine codes may cross this boundary. Never
+            # echo arbitrary browser, database or resource exception text.
+            reason = str(exc)
+            recoverable = reason in {
+                "command_changed",
+                "workflow_revision_changed",
+                "command_in_progress",
+                "workflow_lost",
+                "workflow_not_open",
+                "pending_live_confirmation_required",
+            }
             return JSONResponse(
-                {"error": "workflow_not_authorized_or_unavailable"},
+                {
+                    "error": "workflow_not_authorized_or_unavailable",
+                    **({"reason": reason} if recoverable else {}),
+                },
                 status_code=403,
                 headers=headers,
             )
