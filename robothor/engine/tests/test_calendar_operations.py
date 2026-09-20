@@ -429,6 +429,27 @@ def test_an_interrupted_write_that_changed_nothing_clears_its_own_barrier(
 
 
 @pytest.mark.integration
+def test_a_proven_no_write_files_no_human_repair_task(store, google, ctx, monkeypatch):
+    """A task saying "reconcile this" when the code has just proven there is
+    nothing to reconcile is the pager noise this whole path exists to end."""
+    prepared = draft(ctx)
+    from robothor.engine.tools.handlers import gws
+
+    original = gws._handle_gws_tool
+    monkeypatch.setattr(gws, "_handle_gws_tool", _die)
+    with pytest.raises(RuntimeError):
+        operations.perform({"operation_id": prepared["operation_id"]}, ctx)
+    monkeypatch.setattr(gws, "_handle_gws_tool", original)
+
+    filed = []
+    monkeypatch.setattr("robothor.crm.dal.create_task", lambda **kw: filed.append(kw) or "task")
+    reconciled = operations.perform({"operation_id": prepared["operation_id"]}, ctx)
+    assert reconciled["invitations_requested"] is False
+    assert filed == []
+    assert "repair_task_id" not in reconciled
+
+
+@pytest.mark.integration
 def test_an_unfiled_repair_task_never_arms_an_unclearable_barrier(store, google, ctx, monkeypatch):
     """The barrier is cleared by reconciling the repair task. With no task
     filed there is nothing to reconcile, so arming it freezes the meeting."""

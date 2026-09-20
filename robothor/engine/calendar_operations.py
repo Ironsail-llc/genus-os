@@ -104,6 +104,9 @@ def _reconcile(
             "attendees_present": [],
             "invitations_requested": False,
             "verification": "verified",
+            # Proof, not a guess: there is nothing for a human to reconcile,
+            # so no repair task is filed and the barrier does not arm.
+            "no_write_confirmed": True,
             "calendar": calendar,
         }
     return {
@@ -295,7 +298,12 @@ def perform(args: dict[str, Any], ctx: Any, *, cancelled: Any = None) -> dict[st
     first connection. Concurrent failures must not exhaust the pool in a cycle.
     """
     result = _perform_locked(args, ctx, cancelled=cancelled)
-    if not result.get("error") or not result.get("operation_id") or result.get("replayed"):
+    if (
+        not result.get("error")
+        or not result.get("operation_id")
+        or result.get("replayed")
+        or result.get("no_write_confirmed")
+    ):
         return result
     from robothor.engine.calendar_repair import attach_repair_task
 
