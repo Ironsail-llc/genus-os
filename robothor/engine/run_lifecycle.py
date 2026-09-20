@@ -602,18 +602,19 @@ class RunLifecycleMixin:
         run_id: str,
         session: AgentSession,
     ) -> Any:
-        """Resume from a previous run's checkpoint. Returns restored scratchpad or None."""
+        """Restore a checkpoint or fail closed; only the scratchpad is optional."""
         try:
             from robothor.engine.checkpoint import CheckpointManager
             from robothor.engine.scratchpad import Scratchpad
 
-            checkpoint_data = CheckpointManager.load_latest(run_id)
+            checkpoint_data = CheckpointManager.load_latest(run_id, tenant_id=session.run.tenant_id)
             if not checkpoint_data:
-                logger.info("No checkpoint found for run %s", run_id)
-                return None
+                raise ValueError("checkpoint unavailable; refusing fresh execution")
 
             # Restore messages
             messages = checkpoint_data.get("messages")
+            if not isinstance(messages, list) or not messages:
+                raise ValueError("checkpoint conversation is missing or malformed")
             if messages and isinstance(messages, list):
                 session.messages = messages
                 from robothor.engine.task_context import install_context, make_context, read_context
@@ -665,6 +666,6 @@ class RunLifecycleMixin:
             return None
         except Exception as e:
             logger.warning("Failed to resume from checkpoint: %s", _sanitize(e))
-            return None
+            raise RuntimeError("Failed to restore checkpoint; reconcile before retrying") from e
 
     # ─── LLM Call Methods ────────────────────────────────────────────
