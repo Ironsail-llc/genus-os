@@ -29,6 +29,7 @@ def sales():
                 "135_sales_requests.sql",
                 "136_sales_pipedrive_scope.sql",
                 "137_sales_analyst_permissions.sql",
+                "138_opt_in_tool_denies.sql",
             ):
                 cur.execute((Path(__file__).parents[3] / "crm/migrations" / filename).read_text())
         conn.commit()
@@ -38,7 +39,13 @@ def sales():
             "INSERT INTO crm_tenants(id,display_name) VALUES(%s,%s)",
             (service.tenant, "Sales integration test"),
         )
-    service.configure({"research_enabled": True, "sending_enabled": False}, "operator:test")
+    # email_provider is explicit: the platform default is "none" (every
+    # integration switch defaults off), and these fixtures exercise a
+    # configured provider.
+    service.configure(
+        {"research_enabled": True, "sending_enabled": False, "email_provider": "instantly"},
+        "operator:test",
+    )
     return service
 
 
@@ -124,7 +131,7 @@ def test_suppression_invalidates_pending_messages(sales):
         },
     )
     sales.publish_knowledge(
-        "v1", {"claims": {"access": "Access participating pharmacies."}}, "operator:test"
+        "v1", {"claims": {"access": "Access the partner network."}}, "operator:test"
     )
     action = sales.draft(
         p["id"],
@@ -132,7 +139,7 @@ def test_suppression_invalidates_pending_messages(sales):
             "recipient": "alice@example.com",
             "sender": "sales@example.com",
             "subject": "Pharmacy workflows",
-            "body": "Access participating pharmacies.",
+            "body": "Access the partner network.",
             "claim_ids": ["access"],
             "knowledge_version": "v1",
             "evidence_ids": ["service"],

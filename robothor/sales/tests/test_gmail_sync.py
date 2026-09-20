@@ -203,7 +203,7 @@ async def test_final_send_check_ingests_new_reply_and_never_posts_stale_approved
             "sender": "sales@example.com",
             "recipient": "alice@example.com",
             "subject": "Pharmacy workflows",
-            "body": "Access participating pharmacies.\nTEST POSTAL ADDRESS\nhttps://example.com/unsubscribe",
+            "body": "Access the partner network.\nTEST POSTAL ADDRESS\nhttps://example.com/unsubscribe",
             "claim_ids": ["access"],
             "knowledge_version": "v1",
             "evidence_ids": ["service"],

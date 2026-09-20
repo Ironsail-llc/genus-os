@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pydantic import Field, field_validator
 
 from robothor import vault
+from robothor.constants import platform_timezone
 from robothor.operations.store import digest
 from robothor.sales.models import Contract, SalesSettings
 
@@ -145,11 +146,11 @@ def sender_context_hash(config, sender):
     return digest(
         {
             "sender": sender,
-            "email_provider": config.get("email_provider", "instantly"),
+            "email_provider": config.get("email_provider", "none"),
             "enabled": sender in config.get("senders", []),
             "postal_address": config.get("postal_address", ""),
             "unsubscribe_url": config.get("unsubscribe_url", ""),
-            "timezone": config.get("timezone", "America/Chicago"),
+            "timezone": config.get("timezone") or platform_timezone(),
             "readiness_until": expiry,
         }
     )

@@ -175,7 +175,7 @@ async def test_inbound_question_produces_only_a_thread_bound_review_draft(sales)
             "recipient": "alice@example.com",
             "sender": "sales@example.com",
             "subject": "Re: Question",
-            "body": "Access participating pharmacies. TEST POSTAL ADDRESS https://example.com/unsubscribe",
+            "body": "Access the partner network. TEST POSTAL ADDRESS https://example.com/unsubscribe",
             "claim_ids": ["access"],
             "knowledge_version": "v1",
             "evidence_ids": ["service"],

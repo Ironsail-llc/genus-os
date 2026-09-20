@@ -38,7 +38,7 @@ def configure(sales, **changes):
                 {
                     "id": "clinic",
                     "buying_case": "network_access",
-                    "query": "US multispecialty prescribing clinics",
+                    "query": "Regional widget distributors",
                 },
                 {
                     "id": "wellness",

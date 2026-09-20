@@ -265,9 +265,13 @@ _BENCHMARK_EXCLUDED_TOOLS: frozenset[str] = _BENCHMARK_WITHHELD_READS | frozense
     {
         # Sales fixtures are supplied in the offline task. Do not expose live
         # prospect context or durable discovery/draft/queue work to the grader.
+        "sales_create_request",
         "sales_discover",
         "sales_get_context",
         "sales_get_prospect",
+        "sales_get_report",
+        "sales_get_request",
+        "sales_get_workspace",
         "sales_process_queue",
         "sales_research_parallel",
         "sales_propose_email",

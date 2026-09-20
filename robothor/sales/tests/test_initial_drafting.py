@@ -100,7 +100,7 @@ async def test_native_draft_tick_completes_genus_only_path(sales):
             "sender": "sales@example.com",
             "recipient": "alice@example.com",
             "subject": "Workflow question",
-            "body": "Access participating pharmacies. TEST POSTAL ADDRESS https://example.com/unsubscribe",
+            "body": "Access the partner network. TEST POSTAL ADDRESS https://example.com/unsubscribe",
             "claim_ids": ["access"],
             "knowledge_version": "v1",
             "evidence_ids": ["service"],

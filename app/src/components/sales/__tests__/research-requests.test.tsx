@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { ResearchRequests } from "../research-requests";
 
 afterEach(() => vi.restoreAllMocks());
-const request = { id: "request-1", revision: 2, status: "active", config: { title: "Florida clinics", query: "US prescribing clinics in Florida", target_companies: 10, buying_case: "network_access" } };
+const request = { id: "request-1", revision: 2, status: "active", config: { title: "Regional distributors", query: "Regional widget distributors", target_companies: 10, buying_case: "network_access" } };
 
 it("creates a bounded request without enabling sending and preserves its key after an uncertain response", async () => {
   const writes: Record<string, unknown>[] = [];
@@ -13,15 +13,15 @@ it("creates a bounded request without enabling sending and preserves its key aft
   });
   render(<ResearchRequests buyingCases={["network_access"]} />);
   await screen.findByText("No research requests yet.");
-  fireEvent.change(screen.getByLabelText("Request title"), { target: { value: "Florida clinics" } });
-  fireEvent.change(screen.getByLabelText("Businesses to find"), { target: { value: "US prescribing clinics in Florida" } });
+  fireEvent.change(screen.getByLabelText("Request title"), { target: { value: "Regional distributors" } });
+  fireEvent.change(screen.getByLabelText("Businesses to find"), { target: { value: "Regional widget distributors" } });
   fireEvent.change(screen.getByLabelText("New companies to research"), { target: { value: "10" } });
   fireEvent.click(screen.getByRole("button", { name: "Create research request" }));
   await screen.findByRole("alert");
   fireEvent.click(screen.getByRole("button", { name: "Retry the same request" }));
   await waitFor(() => expect(writes).toHaveLength(2));
   expect(writes[0]).toEqual(writes[1]);
-  expect(writes[0]).toMatchObject({ title: "Florida clinics", target_companies: 10, buying_case: "network_access" });
+  expect(writes[0]).toMatchObject({ title: "Regional distributors", target_companies: 10, buying_case: "network_access" });
   expect(writes[0]).not.toHaveProperty("sending_enabled");
 });
 
@@ -33,7 +33,7 @@ it("shows progress and pauses using the reviewed revision and reason", async () 
     return Response.json({ items: [request], next_cursor: null });
   });
   render(<ResearchRequests buyingCases={["network_access"]} />);
-  fireEvent.click(await screen.findByRole("button", { name: /Florida clinics/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Regional distributors/ }));
   expect(await screen.findByText(/4 discovered/)).toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("Reason for request change"), { target: { value: "Pause for operator review" } });
   fireEvent.click(screen.getByRole("button", { name: "Pause this request" }));

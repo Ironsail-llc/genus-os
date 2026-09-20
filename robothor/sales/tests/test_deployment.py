@@ -344,7 +344,10 @@ def test_email_provider_selection_is_deployed_locked_and_rolled_back(deployment,
     assert sales.settings()["email_provider"] == "none"
     with pytest.raises(Conflict, match="coordinator"):
         sales.configure({"email_provider": "instantly"}, "operator:test")
-    # Older deployment snapshots predate this field; rollback must use its default.
+    # Older deployment snapshots predate this field; rollback must use its
+    # default -- which is now "none". A snapshot that never recorded a provider
+    # rolls back to no provider, not to whichever vendor happened to be the
+    # default when it was taken.
     with sales.ops.transaction() as cur:
         cur.execute(
             "UPDATE sales_deployments SET previous_config=previous_config-'email_provider' WHERE id=%s",
@@ -356,4 +359,4 @@ def test_email_provider_selection_is_deployed_locked_and_rolled_back(deployment,
         actor="operator:test",
         reason="Restore the previous email selection",
     )
-    assert rollback["target_config"]["email_provider"] == "instantly"
+    assert rollback["target_config"]["email_provider"] == "none"

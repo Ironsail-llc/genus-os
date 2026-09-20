@@ -23,7 +23,7 @@ def prepared(sales):
         },
     )
     sales.publish_knowledge(
-        "v1", {"claims": {"access": "Access participating pharmacies."}}, "operator:test"
+        "v1", {"claims": {"access": "Access the partner network."}}, "operator:test"
     )
     sales.configure(
         {
@@ -47,7 +47,7 @@ def draft(sales, p):
             "recipient": "alice@example.com",
             "sender": "sales@example.com",
             "subject": "Pharmacy workflows",
-            "body": "Access participating pharmacies.\nTEST POSTAL ADDRESS\nhttps://example.com/unsubscribe",
+            "body": "Access the partner network.\nTEST POSTAL ADDRESS\nhttps://example.com/unsubscribe",
             "claim_ids": ["access"],
             "knowledge_version": "v1",
             "evidence_ids": ["service"],

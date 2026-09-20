@@ -104,7 +104,7 @@ def test_rejecting_observed_results_requires_an_auditable_explanation():
 def test_degraded_search_requires_bounded_distinct_query_refinement():
     sources = ScoutSources("test", "scout", 1)
     ctx = SimpleNamespace(tenant_id="test", agent_id="scout", run_id="run-1")
-    for query in ("TRT clinics", " TRT   clinics ", "TRT Florida"):
+    for query in ("widget distributors", " widget   distributors ", "widget Springfield"):
         sources.observe(
             "web_search", {"query": query}, {"results": [], "degraded": "low relevance"}, ctx
         )
@@ -112,7 +112,7 @@ def test_degraded_search_requires_bounded_distinct_query_refinement():
             sources.attest("run-1", '{"companies": []}')
     sources.observe(
         "web_search",
-        {"query": "testosterone clinic Texas"},
+        {"query": "widget wholesaler Springfield"},
         {"results": [], "degraded": "low relevance"},
         ctx,
     )

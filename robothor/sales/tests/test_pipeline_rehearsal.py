@@ -51,7 +51,7 @@ async def test_discovery_to_reviewed_outreach_reply_optout_and_fulfillment(sales
     )
     sales.publish_knowledge(
         "1",
-        {"claims": {"access": "Access participating pharmacies."}},
+        {"claims": {"access": "Access the partner network."}},
         "operator:synthetic-reviewer",
     )
     sales.configure(
@@ -165,7 +165,7 @@ async def test_discovery_to_reviewed_outreach_reply_optout_and_fulfillment(sales
         "sender": "sales@example.com",
         "recipient": "alice@example.com",
         "subject": "Workflow question",
-        "body": "Access participating pharmacies. TEST POSTAL ADDRESS https://example.com/unsubscribe",
+        "body": "Access the partner network. TEST POSTAL ADDRESS https://example.com/unsubscribe",
         "claim_ids": ["access"],
         "knowledge_version": "1",
         "evidence_ids": ["services"],

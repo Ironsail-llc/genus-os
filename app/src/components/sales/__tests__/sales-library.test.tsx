@@ -4,7 +4,7 @@ import { SalesLibrary } from "../sales-library";
 
 const policy = { kind: "qualification", version: "v1", approved_by: "operator:reviewer", approved_at: "2026-09-19T00:00:00Z",
   data: { buying_case: "network_access", required: ["prescribing"], weights: { prescribing: 100 }, threshold: 80, max_evidence_age_days: 90 } };
-const knowledge = { ...policy, kind: "knowledge", data: { claims: { access: "Access participating pharmacies." } } };
+const knowledge = { ...policy, kind: "knowledge", data: { claims: { access: "Access the partner network." } } };
 const empty = { revision: 4, config: { active_policy_versions: {}, active_knowledge_version: "", sending_enabled: false } };
 afterEach(() => vi.restoreAllMocks());
 function backend(fail = false) {
@@ -28,7 +28,7 @@ it("shows exact published rules and claims before selecting without enabling sen
   render(<SalesLibrary onChanged={changed} />);
   await select();
   const preview = screen.getByRole("region", { name: "Review selected library" });
-  expect(preview).toHaveTextContent("Access participating pharmacies.");
+  expect(preview).toHaveTextContent("Access the partner network.");
   expect(preview).toHaveTextContent("prescribing: 100 points · required");
   expect(preview).toHaveTextContent("operator:reviewer");
   expect(fetcher.mock.calls.filter(([, options]) => options?.method === "POST")).toHaveLength(0);

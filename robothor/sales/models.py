@@ -8,6 +8,8 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
 
+from robothor.constants import platform_timezone
+
 
 class Contract(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -241,7 +243,11 @@ class SalesSettings(Contract):
     research_enabled: StrictBool = False
     enrichment_enabled: StrictBool = False
     promotion_enabled: StrictBool = False
-    email_provider: Literal["instantly", "gmail", "none"] = "instantly"
+    # "none", not a vendor name: every integration switch in this model
+    # defaults off, and off for an email provider is no provider. Research
+    # and CRM run without one; `discovery_configuration` below refuses
+    # sending_enabled while it holds.
+    email_provider: Literal["instantly", "gmail", "none"] = "none"
     sending_enabled: StrictBool = False
     outcomes_enabled: StrictBool = False
     business_sources: list[BusinessSource] = Field(default_factory=list, max_length=10)
@@ -263,7 +269,10 @@ class SalesSettings(Contract):
     mailbox_approved_until: dict[str, datetime] = Field(default_factory=dict)
     postal_address: str = Field(default="", max_length=1000)
     unsubscribe_url: str = ""
-    timezone: str = "America/Chicago"
+    # The instance's timezone, never a literal: a hardcoded locale here is
+    # instance data in platform code and disagrees with the scheduler, whose
+    # default is the same DEFAULT_TIMEZONE.
+    timezone: str = Field(default_factory=platform_timezone)
     agents: dict[str, str] = Field(default_factory=dict)
     active_knowledge_version: str = ""
     active_policy_versions: dict[str, str] = Field(default_factory=dict)

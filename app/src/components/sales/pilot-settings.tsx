@@ -20,7 +20,7 @@ const fields: Field[] = [
   { key: "followup_delays_business_days", label: "Follow-up delays (business days; blank disables)", kind: "cadence", fallback: [] },
   { key: "discovery_start_hour", label: "Discovery starts at hour", kind: "integer", fallback: 2, min: 0, max: 23 },
   { key: "discovery_end_hour", label: "Discovery ends at hour", kind: "integer", fallback: 7, min: 1, max: 24 },
-  { key: "timezone", label: "Timezone", kind: "timezone", fallback: "America/Chicago" },
+  { key: "timezone", label: "Timezone", kind: "timezone", fallback: "America/New_York" },
 ];
 
 function display(field: Field, value: unknown) {

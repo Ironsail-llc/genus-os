@@ -12,7 +12,7 @@ def request_data(**changes):
     return {
         "request_key": "request-1",
         "title": "Find prescribing practices",
-        "query": "US prescribing clinics in Florida",
+        "query": "Regional widget distributors",
         "buying_case": "network_access",
         "target_companies": 3,
         **changes,

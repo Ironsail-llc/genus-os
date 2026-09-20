@@ -361,6 +361,40 @@ READONLY_TOOLS: frozenset[str] = frozenset(
 # set; injected only when an agent's toolset is deferred (see registry).
 TOOLSEARCH_TOOLS = frozenset({"tool_search", "tool_describe", "tool_call"})
 
+# Registered, but never part of the default "everything" set an agent with no
+# `tools_allowed` receives. An agent gets one of these only by naming it in its
+# manifest — the same opt-in shape as SPAWN_TOOLS (gated on can_spawn_agents)
+# and TODO_TOOLS (gated on todo_list_enabled), and for the same reason.
+#
+# The ten sales tools are a subsystem most instances never deploy; advertising
+# them cost every agent on every instance ~6.5k characters of schema and two
+# unbounded CRM writes (`sales_discover`, `sales_propose_email`) it had no
+# business being offered. `web_render` drives a headless browser, which is a
+# separate capability from `web_fetch` and should be asked for.
+#
+# Advertisement is only half the gate. RBAC is the other half: the `__default__`
+# `service`/`user` roles hold a `*` allow, so migration 138 adds the matching
+# explicit denies. Both halves are needed — a tool an agent cannot see is still
+# a tool it can name.
+#
+# Spelled out rather than imported from robothor.sales so this module stays
+# import-light; test_opt_in_tools_are_not_default pins the two together.
+OPT_IN_TOOLS: frozenset[str] = frozenset(
+    {
+        "web_render",
+        "sales_create_request",
+        "sales_discover",
+        "sales_get_context",
+        "sales_get_prospect",
+        "sales_get_report",
+        "sales_get_request",
+        "sales_get_workspace",
+        "sales_process_queue",
+        "sales_propose_email",
+        "sales_research_parallel",
+    }
+)
+
 # The always-advertised tool set when deferral is active. Chosen as the
 # highest-frequency tools so most turns never need a tool_search round-trip;
 # everything else loads on demand via tool_search → tool_describe → tool_call.
