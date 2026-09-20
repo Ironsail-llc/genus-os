@@ -726,6 +726,16 @@
       "checks": "Ruff, formatting and diff checks pass",
       "manual_acceptance": false,
       "production_deployed": false
+    },
+    "goal_family_task_dispatch_guard": {
+      "initial": "Blocked parent left a queued child task runnable",
+      "goal_suite": "91 passed in 16.36s; three dependency warnings",
+      "callers": "95 passed in 1.39s",
+      "migration": "139_goal_task_family_controls.sql applied twice in disposable PostgreSQL only",
+      "evidence": "Inactive ancestors and unresolved/foreign parents deny linked-task dispatch; active parents and ordinary unlinked tasks retain behavior",
+      "checks": "Ruff, formatting and diff checks pass",
+      "limitations": "Deployment must apply migration 139. No shared or production database change. Full acceptance incomplete.",
+      "production_deployed": false
     }
   },
   "calendar": {

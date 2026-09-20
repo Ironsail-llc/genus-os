@@ -69,6 +69,9 @@ def private_database(tmp_path_factory):
             reservation = migration.with_name("138_goal_provider_reservations.sql")
             cur.execute(reservation.read_text())
             cur.execute(reservation.read_text())
+            family_controls = migration.with_name("139_goal_task_family_controls.sql")
+            cur.execute(family_controls.read_text())
+            cur.execute(family_controls.read_text())
         yield dsn
     finally:
         command("pg_ctl", "-D", data, "-m", "immediate", "-w", "stop")
@@ -399,3 +402,80 @@ def test_child_resume_cannot_bypass_a_paused_parent(db):
         change(db, child, "resume")
     assert store.get(db, child["id"])["status"] == "paused"
     assert not task_runnable(task_id, db)
+
+
+def test_blocked_parent_prevents_dispatch_of_a_queued_child_task(db):
+    from robothor.goals.runtime import task_runnable
+
+    parent = create(db, kind="long")
+    child = create(db, parent_goal_id=parent["id"])
+    task_id = str(uuid4())
+    with store.transaction() as cur:
+        cur.execute(
+            "INSERT INTO crm_tasks(id,tenant_id,title,status) VALUES (%s,%s,'Child work','TODO')",
+            (task_id, db),
+        )
+    change(db, child, "link_task", task_id=task_id)
+    assert task_runnable(task_id, db)
+    for _ in range(3):
+        parent = change(db, parent, "block", note="Waiting for operator decision")
+    assert parent["status"] == "blocked"
+    assert store.get(db, child["id"])["status"] == "queued"
+    assert not task_runnable(task_id, db)
+    change(db, parent, "resume")
+    assert task_runnable(task_id, db)
+
+
+@pytest.mark.parametrize(
+    "status", ["paused", "blocked", "review", "complete", "canceled", "waiting", "queued"]
+)
+def test_task_guard_checks_persisted_ancestor_state_even_with_queued_child(db, status):
+    from robothor.goals.runtime import task_runnable
+
+    parent = create(db, kind="long")
+    child = create(db, parent_goal_id=parent["id"])
+    task_id = str(uuid4())
+    with store.transaction() as cur:
+        cur.execute(
+            "INSERT INTO crm_tasks(id,tenant_id,title,status) VALUES (%s,%s,'Work','TODO')",
+            (task_id, db),
+        )
+    change(db, child, "link_task", task_id=task_id)
+    with store.transaction() as cur:
+        parent["status"] = status
+        store.save(cur, db, parent)  # legacy/interrupted cascade may leave the child queued
+    assert task_runnable(task_id, db) is (status in {"queued", "waiting"})
+
+
+@pytest.mark.parametrize("parent_kind", ["missing", "foreign"])
+def test_task_guard_does_not_borrow_an_unresolved_or_foreign_parent(db, parent_kind):
+    from robothor.goals.runtime import task_runnable
+
+    child = create(db)
+    task_id = str(uuid4())
+    parent_id = (
+        create("other-" + db, kind="long")["id"] if parent_kind == "foreign" else str(uuid4())
+    )
+    with store.transaction() as cur:
+        cur.execute(
+            "INSERT INTO crm_tasks(id,tenant_id,title,status) VALUES (%s,%s,'Work','TODO')",
+            (task_id, db),
+        )
+    child = change(db, child, "link_task", task_id=task_id)
+    with store.transaction() as cur:
+        child["parent_goal_id"] = parent_id
+        store.save(cur, db, child)
+    assert not task_runnable(task_id, db)
+
+
+def test_family_guard_keeps_unlinked_tasks_independent_of_goal_enablement(db):
+    from robothor.goals.runtime import task_runnable
+
+    task_id = str(uuid4())
+    with store.transaction() as cur:
+        cur.execute(
+            "INSERT INTO crm_tasks(id,tenant_id,title,status) VALUES (%s,%s,'Ordinary task','TODO')",
+            (task_id, db),
+        )
+    store.set_enabled(db, False, "operator:test")
+    assert task_runnable(task_id, db)
