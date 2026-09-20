@@ -402,3 +402,42 @@ def test_recovered_attendees_keep_known_notification_request_distinct_from_deliv
         assert "Whether notifications were sent remains unknown" not in result["text"]
     else:
         assert "Whether notifications were sent remains unknown" in result["text"]
+
+
+def test_browser_recovery_scope_separates_tenants_principals_and_sessions():
+    from types import SimpleNamespace
+
+    from robothor.engine.runtime.chat_control import recovery_scope
+
+    auth = SimpleNamespace(tenant_id="tenant", user_id="person")
+    scope = recovery_scope(auth, "web:main")
+    assert scope == recovery_scope(auth, "web:main")
+    assert scope != recovery_scope(auth, "web:other")
+    assert scope != recovery_scope(SimpleNamespace(tenant_id="other", user_id="person"), "web:main")
+    assert scope != recovery_scope(SimpleNamespace(tenant_id="tenant", user_id="other"), "web:main")
+    assert recovery_scope(SimpleNamespace(tenant_id="a:b", user_id="c"), "d") != recovery_scope(
+        SimpleNamespace(tenant_id="a", user_id="b:c"), "d"
+    )
+
+
+async def test_history_exposes_authenticated_noncacheable_recovery_namespace(
+    chat_app,  # noqa: F811
+    mock_runner,  # noqa: F811
+    monkeypatch,
+):
+    from unittest.mock import patch
+
+    from httpx import ASGITransport, AsyncClient
+
+    from robothor.engine.runtime.chat_control import recovery_scope
+
+    auth = identity()
+    monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "off")
+    with patch("robothor.engine.chat._auth_context", return_value=auth):
+        async with AsyncClient(
+            transport=ASGITransport(app=chat_app), base_url="http://test"
+        ) as http:
+            response = await http.get("/chat/history", params={"session_key": "web:main"})
+    assert response.json()["recoveryScope"] == recovery_scope(auth, "web:main")
+    assert response.headers["cache-control"] == "no-store"
+    mock_runner.execute.assert_not_called()

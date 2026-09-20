@@ -311,3 +311,15 @@ it("recovers through a scoped read of the original request, without sending work
   expect((await response.json()).text).toBe("Recorded answer");
   expect(engine.chatSend).not.toHaveBeenCalled();
 });
+
+describe("history recovery namespace", () => {
+  it("forwards only the engine-provided scope and disables caching", async () => {
+    resolveChatAgent.mockResolvedValue({ ok: true, key: KEY });
+    engine.chatHistory.mockResolvedValue({ messages: [], sessionKey: KEY, recoveryScope: "engine-scope" });
+    const { GET } = await import("../history/route");
+    const result = await GET(new Request("http://localhost/api/chat/history?agent=scheduler&recoveryScope=forged"));
+    expect((await result.json()).recoveryScope).toBe("engine-scope");
+    expect(result.headers.get("cache-control")).toBe("no-store");
+    expect(engine.chatHistory).toHaveBeenCalledWith(50, KEY);
+  });
+});

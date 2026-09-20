@@ -1,6 +1,7 @@
 """Bind browser requests and stops to authenticated session ownership."""
 
 import asyncio
+import json
 from contextvars import copy_context
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
@@ -18,6 +19,12 @@ def request_key(auth, session_key, client_id):
     return str(
         uuid5(NAMESPACE_URL, f"webchat:{auth.tenant_id}:{auth.user_id}:{session_key}:{identifier}")
     )
+
+
+def recovery_scope(auth, session_key):
+    """Opaque browser storage namespace, never an authorization credential."""
+    identity = json.dumps(["webchat-recovery", auth.tenant_id, auth.user_id, session_key])
+    return str(uuid5(NAMESPACE_URL, identity))
 
 
 def start(session, factory, auth, session_key, client_id=None):

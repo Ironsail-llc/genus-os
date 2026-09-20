@@ -104,7 +104,7 @@ class EngineClient {
   async chatHistory(
     limit = 50,
     sessionKey = ""
-  ): Promise<{ sessionKey: string; messages: ChatMessage[] }> {
+  ): Promise<{ sessionKey: string; messages: ChatMessage[]; recoveryScope?: string }> {
     const res = await fetch(
       `${ENGINE_URL}/chat/history?limit=${limit}${keyedQuery(sessionKey)}`,
       { headers: await engineHeaders(), signal: AbortSignal.timeout(30_000) },

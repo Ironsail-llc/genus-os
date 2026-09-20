@@ -521,7 +521,16 @@ async def chat_history(request: Request, session_key: str = "", limit: int = 50)
     session = _get_session(session_key)
     messages = session.history[-limit:] if limit > 0 else session.history
 
-    return JSONResponse({"sessionKey": session_key, "messages": messages})
+    from robothor.engine.runtime.chat_control import recovery_scope
+
+    return JSONResponse(
+        {
+            "sessionKey": session_key,
+            "messages": messages,
+            "recoveryScope": recovery_scope(auth, session_key),
+        },
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.post("/inject")
