@@ -37,6 +37,11 @@ logger = logging.getLogger(__name__)
 EVENT_RETENTION_DAYS = 7
 HISTORY_RETENTION_DAYS = 180
 
+# How many ceiling-blocked goals one claim will retire before giving up and
+# letting the next tick continue. Purely a belt-and-braces bound on the sweep
+# below: a goal it blocks leaves the ready set, so the loop always terminates.
+MAX_CEILING_SWEEP = 50
+
 
 @contextmanager
 def transaction() -> Iterator[Any]:
@@ -423,29 +428,34 @@ def claim(tenant: str) -> tuple[dict[str, Any], str] | None:
         )
         if cur.fetchone():
             return None
-        cur.execute(
-            """SELECT data FROM pursuit_goals g WHERE tenant_id=%s
-                       AND status IN ('queued','waiting') AND ready_at<=clock_timestamp()
-                       AND NOT EXISTS (SELECT 1 FROM pursuit_goals p WHERE p.tenant_id=g.tenant_id
-                           AND p.id::text=g.data->>'parent_goal_id'
-                           AND p.status IN ('paused','blocked','review','complete','canceled'))
-                       ORDER BY priority DESC,ready_at ASC LIMIT 1 FOR UPDATE""",
-            (tenant,),
-        )
-        row = cur.fetchone()
-        if not row:
-            return None
-        g = row["data"]
         # Every ceiling is checked here, before the attempt is counted, so a
         # goal that has reached one never starts another run. Blocking is not
-        # failure: the blocker names the ceiling and `resume` with a raised
-        # one restarts it.
-        reached = exceeded(g)
-        if reached:
+        # failure: the blocker names the ceiling and `resume` with a raised one
+        # restarts it. A blocked goal leaves the ready set, so the loop moves
+        # on to the next candidate rather than costing the tenant one paced
+        # tick per goal that happens to be over its limit.
+        for _ in range(MAX_CEILING_SWEEP):
+            cur.execute(
+                """SELECT data FROM pursuit_goals g WHERE tenant_id=%s
+                           AND status IN ('queued','waiting') AND ready_at<=clock_timestamp()
+                           AND NOT EXISTS (SELECT 1 FROM pursuit_goals p WHERE p.tenant_id=g.tenant_id
+                               AND p.id::text=g.data->>'parent_goal_id'
+                               AND p.status IN ('paused','blocked','review','complete','canceled'))
+                           ORDER BY priority DESC,ready_at ASC LIMIT 1 FOR UPDATE""",
+                (tenant,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            g = row["data"]
+            reached = exceeded(g)
+            if not reached:
+                break
             g.update(status="blocked", blocker=reached, version=g["version"] + 1)
             save(cur, tenant, g)
             journal(cur, tenant, g, "ceiling_reached", "engine", {"ceiling": reached})
             notify(cur, tenant, g, "blocked", reached)
+        else:
             return None
         attempt = str(uuid4())
         g.update(status="running", version=g["version"] + 1, attempts=g["attempts"] + 1)

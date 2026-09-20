@@ -57,6 +57,16 @@ def deadline_of(goal: dict[str, Any]) -> datetime:
     return created + timedelta(seconds=DEFAULT_DEADLINE_SECONDS)
 
 
+def token_budget_of(goal: dict[str, Any]) -> int:
+    """This goal's token ceiling, defaulted the same way ``exceeded`` does.
+
+    The in-run cap must agree with the between-run one, or a goal written
+    before the ceilings existed would be blocked at the run boundary while
+    running unbounded inside it.
+    """
+    return int(goal.get("token_budget") or DEFAULT_TOKEN_BUDGET)
+
+
 def exceeded(goal: dict[str, Any]) -> str:
     """The first ceiling this goal has reached, or ``""``.
 
@@ -64,7 +74,7 @@ def exceeded(goal: dict[str, Any]) -> str:
     written by an older build — or by any caller that left a limit unset — is
     still bounded. ``None`` means "unset, use the default", never "unlimited".
     """
-    tokens = goal.get("token_budget") or DEFAULT_TOKEN_BUDGET
+    tokens = token_budget_of(goal)
     if goal.get("tokens_used", 0) >= tokens:
         return f"token budget exhausted ({goal.get('tokens_used', 0)}/{tokens})"
     cost = goal.get("cost_budget_usd") or DEFAULT_COST_BUDGET_USD

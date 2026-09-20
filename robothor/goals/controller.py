@@ -117,17 +117,16 @@ class GoalController:
     async def execute(self, goal: dict[str, Any], attempt: str) -> None:
         from robothor.engine.config import load_agent_config_or_broken
         from robothor.engine.models import TriggerType
+        from robothor.goals.model import token_budget_of
 
         tenant = self.config.tenant_id
-        remaining = goal["token_budget"] - goal["tokens_used"] if goal["token_budget"] else None
+        # token_budget_of defaults exactly as the between-run ceiling does, so
+        # a goal written before the ceilings existed is capped inside a run too.
+        remaining = token_budget_of(goal) - goal["tokens_used"]
         if goal["parent_goal_id"]:
             parent = await asyncio.to_thread(store.control, tenant, goal["parent_goal_id"])
-            if parent["token_budget"]:
-                parent_remaining = max(0, parent["token_budget"] - parent["tokens_used"])
-                remaining = (
-                    min(remaining, parent_remaining) if remaining is not None else parent_remaining
-                )
-        if remaining is not None and remaining <= 0:
+            remaining = min(remaining, max(0, token_budget_of(parent) - parent["tokens_used"]))
+        if remaining <= 0:
             await asyncio.to_thread(
                 store.finish, tenant, goal["id"], attempt, budget_exhausted=True
             )

@@ -257,6 +257,24 @@ def test_cost_attempt_and_deadline_ceilings_block_at_claim(db):
     assert "deadline" in store.get(db, overdue["id"])["blocker"]
 
 
+def test_goals_over_a_ceiling_do_not_each_cost_a_paced_turn(db):
+    """One claim retires every over-limit goal ahead of the runnable one.
+
+    Runs are paced at one per MIN_RUN_INTERVAL_SECONDS, so returning None per
+    blocked goal would leave a tenant with a handful of exhausted goals unable
+    to start its healthy one for minutes.
+    """
+    spent = [create(db, request_key=f"spent-{i}") for i in range(3)]
+    with store.transaction() as cur:
+        for g in spent:
+            g["deadline_at"] = "2000-01-01T00:00:00+00:00"
+            store.save(cur, db, g)
+    healthy = create(db, request_key="healthy")
+    claimed, _ = store.claim(db)
+    assert claimed["id"] == healthy["id"]
+    assert all(store.get(db, g["id"])["status"] == "blocked" for g in spent)
+
+
 def test_an_unknown_tenant_cannot_own_a_goal(db):
     """Without the foreign key, a typo'd tenant produced a goal whose every
     finish() rolled back on the notification insert and held its lease."""
