@@ -107,6 +107,58 @@ def test_narrowing_unrestricted_child_and_empty_override_are_unambiguous(
     assert child_agent_config.tools_denied == ["exec"]
 
 
+@pytest.mark.parametrize("granted", ["web_render", "sales_discover", "sales_propose_email"])
+def test_an_override_cannot_grant_an_opt_in_tool_to_an_undeclared_child(
+    spawn_context, child_agent_config, granted
+):
+    """The subset check was skipped entirely for the common case.
+
+    `if child_config.tools_allowed and not set(tools_override) <= ...` is
+    vacuous when the child declares no allowlist — which most children do not.
+    That is fine for an ordinary tool, because a child with no allowlist would
+    have been offered it anyway, so naming it is a narrowing. It is NOT fine
+    for the opt-in families: `OPT_IN_TOOLS` is precisely the set an undeclared
+    child is not offered, so an override naming one is a grant.
+    """
+    from robothor.engine.tools.handlers.spawn import _narrow_child_config
+
+    child_agent_config.tools_allowed = []
+
+    with pytest.raises(ValueError, match="cannot grant"):
+        _narrow_child_config(
+            child_agent_config,
+            {"tools_override": ["read_file", granted]},
+            spawn_context,
+            1,
+        )
+
+
+def test_an_undeclared_child_can_still_be_narrowed_to_ordinary_tools(
+    spawn_context, child_agent_config
+):
+    """The complement: narrowing is the whole point of the argument."""
+    from robothor.engine.tools.handlers.spawn import _narrow_child_config
+
+    child_agent_config.tools_allowed = []
+    _narrow_child_config(
+        child_agent_config, {"tools_override": ["read_file", "web_fetch"]}, spawn_context, 1
+    )
+
+    assert child_agent_config.tools_allowed == ["read_file", "web_fetch"]
+
+
+def test_a_child_that_declares_an_opt_in_tool_may_still_be_narrowed_to_it(
+    spawn_context, child_agent_config
+):
+    """A manifest that asked for it is the grant; the override only narrows."""
+    from robothor.engine.tools.handlers.spawn import _narrow_child_config
+
+    child_agent_config.tools_allowed = ["web_fetch", "web_render", "sales_get_prospect"]
+    _narrow_child_config(child_agent_config, {"tools_override": ["web_render"]}, spawn_context, 1)
+
+    assert child_agent_config.tools_allowed == ["web_render"]
+
+
 # ─── Tool Handler Tests (mock runner.execute, no DB) ──────────────────
 
 

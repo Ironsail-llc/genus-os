@@ -424,3 +424,139 @@ def test_a_naive_expiry_is_refused_before_it_is_ever_stored(sales):
             {"mailbox_approved_until": {"sales@example.com": "2027-01-01T12:00:00"}},
             "operator:test",
         )
+
+
+# ── 8. sales/gmail_delivery.py — the SECOND copy of each Gmail guard ───────
+#
+# `_authorize` holds its own mailbox-readiness expiry and its own
+# sender-equals-mailbox check, separate from the ones in `gmail.py` that
+# section 6 covers and from the Instantly `_check_mailbox` that section 5
+# covers. Six files drive `_authorize` on the happy path, so both lines are
+# executed constantly — and deleting either left the suite green, because
+# every test that reached them had a tested sibling refuse the same call a
+# moment later. Executed is not tested.
+#
+# The expiry is the narrower real gap. `validate_send` compares
+# `sender_context_hash`, which covers `readiness_until`, so a review the
+# operator REVOKES by editing settings is caught before `_authorize` runs. A
+# review that simply LAPSES with time changes no setting, so the hash still
+# matches and this line is the only thing left. Both tests below therefore
+# configure the settings first and draft afterwards, so the approval carries a
+# hash that agrees with them.
+
+
+def _draft_from(sales, prospect, sender):
+    """The fixture draft, but from a chosen (enabled) sender."""
+    return sales.draft(
+        prospect["id"],
+        {
+            "recipient": "alice@example.com",
+            "sender": sender,
+            "subject": "Partner network",
+            "body": (
+                "Access the partner network.\nTEST POSTAL ADDRESS\nhttps://example.com/unsubscribe"
+            ),
+            "claim_ids": ["access"],
+            "knowledge_version": "v1",
+            "evidence_ids": ["service"],
+        },
+    )
+
+
+def _claimed(sales, prospect, sender="sales@example.com"):
+    action = _draft_from(sales, prospect, sender)
+    sales.ops.decide(action, True, "operator:test")
+    return sales.ops.claim_action(kind="sales.email")
+
+
+def _gmail_worker(sales, monkeypatch, clock):
+    from robothor.sales.gmail import Gmail
+    from robothor.sales.gmail_delivery import GmailDeliveryWorker
+    from robothor.sales.tests.test_gmail import GmailCLI
+
+    monkeypatch.setenv("ROBOTHOR_SALES_GMAIL_TENANT_ID", sales.tenant)
+    monkeypatch.setenv("ROBOTHOR_SALES_GMAIL_MAILBOX", "sales@example.com")
+    cli = GmailCLI()
+    return GmailDeliveryWorker(sales, Gmail(sales.tenant, runner=cli), clock=lambda: clock), cli
+
+
+@pytest.mark.asyncio
+async def test_a_gmail_review_that_lapsed_with_time_stops_the_send(sales, monkeypatch):
+    """gmail_delivery.py — the expiry branch of `_authorize`.
+
+    Nothing upstream can see this one. The settings are unchanged since
+    approval, so `sender_context_hash` agrees; only the clock moved past the
+    readiness the operator granted. Delete these two lines and a lapsed review
+    sends.
+    """
+    p = prepared(sales)
+    sent_at = datetime(2026, 9, 18, 15, tzinfo=UTC)
+    sales.configure(
+        {
+            "email_provider": "gmail",
+            "mailbox_approved_until": {
+                "sales@example.com": (sent_at - timedelta(hours=1)).isoformat()
+            },
+        },
+        "operator:test",
+    )
+    action = _claimed(sales, p)
+    worker, cli = _gmail_worker(sales, monkeypatch, sent_at)
+
+    with pytest.raises(Conflict, match="mailbox readiness review"):
+        await worker._authorize(action)
+
+    assert cli.calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_current_gmail_review_authorizes(sales, monkeypatch):
+    """Otherwise the test above would pass against a guard that refuses everything."""
+    p = prepared(sales)
+    sent_at = datetime(2026, 9, 18, 15, tzinfo=UTC)
+    sales.configure(
+        {
+            "email_provider": "gmail",
+            "mailbox_approved_until": {
+                "sales@example.com": (sent_at + timedelta(days=1)).isoformat()
+            },
+        },
+        "operator:test",
+    )
+    action = _claimed(sales, p)
+    worker, _ = _gmail_worker(sales, monkeypatch, sent_at)
+
+    settings, _local = await worker._authorize(action)
+
+    assert settings.email_provider == "gmail"
+
+
+@pytest.mark.asyncio
+async def test_gmail_refuses_an_approved_sender_that_is_not_the_bound_account(sales, monkeypatch):
+    """gmail_delivery.py — the `sender != self.provider.mailbox` branch of `_authorize`.
+
+    A second enabled sender is a perfectly valid approval, and `validate_send`
+    passes it: the address is in `senders` and the context hash matches. Only
+    this line knows the bound OAuth account is somebody else's.
+    """
+    p = prepared(sales)
+    sent_at = datetime(2026, 9, 18, 15, tzinfo=UTC)
+    readiness = (sent_at + timedelta(days=1)).isoformat()
+    sales.configure(
+        {
+            "email_provider": "gmail",
+            "senders": ["sales@example.com", "other@example.com"],
+            "mailbox_approved_until": {
+                "sales@example.com": readiness,
+                "other@example.com": readiness,
+            },
+        },
+        "operator:test",
+    )
+    action = _claimed(sales, p, sender="other@example.com")
+    worker, cli = _gmail_worker(sales, monkeypatch, sent_at)
+
+    with pytest.raises(Conflict, match="Approved sender differs from Gmail account"):
+        await worker._authorize(action)
+
+    assert cli.calls == []

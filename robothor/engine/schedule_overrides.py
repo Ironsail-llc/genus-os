@@ -61,6 +61,13 @@ def _build_worker_config(agent_config: AgentConfig) -> AgentConfig:
         persistent_history_limit=w.persistent_history_limit,
         max_cost_usd=w.cost_budget_usd or agent_config.max_cost_usd,
         hard_budget=w.cost_budget_usd > 0 or agent_config.hard_budget,
+        # NOT inherited, unlike every other field here. `auto_task` files one
+        # operator-facing CRM row per run; when `dataclasses.replace` started
+        # carrying the agent's value into override runs, that was ~138 new rows
+        # a day on this instance from nine scheduled agents — a repeat of the
+        # 6,887 junk rows `should_create_auto_task` was written to stop. An
+        # override run files one only when its own block asks.
+        auto_task=w.auto_task,
         # Drain runs do NOT override task authorship — filed tasks stay
         # attributed to 'main' (the agent identity).
         task_author_override="",
@@ -105,6 +112,13 @@ def _build_heartbeat_config(agent_config: AgentConfig) -> AgentConfig:
         # so the override actually bites.
         max_cost_usd=hb.cost_budget_usd or agent_config.max_cost_usd,
         hard_budget=hb.cost_budget_usd > 0 or agent_config.hard_budget,
+        # NOT inherited, unlike every other field here. `auto_task` files one
+        # operator-facing CRM row per run; when `dataclasses.replace` started
+        # carrying the agent's value into override runs, that was ~138 new rows
+        # a day on this instance from nine scheduled agents — a repeat of the
+        # 6,887 junk rows `should_create_auto_task` was written to stop. An
+        # override run files one only when its own block asks.
+        auto_task=hb.auto_task,
         # Scout filings attributed to `hb.task_authorship_agent` (if set)
         # for CRM timeline clarity — agent_id on the run stays 'main'.
         task_author_override=hb.task_authorship_agent,

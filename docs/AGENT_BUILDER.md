@@ -261,6 +261,14 @@ access or disable all tools. A child with no declared allowlist can be narrowed
 to an explicit list, and its `tools_denied` restrictions still apply. Change the
 child manifest deliberately when it needs an additional capability.
 
+A child with no declared allowlist is the case to understand. Naming an
+ordinary tool in the override is still a narrowing, because that child would
+have been offered it anyway. The opt-in families are the exception:
+`OPT_IN_TOOLS` — `web_render` and the ten `sales_*` tools — is precisely the
+set an undeclared child is NOT offered, so an override naming one would be a
+grant, and the engine refuses it by name. A child whose own manifest asks for
+an opt-in tool can still be narrowed to it.
+
 Set `v2.spawn_allowed_agents` to a list of agent IDs when delegation must stay
 inside an approved team. The engine checks the target before loading its manifest.
 This restriction follows the entire spawn tree: each child's own nonempty list
@@ -293,7 +301,8 @@ again; benchmark child contexts use the same convention.
 
 `spawn_allowed_agents` and `max_spawn_total` — like every other security field
 on the manifest — are carried into a `heartbeat:` or `worker:` override run
-unchanged. The override blocks name what they CHANGE (schedule, instructions,
+unchanged. The single field that is deliberately NOT inherited is `auto_task`:
+see below. The override blocks name what they CHANGE (schedule, instructions,
 delivery, warmup, budget, model, tools) and everything else is inherited, so a
 field nobody remembered to list cannot silently reset to its permissive default
 on the runs nobody is watching. That is not automatic: both builders once
@@ -301,6 +310,16 @@ reconstructed the config field by field, and the fields they forgot took the
 dataclass default — which is how every drain run came to execute with no
 guardrails in a local sandbox, and how these two allowances came to be absent
 from every heartbeat and drain run.
+
+The one field an override does not inherit is `auto_task`, and it has its own
+`heartbeat.auto_task` / `worker.auto_task` key (both default `false`). That
+flag files one operator-facing CRM row per run, and an agent whose interactive
+work is worth tracking usually has a beat and a drain that are not: nine
+scheduled agents on the first instance declare `auto_task` and make about 138
+runs a day between them, so inheriting it would have put roughly 4,000 rows a
+month into the operator's queue. `should_create_auto_task` exists because
+6,887 junk rows reached that queue once already. Set the key on the block when
+you want the beat or the drain to file one too.
 
 Native integrations may attach an internal per-result callback to the parallel
 spawn handler to checkpoint completed children before siblings finish. It receives

@@ -558,6 +558,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
             persistent_history_limit=int(raw_heartbeat.get("persistent_history_limit", 20)),
             tools_allowed=raw_heartbeat.get("heartbeat_tools_allowed", []),
             task_authorship_agent=raw_heartbeat.get("task_authorship_agent", ""),
+            auto_task=bool(raw_heartbeat.get("auto_task", False)),
             # token_budget is auto-derived at runtime from model registry × max_iterations
         )
 
@@ -591,6 +592,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
             cost_budget_usd=float(raw_worker.get("cost_budget_usd", 0.0)),
             persistent_history_limit=int(raw_worker.get("persistent_history_limit", 20)),
             tools_allowed=raw_worker.get("worker_tools_allowed", []),
+            auto_task=bool(raw_worker.get("auto_task", False)),
         )
 
     # Channel-bus config — main only. Parsed here so the scheduler can read

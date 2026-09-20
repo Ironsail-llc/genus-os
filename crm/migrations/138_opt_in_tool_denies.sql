@@ -48,8 +48,9 @@ ON CONFLICT (tenant_id, role, tool_pattern) DO NOTHING;
 -- "service:<agent_id>" and whose role is not 'service'
 -- (robothor/engine/tools/handlers/sales.py). An exact pattern beats the
 -- 'sales_*' glob, so this restores exactly that one tool and nothing else.
--- test_sales_queue_identity_gate.py pins the handler gate that is now the
--- only thing standing behind this row.
+-- robothor/sales/tests/test_outbound_guard_survivors.py:54
+-- (test_only_a_native_service_workflow_can_drive_the_queue) pins that handler
+-- gate, which is now the only thing standing behind this row.
 INSERT INTO role_permissions (tenant_id, role, tool_pattern, access)
 VALUES ('__default__', 'service', 'sales_process_queue', 'allow')
 ON CONFLICT (tenant_id, role, tool_pattern) DO NOTHING;

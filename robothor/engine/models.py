@@ -194,6 +194,13 @@ class HeartbeatConfig:
     # beat-filed tasks to "scout" while the underlying run_id stays "main".
     task_authorship_agent: str = ""
 
+    #: Whether THIS override's runs file the agent's operator-facing
+    #: `auto_task` CRM row. Deliberately its own field rather than inherited
+    #: from the agent: `auto_task` costs one operator-visible task per run, and
+    #: an agent whose interactive work is worth tracking usually has a
+    #: heartbeat and a drain that are not. Off unless the block asks.
+    auto_task: bool = False
+
 
 @dataclass
 class WorkerConfig:
@@ -238,6 +245,13 @@ class WorkerConfig:
     # Tool restriction for drain runs. When empty, inherits parent's full
     # `tools_allowed` — drain should have full execution capability.
     tools_allowed: list[str] = field(default_factory=list)
+
+    #: Whether THIS override's runs file the agent's operator-facing
+    #: `auto_task` CRM row. Deliberately its own field rather than inherited
+    #: from the agent: `auto_task` costs one operator-visible task per run, and
+    #: an agent whose interactive work is worth tracking usually has a
+    #: heartbeat and a drain that are not. Off unless the block asks.
+    auto_task: bool = False
 
 
 @dataclass

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from robothor.engine.models import SpawnContext
 from robothor.engine.sanitize import sanitize_log
 from robothor.engine.spawn_cancel import ChildRunWatch, finalize_abandoned_child
+from robothor.engine.tools.constants import OPT_IN_TOOLS
 
 if TYPE_CHECKING:
     from robothor.engine.config import EngineConfig
@@ -157,10 +158,24 @@ def _narrow_child_config(
     ):
         raise ValueError("tools_override must be a list of tool names")
     if tools_override:
-        if child_config.tools_allowed and not set(tools_override) <= set(
-            child_config.tools_allowed
-        ):
-            raise ValueError("tools_override cannot expand the child manifest's tools_allowed")
+        if child_config.tools_allowed:
+            if not set(tools_override) <= set(child_config.tools_allowed):
+                raise ValueError("tools_override cannot expand the child manifest's tools_allowed")
+        else:
+            # A child that declares no allowlist is NOT unbounded, and this
+            # branch used to skip the check entirely — which is the common
+            # case, so the guarantee only held for the minority of children.
+            # An undeclared child's effective set is the default one, and the
+            # default one excludes OPT_IN_TOOLS by construction. Naming an
+            # ordinary tool here is still a narrowing (the child would have
+            # been offered it anyway); naming an opt-in one is a grant, which
+            # is the one thing this argument may never be.
+            granted = sorted(set(tools_override) & OPT_IN_TOOLS)
+            if granted:
+                raise ValueError(
+                    "tools_override cannot grant a tool the child's manifest never asked "
+                    "for: " + ", ".join(granted)
+                )
         child_config.tools_allowed = tools_override
 
     # Apply max_iterations override (never increase beyond parent's sub_agent_max_iterations)

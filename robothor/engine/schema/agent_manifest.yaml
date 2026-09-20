@@ -325,6 +325,14 @@ optional:
   # ── Worker (a second cron lane with its own instruction + budget) ─
   # Same shape as heartbeat. Inherits model + tools from the parent agent.
   worker:
+    auto_task:
+      type: boolean
+      default: false
+      description: >
+        File this override's own operator-facing CRM task per run. NOT
+        inherited from the agent's top-level `auto_task`: that flag costs one
+        operator-visible row per run, and an agent whose interactive work is
+        worth tracking usually has a heartbeat and a drain that are not.
     cron:
       type: string
     timezone:
@@ -392,6 +400,14 @@ optional:
   # different instruction file, delivery mode, warmup, and budget.
   # Inherits model + tools from the parent agent.
   heartbeat:
+    auto_task:
+      type: boolean
+      default: false
+      description: >
+        File this override's own operator-facing CRM task per run. NOT
+        inherited from the agent's top-level `auto_task`: that flag costs one
+        operator-visible row per run, and an agent whose interactive work is
+        worth tracking usually has a heartbeat and a drain that are not.
     cron:
       type: string
       description: APScheduler cron expression for heartbeat schedule
