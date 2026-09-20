@@ -36,6 +36,9 @@ class Host:
         )
         return self.run, self.gateway
 
+    async def bind_candidate(self, request, candidate):
+        return candidate
+
     async def finish(self, result):
         self.results.append(result)
 

@@ -25,6 +25,19 @@ def usage_tokens(response):
     return value if type(value) is int and value >= 0 else None
 
 
+async def budget_value(budget, name):
+    asynchronous = getattr(budget, "value_async", None)
+    return await asynchronous(name) if asynchronous else getattr(budget, name)
+
+
+async def budget_operation(budget, name, *args):
+    asynchronous = getattr(budget, name + "_async", None)
+    if asynchronous:
+        await asynchronous(*args)
+    else:
+        getattr(budget, name)(*args)
+
+
 async def goal_completion(call, kwargs, budget):
     from robothor.engine.request_budget import _text_only
 
@@ -40,13 +53,16 @@ async def goal_completion(call, kwargs, budget):
     input_bound = len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) + 256 * (
         len(kwargs.get("messages", [])) + 1
     )
-    remaining = budget.limit - budget.charged
-    output_bound = min(kwargs.get("max_tokens") or 4096, remaining - input_bound)
+    limit = await budget_value(budget, "limit")
+    remaining = limit - await budget_value(budget, "charged") if limit is not None else None
+    output_bound = kwargs.get("max_tokens") or 4096
+    if remaining is not None:
+        output_bound = min(output_bound, remaining - input_bound)
     if output_bound <= 0:
         raise RequestBudgetError("Goal budget cannot cover the request's conservative input bound")
     call_id = str(uuid4())
     try:
-        budget.reserve(call_id, input_bound + output_bound)
+        await budget_operation(budget, "reserve", call_id, input_bound + output_bound)
     except ValueError as exc:
         raise RequestBudgetError(str(exc)) from exc
     import asyncio
@@ -57,12 +73,16 @@ async def goal_completion(call, kwargs, budget):
     current = binding.get()
     if current:
         await asyncio.to_thread(
-            reserve_provider_usage, current.tenant, current.goal_id, current.attempt, budget.charged
+            reserve_provider_usage,
+            current.tenant,
+            current.goal_id,
+            current.attempt,
+            await budget_value(budget, "charged"),
         )
     response = await call(**{**kwargs, "max_tokens": output_bound})
     if kwargs.get("stream"):
         return TokenStream(response, budget, call_id)
-    budget.settle(call_id, usage_tokens(response))
+    await budget_operation(budget, "settle", call_id, usage_tokens(response))
     return response
 
 
@@ -83,7 +103,7 @@ class TokenStream:
             chunk = await self.iterator.__anext__()
         except StopAsyncIteration:
             self.done = True
-            self.budget.settle(self.call_id, self.actual)
+            await budget_operation(self.budget, "settle", self.call_id, self.actual)
             raise
         except BaseException:
             await self.aclose()

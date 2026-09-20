@@ -56,6 +56,41 @@ class DurableAttemptBudget:
             if row["data"].get("recovery_required"):
                 raise ValueError("goal requires reconciliation before business actions")
 
+    @property
+    def limit(self):
+        with store.transaction() as cur:
+            goal = self._authorized_attempt(cur)["data"]
+            family = [goal]
+            if goal["parent_goal_id"]:
+                family.append(store.locked(cur, self.tenant, goal["parent_goal_id"]))
+            limits = [g["token_budget"] - g["tokens_used"] for g in family if g["token_budget"]]
+            return min(limits) if limits else None
+
+    def validate_context(self, context):
+        with store.transaction() as cur:
+            goal = self._authorized_attempt(cur)["data"]
+            if context.parent_goal_id != goal["parent_goal_id"] or context.budget_id != (
+                goal["parent_goal_id"] or goal["id"]
+            ):
+                raise ValueError("goal family identity mismatch")
+
+    async def value_async(self, name):
+        import asyncio
+
+        if name not in {"limit", "charged"}:
+            raise ValueError("unsupported budget property")
+        return await asyncio.to_thread(getattr, self, name)
+
+    async def reserve_async(self, call_id, maximum):
+        import asyncio
+
+        await asyncio.to_thread(self.reserve, call_id, maximum)
+
+    async def settle_async(self, call_id, actual):
+        import asyncio
+
+        await asyncio.to_thread(self.settle, call_id, actual)
+
     def reserve(self, call_id, maximum):
         if not call_id or type(maximum) is not int or maximum <= 0:
             raise ValueError("call identity and positive bound required")

@@ -206,3 +206,21 @@ async def test_durable_stop_denies_next_provider_or_fallback(monkeypatch):
 
     await CurrentRuntime(execute).run(request())
     provider.assert_not_called()
+
+
+async def test_uncapped_async_goal_ledger_preserves_provider_output_bound():
+    from types import SimpleNamespace
+
+    from robothor.engine.runtime.provider_budget import goal_completion
+
+    ledger = SimpleNamespace(
+        value_async=AsyncMock(return_value=None),
+        reserve_async=AsyncMock(),
+        settle_async=AsyncMock(),
+    )
+    provider = AsyncMock(return_value={"usage": {"total_tokens": 100}})
+    await goal_completion(provider, {"messages": [], "max_tokens": 100}, ledger)
+    assert provider.call_args.kwargs["max_tokens"] == 100
+    ledger.value_async.assert_awaited_once_with("limit")
+    assert ledger.reserve_async.call_args.args[1] > 100
+    assert ledger.settle_async.call_args.args[1] == 100

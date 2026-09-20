@@ -37,6 +37,8 @@ class CandidateHost(Protocol):
         self, request: RunRequest, identity: StateEnvelope
     ) -> tuple[AgentRun, object]: ...
 
+    async def bind_candidate(self, request: RunRequest, candidate): ...
+
     async def finish(self, result: RuntimeResult) -> None: ...
 
     async def control(self, tenant: str, run_id: str, action: str, note: str) -> dict: ...
@@ -119,9 +121,10 @@ class CandidateRuntime:
         usage, verified = Usage(None, None, None, None), False
         run.status = RunStatus.RUNNING
         try:
+            candidate = await self.host.bind_candidate(request, self.candidate)
             report = await execute_before_deadline(
                 request.context,
-                lambda: self.candidate.run(
+                lambda: candidate.run(
                     gateway, tenant=request.context.tenant_id, prompt=request.message
                 ),
             )

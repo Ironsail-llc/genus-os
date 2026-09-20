@@ -14,7 +14,7 @@ from psycopg2.extras import Json
 
 from bench.runtime.candidates import admit_gateway
 from robothor.db.connection import get_connection
-from robothor.engine.models import AgentRun, RunStatus
+from robothor.engine.models import AgentRun, RunStatus, TriggerType
 from robothor.engine.runtime import controls
 from robothor.engine.runtime.contracts import RuntimeResult, RuntimeStoppedError, Usage
 from robothor.engine.runtime.deadlines import require_time
@@ -46,14 +46,22 @@ class RunGateway:
 
 
 class StoreHost:
-    def __init__(self, gateway_factory):
+    def __init__(self, gateway_factory, *, request_token_bound=None):
         self.gateway_factory = gateway_factory
+        self.request_token_bound = request_token_bound
         self._admissions = set()
 
     async def prepare(self, request, identity):
         context = request.context
         require_time(context)
+        from bench.runtime.goal_binding import bind_goal
+
+        ledger = await bind_goal(context, self.request_token_bound)
         gateway = await self.gateway_factory(request)
+        if ledger is not None:
+            from bench.runtime.goal_gateway import GoalGateway
+
+            gateway = GoalGateway(gateway, ledger)
         await admit_gateway(gateway, context.tenant_id)
         if await asyncio.to_thread(controls.stopped, context.tenant_id, ""):
             raise ValueError("request already stopped")
@@ -65,19 +73,32 @@ class StoreHost:
             tenant_id=context.tenant_id,
             user_id=context.principal_id,
             agent_id=request.agent_id,
+            trigger_type=TriggerType(request.options.get("trigger_type", TriggerType.MANUAL)),
             correlation_id=context.request_id,
             parent_run_id=context.parent_id,
             started_at=datetime.now(UTC),
+            trigger_detail=f"goal:{context.goal_id}" if context.goal_id else None,
         )
         metadata = {**asdict(context), **asdict(identity)}
         metadata["deadline"] = context.deadline.isoformat() if context.deadline else None
-        insertion = self._track(asyncio.to_thread(self._insert, run, metadata))
+        insertion = self._track(asyncio.to_thread(self._insert_and_attach, run, metadata))
         try:
             await asyncio.shield(insertion)
         except asyncio.CancelledError:
             self._track(self._cancel_admission(insertion, run, identity, context.request_id))
             raise
         return run, RunGateway(run, gateway)
+
+    def _insert_and_attach(self, run, metadata):
+        from robothor.goals.runtime import attach_run
+
+        self._insert(run, metadata)
+        attach_run(run)
+
+    async def bind_candidate(self, request, candidate):
+        from bench.runtime.goal_binding import bind_candidate
+
+        return bind_candidate(request.context, candidate, self.request_token_bound)
 
     def _track(self, work):
         task = asyncio.create_task(work)
@@ -133,14 +154,16 @@ class StoreHost:
                     raise ValueError("parent run not found in tenant")
             cur.execute(
                 """INSERT INTO agent_runs
-                   (id,tenant_id,user_id,agent_id,trigger_type,correlation_id,parent_run_id,
-                    status,started_at,runtime_context) VALUES (%s,%s,%s,%s,'manual',%s,%s,
+                   (id,tenant_id,user_id,agent_id,trigger_type,trigger_detail,correlation_id,parent_run_id,
+                    status,started_at,runtime_context) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,
                     'running',%s,%s)""",
                 (
                     run.id,
                     run.tenant_id,
                     run.user_id,
                     run.agent_id,
+                    str(run.trigger_type),
+                    run.trigger_detail,
                     correlation,
                     run.parent_run_id,
                     run.started_at,
