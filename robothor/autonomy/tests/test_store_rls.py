@@ -41,16 +41,25 @@ def policy(**changes):
     )
 
 
-@pytest.fixture
-def scoped_role(store, identity):
-    """An `AutonomyStore` that connects as a role RLS actually applies to."""
-    neighbour = Scope(tenant_id="neighbour-" + uuid4().hex, owner_id="bob")
-    store.create_grant(identity, policy())
-    store.create_grant(neighbour, policy())
+@pytest.fixture(scope="session")
+def rls_role(migrated_dsn):
+    """One unprivileged role for the whole session, created before any test runs.
 
+    Session-scoped on purpose. `GRANT` and `REVOKE` take ACCESS EXCLUSIVE on
+    the table, and this suite runs tests that hold transactions from a
+    SUBPROCESS (`test_worker_process`, `test_workflow_process`). Doing the
+    grants per test put a lock request in the middle of the run that could sit
+    behind one of those for as long as the subprocess lived — a hang, not a
+    failure. One grant before the first test and one revoke after the last
+    costs two lock waits at moments when nothing else is holding anything.
+
+    `lock_timeout` is belt and braces: if something IS holding a table when
+    this runs, the suite should say so in seconds rather than stop.
+    """
     role = "autonomy_rls_" + uuid4().hex
-    admin = store._connect()
+    admin = psycopg2.connect(migrated_dsn)
     with admin, admin.cursor() as cur:
+        cur.execute("SET lock_timeout = '10s'")
         cur.execute(sql.SQL("CREATE ROLE {} NOSUPERUSER NOBYPASSRLS").format(sql.Identifier(role)))
         cur.execute(sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(sql.Identifier(role)))
         for table in GRANTED:
@@ -60,30 +69,31 @@ def scoped_role(store, identity):
                 )
             )
     admin.close()
+    try:
+        yield role
+    finally:
+        cleanup = psycopg2.connect(migrated_dsn)
+        with cleanup, cleanup.cursor() as cur:
+            cur.execute("SET lock_timeout = '10s'")
+            cur.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(role)))
+            cur.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(role)))
+        cleanup.close()
+
+
+@pytest.fixture
+def scoped_role(store, identity, rls_role):
+    """An `AutonomyStore` that connects as a role RLS actually applies to."""
+    neighbour = Scope(tenant_id="neighbour-" + uuid4().hex, owner_id="bob")
+    store.create_grant(identity, policy())
+    store.create_grant(neighbour, policy())
 
     def connect():
         conn = store._connect()
         with conn.cursor() as cur:
-            cur.execute(sql.SQL("SET ROLE {}").format(sql.Identifier(role)))
+            cur.execute(sql.SQL("SET ROLE {}").format(sql.Identifier(rls_role)))
         return conn
 
-    scoped = AutonomyStore(connect, keys={"v1": b"x" * 32}, key_id="v1")
-    try:
-        yield scoped, neighbour
-    finally:
-        cleanup = store._connect()
-        with cleanup, cleanup.cursor() as cur:
-            for table in GRANTED:
-                cur.execute(
-                    sql.SQL("REVOKE ALL ON {} FROM {}").format(
-                        sql.Identifier(table), sql.Identifier(role)
-                    )
-                )
-            cur.execute(
-                sql.SQL("REVOKE USAGE ON SCHEMA public FROM {}").format(sql.Identifier(role))
-            )
-            cur.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(role)))
-        cleanup.close()
+    return AutonomyStore(connect, keys={"v1": b"x" * 32}, key_id="v1"), neighbour
 
 
 def test_every_call_site_with_a_scope_binds_it():

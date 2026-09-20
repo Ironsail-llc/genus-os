@@ -91,9 +91,9 @@ async def recover_checks() -> None:
 
 
 #: Six hours. The retention window is measured in months, so the sweep only
-#: has to be regular, not prompt — and a shorter period would mean every
-#: bridge worker taking the same advisory lock far more often than the work
-#: needs. A missed pass costs nothing but a few more hours of retention.
+#: has to be regular, not prompt, and a missed pass costs nothing but a few
+#: more hours of retention. Running it oftener would mean every bridge worker
+#: issuing the same no-op DELETE against a growing table for no gain.
 PURGE_PERIOD_SECONDS = 6 * 60 * 60
 
 
