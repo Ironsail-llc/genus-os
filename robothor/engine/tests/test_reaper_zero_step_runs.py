@@ -23,7 +23,7 @@ class _Cursor:
         self.stale_rows = stale_rows
         self.executed: list[str] = []
         self.params: list[Any] = []
-        self.rowcount = 0
+        self.rowcount = 1
 
     def execute(self, sql: str, params: Any = None) -> None:
         self.executed.append(sql)
@@ -53,9 +53,12 @@ class _Conn:
         return False
 
 
-def _run_reaper(age_seconds: float, steps: list[dict[str, Any]]) -> _Cursor:
+def _run_reaper(
+    age_seconds: float, steps: list[dict[str, Any]], *, affected_rows: int = 1
+) -> _Cursor:
     started = datetime.now(UTC) - timedelta(seconds=age_seconds)
     cursor = _Cursor([("11111111-1111-4111-8111-111111111111", "main", started)])
+    cursor.rowcount = affected_rows
     conn = _Conn(cursor)
     with (
         patch("robothor.db.connection.get_connection", return_value=conn),
@@ -63,9 +66,10 @@ def _run_reaper(age_seconds: float, steps: list[dict[str, Any]]) -> _Cursor:
         patch.object(daemon, "_DAEMON_START_TS", None),
         patch("robothor.engine.tracking.list_steps", return_value=steps),
         patch.object(daemon, "stale_run_cutoff_seconds", return_value=7200),
-        patch("robothor.engine.dedup.release_sync"),
+        patch("robothor.engine.dedup.release_sync") as release,
     ):
-        daemon._cleanup_stale_runs("fixture-tenant")
+        cursor.reaped = daemon._cleanup_stale_runs("fixture-tenant")
+        cursor.released = [call.args[0] for call in release.call_args_list]
     return cursor
 
 
@@ -123,3 +127,22 @@ def test_workflow_cleanup_keeps_explicit_tenant():
     statement, params = cursor.execute.call_args.args
     assert "WHERE tenant_id=%s" in statement
     assert params == ("fixture-tenant",)
+
+
+def test_healthy_run_retains_duplicate_protection():
+    cursor = _run_reaper(1200, [{"step_type": "llm_call"}])
+    assert cursor.released == []
+    assert cursor.reaped == 0
+
+
+def test_concurrently_completed_run_is_not_released_or_counted():
+    cursor = _run_reaper(1200, [], affected_rows=0)
+    assert _agent_run_updates(cursor)
+    assert cursor.released == []
+    assert cursor.reaped == 0
+
+
+def test_successful_reap_releases_and_counts_the_run():
+    cursor = _run_reaper(1200, [])
+    assert cursor.released == ["main"]
+    assert cursor.reaped == 1

@@ -524,6 +524,7 @@ def _cleanup_stale_runs(tenant_id: str | None = None) -> int:
             if not stale:
                 return wf_reaped
 
+            reaped_agents = []
             for run_id, agent_id, started_at in stale:
                 # The scan floor is deliberately cheap; this is the real gate.
                 # An orphan (predating this boot) is reaped whatever its age —
@@ -547,6 +548,9 @@ def _cleanup_stale_runs(tenant_id: str | None = None) -> int:
                     "WHERE id=%s AND tenant_id=%s AND status='running'",
                     (message, category, run_id, tenant_id),
                 )
+                if cur.rowcount != 1:
+                    continue
+                reaped_agents.append(agent_id)
                 logger.warning(
                     "Cleaned up stale run %s (agent=%s, category=%s)",
                     run_id,
@@ -559,10 +563,10 @@ def _cleanup_stale_runs(tenant_id: str | None = None) -> int:
             # Release dedup locks for cleaned-up agents
             from robothor.engine.dedup import release_sync
 
-            for row in stale:
-                release_sync(row[1])
+            for agent_id in reaped_agents:
+                release_sync(agent_id)
 
-            return len(stale) + wf_reaped
+            return len(reaped_agents) + wf_reaped
     except Exception as e:
         logger.warning("Stale run cleanup failed: %s", e)
         return wf_reaped

@@ -616,3 +616,8 @@ All 33 resume/control/size checks passed (5.21s), and the drill's 13 tracking/pe
 The restart drill now seeds stale running agent and workflow records for both the daemon tenant and a foreign tenant. The initial run failed because cleanup timed out foreign work. Agent selection and updates, and workflow updates, now include the configured tenant; both startup and the periodic watchdog pass that tenant explicitly.
 
 Two real daemon restart cycles now clean local stale records while preserving foreign running records. Earlier stopped-run, foreign-resume, paused-goal, checkpoint and uncertain-operation assertions still pass. All 53 focused reaper/workflow/resume/size checks passed (3.64s); the canonical migration drill and 13 tracking integrations passed (0.30s). Ruff and diff checks pass. Evidence is in `bench/runtime/uat-cleanup-tenant-isolation.json`. This verifies these cleanup paths, not all startup maintenance or active-goal continuation. Full acceptance and production rollout remain incomplete.
+
+
+## Cleanup preserves locks for skipped work
+
+Two regression tests reproduced cleanup releasing an agent lock despite skipping its healthy run, and releasing/counting a run whose conditional update affected zero rows. Cleanup now collects only successfully updated rows and releases their locks after commit; counts and logs reflect those rows. All 56 focused reaper/workflow/resume/size tests pass (4.93s), and the isolated canonical migration/two-restart drill passes with 13 integration tests (0.28s). The initial two failing tests are recorded in `bench/runtime/uat-reaper-lock-preservation.json`. Ruff and diff checks pass. This does not establish replacement-run lock ownership or full HA concurrency correctness; full acceptance remains incomplete.

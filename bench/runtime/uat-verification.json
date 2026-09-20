@@ -1011,6 +1011,32 @@
       "tracking_integration_passed": 13,
       "tracking_integration_seconds": 0.3,
       "limits": "Private synthetic database, two real daemon restart cycles. Does not certify every maintenance path, active-goal continuation, or application rollback."
+    },
+    "reaper_lock_preservation": {
+      "initial_failures": [
+        "Healthy run below its ceiling had its duplicate-prevention lock released.",
+        "Conditional update affecting zero rows still released the lock and counted a cleanup."
+      ],
+      "fix": "Only successfully updated rows are logged, counted and released after commit.",
+      "focused_passed": 56,
+      "focused_seconds": 4.93,
+      "integration_passed": 13,
+      "integration_seconds": 0.28,
+      "restart_cycles": [
+        {
+          "health_ready": true,
+          "shutdown_exit_code": 0,
+          "shutdown_seconds": 0.9670282000006409,
+          "recovery_worker_spawns": 1
+        },
+        {
+          "health_ready": true,
+          "shutdown_exit_code": 0,
+          "shutdown_seconds": 1.2678338019995863,
+          "recovery_worker_spawns": 1
+        }
+      ],
+      "limits": "Regression tests cover skipped and concurrently transitioned rows. Lock ownership across replacement runs and all HA concurrency behavior are not certified by these tests."
     }
   },
   "calendar": {
