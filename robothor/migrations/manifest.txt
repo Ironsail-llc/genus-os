@@ -151,3 +151,4 @@ crm/133_autonomy_terms_audit.sql
 crm/134_autonomy_material_documents.sql
 
 crm/126_calendar_operations.sql
+crm/138_autonomy_payment_events.sql
