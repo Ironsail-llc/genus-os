@@ -97,3 +97,47 @@ def test_late_submission_never_downgrades_a_verified_charge():
         [fact("charged", 600), fact("submitted", source="merchant")], limit_minor=600
     )
     assert result.state == "charged" and result.charged_minor == 600
+
+
+def test_delivery_order_does_not_change_known_charge_and_refund_totals():
+    from itertools import permutations
+
+    rows = [
+        fact("authorized", 600),
+        fact("charged", 400, "capture-one"),
+        fact("charged", 200, "capture-two"),
+        fact("refunded", 150, "refund-one"),
+        fact("refunded", 450, "refund-two"),
+    ]
+    for delivered in permutations(rows):
+        position = project_payment(list(delivered), limit_minor=600)
+        assert position.state == "refunded"
+        assert (position.authorized_minor, position.charged_minor, position.refunded_minor) == (
+            600,
+            600,
+            600,
+        )
+        assert position.net_charged_minor == 0
+
+
+def test_reversal_delivered_before_authorization_resolves_when_authorization_arrives():
+    with pytest.raises(ValueError):
+        project_payment([fact("reversed", 600)], limit_minor=600)
+    position = project_payment([fact("reversed", 600), fact("authorized", 600)], limit_minor=600)
+    assert position.state == "reversed" and position.reversed_minor == 600
+    assert position.charged_minor == position.refunded_minor == 0
+
+
+def test_reordering_does_not_conceal_excess_refunds_or_authorization_conflicts():
+    with pytest.raises(ValueError, match="refund_exceeds_charge"):
+        project_payment([fact("refunded", 601), fact("charged", 600)], limit_minor=600)
+    with pytest.raises(ValueError, match="authorization_already_recorded"):
+        project_payment(
+            [
+                fact("refunded", 600),
+                fact("authorized", 600),
+                fact("charged", 600),
+                fact("authorized", 700, "other"),
+            ],
+            limit_minor=600,
+        )
