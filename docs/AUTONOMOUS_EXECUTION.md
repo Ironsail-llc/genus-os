@@ -1,0 +1,339 @@
+# Personal autonomous execution
+
+Open **Account → Personal automation** (`/account/autonomy`) to enroll personal
+information and grant standing authority. An authorized agent can create an
+account, submit an application, log in, or submit a purchase without asking for
+another approval when that action fits the grant. Personal resources extend the
+existing native vault; no external password manager is required.
+
+## Setup
+
+1. Apply packaged migrations `127_autonomous_execution.sql`,
+   `128_autonomy_resource_descriptors.sql`, and `129_autonomy_workflows.sql` through the normal
+   upgrade process. Preserve the existing vault master key and encrypted backups.
+   Install the `genusos[autonomy]` extra and either a system Chromium or the
+   browser installed by `python -m playwright install chromium`.
+   For persistent workflows install the `genusos[api,autonomy]` extras, render/install
+   the platform units with `scripts/install-units.sh`, and enable
+   `robothor-autonomy.service`. It runs independently of the engine and bridge;
+   restarting either controller leaves browser pages alive. The default private
+   socket is `/run/robothor-autonomy/broker.sock` (override
+   `ROBOTHOR_AUTONOMY_SOCKET` consistently in the service and both controllers).
+   Readiness: `curl --unix-socket /run/robothor-autonomy/broker.sock http://autonomy/ready`.
+2. Link the signed-in dashboard account and messaging identity to the same CRM
+   person. Enrollment refuses an ambiguous or unlinked identity. Resources and
+   operations are scoped to both tenant and person, including for administrators.
+3. Use **Use my saved contact details** to import the linked CRM person’s
+   existing name, email, phone, occupation and city into an encrypted profile.
+   This reads only the signed-in person’s record and never returns its values.
+   Enroll any remaining profile fields, reusable application answers, website
+   logins, photos or documents, and website authenticator keys. Values travel
+   inward through the authenticated dashboard; responses contain references.
+   Application answers use a short name, such as `membership_reason`, so the
+   agent can request `answers.membership_reason` without reading its value.
+4. Grant named agents access to exact HTTPS website origins or explicitly
+   select **Allow any public HTTPS website**, with an expiration and spending
+   limits. The general website option retains agent, action, currency and budget
+   checks; saved credentials remain bound to their own origins. Embedded payment
+   providers on another origin still require separately listed
+   frame origins. The UI currently uses USD; the broker also recognizes strict
+   decimal EUR and GBP totals. Zero spending limits still permit account and
+   application tasks.
+5. Enable execution. A valid grant satisfies approval for covered actions;
+   agents cannot create grants, enable payments, or raise their own limits.
+
+Payment execution is off by default. An owner/admin must record the deployment's
+payment-data assessment reference and enable `payment_processing` through
+`PUT /api/autonomy/settings`. This is a deployment setting, separate from the
+person's spending grant. The settings object contains `enabled`,
+`managed_browser`, `payment_processing`, and `payment_assessment_reference`.
+This implementation is not a compliance attestation. It processes encrypted
+personal card data and therefore needs a review of the deployed data flow,
+access, backups, browser vendor, and logging before real-card use.
+
+## Browser and verification
+
+The broker runs in a short-lived, non-dumpable subprocess with a scrubbed
+environment. It owns a fresh browser context that the ordinary browser tool
+cannot inspect. It launches installed `chromium` when available, otherwise
+Playwright's bundled Chromium, always with Chromium sandboxing enabled. An
+operator can select an executable with
+`ROBOTHOR_AUTONOMY_CHROMIUM_EXECUTABLE`. A host that blocks the downloaded
+binary's user namespace may support the distribution's Chromium policy.
+
+Validate Chromium under the actual service restrictions, not only in a login
+shell. A Snap launcher can require capabilities that `NoNewPrivileges=yes`
+correctly denies. One supported deployment option is a root-owned copy of the
+matching Playwright Chromium headless shell, selected with the executable
+override in the engine, bridge and workflow service. On Ubuntu hosts that restrict
+unprivileged user namespaces, give that exact executable a dedicated AppArmor
+profile with `userns,`, following
+[Ubuntu's per-application namespace policy](https://documentation.ubuntu.com/security/security-features/privilege-restriction/apparmor/).
+Keep Chromium sandboxing and the service restrictions enabled. Update that
+browser alongside Playwright, and verify a real protected open/inspect after
+deployment; an HTTP readiness response alone does not prove browser launch.
+
+Optional Browserbase fallback uses the tenant's native-vault credential
+`providers/browserbase/api_key`. Enable managed browsing only after configuring
+that provider. Sessions request `recordSession=false`, `logSession=false`, and
+`solveCaptchas=true`. Local failures can fall back automatically only while the
+operation is still reserved, before credential entry or submission. This
+integration does not guarantee that every CAPTCHA can be solved. Bank approval,
+biometrics, hardware keys, and unsupported challenges remain external actions.
+Managed browsing has mocked contract coverage, not live-provider validation.
+
+Existing owner Gmail access can provide a fresh six-digit code or same-origin
+verification link without passing it to the model. The agent must already have
+both Gmail search and read tools, and the connector must belong to the same
+primary-tenant owner. Extraction checks recipient, time, sender domain and the
+Gmail authentication result. Other mailboxes, delegated sender domains, SMS and
+push approvals need adapters; no account authority implies mailbox authority.
+TOTP generation uses an origin-bound enrolled authenticator resource.
+
+For a card verification code or other supported transient numeric challenge,
+the operation pauses before credential entry. The dashboard accepts the code
+and resumes the stored execution plan. Codes are never sent through chat or
+written into the operation journal. The broker does not save browser storage
+after a payment or transient-code entry: merchant scripts may have copied a
+code into cookies or local storage. Account/login sessions can be saved as
+encrypted references and restored in a later browser process.
+
+## Agent workflow
+
+Use the existing `browser` tool with `action="autonomy"` and `request`:
+
+| `request.kind` | Purpose |
+| --- | --- |
+| `status` | Discover setup state, resource references, grants and recent operations. |
+| `procedures` | Find recent successful plan templates by `origin` and `action`, scoped to the current owner and agent. |
+| `prepare` | Reserve a proposal under `grant_id`; returns a durable operation ID. |
+| `workflow_open` | Open one protected persistent page for `{operation_id,url,session_resource_id?}`; returns workflow ID, revision and inspection. |
+| `workflow_inspect` | Inspect the same page using `{workflow_id}` without reloading it. |
+| `workflow_execute` | Execute `{workflow_id,command_id,revision,plan,advance?}` on that page. Reuse the exact command ID and payload after a transport failure. |
+| `workflow_status` | Read durable workflow and operation state with `{workflow_id}`. |
+| `workflow_close` | Close `{workflow_id}`; unfinished effects retain their budget reservation and require reconciliation. |
+| `inspect` | Discover field selectors, labels, option labels, billing terms and authorized frame fields, never input values. |
+| `generate_credential` | Create an origin-bound username/password reference using an enrolled profile. |
+| `email_verification` | Obtain a short-lived code/link reference from the authorized owner's Gmail. |
+| `execute` | Fill resource references, upload documents, check required boxes and submit. |
+| `operation` | Read the durable state and confirmation evidence. |
+| `reconcile` | Check a receipt-specific confirmation without filling or clicking. |
+| `cancel` | Cancel a reserved operation or one waiting before submission. |
+
+A proposal names `origin`, `action` (`account`, `login`, `application`, `purchase`,
+`subscription`), `purpose`, `idempotency_key`, `amount_minor`, `currency`,
+`recurring_minor`, `annual_commitment_minor` and optional `recurrence`. Money is integer minor units.
+Recurring charges require `recurrence` with `interval_months` (1, 2, 3, 6 or 12),
+`next_charge_on` (ISO date), and optional `ends_on`. New first renewals must be
+within a year. Month-end billing keeps its original day, clamped to shorter months.
+A subscription requires its annual commitment. Per-purchase, monthly total,
+per-recurring-charge and per-membership annual caps are distinct. Monthly
+accounting includes committed purchases and unresolved reservations across the
+person's grants plus recorded renewals due in that UTC calendar month. Future
+commitments are projected across 25 calendar months, covering a new subscription's
+first full billing cycle; free trials cannot overbook a later month. Completed
+memberships remain commitments after the initial purchase rolls out of the current
+month. Missing legacy renewal dates block new spending until resolved. Status
+returns projections separately from actual settlement; this is not an issuer-side
+card limit.
+
+An execution plan identifies the URL, field selectors with resource IDs and
+field names, checkboxes and submit selector. Supply both `success_selector` and
+`success_text` for a known confirmation, or omit both to discover a new affirmative
+English completion message for the requested action. Examples include “Your account
+has been created” and “Application submitted successfully”; welcome pages, pending
+states and failure messages are insufficient. Discovery checks the main document
+and supports a bounded set of completion phrases, not arbitrary language or page
+layouts. Unsupported or ambiguous results remain reconciling. Verification links
+and reconciliation still require a specific confirmation selector and text.
+
+An already-visible confirmation prevents submission. If a confirmation appears
+during filling, the broker stops before clicking and preserves the operation for
+reconciliation. Discovered confirmations return a fixed rule name and a text hash;
+page text is not returned to the model. Confirmation means the merchant's observed
+message, not settlement or admission.
+
+Persistent workflows use a separate non-dumpable broker service with a private
+0700 runtime directory, 0600 socket, exclusive process lease, and signed
+owner/tenant/agent-bound service tokens. Browser processes receive an environment
+allowlist without service credentials or tracing flags. The RPC has no arbitrary
+JavaScript, screenshot, HTML or download operation. Entered values and restored
+cookie/storage values are masked from inspection metadata before results are
+returned or journaled, including common URL/HTML/base64 representations. Once
+protected values are present, inspection returns structural CSS selectors, so
+secret-bearing element IDs are not exposed or turned into unusable masked
+selectors. Masking happens before label shortening. Confirmation digests from
+explicit selectors normally hash masked text; after transient-code entry they
+hash only the previously declared matched phrase, so even a transformed code
+cannot be retained in an arbitrary confirmation-text digest. Browser storage
+is not saved after transient code or TOTP entry. This does not constitute verification
+against every possible site-specific encoding; adversarial leakage testing
+remains part of deployment validation.
+
+Each workflow owns one page and one immutable proposal. `advance=true` permits
+zero-money account/login/application steps only: at least one previous field must
+disappear and a new field appear, or the broker must observe a final confirmation.
+A confirmed intermediate step clears the old plan and increments the revision.
+Invalid native constraints can be corrected in place. For zero-money account,
+login and application forms, a `server_validation_required` result permits
+correcting bindings and retrying at its new revision. Recovery requires exactly
+one POST to the submitted form's declared same-origin action, an HTTP 422
+response, and a newly invalid visible bound field with an associated visible
+error inside that form. It supports AJAX and full-document submissions. Only
+fixed error categories and existing selectors are returned; error text, response
+bodies and entered values stay private. Wrong endpoints, multiple requests,
+stale/hidden errors, unknown outcomes, payments and transient-code challenges
+cannot authorize a retry through this path. Commands are journaled before
+execution; duplicates return the original result and changed payloads are refused.
+Secure code entry resumes the same page without retaining the code in the journal.
+Up to 16 contexts are retained, for 15 idle minutes and at most one hour total.
+Completion, uncertain outcomes, expiry and shutdown close the browser. Restarting
+the browser service loses page state and requires reconciliation; a controller
+restart does not. Closing a workflow does not assert cancellation or release money.
+
+Before updating the broker service, send its main process `SIGUSR1` to stop
+admitting new workflows. Existing pages remain inspectable and executable.
+The private `/ready` response reports `accepting`, `active_workflows` and
+`opening_workflow`; restart only when admission is off and both counts/activity
+are zero. `SIGUSR2` resumes admission if the rollout is deferred. These controls
+are process-management signals, not agent tools. Engine and bridge updates
+need not restart this service.
+
+Persistent workflows currently use local Chromium. Managed-browser CAPTCHA
+sessions, authentication redirects, verification-link navigation, cumulative-only
+wizard transitions, field rejection without the explicit request/error evidence above,
+and multi-operation checkout workflows remain separate work.
+The one-shot browser path remains available for its supported tasks.
+
+Successful execution plans persist in the operation journal. `procedures` returns
+up to five distinct templates from confirmed operations in the last 90 days.
+One-time verification links and expiring or revoked resource bindings are excluded;
+saved session references, URL query strings and fragments are removed. Old
+receipt-specific success text is replaced with discovery rather than asserted
+about a new submission. Templates retain active personal-resource references, not
+their values. Inspect the current page, choose the correct resources and fresh
+session for the new task, then prepare a new proposal with a new idempotency key
+and current grant. Existing budgets, price checks, validation and revocation checks
+still apply. A template does not resume or repeat its source operation.
+Payment plans also identify visible current, recurring and annual totals as
+applicable. Recurring plans also require `recurrence_interval_selector` and
+`next_charge_selector`, plus `recurrence_end_selector` when an end date is declared.
+The broker compares those visible terms to the proposal before filling and again
+before submitting. Date selectors must identify an ISO date or an unambiguous
+English month-name date; interval selectors identify monthly, quarterly, yearly
+or an explicit “every N months” label. Even a zero-charge checkout must show a
+matching zero total.
+For terms inside a direct child frame, set `terms_frame_selector` and
+`terms_frame_origin`; all price and renewal selectors then use that frame.
+Inspection returns these bindings with each frame field or term. Same-origin
+frames inherit website authority; foreign frames require a separately granted
+origin. Credentials must match the actual frame origin. Nested and originless
+frames are reported as unsupported. Protected frames cannot navigate to another
+origin during filling or submission. Inspection omits page HTML and general body
+text; returned terms are restricted to recognized prices, intervals and dates.
+The broker validates origin and totals again immediately before clicking.
+Before entering protected values, the broker checks native form constraints in
+a separate offline browser context. Required fields, email formats, patterns,
+lengths, numeric bounds and unfillable controls return `validation_required`
+with field selectors and fixed constraint flags; values and browser error messages
+are omitted. The operation remains reserved and its plan is not bound yet, so the
+agent can correct field bindings or required checkboxes and execute the same
+operation. These checks do not run merchant scripts and do not replace server-side
+validation. Once actual protected filling starts, failures still require
+reconciliation rather than a blind retry.
+
+Multi-step applications use a separate operation for each meaningful step,
+with the saved account session carried forward. This currently works only when
+the website persists progress outside the page: each broker call closes its
+browser, and cookie/local-storage restoration does not preserve client-only
+wizard state. Persistent workflow sessions remain an implementation gap.
+File upload accepts an enrolled
+document reference; ordinary nonsecret workspace uploads also work through
+`browser(action="act", request={kind:"upload", selector, path})`.
+
+The journal is authoritative:
+
+- `reserved`: no protected fill has begun. Native validation failures can be
+  corrected within the same operation before its plan is bound. Other bad plans
+  can be cancelled and prepared again with a new idempotency key.
+- `awaiting_input`: the bound plan is waiting for a code before submission.
+- `submitting`: atomically claimed before the first protected fill; scripts
+  can initiate requests during input, so even a later failure is uncertain.
+- `reconciling`: an external outcome is unknown. Do not repeat the submission.
+- `completed`: the expected merchant confirmation was observed and hashed.
+- `failed` / `cancelled`: terminal outcomes; only valid journal transitions apply.
+
+Identical preparation requests return the same operation. A different proposal
+with the same idempotency key is refused. Concurrent reservations cannot exceed
+the monthly cap. Grant revocation, expiry and execution/payment settings are
+rechecked before submission. Disabling execution does not prevent read-only
+reconciliation of a pending result.
+
+**Completion means observed website confirmation, not bank settlement or club
+admission.** Reconciliation needs a receipt-specific URL/selector/text tied to
+the operation; a generic welcome page is insufficient evidence. No issuer
+webhook, refund/dispute automation, settlement feed or virtual-card issuance is
+provided by this browser adapter. Recurring commitments are recorded and capped
+at enrollment; future merchant-initiated renewals are not intercepted by it.
+
+## Storage and operation
+
+`vault_resources` holds versioned AES-GCM envelopes authenticated to the tenant,
+person, record and key version. These resources are excluded from generic
+service-secret exports. `autonomy_grants`, `autonomy_operations`,
+`autonomy_events` and `autonomy_settings` provide authority, reservations,
+state transitions and owner-scoped status. Tenant RLS matches the platform's
+backstop; the DAL also requires tenant and person on every lookup.
+
+Resource descriptors expose available field names, enrollment source and timestamp
+without decrypting values during ordinary status reads. The dashboard shows saved
+fields and provenance. For preexisting resources, the owner can choose **Check saved
+information** (`POST /api/autonomy/resources/refresh-descriptions`, empty JSON body)
+to derive metadata inside the vault boundary. This retains the original enrollment
+timestamp and marks unknown historical provenance explicitly; it does not invent
+missing personal information.
+
+`genus vault rotate-resources` reencrypts personal resources transactionally
+under a new resource key wrapped by the existing vault master key. Old versions
+remain readable for in-flight workers. This does not rotate the master key.
+Back up the database and master key together; deleting old key versions can
+break recovery. Event records contain event names and references, never values;
+this is an application append-only journal, not an external tamper-proof ledger.
+
+The feature does not expose screenshots, page HTML, arbitrary JavaScript,
+console logs or recordings from credential-bearing browser contexts. Recognized
+card numbers and labeled verification codes pasted into text are redacted
+before the normal runner/Telegram transcript path. This is a backstop, not a
+way to enroll payment data. Arbitrary card photos or attachments are not
+classified automatically; use the secure enrollment page.
+
+The broker blocks nonpublic request destinations, including redirects, but
+application DNS checks do not close DNS rebinding. Deployed brokers also need
+network egress enforcement. Agent shell execution must remain in its configured
+sandbox; a privileged host process can bypass an application-level vault.
+Disable execution or revoke a grant to stop new submissions; preserve uncertain
+operations and reconcile them rather than deleting their reservations.
+
+## Validation
+
+Use a disposable PostgreSQL database whose name ends in `_test`:
+
+```bash
+export AUTONOMY_TEST_DSN='host=127.0.0.1 port=5432 user=test dbname=autonomy_test'
+export ROBOTHOR_WORKSPACE="$PWD"
+pytest robothor/autonomy/tests/ robothor/engine/tests/test_browser_resources.py
+```
+
+The suite covers real database transactions, concurrent budgets, owner/origin
+isolation, key rotation, safe HTTP validation, code extraction, redirects,
+revocation, process errors, and controlled Chromium account/checkout flows.
+The subprocess acceptance test requires a sandbox-capable Chromium executable.
+Managed browser tests mock the provider. No live account creation, real payment,
+production migration or service deployment is performed by this test suite.
+
+Host browser paths are declared under `settings.autonomy` in the normal settings
+registry. `chromium_executable` and `socket` accept the corresponding documented
+environment overrides and appear in the generated configuration reference.
+Browser tests carry the `e2e` marker where they do not require the database fixture;
+the required `test-autonomy` CI lane installs Chromium and runs the entire autonomy
+suite, including these tests. Generic Python matrix jobs do not install browsers.
