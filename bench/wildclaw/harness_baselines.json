@@ -2,7 +2,9 @@
   "_meta": {
     "source": "internlm/WildClawBench README \u2014 'Harness comparison', four scaffolds on the same 60 tasks and graders",
     "note": "Aggregate 60-task scores in percent. Published by the benchmark authors, not measured here. Genus is absent because the authors did not run it; placing Genus in this table requires running our harness on one of these models, which is why the model column matters more than it looks.",
-    "why_this_file": "The project's competitive framing was OpenClaw-vs-Genus. These numbers say OpenClaw is the best harness on ZERO of four models and Hermes on three. Front-runner means beating Hermes, which is a higher bar than the one that has been measured against."
+    "why_this_file": "The project's competitive framing was OpenClaw-vs-Genus. These numbers say OpenClaw is the best harness on ZERO of four models and Hermes on three. Front-runner means beating Hermes, which is a higher bar than the one that has been measured against.",
+    "per_task_fidelity": "AGGREGATE ONLY, and this was checked rather than assumed. The published trajectories dataset (internlm/WildClawBench-Trajectories) holds ten per-MODEL archives plus 600 session files, all of them OpenClaw-harness runs \u2014 zero files mention any other harness. So per-task scores exist for OpenClaw (that is where baselines.json came from) and for nobody else. The Hermes and Codex numbers here are the authors' 60-task means from the repository README and cannot be broken down further. A per-task Hermes comparison is not blocked on this instance's provider key; it is not published. Do not go looking again.",
+    "checked": "2026-08-27"
   },
   "harness_scores": {
     "GPT-5.4": {
