@@ -61,11 +61,18 @@ def check_context(ctx: ToolContext) -> None:
         raise ValueError("goal pursuit is unavailable in benchmarks")
     if ctx.agent_id != "main":
         raise ValueError("the main agent coordinates operator goals")
-    if ctx.identity is not None and ctx.user_role not in {"owner", "admin"}:
-        raise ValueError("operator role required for goals")
     current = binding.get()
     if current and current.run_id != ctx.run_id:
         raise ValueError("a delegated run cannot control its parent's goal")
+    # An operator role is required positively. The check used to read "unless
+    # identity is None", which skipped it entirely for cron, heartbeat and
+    # scheduled runs — the runs that read inbound email, and the ones an
+    # injected instruction reaches. The only unattended caller allowed here is
+    # the goal executor itself, which carries this goal's authorized binding
+    # (already matched to ctx.run_id above). Autonomous goal creation, if it is
+    # ever wanted, is a per-tenant setting somebody turns on, not this hole.
+    if current is None and ctx.user_role not in {"owner", "admin"}:
+        raise ValueError("operator role required for goals")
 
 
 async def create_goal(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:

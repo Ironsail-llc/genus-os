@@ -27,6 +27,26 @@ async def test_unbound_implicit_goal_and_workers_are_refused():
     assert "benchmarks" in result["error"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", sorted(TOOL_NAMES))
+@pytest.mark.parametrize(
+    "ctx",
+    [
+        # `identity is None` is a cron, heartbeat or scheduled run — the runs
+        # that read inbound email. The check used to be skipped entirely for
+        # them, and a probe created a goal titled "injected goal from an
+        # inbound email" and cancelled another goal from such a run.
+        ToolContext(agent_id="main"),
+        ToolContext(agent_id="main", user_role="", identity=SimpleNamespace()),
+        ToolContext(agent_id="main", user_role="member", identity=SimpleNamespace()),
+    ],
+    ids=["unattended", "identified-no-role", "identified-member"],
+)
+async def test_every_chat_tool_requires_an_operator_role_positively(name, ctx):
+    result = await HANDLERS[name]({}, ctx)
+    assert "operator role" in result["error"], result
+
+
 def test_recovery_refuses_external_writes_and_stopped_lease_refuses_all(db):  # noqa: F811
     g = store.create(
         db, CreateGoal(objective="Deliver report", success_criteria=["Delivered"]), "operator"

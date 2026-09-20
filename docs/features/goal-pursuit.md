@@ -19,6 +19,14 @@ Create goals only on explicit operator requests or as execution children of an
 already authorized long-term goal. Tool permissions and action approvals remain
 in force.
 
+All four tools require a verified owner or admin on the run. An unattended run —
+cron, heartbeat, scheduled: the runs that read inbound email — carries no
+identity and is refused, so content the agent reads cannot create, steer or
+cancel a goal. The single exception is the goal executor itself, which is
+already running an authorized goal and is recognised by that goal's lease
+rather than by a role. Autonomous goal creation is not available; if it is ever
+wanted it will be a per-tenant setting an operator turns on.
+
 CLI examples:
 
 ```sh
