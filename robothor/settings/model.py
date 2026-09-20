@@ -2989,6 +2989,17 @@ class OpsSettings(SettingsGroup):
 class AutonomySettings(SettingsGroup):
     """Host paths and secure enrollment for personal automation."""
 
+    enabled: bool = declare(
+        False,
+        "ROBOTHOR_AUTONOMY_ENABLED",
+        "Whether this instance offers personal automation at all: delegated accounts, "
+        "applications and purchases under standing grants. Off by default, and off means "
+        "absent — no dashboard page, no autonomy paragraph on any agent's system prompt, "
+        "no autonomy wording in the browser tool schema, and no database lookup to decide. "
+        "Turning it on only makes the feature reachable; each owner still enrols, switches "
+        "execution on and writes a grant naming the agents it covers.",
+    )
+
     dashboard_origin: str = declare(
         "",
         "ROBOTHOR_AUTONOMY_DASHBOARD_ORIGIN",

@@ -183,6 +183,20 @@ EXTERNAL_DATA_TOOLS: frozenset[str] = frozenset(
     }
 )
 
+#: Appended to the system prompt ONLY on a run where the owner has delegated
+#: execution enabled and a live standing grant names this agent. Parked at
+#: module scope so the wording is one grep away and its condition is visible
+#: next to it, not buried mid-method where it acquired an audience of every
+#: browser-capable agent on every instance.
+AUTONOMY_BROWSER_PROMPT = (
+    "\n\nFor account creation, applications and purchases, inspect browser(action='autonomy', "
+    "request={'kind':'status'}). An active standing grant is prior explicit authorization "
+    "for its covered actions; do not ask for it again or impose a blanket stop before submission. "
+    "Use the reference-only broker for credentials and payments. Complete and verify authorized "
+    "work; preserve uncertain submissions for reconciliation. Missing data, unsupported verification "
+    "and absent authority are distinct conditions, not reasons to claim all forms are impossible."
+)
+
 
 class AgentSession:
     """Per-run state manager for an agent execution."""
@@ -319,6 +333,7 @@ class AgentSession:
         delivery_mode: str | None = None,
         conversation_history: list[dict[str, Any]] | None = None,
         engine_context: str | None = None,
+        autonomy_active: bool = False,
     ) -> None:
         """Initialize the session with system prompt and user message.
 
@@ -343,19 +358,23 @@ class AgentSession:
         metadata keys (origin, surfaced_from_run_id, telegram_message_id,
         replies_to) are dropped before the envelope reaches the LLM —
         only role + content go on the wire.
+
+        ``autonomy_active`` is the runner's answer to one question, asked once
+        per run: is delegated execution enabled for this run's owner, and does
+        a live standing grant name this agent? Only then does the autonomy
+        paragraph go on the prompt. It used to be attached to anything holding
+        the ``browser`` tool, which put "a standing grant is prior explicit
+        authorization … do not ask for it again or impose a blanket stop
+        before submission" in front of every browser-capable agent on every
+        instance — including the ones with no grants to be prior authorization
+        for. A sentence that relaxes a default posture has to be earned by the
+        configuration it describes.
         """
         from robothor.autonomy.intake import protect_payment_text
 
         user_message = protect_payment_text(user_message)
-        if "browser" in tools_provided:
-            system_prompt += (
-                "\n\nFor account creation, applications and purchases, inspect browser(action='autonomy', "
-                "request={'kind':'status'}). An active standing grant is prior explicit authorization "
-                "for its covered actions; do not ask for it again or impose a blanket stop before submission. "
-                "Use the reference-only broker for credentials and payments. Complete and verify authorized "
-                "work; preserve uncertain submissions for reconciliation. Missing data, unsupported verification "
-                "and absent authority are distinct conditions, not reasons to claim all forms are impossible."
-            )
+        if autonomy_active and "browser" in tools_provided:
+            system_prompt += AUTONOMY_BROWSER_PROMPT
         self.run.status = RunStatus.RUNNING
         self.run.started_at = datetime.now(UTC)
         # The run has begun — tell anyone watching for it now, not when the

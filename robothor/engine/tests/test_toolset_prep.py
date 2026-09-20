@@ -25,9 +25,11 @@ from robothor.engine.toolset_prep import prepare_toolset
 class FakeRegistry:
     def __init__(self):
         self.registered = []
+        self.autonomy = None
         self.register_adapter_tools = AsyncMock()
 
-    def build_for_agent(self, config):
+    def build_for_agent(self, config, *, autonomy=False):
+        self.autonomy = autonomy
         return [{"name": "full"}]
 
     def get_tool_names(self, config):
@@ -52,6 +54,8 @@ async def _prep(**kw):
         system_prompt=kw.pop("system_prompt", "IDENTITY"),
         readonly_mode=kw.pop("readonly_mode", False),
         deep_plan=kw.pop("deep_plan", False),
+        tenant_id=kw.pop("tenant_id", None),
+        actor_id=kw.pop("actor_id", None),
     )
 
 
@@ -162,3 +166,60 @@ async def test_a_failing_adapter_registration_is_also_survivable():
         result = await _prep(registry=registry)
 
     assert result.tool_names == ["exec", "read_file"]
+
+
+# ── Autonomy: a feature nobody enabled costs nobody anything ──────────
+
+
+async def test_a_run_with_no_identified_owner_never_asks_for_autonomy():
+    """No owner means no grant, and it must be settled without a query.
+
+    This is the common case on every instance — cron, events, sub-agents —
+    and the browser schema and the prompt paragraph both used to widen anyway.
+    """
+    registry = FakeRegistry()
+    with patch("robothor.engine.adapters.get_adapters_for_agent", return_value=[]):
+        result = await _prep(registry=registry)
+
+    assert registry.autonomy is False
+    assert result.autonomy_active is False
+
+
+async def test_a_live_grant_reaches_both_the_schema_and_the_prompt():
+    registry = FakeRegistry()
+    with (
+        patch("robothor.engine.adapters.get_adapters_for_agent", return_value=[]),
+        patch("robothor.autonomy.availability.autonomy_active", return_value=True),
+    ):
+        result = await _prep(registry=registry, tenant_id="t", actor_id="u")
+
+    assert registry.autonomy is True
+    assert result.autonomy_active is True
+
+
+async def test_an_autonomy_lookup_that_explodes_is_a_no_not_a_failed_run():
+    registry = FakeRegistry()
+    with (
+        patch("robothor.engine.adapters.get_adapters_for_agent", return_value=[]),
+        patch(
+            "robothor.autonomy.availability.autonomy_active",
+            side_effect=RuntimeError("database is down"),
+        ),
+    ):
+        result = await _prep(registry=registry, tenant_id="t", actor_id="u")
+
+    assert result.autonomy_active is False
+    assert result.tool_schemas == [{"name": "full"}]
+
+
+async def test_plan_mode_never_pays_for_autonomy_wording():
+    """A read-only run cannot submit a form, so the wording would describe an
+    action the run is forbidden from taking."""
+    with (
+        patch("robothor.engine.adapters.get_adapters_for_agent", return_value=[]),
+        patch("robothor.autonomy.availability.autonomy_active", return_value=True) as probe,
+    ):
+        result = await _prep(readonly_mode=True, tenant_id="t", actor_id="u")
+
+    probe.assert_not_called()
+    assert result.autonomy_active is False

@@ -929,6 +929,8 @@ class AgentRunner(
             system_prompt=system_prompt,
             readonly_mode=readonly_mode,
             deep_plan=deep_plan,
+            tenant_id=resolved_tenant,
+            actor_id=effective_user_id,
         )
         tool_schemas = _prepared.tool_schemas
         tool_names = _prepared.tool_names
@@ -969,6 +971,7 @@ class AgentRunner(
             delivery_mode=agent_config.delivery_mode.value,
             conversation_history=conversation_history,
             engine_context=engine_preamble or None,
+            autonomy_active=_prepared.autonomy_active,
         )
 
         watchdog.touch("session_started")

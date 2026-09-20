@@ -8,6 +8,16 @@ existing native vault; no external password manager is required.
 
 ## Setup
 
+0. Offer the feature on this instance: set `ROBOTHOR_AUTONOMY_ENABLED=true` and
+   restart the engine, bridge and app. It is **off by default**, and off means
+   absent rather than merely inert — `/account/autonomy` answers 404, the link
+   to it disappears from Account security, no agent's system prompt carries the
+   standing-grant paragraph, and the `browser` tool schema carries none of the
+   delegated-execution wording (about 1,100 schema tokens per turn). Turning it
+   on makes the feature reachable and authorizes nobody: each person still
+   enrols, switches execution on, and writes a grant naming the agents it
+   covers. The engine attaches the prompt paragraph and the schema wording to a
+   run only when this flag is on **and** a live grant names that run's agent.
 1. Apply packaged migrations `127_autonomous_execution.sql`,
    `128_autonomy_resource_descriptors.sql`, and `129_autonomy_workflows.sql` through the normal
    upgrade process. Preserve the existing vault master key and encrypted backups.

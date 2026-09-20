@@ -145,8 +145,43 @@ def main() -> None:
         raise SystemExit("workflow_process_isolation_unavailable")
     try:
         asyncio.run(run(Path(get_settings().autonomy.socket)))
-    except Exception:
+    except Exception as exc:
+        _report_startup_failure(exc)
         raise SystemExit("workflow_service_failed") from None
+
+
+def _report_startup_failure(exc: BaseException) -> None:
+    """Say WHAT went wrong, once, on the way out.
+
+    Under ``Restart=always`` / ``RestartSec=5`` a persistent misconfiguration
+    — a runtime directory that is not 0700, a socket already bound, no
+    sandbox-capable Chromium — used to be an endless loop emitting the single
+    word ``workflow_service_failed``. An operator cannot act on that, and the
+    unit pages nobody, so the loop is invisible as well as useless.
+
+    Two deliberate details:
+
+    * ``logging.disable(CRITICAL)`` above is not lifted globally. This process
+      drives a real browser over the owner's accounts and must never log page
+      content; the one message that has to escape gets a local, temporary
+      lift around this call and nothing else.
+    * Only ``type(exc).__name__`` and ``str(exc)`` go out — never a traceback
+      with local variables in it, which on this process could hold a resource
+      value or a page fragment. An exception MESSAGE here is a path, a mode,
+      an errno; that is what an operator needs and all they get.
+    """
+    previous = logging.root.manager.disable
+    try:
+        logging.disable(logging.NOTSET)
+        logging.getLogger(__name__).error(
+            "workflow_service_failed: %s: %s", type(exc).__name__, exc
+        )
+    except Exception:  # noqa: BLE001, S110 - the exit matters more than the message
+        # Nothing to log to: logging is what just failed. The SystemExit
+        # below still carries the name, and the unit still enters `failed`.
+        pass
+    finally:
+        logging.disable(previous)
 
 
 if __name__ == "__main__":
