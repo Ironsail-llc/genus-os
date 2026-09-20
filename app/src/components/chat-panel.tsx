@@ -23,8 +23,7 @@ import {
 } from "@/lib/chat/agent-session";
 import { Send, Square, Check, X, ClipboardList, MessageSquareText, Brain } from "lucide-react";
 
-const PLAN_OUTCOME_UNKNOWN =
-  "I couldn’t confirm the outcome. Some actions may have finished; check their status before trying again.";
+import { OUTCOME_UNKNOWN, terminalOutcome } from "@/lib/chat/terminal-outcome";
 
 interface ChatMessage {
   id: string;
@@ -480,7 +479,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       });
 
       if (!res.ok || !res.body) {
-        let errorText = `Server error (${res.status}). Please try again.`;
+        let errorText = OUTCOME_UNKNOWN;
         try {
           const errBody = await res.json();
           if (errBody.error) errorText = errBody.error;
@@ -625,7 +624,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       });
 
       if (!res.ok || !res.body) {
-        let errorText = `Server error (${res.status}). Please try again.`;
+        let errorText = OUTCOME_UNKNOWN;
         try {
           const errBody = await res.json();
           if (errBody.error) errorText = errBody.error;
@@ -649,6 +648,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       let sseEventType = "";
       let sseData = "";
       let fullResponse = "";
+      let receivedTerminal = false;
       const collectedAgentData: Record<string, unknown> = {};
 
       const interceptor = new MarkerInterceptor();
@@ -717,7 +717,11 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                 });
               }
             }
-            fullResponse = parsed.text || fullResponse;
+            const terminal = terminalOutcome(parsed, fullResponse);
+            if (terminal !== undefined) {
+              receivedTerminal = true;
+              fullResponse = terminal;
+            }
           }
         } catch {
           // Invalid JSON, skip
@@ -776,6 +780,8 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       setCurrentIteration(0);
       setMaxIterations(0);
 
+      if (!receivedTerminal) fullResponse = OUTCOME_UNKNOWN;
+
       // Finalize the message
       const assistantMsg: ChatMessage = {
         id: `asst-${Date.now()}`,
@@ -790,7 +796,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       // triage+generate pipeline entirely, saving 5-11s of LLM + fetch time.
       const hasAgentData = Object.keys(collectedAgentData).length > 0;
       const isSubstantive = assistantMsg.content.length >= 200;
-      if (hasAgentData || isSubstantive) {
+      if (receivedTerminal && (hasAgentData || isSubstantive)) {
         const recentMessages = [
           { role: userMsg.role, content: userMsg.content },
           { role: assistantMsg.role, content: assistantMsg.content },
@@ -806,7 +812,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
         const errorMsg: ChatMessage = {
           id: `err-${Date.now()}`,
           role: "assistant",
-          content: `Connection error: ${(err as Error).message}. Please try again.`,
+          content: OUTCOME_UNKNOWN,
           timestamp: new Date(),
         };
         setMessages((prev) => [...prev, errorMsg]);
@@ -887,8 +893,11 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                   cost: parsed.cost_usd || 0,
                 };
               } else if (sseEventType === "done") {
-                receivedTerminal = true;
-                if (parsed.text) fullResponse = parsed.text;
+                const terminal = terminalOutcome(parsed, fullResponse);
+                if (terminal !== undefined) {
+                  receivedTerminal = true;
+                  fullResponse = terminal;
+                }
                 if (parsed.cost_usd && !costInfo) {
                   costInfo = {
                     time_s: parsed.execution_time_s || 0,
@@ -925,13 +934,16 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
         try {
           const parsed = JSON.parse(sseData);
           if (sseEventType === "done") {
-            receivedTerminal = true;
-            fullResponse = parsed.text || fullResponse;
+            const terminal = terminalOutcome(parsed, fullResponse);
+            if (terminal !== undefined) {
+              receivedTerminal = true;
+              fullResponse = terminal;
+            }
           }
         } catch { /* skip */ }
       }
 
-      if (!receivedTerminal) fullResponse = PLAN_OUTCOME_UNKNOWN;
+      if (!receivedTerminal) fullResponse = OUTCOME_UNKNOWN;
 
       const finalCost = costInfo as { time_s: number; cost: number } | null;
       if (finalCost) setDeepCost(finalCost);
@@ -957,7 +969,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
         setMessages((prev) => [...prev, {
           id: `err-${Date.now()}`,
           role: "assistant",
-          content: PLAN_OUTCOME_UNKNOWN,
+          content: OUTCOME_UNKNOWN,
           timestamp: new Date(),
         }]);
       }

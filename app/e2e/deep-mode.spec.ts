@@ -544,3 +544,32 @@ for (const deep of [false, true]) {
     });
   }
 }
+
+for (const outcome of ["eof", "transport", "aborted", "failed", "completed"]) {
+  test(`ordinary chat reports its terminal outcome after ${outcome}`, async ({ page }) => {
+    await setupMocks(page);
+    let sends = 0;
+    await page.route("**/api/chat/send", (route) => {
+      sends += 1;
+      if (outcome === "transport") return route.abort("connectionfailed");
+      const terminal = outcome === "aborted" ? { text: "", aborted: true }
+        : outcome === "failed" ? { text: "", status: "failed" }
+          : { text: "Verified result", status: "completed" };
+      return route.fulfill({
+        status: 200, contentType: "text/event-stream",
+        body: buildSSE([
+          { event: "delta", data: { text: "Everything is done." } },
+          ...(outcome === "eof" ? [] : [{ event: "done", data: terminal }]),
+        ]),
+      });
+    });
+    await page.goto(BASE_URL, { waitUntil: "networkidle" });
+    await page.getByTestId("chat-input").fill("Do the requested work");
+    await page.getByTestId("send-button").click();
+    const answer = page.getByTestId("message-assistant").last();
+    await expect(answer).toContainText(outcome === "completed" ? "Verified result" : "I couldn’t confirm the outcome.");
+    await expect(page.getByTestId("message-assistant").filter({ hasText: "Everything is done." })).toHaveCount(0);
+    await expect(page.getByTestId("chat-input")).toBeEnabled();
+    expect(sends).toBe(1);
+  });
+}

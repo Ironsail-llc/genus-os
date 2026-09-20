@@ -500,6 +500,31 @@
       "backend": "intercepted synthetic streams; isolated dead-port fallbacks",
       "automatic_retries": 0,
       "manual_acceptance": false
+    },
+    "ordinary_chat_terminal_outcomes": {
+      "initial_component_reproduction": {
+        "failed": 4,
+        "passed": 4
+      },
+      "focused_components": {
+        "passed": 31,
+        "seconds": 1.35
+      },
+      "all_chat_components": {
+        "files": 5,
+        "passed": 50,
+        "seconds": 1.4
+      },
+      "browser": {
+        "passed": 25,
+        "seconds": 28.8
+      },
+      "build": "passed",
+      "eslint": "passed",
+      "provider_calls": 0,
+      "business_effects": 0,
+      "manual_acceptance": false,
+      "manual_review": "Requested in normal chat; answer pending"
     }
   },
   "calendar": {

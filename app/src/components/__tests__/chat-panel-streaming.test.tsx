@@ -164,3 +164,39 @@ describe("ChatPanel streaming UX", () => {
     );
   });
 });
+
+describe("ordinary chat terminal outcomes", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each(["eof", "transport", "aborted", "failed", "completed"])(
+    "does not mistake partial text for completion after %s",
+    async (outcome) => {
+      let sends = 0;
+      global.fetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url === "/api/chat/send") {
+          sends += 1;
+          if (outcome === "transport") throw new TypeError("Failed to fetch");
+          const events = [{ event: "delta", data: { text: "Everything is done." } }];
+          if (outcome !== "eof") {
+            const terminal = outcome === "aborted"
+              ? { text: "", aborted: true }
+              : outcome === "failed"
+                ? { text: "", status: "failed" }
+                : { text: "Verified result", status: "completed" };
+            return { ok: true, body: makeSSEStream([...events, { event: "done", data: terminal }]) };
+          }
+          return { ok: true, body: makeSSEStream(events) };
+        }
+        if (url === "/api/chat/history") return { ok: true, json: async () => ({ messages: [] }) };
+        if (url === "/api/chat/plan/status") return { ok: true, json: async () => ({ active: false }) };
+        return { ok: false, status: 404 };
+      });
+      render(<ChatPanel />);
+      await typeAndSend(screen.getByTestId("chat-input") as HTMLTextAreaElement, "Do the work");
+      const expected = outcome === "completed" ? "Verified result" : "I couldn’t confirm the outcome.";
+      await waitFor(() => expect(screen.getByTestId("message-assistant").textContent).toContain(expected));
+      expect(screen.queryByText("Everything is done.")).toBeNull();
+      expect(sends).toBe(1);
+    },
+  );
+});
