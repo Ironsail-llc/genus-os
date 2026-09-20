@@ -126,6 +126,30 @@ def seed_task(dsn, tenant, **columns):
     return task_id
 
 
+def test_a_cursor_that_cannot_answer_is_not_remembered():
+    """The probe's answer is cached for the whole process, so the first caller
+    decides for every later one. A test double whose ``fetchone`` returns a
+    mock or ``None`` is not an answer: cached, it silently told the rest of the
+    process that migration 126 was absent, and eight goal tests went red behind
+    a passing mock in an unrelated file.
+    """
+    from unittest.mock import MagicMock
+
+    compat.reset_probe()
+    try:
+        for answer in (None, MagicMock(), {"present": MagicMock()}, ("not a bool",)):
+            cursor = MagicMock()
+            cursor.fetchone.return_value = answer
+            # Unknown keeps the predicate — the behaviour from before the probe.
+            assert compat.pursuit_installed(cursor) is True
+        # Nothing was remembered, so a cursor that CAN answer is still believed.
+        honest = MagicMock()
+        honest.fetchone.return_value = {"present": False}
+        assert compat.pursuit_installed(honest) is False
+    finally:
+        compat.reset_probe()
+
+
 def test_the_probe_reports_the_predicate_missing(pre_126):
     with psycopg2.connect(pre_126) as conn, conn.cursor() as cur:
         assert compat.pursuit_installed(cur) is False

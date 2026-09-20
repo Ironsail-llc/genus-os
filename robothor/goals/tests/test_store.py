@@ -13,7 +13,7 @@ from uuid import uuid4
 import psycopg2
 import pytest
 
-from robothor.goals import store
+from robothor.goals import compat, store
 from robothor.goals.model import DEFAULT_TOKEN_BUDGET, CreateGoal, GoalUpdate
 
 
@@ -85,6 +85,10 @@ def db(private_database, monkeypatch):
             conn.close()
 
     monkeypatch.setattr(store, "get_connection", connection)
+    # The migration probe is cached per process and these tests run alongside
+    # thousands of others that hold fake cursors. Start each one from an
+    # unprobed state so this suite's result never depends on file order.
+    compat.reset_probe()
     tenant = register_tenant(str(uuid4()))
     store.set_enabled(tenant, True, "operator:test")
     return tenant

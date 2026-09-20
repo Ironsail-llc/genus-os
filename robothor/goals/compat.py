@@ -37,13 +37,29 @@ def pursuit_installed(cur: Any) -> bool:
 
     ``cur`` is the caller's open cursor: the probe is a plain ``SELECT`` on a
     text literal, so it can neither fail nor disturb the caller's transaction.
+
+    The answer is remembered for the whole process, which means the FIRST
+    caller decides for every later one — so only a real ``True``/``False`` off
+    a real cursor is allowed to be remembered. A test double's ``fetchone``
+    returning a mock or ``None`` is not an answer; cached, it told the rest of
+    the process that 126 was absent and took eight goal tests down behind a
+    passing mock in an unrelated file. Anything that is not a bool leaves the
+    cache untouched and keeps the predicate, which is the behaviour from
+    before this probe existed.
     """
     global _installed
-    if _installed is None:
-        cur.execute(_PROBE)
-        row = cur.fetchone()
+    if _installed is not None:
+        return _installed
+    cur.execute(_PROBE)
+    row = cur.fetchone()
+    try:
         # The caller's cursor may or may not use a dict factory.
-        _installed = bool(row and (row["present"] if isinstance(row, dict) else row[0]))
+        present = row["present"] if isinstance(row, dict) else row[0]
+    except (TypeError, KeyError, IndexError):
+        return True
+    if not isinstance(present, bool):
+        return True
+    _installed = present
     return _installed
 
 
