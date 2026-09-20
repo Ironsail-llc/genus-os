@@ -180,7 +180,7 @@ The agent execution layer: bind address, concurrency, pacing, sandbox.
 | `ROBOTHOR_ALLOW_EMPTY_FLEET` | bool | `true` | `robothor-engine` | no | legacy | Let the engine start with no agent manifests at all. True suits a fresh install; false makes an emptied manifest directory fatal. |
 | `ROBOTHOR_AUTODREAM_UNLOAD_BELOW_GB` | float | `24.0` | `robothor-engine` | no | legacy | Free VRAM (GiB) below which the autodream pass unloads local models rather than competing with live agent work. |
 | `ROBOTHOR_BUDDY_GRADER_DRYRUN` | bool | `false` | `robothor-engine` | no | legacy | Run the verification grader without writing its verdicts, for checking a grading change against live runs. |
-| `ROBOTHOR_CALENDAR_OPERATIONS_ENABLED` | bool | `false` | no | no | legacy | Enable durable native attendee updates after migration 126 and test-calendar canaries. |
+| `ROBOTHOR_CALENDAR_OPERATIONS_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Enable durable native attendee updates after migrations 126/127 and test-calendar canaries. |
 | `ROBOTHOR_DAEMON_START_TS` | str | _(empty)_ | `robothor-engine` | no | legacy | ISO timestamp the daemon sets on itself at boot and child processes read to report uptime. Set by the engine, not by an operator. |
 | `ROBOTHOR_DEFAULT_CHAT_AGENT` | str | `main` | `robothor-engine` | no | legacy | Agent an inbound chat is routed to when nothing names one. |
 | `ROBOTHOR_ENGINE_HOST` | str | `127.0.0.1` | `robothor-engine` | no | legacy | Address the engine's HTTP surface binds to. Loopback by default; the auth guard refuses the insecure dev mode on any other address. |

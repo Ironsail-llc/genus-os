@@ -2344,6 +2344,7 @@ def _calendar_add_attendees(
         sorted({e.strip().casefold() for e in emails}),
         expected_event=args.get("_expected_event"),
         cancelled=args.get("_cancel_event"),
+        prefetched=args.get("_prefetched_event"),
         screen=lambda *recipients: _dnc_refusal(
             name,
             *recipients,

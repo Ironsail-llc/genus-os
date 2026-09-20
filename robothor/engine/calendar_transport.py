@@ -20,6 +20,19 @@ class CalendarTransport:
     def __init__(self) -> None:
         self.client = httpx.Client(timeout=20.0, follow_redirects=False)
         self.token = ""
+        self._refreshed = False
+
+    def _send(self, method: str, url: str, body: dict[str, Any] | None, etag: str) -> Any:
+        headers = {"Authorization": f"Bearer {self.token}"}
+        if etag:
+            headers["If-Match"] = etag
+        return self.client.request(
+            method,
+            url,
+            headers=headers,
+            json=body,
+            params={"sendUpdates": "all"} if method == "PATCH" else None,
+        )
 
     def __enter__(self) -> CalendarTransport:
         return self
@@ -27,13 +40,16 @@ class CalendarTransport:
     def __exit__(self, *args: Any) -> None:
         self.client.close()
 
-    def _authenticate(self) -> None:
+    def _authenticate(self, *, use_static: bool = True) -> None:
         from robothor.engine.tools.handlers.gws import _resolve_gws_binary
         from robothor.settings import get_settings
 
         settings = get_settings().channels
         token = settings.google_workspace_token
-        if token:
+        if token and use_static:
+            # An access token, not a credential: it expires about an hour
+            # after it is minted, and `use_static=False` is how a rejected
+            # one gets replaced instead of killing the feature silently.
             self.token = token
             return
         credential_file = settings.google_workspace_credentials_file
@@ -84,21 +100,25 @@ class CalendarTransport:
                 self._authenticate()
             except Exception:
                 return {"error": "Calendar authentication failed", "status_code": 401}
-        headers = {"Authorization": f"Bearer {self.token}"}
-        if etag:
-            headers["If-Match"] = etag
         url = (
             "https://www.googleapis.com/calendar/v3/calendars/"
             f"{quote(calendar_id, safe='')}/events/{quote(event_id, safe='')}"
         )
         try:
-            response = self.client.request(
-                method,
-                url,
-                headers=headers,
-                json=body,
-                params={"sendUpdates": "all"} if method == "PATCH" else None,
-            )
+            response = self._send(method, url, body, etag)
+            if response.status_code == 401 and not self._refreshed:
+                # 401 means the request was NOT applied, so retrying it is
+                # safe even for a PATCH. Exactly one refresh per transport.
+                self._refreshed = True
+                self.token = ""
+                try:
+                    self._authenticate(use_static=False)
+                except Exception:
+                    return {
+                        "error": "Calendar credentials expired and could not be refreshed",
+                        "status_code": 401,
+                    }
+                response = self._send(method, url, body, etag)
             if not response.is_success:
                 return {
                     "error": f"Calendar HTTP {response.status_code}",

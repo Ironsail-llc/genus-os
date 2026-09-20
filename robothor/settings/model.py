@@ -800,8 +800,7 @@ class EngineSettings(SettingsGroup):
     calendar_operations_enabled: bool = declare(
         False,
         "ROBOTHOR_CALENDAR_OPERATIONS_ENABLED",
-        "Enable durable native attendee updates after migration 126 and test-calendar canaries.",
-        restart_required=False,
+        "Enable durable native attendee updates after migrations 126/127 and test-calendar canaries.",
     )
 
     host: str = declare(

@@ -995,7 +995,7 @@ class AgentRunner(
 
         from robothor.engine.routine_request import bind_confirmation
 
-        await bind_confirmation(session, message, conversation_history or [])
+        await bind_confirmation(session, message, conversation_history, agent_config, readonly_mode)
 
         watchdog.touch("session_started")
 
@@ -1119,7 +1119,7 @@ class AgentRunner(
                 # ── [PLANNER] Generate plan if enabled ──
                 plan_result = None
                 plan_context = ""
-                if not getattr(session, "routine_operation_id", None) and self._should_plan(
+                if not getattr(session, "routine_operation_bound", False) and self._should_plan(
                     agent_config, route
                 ):
                     plan_result = await self._run_planner(
@@ -1439,7 +1439,7 @@ class AgentRunner(
 
         # ── [VERIFIER] Self-validation step ──
         output_text = session.get_final_text()
-        if not getattr(session, "routine_operation_id", None) and self._should_verify(
+        if not getattr(session, "routine_operation_bound", False) and self._should_verify(
             agent_config, route, session
         ):
             output_text = await self._run_verification(
@@ -1722,14 +1722,9 @@ class AgentRunner(
         on_stream_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> None:
         """Core conversation loop: LLM call → tool execution → repeat."""
-        from robothor.engine.routine_request import TOOL, confirmed_response, finish_confirmation
+        from robothor.engine import routine_request
 
-        if getattr(session, "routine_operation_id", None):
-            # The permission set is still checked by run_tool_turn. Advertise
-            # only the already granted operation for this bound confirmation.
-            from robothor.engine.tools.schemas import get_engine_schemas
-
-            tool_schemas = [get_engine_schemas()[TOOL]]
+        _bound, tool_schemas = routine_request.bound_toolset(session, tool_schemas)
         # Track models that hit permanent errors (401/403/429) across iterations
         broken_models: set[str] = set()
 
@@ -1958,7 +1953,7 @@ class AgentRunner(
             # against the model that will actually be tried next (G2b), runs
             # every iteration, and never raises — losing compaction costs
             # money, taking the run down with it costs the work.
-            if not getattr(session, "routine_operation_id", None):
+            if not _bound:
                 await keep_context_within_budget(
                     session,
                     agent_config,
@@ -1998,7 +1993,7 @@ class AgentRunner(
             try:
                 async with _stop.call_window():
                     if getattr(session, "routine_operation_id", None):
-                        response = confirmed_response(session)
+                        response = routine_request.confirmed_response(session)
                     else:
                         (
                             response,
@@ -2109,8 +2104,8 @@ class AgentRunner(
             )
 
             # ── [ERROR RECOVERY] Attempt autonomous recovery before escalation ──
-            if getattr(session, "routine_operation_id", None):
-                await finish_confirmation(session, on_content)
+            if _bound:
+                await routine_request.finish_confirmation(session, on_content)
                 return
 
             # robothor/engine/error_actions.py. `applied` suppresses the error

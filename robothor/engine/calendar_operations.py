@@ -76,6 +76,46 @@ def load_operation(operation_id: str, tenant: str, user: str, agent: str) -> dic
         return dict(row) if row else None
 
 
+def _reconcile(
+    event: dict[str, Any],
+    stored: dict[str, Any],
+    pre_write_etag: str | None,
+    calendar_id: str,
+    kind: str,
+) -> dict[str, Any]:
+    """Settle an interrupted write from evidence, not from assumption.
+
+    An unchanged event version with none of the requested attendees on it is
+    proof the request never reached the calendar. Reporting that as an unknown
+    outcome armed a barrier that refused every later draft AND every direct
+    write for the meeting, with nothing able to clear it.
+    """
+    calendar = {"kind": kind, "id": calendar_id}
+    present = {a.get("email", "").casefold() for a in event.get("attendees", [])}
+    touched = sorted(present & set(stored["attendees"]))
+    unchanged = bool(pre_write_etag) and str(event.get("etag") or "") == str(pre_write_etag)
+    if "error" not in event and unchanged and not touched:
+        return {
+            "error": (
+                "The interrupted write never reached the calendar — the event is unchanged and "
+                "no invitation was requested. Prepare a new draft to try again."
+            ),
+            "event_id": stored["event_id"],
+            "attendees_present": [],
+            "invitations_requested": False,
+            "verification": "verified",
+            "calendar": calendar,
+        }
+    return {
+        "error": "Interrupted write reconciled without retry; notification outcome unknown",
+        "event_id": stored["event_id"],
+        "attendees_present": touched,
+        "invitations_requested": None,
+        "verification": "unverified",
+        "calendar": calendar,
+    }
+
+
 def _perform_locked(args: dict[str, Any], ctx: Any, *, cancelled: Any = None) -> dict[str, Any]:
     from robothor.engine.calendar_transport import CalendarTransport
     from robothor.engine.tools.handlers.gws import _handle_gws_tool, _resolve_calendar
@@ -103,7 +143,7 @@ def _perform_locked(args: dict[str, Any], ctx: Any, *, cancelled: Any = None) ->
     else:
         row = None
     try:
-        calendar_id, _ = _resolve_calendar(args)
+        calendar_id, kind = _resolve_calendar(args)
     except ValueError:
         return {"error": "Invalid calendar selector"}
     event_id = args.get("event_id")
@@ -120,8 +160,13 @@ def _perform_locked(args: dict[str, Any], ctx: Any, *, cancelled: Any = None) ->
         "event_id": event_id,
         "attendees": sorted({e.strip().casefold() for e in emails}),
     }
-    # All writers for this resource share a key regardless of requester.
-    digest = hashlib.sha256(f"{ctx.tenant_id}\0{calendar_id}\0{event_id}".encode()).digest()
+    # All writers for this resource share a key regardless of requester. A
+    # recurring series is ONE resource: Google names an occurrence
+    # "<master id>_<instance timestamp>", so keying on the raw event id gave a
+    # master and its own occurrence different locks and let two engines race
+    # the same series.
+    series_id = event_id.split("_", 1)[0]
+    digest = hashlib.sha256(f"{ctx.tenant_id}\0{calendar_id}\0{series_id}".encode()).digest()
     lock = int.from_bytes(digest[:8], "big", signed=True)
     with get_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
         assert_test_database_write(connection_database_name(conn), "calendar_operations")
@@ -164,9 +209,12 @@ def _perform_locked(args: dict[str, Any], ctx: Any, *, cancelled: Any = None) ->
                 operation_id = str(cur.fetchone()["id"])
                 conn.commit()
             # Existing drafts are subject to the same uncertainty barrier as new requests.
+            # `barrier_released` is set when no repair task could be filed: a
+            # barrier nobody is tracking has no clearing path, and one with no
+            # clearing path freezes the meeting for good.
             cur.execute(
-                "SELECT id FROM calendar_operations WHERE tenant_id=%s AND calendar_id=%s AND event_id=%s AND id<>%s AND (status='executing' OR (status='blocked' AND result->'invitations_requested' IS DISTINCT FROM 'false'::jsonb)) LIMIT 1",
-                (ctx.tenant_id, calendar_id, event_id, operation_id),
+                "SELECT id FROM calendar_operations WHERE tenant_id=%s AND calendar_id=%s AND split_part(event_id,'_',1)=%s AND id<>%s AND (status='executing' OR (status='blocked' AND result->'invitations_requested' IS DISTINCT FROM 'false'::jsonb AND result->'barrier_released' IS DISTINCT FROM 'true'::jsonb)) LIMIT 1",
+                (ctx.tenant_id, calendar_id, series_id, operation_id),
             )
             if cur.fetchone():
                 return {"error": "A prior operation needs reconciliation; no new write attempted"}
@@ -189,30 +237,41 @@ def _perform_locked(args: dict[str, Any], ctx: Any, *, cancelled: Any = None) ->
                     "start": event.get("start"),
                     "attendees_to_add": stored["attendees"],
                     "invitations_requested": False,
-                    "instruction": "Show the draft and include this exact line: "
-                    + OPERATION_MARKER
-                    + operation_id,
+                    # WHOSE calendar, in the draft too. The draft is what the
+                    # operator reads before saying "Go", and it used to instruct
+                    # the model to display a calendar it never handed it.
+                    "calendar": {"kind": kind, "id": calendar_id},
+                    "instruction": "Show the draft, name the calendar it applies to, and include "
+                    "this exact line: " + OPERATION_MARKER + operation_id,
                 }
             if row and row["status"] == "executing":
                 with CalendarTransport() as api:
                     event = api.request("GET", calendar_id, event_id)
-                present = {a.get("email", "").casefold() for a in event.get("attendees", [])}
-                result = {
-                    "error": "Interrupted write reconciled without retry; notification outcome unknown",
-                    "event_id": event_id,
-                    "attendees_present": sorted(present & set(stored["attendees"])),
-                    "invitations_requested": None,
-                    "verification": "unverified",
-                }
+                result = _reconcile(event, stored, row.get("pre_write_etag"), calendar_id, kind)
             else:
+                # The version observed immediately before the request is the
+                # only evidence a later process has that an interrupted write
+                # never landed. It must be committed BEFORE the request.
+                with CalendarTransport() as api:
+                    before_event = api.request("GET", calendar_id, event_id)
+                if "error" in before_event:
+                    return {
+                        **before_event,
+                        "invitations_requested": False,
+                        "verification": "unavailable",
+                        "calendar": {"kind": kind, "id": calendar_id},
+                    }
                 cur.execute(
-                    "UPDATE calendar_operations SET status='executing',updated_at=now() WHERE id=%s",
-                    (operation_id,),
+                    "UPDATE calendar_operations SET status='executing',pre_write_etag=%s,updated_at=now() WHERE id=%s",
+                    (str(before_event.get("etag") or ""), operation_id),
                 )
                 conn.commit()
                 if row and row.get("draft_event"):
                     stored["_expected_event"] = row["draft_event"]
                 stored["_cancel_event"] = cancelled
+                # Reuse the read that produced the recorded version rather than
+                # paying for a second one; If-Match still guards the write.
+                stored["_prefetched_event"] = before_event
                 result = _handle_gws_tool(
                     "gws_calendar_add_attendees", stored, run_id=ctx.run_id, tenant_id=ctx.tenant_id
                 )
@@ -241,6 +300,12 @@ def perform(args: dict[str, Any], ctx: Any, *, cancelled: Any = None) -> dict[st
     from robothor.engine.calendar_repair import attach_repair_task
 
     attach_repair_task(result, ctx)
+    if result.get("repair_task_error"):
+        # The barrier's only clearing path is the repair task. With no task
+        # filed, arming it would refuse every later draft and every direct
+        # write for this meeting with nothing able to release it. The operator
+        # is told plainly instead (see routine_request.finish_confirmation).
+        result["barrier_released"] = True
     with get_connection() as conn, conn.cursor() as cur:
         assert_test_database_write(connection_database_name(conn), "calendar_operations")
         cur.execute(
