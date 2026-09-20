@@ -1,3 +1,4 @@
+from datetime import UTC
 from types import SimpleNamespace
 
 import pytest
@@ -80,6 +81,61 @@ async def test_reported_task_wake_works_without_named_event_and_obeys_execution_
     claimed, _attempt = store.claim(db)
     assert claimed["id"] == goal["id"] and claimed["status"] == "running"
     assert "task.changed" in claimed["next_action"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("trigger", ["named_event", "task_event", "scheduled_review"])
+async def test_registered_wakes_require_a_fresh_matching_trigger(db, trigger):  # noqa: F811
+    from datetime import datetime, timedelta
+    from uuid import uuid4
+
+    task_id = str(uuid4())
+    with store.transaction() as cur:
+        cur.execute(
+            "INSERT INTO crm_tasks(id,tenant_id,title,status) VALUES (%s,%s,'Review','TODO')",
+            (task_id, db),
+        )
+    goal = store.create(
+        db, CreateGoal(objective="Review reply", success_criteria=["Checked"]), "operator"
+    )
+    options = {"event_type": "reply.received", "event_match": {"thread_id": "expected"}}
+    if trigger == "task_event":
+        options = {"task_id": task_id}
+    elif trigger == "scheduled_review":
+        options = {}
+    # A matching event predating this wait must not satisfy the new registration.
+    payload = {"task_id": task_id, "thread_id": "expected"}
+    store.ingest_event(db, str(uuid4()), "reply.received", payload)
+    goal = store.update(
+        db,
+        goal["id"],
+        GoalUpdate(
+            action="wait",
+            version=goal["version"],
+            note="Await fresh review",
+            wake_at=datetime.now(UTC) + timedelta(days=1),
+            **options,
+        ),
+        "operator",
+    )
+    ctx = ToolContext(agent_id="main", user_role="owner", tenant_id=db)
+    result = await HANDLERS["get_pursuit_goal"]({"goal_id": goal["id"]}, ctx)
+    assert result["execution_enabled"] is True
+    assert result["wake_conditions"]["events_registered_at"]
+    assert store.claim(db) is None  # registered and enabled does not mean ready
+    if trigger == "scheduled_review":
+        with store.transaction() as cur:
+            goal["ready_at"] = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+            store.save(cur, db, goal)
+    else:
+        store.ingest_event(db, str(uuid4()), "reply.received", {"thread_id": "wrong"})
+        assert store.claim(db) is None
+        if trigger == "task_event":
+            assert result["wake_conditions"]["task_events"] == {"task_id": task_id}
+        store.ingest_event(db, str(uuid4()), "reply.received", payload)
+    claimed, _attempt = store.claim(db)
+    assert claimed["id"] == goal["id"] and claimed["status"] == "running"
+    assert store.claim(db) is None
 
 
 @pytest.mark.asyncio

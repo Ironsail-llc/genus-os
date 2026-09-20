@@ -431,6 +431,14 @@
         "ruff": "passed",
         "format": "passed"
       }
+    },
+    "goal_wake_scheduler_contracts": {
+      "passed": 76,
+      "seconds": 17.12,
+      "warnings": 3,
+      "scope": "Goal tests, scripted native chat, module/function size checks; three new actual-claim cases for fresh named events, explicit task events and due reviews",
+      "external_model_calls": 0,
+      "live_language_verified": false
     }
   },
   "calendar": {

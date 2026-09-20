@@ -35,6 +35,9 @@ def schemas() -> dict[str, Any]:
             "do not promise automatic progress when false. A waiting goal may wake on its "
             "scheduled review or a matching event/linked-task change; paused goals do not wake. "
             "wake_conditions explicitly lists those alternatives, conditional on execution_enabled. "
+            "These are registered triggers, not evidence that a trigger has fired. Events older "
+            "than events_registered_at are ignored; enabling execution alone does not make a "
+            "future review due. task_events accepts events carrying that task_id. "
             "Waking is not permission to run: parent controls, budgets and recovery still apply. "
             "Omit goal_id only within that goal's execution.",
             {"type": "object", "properties": {"goal_id": {"type": "string"}}},
@@ -97,6 +100,8 @@ async def get_goal(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     if goal["status"] == "waiting":
         conditions = {
             "scheduled_review_at": goal["ready_at"],
+            "events_registered_at": wait.get("registered_at"),
+            "task_events": {"task_id": wait["task_id"]} if wait.get("task_id") else None,
             "linked_task_changes": [str(task["id"]) for task in goal["tasks"]],
             "matching_event": {"type": wait["event_type"], "match": wait.get("event_match", {})}
             if wait.get("event_type")
