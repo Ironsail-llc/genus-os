@@ -84,6 +84,9 @@ class Thread:
         return self.id[:8]
 
 
+# `{pursuit_gate}` is filled per call from robothor.goals.compat: migration 126
+# is optional and this claim is the thread inbox, so the predicate has to be
+# absent from the statement — not merely false — when the function is not there.
 _LIST_SQL = """
 SELECT
   t.id::text,
@@ -110,7 +113,7 @@ WHERE t.deleted_at IS NULL
   AND t.tenant_id = %s
   AND t.status != 'DONE'
   AND 'thread' = ANY(t.tags)
-  AND pursuit_task_runnable(t.id,t.tenant_id)
+  AND {pursuit_gate}
   AND (t.follow_up_at IS NULL OR t.follow_up_at <= NOW())
 ORDER BY
   CASE WHEN t.requires_human AND t.status = 'REVIEW' THEN 0 ELSE 1 END,
@@ -143,7 +146,10 @@ def list_threads(
     with get_connection() as conn:
         cur = conn.cursor()
         cur.execute("SET LOCAL statement_timeout = '3s'")
-        cur.execute(_LIST_SQL, (tenant_id, fetch_limit))
+        from robothor.goals.compat import task_gate
+
+        sql = _LIST_SQL.format(pursuit_gate=task_gate(cur, "t.id", "t.tenant_id"))
+        cur.execute(sql, (tenant_id, fetch_limit))
         rows = cur.fetchall()
 
     threads: list[Thread] = []

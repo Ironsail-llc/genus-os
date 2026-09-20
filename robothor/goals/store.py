@@ -14,6 +14,7 @@ from psycopg2.extras import Json, RealDictCursor
 
 from robothor.crm.dal import benchmark_sandbox_active
 from robothor.db.connection import get_connection
+from robothor.goals.compat import pursuit_installed
 from robothor.goals.model import (
     INACTIVE,
     CreateGoal,
@@ -71,6 +72,11 @@ def locked(cur: Any, tenant: str, goal_id: str) -> dict[str, Any]:
 
 def enabled(tenant: str) -> bool:
     with transaction() as cur:
+        # Without migration 126 there is no settings table to read, and the
+        # honest answer is that pursuit is off — not a raised UndefinedTable
+        # through every caller of this, including the controller's tick.
+        if not pursuit_installed(cur):
+            return False
         cur.execute("SELECT enabled FROM goal_pursuit_settings WHERE tenant_id=%s", (tenant,))
         row = cur.fetchone()
         return bool(row and row["enabled"])

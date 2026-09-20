@@ -155,10 +155,14 @@ def link_created_task(cur: Any, tenant: str, task_id: str) -> None:
 
 
 def task_runnable(task_id: str, tenant: str) -> bool:
+    from robothor.goals.compat import pursuit_installed
     from robothor.goals.store import transaction
 
     with transaction() as cur:
-        cur.execute("SELECT pursuit_task_runnable(%s,%s) AS runnable", (task_id, tenant))
+        # No migration 126, no goals, so no task can be owned by one.
+        if not pursuit_installed(cur):
+            return True
+        cur.execute("SELECT pursuit_task_runnable(%s::uuid,%s) AS runnable", (task_id, tenant))
         return bool(cur.fetchone()["runnable"])
 
 

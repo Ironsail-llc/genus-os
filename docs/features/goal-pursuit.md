@@ -11,6 +11,12 @@ Apply the canonical migration chain, including `crm/migrations/126_goal_pursuit.
 running the new engine or bridge. No existing session goal starts executing as a
 result of migration. The tenant switch starts disabled.
 
+126 is not a hard dependency of anything else. Without it the engine runs
+exactly as it did before goal pursuit existed: the agent task inbox and the
+thread claim keep returning tasks, and the feature reports itself off. The same
+holds after rolling 126 back. The check is a single probe per process, so the
+task inbox pays nothing per query for it.
+
 The Goals view supports creation, execution enable/disable, progress inspection,
 pause/resume, cancellation, steering and completion approval. Chat has four tools:
 `create_pursuit_goal`, `get_pursuit_goal`, `list_pursuit_goals`, and

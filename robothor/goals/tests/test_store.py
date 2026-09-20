@@ -287,7 +287,13 @@ def test_recovered_usage_is_not_billed_twice(db):
 
 
 def test_parent_pause_resume_restores_child_and_task_dispatch(db):
+    from robothor.goals.compat import task_gate
     from robothor.goals.runtime import task_runnable
+
+    # The migration-optional fallback must not become permanent: with 126
+    # applied, the gate is the predicate, not the constant TRUE.
+    with store.transaction() as cur:
+        assert "pursuit_task_runnable" in task_gate(cur, "crm_tasks.id", "crm_tasks.tenant_id")
 
     parent = create(db, kind="long")
     child = create(db, parent_goal_id=parent["id"])
