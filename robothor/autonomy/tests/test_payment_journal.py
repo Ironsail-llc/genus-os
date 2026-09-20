@@ -193,3 +193,32 @@ def test_recurring_membership_records_initial_submission(store, identity):
     store.finish(identity, op["id"], "completed", {"origin": "https://shop.example"})
     result = PaymentJournal(store).read(identity, op["id"])
     assert result["event_count"] == 1 and result["position"]["state"] == "submitted"
+
+
+def test_late_charge_resolves_refund_without_rewriting_evidence_or_freeing_budget(store, identity):
+    op = purchase(store, identity)
+    journal = PaymentJournal(store)
+    budget_before = store.spending_projection(identity)
+    pending = journal.append(
+        identity, op, charge(key="refund-delivered-first", amount=200, kind="refunded")
+    )
+    assert pending["reconciliation_required"] and pending["position"] is None
+    with store.transaction() as cur:
+        cur.execute(
+            "SELECT id,version,encrypted_value FROM autonomy_payment_events WHERE operation_id=%s ORDER BY version",
+            (op,),
+        )
+        original = [dict(row) for row in cur.fetchall()]
+    resolved = journal.append(identity, op, charge(key="capture-delivered-late"))
+    assert not resolved["reconciliation_required"]
+    assert resolved["position"]["state"] == "partially_refunded"
+    assert resolved["position"]["net_charged_minor"] == 400
+    assert PaymentJournal(store).read(identity, op) == resolved
+    assert store.spending_projection(identity) == budget_before
+    with store.transaction() as cur:
+        cur.execute(
+            "SELECT id,version,encrypted_value FROM autonomy_payment_events WHERE operation_id=%s ORDER BY version",
+            (op,),
+        )
+        final = [dict(row) for row in cur.fetchall()]
+    assert final[:1] == original and len(final) == 2

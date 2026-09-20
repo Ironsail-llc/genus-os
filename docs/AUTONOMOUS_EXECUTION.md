@@ -549,6 +549,14 @@ records a submission fact atomically for `purchase` and initial `subscription` e
 and conflicting deliveries cannot overwrite evidence. A fresh process can read the
 position using the native resource keyring. Unsupported or inconsistent facts remain
 stored with a reconciliation-required result rather than an invented balance.
+Delivery order does not determine financial dependency order: known authorizations
+are evaluated before reversals, and known captures before refunds. A refund or
+reversal that arrives first stays unresolved until its prerequisite evidence
+arrives, then the read projection can recover without modifying earlier journal
+entries or releasing budget. This operates on one payment's initial evidence;
+renewal transaction grouping and corrections remain unfinished. Conflicting
+captures/reversals, excess refunds and multiple authorizations still require
+reconciliation.
 
 The journal is not yet an issuer integration. Its provenance field is descriptive, not authentication: only trusted adapters may
 supply facts after validating their evidence. Agent claims and unauthenticated
@@ -557,8 +565,9 @@ The owner-only GET payment endpoint and agent-bound `payment_status` command
 return balances and discrepancy flags without issuer references. Neither accepts
 payment writes. A submission is explicitly labeled as not yet a verified charge.
 
-Encrypted receipt capture, validated evidence ingestion and budget reconciliation
-remain integration work before this capability can be considered complete.
+Rendered-page receipt observations are described below. Validated issuer evidence
+ingestion and budget reconciliation remain integration work before this capability
+can be considered complete.
 
 
 ### Private receipt observations

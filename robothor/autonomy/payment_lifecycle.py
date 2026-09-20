@@ -99,8 +99,14 @@ def project_payment(
             if previous != fact:
                 raise ValueError("payment_event_conflict")
             continue
-        _apply(position, fact)
         seen[fact.event_key] = fact
+    # Delivery order is not financial causality. Project the known evidence in
+    # dependency order; the encrypted journal still preserves arrival order.
+    # Refunds require known captures, and reversals require an authorization.
+    # Conflicting captures/reversals remain invalid whichever arrived first.
+    priority = {"submitted": 0, "authorized": 1, "charged": 2, "reversed": 2, "refunded": 3}
+    for fact in sorted(seen.values(), key=lambda value: priority[value.kind]):
+        _apply(position, fact)
     position.limit_exceeded = max(position.authorized_minor, position.charged_minor) > limit_minor
     position.authorization_exceeded = bool(
         position.authorized_minor and position.charged_minor > position.authorized_minor
