@@ -65,7 +65,7 @@ def _run_reaper(age_seconds: float, steps: list[dict[str, Any]]) -> _Cursor:
         patch.object(daemon, "stale_run_cutoff_seconds", return_value=7200),
         patch("robothor.engine.dedup.release_sync"),
     ):
-        daemon._cleanup_stale_runs()
+        daemon._cleanup_stale_runs("fixture-tenant")
     return cursor
 
 
@@ -96,3 +96,30 @@ def test_the_zero_step_cutoff_is_fifteen_minutes() -> None:
     assert daemon.NO_STEP_REAP_SECONDS == 15 * 60
     # The scan floor must let the reaper see such rows at all.
     assert daemon.REAP_MIN_SCAN_SECONDS <= daemon.NO_STEP_REAP_SECONDS
+
+
+def test_reaper_selection_and_update_keep_explicit_tenant():
+    cursor = _run_reaper(2000, [])
+    assert "tenant_id=%(tenant)s" in cursor.executed[0]
+    assert cursor.params[0]["tenant"] == "fixture-tenant"
+    updates = [
+        (statement, params)
+        for statement, params in zip(cursor.executed, cursor.params, strict=True)
+        if statement.startswith("UPDATE agent_runs")
+    ]
+    assert len(updates) == 1
+    assert "tenant_id=%s" in updates[0][0]
+    assert updates[0][1][-1] == "fixture-tenant"
+
+
+def test_workflow_cleanup_keeps_explicit_tenant():
+    from unittest.mock import MagicMock
+
+    connection = MagicMock()
+    cursor = connection.return_value.__enter__.return_value.cursor.return_value
+    cursor.rowcount = 1
+    with patch("robothor.db.connection.get_connection", connection):
+        assert daemon._cleanup_stale_workflow_runs("fixture-tenant") == 1
+    statement, params = cursor.execute.call_args.args
+    assert "WHERE tenant_id=%s" in statement
+    assert params == ("fixture-tenant",)

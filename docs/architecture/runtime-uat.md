@@ -609,3 +609,10 @@ Extending the real-daemon restart fixture with another tenant's eligible cancell
 The corrected private-database drill passes two real startup/shutdown cycles with resume enabled, leaving both the stopped local run and foreign tenant run at zero charged attempts. Existing paused goal, checkpoint, cancel and blocked uncertain-operation checks still pass. The database role is a private superuser, so SQL tenant selection is tested independently of RLS masking the defect. Unit controls verify a same-tenant eligible candidate is handed to execution with its tenant, and a charge affecting zero rows cannot admit work.
 
 All 33 resume/control/size checks passed (5.21s), and the drill's 13 tracking/person-timeline integration tests passed (0.48s). Shutdowns were approximately 1.17s and 0.87s, with health, worker launch and owned-process cleanup checks passing. Ruff, formatting and diff checks pass. `bench/runtime/uat-resume-tenant-isolation.json` records the evidence. This covers startup resume selection and charging, not every startup maintenance/reaper path, loaded-fleet continuation or full rollback acceptance. No real tenant work was resumed and no production deployment changed.
+
+
+## Stale cleanup retains tenant ownership
+
+The restart drill now seeds stale running agent and workflow records for both the daemon tenant and a foreign tenant. The initial run failed because cleanup timed out foreign work. Agent selection and updates, and workflow updates, now include the configured tenant; both startup and the periodic watchdog pass that tenant explicitly.
+
+Two real daemon restart cycles now clean local stale records while preserving foreign running records. Earlier stopped-run, foreign-resume, paused-goal, checkpoint and uncertain-operation assertions still pass. All 53 focused reaper/workflow/resume/size checks passed (3.64s); the canonical migration drill and 13 tracking integrations passed (0.30s). Ruff and diff checks pass. Evidence is in `bench/runtime/uat-cleanup-tenant-isolation.json`. This verifies these cleanup paths, not all startup maintenance or active-goal continuation. Full acceptance and production rollout remain incomplete.

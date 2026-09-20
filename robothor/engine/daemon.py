@@ -430,7 +430,7 @@ def classify_reap_reason(
     )
 
 
-def _cleanup_stale_workflow_runs() -> int:
+def _cleanup_stale_workflow_runs(tenant_id: str | None = None) -> int:
     """Mark workflow_runs stuck 'running' for >2h as 'timeout'.
 
     Engine shutdown mid-run used to leave workflow_runs rows 'running'
@@ -439,6 +439,9 @@ def _cleanup_stale_workflow_runs() -> int:
     timeout is 900s, so anything 'running' for 2 hours is dead. Returns the
     number of rows reaped.
     """
+    from robothor.constants import DEFAULT_TENANT
+
+    tenant_id = tenant_id or DEFAULT_TENANT
     try:
         from robothor.db.connection import get_connection
 
@@ -449,7 +452,8 @@ def _cleanup_stale_workflow_runs() -> int:
                 "completed_at=NOW(), "
                 "duration_ms=EXTRACT(EPOCH FROM (NOW()-started_at))*1000, "
                 "error_message='Reaped: engine restarted mid-run' "
-                "WHERE status='running' AND started_at < NOW() - INTERVAL '2 hours'"
+                "WHERE tenant_id=%s AND status='running' AND started_at < NOW() - INTERVAL '2 hours'",
+                (tenant_id,),
             )
             reaped = cur.rowcount or 0
             conn.commit()
@@ -473,7 +477,7 @@ def _has_any_step(run_id: str) -> bool:
         return True
 
 
-def _cleanup_stale_runs() -> int:
+def _cleanup_stale_runs(tenant_id: str | None = None) -> int:
     """Mark stale 'running' agent_runs as 'timeout' with per-run classification.
 
     Called on startup and periodically by the watchdog. Instead of applying a
@@ -483,7 +487,10 @@ def _cleanup_stale_runs() -> int:
 
     Returns the number of runs cleaned up (agent + workflow).
     """
-    wf_reaped = _cleanup_stale_workflow_runs()
+    from robothor.constants import DEFAULT_TENANT
+
+    tenant_id = tenant_id or DEFAULT_TENANT
+    wf_reaped = _cleanup_stale_workflow_runs(tenant_id)
     try:
         from robothor.db.connection import get_connection
 
@@ -506,12 +513,12 @@ def _cleanup_stale_runs() -> int:
             cur.execute(
                 "SELECT id, agent_id, started_at "
                 "FROM agent_runs "
-                "WHERE status='running' AND ("
+                "WHERE tenant_id=%(tenant)s AND status='running' AND ("
                 "  (%(boot)s IS NOT NULL"
                 "   AND started_at < %(boot)s::timestamptz - INTERVAL '60 seconds')"
                 "  OR started_at < NOW() - make_interval(secs => %(cutoff)s)"
                 ")",
-                {"boot": daemon_start_ts, "cutoff": REAP_MIN_SCAN_SECONDS},
+                {"tenant": tenant_id, "boot": daemon_start_ts, "cutoff": REAP_MIN_SCAN_SECONDS},
             )
             stale = cur.fetchall()
             if not stale:
@@ -537,8 +544,8 @@ def _cleanup_stale_runs() -> int:
                     "duration_ms=EXTRACT(EPOCH FROM (NOW()-started_at))*1000, "
                     "error_message=%s, "
                     "reap_category=%s "
-                    "WHERE id=%s AND status='running'",
-                    (message, category, run_id),
+                    "WHERE id=%s AND tenant_id=%s AND status='running'",
+                    (message, category, run_id, tenant_id),
                 )
                 logger.warning(
                     "Cleaned up stale run %s (agent=%s, category=%s)",
@@ -1372,7 +1379,7 @@ async def main() -> int:
     except Exception as e:
         logger.warning("Startup resume failed, continuing to reap: %s", _sanitize(e))
 
-    cleaned = await asyncio.to_thread(_cleanup_stale_runs)
+    cleaned = await asyncio.to_thread(_cleanup_stale_runs, config.tenant_id)
     if cleaned:
         logger.info("Startup: cleaned %d stale agent runs", cleaned)
 
@@ -1948,7 +1955,7 @@ async def _watchdog(
         if tick_count % 40 == 0:
             try:
                 loop = asyncio.get_running_loop()
-                reaped = await loop.run_in_executor(None, _cleanup_stale_runs)
+                reaped = await loop.run_in_executor(None, _cleanup_stale_runs, config.tenant_id)
                 if reaped:
                     logger.warning("Watchdog: reaped %d zombie agent runs", reaped)
             except Exception as e:

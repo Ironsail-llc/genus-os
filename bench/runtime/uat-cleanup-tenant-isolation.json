@@ -1,0 +1,28 @@
+{
+  "command": ".venv/bin/python -m bench.runtime.migrated_integration --daemon --restart",
+  "cycles": [
+    {
+      "health_ready": true,
+      "shutdown_exit_code": 0,
+      "shutdown_seconds": 1.0174561870007892,
+      "recovery_worker_spawns": 1
+    },
+    {
+      "health_ready": true,
+      "shutdown_exit_code": 0,
+      "shutdown_seconds": 1.2711398909996205,
+      "recovery_worker_spawns": 1
+    }
+  ],
+  "initial_failure": "Agent cleanup crossed tenant boundary or missed local orphan: the default daemon timed out a foreign tenant stale run.",
+  "fix": "Scope agent and workflow stale cleanup to the configured tenant at startup and in the watchdog.",
+  "local_stale_agent_status": "timeout",
+  "foreign_stale_agent_status": "running",
+  "local_stale_workflow_status": "timeout",
+  "foreign_stale_workflow_status": "running",
+  "unit_contract_passed": 53,
+  "unit_contract_seconds": 3.64,
+  "tracking_integration_passed": 13,
+  "tracking_integration_seconds": 0.3,
+  "limits": "Private synthetic database, two real daemon restart cycles. Does not certify every maintenance path, active-goal continuation, or application rollback."
+}

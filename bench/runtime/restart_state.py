@@ -47,11 +47,22 @@ def seed(dsn):
             "INSERT INTO agent_run_checkpoints(run_id,step_number,messages,schema_version) VALUES (%s,1,'[]',1)",
             (foreign,),
         )
-    return run, goal, operation, foreign
+        stale_local, stale_foreign, wf_local, wf_foreign = [str(uuid4()) for _ in range(4)]
+        for identifier, tenant in [(stale_local, "default"), (stale_foreign, "foreign-fixture")]:
+            cur.execute(
+                "INSERT INTO agent_runs(id,tenant_id,agent_id,trigger_type,status,started_at) VALUES (%s,%s,'orphan-fixture','manual','running',now()-interval '3 hours')",
+                (identifier, tenant),
+            )
+        for identifier, tenant in [(wf_local, "default"), (wf_foreign, "foreign-fixture")]:
+            cur.execute(
+                "INSERT INTO workflow_runs(id,tenant_id,workflow_id,status,started_at) VALUES (%s,%s,'fixture','running',now()-interval '3 hours')",
+                (identifier, tenant),
+            )
+    return run, goal, operation, foreign, stale_local, stale_foreign, wf_local, wf_foreign
 
 
 def verify(dsn, identifiers):
-    run, goal, operation, foreign = identifiers
+    run, goal, operation, foreign, stale_local, stale_foreign, wf_local, wf_foreign = identifiers
     with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("SELECT status,COALESCE(resume_attempts,0) FROM agent_runs WHERE id=%s", (run,))
         assert cur.fetchone() == ("cancelled", 0), (
@@ -74,3 +85,14 @@ def verify(dsn, identifiers):
             "SELECT status,COALESCE(resume_attempts,0) FROM agent_runs WHERE id=%s", (foreign,)
         )
         assert cur.fetchone() == ("cancelled", 0), "Daemon selected another tenant for resume"
+
+        for identifier, expected in [(stale_local, "timeout"), (stale_foreign, "running")]:
+            cur.execute("SELECT status FROM agent_runs WHERE id=%s", (identifier,))
+            assert cur.fetchone()[0] == expected, (
+                "Agent cleanup crossed tenant boundary or missed local orphan"
+            )
+        for identifier, expected in [(wf_local, "timeout"), (wf_foreign, "running")]:
+            cur.execute("SELECT status FROM workflow_runs WHERE id=%s", (identifier,))
+            assert cur.fetchone()[0] == expected, (
+                "Workflow cleanup crossed tenant boundary or missed local orphan"
+            )
