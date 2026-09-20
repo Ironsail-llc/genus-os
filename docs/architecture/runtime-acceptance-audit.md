@@ -50,8 +50,13 @@ The user need not identify whether an ordinary request became a task or a goal.
 
 The user requested normal-chat acceptance review instead of the goal workspace preview.
 `uat-chat-goal-review.json` records the tested two-turn status/pause interaction through
-the native chat route and real goal store with a scripted model. Their review is pending;
-the script does not establish live language understanding.
+the native chat route and real goal store with a scripted model. The user accepted this
+behavior on 2026-09-20: “Yes, that matches what I expect.” This is acceptance of the
+unfinished-work explanation and pause behavior, not the entire modernization or deployment.
+Two separately recorded configured-primary live diagnostics now exercise that interaction;
+the first exceeded its intended deadline and exposed a dropped host deadline in chat
+admission. The fixed diagnostic completed in 15.888s and 22.619s; two turns are not a
+latency cohort or evidence of complete production-profile parity.
 
 The user-facing case is ordinary task work: show what remains unfinished,
 why it is waiting or blocked, what evidence supports completion, and what Pause/Stop did.

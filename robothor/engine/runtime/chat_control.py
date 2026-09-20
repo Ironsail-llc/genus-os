@@ -23,7 +23,17 @@ def request_key(auth, session_key, client_id):
 def start(session, factory, auth, session_key, client_id=None):
     identifier = request_key(auth, session_key, client_id)
     context = copy_context()
-    context.run(active_context.set, ExecutionContext(auth.tenant_id, auth.user_id, identifier))
+    inherited = active_context.get()
+    deadline = (
+        inherited.deadline
+        if inherited
+        and (inherited.tenant_id, inherited.principal_id) == (auth.tenant_id, auth.user_id)
+        else None
+    )
+    context.run(
+        active_context.set,
+        ExecutionContext(auth.tenant_id, auth.user_id, identifier, deadline=deadline),
+    )
     task = asyncio.create_task(factory(), context=context)
     session.active_request_id = identifier
     session.active_task = task

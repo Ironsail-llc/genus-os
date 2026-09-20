@@ -6,8 +6,10 @@ transcript, not live language understanding or provider reliability.
 
 import json
 import os
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -18,6 +20,8 @@ from bench.runtime.uat_server import seed_unfinished_work
 from robothor.auth.deps import AuthContext
 from robothor.engine import chat
 from robothor.engine.llm_client import LLMClient
+from robothor.engine.runtime.contracts import ExecutionContext
+from robothor.engine.runtime.current import active_context
 from robothor.engine.tests import test_runtime_controls
 from robothor.engine.tests.test_runner import runner  # noqa: F401
 from robothor.engine.tools.dispatch import ToolContext
@@ -32,6 +36,7 @@ runtime_db = test_runtime_controls.runtime_db
 
 
 @pytest.mark.usefixtures("_mock_run_persistence")
+@pytest.mark.timeout(150)
 async def test_unfinished_goal_review_and_pause_through_normal_chat(
     request,
     db,
@@ -41,9 +46,25 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
     tmp_path,  # noqa: F811
 ):
     engine = request.getfixturevalue("runner")
+    live = json.loads(os.environ.get("ROBOTHOR_RUNTIME_CHAT_LIVE", "null"))
+    live_output = None
+    if live:
+        import yaml
+
+        configuration = yaml.safe_load(Path(live["manifest"]).read_text())["model"]
+        sample_agent_config.model_primary = configuration["primary"]
+        sample_agent_config.model_fallbacks = list(configuration.get("fallbacks", []))
+        sample_agent_config.temperature = configuration.get("temperature", 0.5)
+        sample_agent_config.timeout_seconds = 60
+        live_output = Path(live["output"])
+        assert not live_output.exists(), "preserve every live diagnostic, including failures"
     sample_agent_config.id = "main"
     sample_agent_config.task_protocol = False
-    sample_agent_config.tools_allowed = ["get_pursuit_goal", "update_pursuit_goal"]
+    sample_agent_config.tools_allowed = [
+        "list_pursuit_goals",
+        "get_pursuit_goal",
+        "update_pursuit_goal",
+    ]
     engine.registry.build_for_agent.return_value = [
         schemas()[name] for name in sample_agent_config.tools_allowed
     ]
@@ -56,8 +77,23 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
     seed_unfinished_work(db)
     (goal,) = store.list_goals(db)
     calls = []
+    active_message = ""
+
+    def open_tasks(*, tenant_id, exclude_resolved=True, **kwargs):
+        assert tenant_id == db
+        return [
+            task
+            for task in store.get(db, goal["id"])["tasks"]
+            if not exclude_resolved or task["status"] != "DONE"
+        ]
+
+    monkeypatch.setattr("robothor.crm.dal.list_tasks", open_tasks)
 
     async def dispatch(name, arguments, **context):
+        assert name in sample_agent_config.tools_allowed
+        if name == "update_pursuit_goal":
+            assert active_message == "Pause that work."
+            assert arguments.get("action") == "pause" and arguments.get("goal_id") == goal["id"]
         calls.append(name)
         return await HANDLERS[name](
             arguments,
@@ -121,9 +157,24 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
             choices=[{"message": message, "finish_reason": "tool_calls" if name else "stop"}]
         )
 
-    monkeypatch.setattr(LLMClient, "_call_llm_streaming", provider)
-    monkeypatch.setattr(LLMClient, "_call_llm", provider)
-    outbound = AsyncMock(side_effect=AssertionError("external model calls forbidden in chat UAT"))
+    if live:
+        import litellm
+
+        original = litellm.acompletion
+        allowed = {sample_agent_config.model_primary, *sample_agent_config.model_fallbacks}
+
+        async def bounded_provider(**kwargs):
+            assert kwargs["model"] in allowed, "only the configured model chain is authorized"
+            assert outbound.call_count <= 12, "live diagnostic provider-call bound exceeded"
+            return await original(**kwargs)
+
+        outbound = AsyncMock(side_effect=bounded_provider)
+    else:
+        monkeypatch.setattr(LLMClient, "_call_llm_streaming", provider)
+        monkeypatch.setattr(LLMClient, "_call_llm", provider)
+        outbound = AsyncMock(
+            side_effect=AssertionError("external model calls forbidden in chat UAT")
+        )
     monkeypatch.setattr("litellm.acompletion", outbound)
     monkeypatch.setattr(chat, "_runner", engine)
     monkeypatch.setattr(chat, "_config", engine.config)
@@ -149,9 +200,18 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
         for message in ("What's finished, and what's still left?", "Pause that work."):
-            response = await client.post(
-                "/chat/send", json={"message": message, "session_key": "web:main"}
+            active_message = message
+            token = active_context.set(
+                ExecutionContext(
+                    db, "operator", str(uuid4()), deadline=datetime.now(UTC) + timedelta(seconds=60)
+                )
             )
+            try:
+                response = await client.post(
+                    "/chat/send", json={"message": message, "session_key": "web:main"}
+                )
+            finally:
+                active_context.reset(token)
             assert response.status_code == 200
             events = [
                 json.loads(line[6:])
@@ -159,17 +219,46 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
                 if line.startswith("data: ")
             ]
             done = next(
-                event for event in reversed(events) if "run_id" in event and "text" in event
+                (event for event in reversed(events) if "run_id" in event and "text" in event),
+                {
+                    "status": "failed",
+                    "text": next(
+                        (e["error"] for e in reversed(events) if "error" in e),
+                        "Chat ended without terminal run metadata",
+                    ),
+                },
             )
-            assert done["status"] == "completed", done
-            transcript.append({"user": message, "robothor": done["text"]})
+            transcript.append({"user": message, "robothor": done["text"], "run": done})
             snapshot = store.get(db, goal["id"])
+            if live_output:
+                live_output.write_text(
+                    json.dumps(
+                        {
+                            "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+                            "configured_primary": sample_agent_config.model_primary,
+                            "manual_acceptance": False,
+                            "transcript": transcript,
+                            "tool_calls": calls,
+                            "provider_attempts": outbound.call_count,
+                            "goal_status": snapshot["status"],
+                            "task_statuses": sorted(t["status"] for t in snapshot["tasks"]),
+                        },
+                        indent=2,
+                    )
+                    + "\n"
+                )
+            assert done["status"] == "completed", done
+            assert done["duration_ms"] <= 60_000, "completed response exceeded the host deadline"
             assert snapshot["status"] == ("paused" if message.startswith("Pause") else "waiting")
             assert sorted(task["status"] for task in snapshot["tasks"]) == ["DONE", "TODO"]
-    assert calls == ["get_pursuit_goal", "get_pursuit_goal", "update_pursuit_goal"]
-    outbound.assert_not_called()
-    assert "isn't complete" in transcript[0]["robothor"]
-    assert "Paused the goal" in transcript[1]["robothor"]
+    if live:
+        assert "get_pursuit_goal" in calls and calls.count("update_pursuit_goal") == 1
+        assert outbound.call_count > 0
+    else:
+        assert calls == ["get_pursuit_goal", "get_pursuit_goal", "update_pursuit_goal"]
+        outbound.assert_not_called()
+        assert "isn't complete" in transcript[0]["robothor"]
+        assert "Paused the goal" in transcript[1]["robothor"]
     artifact = {
         "scope": "Native chat route/runner and goal handlers; scripted model, private PostgreSQL, no business connectors or scheduler.",
         "manual_acceptance": False,
@@ -179,4 +268,5 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
         "final_task_statuses": ["DONE", "TODO"],
     }
     output = Path(os.environ.get("ROBOTHOR_CHAT_GOAL_UAT_OUTPUT", str(tmp_path / "chat-uat.json")))
-    output.write_text(json.dumps(artifact, indent=2) + "\n")
+    if not live:
+        output.write_text(json.dumps(artifact, indent=2) + "\n")

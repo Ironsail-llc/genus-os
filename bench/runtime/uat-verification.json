@@ -343,7 +343,7 @@
     "normal_chat_goal_uat": {
       "artifact": "uat-chat-goal-review.json",
       "passed": 1,
-      "manual_acceptance": false,
+      "manual_acceptance": true,
       "user_preference": "Review in normal chat instead of goal workspace preview",
       "scope": "Native chat route/runner and actual goal handlers; scripted provider; private goal/task state. Run tracking and business registry mocked; live model understanding not tested.",
       "initial_setup_incident": "Incorrect stub location sent invalid fixture model names to provider; requests rejected before business tools. Provider billing unmeasured. Fixed at LLMClient and guarded with forbidden outbound stub and zero-call assertion.",
@@ -352,7 +352,44 @@
         "failed": 0,
         "seconds": 6.8,
         "warnings": 1
-      }
+      },
+      "accepted_scope": "Normal-chat unfinished-work explanation and explicit pause preserving the unfinished task; user confirmed on 2026-09-20."
+    },
+    "normal_chat_live_diagnostics": {
+      "scope": "Two-turn diagnostics, selected primary through native chat with isolated minimal manifest/workspace and private goal tools; no production business effects. Not a performance cohort.",
+      "initial": {
+        "artifact": "uat-chat-goal-live-primary.json",
+        "state_checks": "passed",
+        "deadline_acceptance": false,
+        "duration_ms": [
+          64014,
+          24039
+        ],
+        "provider_attempts": 7,
+        "pytest_initially_passed": true,
+        "finding": "Chat task admission dropped the trusted host deadline; original test lacked elapsed-time assertion."
+      },
+      "after_fix": {
+        "artifact": "uat-chat-goal-live-primary-after-deadline.json",
+        "state_checks": "passed",
+        "duration_ms": [
+          15888,
+          22619
+        ],
+        "provider_attempts": 7,
+        "estimated_engine_cost_usd": 0.0025
+      },
+      "deadline_control_chat_suite": {
+        "passed": 21,
+        "failed": 0,
+        "seconds": 6.29
+      },
+      "http_chat_runtime_size_suite": {
+        "passed": 43,
+        "failed": 0,
+        "seconds": 30.23
+      },
+      "remaining": "Read tools should expose execution_enabled; complete wake-condition explanation and representative live performance remain unproven."
     }
   },
   "calendar": {

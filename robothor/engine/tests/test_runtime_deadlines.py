@@ -46,6 +46,59 @@ async def test_deadline_cancels_inflight_execution_and_preserves_cleanup():
     assert active_context.get() is None
 
 
+async def test_chat_background_admission_preserves_trusted_host_deadline():
+    from types import SimpleNamespace
+
+    from robothor.engine.runtime.chat_control import start
+
+    outer = request(0.05).context
+    session = SimpleNamespace(active_request_id=None, active_task=None)
+    auth = SimpleNamespace(tenant_id=outer.tenant_id, user_id=outer.principal_id)
+    cleaned = asyncio.Event()
+
+    async def execute(**kwargs):
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaned.set()
+
+    async def work():
+        admitted = active_context.get()
+        assert admitted.deadline == outer.deadline
+        assert admitted.request_id != outer.request_id
+        return await CurrentRuntime(execute).run(RunRequest(admitted, "main", "fixture"))
+
+    token = active_context.set(outer)
+    try:
+        with pytest.raises(RuntimeDeadlineError, match="execution cancelled"):
+            await asyncio.wait_for(start(session, work, auth, "web:main"), 1)
+        assert cleaned.is_set()
+        assert active_context.get() is outer
+    finally:
+        active_context.reset(token)
+
+
+@pytest.mark.parametrize("tenant,principal", [("other", "owner"), ("tenant", "other")])
+async def test_chat_does_not_borrow_another_principals_deadline(tenant, principal):
+    from types import SimpleNamespace
+
+    from robothor.engine.runtime.chat_control import start
+
+    outer = request(-1).context
+    auth = SimpleNamespace(tenant_id=tenant, user_id=principal)
+
+    async def work():
+        current = active_context.get()
+        assert (current.tenant_id, current.principal_id) == (tenant, principal)
+        assert current.deadline is None and current.goal_id is None
+
+    token = active_context.set(outer)
+    try:
+        await start(SimpleNamespace(), work, auth, "web:main")
+    finally:
+        active_context.reset(token)
+
+
 async def test_cancellation_resistance_cannot_dispatch_or_report_success():
     from robothor.engine.request_budget import bounded_completion
     from robothor.engine.tools.dispatch import ToolContext, _runtime_denial

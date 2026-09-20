@@ -1,6 +1,6 @@
 {
   "scope": "Native chat route/runner and goal handlers; scripted model, private PostgreSQL, no business connectors or scheduler.",
-  "manual_acceptance": false,
+  "manual_acceptance": true,
   "transcript": [
     {
       "user": "What's finished, and what's still left?",
@@ -20,5 +20,11 @@
   "final_task_statuses": [
     "DONE",
     "TODO"
-  ]
+  ],
+  "acceptance": {
+    "scope": "Normal-chat explanation of unfinished work and explicit pause preserving the unfinished task",
+    "user_response": "Yes, that matches what I expect",
+    "date": "2026-09-20",
+    "does_not_approve": "Live-model reliability, runtime replacement or production deployment"
+  }
 }
