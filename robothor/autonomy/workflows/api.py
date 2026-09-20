@@ -10,7 +10,14 @@ from fastapi.responses import JSONResponse
 
 from robothor.auth import tokens
 from robothor.autonomy.models import Scope
-from robothor.autonomy.workflows.protocol import AUDIENCE, RPC, SCOPE, ExecuteRequest, OpenRequest
+from robothor.autonomy.workflows.protocol import (
+    AUDIENCE,
+    RPC,
+    SCOPE,
+    ExecuteRequest,
+    OpenRequest,
+    ReconcileRequest,
+)
 
 if TYPE_CHECKING:
     from robothor.autonomy.workflows.manager import WorkflowManager
@@ -90,6 +97,16 @@ def create_app(manager: WorkflowManager) -> FastAPI:
                         if command.verification_code
                         else None,
                     )
+                elif isinstance(command, ReconcileRequest):
+                    result = await manager.reconcile(
+                        scope,
+                        agent_id,
+                        str(command.workflow_id),
+                        str(command.command_id),
+                        command.revision,
+                        command.selector,
+                        command.text,
+                    )
                 elif command.kind == "status":
                     result = await manager.status(scope, agent_id, str(command.workflow_id))
                 elif command.kind == "close":
@@ -97,9 +114,23 @@ def create_app(manager: WorkflowManager) -> FastAPI:
                 else:
                     result = await manager.inspect(scope, agent_id, str(command.workflow_id))
             return JSONResponse(result, headers=headers)
-        except PermissionError:
+        except PermissionError as exc:
+            # Only fixed state-machine codes may cross this boundary. Never
+            # echo arbitrary browser, database or resource exception text.
+            reason = str(exc)
+            recoverable = reason in {
+                "command_changed",
+                "workflow_revision_changed",
+                "command_in_progress",
+                "workflow_lost",
+                "workflow_not_open",
+                "pending_live_confirmation_required",
+            }
             return JSONResponse(
-                {"error": "workflow_not_authorized_or_unavailable"},
+                {
+                    "error": "workflow_not_authorized_or_unavailable",
+                    **({"reason": reason} if recoverable else {}),
+                },
                 status_code=403,
                 headers=headers,
             )

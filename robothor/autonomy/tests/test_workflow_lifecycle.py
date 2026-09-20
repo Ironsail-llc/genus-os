@@ -1,4 +1,4 @@
-"""Persistent contexts have bounded lifetimes and close on uncertain effects."""
+"""Persistent contexts have bounded lifetimes and retain read-only evidence on uncertain effects."""
 
 import asyncio
 from types import SimpleNamespace
@@ -18,7 +18,10 @@ async def opened(store, identity, monkeypatch):
 
     clock = [0.0]
     page = SimpleNamespace(goto=AsyncMock(), url="https://form.example/apply")
-    context = SimpleNamespace(route=AsyncMock(), new_page=AsyncMock(return_value=page))
+    context = SimpleNamespace(
+        route=AsyncMock(), set_offline=AsyncMock(), new_page=AsyncMock(return_value=page)
+    )
+    page.context = context
     browser = SimpleNamespace(new_context=AsyncMock(return_value=context), close=AsyncMock())
     monkeypatch.setattr(module, "inspect_page", AsyncMock(return_value={"fields": []}))
     manager = WorkflowManager(store, AsyncMock(return_value=browser), clock=lambda: clock[0])
@@ -49,7 +52,7 @@ async def test_inspection_cannot_extend_absolute_lifetime(opened, identity):
     browser.close.assert_awaited_once()
 
 
-async def test_uncertain_action_closes_context_and_returns_cached_result(opened, identity):
+async def test_uncertain_action_freezes_context_and_returns_cached_result(opened, identity):
     manager, result, _, browser, _ = opened
     wid = result["workflow_id"]
     live = manager._live[wid]
@@ -59,8 +62,9 @@ async def test_uncertain_action_closes_context_and_returns_cached_result(opened,
     command = str(uuid4())
     plan = ExecutionPlan(url="https://form.example/apply", submit_selector="#submit")
     first = await manager.execute(identity, "main", wid, command, 0, plan)
-    assert manager.active_count == 0
-    browser.close.assert_awaited_once()
+    assert manager.active_count == 1
+    browser.close.assert_not_awaited()
+    live.page.context.set_offline.assert_awaited_once_with(True)
     assert await manager.execute(identity, "main", wid, command, 0, plan) == first
     live.broker.execute_on_page.assert_awaited_once()
 
@@ -81,7 +85,10 @@ async def test_status_waits_for_in_progress_browser_open(store, identity, monkey
 
     entered, release = asyncio.Event(), asyncio.Event()
     page = SimpleNamespace(goto=AsyncMock(), url="https://form.example/apply")
-    context = SimpleNamespace(route=AsyncMock(), new_page=AsyncMock(return_value=page))
+    context = SimpleNamespace(
+        route=AsyncMock(), set_offline=AsyncMock(), new_page=AsyncMock(return_value=page)
+    )
+    page.context = context
     browser = SimpleNamespace(new_context=AsyncMock(return_value=context), close=AsyncMock())
     monkeypatch.setattr(module, "inspect_page", AsyncMock(return_value={"fields": []}))
 

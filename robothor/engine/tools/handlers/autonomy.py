@@ -51,6 +51,7 @@ async def handle(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             "workflow_execute",
             "workflow_status",
             "workflow_close",
+            "workflow_reconcile",
         }:
             from robothor.autonomy.workflows.client import invoke
 

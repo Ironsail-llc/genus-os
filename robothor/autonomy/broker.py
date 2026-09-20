@@ -154,6 +154,7 @@ class BrowserBroker:
 
         self.store = store
         self.protected_values = ProtectedValues()
+        self.reconciliation_baseline: set[str] | None = None
         self._used_transient_code = False
         self._guarded_frames: dict[Frame, str] = {}
 

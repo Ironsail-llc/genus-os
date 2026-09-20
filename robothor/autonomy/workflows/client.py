@@ -6,6 +6,7 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 import httpx
+from pydantic import ValidationError
 
 from robothor.auth import tokens
 from robothor.autonomy.workflows.protocol import AUDIENCE, RPC, SCOPE, ExecuteRequest
@@ -15,6 +16,34 @@ if TYPE_CHECKING:
     from robothor.autonomy.models import Scope
 
 
+def _invalid_request(exc: ValidationError) -> dict[str, str]:
+    result = {"error": "invalid_workflow_request"}
+    # Neither submitted values nor arbitrary field names/messages may escape.
+    identifiers = {
+        "operation_id": "invalid_operation_id",
+        "workflow_id": "invalid_workflow_id",
+        "command_id": "invalid_command_id",
+    }
+    for error in exc.errors(include_input=False, include_url=False):
+        location = error["loc"]
+        if (
+            len(location) == 2
+            and location[1] in identifiers
+            and error["type"] in {"uuid_parsing", "uuid_type", "missing"}
+        ):
+            result["reason"] = identifiers[str(location[1])]
+            break
+        if (
+            location == ("execute", "plan")
+            and error["type"] == "value_error"
+            and str(error.get("ctx", {}).get("error"))
+            == "confirmation_selector_and_text_required_together"
+        ):
+            result["reason"] = "confirmation_selector_and_text_required_together"
+            break
+    return result
+
+
 async def invoke(
     scope: Scope,
     agent_id: str,
@@ -22,7 +51,10 @@ async def invoke(
     *,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> dict[str, Any]:
-    command = RPC.validate_python(request)
+    try:
+        command = RPC.validate_python(request)
+    except ValidationError as exc:
+        return _invalid_request(exc)
     payload = command.model_dump(mode="json")
     if isinstance(command, ExecuteRequest) and command.verification_code:
         payload["verification_code"] = command.verification_code.get_secret_value()
