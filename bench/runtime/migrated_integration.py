@@ -105,6 +105,7 @@ def main():
                     "robothor/engine/tests/test_runner_person_link.py",
                     "bench/runtime/test_resume_family.py",
                     "robothor/engine/tests/test_native_goal_recovery.py",
+                    "robothor/engine/tests/test_native_admission_rollback.py",
                 ],
                 env=env,
                 check=False,

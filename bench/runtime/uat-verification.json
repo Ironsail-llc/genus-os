@@ -1165,6 +1165,28 @@
         "waiting tick performs no model calls"
       ],
       "scope": "Real process termination and native controller/runner/dispatch/database recovery with scripted provider responses and seeded test permissions. Lease expiry accelerated in SQL. Not a full daemon kill/restart, saved-message checkpoint continuation, real external provider readback, or rollback."
+    },
+    "native_admission_preservation": {
+      "command": ".venv/bin/python -m bench.runtime.migrated_integration",
+      "integration_passed": 17,
+      "skipped": 1,
+      "seconds": 5.9,
+      "warnings": 1,
+      "new_admission": {
+        "runtime_id": "current",
+        "status": "completed",
+        "model_calls": 1,
+        "business_tool_calls": 0
+      },
+      "preserved_snapshots": [
+        "cancelled agent run",
+        "durable stop",
+        "saved checkpoint",
+        "paused goal including used budget",
+        "executing uncertain calendar operation"
+      ],
+      "initial_fixture_failure": "Asserted nonexistent runtime key instead of persisted runtime_id; corrected assertion.",
+      "scope": "Real native admission and canonical database state preservation with scripted provider, seeded test permissions. No runtime routing switch, binary downgrade, deployment or full rollback drill. Accepted integration baseline is not a safe stopped-work rollback target because it predates durable stop enforcement."
     }
   },
   "calendar": {
