@@ -4,6 +4,8 @@ Research date: September 19, 2026 (America/New_York).
 
 This extends [the runtime options brief](AGENT_RUNTIME_OPTIONS_2026-09-19.md). It is a source and documentation comparison, not a migration or benchmark result. No candidate was installed or exercised. No service configuration, goal, or external action was changed.
 
+Implementation follow-up: [modernization plan](../plans/AGENT_RUNTIME_MODERNIZATION_2026-09-20.md).
+
 ## Main finding
 
 Robothor already has a substantial product layer that a generic agent framework will not replace automatically. Preserve its goal contracts, authority, memory semantics, and external-action receipts behind explicit interfaces. Compare upstream runtimes on how much generic execution machinery they can replace without weakening those contracts.
@@ -12,7 +14,7 @@ Pydantic AI and Deep Agents should be peer candidates in the first Python compar
 
 ## Evidence and limits
 
-The current capability inventory uses the fixed deployed source artifact `6ffb95370d`, at `/home/philip/.local/share/robothor/combined-preview/6ffb95370d`. The research branch predates some of that artifact's goal and autonomy additions. Source presence does not establish tenant enablement, successful production execution, or throughput. Goal pursuit is opt-in and disabled by default; this review did not enable it or inspect private goal contents.
+The current capability inventory uses the fixed deployed source artifact `6ffb95370d`. The research branch predates some of that artifact's goal and autonomy additions. Source presence does not establish tenant enablement, successful production execution, or throughput. Goal pursuit is opt-in and disabled by default; this review did not enable it or inspect private goal contents.
 
 Local evidence paths below refer to that artifact. Upstream links describe documentation fetched during this research; prototype versions must be pinned and their actual behavior checked. “Integrate” means Robothor must supply the contract, even when a framework supplies useful primitives. “Not established” means the reviewed documentation did not demonstrate equivalent behavior, not that implementation is impossible.
 
