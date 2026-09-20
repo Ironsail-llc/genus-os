@@ -130,16 +130,21 @@ async def lifespan(app: FastAPI):
     # not use the SSO exchange), so this is a loud log line rather than a raise.
     sso_secret_present()
     http_client = httpx.AsyncClient(timeout=30.0)
-    from robothor.autonomy.handoff_worker import recover_checks
+    from robothor.autonomy.handoff_worker import purge_expired_observations, recover_checks
 
     trigger_task = asyncio.create_task(_routine_trigger_loop())
     recovery_task = asyncio.create_task(recover_checks())
+    # The observation archive kept the owner's name, date of birth, address
+    # and their answers to a website indefinitely. This is what makes
+    # `autonomy.terms_retention_days` an actual window rather than a comment.
+    purge_task = asyncio.create_task(purge_expired_observations())
     try:
         yield
     finally:
         trigger_task.cancel()
         recovery_task.cancel()
-        for task in (trigger_task, recovery_task):
+        purge_task.cancel()
+        for task in (trigger_task, recovery_task, purge_task):
             with suppress(asyncio.CancelledError):
                 await task
         await http_client.aclose()

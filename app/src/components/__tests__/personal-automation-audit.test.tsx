@@ -46,3 +46,32 @@ it("labels receipts and explains withheld text without rendering page contents",
   expect(await screen.findByText("Receipt text was not saved because a verification code was used.")).toBeTruthy();
   expect(screen.queryByText("Private field")).toBeNull();
 });
+
+it("lets the owner erase the record, and the audit fact outlives it", async () => {
+  // The archive kept the owner's name, date of birth, address and the answers
+  // they typed into a website forever, with no owner-facing delete anywhere.
+  let gone = false;
+  const fetcher = vi.fn(async (url: string, init?: {method?: string}) => {
+    if (init && init.method === "DELETE") { gone = true; return {ok: true, json: async () => ({erased: 1})}; }
+    if (url.endsWith("/terms")) return {ok: true, json: async () => ({snapshots: [
+      {id: "snapshot-1", version: 1, grant_version: 2, phase: "before_input", created_at: "2030-01-01", redacted_at: gone ? "2030-02-02" : null}]})};
+    return {ok: true, json: async () => gone
+      ? {snapshot: null, redacted_at: "2030-02-02"}
+      : {snapshot: {omitted_frames: 0, documents: [{origin: "https://club.example", text: "private-canary-dob", links: []}]}}};
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<PersonalAutomationAudit operationId="operation-1"/>);
+  fireEvent.click(screen.getByRole("button", {name: "Submission record"}));
+  fireEvent.click(await screen.findByRole("button", {name: /View snapshot 1/}));
+  expect(await screen.findByText("private-canary-dob")).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("button", {name: /Erase submission record/}));
+  expect(await screen.findByText(/Submission record erased/)).toBeTruthy();
+  expect(screen.queryByText("private-canary-dob")).toBeNull();
+  expect(fetcher).toHaveBeenCalledWith(
+    "/api/bridge/api/autonomy/operations/operation-1/terms",
+    expect.objectContaining({method: "DELETE"}),
+  );
+  // The audit fact survives: the snapshot is still listed.
+  expect(await screen.findByText(/Grant version 2/)).toBeTruthy();
+});

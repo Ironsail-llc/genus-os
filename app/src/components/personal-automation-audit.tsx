@@ -2,13 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 
-type Entry = { id: string; version: number; grant_version: number; phase: string; created_at: string };
+type Entry = { id: string; version: number; grant_version: number; phase: string; created_at: string; redacted_at?: string | null };
 type Snapshot = { phase?: string; capture_status?: "captured" | "withheld_after_code" | "unavailable"; omitted_frames: number; documents: { origin: string; text: string; links: string[]; source?: string; source_url?: string; requested_url?: string; text_truncated: boolean; links_truncated: boolean }[] };
 
 export function PersonalAutomationAudit({ operationId, includeReceipts = false }: { operationId: string; includeReceipts?: boolean }) {
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState<Entry[]>([]);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  const [redactedAt, setRedactedAt] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const pending = useRef<AbortController | null>(null);
@@ -17,13 +18,13 @@ export function PersonalAutomationAudit({ operationId, includeReceipts = false }
   async function load(id?: string) {
     pending.current?.abort();
     const request = new AbortController(); pending.current = request;
-    setOpen(true); setBusy(true); setSnapshot(null); setMessage("");
+    setOpen(true); setBusy(true); setSnapshot(null); setRedactedAt(null); setMessage("");
     try {
       const response = await fetch(`/api/bridge/api/autonomy/operations/${operationId}/terms${id ? `/${id}` : ""}`, {cache: "no-store", signal: request.signal});
       if (!response.ok) throw new Error("unavailable");
       const data = await response.json();
       if (request.signal.aborted) return;
-      if (id) setSnapshot(data.snapshot);
+      if (id) { setSnapshot(data.snapshot); setRedactedAt(data.redacted_at ?? null); }
       else { setRows(data.snapshots); if (!data.snapshots.length) setMessage("No submission record was captured for this task."); }
     } catch {
       if (!request.signal.aborted) setMessage("Submission record unavailable. Please try again.");
@@ -31,8 +32,31 @@ export function PersonalAutomationAudit({ operationId, includeReceipts = false }
       if (!request.signal.aborted) setBusy(false);
     }
   }
+  // The owner's own delete. The archive held their name, date of birth,
+  // address and the answers they typed into a website, and nothing but the
+  // retention window ever removed it. What survives the call is the audit
+  // fact — that a snapshot was taken, when, and under which grant version —
+  // so the listing is reloaded rather than emptied.
+  async function erase() {
+    pending.current?.abort();
+    const request = new AbortController(); pending.current = request;
+    setBusy(true); setSnapshot(null); setRedactedAt(null); setMessage("");
+    try {
+      const response = await fetch(`/api/bridge/api/autonomy/operations/${operationId}/terms`, {method: "DELETE", cache: "no-store", signal: request.signal});
+      if (!response.ok) throw new Error("unavailable");
+      await response.json();
+      if (request.signal.aborted) return;
+      setMessage("Submission record erased. The record of when it was taken remains.");
+      const listing = await fetch(`/api/bridge/api/autonomy/operations/${operationId}/terms`, {cache: "no-store", signal: request.signal});
+      if (listing.ok && !request.signal.aborted) setRows((await listing.json()).snapshots);
+    } catch {
+      if (!request.signal.aborted) setMessage("Submission record unavailable. Please try again.");
+    } finally {
+      if (!request.signal.aborted) setBusy(false);
+    }
+  }
   function close() {
-    pending.current?.abort(); setOpen(false); setRows([]); setSnapshot(null); setMessage(""); setBusy(false);
+    pending.current?.abort(); setOpen(false); setRows([]); setSnapshot(null); setRedactedAt(null); setMessage(""); setBusy(false);
   }
   const capturedUrls = new Set(snapshot?.documents.flatMap(document => [document.source_url, document.requested_url]).filter(Boolean));
   if (!open) return <button className="text-sm underline" onClick={() => void load()}>{includeReceipts ? "Submission and receipts" : "Submission record"}</button>;
@@ -43,8 +67,10 @@ export function PersonalAutomationAudit({ operationId, includeReceipts = false }
     {message && <p role="status">{message}</p>}
     {rows.map(row => <div key={row.id} className="text-sm">
       <button disabled={busy} className="underline" onClick={() => void load(row.id)}>View snapshot {row.version}</button>
-      <span> · {row.phase === "after_confirmation" ? "Receipt after confirmation" : row.phase === "before_input" ? "Before filling" : "Before submission"} · Grant version {row.grant_version} · {row.created_at}</span>
+      <span> · {row.phase === "after_confirmation" ? "Receipt after confirmation" : row.phase === "before_input" ? "Before filling" : "Before submission"} · Grant version {row.grant_version} · {row.created_at}{row.redacted_at ? ` · erased ${row.redacted_at}` : ""}</span>
     </div>)}
+    {rows.length > 0 && rows.some(row => !row.redacted_at) && <button disabled={busy} className="text-sm underline" onClick={() => void erase()}>Erase submission record</button>}
+    {redactedAt && <p>This record was erased on {redactedAt}. Only the fact that it was taken remains.</p>}
     {snapshot && <div className="space-y-3">
       {snapshot.phase === "after_confirmation" && snapshot.capture_status === "captured" && <p>Receipt record contains rendered page text only.</p>}
       {snapshot.capture_status === "withheld_after_code" && <p>Receipt text was not saved because a verification code was used.</p>}

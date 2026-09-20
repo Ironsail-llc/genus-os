@@ -352,6 +352,39 @@ class AutonomyStore:
             self._event(cur, scope, resource_id, "resource_consumed")
             return cast("dict[str, Any]", json.loads(plaintext))
 
+    def purge_expired(self, *, terms_days: int | None = None) -> dict[str, int]:
+        """Delete observations past the retention window, across every tenant.
+
+        This is the first ``DELETE FROM autonomy_*`` in the codebase. Before
+        it, the archive of rendered review pages — the owner's name, date of
+        birth, address and the answers they gave a website — was kept forever,
+        openable with the vault master key, with no expiry and nothing but
+        ``DELETE /resources/{id}`` and ``DELETE /grants/{id}`` on the routes.
+
+        Deliberately NOT swept here: ``autonomy_payment_events``. A payment
+        position is reconstructed from its whole event log, so removing part
+        of one silently rewrites what was charged and what is still owed.
+        ``autonomy.payment_event_retention_days`` documents the window as
+        policy; acting on it is an operator decision against a closed
+        operation, not a background job. See ``docs/AUTONOMOUS_EXECUTION.md``.
+
+        Tenant-wide by design — it runs as the platform, after every owner's
+        own erasure has had its chance, so it takes no ``Scope``.
+        """
+        if terms_days is None:
+            from robothor.settings import get_settings
+
+            terms_days = get_settings().autonomy.terms_retention_days
+        if terms_days <= 0:
+            return {"terms_snapshots": 0}
+        with self.transaction() as cur:
+            cur.execute(
+                "DELETE FROM autonomy_terms_snapshots "
+                "WHERE created_at < now() - %s * interval '1 day'",
+                (terms_days,),
+            )
+            return {"terms_snapshots": cur.rowcount}
+
     def revoke_resource(self, scope: Scope, resource_id: str) -> None:
         with self.transaction() as cur:
             cur.execute(

@@ -88,3 +88,37 @@ async def recover_checks() -> None:
         except Exception:
             logger.warning("External verification recovery temporarily unavailable")
         await asyncio.sleep(ACTIVE_POLL_SECONDS if active else IDLE_POLL_SECONDS)
+
+
+#: Six hours. The retention window is measured in months, so the sweep only
+#: has to be regular, not prompt — and a shorter period would mean every
+#: bridge worker taking the same advisory lock far more often than the work
+#: needs. A missed pass costs nothing but a few more hours of retention.
+PURGE_PERIOD_SECONDS = 6 * 60 * 60
+
+
+async def purge_expired_observations(period: float = PURGE_PERIOD_SECONDS) -> None:
+    """Delete observations past their retention window, forever.
+
+    The archive of rendered review pages had no expiry at all: an operation
+    the owner ran once kept their name, date of birth, address and the
+    answers they gave a website indefinitely, sealed with a key derived from
+    the vault master key. ``AutonomyStore.purge_expired`` is the sweep and
+    ``autonomy.terms_retention_days`` is the window; this only runs it.
+
+    Every bridge worker may call it — the DELETE is idempotent and the rows
+    it removes are gone for everybody — so no lease is taken. A failure is a
+    warning and never a crash: a retention sweep is not worth taking the
+    bridge down for, and the next pass picks up whatever this one missed.
+    """
+    while True:
+        await asyncio.sleep(period)
+        try:
+            removed = await asyncio.to_thread(AutonomyStore().purge_expired)
+            if removed["terms_snapshots"]:
+                logger.info(
+                    "Retention sweep removed %s expired observation(s)",
+                    removed["terms_snapshots"],
+                )
+        except Exception:
+            logger.warning("Observation retention sweep temporarily unavailable")

@@ -287,6 +287,30 @@ async def terms_detail(operation_id: UUID, snapshot_id: UUID, request: Request):
         raise HTTPException(503, "Submission record unavailable") from None
 
 
+@router.delete("/operations/{operation_id}/terms")
+async def forget_terms(operation_id: UUID, request: Request):
+    """The owner's own delete for what the browser observed on their behalf.
+
+    Until this existed the routes offered `DELETE /resources/{id}` and
+    `DELETE /grants/{id}` and nothing else, while the observation archive kept
+    the rendered review page — the owner's name, date of birth, address and
+    the answers they typed — indefinitely. The audit fact survives; only the
+    sealed page text goes. Already-erased is a success, not a 404.
+    """
+    from robothor.autonomy.terms_audit import TermsAudit
+
+    scope = await require_personal_owner(request)
+    try:
+        erased = await asyncio.to_thread(
+            TermsAudit(AutonomyStore()).forget, scope, str(operation_id)
+        )
+        return _safe({"operation_id": str(operation_id), "erased": erased})
+    except PermissionError:
+        raise HTTPException(404, "Submission record not found") from None
+    except Exception:
+        raise HTTPException(503, "Submission record unavailable") from None
+
+
 @router.get("/operations/{operation_id}/payment")
 async def payment_status(operation_id: UUID, request: Request):
     from robothor.autonomy.payment_journal import PaymentJournal

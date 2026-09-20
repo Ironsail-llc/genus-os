@@ -73,7 +73,10 @@ class TermsSnapshot(StrictModel):
         return self
 
 
-_COLUMNS = "id::text,version,grant_version,phase,coverage,document_count,created_at::text"
+_COLUMNS = (
+    "id::text,version,grant_version,phase,coverage,document_count,created_at::text,"
+    "redacted_at::text"
+)
 
 
 class TermsAudit:
@@ -183,6 +186,13 @@ class TermsAudit:
                 raise PermissionError("audit_not_found")
         result = dict(row)
         encrypted = bytes(result.pop("encrypted_value"))
+        if result.get("redacted_at"):
+            # Erased by its owner. The row is deliberately still here — the
+            # audit fact is that a snapshot of this phase was taken at this
+            # time under this grant version — and there is nothing left to
+            # open, which is not the same thing as a key that cannot decrypt.
+            result["snapshot"] = None
+            return result
         try:
             text = open_resource(
                 encrypted, self.store.keys, scope, f"terms:{operation_id}:{record_id}"
@@ -191,3 +201,30 @@ class TermsAudit:
         except Exception:
             raise ValueError("audit_unavailable") from None
         return result
+
+    def forget(self, scope: Scope, operation_id: str) -> int:
+        """Erase the observed pages for one operation, keeping that it observed.
+
+        The owner's own delete. `autonomy_terms_snapshots` held the rendered
+        review page — their name, date of birth, address and the answers they
+        typed — with no way to remove it and no expiry. Dropping the whole row
+        would let an operation deny that it ever looked at anything, so the
+        row, its version, its phase and its grant version stay and only the
+        sealed value goes.
+
+        Returns the number of records erased by THIS call; erasing an already
+        erased operation is not an error and does not move the stamp.
+        """
+        with self.store.transaction() as cur:
+            # Scoped by the WHERE clause rather than by `_operation`: a delete
+            # must not tell a caller whether an operation it cannot see exists.
+            cur.execute(
+                "UPDATE autonomy_terms_snapshots SET encrypted_value=''::bytea,"
+                "redacted_at=now() WHERE tenant_id=%s AND owner_id=%s AND operation_id=%s "
+                "AND redacted_at IS NULL",
+                (scope.tenant_id, scope.owner_id, operation_id),
+            )
+            erased = cur.rowcount
+            if erased:
+                self.store._event(cur, scope, operation_id, "terms_forgotten")
+            return erased

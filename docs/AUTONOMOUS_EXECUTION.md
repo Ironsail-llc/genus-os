@@ -530,6 +530,41 @@ available; do not describe it as a later pre-submit snapshot. Failed or rejected
 attempts retain their own observations, and a snapshot alone never changes an
 operation's state or authorizes another submission.
 
+### Erasure and retention
+
+A submission record holds the rendered review page: the owner's name, date of
+birth, address and the answers they typed into a website. Two things bound how
+long it lives.
+
+**The owner can erase it.** On Account → Personal automation, **Erase
+submission record** under a task removes the observed page text for every
+snapshot of that operation. What survives is the audit fact — that a snapshot
+of this phase was taken at this time, under this grant version, covering this
+many documents — stamped with `redacted_at`; the viewer then shows the record
+as erased rather than as unavailable. An audit trail that can be made to forget
+it ever observed anything is not an audit trail; one that can never forget what
+it observed is a liability. The route is `DELETE
+/api/autonomy/operations/{id}/terms`, owner-authenticated like the read routes;
+agent service tokens cannot call it, and erasing an already-erased record is a
+success, not an error.
+
+**It expires on its own.** `autonomy.terms_retention_days`
+(`ROBOTHOR_AUTONOMY_TERMS_RETENTION_DAYS`, 365 by default) is how long a terms
+or receipt observation is kept before it is deleted outright, row and all. The
+bridge sweeps every six hours; set it to 0 to keep observations forever.
+
+Payment events are different and are **not** swept. A payment position is
+reconstructed from its whole event log, so deleting part of one silently
+rewrites what was charged and what is still owed.
+`autonomy.payment_event_retention_days`
+(`ROBOTHOR_AUTONOMY_PAYMENT_EVENT_RETENTION_DAYS`, seven years by default)
+states the policy — these are financial records and a jurisdiction may require
+them for that long — and acting on it is an operator decision against a closed
+operation, not a background job.
+
+Apply migration 143 with the others below. It adds `redacted_at` and the two
+age indexes; it rewrites no encrypted record.
+
 Apply migration 133 through the canonical migrator before deploying the broker
 and bridge changes. The new table applies tenant row-level security inline and
 uses the native versioned encryption keyring; retained historical keys can still

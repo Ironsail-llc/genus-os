@@ -3024,6 +3024,24 @@ class AutonomySettings(SettingsGroup):
         "Private Unix socket shared by the protected browser service and its authenticated clients. "
         "Its parent directory must be owned by the service user with mode 0700.",
     )
+    terms_retention_days: int = declare(
+        365,
+        "ROBOTHOR_AUTONOMY_TERMS_RETENTION_DAYS",
+        "How long a terms or receipt observation is kept before it is deleted outright. These "
+        "hold the rendered review page — the owner's name, date of birth, address and the "
+        "answers they gave a website — sealed with a key derived from the vault master key. "
+        "The owner can also erase one at any time from the operation's page, which keeps the "
+        "audit fact and drops the content. 0 disables the sweep and keeps them forever.",
+    )
+    payment_event_retention_days: int = declare(
+        2555,
+        "ROBOTHOR_AUTONOMY_PAYMENT_EVENT_RETENTION_DAYS",
+        "How long a payment event is kept. Seven years by default, because these are financial "
+        "records and a jurisdiction may require them for that long. NOT swept automatically: a "
+        "payment position is reconstructed from its whole event log, so deleting part of one "
+        "silently rewrites what was charged. Deleting them is an operator action against a "
+        "closed operation, and the window above is the documented policy for it.",
+    )
 
 
 class GenusSettings(BaseSettings):
