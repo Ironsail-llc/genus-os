@@ -598,9 +598,10 @@ async def _action_start(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
                 # The env, not the args, is what fixes the launch. Chromium
                 # spawns chrome_crashpad_handler with a --database path derived
                 # from $HOME/.config, which the unit's ProtectHome=read-only
-                # makes unwritable; the handler exits and takes the browser with
-                # it ("chrome_crashpad_handler: --database is required"). Pointing
-                # XDG_CONFIG_HOME at the workspace removes that path entirely.
+                # makes unwritable. The handler then quits, complaining that
+                # its database flag is required, and takes the browser down with
+                # it. Pointing XDG_CONFIG_HOME at the workspace removes that
+                # path entirely.
                 # --user-data-dir is deliberately NOT passed: Playwright rejects
                 # it as a launch arg (it manages its own temp profile), and it is
                 # not what fails. See _browser_profile_dir / _browser_env.
