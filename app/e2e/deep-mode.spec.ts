@@ -595,3 +595,36 @@ for (const outcome of ["eof", "transport", "aborted", "failed", "completed"]) {
     expect(lookups).toBe(outcome === "completed" ? 0 : 2);
   });
 }
+
+test("chat follows pending calendar evidence after a cancelled run", async ({ page }) => {
+  await setupMocks(page);
+  let sends = 0;
+  let requestId = "";
+  let lookups = 0;
+  let reconciled = false;
+  await page.route("**/api/chat/send", (route) => {
+    sends += 1;
+    requestId = route.request().postDataJSON().request_id;
+    return route.abort("connectionfailed");
+  });
+  await page.route("**/api/chat/outcome?*", (route) => {
+    expect(new URL(route.request().url()).searchParams.get("request_id")).toBe(requestId);
+    lookups += 1;
+    return route.fulfill({ json: {
+      state: "cancelled", terminal: true, reconciliation_pending: !reconciled,
+      text: reconciled ? "Run stopped. The recorded calendar change is verified."
+        : "Run stopped. Calendar verification is pending.",
+    } });
+  });
+  await page.goto(BASE_URL, { waitUntil: "networkidle" });
+  await page.getByTestId("chat-input").fill("Make the requested calendar change");
+  await page.getByTestId("send-button").click();
+  const answer = page.getByTestId("message-assistant").last();
+  await expect(answer).toContainText("Calendar verification is pending.");
+  await expect(answer).toContainText("Checking for updated action evidence");
+  await expect(page.getByTestId("chat-input")).toBeEnabled();
+  reconciled = true;
+  await expect(answer).toContainText("The recorded calendar change is verified.");
+  expect(lookups).toBeGreaterThanOrEqual(2);
+  expect(sends).toBe(1);
+});

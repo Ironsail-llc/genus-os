@@ -72,4 +72,23 @@ describe("audit recovery under interruption", () => {
     expect(recovered).not.toHaveBeenCalled();
     expect(fetch).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps reading pending action evidence after the run ends", async () => {
+    vi.useFakeTimers();
+    const recovered = vi.fn();
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(answer({ terminal: true, state: "cancelled", reconciliation_pending: true, text: "Run stopped. Calendar verification is pending." }))
+      .mockResolvedValueOnce(answer({ terminal: true, state: "cancelled", reconciliation_pending: false, text: "Run stopped. Recorded calendar change is verified." }));
+    vi.stubGlobal("fetch", fetch);
+    render(<ChatRecovery request={request} messageId="message" onRecovered={recovered} />);
+    await advance();
+    expect(recovered).not.toHaveBeenCalled();
+    expect(screen.getByText(/Calendar verification is pending/)).toBeTruthy();
+    await advance(1000);
+    expect(recovered).toHaveBeenCalledExactlyOnceWith("message", "Run stopped. Recorded calendar change is verified.");
+    await advance(60_000);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls[0][0]).toBe(fetch.mock.calls[1][0]);
+  });
+
 });

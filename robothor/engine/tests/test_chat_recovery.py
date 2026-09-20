@@ -298,3 +298,22 @@ def test_unrelated_deferred_tool_output_is_not_a_calendar_receipt(records):
             (Json({"name": "other_tool", "arguments": {"operation_id": operation}}), run),
         )
     assert chat_recovery.read_outcome(auth, "web:main", client)["effects"] == []
+
+
+@pytest.mark.parametrize("status", ["executing", "blocked", "completed", "draft"])
+def test_terminal_run_distinguishes_pending_action_reconciliation(records, status):
+    auth, client = identity(), str(uuid4())
+    run = insert(records, auth, client, "cancelled", verified_status=None)
+    operation = record_calendar_receipt(records, auth, run, status=status)
+    result = chat_recovery.read_outcome(auth, "web:main", client)
+    assert result["terminal"] is True
+    assert result["reconciliation_pending"] is (status == "executing")
+    if status == "executing":
+        with records() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE calendar_operations SET status='completed' WHERE id=%s", (operation,)
+            )
+        refreshed = chat_recovery.read_outcome(auth, "web:main", client)
+        assert not refreshed["reconciliation_pending"]
+        assert refreshed["effects"][0]["verified"]
+        assert refreshed["state"] == "cancelled"

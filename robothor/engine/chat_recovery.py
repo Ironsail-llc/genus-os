@@ -48,6 +48,7 @@ def read_outcome(auth, session_key: str, client_id: str) -> dict:
         "run_id": str(row["id"]),
         "text": text,
         "effects": receipts,
+        "reconciliation_pending": any(item["status"] == "executing" for item in receipts),
         "verified": row["verified_status"] == "verified" and not incomplete,
         "source": "run_record",
     }

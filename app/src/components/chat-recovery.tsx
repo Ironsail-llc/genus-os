@@ -31,15 +31,17 @@ export function ChatRecovery({ request, messageId, onRecovered }: {
         if (!response.ok) throw new Error("Audit record unavailable");
         const record = await response.json();
         if (controller.signal.aborted) return;
-        if (record.terminal === true && typeof record.text === "string") {
+        if (record.terminal === true && record.reconciliation_pending !== true && typeof record.text === "string") {
           onRecovered(messageId, record.text || "The run has finished; no response text was recorded.");
           return;
         }
-        setStatus(record.state === "running"
-          ? "The original run is still working. Waiting for its recorded result…"
-          : record.state === "awaiting_approval"
-            ? "The original run is waiting for approval. Checking for its result…"
-            : "Checking the original request’s audit record…");
+        setStatus(record.reconciliation_pending === true
+          ? `${typeof record.text === "string" ? record.text : ""}\n\nChecking for updated action evidence…`
+          : record.state === "running"
+            ? "The original run is still working. Waiting for its recorded result…"
+            : record.state === "awaiting_approval"
+              ? "The original run is waiting for approval. Checking for its result…"
+              : "Checking the original request’s audit record…");
       } catch {
         if (controller.signal.aborted) return;
         setStatus("Reconnecting to read the original request’s audit record…");

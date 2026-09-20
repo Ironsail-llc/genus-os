@@ -609,6 +609,15 @@
       "result": "32 passed in 4.44s; Ruff passed",
       "scope": "Direct and deferred calendar audit references, private PostgreSQL and fake calendar provider; no production deployment",
       "limitations": "Recorded evidence only; general external-service reconciliation and full acceptance remain incomplete"
+    },
+    "chat_pending_action_evidence": {
+      "initial_result": "4 backend assertions and 1 component scenario failed before implementation",
+      "backend": "36 passed in 5.05s",
+      "frontend": "147 files, 1629 passed in 10.80s; existing jsdom navigation notice",
+      "browser": "26 passed in 47.3s on isolated port 15324; original invocation refused occupied port 3004",
+      "build": "passed",
+      "lint": "Ruff, ESLint and diff checks passed",
+      "limitations": "Observes durable evidence updates without replay; does not schedule provider readback. Full acceptance and manual approval of this behavior remain incomplete."
     }
   },
   "calendar": {
