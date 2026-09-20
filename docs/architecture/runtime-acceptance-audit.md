@@ -418,3 +418,12 @@ All 65 focused control/runtime/chat/size tests pass (3.53s), and 20 canonical in
 The successful native checkpoint integration exposed the original canceled run remaining eligible for another startup resume. Startup scan now excludes records with a same-tenant recorded continuation, and charging repeats that check so a stale selection cannot restart an already superseded origin. The latest canceled/running continuation remains selectable with its own checkpoint; completed latest work does not. A denied old charge leaves its attempt count unchanged.
 
 All 26 focused resume/size tests pass (3.79s). The combined canonical migration, real-daemon restart and full goal-crash command passes, including 23 integrations (7.76s, one worker-only skip and one warning). Ruff and diff checks pass. Evidence: `bench/runtime/uat-resume-supersession.json`. Concurrent first admissions before either continuation row exists remain a separate atomic-claim concern; this test does not certify that race. Nothing was deployed.
+
+
+## Exclusive startup checkpoint admission
+
+An overlapping-startup integration test reproduced two launches and two charges for the same checkpoint before either worker wrote a continuation row. Startup now first acquires a nonblocking tenant/source PostgreSQL session lock using a dedicated connection. The connection remains owned through execution; failure to charge or schedule releases it. Worker finally and a task completion callback cover normal exit and cancellation, including cancellation before coroutine entry. The source-continuation recheck remains in place.
+
+The private database test proves one launch/charge, then successful reacquisition after either completion or cancellation. A focused early-cancel check proves no runner call and released ownership. All 27 focused resume/size checks pass (4.41s), and the combined real-daemon restart/goal-crash command passes with 25 integrations (6.22s, one worker-only skip, one warning). Ruff and diff checks pass. Evidence: `bench/runtime/uat-resume-claim.json`.
+
+Each active startup resume holds a dedicated DB connection. Session loss while a worker survives and cross-process failure injection for this claim remain unverified; this is not general HA fencing certification. Nothing was deployed.

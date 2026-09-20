@@ -136,3 +136,60 @@ def test_only_latest_checkpoint_remains_eligible_and_old_charge_is_denied(status
         with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
             cur.execute("DELETE FROM agent_runs WHERE id=ANY(%s::uuid[])", ([old, latest],))
             cur.execute("DELETE FROM crm_tenants WHERE id=%s", (tenant,))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_concurrent_startup_workers_launch_one_continuation(monkeypatch, cancel):
+    import asyncio
+    from types import SimpleNamespace
+
+    from robothor.engine import daemon
+
+    dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
+    if "host=/tmp/runtime-migrated-" not in dsn:
+        pytest.skip("requires the disposable canonical migration harness")
+    tenant, run = "claim-" + uuid4().hex, str(uuid4())
+    with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute("INSERT INTO crm_tenants(id,display_name) VALUES (%s,%s)", (tenant, tenant))
+        cur.execute(
+            "INSERT INTO agent_runs(id,tenant_id,agent_id,trigger_type,status,error_message) VALUES (%s,%s,'main','event','cancelled','daemon_restart')",
+            (run, tenant),
+        )
+        cur.execute(
+            "INSERT INTO agent_run_checkpoints(run_id,step_number,messages,schema_version) VALUES (%s,1,'[]',1)",
+            (run,),
+        )
+    release = asyncio.Event()
+    calls = []
+
+    async def execute(**kwargs):
+        calls.append(kwargs["resume_from_run_id"])
+        await release.wait()
+
+    runner = SimpleNamespace(config=SimpleNamespace(tenant_id=tenant), execute=execute)
+    monkeypatch.setenv("ROBOTHOR_RESUME_IN_FLIGHT", "true")
+    try:
+        results = await asyncio.gather(
+            daemon.resume_interrupted_runs(runner), daemon.resume_interrupted_runs(runner)
+        )
+        await asyncio.sleep(0)
+        assert sum(results) == 1 and calls == [run]
+        with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+            cur.execute("SELECT resume_attempts FROM agent_runs WHERE id=%s", (run,))
+            assert cur.fetchone()[0] == 1
+    finally:
+        tasks = list(daemon._RESUME_TASKS)
+        if cancel:
+            for task in tasks:
+                task.cancel()
+        release.set()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        from robothor.engine.resume_claim import acquire
+
+        claim = acquire(tenant, run)
+        assert claim is not None, "finished worker stranded its database claim"
+        claim.close()
+        with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM agent_runs WHERE id=%s", (run,))
+            cur.execute("DELETE FROM crm_tenants WHERE id=%s", (tenant,))

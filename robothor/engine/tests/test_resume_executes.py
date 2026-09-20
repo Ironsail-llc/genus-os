@@ -51,6 +51,9 @@ class TestTheLoopActuallyExecutes:
         monkeypatch.setattr(daemon, "_resume_scan", lambda tenant: [candidate])
         monkeypatch.setattr(daemon, "_charge_resume_attempt", lambda rid, tenant: True)
 
+        from unittest.mock import Mock
+
+        monkeypatch.setattr("robothor.engine.resume_claim.acquire", lambda *args: Mock())
         runner = AsyncMock()
         from types import SimpleNamespace
 
@@ -198,3 +201,27 @@ def test_resume_charge_requires_a_row_in_the_same_tenant(monkeypatch, matched):
     statement, parameters = cursor.execute.call_args.args
     assert "WHERE id = %s AND tenant_id = %s" in statement
     assert parameters == ("run", "tenant-a")
+
+
+@pytest.mark.asyncio
+async def test_cancel_before_resume_worker_starts_releases_claim(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from robothor.engine.resume import ResumeCandidate
+
+    monkeypatch.setenv("ROBOTHOR_RESUME_IN_FLIGHT", "true")
+    candidate = ResumeCandidate("run", "main", 0, True, tenant_id="fixture")
+    monkeypatch.setattr(daemon, "_resume_scan", lambda tenant: [candidate])
+    monkeypatch.setattr(daemon, "_charge_resume_attempt", lambda *args: True)
+    claim = Mock()
+    monkeypatch.setattr("robothor.engine.resume_claim.acquire", lambda *args: claim)
+    runner = SimpleNamespace(config=SimpleNamespace(tenant_id="fixture"), execute=AsyncMock())
+    assert await daemon.resume_interrupted_runs(runner) == 1
+    tasks = list(daemon._RESUME_TASKS)
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+    await asyncio.sleep(0)
+    runner.execute.assert_not_awaited()
+    claim.close.assert_called()

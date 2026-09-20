@@ -215,7 +215,7 @@ def _charge_resume_attempt(run_id: str, tenant_id: str) -> bool:
         return False
 
 
-async def _execute_resume(runner: Any, candidate: Any) -> None:
+async def _execute_resume(runner: Any, candidate: Any, claim: Any = None) -> None:
     """Actually continue the run. The step this function exists to perform.
 
     Same call shape as the operator-facing resume endpoint (health.py), so
@@ -241,6 +241,9 @@ async def _execute_resume(runner: Any, candidate: Any) -> None:
         )
     except Exception:
         logger.exception("Resume of run %s failed", candidate.run_id)
+    finally:
+        if claim is not None:
+            claim.close()
 
 
 def _resume_scan(tenant_id: str) -> list[ResumeCandidate]:
@@ -347,10 +350,16 @@ async def resume_interrupted_runs(runner: Any = None) -> int:
     batch = resume_batch([c for c in _resume_scan(tenant) if c.tenant_id == tenant])
 
     started = 0
+    from robothor.engine.resume_claim import acquire
+
     for candidate in batch:
+        claim = acquire(candidate.tenant_id, candidate.run_id)
+        if claim is None:
+            continue
         # Charge the attempt BEFORE resuming: a run that dies during resume
         # must still have paid, or a crash loop resumes forever.
         if not _charge_resume_attempt(candidate.run_id, candidate.tenant_id):
+            claim.close()
             continue
         logger.info(
             "Resuming run %s (agent %s, attempt %d/%d)",
@@ -362,8 +371,15 @@ async def resume_interrupted_runs(runner: Any = None) -> int:
         # Launched, not awaited: these are full agent runs and the daemon is
         # still coming up. Held in a module set because a bare create_task can
         # be garbage-collected mid-flight (this repo has been bitten before).
-        task = asyncio.create_task(_execute_resume(runner, candidate))
+        work = _execute_resume(runner, candidate, claim)
+        try:
+            task = asyncio.create_task(work)
+        except BaseException:
+            work.close()
+            claim.close()
+            raise
         _RESUME_TASKS.add(task)
+        task.add_done_callback(lambda _task, owned=claim: owned.close())
         task.add_done_callback(_RESUME_TASKS.discard)
         started += 1
     return started

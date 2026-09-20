@@ -1312,6 +1312,24 @@
       "positive_controls": "The latest cancelled or running continuation remains selectable when it has its own checkpoint. Completed latest work is not selected.",
       "full_daemon_command": ".venv/bin/python -m bench.runtime.migrated_integration --daemon --restart --goal-crash",
       "limits": "Prevents replay of an original after a continuation record exists. Concurrent first admissions before either writes a continuation record are not made mutually exclusive by this change."
+    },
+    "resume_claim": {
+      "initial_failure": "Two concurrent startup workers both charged and launched the same source checkpoint.",
+      "fix": "Acquire a nonblocking PostgreSQL session advisory lock on tenant/source before charging; retain a dedicated connection through worker exit; close on charge refusal, scheduling failure, normal exit and cancellation, including cancellation before coroutine entry.",
+      "focused_passed": 27,
+      "focused_seconds": 4.41,
+      "integration_passed": 25,
+      "integration_seconds": 6.22,
+      "integration_skipped": 1,
+      "integration_warnings": 1,
+      "concurrency_checks": [
+        "one launch and one charge across two overlapping startup calls",
+        "claim reusable after normal completion",
+        "claim reusable after cancellation",
+        "early task cancellation closes claim before any execute call"
+      ],
+      "full_daemon_command": ".venv/bin/python -m bench.runtime.migrated_integration --daemon --restart --goal-crash",
+      "limits": "Each active resume holds one dedicated database connection, bounded by startup resume concurrency. Database-session loss while a worker survives and cross-process failure injection for the claim itself remain unverified; no general HA fencing claim."
     }
   },
   "calendar": {
