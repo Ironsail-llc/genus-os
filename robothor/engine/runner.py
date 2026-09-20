@@ -1178,11 +1178,7 @@ class AgentRunner(
                 # ── [CHECKPOINT] Resume from checkpoint if requested ──
                 resumed_scratchpad = None
                 if resume_from_run_id:
-                    resumed_scratchpad = self._resume_from_checkpoint(resume_from_run_id, session)
-                    if not await asyncio.to_thread(
-                        update_run, session.run.id, task_text=session.run.task_text
-                    ):
-                        raise RuntimeError("Failed to persist restored task before continuation")
+                    resumed_scratchpad = await self._resume_checkpoint(resume_from_run_id, session)
 
                 # ── [SANDBOX] Create sandbox for computer-use / exec agents ──
                 # Explicit "docker" always sandboxes; "host" always opts out.

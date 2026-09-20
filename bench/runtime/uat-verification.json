@@ -9,16 +9,17 @@
   "replacement_selected": false,
   "checks": {
     "engine": {
-      "revision": "5f5b6e62179",
-      "passed": 11031,
-      "failed": 0,
+      "revision": "7c5f5c64b21",
+      "passed": 11040,
+      "failed": 1,
       "skipped": 29,
-      "deselected": 173,
-      "seconds": 356.2,
+      "deselected": 178,
+      "seconds": 357.83,
       "warnings": 393,
       "selection": "not slow and not integration and not llm and not e2e and not smoke",
-      "log": "/tmp/runtime-engine-regression-5f5b6e62179.log",
-      "note": "Current broad engine run includes admission deadline/audit, canonical migration, resume and reaper fixes. One connect_tcp unawaited coroutine warning persists; no warning-free or full acceptance claim."
+      "log": "/tmp/runtime-engine-regression-7c5f5c64b21.log",
+      "failure": "Function-size ratchet: runner.py::execute 990 lines exceeds pinned cap 986. Fixed afterward by lifecycle helper extraction; full suite not rerun after extraction.",
+      "note": "One connect_tcp unawaited coroutine warning persists. No full acceptance claim."
     },
     "frontend": {
       "revision": "da202e576fb",
@@ -1051,12 +1052,11 @@
       "note": "Broad run includes delegated receipt and goal changes, before chat fixture embedding isolation. Two connect_tcp unawaited coroutine warnings remain in this run; no full acceptance or warning-free claim."
     },
     "goals_current": {
-      "revision": "5f5b6e62179",
-      "passed": 84,
+      "revision": "7c5f5c64b21",
+      "passed": 85,
       "failed": 0,
-      "warnings": 2,
-      "seconds": 9.94,
-      "log": "/tmp/runtime-goals-regression-5f5b6e62179.log"
+      "seconds": 10.83,
+      "warnings": 2
     },
     "goal_recovery_ownership": {
       "initial_failure": "Real daemon startup charged a paused goal run for generic checkpoint resumption outside GoalController.",
@@ -1350,6 +1350,28 @@
         "claim closes and unrelated subsequent admission remains usable"
       ],
       "limits": "Checks detected database-session loss before admission. Already admitted/in-flight effects may finish and require reconciliation. Network blackhole timing, database failover and production fencing remain unqualified."
+    },
+    "engine_previous_5f5b6e62179": {
+      "revision": "5f5b6e62179",
+      "passed": 11031,
+      "failed": 0,
+      "skipped": 29,
+      "deselected": 173,
+      "seconds": 356.2,
+      "warnings": 393,
+      "selection": "not slow and not integration and not llm and not e2e and not smoke",
+      "log": "/tmp/runtime-engine-regression-5f5b6e62179.log",
+      "note": "Current broad engine run includes admission deadline/audit, canonical migration, resume and reaper fixes. One connect_tcp unawaited coroutine warning persists; no warning-free or full acceptance claim."
+    },
+    "checkpoint_lifecycle_extraction": {
+      "change": "Move restored-checkpoint audit persistence into an async lifecycle helper without raising the function-size cap.",
+      "initial_extraction_error": "Missing local asyncio import; focused and integration reruns exposed it and passed after correction.",
+      "focused_passed": 92,
+      "focused_seconds": 10.53,
+      "integration_passed": 26,
+      "integration_seconds": 4.98,
+      "integration_skipped": 1,
+      "integration_warnings": 1
     }
   },
   "calendar": {
@@ -1552,7 +1574,7 @@
     "Runtime deadlines are enforced when supplied; classification and enforcement of the 60-second policy across all simple conversational actions remain unproven.",
     "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded; production ingress, selected-provider p95 and mixed-load fallback operating limits are not certified.",
     "Candidate full-runtime parity, matched configuration workloads and 100-repetition finalist comparison remain incomplete; retain the current runtime.",
-    "Calendar audit recovery, unattended readback and same-tab browser reload are locally tested. General external-provider coverage, recovery without browser storage, cross-device restoration and loaded-fleet and active-goal daemon restart validation remain incomplete (isolated empty-fleet startup/shutdown now passes).",
+    "Calendar audit recovery, unattended readback and same-tab browser reload are locally tested. General external-provider coverage, recovery without browser storage, cross-device restoration and loaded-fleet performance remain incomplete. Synthetic full-daemon active-goal crash recovery, native checkpoint continuation, chat lineage and continuation stop now pass.",
     "The normal-chat unfinished-work/pause case is accepted. Manual acceptance of the newer recovery behavior and remaining goal controls is pending.",
     "Production deployment is not authorized. Concrete rollout/rollback review and end-to-end finalist upgrade compatibility remain unfinished."
   ],

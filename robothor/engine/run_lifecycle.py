@@ -597,6 +597,17 @@ class RunLifecycleMixin:
             logger.debug("Verification failed: %s", _sanitize(e))
             return output_text
 
+    async def _resume_checkpoint(self, run_id: str, session: AgentSession) -> Any:
+        import asyncio
+
+        # Use the runner's persistence seam, also used when the run is created.
+        from robothor.engine.runner import update_run
+
+        scratchpad = self._resume_from_checkpoint(run_id, session)
+        if not await asyncio.to_thread(update_run, session.run.id, task_text=session.run.task_text):
+            raise RuntimeError("Failed to persist restored task before continuation")
+        return scratchpad
+
     def _resume_from_checkpoint(
         self,
         run_id: str,
