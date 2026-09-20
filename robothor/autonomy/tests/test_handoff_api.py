@@ -20,7 +20,9 @@ def test_owner_check_uses_stored_read_only_confirmation_without_returning_it(
     monkeypatch.setattr(autonomy, "AutonomyStore", lambda: store)
     monkeypatch.setattr(autonomy, "scope_for_actor", lambda *args: identity)
     browser = AsyncMock(return_value={"state": "reconciling"})
-    monkeypatch.setattr(autonomy, "run_browser", browser)
+    from robothor.autonomy import handoff_worker
+
+    monkeypatch.setattr(handoff_worker, "run_browser", browser)
     auth = SimpleNamespace(
         tenant_id=identity.tenant_id, actor_id=identity.owner_id, role="owner", is_service=False
     )

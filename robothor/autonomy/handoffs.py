@@ -176,7 +176,7 @@ class HandoffStore:
                 )
             )
             cur.execute(
-                "UPDATE autonomy_handoffs SET state='checking',updated_at=now() WHERE id=%s",
+                "UPDATE autonomy_handoffs SET check_attempts=CASE WHEN state='checking' THEN check_attempts ELSE 0 END,check_lease_until=CASE WHEN state='checking' THEN check_lease_until ELSE NULL END,state='checking',updated_at=now() WHERE id=%s",
                 (handoff_id,),
             )
             self.store._event(
@@ -187,20 +187,3 @@ class HandoffStore:
                 "agent_id": row["agent_id"],
                 "confirmation": spec.confirmation.model_dump(),
             }
-
-    def check_finished(self, scope: Scope, handoff_id: str) -> None:
-        """A finished unsuccessful check remains uncertain and may be checked again."""
-        with self.store.transaction() as cur:
-            self.store._lock(cur, scope)
-            cur.execute(
-                "UPDATE autonomy_handoffs SET state=CASE WHEN expires_at<=now() "
-                "THEN 'expired' ELSE 'awaiting_external_action' END,updated_at=now() "
-                "WHERE tenant_id=%s AND owner_id=%s AND id=%s AND state='checking' "
-                "RETURNING operation_id",
-                (scope.tenant_id, scope.owner_id, handoff_id),
-            )
-            row = cur.fetchone()
-            if row:
-                self.store._event(
-                    cur, scope, str(row["operation_id"]), "external_status_check_finished"
-                )
