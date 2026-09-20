@@ -309,3 +309,12 @@ The same interruption audit now covers `/chat/send`. Four new component cases re
 The focused component suite passed 31 tests (1.35s); all five chat-panel component files passed 50 tests (1.40s). The initial reproduction retained four failures and four passing cases. ESLint and the production build pass. The new browser scenarios exercise the actual rebuilt dashboard with intercepted SSE responses, preserving isolation from real providers and business services. Manual acceptance of this uncertainty wording remains pending.
 
 Final browser verification passed all 25 cases (28.8s), including the five new ordinary-chat outcomes and the existing plan/deep cases. Each new case checks final text, removal of partial success, usable chat input and one send request. A normal-chat acceptance question for the uncertainty response has been sent to the user; no answer is assumed.
+
+
+## Broad regression rerun and watchdog test evidence
+
+At revision `04e9a05d10d`, the full frontend suite passed 1,622 tests across 146 files (10.36s). The jsdom navigation notice remains; this is not a warning-free test claim.
+
+The previously recorded unawaited-coroutine warning was traced to `test_no_watchdog_bound_is_harmless`: a synchronous mock side effect returned another coroutine, while the test only checked that the result was non-null. Strengthening the assertion reproduced an AttributeError on that coroutine. The mock now returns the actual response, and the test checks response content and exactly one awaited provider call. All 14 watchdog wiring/semantics checks passed (12.47s), with one upstream Pydantic warning and no unawaited coroutine warning. This fixes misleading test evidence, not production model-call behavior. The broad engine invocation began before this test-only correction, so its result is recorded separately from the focused corrected checks.
+
+The broad engine run at `04e9a05d10d` completed with 10,933 passed, 29 skipped and 173 deselected in 355.77s. Its 398 warnings include the original watchdog mock warning; the corrected focused run above is separate. The selection excludes slow, integration, LLM, end-to-end and smoke markers. These broad results precede the following audit-recovery feature.

@@ -118,17 +118,14 @@ async def test_no_watchdog_bound_is_harmless():
     """Sub-agents and out-of-loop callers run with no watchdog in context."""
     token = _active_watchdog_var.set(None)
     try:
-        with patch("litellm.acompletion", side_effect=lambda **k: _async(_response())):
+        with patch("litellm.acompletion", return_value=_response()) as provider:
             result = await LLMClient()._call_llm(
                 messages=[{"role": "user", "content": "hi"}], models=[LOCAL], tools=[]
             )
     finally:
         _active_watchdog_var.reset(token)
-    assert result is not None
-
-
-async def _async(value: Any) -> Any:
-    return value
+    assert result.choices[0].message.content == "ok"
+    provider.assert_awaited_once()
 
 
 @pytest.mark.asyncio

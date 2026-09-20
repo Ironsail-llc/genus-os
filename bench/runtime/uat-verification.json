@@ -9,19 +9,21 @@
   "replacement_selected": false,
   "checks": {
     "engine": {
-      "passed": 10888,
+      "passed": 10933,
       "failed": 0,
       "skipped": 29,
       "deselected": 173,
-      "seconds": 358.9,
+      "seconds": 355.77,
+      "warnings": 398,
       "selection": "not slow and not integration and not llm and not e2e and not smoke",
-      "note": "Broad run after durable async goal-budget binding at revision 0d5e3d2add1. Optional slow/integration/llm/e2e/smoke selections excluded. Subsequent native gateway checks recorded separately.",
-      "warnings": 398
+      "note": "Broad run at 04e9a05d10d, before automatic chat audit recovery and watchdog fixture correction; focused follow-ups recorded separately."
     },
     "frontend": {
       "files": 146,
-      "passed": 1617,
-      "failed": 0
+      "passed": 1622,
+      "failed": 0,
+      "seconds": 10.36,
+      "note": "Broad run at 04e9a05d10d; before automatic audit recovery."
     },
     "goals_private_database": {
       "passed": 58,
@@ -525,6 +527,13 @@
       "business_effects": 0,
       "manual_acceptance": false,
       "manual_review": "Requested in normal chat; answer pending"
+    },
+    "watchdog_evidence_correction": {
+      "reproduction": "Stronger assertion failed because mock returned an unawaited coroutine",
+      "passed": 14,
+      "seconds": 12.47,
+      "warnings": 1,
+      "production_behavior_changed": false
     }
   },
   "calendar": {
