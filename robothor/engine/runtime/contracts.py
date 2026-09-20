@@ -65,10 +65,10 @@ class ProgressEvent:
 
 @dataclass(frozen=True)
 class Usage:
-    model_calls: int
-    input_tokens: int
-    output_tokens: int
-    cost_usd: float
+    model_calls: int | None
+    input_tokens: int | None
+    output_tokens: int | None
+    cost_usd: float | None
 
 
 @dataclass(frozen=True)

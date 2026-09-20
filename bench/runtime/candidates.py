@@ -76,7 +76,18 @@ PROMPT = (
 SYSTEM = "Complete only the authorized request. Use record to store the requested value."
 
 
+def candidate_timeout():
+    from robothor.engine.runtime.current import active_context
+    from robothor.engine.runtime.deadlines import owns_deadline
+
+    context = active_context.get()
+    return asyncio.timeout(None if context and owns_deadline(context) else 60)
+
+
 async def admit_gateway(gateway, tenant):
+    from robothor.engine.runtime.deadlines import require_time
+
+    require_time()
     result = gateway.admit(tenant)
     if inspect.isawaitable(result):
         await result
@@ -124,7 +135,7 @@ class PydanticCandidate:
         )
         started = time.perf_counter()
         async with (
-            asyncio.timeout(60),
+            candidate_timeout(),
             agent.iter(
                 prompt, usage_limits=UsageLimits(request_limit=4, tool_calls_limit=4)
             ) as run,
@@ -218,7 +229,7 @@ class DeepAgentsCandidate:
             system_prompt=system_prompt,
             middleware=[Boundary()],
         )
-        async with asyncio.timeout(60):
+        async with candidate_timeout():
             await agent.ainvoke(
                 {"messages": [{"role": "user", "content": prompt}]}, config={"recursion_limit": 12}
             )

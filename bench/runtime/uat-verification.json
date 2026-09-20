@@ -213,6 +213,14 @@
       "native_and_store_contracts_passed": 28,
       "native_and_store_contracts_seconds": 2.37,
       "scope": "Private database authority changes during a synthetic provider request deny returned actions; pause, cancel, expiry, recovery, tenant isolation. Full candidate runtime and in-flight external effect reconciliation remain incomplete."
+    },
+    "candidate_runtime_bridge": {
+      "passed": 56,
+      "failed": 0,
+      "seconds": 4.56,
+      "native_deadline_runtime_passed": 19,
+      "native_deadline_runtime_seconds": 2.37,
+      "scope": "Shared request/result/control lifecycle with explicit in-memory host, plus existing framework/private-database component contracts. Production host, checkpoints, memory and matched comparison incomplete."
     }
   },
   "calendar": {
