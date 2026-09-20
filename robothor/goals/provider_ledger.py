@@ -32,20 +32,36 @@ class DurableAttemptBudget:
         with store.transaction() as cur:
             return self._attempt(cur)["tokens"]
 
+    def _authorized_attempt(self, cur):
+        row = self._attempt(cur)
+        goal = row["data"]
+        if (
+            row["status"] != "running"
+            or str(row["lease_id"]) != self.attempt
+            or not row["live"]
+            or not row["enabled"]
+            or goal["status"] not in {"running", "queued"}
+        ):
+            raise ValueError("goal lease no longer authorizes provider spending")
+        if goal["parent_goal_id"]:
+            parent = store.locked(cur, self.tenant, goal["parent_goal_id"])
+            if parent["status"] in INACTIVE:
+                raise ValueError("goal family authority exhausted")
+        return row
+
+    def assert_tool_authorized(self):
+        """Check durable authority again after provider work, before host dispatch."""
+        with store.transaction() as cur:
+            row = self._authorized_attempt(cur)
+            if row["data"].get("recovery_required"):
+                raise ValueError("goal requires reconciliation before business actions")
+
     def reserve(self, call_id, maximum):
         if not call_id or type(maximum) is not int or maximum <= 0:
             raise ValueError("call identity and positive bound required")
         with store.transaction() as cur:
-            row = self._attempt(cur)
+            row = self._authorized_attempt(cur)
             goal = row["data"]
-            if (
-                row["status"] != "running"
-                or str(row["lease_id"]) != self.attempt
-                or not row["live"]
-                or not row["enabled"]
-                or goal["status"] not in {"running", "queued"}
-            ):
-                raise ValueError("goal lease no longer authorizes provider spending")
             cur.execute(
                 """SELECT call_id,actual,reserved FROM pursuit_goal_provider_reservations
                    WHERE tenant_id=%s AND attempt_id=%s""",

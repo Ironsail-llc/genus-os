@@ -8,6 +8,7 @@ filesystem, shell or delegation tool may escape the supplied gateway.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 from dataclasses import dataclass, field
 
@@ -75,6 +76,12 @@ PROMPT = (
 SYSTEM = "Complete only the authorized request. Use record to store the requested value."
 
 
+async def admit_gateway(gateway, tenant):
+    result = gateway.admit(tenant)
+    if inspect.isawaitable(result):
+        await result
+
+
 def bound_tools(gateway, tenant):
     """Bind host-selected names in closures, never in model-overridable arguments."""
 
@@ -99,7 +106,7 @@ class PydanticCandidate:
         self.system_prompt = system_prompt
 
     async def run(self, gateway, *, tenant, prompt=PROMPT):
-        gateway.admit(tenant)
+        await admit_gateway(gateway, tenant)
         from pydantic_ai import Agent, Tool
         from pydantic_ai.usage import UsageLimits
 
@@ -123,7 +130,7 @@ class PydanticCandidate:
             ) as run,
         ):
             async for _node in run:
-                gateway.admit(tenant)
+                await admit_gateway(gateway, tenant)
                 if gateway.verified:
                     break
             usage = run.usage
@@ -151,7 +158,7 @@ class DeepAgentsCandidate:
         self.system_prompt = system_prompt
 
     async def run(self, gateway, *, tenant, prompt=PROMPT):
-        gateway.admit(tenant)
+        await admit_gateway(gateway, tenant)
         from deepagents import create_deep_agent
         from langchain.agents.middleware import AgentMiddleware
         from langchain.agents.middleware.types import ModelResponse
@@ -175,7 +182,7 @@ class DeepAgentsCandidate:
         class Boundary(AgentMiddleware):
             async def awrap_model_call(self, request, handler):
                 nonlocal calls, usage_known
-                gateway.admit(tenant)
+                await admit_gateway(gateway, tenant)
                 if gateway.verified:
                     return ModelResponse(result=[AIMessage(content="Verified completion")])
                 if calls >= 4:
@@ -198,7 +205,7 @@ class DeepAgentsCandidate:
                 return response
 
             async def awrap_tool_call(self, request, handler):
-                gateway.admit(tenant)
+                await admit_gateway(gateway, tenant)
                 tool = host_tools.get(request.tool_call["name"])
                 if tool is None:
                     raise ValueError("framework tool bypass denied")

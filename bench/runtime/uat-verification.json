@@ -205,6 +205,14 @@
       "goal_suite_failed": 0,
       "goal_suite_seconds": 8.92,
       "scope": "Private PostgreSQL reservation identities, concurrent ledgers, recovery, parent limits, tenant isolation, and both frameworks with durable pause/usage settlement. Full candidate runtime binding incomplete."
+    },
+    "candidate_durable_tool_admission": {
+      "passed": 41,
+      "failed": 0,
+      "seconds": 3.13,
+      "native_and_store_contracts_passed": 28,
+      "native_and_store_contracts_seconds": 2.37,
+      "scope": "Private database authority changes during a synthetic provider request deny returned actions; pause, cancel, expiry, recovery, tenant isolation. Full candidate runtime and in-flight external effect reconciliation remain incomplete."
     }
   },
   "calendar": {
