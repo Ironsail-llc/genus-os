@@ -187,3 +187,48 @@ async def test_late_finalization_cannot_overwrite_terminal_record(database):
         await runtime.host.finish(altered)
     (saved,) = rows(connect, tenant)
     assert saved["status"] == "completed" and saved["runtime_context"]["verified"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop", ["cancel", "deadline"])
+@pytest.mark.parametrize("lost_ack", [False, True])
+async def test_cancelled_admission_reconciles_late_database_insert(
+    database, monkeypatch, stop, lost_ack
+):
+    import asyncio
+    import threading
+
+    tenant, connect = database
+    runtime, req, gateway, calls = setup(tenant, "pydantic-ai")
+    if stop == "deadline":
+        from dataclasses import replace
+        from datetime import UTC, datetime, timedelta
+
+        req = replace(
+            req, context=replace(req.context, deadline=datetime.now(UTC) + timedelta(seconds=0.2))
+        )
+    entered, release = threading.Event(), threading.Event()
+    insert = runtime.host._insert
+
+    def delayed_insert(run, metadata):
+        entered.set()
+        assert release.wait(5), "test did not release the database worker"
+        insert(run, metadata)
+        if lost_ack:
+            raise psycopg2.OperationalError("synthetic lost commit acknowledgement")
+
+    monkeypatch.setattr(runtime.host, "_insert", delayed_insert)
+    task = asyncio.create_task(runtime.run(req))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        if stop == "cancel":
+            task.cancel()
+        with pytest.raises(asyncio.CancelledError if stop == "cancel" else TimeoutError):
+            await task
+    finally:
+        release.set()
+    await runtime.host.drain_admissions()
+    (saved,) = rows(connect, tenant)
+    assert saved["status"] == "cancelled"
+    assert saved["runtime_context"]["usage"]["model_calls"] == 0
+    assert not calls and gateway.writes == 0

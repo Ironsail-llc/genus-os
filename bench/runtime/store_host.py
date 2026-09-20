@@ -5,6 +5,7 @@ options and tool authority. This module never chooses business tools or models.
 """
 
 import asyncio
+import logging
 from dataclasses import asdict
 from datetime import UTC, datetime
 from uuid import UUID
@@ -13,9 +14,9 @@ from psycopg2.extras import Json
 
 from bench.runtime.candidates import admit_gateway
 from robothor.db.connection import get_connection
-from robothor.engine.models import AgentRun
+from robothor.engine.models import AgentRun, RunStatus
 from robothor.engine.runtime import controls
-from robothor.engine.runtime.contracts import RuntimeStoppedError
+from robothor.engine.runtime.contracts import RuntimeResult, RuntimeStoppedError, Usage
 from robothor.engine.runtime.deadlines import require_time
 
 
@@ -47,6 +48,7 @@ class RunGateway:
 class StoreHost:
     def __init__(self, gateway_factory):
         self.gateway_factory = gateway_factory
+        self._admissions = set()
 
     async def prepare(self, request, identity):
         context = request.context
@@ -69,8 +71,50 @@ class StoreHost:
         )
         metadata = {**asdict(context), **asdict(identity)}
         metadata["deadline"] = context.deadline.isoformat() if context.deadline else None
-        await asyncio.to_thread(self._insert, run, metadata)
+        insertion = self._track(asyncio.to_thread(self._insert, run, metadata))
+        try:
+            await asyncio.shield(insertion)
+        except asyncio.CancelledError:
+            self._track(self._cancel_admission(insertion, run, identity, context.request_id))
+            raise
         return run, RunGateway(run, gateway)
+
+    def _track(self, work):
+        task = asyncio.create_task(work)
+        self._admissions.add(task)
+
+        def completed(done):
+            self._admissions.discard(done)
+            if not done.cancelled() and done.exception():
+                logging.getLogger(__name__).error(
+                    "Candidate admission reconciliation failed: %s", done.exception()
+                )
+
+        task.add_done_callback(completed)
+        return task
+
+    async def drain_admissions(self):
+        """Shutdown/test hook: retain reconciliation work until it has finished."""
+        while self._admissions:
+            await asyncio.gather(*tuple(self._admissions), return_exceptions=True)
+
+    async def _cancel_admission(self, insertion, run, identity, request_id):
+        await asyncio.to_thread(
+            controls.issue_request,
+            run.tenant_id,
+            request_id,
+            "Cancelled during candidate admission",
+        )
+        try:
+            await insertion
+        except Exception:
+            # A lost commit acknowledgement is uncertain; attempt terminal reconciliation.
+            logging.getLogger(__name__).debug("Admission insert failed", exc_info=True)
+        run.status = RunStatus.CANCELLED
+        run.completed_at = datetime.now(UTC)
+        run.duration_ms = round((run.completed_at - run.started_at).total_seconds() * 1000)
+        run.error_message = "Cancelled during admission; no model or business action dispatched"
+        await self.finish(RuntimeResult(run, Usage(0, 0, 0, 0.0), False, False, identity))
 
     @staticmethod
     def _insert(run, metadata):

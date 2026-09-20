@@ -229,6 +229,12 @@
       "native_runtime_control_deadline_passed": 26,
       "native_seconds": 5.25,
       "scope": "Real run/control migrations in private PostgreSQL; persisted identity and unknown usage, remote stop, parent authority and terminal overwrite denial. Ordinary product admission, goal lifecycle wiring, memory, checkpoints and matched comparison incomplete."
+    },
+    "candidate_interrupted_admission": {
+      "passed": 69,
+      "failed": 0,
+      "seconds": 6.62,
+      "scope": "Candidate suite including delayed insert after cancellation/deadline and lost commit acknowledgement. Retained reconciliation records cancellation without provider/business effects; process-crash recovery and production shutdown wiring incomplete."
     }
   },
   "calendar": {
