@@ -370,9 +370,13 @@ class AgentSession:
         for. A sentence that relaxes a default posture has to be earned by the
         configuration it describes.
         """
-        from robothor.autonomy.intake import protect_payment_text
+        # This run's OWN trigger decides, not the fact that a session exists:
+        # `start` is reached by every run of every kind. See
+        # robothor/engine/chat_backstop.py for why masking machine-authored
+        # text is an injection primitive rather than a courtesy.
+        from robothor.engine.chat_backstop import protect_if_human_chat
 
-        user_message = protect_payment_text(user_message)
+        user_message = protect_if_human_chat(user_message, self.run.trigger_type)
         if autonomy_active and "browser" in tools_provided:
             system_prompt += AUTONOMY_BROWSER_PROMPT
         self.run.status = RunStatus.RUNNING
