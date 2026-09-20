@@ -76,7 +76,11 @@ def stopped(tenant: str, run_id: str) -> bool:
             """WITH RECURSIVE family AS (
             SELECT id,parent_run_id,runtime_context FROM agent_runs WHERE tenant_id=%s AND id=%s
             UNION
-            SELECT r.id,r.parent_run_id,r.runtime_context FROM agent_runs r JOIN family f ON r.id=f.parent_run_id
+            SELECT r.id,r.parent_run_id,r.runtime_context FROM agent_runs r JOIN family f
+              ON r.id IN (f.parent_run_id, CASE
+                WHEN f.runtime_context->>'resume_from_run_id' ~
+                  '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$'
+                THEN (f.runtime_context->>'resume_from_run_id')::uuid END)
             WHERE r.tenant_id=%s
         ) SELECT 1 FROM agent_runtime_controls c JOIN family f ON f.id=c.run_id
           WHERE c.tenant_id=%s

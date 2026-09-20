@@ -1,0 +1,17 @@
+{
+  "initial_failures": [
+    "Run stop did not reach native continuation or its delegated children.",
+    "Original request stop did not reach continuations.",
+    "Resume-cycle test could not inherit a local pause."
+  ],
+  "fix": "Durable stop ancestry includes checkpoint origin as well as delegated parent, within tenant; UNION terminates cycles. Validated UUID cast retains direct ID lookup and ignores malformed references.",
+  "focused_passed": 65,
+  "focused_seconds": 3.53,
+  "integration_passed": 20,
+  "integration_seconds": 6.32,
+  "integration_skipped": 1,
+  "integration_warnings": 1,
+  "tool_admission_check": "Both original-run and original-request stop deny dispatch from a continuation of delegated work.",
+  "full_daemon_drill": "Passed before final equivalent UUID lookup refinement; preserved goal budget/progress recovery and stopped-work restart checks.",
+  "limits": "No latency cohort for stop propagation is claimed by this increment. Existing in-flight external effects still require reconciliation."
+}

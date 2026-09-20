@@ -255,3 +255,63 @@ async def test_chat_abort_route_commits_before_ack_and_denies_cancel_resistant_w
     with pytest.raises(RequestBudgetError, match="Durable stop"):
         await task
     provider.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_stop", [False, True])
+async def test_stop_follows_checkpoint_continuations_and_their_children(runtime_db, request_stop):
+    from psycopg2.extras import Json
+
+    tenant = "resume-stop-" + uuid4().hex
+    root, resumed, child, later, unrelated = [str(uuid4()) for _ in range(5)]
+    request_id = str(uuid4())
+    with runtime_db() as conn, conn.cursor() as cur:
+        for run, parent, metadata in [
+            (root, None, {"request_id": request_id}),
+            (resumed, None, {"resume_from_run_id": root}),
+            (child, resumed, {}),
+            (later, None, {"resume_from_run_id": child}),
+            (unrelated, None, {"resume_from_run_id": "invalid-uuid"}),
+        ]:
+            cur.execute(
+                "INSERT INTO agent_runs VALUES (%s,%s,%s,%s)", (run, tenant, parent, Json(metadata))
+            )
+    assert not controls.stopped(tenant, later)
+    if request_stop:
+        controls.issue_request(tenant, request_id, "Stop original request")
+    else:
+        controls.issue(tenant, root, "cancel")
+    for run in (root, resumed, child, later):
+        assert controls.stopped(tenant, run)
+    assert not controls.stopped(tenant, unrelated)
+    assert not controls.stopped("another-tenant", later)
+    from unittest.mock import patch
+
+    from robothor.engine.tools.dispatch import ToolContext, _runtime_denial
+
+    with patch("robothor.engine.tools.dispatch._audit_tool_call"):
+        denial = await _runtime_denial(
+            "create_task", {}, ToolContext(run_id=later, tenant_id=tenant, agent_id="main")
+        )
+    assert "durable stop denies further tool dispatch" in denial["error"]
+
+
+def test_resume_stop_edges_are_tenant_scoped_and_cycles_terminate(runtime_db):
+    from psycopg2.extras import Json
+
+    local, foreign = "local-" + uuid4().hex, "foreign-" + uuid4().hex
+    first, second, foreign_run = [str(uuid4()) for _ in range(3)]
+    with runtime_db() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO agent_runs VALUES (%s,%s,NULL,%s)",
+            (first, local, Json({"resume_from_run_id": second})),
+        )
+        cur.execute(
+            "INSERT INTO agent_runs VALUES (%s,%s,%s,%s)",
+            (second, local, foreign_run, Json({"resume_from_run_id": first})),
+        )
+        cur.execute("INSERT INTO agent_runs VALUES (%s,%s,NULL,DEFAULT)", (foreign_run, foreign))
+    controls.issue(foreign, foreign_run, "cancel")
+    assert not controls.stopped(local, first)
+    controls.issue(local, second, "pause")
+    assert controls.stopped(local, first)
