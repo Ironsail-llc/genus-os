@@ -242,17 +242,13 @@ async def maybe_compress(
     )
 
     compressed = _restore_output_contract(messages, result.messages)
-    # Summarisation is best effort; reaching the target must not depend on it.
-    # Remove complete historical exchanges if a long reasoning/tool tail still
-    # fills the prompt. Keep provider-required reasoning on retained exchanges.
-    from robothor.engine.context_fit import ContextFit, estimate_for, shrink_to_fit
+    # Soft draining preserves the pinned request and recent complete exchanges.
+    # Provider hard-limit enforcement remains a separate preflight operation.
+    from robothor.engine.context_control import drain_history
 
     target = min(DRAIN_THRESHOLD, max(1, int(compress_at * 0.75)))
-    if estimate_for(compressed, model) > target:
-        outcome = shrink_to_fit(compressed, ContextFit(model, target, target, 0))
-        if outcome.tokens_after < outcome.tokens_before:
-            compressed = outcome.messages
-    after = estimate_for(compressed, model)
+    compressed = drain_history(compressed, model, target)
+    after = await asyncio.to_thread(estimate_tokens, compressed, model or None)
     if state is not None:
         state.fingerprint = fingerprint(compressed)
         state.model = model

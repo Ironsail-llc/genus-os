@@ -76,7 +76,7 @@ def load_operation(operation_id: str, tenant: str, user: str, agent: str) -> dic
         return dict(row) if row else None
 
 
-def perform(args: dict[str, Any], ctx: Any, *, cancelled: Any = None) -> dict[str, Any]:
+def _perform_locked(args: dict[str, Any], ctx: Any, *, cancelled: Any = None) -> dict[str, Any]:
     from robothor.engine.calendar_transport import CalendarTransport
     from robothor.engine.tools.handlers.gws import _handle_gws_tool, _resolve_calendar
 
@@ -151,14 +151,6 @@ def perform(args: dict[str, Any], ctx: Any, *, cancelled: Any = None) -> dict[st
                     }
             else:
                 cur.execute(
-                    "SELECT id FROM calendar_operations WHERE tenant_id=%s AND calendar_id=%s AND event_id=%s AND (status='executing' OR (status='blocked' AND result->'invitations_requested' IS DISTINCT FROM 'false'::jsonb)) LIMIT 1",
-                    (ctx.tenant_id, calendar_id, event_id),
-                )
-                if cur.fetchone():
-                    return {
-                        "error": "A prior operation needs reconciliation; no new write attempted"
-                    }
-                cur.execute(
                     "INSERT INTO calendar_operations (tenant_id,user_id,agent_id,calendar_id,event_id,arguments,status) VALUES (%s,%s,%s,%s,%s,%s::jsonb,'draft') RETURNING id",
                     (
                         ctx.tenant_id,
@@ -171,6 +163,13 @@ def perform(args: dict[str, Any], ctx: Any, *, cancelled: Any = None) -> dict[st
                 )
                 operation_id = str(cur.fetchone()["id"])
                 conn.commit()
+            # Existing drafts are subject to the same uncertainty barrier as new requests.
+            cur.execute(
+                "SELECT id FROM calendar_operations WHERE tenant_id=%s AND calendar_id=%s AND event_id=%s AND id<>%s AND (status='executing' OR (status='blocked' AND result->'invitations_requested' IS DISTINCT FROM 'false'::jsonb)) LIMIT 1",
+                (ctx.tenant_id, calendar_id, event_id, operation_id),
+            )
+            if cur.fetchone():
+                return {"error": "A prior operation needs reconciliation; no new write attempted"}
             if args.get("draft"):
                 with CalendarTransport() as api:
                     event = api.request("GET", calendar_id, event_id)
@@ -218,24 +217,6 @@ def perform(args: dict[str, Any], ctx: Any, *, cancelled: Any = None) -> dict[st
                     "gws_calendar_add_attendees", stored, run_id=ctx.run_id, tenant_id=ctx.tenant_id
                 )
             status = "blocked" if result.get("error") else "completed"
-            if status == "blocked":
-                from robothor.crm.dal import create_task
-
-                try:
-                    repair = create_task(
-                        title="Reconcile blocked calendar operation",
-                        body=f"Operation {operation_id}; run {ctx.run_id}. " + str(result["error"]),
-                        created_by_agent=ctx.agent_id,
-                        requires_human=True,
-                        tags=["calendar", "integration-repair"],
-                        tenant_id=ctx.tenant_id,
-                    )
-                    if isinstance(repair, str):
-                        result["repair_task_id"] = repair
-                except Exception:
-                    result["repair_task_error"] = (
-                        "Repair task could not be filed; operation record retained"
-                    )
             cur.execute(
                 "UPDATE calendar_operations SET status=%s,result=%s::jsonb,updated_at=now() WHERE id=%s",
                 (status, json.dumps(result), operation_id),
@@ -246,3 +227,24 @@ def perform(args: dict[str, Any], ctx: Any, *, cancelled: Any = None) -> dict[st
             conn.rollback()
             cur.execute("SELECT pg_advisory_unlock(%s)", (lock,))
             conn.commit()
+
+
+def perform(args: dict[str, Any], ctx: Any, *, cancelled: Any = None) -> dict[str, Any]:
+    """Complete the durable operation before optional repair-task bookkeeping.
+
+    Never wait for a second pooled connection while holding the event lock and
+    first connection. Concurrent failures must not exhaust the pool in a cycle.
+    """
+    result = _perform_locked(args, ctx, cancelled=cancelled)
+    if not result.get("error") or not result.get("operation_id") or result.get("replayed"):
+        return result
+    from robothor.engine.calendar_repair import attach_repair_task
+
+    attach_repair_task(result, ctx)
+    with get_connection() as conn, conn.cursor() as cur:
+        assert_test_database_write(connection_database_name(conn), "calendar_operations")
+        cur.execute(
+            "UPDATE calendar_operations SET result=%s::jsonb,updated_at=now() WHERE id=%s AND tenant_id=%s AND user_id=%s",
+            (json.dumps(result), result["operation_id"], ctx.tenant_id, ctx.user_id),
+        )
+    return result

@@ -50,7 +50,9 @@ async def test_runner_registers_the_live_session():
     from robothor.engine.context_control import control
     from robothor.engine.request_runtime import observe_request
 
-    assert "async with observe_request(session, on_status)" in inspect.getsource(runner)
+    assert "async with observe_request(session, on_status) as report_status" in inspect.getsource(
+        runner
+    )
     session = AgentSession(agent_id="a")
     with pytest.raises(RuntimeError):
         async with observe_request(session, None):

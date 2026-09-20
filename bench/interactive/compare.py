@@ -15,17 +15,18 @@ import json
 import math
 from collections import Counter, defaultdict
 from pathlib import Path
+from typing import Any
 
 METRICS = ("duration_ms", "harness_ms", "model_calls", "input_tokens", "post_completion_tool_calls")
 COHORT = ("cohort", "model", "reasoning", "startup", "machine", "prompt_hash", "tools_hash")
 HARNESSES = {"current", "optimized", "minimal", "opencode", "pi"}
 
 
-def percentile(values, p):
+def percentile(values: list[float], p: float) -> float:
     return sorted(values)[max(0, math.ceil(len(values) * p) - 1)]
 
 
-def compare(records):
+def compare(records: list[dict[str, Any]]) -> dict[str, Any]:
     groups = defaultdict(list)
     cohorts = set()
     for row in records:
@@ -44,7 +45,7 @@ def compare(records):
         groups[row["harness"]].append(row)
     if len(cohorts) != 1:
         raise ValueError("Compare exactly one matching model/tool/prompt/machine cohort at a time")
-    report = {}
+    report: dict[str, Any] = {}
     for harness, rows in groups.items():
         if len({r["version"] for r in rows}) != 1:
             raise ValueError("Do not mix versions of one harness")
@@ -69,7 +70,7 @@ def compare(records):
     optimized = report.get("optimized")
     comparable = current and optimized and case_counts["current"] == case_counts["optimized"]
     gates = {"comparable_baseline": bool(comparable)}
-    if comparable:
+    if comparable and current is not None and optimized is not None:
         gates.update(
             {
                 "sufficient_samples": optimized["sufficient_samples"]

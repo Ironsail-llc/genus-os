@@ -1212,6 +1212,11 @@ class ChannelSettings(SettingsGroup):
         "Workspace access token for native conditional calendar requests.",
         secret=True,
     )
+    google_workspace_config_dir: str = declare(
+        "",
+        "GOOGLE_WORKSPACE_CLI_CONFIG_DIR",
+        "Workspace CLI credential directory; defaults to ~/.config/gws.",
+    )
     google_workspace_credentials_file: str = declare(
         "",
         "GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE",
