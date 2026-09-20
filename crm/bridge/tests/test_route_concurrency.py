@@ -47,6 +47,7 @@ def test_only_genuinely_async_routes_run_on_the_event_loop():
         ("GET", "/api/autonomy/operations/{operation_id}/payment"),
         ("GET", "/api/autonomy/operations/{operation_id}/terms"),
         ("GET", "/api/autonomy/operations/{operation_id}/terms/{snapshot_id}"),
+        ("DELETE", "/api/autonomy/operations/{operation_id}/terms"),
         ("POST", "/api/autonomy/resources"),
         ("POST", "/api/autonomy/enrollments"),
         ("POST", "/api/autonomy/enrollments/inspect"),

@@ -510,7 +510,7 @@ class AutonomyStore:
 
     def payment_hold(self, scope: Scope, grant_id: str) -> bool:
         """Whether this grant is frozen after evidence of overspend."""
-        with self.transaction() as cur:
+        with self.transaction(scope) as cur:
             self._grant_row(cur, scope, grant_id)
             return grant_on_hold(cur, scope, grant_id)
 
@@ -521,7 +521,7 @@ class AutonomyStore:
         saying they have looked at the charge -- it is not a correction of the
         evidence, which stays exactly as the issuer delivered it.
         """
-        with self.transaction() as cur:
+        with self.transaction(scope) as cur:
             self._lock(cur, scope)
             self._grant_row(cur, scope, grant_id)
             if grant_on_hold(cur, scope, grant_id):
