@@ -253,7 +253,11 @@ def test_an_unverified_requester_reaches_neither_the_store_nor_google(store, goo
         SimpleNamespace(tenant_id="fixture", user_id="", agent_id="main", run_id="run"),
     ):
         result = operations.perform(
-            {"calendar_id": "owner@example.com", "event_id": "meeting", "attendees": ["sam@example.com"]},
+            {
+                "calendar_id": "owner@example.com",
+                "event_id": "meeting",
+                "attendees": ["sam@example.com"],
+            },
             anonymous,
         )
         assert result == {"error": "A verified requester and tenant are required"}
@@ -305,7 +309,16 @@ def test_an_incomplete_request_is_refused_before_anything_happens(store, google,
 
 @pytest.mark.integration
 @pytest.mark.parametrize(
-    "bad", ["not an email", "sam@example", "sam<@>example.com", "", "sam@example.com,bob@example.com", 5, None]
+    "bad",
+    [
+        "not an email",
+        "sam@example",
+        "sam<@>example.com",
+        "",
+        "sam@example.com,bob@example.com",
+        5,
+        None,
+    ],
 )
 def test_an_invalid_attendee_address_is_refused_before_anything_happens(store, google, ctx, bad):
     result = operations.perform(

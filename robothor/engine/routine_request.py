@@ -20,14 +20,14 @@ import json
 import logging
 from typing import Any
 
+# The pin is an engine-set KEY, owned by ``compaction``: content is model- and
+# tool-controlled, a key the engine writes on the dict is not, and
+# ``llm_client`` strips it before the payload reaches a provider.
+from robothor.engine.compaction import ACTIVE_REQUEST_PIN, PIN_KEY
+
 logger = logging.getLogger(__name__)
 
 TOOL = "gws_calendar_add_attendees"
-
-#: Engine-set key marking the pinned request. Content is model- and
-#: tool-controlled; a key the engine writes onto the message dict is not.
-PIN_KEY = "_pin"
-PIN_ACTIVE_REQUEST = "active_request"
 
 
 def bound_toolset(session: Any, tool_schemas: list[Any]) -> tuple[bool, list[Any]]:
@@ -85,7 +85,7 @@ async def bind_confirmation(
     session.messages.append(
         {
             "role": "developer",
-            PIN_KEY: PIN_ACTIVE_REQUEST,
+            PIN_KEY: ACTIVE_REQUEST_PIN,
             "content": (
                 "[ACTIVE REQUEST]\nExecute only the confirmed calendar operation "
                 + operation_id

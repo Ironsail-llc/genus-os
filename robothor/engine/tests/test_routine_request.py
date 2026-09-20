@@ -79,6 +79,26 @@ async def test_a_draft_binds(calendar_enabled, row):
     assert live.routine_operation_id == OP
 
 
+async def test_the_pinned_request_is_pinned_by_key_and_never_sent(calendar_enabled, row):
+    """The two halves of the pin contract, checked against each other.
+
+    ``[ACTIVE REQUEST]`` in the content is prose for a human reader; the pin
+    that compaction honours is an engine-set key, and that key must not reach
+    a provider — OpenAI-compatible APIs reject unrecognised message fields.
+    """
+    from robothor.engine.compaction import _is_pinned
+    from robothor.engine.llm_client import LLMClient
+
+    live = session()
+    await bind_confirmation(live, "yes", history())
+    pinned = live.messages[-1]
+    assert _is_pinned(pinned)
+
+    kwargs = LLMClient._build_llm_kwargs("ollama_chat/test", live.messages, [], 100, 0.3)
+    assert all(not k.startswith("_") for m in kwargs["messages"] for k in m)
+    assert _is_pinned(live.messages[-1]), "the caller's own messages must be untouched"
+
+
 @pytest.mark.parametrize("status", ["completed", "blocked", "executing"])
 async def test_only_a_draft_binds(calendar_enabled, row, status):
     """An already finished operation must never be replayed by a bare 'yes'."""
