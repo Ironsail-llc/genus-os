@@ -395,3 +395,31 @@ It adds the established tenant-isolation database backstop to enrollment intents
 and any other tenant table missing it, without changing existing policies or
 the checksum of an already-applied migration 131. Scoped database reads and
 writes are covered by a non-superuser PostgreSQL regression test.
+
+## Purposes and shared spending decisions
+
+Standing grants can set `allowed_purposes` on Account → Personal automation.
+Each line is an allowed proposal purpose; matching ignores leading/trailing
+whitespace and letter case but does not use substring or semantic matching.
+An empty list retains broad authority for any task otherwise covered by the
+grant, including existing grants created before this field was added. Select a
+matching granted purpose when preparing a task. The originating request remains
+linked through `request_context`; a purpose label is not proof that arbitrary
+page content describes the user's intent.
+
+The operation's purpose is part of its immutable proposal and idempotency
+fingerprint. The broker checks it on reservation and again before execution and
+submission, alongside grant revocation, version, destination and amounts. A page
+cannot edit the grant or replace that purpose. A covered task proceeds without an
+additional approval; an unmatched purpose returns `purpose_not_allowed`.
+
+Personal and organizational spending now call the same exact-amount limit
+functions in `robothor.entity.spend_limits`. Personal amounts remain integer minor
+units; treasury amounts remain Decimal values. Both paths enforce per-transaction
+and monthly boundaries and reject unavailable or invalid usage. Organizational
+daily limits and approval thresholds remain part of treasury policy; personal
+standing grants do not acquire a new approval threshold. Future personal renewal
+projections use the same bounded arithmetic. Ownership checks, resource access,
+reservations and ledger records remain scoped to their respective domains, so
+personal funds are never represented as company-owned virtual cards.
+e

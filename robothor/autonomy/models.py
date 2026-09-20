@@ -8,6 +8,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 from robothor.entity.payments import Identifier
+from robothor.entity.spend_limits import DecisionOutcome, DecisionReason, decide_limits
 
 Minor = Annotated[int, Field(strict=True, ge=0, le=10**12)]
 Action = Literal["account", "login", "application", "purchase", "subscription"]
@@ -139,6 +140,15 @@ class Delegation(StrictModel):
     recurring_minor: Minor = 0
     annual_minor: Minor = 0
     frame_origins: frozenset[str] = frozenset()
+    allowed_purposes: frozenset[str] = Field(default=frozenset(), max_length=80)
+
+    @field_validator("allowed_purposes")
+    @classmethod
+    def valid_purposes(cls, values: frozenset[str]) -> frozenset[str]:
+        cleaned = frozenset(value.strip() for value in values)
+        if any(not 3 <= len(value) <= 300 for value in cleaned):
+            raise ValueError("purposes must contain 3 to 300 characters")
+        return cleaned
 
     @field_validator("origins", "frame_origins")
     @classmethod
@@ -167,17 +177,34 @@ class Delegation(StrictModel):
             (agent_id in self.agent_ids, "agent_not_allowed"),
             (self.allow_any_website or operation.origin in self.origins, "origin_not_allowed"),
             (operation.action in self.actions, "action_not_allowed"),
-            (operation.currency == self.currency, "currency_not_allowed"),
-            (operation.amount_minor <= self.per_purchase_minor, "purchase_limit"),
             (
-                not spending
-                or (used_minor >= 0 and used_minor + operation.amount_minor <= self.monthly_minor),
-                "monthly_limit",
+                not self.allowed_purposes
+                or operation.purpose.strip().casefold()
+                in {purpose.casefold() for purpose in self.allowed_purposes},
+                "purpose_not_allowed",
             ),
-            (operation.recurring_minor <= self.recurring_minor, "recurring_limit"),
-            (operation.annual_commitment_minor <= self.annual_minor, "annual_limit"),
+            (operation.currency == self.currency, "currency_not_allowed"),
         ]
-        return next((reason for passed, reason in checks if not passed), "allow")
+        failed = next((reason for passed, reason in checks if not passed), None)
+        if failed:
+            return failed
+        outcome, reason = decide_limits(
+            amount=operation.amount_minor,
+            per_transaction_limit=self.per_purchase_minor,
+            monthly_limit=self.monthly_minor,
+            monthly_used=used_minor if spending else 0,
+        )
+        if outcome != DecisionOutcome.ALLOW:
+            return (
+                "purchase_limit"
+                if reason == DecisionReason.PER_TRANSACTION_LIMIT
+                else "monthly_limit"
+            )
+        if operation.recurring_minor > self.recurring_minor:
+            return "recurring_limit"
+        if operation.annual_commitment_minor > self.annual_minor:
+            return "annual_limit"
+        return "allow"
 
 
 class RuntimeSettings(StrictModel):
