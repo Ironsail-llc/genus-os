@@ -20,7 +20,11 @@ def _position(facts: list[PaymentFact], limit: int, currency: str) -> dict[str, 
     except ValueError:
         return {"position": None, "reconciliation_required": True}
     return {
-        "position": {**asdict(position), "net_charged_minor": position.net_charged_minor},
+        "position": {
+            **asdict(position),
+            "net_charged_minor": position.net_charged_minor,
+            "authorization_open_minor": position.authorization_open_minor,
+        },
         "reconciliation_required": position.limit_exceeded or position.authorization_exceeded,
     }
 

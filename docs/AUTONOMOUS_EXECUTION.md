@@ -543,6 +543,14 @@ is rejected. Gross charged and refunded amounts remain separate, and verified
 amounts above the reservation or authorization are recorded with discrepancy flags.
 They are not hidden by execution-policy limits. Refunds do not by themselves free
 a spending reservation or end a recurring commitment.
+Partial authorization reversals accumulate as released holds, not refunds. A
+capture may coexist with release of the unused authorization; captured amounts
+plus releases cannot exceed the known authorization. The remaining authorization
+is the original amount less captures and reversals, and a refund never reopens
+it. The owner view shows released and remaining authorization separately. Full
+reversal with a conflicting capture, excessive releases, and ambiguous multiple
+authorizations remain unresolved; this does not add authorization amendments or
+an issuer feed.
 
 Migration 138 adds encrypted, owner-scoped payment facts. Broker payment completion
 records a submission fact atomically for `purchase` and initial `subscription` enrollment; concurrent identical deliveries are deduplicated,

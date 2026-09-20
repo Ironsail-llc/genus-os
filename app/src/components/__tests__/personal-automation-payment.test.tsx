@@ -45,3 +45,14 @@ it("keeps renewal balances separate and clears them when closed", async () => {
   fireEvent.click(screen.getByRole("button", {name:"Close payment status"}));
   expect(screen.queryByText("Renewal due 2026-02-28")).toBeNull();
 });
+
+it("separates an authorization release from refunded captured money", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => ({ok:true,json:async()=>({event_count:4,reconciliation_required:false,
+    position:{state:"partially_refunded",authorized_minor:600,authorization_open_minor:0,reversed_minor:200,charged_minor:400,refunded_minor:100,net_charged_minor:300}})})));
+  render(<PersonalAutomationPayment operationId="order-1" currency="USD" />);
+  fireEvent.click(screen.getByRole("button", {name:"Payment status"}));
+  expect(await screen.findByText("Authorization released: $2.00")).toBeTruthy();
+  expect(screen.getByText("Authorization remaining: $0.00")).toBeTruthy();
+  expect(screen.getByText("Refunded: $1.00")).toBeTruthy();
+  expect(screen.getByText("Net charged: $3.00")).toBeTruthy();
+});
