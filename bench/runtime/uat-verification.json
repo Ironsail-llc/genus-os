@@ -618,6 +618,13 @@
       "build": "passed",
       "lint": "Ruff, ESLint and diff checks passed",
       "limitations": "Observes durable evidence updates without replay; does not schedule provider readback. Full acceptance and manual approval of this behavior remain incomplete."
+    },
+    "automatic_calendar_readback": {
+      "backend": "102 passed in 7.92s; 13 readback checks passed in 1.37s after two additional state-revalidation cases",
+      "checks": "Ruff, formatting and diff checks pass",
+      "evidence": "Private PostgreSQL HTTP background recovery, fake Google readback, scoped ownership, cooldown, nonblocking writer lock, no agent execution or write replay",
+      "limitations": "Triggered by chat polling; unattended scheduling, browser reload, other providers, notification delivery verification and full acceptance remain incomplete",
+      "production_deployed": false
     }
   },
   "calendar": {

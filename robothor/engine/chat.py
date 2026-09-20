@@ -42,7 +42,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 
@@ -565,13 +565,19 @@ async def chat_inject(request: Request) -> JSONResponse:
 
 
 @router.get("/outcome")
-async def chat_outcome(request: Request, request_id: str, session_key: str = "") -> JSONResponse:
+async def chat_outcome(
+    request: Request, background_tasks: BackgroundTasks, request_id: str, session_key: str = ""
+) -> JSONResponse:
     """Read only the authenticated caller's original request record."""
     from robothor.engine.chat_recovery import read_outcome
 
     auth = _auth_context(request)
     key = _effective_session_key(auth, session_key)
     result = await asyncio.to_thread(read_outcome, auth, key, request_id)
+    if result.get("terminal") and result.get("reconciliation_pending"):
+        from robothor.engine.calendar_reconciliation import reconcile_outcome
+
+        background_tasks.add_task(reconcile_outcome, auth, key, request_id)
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 

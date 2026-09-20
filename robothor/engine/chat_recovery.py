@@ -46,6 +46,7 @@ def read_outcome(auth, session_key: str, client_id: str) -> dict:
         "state": status.value,
         "terminal": terminal,
         "run_id": str(row["id"]),
+        "agent_id": row["agent_id"],
         "text": text,
         "effects": receipts,
         "reconciliation_pending": any(item["status"] == "executing" for item in receipts),

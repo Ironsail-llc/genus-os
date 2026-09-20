@@ -317,3 +317,58 @@ def test_terminal_run_distinguishes_pending_action_reconciliation(records, statu
         assert not refreshed["reconciliation_pending"]
         assert refreshed["effects"][0]["verified"]
         assert refreshed["state"] == "cancelled"
+
+
+async def test_http_recovery_initiates_scoped_readback_without_replaying_action(
+    records,
+    chat_app,  # noqa: F811
+    mock_runner,  # noqa: F811
+    monkeypatch,
+):
+    from unittest.mock import Mock, patch
+
+    from httpx import ASGITransport, AsyncClient
+
+    from robothor.engine import calendar_operations
+
+    auth, client_id = identity(), str(uuid4())
+    run = insert(records, auth, client_id, "cancelled", verified_status=None)
+    operation = record_calendar_receipt(records, auth, run, status="executing")
+    with records() as conn, conn.cursor() as cur:
+        cur.execute(
+            "ALTER TABLE calendar_operations ADD COLUMN calendar_id TEXT, ADD COLUMN event_id TEXT, ADD COLUMN arguments JSONB, ADD COLUMN updated_at TIMESTAMPTZ"
+        )
+        cur.execute(
+            "UPDATE calendar_operations SET calendar_id='fixture-calendar',event_id='fixture-event',arguments=%s,updated_at=now()-interval '1 minute' WHERE id=%s",
+            (Json({"attendees": ["sam@example.com"]}), operation),
+        )
+    readback = Mock(
+        return_value={
+            "error": "Interrupted write reconciled without retry; notification outcome unknown",
+            "verification": "unverified",
+            "attendees_present": ["sam@example.com"],
+            "invitations_requested": None,
+        }
+    )
+    monkeypatch.setattr(calendar_operations, "get_connection", records)
+    monkeypatch.setattr(calendar_operations, "_reconcile_interrupted", readback)
+    monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "off")
+    with patch("robothor.engine.chat._auth_context", return_value=auth):
+        async with AsyncClient(
+            transport=ASGITransport(app=chat_app), base_url="http://test"
+        ) as http:
+            first = await http.get(
+                "/chat/outcome", params={"request_id": client_id, "session_key": "web:main"}
+            )
+            second = await http.get(
+                "/chat/outcome", params={"request_id": client_id, "session_key": "web:main"}
+            )
+    assert first.json()["reconciliation_pending"]
+    assert not second.json()["reconciliation_pending"]
+    assert second.json()["state"] == "cancelled"
+    assert "Readback found these requested attendees: sam@example.com" in second.json()["text"]
+    assert "Whether notifications were sent remains unknown" in second.json()["text"]
+    readback.assert_called_once_with(
+        "fixture-calendar", "fixture-event", {"attendees": ["sam@example.com"]}
+    )
+    mock_runner.execute.assert_not_called()

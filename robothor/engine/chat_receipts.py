@@ -65,6 +65,11 @@ def calendar_receipts(cur, run, auth):
                 "kind": "calendar_attendees",
                 "status": row["status"],
                 "verified": verified,
+                "attendees_present": [
+                    email for email in result.get("attendees_present", []) if isinstance(email, str)
+                ]
+                if isinstance(result.get("attendees_present"), list)
+                else [],
                 "invitations_requested": result.get("invitations_requested")
                 if isinstance(result.get("invitations_requested"), bool)
                 else None,
@@ -95,5 +100,13 @@ def receipt_summary(receipts):
             finding = "Only a calendar draft is recorded."
         else:
             finding = "The calendar change is not fully verified in its operation record."
+        if receipt.get("attendees_present"):
+            finding += (
+                " Readback found these requested attendees: "
+                + ", ".join(receipt["attendees_present"])
+                + "."
+            )
+            if receipt["invitations_requested"] is None:
+                finding += " Whether notifications were sent remains unknown."
         lines.append(f"{finding} (Operation {receipt['operation_id']})")
     return "\n\n".join(lines)
