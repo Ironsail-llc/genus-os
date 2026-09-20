@@ -37,8 +37,10 @@ runtime_db = test_runtime_controls.runtime_db
 
 @pytest.mark.usefixtures("_mock_run_persistence")
 @pytest.mark.timeout(150)
+@pytest.mark.parametrize("hierarchy", [False, True], ids=["single-goal", "parent-child"])
 async def test_unfinished_goal_review_and_pause_through_normal_chat(
     request,
+    hierarchy,
     db,
     runtime_db,
     sample_agent_config,
@@ -52,6 +54,8 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
         lambda *args, **kwargs: "Engine health: unavailable in this isolated test.",
     )
     live = json.loads(os.environ.get("ROBOTHOR_RUNTIME_CHAT_LIVE", "null"))
+    if live and hierarchy:
+        pytest.skip("hierarchy acceptance uses synthetic provider only")
     live_output = None
     if live:
         import yaml
@@ -79,8 +83,9 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
         lambda *args, **kwargs: (sample_agent_config, None),
     )
     store.set_enabled(db, False, "operator")
-    seed_unfinished_work(db)
+    seed_unfinished_work(db, kind="long" if hierarchy else "short")
     (goal,) = store.list_goals(db)
+    child = test_store.create(db, parent_goal_id=goal["id"]) if hierarchy else None
     calls = []
     active_message = ""
 
@@ -131,14 +136,24 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
                     "note": "User asked to pause in chat",
                 },
             )
+        elif pausing and hierarchy and len(results) == 2:
+            name, args = "get_pursuit_goal", {"goal_id": goal["id"]}
         elif pausing:
             assert results[-1]["goal"]["status"] == "paused"
             text = "Paused the goal. The unfinished task is still open; I haven't marked the goal complete."
+            if hierarchy:
+                observed = results[-1]["goal"]
+                assert observed["children"][0]["id"] == child["id"]
+                assert observed["children"][0]["status"] == "paused"
+                assert sorted(task["status"] for task in observed["tasks"]) == ["DONE", "TODO"]
+                text = "Paused the goal and its unfinished child goal. The remaining task is still open; neither goal is complete."
         else:
             snapshot = results[-1]["goal"]
             assert results[-1]["execution_enabled"] is False
             assert snapshot["status"] == "waiting"
             assert snapshot["evidence"] == []
+            if hierarchy:
+                assert snapshot["children"][0]["status"] == "queued"
             assert sorted(task["status"] for task in snapshot["tasks"]) == ["DONE", "TODO"]
             text = (
                 "One of the two tasks is done. ‘Check the remaining item’ is still open, "
@@ -261,11 +276,19 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
             assert done["duration_ms"] <= 60_000, "completed response exceeded the host deadline"
             assert snapshot["status"] == ("paused" if message.startswith("Pause") else "waiting")
             assert sorted(task["status"] for task in snapshot["tasks"]) == ["DONE", "TODO"]
+            if hierarchy:
+                child_state = store.get(db, child["id"])
+                assert child_state["status"] == (
+                    "paused" if message.startswith("Pause") else "queued"
+                )
+                assert child_state["evidence"] == []
     if live:
         assert "get_pursuit_goal" in calls and calls.count("update_pursuit_goal") == 1
         assert outbound.call_count > 0
     else:
-        assert calls == ["get_pursuit_goal", "get_pursuit_goal", "update_pursuit_goal"]
+        assert calls == ["get_pursuit_goal", "get_pursuit_goal", "update_pursuit_goal"] + (
+            ["get_pursuit_goal"] if hierarchy else []
+        )
         outbound.assert_not_called()
         assert "isn't complete" in transcript[0]["robothor"]
         assert "Paused the goal" in transcript[1]["robothor"]
@@ -276,7 +299,10 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
         "tool_calls": calls,
         "final_goal_status": snapshot["status"],
         "final_task_statuses": ["DONE", "TODO"],
+        "final_child_status": store.get(db, child["id"])["status"] if child else None,
     }
     output = Path(os.environ.get("ROBOTHOR_CHAT_GOAL_UAT_OUTPUT", str(tmp_path / "chat-uat.json")))
+    if hierarchy:
+        output = output.with_name(output.stem + "-hierarchy" + output.suffix)
     if not live:
         output.write_text(json.dumps(artifact, indent=2) + "\n")

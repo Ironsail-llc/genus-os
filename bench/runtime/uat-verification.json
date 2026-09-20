@@ -706,6 +706,16 @@
       "checks": "Ruff, formatting and diff checks pass",
       "limitations": "No production daemon startup validation; full acceptance remains incomplete",
       "production_deployed": false
+    },
+    "normal_chat_goal_family_pause": {
+      "focused": "2 passed in 4.00s; one dependency warning",
+      "expanded": "77 passed in 12.87s; three dependency warnings",
+      "artifact": "uat-chat-goal-hierarchy.json",
+      "evidence": "Native chat and real goal handlers/private PostgreSQL; fresh post-pause read verifies parent and child paused, DONE/TODO tasks unchanged, no completion evidence",
+      "checks": "Ruff, formatting and diff checks pass",
+      "manual_acceptance": false,
+      "limitations": "Scripted provider, not live language understanding. Existing single-goal user acceptance preserved.",
+      "production_deployed": false
     }
   },
   "calendar": {

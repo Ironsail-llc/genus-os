@@ -26,11 +26,12 @@ from robothor.goals.model import CreateGoal, GoalUpdate
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def seed_unfinished_work(tenant):
+def seed_unfinished_work(tenant, *, kind="short"):
     goal = store.create(
         tenant,
         CreateGoal(
             objective="Finish the requested work",
+            kind=kind,
             success_criteria=["The requested work has been checked"],
         ),
         "uat-operator",
