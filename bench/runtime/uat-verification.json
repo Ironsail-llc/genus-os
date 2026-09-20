@@ -149,6 +149,12 @@
       ],
       "progress_interval_ms": 10000.75707497308,
       "artifact": "uat-native-http.json"
+    },
+    "matched_configuration_gates": {
+      "passed": 16,
+      "failed": 0,
+      "seconds": 4.81,
+      "scope": "Comparator, native benchmark producer and size checks; settings/resource mismatches rejected; legacy unknown configurations retain measurements without qualification."
     }
   },
   "calendar": {

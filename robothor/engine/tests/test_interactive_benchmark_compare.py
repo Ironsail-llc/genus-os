@@ -18,6 +18,8 @@ def samples(harness, duration):
             "machine": "same",
             "prompt_hash": "same",
             "tools_hash": "same",
+            "model_settings": {"temperature": 0.5, "max_output_tokens": 512},
+            "resources": {"concurrency": 1, "deadline_seconds": 60},
             "duration_ms": duration,
             "harness_ms": 10,
             "model_calls": 0,
@@ -43,6 +45,33 @@ def test_cannot_report_mixed_model_improvement():
     rows[-1]["model"] = "different"
     with pytest.raises(ValueError, match="cohort"):
         compare(rows)
+
+
+@pytest.mark.parametrize(
+    "section,key,value",
+    [
+        ("model_settings", "temperature", 0.0),
+        ("model_settings", "max_output_tokens", 4096),
+        ("resources", "concurrency", 20),
+        ("resources", "deadline_seconds", 120),
+    ],
+)
+def test_different_settings_or_resource_limits_cannot_qualify(section, key, value):
+    rows = samples("optimized", 100) + samples("deepagents", 50)
+    rows[-1][section][key] = value
+    with pytest.raises(ValueError, match="configuration cohort"):
+        compare(rows)
+
+
+def test_legacy_unknown_configuration_is_reported_without_qualification():
+    rows = samples("optimized", 100) + samples("deepagents", 50)
+    for row in rows:
+        del row["model_settings"]
+        del row["resources"]
+    report = compare(rows)
+    assert report["harnesses"]["deepagents"]["samples"] == 30
+    assert not report["optimization_gates"]["configuration_complete"]
+    assert not report["replacement_latency_gate"]["deepagents"]
 
 
 def test_pooled_speedup_cannot_hide_scenario_regression():

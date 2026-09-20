@@ -6,6 +6,8 @@ cohort (local/cloud), duration_ms,
 harness_ms, model_calls, input_tokens, post_completion_tool_calls, and
 state_checks (a nonempty mapping of independent fixture assertions to bool).
 Never substitute transcript claims for fixture state checks.
+Qualification also requires nonempty model_settings and resources objects.
+Legacy records remain readable, but missing configuration cannot qualify a gate.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from typing import Any
 
 METRICS = ("duration_ms", "harness_ms", "model_calls", "input_tokens", "post_completion_tool_calls")
 COHORT = ("cohort", "model", "reasoning", "startup", "machine", "prompt_hash", "tools_hash")
+CONFIGURATION = ("model_settings", "resources")
 HARNESSES = {"current", "optimized", "minimal", "opencode", "pi", "pydantic-ai", "deepagents"}
 EXTRA_METRICS = (
     "output_tokens",
@@ -38,10 +41,20 @@ def percentile(values: list[float], p: float) -> float:
 def compare(records: list[dict[str, Any]]) -> dict[str, Any]:
     groups = defaultdict(list)
     cohorts = set()
+    configurations = set()
+    configuration_complete = True
     for row in records:
         if row["harness"] not in HARNESSES or not row.get("version"):
             raise ValueError("Unknown or unversioned harness")
         cohorts.add(tuple(row[k] for k in COHORT))
+        configuration = []
+        for name in CONFIGURATION:
+            value = row.get(name)
+            if value is not None and not isinstance(value, dict):
+                raise ValueError(f"Configuration must be an object: {name}")
+            configuration_complete &= bool(value)
+            configuration.append(json.dumps(value, sort_keys=True, allow_nan=False))
+        configurations.add(tuple(configuration))
         for metric in METRICS:
             if (
                 isinstance(row.get(metric), bool)
@@ -68,8 +81,10 @@ def compare(records: list[dict[str, Any]]) -> dict[str, Any]:
             ):
                 raise ValueError(f"Invalid measurement: {metric}")
         groups[row["harness"]].append(row)
-    if len(cohorts) != 1:
-        raise ValueError("Compare exactly one matching model/tool/prompt/machine cohort at a time")
+    if len(cohorts) != 1 or len(configurations) != 1:
+        raise ValueError(
+            "Compare exactly one matching model/tool/prompt/machine/configuration cohort at a time"
+        )
     from bench.interactive.statistics import summary
 
     report: dict[str, Any] = {}
@@ -114,7 +129,10 @@ def compare(records: list[dict[str, Any]]) -> dict[str, Any]:
     current = report.get("current")
     optimized = report.get("optimized")
     comparable = current and optimized and case_counts["current"] == case_counts["optimized"]
-    gates = {"comparable_baseline": bool(comparable)}
+    gates = {
+        "configuration_complete": configuration_complete,
+        "comparable_baseline": bool(comparable and configuration_complete),
+    }
     if comparable and current is not None and optimized is not None:
         gates.update(
             {
@@ -136,7 +154,8 @@ def compare(records: list[dict[str, Any]]) -> dict[str, Any]:
         candidate = report.get(name)
         if optimized and candidate and case_counts[name] == case_counts["optimized"]:
             replacements[name] = (
-                candidate["all_completed"]
+                configuration_complete
+                and candidate["all_completed"]
                 and optimized["all_completed"]
                 and candidate["sufficient_samples"]
                 and optimized["sufficient_samples"]
@@ -152,6 +171,9 @@ def compare(records: list[dict[str, Any]]) -> dict[str, Any]:
             )
     return {
         "cohort": dict(zip(COHORT, next(iter(cohorts)), strict=True)),
+        "configuration": dict(
+            zip(CONFIGURATION, map(json.loads, next(iter(configurations))), strict=True)
+        ),
         "harnesses": report,
         "optimization_gates": gates,
         "replacement_latency_gate": replacements,

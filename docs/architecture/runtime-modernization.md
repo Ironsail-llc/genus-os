@@ -6,6 +6,8 @@ This change starts from the accepted integration revision `eea3252b15`. The curr
 
 The local acceptance follow-up, fixes, and latest test results are recorded in [runtime UAT](runtime-uat.md). The measurements below preserve the original implementation evaluation.
 
+The current [requirements audit](runtime-acceptance-audit.md) records verified scope and remaining work. In particular, action prototypes do not establish full alternative-runtime parity.
+
 ## Product and execution boundaries
 
 `robothor/engine/runtime/contracts.py` defines execution identity, requests, checkpoint envelopes, progress, usage, results and the runtime protocol. `CurrentRuntime` wraps `AgentRunner.execute`; the existing runner owns model retries, compaction and delivery. The goal controller accepts an injected runtime and otherwise uses this adapter. Business state remains in the existing stores.
