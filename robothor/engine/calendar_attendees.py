@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from robothor.engine.calendar_transport import CalendarTransport
 
@@ -17,7 +20,7 @@ def add_attendees(
     event_id: str,
     emails: list[str],
     *,
-    screen: Any,
+    screen: Callable[..., dict[str, Any] | None],
     expected_event: dict[str, Any] | None = None,
     cancelled: Any = None,
 ) -> dict[str, Any]:

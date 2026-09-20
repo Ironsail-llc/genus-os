@@ -348,8 +348,12 @@ class TestRunStatusSink:
         src = Path(run_status.__file__.replace("run_status.py", "runner.py")).read_text(
             encoding="utf-8"
         )
-        assert "session_registry.register(session, on_status=on_status)" in src
-        assert "session_registry.unregister(session)" in src
+        assert "async with observe_request(session, on_status) as report_status:" in src
+        runtime = Path(
+            run_status.__file__.replace("run_status.py", "request_runtime.py")
+        ).read_text()
+        assert "session_registry.register(session, on_status=reporter.status)" in runtime
+        assert "session_registry.unregister(session)" in runtime
 
 
 # ─── The ask_user tool ──────────────────────────────────────────────

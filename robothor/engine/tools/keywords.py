@@ -198,8 +198,17 @@ TOOL_HINTS: dict[str, ToolHint] = {
         ),
     ),
     "gws_calendar_add_attendees": ToolHint(
-        keywords=(*_CALENDAR, "add", "update", "patch", "attendee", "invite", "guest", "existing"),
-        rank_bias=1.0,
+        keywords=(
+            "calendar",
+            "meeting",
+            "event",
+            "add",
+            "update",
+            "attendee",
+            "invite",
+            "guest",
+            "existing",
+        ),
         when_to_use="Use this to add attendees to an EXISTING meeting while preserving existing guests and RSVPs.",
     ),
     # ── Google Chat ───────────────────────────────────────────────────

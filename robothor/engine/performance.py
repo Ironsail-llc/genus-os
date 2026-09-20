@@ -10,7 +10,46 @@ from typing import Any
 from robothor.engine.models import RunStep, StepType
 
 
-async def periodic_progress(session: Any, callback: Any, interval: float = 30.0) -> None:
+class ProgressReporter:
+    """Human-readable progress from actual loop events, without a model call."""
+
+    def __init__(self, callback: Any) -> None:
+        self.callback = callback
+        self.phase = "preparing"
+        self.activity = "Preparing the request"
+
+    async def status(self, event: dict[str, Any]) -> None:
+        kind = event.get("event")
+        if kind == "iteration_start":
+            self.phase, self.activity = "reasoning", "Working out the next step"
+        elif kind == "tools_start":
+            self.phase = "tools"
+            names = [str(n) for n in event.get("tools", [])]
+            self.activity = (
+                "Working on the calendar request"
+                if names == ["gws_calendar_add_attendees"]
+                else "Running requested tools"
+            )
+        elif kind == "tools_done":
+            self.phase, self.activity = "reviewing", "Reviewing the results"
+        if self.callback is not None:
+            await self.callback(event)
+
+    def progress(self, *, elapsed_s: int, completed: int) -> dict[str, Any]:
+        return {
+            "phase": self.phase,
+            "elapsed_s": elapsed_s,
+            "tool_calls_completed": completed,
+            "text": f"{self.activity} — {elapsed_s}s elapsed; {completed} tool calls completed.",
+        }
+
+
+async def periodic_progress(
+    session: Any,
+    callback: Any,
+    interval: float = 30.0,
+    reporter: ProgressReporter | None = None,
+) -> None:
     if callback is None:
         return
     started = time.monotonic()
@@ -20,9 +59,9 @@ async def periodic_progress(session: Any, callback: Any, interval: float = 30.0)
         event = {
             "event": "progress",
             "run_id": session.run_id,
-            "elapsed_s": round(time.monotonic() - started),
-            "tool_calls_completed": tools,
-            "text": f"Still working — {tools} tool calls completed.",
+            **(reporter or ProgressReporter(callback)).progress(
+                elapsed_s=round(time.monotonic() - started), completed=tools
+            ),
         }
         try:
             await asyncio.wait_for(callback(event), timeout=5)

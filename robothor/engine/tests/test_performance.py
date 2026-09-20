@@ -55,3 +55,22 @@ def test_draft_marker_attached_from_tool_evidence():
     )
     text = attach_draft_reference(session, "Review this draft.")
     assert attach_draft_reference(session, text) == text
+
+
+async def test_progress_names_phase_and_elapsed_time_without_tool_arguments():
+    from robothor.engine.performance import ProgressReporter
+
+    callback = AsyncMock()
+    reporter = ProgressReporter(callback)
+    await reporter.status(
+        {
+            "event": "tools_start",
+            "tools": ["gws_calendar_add_attendees"],
+            "arguments": {"secret": "never display"},
+        }
+    )
+    event = reporter.progress(elapsed_s=45, completed=2)
+    assert event["phase"] == "tools"
+    assert "45s" in event["text"]
+    assert "calendar" in event["text"].lower()
+    assert "never display" not in str(event)

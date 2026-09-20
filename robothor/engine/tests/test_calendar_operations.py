@@ -15,12 +15,17 @@ from robothor.engine.tests.test_calendar_attendees import api as calendar_api  #
 
 
 @pytest.fixture
-def store(monkeypatch):
+def store(monkeypatch, db_dsn):
+    from psycopg2.extensions import parse_dsn
+
+    from robothor.db.connection import assert_test_database
+
+    assert_test_database(parse_dsn(db_dsn).get("dbname", ""))
     schema = "calendar_" + uuid4().hex
     try:
-        admin = psycopg2.connect(dbname="robothor_test", connect_timeout=3)
-    except psycopg2.OperationalError:
-        pytest.skip("Local robothor_test database unavailable")
+        admin = psycopg2.connect(db_dsn, connect_timeout=3)
+    except psycopg2.OperationalError as exc:
+        pytest.fail(f"Calendar integration database unavailable: {type(exc).__name__}")
     admin.autocommit = True
     with admin.cursor() as cur:
         cur.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
@@ -31,7 +36,7 @@ def store(monkeypatch):
 
     @contextmanager
     def connection():
-        conn = psycopg2.connect(dbname="robothor_test", options=f"-c search_path={schema}")
+        conn = psycopg2.connect(db_dsn, options=f"-c search_path={schema}")
         try:
             with conn:
                 yield conn
@@ -88,6 +93,7 @@ def draft(ctx):
     )
 
 
+@pytest.mark.integration
 def test_draft_confirm_and_duplicate(store, google, ctx):
     prepared = draft(ctx)
     assert prepared["status"] == "draft"
@@ -100,6 +106,7 @@ def test_draft_confirm_and_duplicate(store, google, ctx):
     assert sum(c[0] == "PATCH" for c in google.calls) == 1
 
 
+@pytest.mark.integration
 def test_scope_and_argument_change_refused(store, google, ctx):
     prepared = draft(ctx)
     args = {"operation_id": prepared["operation_id"]}
@@ -109,6 +116,7 @@ def test_scope_and_argument_change_refused(store, google, ctx):
     assert len(google.calls) == 1
 
 
+@pytest.mark.integration
 def test_changed_meeting_requires_new_draft(store, google, ctx):
     prepared = draft(ctx)
     google.event["start"] = {"dateTime": "2026-09-23T16:00:00-04:00"}
@@ -119,6 +127,7 @@ def test_changed_meeting_requires_new_draft(store, google, ctx):
     assert draft(ctx)["status"] == "draft"
 
 
+@pytest.mark.integration
 def test_crash_after_write_reconciles_without_second_write(store, google, ctx, monkeypatch):
     prepared = draft(ctx)
     from robothor.engine.tools.handlers import gws
@@ -143,6 +152,7 @@ def test_crash_after_write_reconciles_without_second_write(store, google, ctx, m
     assert sum(c[0] == "PATCH" for c in google.calls) == 1
 
 
+@pytest.mark.integration
 def test_resource_lock_prevents_overlapping_writes(store, google, ctx):
     import hashlib
 
@@ -166,6 +176,7 @@ def test_confirmation_must_be_unambiguous_and_immediately_preceding():
     assert operations.confirmation_id("Go", history) is None
 
 
+@pytest.mark.integration
 def test_expired_draft_refuses_without_google_request(store, google, ctx):
     prepared = draft(ctx)
     with store() as conn, conn.cursor() as cur:
@@ -194,8 +205,23 @@ def test_operator_interrupt_is_visible_to_worker_without_consuming_it():
         session_registry.unregister(session)
 
 
+@pytest.mark.integration
 def test_operation_id_with_draft_flag_cannot_execute(store, google, ctx):
     prepared = draft(ctx)
     result = operations.perform({"operation_id": prepared["operation_id"], "draft": True}, ctx)
     assert result["invitations_requested"] is False
     assert len(google.calls) == 1
+
+
+@pytest.mark.integration
+def test_older_draft_cannot_bypass_uncertain_operation(store, google, ctx):
+    first = draft(ctx)
+    second = draft(ctx)
+    google.failure = {"error": "timeout", "outcome_unknown": True}
+    uncertain = operations.perform({"operation_id": first["operation_id"]}, ctx)
+    assert uncertain["invitations_requested"] is None
+    writes = sum(call[0] == "PATCH" for call in google.calls)
+    google.failure = None
+    result = operations.perform({"operation_id": second["operation_id"]}, ctx)
+    assert "reconciliation" in result["error"]
+    assert sum(call[0] == "PATCH" for call in google.calls) == writes

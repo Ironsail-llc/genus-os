@@ -37,11 +37,19 @@ class CalendarTransport:
             self.token = token
             return
         credential_file = settings.google_workspace_credentials_file
+        config_dir = (
+            Path(settings.google_workspace_config_dir).expanduser()
+            if settings.google_workspace_config_dir
+            else Path.home() / ".config" / "gws"
+        )
+        plain = config_dir / "credentials.json"
         if credential_file:
-            credentials = json.loads(Path(credential_file).read_text())
+            credentials = json.loads(Path(credential_file).expanduser().read_text())
+        elif plain.is_file() and not (config_dir / "credentials.enc").exists():
+            credentials = json.loads(plain.read_text())
         else:
             proc = subprocess.run(
-                [_resolve_gws_binary(), "auth", "export"],
+                [_resolve_gws_binary(), "auth", "export", "--unmasked"],
                 capture_output=True,
                 text=True,
                 timeout=10,

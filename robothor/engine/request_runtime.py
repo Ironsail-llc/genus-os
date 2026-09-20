@@ -5,23 +5,27 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager, suppress
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 from robothor.engine import session_registry
 from robothor.engine.context_control import ContextControl, control
-from robothor.engine.performance import periodic_progress, record_compactions
+from robothor.engine.performance import ProgressReporter, periodic_progress, record_compactions
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def observe_request(session: Any, on_status: Any):
-    session_registry.register(session, on_status=on_status)
+async def observe_request(session: Any, on_status: Any) -> AsyncIterator[Any]:
+    reporter = ProgressReporter(on_status)
+    session_registry.register(session, on_status=reporter.status)
     state = ContextControl(active_request=getattr(session, "originating_message", ""))
     token = control.set(state)
-    task = asyncio.create_task(periodic_progress(session, on_status))
+    task = asyncio.create_task(periodic_progress(session, on_status, reporter=reporter))
     try:
-        yield
+        yield reporter.status
     finally:
         task.cancel()
         with suppress(asyncio.CancelledError):
