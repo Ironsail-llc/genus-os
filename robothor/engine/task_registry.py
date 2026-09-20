@@ -44,7 +44,13 @@ class TaskRegistry:
         The task reference is stored until completion. On failure, the
         exception is logged at ERROR level.
         """
-        task = asyncio.create_task(coro, name=name)
+        try:
+            task = asyncio.create_task(coro, name=name)
+        except BaseException:
+            # No task owns this coroutine when admission fails. Release it
+            # without executing work, and preserve the caller's exception.
+            coro.close()
+            raise
         self._tasks.add(task)
         task.add_done_callback(self._on_done)
         return task

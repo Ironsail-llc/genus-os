@@ -126,3 +126,37 @@ class TestTaskRegistry:
         reset_task_registry()
         r2 = get_task_registry()
         assert r1 is not r2
+
+
+def test_rejected_spawn_closes_unowned_coroutine_without_a_running_loop():
+    import inspect
+
+    async def work():
+        raise AssertionError("rejected work must not execute")
+
+    pending = work()
+    try:
+        with pytest.raises(RuntimeError, match="no running event loop"):
+            TaskRegistry().spawn(pending)
+        assert inspect.getcoroutinestate(pending) == inspect.CORO_CLOSED
+    finally:
+        pending.close()
+
+
+async def test_task_factory_rejection_closes_unowned_coroutine(monkeypatch):
+    import inspect
+
+    async def work():
+        raise AssertionError("rejected work must not execute")
+
+    def refuse(*args, **kwargs):
+        raise RuntimeError("task factory rejected admission")
+
+    pending = work()
+    monkeypatch.setattr(asyncio, "create_task", refuse)
+    try:
+        with pytest.raises(RuntimeError, match="rejected admission"):
+            TaskRegistry().spawn(pending)
+        assert inspect.getcoroutinestate(pending) == inspect.CORO_CLOSED
+    finally:
+        pending.close()

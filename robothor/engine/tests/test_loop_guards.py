@@ -27,6 +27,8 @@ from __future__ import annotations
 import time
 from types import SimpleNamespace
 
+import pytest
+
 from robothor.engine.loop_guards import GuardState, check_iteration_guards
 
 
@@ -182,7 +184,22 @@ def test_a_flagged_watchdog_stops_the_run():
 # ── Runaway tokens ───────────────────────────────────────────────────
 
 
-def test_the_hard_cap_stops_the_run_and_marks_the_budget_exhausted():
+@pytest.fixture
+def alert_delivery(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from robothor.engine import runner, task_registry
+
+    registry = task_registry.TaskRegistry()
+    sender = AsyncMock()
+    monkeypatch.setattr("robothor.engine.alerts.alert", sender)
+    monkeypatch.setattr(task_registry, "get_task_registry", lambda: registry)
+    monkeypatch.setattr(runner, "_soft_runaway_window_started_at", None)
+    monkeypatch.setattr(runner, "_soft_runaway_pending", [])
+    return registry, sender
+
+
+async def test_the_hard_cap_stops_the_run_and_marks_the_budget_exhausted(alert_delivery):
     from robothor.engine.runner import RUNAWAY_TOKEN_HARD_CAP
 
     session = _session(input_tokens=RUNAWAY_TOKEN_HARD_CAP, output_tokens=0)
@@ -190,16 +207,20 @@ def test_the_hard_cap_stops_the_run_and_marks_the_budget_exhausted():
     assert _call(session) is True
     assert session.run.budget_exhausted is True
     assert session.errors and "runaway_token_cap_hit" in session.errors[0]
+    await alert_delivery[0].drain()
+    alert_delivery[1].assert_awaited_once()
 
 
-def test_the_cap_counts_input_and_output_together():
+async def test_the_cap_counts_input_and_output_together(alert_delivery):
     from robothor.engine.runner import RUNAWAY_TOKEN_HARD_CAP
 
     half = RUNAWAY_TOKEN_HARD_CAP // 2 + 1
     assert _call(_session(input_tokens=half, output_tokens=half)) is True
+    await alert_delivery[0].drain()
+    alert_delivery[1].assert_awaited_once()
 
 
-def test_the_soft_alert_fires_once_and_does_not_stop_the_run():
+async def test_the_soft_alert_fires_once_and_does_not_stop_the_run(alert_delivery):
     from robothor.engine.runner import RUNAWAY_TOKEN_ALERT
 
     state = GuardState()
@@ -211,6 +232,8 @@ def test_the_soft_alert_fires_once_and_does_not_stop_the_run():
     # A second pass must not alert again: the loop runs this every iteration.
     session2 = _session(input_tokens=RUNAWAY_TOKEN_ALERT)
     assert _call(session2, state=state) is False
+    await alert_delivery[0].drain()
+    alert_delivery[1].assert_awaited_once()
 
 
 def test_below_the_alert_threshold_nothing_happens():

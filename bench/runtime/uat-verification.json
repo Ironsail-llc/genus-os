@@ -660,6 +660,15 @@
       "warnings": 2,
       "seconds": 9.27,
       "log": "/tmp/runtime-goals-regression-b682048.log"
+    },
+    "background_coroutine_admission_cleanup": {
+      "initial": "2 failed: rejected coroutines remained open",
+      "focused": "37 passed in 4.43s with RuntimeWarning errors; six dependency deprecations",
+      "expanded": "62 passed in 11.75s with RuntimeWarning errors",
+      "evidence": "No-loop and rejected-task cleanup; awaited alert delivery exactly once; runaway guards and daemon shutdown preserved",
+      "checks": "Ruff, formatting and diff checks pass",
+      "limitations": "connect_tcp warning not reproduced in isolated timeout tests; unresolved. Broad run predates this change.",
+      "production_deployed": false
     }
   },
   "calendar": {
