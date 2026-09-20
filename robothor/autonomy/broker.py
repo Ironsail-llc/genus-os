@@ -557,6 +557,18 @@ class BrowserBroker:
                     raise ValueError("invalid_verification_code")
             # Keep the actual document origin fixed across decryption and fill.
             await self._guard_origin(page, page.main_frame, proposal.origin)
+            from robothor.autonomy.terms_capture import capture_terms
+
+            await capture_terms(
+                self,
+                scope,
+                operation_id,
+                agent_id,
+                page,
+                proposal.origin,
+                allowed_frames,
+                phase="before_input",
+            )
             # Claim once, before any credential fill can trigger site scripts.
             await asyncio.to_thread(
                 self.store.begin_submit, scope, operation_id, agent_id, workflow_id=workflow_id
@@ -578,6 +590,16 @@ class BrowserBroker:
             if url_origin(page.url) != proposal.origin:
                 raise PermissionError("destination_changed")
             await self._prices(page, proposal, plan, allowed_frames=allowed_frames)
+            await capture_terms(
+                self,
+                scope,
+                operation_id,
+                agent_id,
+                page,
+                proposal.origin,
+                allowed_frames,
+                phase="before_submit",
+            )
             # Revalidate revocation immediately before the irreversible click.
             await asyncio.to_thread(self.store.check_authority, scope, operation_id, agent_id)
             confirmed_before_click = (

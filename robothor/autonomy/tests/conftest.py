@@ -25,6 +25,7 @@ def store(identity):
             cur.execute(Path("crm/migrations/130_autonomy_request_context.sql").read_text())
             cur.execute(Path("crm/migrations/131_autonomy_enrollments.sql").read_text())
             cur.execute(Path("crm/migrations/132_autonomy_enrollment_rls.sql").read_text())
+            cur.execute(Path("crm/migrations/133_autonomy_terms_audit.sql").read_text())
     conn.close()
     store = AutonomyStore(lambda: psycopg2.connect(dsn), keys={"v1": b"x" * 32}, key_id="v1")
     store.configure(
