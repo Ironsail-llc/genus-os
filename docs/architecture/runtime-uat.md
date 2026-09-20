@@ -354,3 +354,10 @@ The recovered chat result now reads calendar-operation references from the origi
 A completed run's prose cannot override blocked, executing or unmatched operation evidence. The first receipt implementation omitted unmatched references and still allowed the original success prose; three strengthened cases reproduced that false evidence acceptance. Missing/foreign/conflicting references now produce unverified evidence instead. UUID references are normalized, and invalid reference text is not reflected into the chat explanation. Only explicit direct calendar-tool references are covered; deferred-tool wrappers, other effect types, and independent fresh provider reconciliation remain incomplete.
 
 Final verification passed 42 recovery/calendar/approved-plan/size checks (5.21s). The tests use private PostgreSQL, include actual calendar-operation result creation through a fake provider, and check interrupted-run success receipts, contrary evidence overriding prose, principal/agent isolation, conflicting references and equivalent UUID encodings. Existing operation IDs and state are not changed by recovery reads. Ruff, formatting and diff checks pass. No production effects or deployment occurred.
+
+
+## Deferred calendar audit recovery
+
+Receipt recovery now recognizes calendar actions invoked through `tool_call`, using the dispatcher's explicit target and nested arguments with its directly returned result. Other deferred tools and invalid argument shapes cannot supply calendar receipts. Existing principal/tenant/agent scoping and contrary-evidence handling remain in the shared reader.
+
+Two new private-database checks initially failed because deferred receipts were omitted. After the fix, 32 recovery/calendar/size checks passed (4.44s), including six new deferred cases. Ruff passed. This extends recorded calendar evidence coverage; it does not establish general external-service reconciliation, fresh provider verification, or full acceptance. No model requests, production effects or deployment occurred.

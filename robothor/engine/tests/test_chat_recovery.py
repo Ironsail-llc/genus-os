@@ -248,3 +248,53 @@ def test_equivalent_uuid_references_match_without_trusting_invalid_reference_tex
     result = chat_recovery.read_outcome(auth, "web:main", client)
     assert not result["verified"]
     assert "untrusted invalid reference" not in result["text"]
+
+
+@pytest.mark.parametrize("status", ["completed", "executing"])
+def test_deferred_calendar_receipt_uses_nested_arguments_and_direct_result(records, status):
+    auth, client = identity(), str(uuid4())
+    run = insert(records, auth, client)
+    operation = record_calendar_receipt(records, auth, run, status=status)
+    with records() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE agent_run_steps SET tool_name='tool_call',tool_input=%s WHERE run_id=%s",
+            (
+                Json(
+                    {
+                        "name": " gws_calendar_add_attendees ",
+                        "arguments": {"operation_id": operation},
+                    }
+                ),
+                run,
+            ),
+        )
+    result = chat_recovery.read_outcome(auth, "web:main", client)
+    assert len(result["effects"]) == 1
+    assert result["effects"][0]["operation_id"] == operation
+    assert result["verified"] is (status == "completed")
+    assert result["effects"][0]["verified"] is (status == "completed")
+
+
+@pytest.mark.parametrize("arguments", [None, [], "invalid"])
+def test_invalid_deferred_arguments_cannot_claim_calendar_receipt(records, arguments):
+    auth, client = identity(), str(uuid4())
+    run = insert(records, auth, client)
+    record_calendar_receipt(records, auth, run)
+    with records() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE agent_run_steps SET tool_name='tool_call',tool_input=%s WHERE run_id=%s",
+            (Json({"name": "gws_calendar_add_attendees", "arguments": arguments}), run),
+        )
+    assert chat_recovery.read_outcome(auth, "web:main", client)["effects"] == []
+
+
+def test_unrelated_deferred_tool_output_is_not_a_calendar_receipt(records):
+    auth, client = identity(), str(uuid4())
+    run = insert(records, auth, client)
+    operation = record_calendar_receipt(records, auth, run)
+    with records() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE agent_run_steps SET tool_name='tool_call',tool_input=%s WHERE run_id=%s",
+            (Json({"name": "other_tool", "arguments": {"operation_id": operation}}), run),
+        )
+    assert chat_recovery.read_outcome(auth, "web:main", client)["effects"] == []

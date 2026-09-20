@@ -14,14 +14,22 @@ def _reference(value):
 
 def calendar_receipts(cur, run, auth):
     cur.execute(
-        """SELECT tool_input,tool_output FROM agent_run_steps
-           WHERE run_id=%s AND tool_name='gws_calendar_add_attendees'
+        """SELECT tool_name,tool_input,tool_output FROM agent_run_steps
+           WHERE run_id=%s AND tool_name IN ('gws_calendar_add_attendees','tool_call')
            ORDER BY step_number DESC""",
         (run["id"],),
     )
     identifiers, conflicts = set(), set()
     for step in cur.fetchall():
         inputs = step["tool_input"] if isinstance(step["tool_input"], dict) else {}
+        if step["tool_name"] == "tool_call":
+            # The deferred dispatcher unwraps arguments but returns the tool's
+            # result directly. Only its explicit calendar target is evidence.
+            if str(inputs.get("name", "")).strip() != "gws_calendar_add_attendees":
+                continue
+            inputs = inputs.get("arguments", {})
+            if not isinstance(inputs, dict):
+                continue
         outputs = step["tool_output"] if isinstance(step["tool_output"], dict) else {}
         before, after = (
             _reference(inputs.get("operation_id")),

@@ -603,6 +603,12 @@
         "Notification delivery is not established",
         "General external-provider reconciliation remains incomplete"
       ]
+    },
+    "chat_deferred_calendar_receipt_recovery": {
+      "initial_result": "2 failed, 4 passed: deferred receipts omitted",
+      "result": "32 passed in 4.44s; Ruff passed",
+      "scope": "Direct and deferred calendar audit references, private PostgreSQL and fake calendar provider; no production deployment",
+      "limitations": "Recorded evidence only; general external-service reconciliation and full acceptance remain incomplete"
     }
   },
   "calendar": {
