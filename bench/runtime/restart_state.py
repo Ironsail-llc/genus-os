@@ -58,11 +58,45 @@ def seed(dsn):
                 "INSERT INTO workflow_runs(id,tenant_id,workflow_id,status,started_at) VALUES (%s,%s,'fixture','running',now()-interval '3 hours')",
                 (identifier, tenant),
             )
-    return run, goal, operation, foreign, stale_local, stale_foreign, wf_local, wf_foreign
+        goal_runs = []
+        for source in ("trigger", "runtime", "attempt"):
+            goal_run = str(uuid4())
+            goal_runs.append(goal_run)
+            cur.execute(
+                "INSERT INTO agent_runs(id,tenant_id,agent_id,trigger_type,trigger_detail,status,error_message,runtime_context) VALUES (%s,'default','main','cron',%s,'cancelled','daemon_restart',%s)",
+                (
+                    goal_run,
+                    "goal:" + goal if source == "trigger" else "delegated",
+                    Json({"goal_id": goal} if source == "runtime" else {}),
+                ),
+            )
+            cur.execute(
+                "INSERT INTO agent_run_checkpoints(run_id,step_number,messages,schema_version) VALUES (%s,1,%s,1)",
+                (goal_run, Json([{"role": "user", "content": "Continue synthetic goal"}])),
+            )
+            if source == "attempt":
+                cur.execute(
+                    "INSERT INTO pursuit_goal_attempts(tenant_id,id,goal_id,run_id,status) VALUES ('default',%s,%s,%s,'interrupted')",
+                    (str(uuid4()), goal, goal_run),
+                )
+
+    return (
+        run,
+        goal,
+        operation,
+        foreign,
+        stale_local,
+        stale_foreign,
+        wf_local,
+        wf_foreign,
+        goal_runs,
+    )
 
 
 def verify(dsn, identifiers):
-    run, goal, operation, foreign, stale_local, stale_foreign, wf_local, wf_foreign = identifiers
+    run, goal, operation, foreign, stale_local, stale_foreign, wf_local, wf_foreign, goal_runs = (
+        identifiers
+    )
     with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("SELECT status,COALESCE(resume_attempts,0) FROM agent_runs WHERE id=%s", (run,))
         assert cur.fetchone() == ("cancelled", 0), (
@@ -96,3 +130,9 @@ def verify(dsn, identifiers):
             assert cur.fetchone()[0] == expected, (
                 "Workflow cleanup crossed tenant boundary or missed local orphan"
             )
+
+        for goal_run in goal_runs:
+            cur.execute(
+                "SELECT status,COALESCE(resume_attempts,0) FROM agent_runs WHERE id=%s", (goal_run,)
+            )
+            assert cur.fetchone() == ("cancelled", 0), "Goal work resumed outside its coordinator"

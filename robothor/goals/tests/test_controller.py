@@ -202,3 +202,81 @@ async def test_controller_failure_stops_runner_before_releasing_lease(db):  # no
     ):
         await controller.execute(g, attempt)
     assert stopped.is_set()
+
+
+@pytest.mark.asyncio
+async def test_restarted_controller_recovers_lease_budget_and_reconciliation(db):  # noqa: F811
+    from robothor.goals.runtime import admit_tool
+
+    goal = store.create(
+        db,
+        CreateGoal(
+            objective="Recover interrupted work", success_criteria=["Checked"], token_budget=100
+        ),
+        "operator",
+    )
+    _, old_attempt = store.claim(db)
+    store.heartbeat(db, goal["id"], old_attempt, tokens=30, cost=0.01)
+    with store.transaction() as cur:
+        cur.execute(
+            "UPDATE pursuit_goals SET lease_until=now()-interval '1 minute' WHERE tenant_id=%s",
+            (db,),
+        )
+    attempts = []
+
+    async def execute(**kwargs):
+        current = binding.get()
+        assert current is not None and current.attempt != old_attempt
+        assert current.goal_id == goal["id"] and current.token_remaining == 70
+        attempts.append(current.attempt)
+        control = store.control(db, goal["id"])
+        assert control["recovery_required"]
+        context = SimpleNamespace(tenant_id=db, run_id="")
+        with pytest.raises(ValueError, match="inspect previous run results"):
+            admit_tool("create_task", {}, context)
+        control = store.update(
+            db,
+            goal["id"],
+            GoalUpdate(
+                action="reconciled",
+                version=control["version"],
+                note="Synthetic audit readback checked",
+            ),
+            "main",
+        )
+        admit_tool("create_task", {}, context)
+        run = AgentRun(
+            tenant_id=db,
+            trigger_detail=kwargs["trigger_detail"],
+            status=RunStatus.COMPLETED,
+            input_tokens=5,
+        )
+        attach_run(run)
+        store.update(
+            db,
+            goal["id"],
+            GoalUpdate(
+                action="wait",
+                version=control["version"],
+                note="Await synthetic reply",
+                event_type="fixture.reply",
+            ),
+            "main",
+        )
+        return run
+
+    controller = GoalController(
+        SimpleNamespace(execute=execute), SimpleNamespace(tenant_id=db, manifest_dir="unused")
+    )
+    with (
+        patch("robothor.engine.config.load_agent_config_or_broken", return_value=SimpleNamespace()),
+        patch("robothor.goals.events.capture"),
+    ):
+        await controller.tick()
+        await controller.tick()
+    assert len(attempts) == 1
+    store.finish(db, goal["id"], old_attempt, tokens=30, cost=0.01)
+    result = store.get(db, goal["id"])
+    assert result["status"] == "waiting" and result["tokens_used"] == 35
+    assert not result["recovery_required"]
+    assert binding.get() is None

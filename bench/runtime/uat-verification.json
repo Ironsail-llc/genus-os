@@ -1057,6 +1057,42 @@
       "warnings": 2,
       "seconds": 9.94,
       "log": "/tmp/runtime-goals-regression-5f5b6e62179.log"
+    },
+    "goal_recovery_ownership": {
+      "initial_failure": "Real daemon startup charged a paused goal run for generic checkpoint resumption outside GoalController.",
+      "fix": "Exclude goal-owned runs from generic startup resume using goal trigger, persisted runtime goal identity, or goal attempt linkage. GoalController retains lease/budget/reconciliation ownership.",
+      "restart_cycles": [
+        {
+          "health_ready": true,
+          "shutdown_exit_code": 0,
+          "shutdown_seconds": 1.2724947910010087,
+          "recovery_worker_spawns": 1
+        },
+        {
+          "health_ready": true,
+          "shutdown_exit_code": 0,
+          "shutdown_seconds": 0.9684781359992485,
+          "recovery_worker_spawns": 1
+        }
+      ],
+      "goal_ownership_forms_checked": [
+        "trigger_detail",
+        "runtime_context.goal_id",
+        "pursuit_goal_attempts.run_id"
+      ],
+      "focused_passed": 111,
+      "focused_seconds": 14.7,
+      "warnings": 2,
+      "positive_controller_recovery": {
+        "prior_tokens": 30,
+        "remaining_tokens": 70,
+        "new_tokens": 5,
+        "final_tokens": 35,
+        "writes_denied_before_reconciliation": true,
+        "stale_finish_cannot_double_charge": true,
+        "waiting_tick_does_not_execute": true
+      },
+      "limits": "Real daemon drill verifies paused goal runs are not admitted through generic recovery. Positive continuation uses actual controller/private store with scripted executor; full native active-goal checkpoint continuation remains unverified. Legacy descendants without goal attribution are not covered."
     }
   },
   "calendar": {

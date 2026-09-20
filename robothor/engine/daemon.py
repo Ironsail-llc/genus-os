@@ -270,7 +270,15 @@ def _resume_scan(tenant_id: str) -> list[ResumeCandidate]:
             cur.execute(
                 "SELECT id, agent_id, COALESCE(resume_attempts, 0), "
                 "COALESCE(error_message, ''), tenant_id FROM agent_runs "
-                "WHERE tenant_id = %s AND status = ANY(%s) ORDER BY id",
+                "WHERE tenant_id = %s AND status = ANY(%s) "
+                # GoalController owns lease recovery, reconciliation and budgets.
+                # A generic resume would drop that trusted binding (including
+                # for delegated runs whose trigger is not goal:<id>).
+                "AND runtime_context->>'goal_id' IS NULL "
+                "AND COALESCE(trigger_detail, '') NOT LIKE 'goal:%%' "
+                "AND NOT EXISTS (SELECT 1 FROM pursuit_goal_attempts a "
+                "WHERE a.tenant_id=agent_runs.tenant_id AND a.run_id=agent_runs.id) "
+                "ORDER BY id",
                 (tenant_id, sorted(RESUMABLE_STATUSES)),
             )
             rows = cur.fetchall()
