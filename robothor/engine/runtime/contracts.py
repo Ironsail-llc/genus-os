@@ -12,6 +12,10 @@ if TYPE_CHECKING:
     from robothor.engine.models import AgentRun
 
 
+class RuntimeStoppedError(RuntimeError):
+    """Durable authority denies further execution; dispatched effects need reconciliation."""
+
+
 @dataclass(frozen=True)
 class ExecutionContext:
     tenant_id: str

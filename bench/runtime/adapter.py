@@ -17,6 +17,7 @@ from robothor.engine.runtime.contracts import (
     ProgressEvent,
     RunRequest,
     RuntimeResult,
+    RuntimeStoppedError,
     StateEnvelope,
     Usage,
 )
@@ -132,9 +133,9 @@ class CandidateRuntime:
             )
             verified = bool(report.get("verified") and gateway.verified)
             run.status = RunStatus.COMPLETED if verified else RunStatus.FAILED
-            run.verified_status = "verified" if verified else "unverified"
+            run.verified_status = "verified" if verified else "failed_verification"
             run.output_text = "Verified completion" if verified else "Completion not verified"
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, RuntimeStoppedError):
             run.status = RunStatus.CANCELLED
             run.error_message = "Execution stopped; reconcile already dispatched effects"
         except Exception as error:
