@@ -138,7 +138,7 @@ Use the existing `browser` tool with `action="autonomy"` and `request`:
 | `email_verification` | Obtain a short-lived code/link reference from the authorized owner's Gmail. |
 | `execute` | Fill resource references, upload documents, check required boxes and submit. |
 | `operation` | Read the durable state and confirmation evidence. |
-| `reconcile` | Check a receipt-specific confirmation without filling or clicking, on the page the operation actually submitted on. |
+| `reconcile` | Check a receipt-specific confirmation without filling or clicking, on a page the broker's browser actually reached while submitting. |
 | `cancel` | Cancel a reserved operation or one waiting before submission. |
 
 A proposal names `origin`, `action` (`account`, `login`, `application`, `purchase`,
@@ -685,9 +685,9 @@ changes remain integration work.
 For an observed SMS/device, push, passkey, biometric, issuer or unsupported website
 challenge, `browser` autonomy supports `handoff {operation_id, handoff}`. The
 handoff contains a fresh UUID `request_id`, a `kind` (`sms`, `push`, `passkey`,
-`biometric`, `issuer` or `captcha`), and a `confirmation` whose `url` is **the page the
-operation submitted on** -- the URL of its bound execution plan, which the
-broker writes immediately before the click. Prefer omitting `selector` and `text` when the future page wording is
+`biometric`, `issuer` or `captcha`), and a `confirmation` whose `url` is **a page the
+broker's own browser reached** during the submission -- the page it submitted
+on, or any page the merchant then redirected it to. Prefer omitting `selector` and `text` when the future page wording is
 unknown: the broker applies its existing affirmative, task-specific outcome
 rules to visible messages, accepting phrases such as “Order confirmed” and
 rejecting negated or pending messages. If the site supplies an exact criterion,
@@ -697,21 +697,35 @@ classifier, which accepts an affirmative sentence anywhere on the origin, and
 that is not a basis for declaring money settled
 (`specific_confirmation_required_for_payment`).
 
-The agent does not get to choose the page it will be judged against. A
-`confirmation.url` that is merely same-origin is refused with
-`confirmation_page_not_observed`; it must match the bound plan's URL in full,
-including path and query. An earlier version also accepted any URL a previous
-handoff had named, which made the pin circular -- the agent registered a
-refund-policy article and then satisfied the pin with its own declaration.
+The agent does not get to choose the page it will be judged against. While
+an operation is executing, the broker records every main-frame address its
+browser lands on (same-origin, at most ten) into `execution_plan.landed_urls`.
+A `confirmation.url` must match one of those in full, including path and
+query, or it is refused with `confirmation_page_not_observed`. This is what
+makes the ordinary checkout work: a POST that redirects to
+`/order/12345/confirmation` lands the browser there, the broker sees it, and
+a handoff may name it.
+
+Two earlier versions were weaker in the same direction. The first accepted any
+URL a previous handoff had named, which made the pin circular -- the agent
+registered a refund-policy article and then satisfied the pin with its own
+declaration. The second used the bound execution plan's `url`, which is still
+the agent's value: `bind_plan` stores what the agent declared, so writing it
+just before the click says when it was written, not whose claim it is.
 
 New handoffs reject the obvious whole-page selectors (`body`, `html`, `*`,
 `:root`) with `use_automatic_or_specific_confirmation`, but that list is a hint,
 not the guard: what decides is checked when the page is read. The matched
-selector must resolve to exactly one visible element whose text is the declared
-criterion plus ordinary surrounding wording -- at most 80 characters more, and
-never more than 300 -- so `html body`, `main`, `div`, `p`, `body *` and
-`body > *` are refused against a real page rather than by spelling, and a
-criterion padded out to 277 characters is refused too.
+selector must resolve to exactly one visible element carrying a short,
+word-shaped message: at most 300 normalised characters, and an average token
+no longer than 24 characters. So `html body`, `main`, `div`, `p`, `body *` and
+`body > *` are refused against a real page rather than by spelling, a
+criterion padded out with 260 filler characters is refused too, and an
+ordinary panel -- "Thank you, Alice! Order confirmed - order #ABC-123456789.
+We emailed a receipt. Estimated delivery: Tuesday 24 September." -- is
+accepted. The bound deliberately does not scale with the declared phrase: it
+did once, and the only way around it was for the agent to guess more future
+wording, which is the behaviour automatic detection exists to remove.
 
 A handoff is admissible only once the operation has actually entered
 `submitting` or `reconciling`: before the first external commitment there is
@@ -730,6 +744,12 @@ replace a pending handoff -- and a replay is re-authorized against the current
 settings and grant before it is answered, so replaying after revocation is
 refused rather than returning the earlier success.
 `handoffs {operation_id}` reads its public state.
+
+The landing record is not a secret. It sits beside the agent's plan in
+`execution_plan`, which the agent can read back through `operation`, because
+the pages a browser visited are evidence rather than confidential material.
+A confirmation URL carrying a one-time token is therefore visible to the agent
+that ran the operation; do not treat a status link as a bearer secret.
 
 Migration 140 stores the confirmation plan encrypted and binds it to the owner,
 operation and handoff. Public results expose the handoff ID, kind and deadline,
@@ -775,11 +795,12 @@ methods and WebSockets, including script-initiated attempts to repeat checkout.
 It does not click or fill. The page it reads is pinned by its **full URL** --
 scheme, host, port, path and query -- so a redirect or a page that rewrites its
 own address cannot substitute another page (`confirmation_page_changed`). That
-URL must also be the one page the operation has on record: where the broker
-was when it submitted, from its bound execution plan. Nothing the agent
-declares can add to that set. A same-origin help article quoting "Your order
-has been confirmed" is not it (`confirmation_page_not_registered`). The same
-pin applies to the agent's own `reconcile` action. Sites requiring a mutating status API need a dedicated
+URL must also be one of the pages the operation has on record in
+`execution_plan.landed_urls` -- where the broker's browser actually went while
+submitting. Nothing the agent declares can add to that set. A same-origin help
+article quoting "Your order has been confirmed" is not in it
+(`confirmation_page_not_registered`). The same pin applies to the agent's own
+`reconcile` action. Sites requiring a mutating status API need a dedicated
 validated adapter; a GET endpoint must still have read-only server semantics.
 Missing confirmation, authentication or an expired handoff leaves the task
 uncertain. A preexisting broker session is needed for authenticated status pages;

@@ -20,8 +20,7 @@ async def test_external_approval_reconciles_with_no_second_post_or_script_mutati
         if route.request.method == "POST":
             submitted.append(route.request.url)
             await route.fulfill(body="Approve on your device")
-        elif submitted:
-            # After the commitment, the same checkout page reports its outcome.
+        elif "/status" in route.request.url:
             status_reads.append(route.request.url)
             await route.fulfill(
                 content_type="text/html",
@@ -32,7 +31,7 @@ async def test_external_approval_reconciles_with_no_second_post_or_script_mutati
         else:
             await route.fulfill(
                 content_type="text/html",
-                body="""<p id="amount">$6.00</p><button id="submit" onclick="fetch('/pay',{method:'POST'}).then(r=>r.text()).then(t=>document.querySelector('#done').textContent=t)">Buy</button><p id="done"></p>""",
+                body="""<p id="amount">$6.00</p><button id="submit" onclick="fetch('/pay',{method:'POST'}).then(r=>r.text()).then(t=>{document.querySelector('#done').textContent=t;location.href='/status';})">Buy</button><p id="done"></p>""",
             )
 
     async with async_playwright() as pw:
@@ -53,16 +52,29 @@ async def test_external_approval_reconciles_with_no_second_post_or_script_mutati
                 ),
                 page,
             )
-            assert result["state"] == "reconciling" and len(submitted) == 1
+            assert result["state"] == "reconciling"
+            assert "https://shop.example/pay" in submitted
+            # The merchant redirected the browser to its own status page, and
+            # that page's script fired while the submission window was still
+            # open. What must not happen is another request DURING the
+            # read-only check below.
+            committed = list(submitted)
+            reads_before = len(status_reads)
         finally:
             await browser.close()
+        # The broker was redirected here after the commitment, so this page
+        # -- not the checkout it submitted on -- is what the handoff names.
+        assert (
+            "https://shop.example/status"
+            in (store.operation(identity, op["id"])["execution_plan"]["landed_urls"])
+        )
         handoff = HandoffStore(store).create(
             identity,
             op["id"],
             "main",
             request(
                 confirmation={
-                    "url": "https://shop.example/checkout",
+                    "url": "https://shop.example/status",
                     "selector": "#done",
                     "text": "Order confirmed",
                 }
@@ -87,10 +99,10 @@ async def test_external_approval_reconciles_with_no_second_post_or_script_mutati
                 )
                 await page.wait_for_timeout(100)
                 assert result["state"] == ("completed" if approved else "reconciling")
-                assert len(submitted) == 1
+                assert submitted == committed
             finally:
                 await browser.close()
-        assert len(status_reads) == 2
+        assert len(status_reads) == reads_before + 2
         assert HandoffStore(store).list(identity)[0]["state"] == "resolved"
 
 
@@ -142,12 +154,17 @@ async def test_automatic_handoff_confirmation_uses_affirmative_observation_not_g
         "main",
         {"url": "https://account.example/register", "submit_selector": "#submit"},
     )
+    store.record_landed_pages(
+        identity,
+        op["id"],
+        ["https://account.example/register", "https://account.example/status"],
+    )
     store.begin_submit(identity, op["id"], "main")
     asked = HandoffStore(store).create(
         identity,
         op["id"],
         "main",
-        request(confirmation={"url": "https://account.example/register"}),
+        request(confirmation={"url": "https://account.example/status"}),
     )
     posts = []
     async with async_playwright() as pw:

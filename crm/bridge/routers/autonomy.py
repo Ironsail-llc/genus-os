@@ -14,7 +14,7 @@ from robothor.autonomy.identity import scope_for_actor
 from robothor.autonomy.models import Delegation, ResourceInput, RuntimeSettings, StrictModel
 from robothor.autonomy.onboarding import import_contact_profile
 from robothor.autonomy.runtime import run_browser
-from robothor.autonomy.store import AutonomyStore
+from robothor.autonomy.store import AutonomyStore, declared_plan
 
 router = APIRouter(prefix="/api/autonomy", tags=["autonomy"])
 _resumes: set[asyncio.Task] = set()
@@ -232,7 +232,7 @@ async def verification(operation_id: UUID, request: Request):
         raise HTTPException(422, "Invalid verification code")
     try:
         row = await asyncio.to_thread(AutonomyStore().resume_with_code, scope, str(operation_id))
-        plan = ExecutionPlan.model_validate(row["execution_plan"])
+        plan = ExecutionPlan.model_validate(declared_plan(row["execution_plan"]))
     except Exception:
         raise HTTPException(409, "Operation is not waiting for this verification") from None
 

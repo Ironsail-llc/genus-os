@@ -7,11 +7,12 @@ import pytest
 from robothor.autonomy.handoffs import HandoffRequest, HandoffStore
 from robothor.autonomy.tests.test_store import policy, proposal
 
-#: The page the broker submits on, and therefore the only page a handoff for
-#: these fixtures may name. The query string is the canary for the private-URL
-#: assertions: it must never appear in a public result or in storage the owner
-#: has not unsealed.
-SUBMISSION_URL = "https://shop.example/checkout?receipt=PrivateLinkCanary"
+#: Where the broker submits.
+SUBMISSION_URL = "https://shop.example/checkout"
+#: Where the merchant sends the browser afterwards, and therefore the page a
+#: handoff may name. The query string is the canary for the private-URL
+#: assertions.
+STATUS_URL = "https://shop.example/status?receipt=PrivateLinkCanary"
 
 
 def request(**changes):
@@ -20,7 +21,7 @@ def request(**changes):
             "request_id": str(uuid4()),
             "kind": "push",
             "confirmation": {
-                "url": SUBMISSION_URL,
+                "url": STATUS_URL,
                 "selector": "#done",
                 "text": "Order confirmed",
             },
@@ -38,13 +39,16 @@ def reserved(store, identity):
 def pending(store, identity):
     """After begin_submit: the outcome is uncertain, so a handoff is admissible.
 
-    The plan is bound first because the broker binds it just before the click,
-    and it is the only record of which page the commitment was made on.
+    This stands in for the commonest checkout: the plan is bound to the
+    checkout page, the commitment is made there, and the merchant redirects
+    the browser to a status page the broker records on the way past. Only
+    that recorded landing makes the status page nameable by a handoff.
     """
     op = reserved(store, identity)
     store.bind_plan(
         identity, op["id"], "main", {"url": SUBMISSION_URL, "submit_selector": "#submit"}
     )
+    store.record_landed_pages(identity, op["id"], [SUBMISSION_URL, STATUS_URL])
     store.begin_submit(identity, op["id"], "main")
     return op
 
@@ -68,6 +72,12 @@ def test_acknowledgment_preserves_uncertainty_and_budget_and_does_not_reexecute(
 
 
 def test_replay_is_idempotent_and_plan_is_private_and_owner_scoped(store, identity):
+    """What the canary proves: the confirmation plan is sealed at rest and is
+    never echoed in a public result or a cross-owner read. It is NOT a
+    confidentiality proof against the agent -- the same URL is a landing the
+    broker recorded in ``execution_plan``, a plaintext column the agent can
+    read back through ``kind=operation``. That is deliberate: the pages the
+    browser actually reached are evidence, not a secret."""
     op = pending(store, identity)
     handoffs = HandoffStore(store)
     spec = request()

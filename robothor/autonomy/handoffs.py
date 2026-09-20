@@ -119,20 +119,25 @@ def release_expired_handoff(
     return True
 
 
-def observed_submission_page(operation: dict[str, Any]) -> str | None:
-    """The one page the BROKER recorded, never a page the agent named.
+def observed_submission_pages(operation: dict[str, Any]) -> set[str]:
+    """The pages the BROKER landed on, never a page the agent named.
 
-    Only the bound execution plan qualifies. It is written by the broker
-    immediately before the click, so it is evidence of where the commitment
-    was made. An earlier version also accepted each handoff's own
-    ``confirmation.url``, which made the pin circular: the agent registered
-    the page it wanted to be judged against and then satisfied the pin with
-    its own declaration -- and completed a purchase against
-    "Order confirmed? You have 30 days to return it." on a refund-policy
-    article.
+    Two earlier versions were both wrong in the same direction. The first
+    accepted each handoff's own ``confirmation.url``, which made the pin
+    circular: the agent registered the page it wanted to be judged against
+    and then satisfied the pin with its own declaration, completing a
+    purchase against "Order confirmed? You have 30 days to return it." on a
+    refund-policy article. The second used the bound plan's ``url``, which is
+    still the AGENT's value -- ``bind_plan`` writes what the agent declared,
+    so that is true about when it was written, not about whose claim it is.
+
+    What counts is ``landed_urls``: the main-frame navigations the broker
+    itself observed while submitting. That both closes the hole and restores
+    the shape the feature exists for, because a merchant's POST -> redirect
+    lands the browser on the confirmation page and the broker sees it.
     """
-    url = (operation.get("execution_plan") or {}).get("url")
-    return url if isinstance(url, str) else None
+    landed = (operation.get("execution_plan") or {}).get("landed_urls") or []
+    return {item for item in landed if isinstance(item, str)}
 
 
 class HandoffStore:
@@ -175,11 +180,12 @@ class HandoffStore:
                 raise PermissionError("operation_not_pending")
             if url_origin(spec.confirmation.url) != proposal.origin:
                 raise PermissionError("destination_mismatch")
-            submitted = observed_submission_page(op)
-            if not submitted or not same_page(spec.confirmation.url, submitted):
+            if not any(
+                same_page(spec.confirmation.url, landed) for landed in observed_submission_pages(op)
+            ):
                 # The agent does not get to name the page it will be judged
-                # against. The only page on record is the one the broker
-                # itself was on when it submitted.
+                # against. The only pages on record are the ones the broker's
+                # own browser reached while submitting.
                 raise PermissionError("confirmation_page_not_observed")
             decision = self.store._budget_decision(
                 cur, scope, policy, proposal, agent_id, operation_id

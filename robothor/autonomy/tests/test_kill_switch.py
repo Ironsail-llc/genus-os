@@ -27,7 +27,7 @@ from robothor.autonomy.broker import BrowserBroker, ExecutionPlan
 from robothor.autonomy.handoff_recovery import HandoffChecks
 from robothor.autonomy.handoffs import HandoffStore
 from robothor.autonomy.models import Delegation, RuntimeSettings, WebOperation
-from robothor.autonomy.tests.test_handoffs import SUBMISSION_URL, pending, request
+from robothor.autonomy.tests.test_handoffs import STATUS_URL, SUBMISSION_URL, pending, request
 from robothor.autonomy.tests.test_store import policy, proposal
 
 DISABLED = RuntimeSettings(enabled=False)
@@ -568,7 +568,7 @@ async def test_a_whole_page_guess_is_rejected_at_check_time(store, identity, sel
         "main",
         request(
             confirmation={
-                "url": SUBMISSION_URL,
+                "url": STATUS_URL,
                 "selector": selector,
                 "text": "Order confirmed",
             }
@@ -659,9 +659,10 @@ async def test_reconciliation_still_works_on_the_page_the_broker_submitted_on(st
 
     op = reserved(store, identity)
     url = "https://shop.example/checkout?cart=42"
-    # The broker binds the plan just before the click; the click is what this
-    # test does not need to repeat.
+    # The broker binds the plan just before the click and records where the
+    # browser ended up; the click is what this test does not need to repeat.
     store.bind_plan(identity, op["id"], "main", {"url": url, "submit_selector": "#submit"})
+    store.record_landed_pages(identity, op["id"], [url])
     store.begin_submit(identity, op["id"], "main")
 
     async def merchant(route):
@@ -743,7 +744,7 @@ async def test_run_browser_refuses_reconciliation_while_the_switch_is_off(
         op["id"],
         "main",
         ExecutionPlan(
-            url=SUBMISSION_URL,
+            url=STATUS_URL,
             submit_selector="__unused__",
             success_selector="#done",
             success_text="Order confirmed",
@@ -774,7 +775,7 @@ async def test_worker_handle_refuses_reconciliation_while_the_switch_is_off(stor
             "key_id": "v1",
             "reconcile": True,
             "plan": {
-                "url": SUBMISSION_URL,
+                "url": STATUS_URL,
                 "submit_selector": "__unused__",
                 "success_selector": "#done",
                 "success_text": "Order confirmed",
@@ -874,6 +875,7 @@ async def test_the_real_recovery_path_refuses_and_then_works(store, identity, mo
             "main",
             {"url": SUBMISSION_URL, "submit_selector": "#submit"},
         )
+        store.record_landed_pages(identity, second["id"], [SUBMISSION_URL, STATUS_URL])
         store.begin_submit(identity, second["id"], "main")
         live = handoffs.create(identity, second["id"], "main", request())
         handoffs.acknowledge(identity, live["id"])
@@ -889,7 +891,7 @@ async def test_the_real_recovery_path_refuses_and_then_works(store, identity, mo
             second["id"],
             "main",
             ExecutionPlan(
-                url=SUBMISSION_URL,
+                url=STATUS_URL,
                 submit_selector="__unused__",
                 success_selector="#done",
                 success_text="Order confirmed",
@@ -906,7 +908,7 @@ async def test_the_real_recovery_path_refuses_and_then_works(store, identity, mo
             second["id"],
             "main",
             ExecutionPlan(
-                url=SUBMISSION_URL,
+                url=STATUS_URL,
                 submit_selector="__unused__",
                 success_selector="#done",
                 success_text="Order confirmed",
@@ -932,7 +934,7 @@ async def test_the_real_recovery_path_refuses_and_then_works(store, identity, mo
             "key_id": "v1",
             "reconcile": True,
             "plan": {
-                "url": SUBMISSION_URL,
+                "url": STATUS_URL,
                 "submit_selector": "__unused__",
                 "success_selector": "#done",
                 "success_text": "Order confirmed",
@@ -1019,6 +1021,7 @@ async def test_a_padded_element_is_not_a_specific_confirmation(store, identity):
     op = reserved(store, identity)
     url = "https://shop.example/checkout"
     store.bind_plan(identity, op["id"], "main", {"url": url, "submit_selector": "#submit"})
+    store.record_landed_pages(identity, op["id"], [url])
     store.begin_submit(identity, op["id"], "main")
 
     async def merchant(route):
@@ -1047,6 +1050,7 @@ async def test_a_padded_element_is_not_a_specific_confirmation(store, identity):
         finally:
             await browser.close()
     assert result["state"] == "reconciling", result
+    assert result["reason"] == "confirmation_not_found"
     assert store.operation(identity, op["id"])["state"] != "completed"
 
 
@@ -1136,3 +1140,223 @@ def test_the_one_gate_refuses_a_terminal_operation(store, identity):
     )
     with pytest.raises(PermissionError, match="operation_not_pending"):
         store.check_reconcile_authority(identity, op["id"], "main")
+
+
+# --------------------------------------------------------------------------
+# Third review round. The pin was right but the recorded set was the agent's
+# declared plan URL, so the shape the feature exists to serve -- submit here,
+# confirm there -- became unrepresentable, and the element bound scaled with
+# the declared phrase and refused ordinary merchants.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.e2e
+@pytest.mark.timeout(60)
+async def test_a_status_page_the_browser_was_redirected_to_is_registrable(store, identity):
+    """POST -> redirect to /order/12345/confirmation, the commonest checkout.
+
+    The broker records where it actually LANDED, so a handoff may name that
+    page even though the agent never submitted on it.
+    """
+    from robothor.autonomy.tests.test_handoffs import reserved
+
+    op = reserved(store, identity)
+    posts = []
+
+    async def merchant(route):
+        if route.request.method == "POST":
+            posts.append(route.request.url)
+            await route.fulfill(body="ok")
+        elif "/order/12345/confirmation" in route.request.url:
+            await route.fulfill(
+                content_type="text/html", body="<p id='done'>Awaiting your device approval</p>"
+            )
+        else:
+            await route.fulfill(
+                content_type="text/html",
+                body="""<p id="amount">$6.00</p>
+                <button id="submit" onclick="fetch('/pay',{method:'POST'}).then(()=>{
+                location.href='/order/12345/confirmation';})">Buy</button><p id="done"></p>""",
+            )
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        try:
+            page = await browser.new_page()
+            await page.route("**/*", merchant)
+            result = await BrowserBroker(store).execute_on_page(
+                identity,
+                op["id"],
+                "main",
+                ExecutionPlan(
+                    url="https://shop.example/checkout",
+                    submit_selector="#submit",
+                    amount_selector="#amount",
+                    success_selector="#never",
+                    success_text="Order confirmed",
+                ),
+                page,
+            )
+            assert result["state"] == "reconciling", result
+        finally:
+            await browser.close()
+    assert len(posts) == 1
+    landed = store.operation(identity, op["id"])["execution_plan"]["landed_urls"]
+    assert "https://shop.example/order/12345/confirmation" in landed
+    # The agent may now name the page the browser was actually sent to.
+    asked = HandoffStore(store).create(
+        identity,
+        op["id"],
+        "main",
+        request(
+            confirmation={
+                "url": "https://shop.example/order/12345/confirmation",
+                "selector": "#done",
+                "text": "Order confirmed",
+            }
+        ),
+    )
+    assert asked["state"] == "awaiting_external_action"
+
+
+def test_a_page_the_browser_never_reached_is_still_refused(store, identity):
+    """The property the landed-URL record must not give away."""
+    from robothor.autonomy.tests.test_handoffs import reserved
+
+    op = reserved(store, identity)
+    store.bind_plan(
+        identity,
+        op["id"],
+        "main",
+        {"url": "https://shop.example/checkout", "submit_selector": "#submit"},
+    )
+    store.record_landed_pages(identity, op["id"], ["https://shop.example/checkout"])
+    store.begin_submit(identity, op["id"], "main")
+    with pytest.raises(PermissionError, match="confirmation_page_not_observed"):
+        HandoffStore(store).create(
+            identity,
+            op["id"],
+            "main",
+            request(
+                confirmation={
+                    "url": "https://shop.example/help/article/refund-policy?v=2",
+                    "selector": "#q3",
+                    "text": "Order confirmed",
+                }
+            ),
+        )
+
+
+def test_a_declared_plan_url_the_browser_never_loaded_is_not_an_observation(store, identity):
+    """bind_plan writes the AGENT's value. Only the landing record counts."""
+    from robothor.autonomy.handoffs import observed_submission_pages
+    from robothor.autonomy.tests.test_handoffs import reserved
+
+    op = reserved(store, identity)
+    store.bind_plan(
+        identity,
+        op["id"],
+        "main",
+        {"url": "https://shop.example/help/article/refund-policy?v=2", "submit_selector": "#x"},
+    )
+    assert observed_submission_pages(store.operation(identity, op["id"])) == set()
+    store.begin_submit(identity, op["id"], "main")
+    with pytest.raises(PermissionError, match="confirmation_page_not_observed"):
+        HandoffStore(store).create(
+            identity,
+            op["id"],
+            "main",
+            request(
+                confirmation={
+                    "url": "https://shop.example/help/article/refund-policy?v=2",
+                    "selector": "#q3",
+                    "text": "Order confirmed",
+                }
+            ),
+        )
+
+
+def test_a_landing_record_does_not_look_like_a_changed_plan(store, identity):
+    """bind_plan's guard compares the agent's plan, not the broker's notes."""
+    from robothor.autonomy.tests.test_handoffs import reserved
+
+    op = reserved(store, identity)
+    plan = {"url": "https://shop.example/checkout", "submit_selector": "#submit"}
+    store.bind_plan(identity, op["id"], "main", plan)
+    store.record_landed_pages(identity, op["id"], ["https://shop.example/order/7"])
+    store.bind_plan(identity, op["id"], "main", plan)
+    with pytest.raises(PermissionError, match="execution_plan_changed"):
+        store.bind_plan(identity, op["id"], "main", {**plan, "submit_selector": "#other"})
+    assert store.operation(identity, op["id"])["execution_plan"]["landed_urls"] == [
+        "https://shop.example/order/7"
+    ]
+
+
+def test_the_landing_record_is_bounded_and_same_origin(store, identity):
+    from robothor.autonomy.tests.test_handoffs import reserved
+
+    op = reserved(store, identity)
+    store.bind_plan(
+        identity,
+        op["id"],
+        "main",
+        {"url": "https://shop.example/checkout", "submit_selector": "#submit"},
+    )
+    store.record_landed_pages(
+        identity,
+        op["id"],
+        [
+            "https://other.example/x",
+            "about:blank",
+            *[f"https://shop.example/{n}" for n in range(20)],
+        ],
+    )
+    landed = store.operation(identity, op["id"])["execution_plan"]["landed_urls"]
+    assert all(item.startswith("https://shop.example/") for item in landed)
+    assert len(landed) <= 10
+
+
+@pytest.mark.e2e
+@pytest.mark.timeout(45)
+async def test_an_ordinary_merchant_confirmation_panel_is_accepted(store, identity):
+    """Measured refusal at 121 characters: "Thank you, Alice! Order confirmed
+    -- order #ABC-123456789. We emailed a receipt. Estimated delivery:
+    Tuesday 24 September." The bound also scaled with the declared phrase, so
+    the only workaround was to guess more future wording -- the behaviour
+    #621 removed, and impossible anyway without knowing the order number."""
+    from robothor.autonomy.tests.test_handoffs import reserved
+
+    op = reserved(store, identity)
+    url = "https://shop.example/checkout"
+    store.bind_plan(identity, op["id"], "main", {"url": url, "submit_selector": "#submit"})
+    store.record_landed_pages(identity, op["id"], [url])
+    store.begin_submit(identity, op["id"], "main")
+    panel = (
+        "Thank you, Alice! Order confirmed \u2014 order #ABC-123456789. "
+        "We emailed a receipt. Estimated delivery: Tuesday 24 September."
+    )
+    assert len(" ".join(panel.split())) > 95
+
+    async def merchant(route):
+        await route.fulfill(content_type="text/html", body=f"<p id='done'>{panel}</p>")
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        try:
+            page = await browser.new_page()
+            await page.route("**/*", merchant)
+            result = await BrowserBroker(store).reconcile_on_page(
+                identity,
+                op["id"],
+                "main",
+                ExecutionPlan(
+                    url=url,
+                    submit_selector="__unused__",
+                    success_selector="#done",
+                    success_text="Order confirmed",
+                ),
+                page,
+            )
+        finally:
+            await browser.close()
+    assert result["state"] == "completed", result

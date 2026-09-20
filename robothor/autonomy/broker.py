@@ -115,12 +115,16 @@ def url_origin(url: str) -> str:
 #: A declared confirmation criterion is at most 300 characters, so the element
 #: it is read from may not carry more text than that either.
 MAX_CONFIRMATION_TEXT = 300
-#: ...and the criterion has to be the SUBSTANCE of that element, not a needle
-#: in it. A flat 300-character bound was satisfied by padding: a 277-character
-#: node reading "Order confirmed. " + 260 filler characters completed an
-#: operation. This is the room a real merchant needs around the phrase --
-#: an order number, a thank-you, a delivery estimate -- and no more.
-CONFIRMATION_CONTEXT_SLACK = 80
+#: A flat ceiling alone was satisfied by padding: a 277-character node
+#: reading "Order confirmed. " + 260 filler characters completed an
+#: operation. Scaling the ceiling by the declared phrase instead was worse --
+#: it refused an ordinary panel at 121 characters and its only workaround was
+#: for the agent to guess more future wording, the behaviour #621 removed.
+#: What separates the two is shape, not size: merchant prose is words. Order
+#: numbers, tracking codes and dates are long tokens, so this is generous.
+MAX_CONFIRMATION_TOKEN = 24
+#: One submission cannot have visited an unbounded number of pages.
+MAX_LANDED_PAGES = 10
 
 
 def same_page(left: str, right: str) -> bool:
@@ -334,10 +338,9 @@ class BrowserBroker:
                 "state": row["state"],
                 "reason": "specific_confirmation_required_for_payment",
             }
-        from robothor.autonomy.handoffs import observed_submission_page
+        from robothor.autonomy.handoffs import observed_submission_pages
 
-        submitted = observed_submission_page(row)
-        if not submitted or not same_page(plan.url, submitted):
+        if not any(same_page(plan.url, landed) for landed in observed_submission_pages(row)):
             # Origin was the only pin, so any same-origin page the caller named
             # would do -- a help article matched a checkout.
             return {
@@ -359,7 +362,7 @@ class BrowserBroker:
             if plan.success_selector:
                 locator = page.locator(plan.success_selector)
                 await locator.wait_for(state="visible", timeout=15000)
-                text = await self._specific_text(locator, plan.success_text or "")
+                text = await self._specific_text(locator)
                 if not plan.success_text or plan.success_text not in text:
                     raise ValueError("confirmation_missing")
                 proof = {"confirmation_sha256": self._confirmation_digest(text, plan)}
@@ -394,6 +397,19 @@ class BrowserBroker:
                 "reason": "confirmation_not_found",
             }
 
+    async def _record_landings(
+        self, scope: Scope, operation_id: str, landed: list[str], page: Page
+    ) -> None:
+        """Never let bookkeeping change an outcome the merchant already gave.
+
+        A workflow step can settle without a navigation event, so the current
+        address is recorded too.
+        """
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(
+                self.store.record_landed_pages, scope, operation_id, [*landed, page.url]
+            )
+
     @staticmethod
     async def _unique(locator: Locator) -> Locator:
         if await locator.count() != 1 or not await locator.is_visible():
@@ -401,19 +417,22 @@ class BrowserBroker:
         return locator
 
     @classmethod
-    async def _specific_text(cls, locator: Locator, expected: str) -> str:
+    async def _specific_text(cls, locator: Locator) -> str:
         """Bound the element a confirmation may be read from, at check time.
 
         The creation-time denylist held four literals, so ``html body``,
         ``main``, ``p``, ``div``, ``body *`` and ``body > *`` all walked past
         it and ``html body`` completed an operation on a page that read "Your
         order is still pending". What makes a selector specific is not its
-        spelling: it is that it matches exactly one element whose visible text
-        IS the declared criterion plus ordinary surrounding wording.
+        spelling: it is that it matches exactly one element carrying a short,
+        word-shaped message rather than a page.
         """
         text = await (await cls._unique(locator)).inner_text()
-        normalized = " ".join(text.split())
-        if len(normalized) > min(MAX_CONFIRMATION_TEXT, len(expected) + CONFIRMATION_CONTEXT_SLACK):
+        tokens = text.split()
+        normalized = " ".join(tokens)
+        if len(normalized) > MAX_CONFIRMATION_TEXT or (
+            tokens and len(normalized) / len(tokens) > MAX_CONFIRMATION_TOKEN
+        ):
             raise ValueError("confirmation_element_not_specific")
         return text
 
@@ -587,6 +606,17 @@ class BrowserBroker:
             }
         proposal = WebOperation.model_validate(row["proposal"])
         started = False
+        # Where the browser ACTUALLY goes, as opposed to where the agent said
+        # to go. A merchant's POST commonly redirects to an order page, and
+        # that page -- not the agent's word for it -- is what a later
+        # confirmation check is allowed to read.
+        landed: list[str] = []
+
+        def _landed(frame: Frame) -> None:
+            if frame is page.main_frame and len(landed) <= MAX_LANDED_PAGES:
+                landed.append(frame.url)
+
+        page.on("framenavigated", _landed)
         try:
             if url_origin(plan.url) != proposal.origin:
                 raise PermissionError("destination_mismatch")
@@ -771,6 +801,7 @@ class BrowserBroker:
                     )
             if url_origin(page.url) != proposal.origin:
                 raise PermissionError("confirmation_origin_changed")
+            await self._record_landings(scope, operation_id, landed, page)
             evidence = {
                 "origin": proposal.origin,
                 **confirmation_evidence,
@@ -827,6 +858,7 @@ class BrowserBroker:
             # A durable 'submitting' row is already a reconciliation marker.
             with contextlib.suppress(Exception):
                 if started:
+                    await self._record_landings(scope, operation_id, landed, page)
                     await asyncio.to_thread(self.store.finish, scope, operation_id, state)
             return {
                 "operation_id": operation_id,
@@ -839,3 +871,6 @@ class BrowserBroker:
                     else "preflight_failed"
                 ),
             }
+        finally:
+            with contextlib.suppress(Exception):
+                page.remove_listener("framenavigated", _landed)

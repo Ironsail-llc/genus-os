@@ -82,12 +82,16 @@ async def test_reflected_credential_not_returned_or_journaled_after_step(store, 
 
 
 async def test_card_code_requires_a_payment_operation_before_browser_entry(store, identity):
-    from unittest.mock import AsyncMock
+    from unittest.mock import AsyncMock, MagicMock
 
     from robothor.autonomy.broker import BrowserBroker
 
     operation = prepared(store, identity)
     page = AsyncMock()
+    # Playwright's event registration is synchronous; an AsyncMock would hand
+    # back un-awaited coroutines and hide a real call behind a warning.
+    page.on = MagicMock()
+    page.remove_listener = MagicMock()
     plan = ExecutionPlan.model_validate(
         {
             "url": "https://form.example/apply",

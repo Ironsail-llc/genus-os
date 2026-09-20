@@ -17,6 +17,7 @@ from uuid import uuid4
 
 from psycopg2.extras import Json, RealDictCursor
 
+from robothor.autonomy.broker import MAX_LANDED_PAGES, url_origin
 from robothor.autonomy.budget import monthly_projection, proposal_record
 from robothor.autonomy.crypto import open_resource, seal_resource
 from robothor.autonomy.descriptors import Source, describe, refresh_descriptors
@@ -35,6 +36,19 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
     from robothor.autonomy.procedures import ProcedureQuery
+
+
+#: Keys the BROKER writes into ``execution_plan`` beside the agent's plan.
+#: They are observations, not part of ``ExecutionPlan``, and must be stripped
+#: before that model validates the column.
+OBSERVATION_KEYS = frozenset({"landed_urls"})
+
+
+def declared_plan(execution_plan: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The agent's plan, with the broker's own notes removed."""
+    if execution_plan is None:
+        return None
+    return {key: value for key, value in execution_plan.items() if key not in OBSERVATION_KEYS}
 
 
 def _validated_payload(resource: ResourceInput) -> str:
@@ -609,8 +623,46 @@ class AutonomyStore:
             row = self._operation(cur, scope, operation_id)
             if row["agent_id"] != agent_id or row["state"] != "reserved":
                 raise PermissionError("operation_not_executable")
-            if row["execution_plan"] is not None and row["execution_plan"] != plan:
+            stored = declared_plan(row["execution_plan"])
+            if stored is not None and stored != plan:
                 raise PermissionError("execution_plan_changed")
+            observations = {
+                key: value
+                for key, value in (row["execution_plan"] or {}).items()
+                if key in OBSERVATION_KEYS
+            }
+            cur.execute(
+                "UPDATE autonomy_operations SET execution_plan=%s WHERE id=%s",
+                (Json({**plan, **observations}), operation_id),
+            )
+
+    def record_landed_pages(self, scope: Scope, operation_id: str, urls: list[str]) -> None:
+        """Broker-only: where the browser ACTUALLY went, not where it was told.
+
+        ``bind_plan`` stores the agent's declared plan, so its ``url`` is the
+        agent's own value -- true about when it was written, not about whose
+        claim it is. These are the main-frame landings the broker observed
+        during the submission itself, and they are the only pages a
+        confirmation check may later read. Recording them is what lets the
+        ordinary checkout shape work again: submit on one page, confirm on
+        the page the merchant redirected to.
+        """
+        with self.transaction() as cur:
+            self._lock(cur, scope)
+            row = self._operation(cur, scope, operation_id)
+            plan = dict(row["execution_plan"] or {})
+            destination = row["proposal"]["origin"]
+            known = [item for item in plan.get("landed_urls", []) if isinstance(item, str)]
+            for url in urls:
+                if not isinstance(url, str) or len(url) > 2000 or url in known:
+                    continue
+                try:
+                    if url_origin(url) != destination:
+                        continue
+                except ValueError:
+                    continue
+                known.append(url)
+            plan["landed_urls"] = known[:MAX_LANDED_PAGES]
             cur.execute(
                 "UPDATE autonomy_operations SET execution_plan=%s WHERE id=%s",
                 (Json(plan), operation_id),

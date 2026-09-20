@@ -13,6 +13,7 @@ from robothor.autonomy.broker import ExecutionPlan
 from robothor.autonomy.confirmation import classify
 from robothor.autonomy.models import Action, Scope, StrictModel
 from robothor.autonomy.models import origin as validate_origin
+from robothor.autonomy.store import declared_plan
 
 if TYPE_CHECKING:
     from robothor.autonomy.store import AutonomyStore
@@ -42,7 +43,7 @@ def find_procedures(
     resource_ids = set()
     for row in rows:
         try:
-            plan = ExecutionPlan.model_validate(row["execution_plan"])
+            plan = ExecutionPlan.model_validate(declared_plan(row["execution_plan"]))
         except ValueError:
             continue
         if plan.verification_link_id:
