@@ -532,3 +532,21 @@ an identical retry keeps the original ID. On `workflow_revision_changed`, read
 `workflow_lost` requires external/status-page reconciliation, not a blind repeat.
 
 Malformed workflow commands return `invalid_workflow_request` before token issuance or browser RPC. Fixed `invalid_operation_id`, `invalid_workflow_id` and `invalid_command_id` reasons identify references that must come from prior results (or a fresh UUID for a new command). `confirmation_selector_and_text_required_together` requires both confirmation fields or neither. Other validation failures remain generic; submitted values and unknown field names are never echoed.
+
+
+### Payment lifecycle integration in progress
+
+The internal `payment_lifecycle` projection distinguishes a merchant submission
+confirmation from issuer authorization, charge, refund and authorization reversal.
+Repeated identical events are idempotent; a reused event key with changed content
+is rejected. Gross charged and refunded amounts remain separate, and verified
+amounts above the reservation or authorization are recorded with discrepancy flags.
+They are not hidden by execution-policy limits. Refunds do not by themselves free
+a spending reservation or end a recurring commitment.
+
+This projection is not yet a durable transaction ledger or an issuer integration.
+Its provenance field is descriptive, not authentication: only trusted adapters may
+supply facts after validating their evidence. Agent claims and unauthenticated
+callbacks must never become issuer facts. Durable records, encrypted receipt
+capture, validated evidence ingestion, budget reconciliation and the operator
+view remain integration work before this capability can be considered complete.
