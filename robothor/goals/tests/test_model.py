@@ -10,6 +10,7 @@ from robothor.goals.model import (
     GoalUpdate,
     exceeded,
     new_goal,
+    tokens_affordable,
     transition,
 )
 
@@ -180,6 +181,27 @@ def test_deadline_blocks_and_is_extended_not_ignored():
     with pytest.raises(ValueError, match="increase"):
         update(g, "resume")
     assert update(g, "resume", deadline_seconds=3600)["status"] == "queued"
+
+
+def test_the_token_cap_for_a_run_respects_the_money_left():
+    """Tokens and dollars are not the same ceiling.
+
+    The in-run cap was derived from tokens alone, so a fresh goal's FIRST run
+    could spend the whole 1,000,000 before anything consulted the $5.00. At
+    $15/M output that is $15 — three times the entire cost ceiling.
+    """
+    g = goal()
+    assert g["cost_budget_usd"] == DEFAULT_COST_BUDGET_USD
+    # $15/M output: the money runs out at 333,333 tokens, well inside 1M.
+    assert tokens_affordable(g, 0.000_015) == 333_333
+    # Spend most of it and the next run's cap shrinks with it.
+    g["cost_usd"] = 4.5
+    assert tokens_affordable(g, 0.000_015) == 33_333
+    # A free model prices no ceiling, so the token budget is the only one.
+    assert tokens_affordable(g, 0.0) is None
+    # Never negative.
+    g["cost_usd"] = 99.0
+    assert tokens_affordable(g, 0.000_015) == 0
 
 
 def test_a_goal_stored_before_ceilings_existed_is_still_bounded():

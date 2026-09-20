@@ -67,6 +67,32 @@ def token_budget_of(goal: dict[str, Any]) -> int:
     return int(goal.get("token_budget") or DEFAULT_TOKEN_BUDGET)
 
 
+def cost_budget_of(goal: dict[str, Any]) -> float:
+    """This goal's cost ceiling, defaulted the same way ``exceeded`` does."""
+    return float(goal.get("cost_budget_usd") or DEFAULT_COST_BUDGET_USD)
+
+
+def tokens_affordable(goal: dict[str, Any], output_price_per_token: float) -> int | None:
+    """How many more tokens this goal's remaining money can pay for.
+
+    The token ceiling and the cost ceiling are different ceilings, and only
+    the token one was reachable from inside a run: a fresh goal's first run
+    could spend the whole 1,000,000 before anything consulted the $5.00. At
+    $15/M output that is $15 — three times the entire cost ceiling, in one
+    run, with the overshoot only noticed at ``finish``.
+
+    Priced at the OUTPUT rate deliberately. It is the higher of the two, so
+    the answer holds however the run's tokens split between prompt and
+    completion: the cost ceiling cannot be passed inside the run rather than
+    merely being noticed after it. ``None`` means the model is free and puts
+    no ceiling here, leaving the token budget as the only bound.
+    """
+    if output_price_per_token <= 0:
+        return None
+    remaining = cost_budget_of(goal) - goal.get("cost_usd", 0)
+    return max(0, int(remaining / output_price_per_token))
+
+
 def exceeded(goal: dict[str, Any]) -> str:
     """The first ceiling this goal has reached, or ``""``.
 
@@ -77,7 +103,7 @@ def exceeded(goal: dict[str, Any]) -> str:
     tokens = token_budget_of(goal)
     if goal.get("tokens_used", 0) >= tokens:
         return f"token budget exhausted ({goal.get('tokens_used', 0)}/{tokens})"
-    cost = goal.get("cost_budget_usd") or DEFAULT_COST_BUDGET_USD
+    cost = cost_budget_of(goal)
     if goal.get("cost_usd", 0) >= cost:
         return f"cost ceiling reached (${goal.get('cost_usd', 0):.2f}/${cost:.2f})"
     attempts = goal.get("max_attempts") or DEFAULT_MAX_ATTEMPTS

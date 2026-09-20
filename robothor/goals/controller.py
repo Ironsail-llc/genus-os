@@ -114,18 +114,42 @@ class GoalController:
                     return
                 await asyncio.sleep(0)
 
+    @staticmethod
+    def run_budget(goal: dict[str, Any], config: Any) -> int:
+        """Tokens this run may spend: whichever of the goal's two ceilings
+        binds first.
+
+        Both defaults resolve the same way the between-run check does, so a
+        goal written before the ceilings existed is capped inside a run too.
+        The cost ceiling is converted to tokens at the model's output price —
+        without that, only the token budget was reachable from inside a run
+        and a first run could spend $15 of a $5 goal before `finish` noticed.
+        """
+        from robothor.engine.model_registry import get_model_limits
+        from robothor.goals.model import token_budget_of, tokens_affordable
+
+        remaining = max(0, token_budget_of(goal) - int(goal["tokens_used"]))
+        model = getattr(config, "model_primary", "") if config is not None else ""
+        if model:
+            try:
+                price = get_model_limits(model).output_cost_per_token
+            except Exception:  # noqa: BLE001 - an unpriced model is not a licence to spend
+                price = 0.0
+            affordable = tokens_affordable(goal, price)
+            if affordable is not None:
+                remaining = min(remaining, affordable)
+        return remaining
+
     async def execute(self, goal: dict[str, Any], attempt: str) -> None:
         from robothor.engine.config import load_agent_config_or_broken
         from robothor.engine.models import TriggerType
-        from robothor.goals.model import token_budget_of
 
         tenant = self.config.tenant_id
-        # token_budget_of defaults exactly as the between-run ceiling does, so
-        # a goal written before the ceilings existed is capped inside a run too.
-        remaining = token_budget_of(goal) - goal["tokens_used"]
+        config = load_agent_config_or_broken("main", self.config.manifest_dir, "goal pursuit")
+        remaining = self.run_budget(goal, config)
         if goal["parent_goal_id"]:
             parent = await asyncio.to_thread(store.control, tenant, goal["parent_goal_id"])
-            remaining = min(remaining, max(0, token_budget_of(parent) - parent["tokens_used"]))
+            remaining = min(remaining, self.run_budget(parent, config))
         if remaining <= 0:
             await asyncio.to_thread(
                 store.finish, tenant, goal["id"], attempt, budget_exhausted=True
@@ -137,7 +161,6 @@ class GoalController:
         error = ""
         work = None
         try:
-            config = load_agent_config_or_broken("main", self.config.manifest_dir, "goal pursuit")
             if config is None:
                 raise ValueError("main agent configuration unavailable")
             detail = await asyncio.to_thread(store.get, tenant, goal["id"])

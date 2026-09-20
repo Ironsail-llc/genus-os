@@ -141,9 +141,21 @@ blocker naming the ceiling and the numbers; `resume` refuses until the ceiling
 that stopped it is raised. Blocking on a ceiling is a request for an operator
 decision, never a claim that the goal succeeded or failed.
 
+A run's token allowance is whichever of the two spend ceilings binds first:
+the tokens left, and the tokens the remaining money can pay for at the
+model's **output** price — the higher of its two rates, so the answer holds
+however the run's tokens split between prompt and completion. Without that
+conversion only the token budget was reachable from inside a run, and a fresh
+goal's first run could spend three times its whole cost ceiling before
+`finish` noticed. A model priced at zero puts no ceiling here, leaving the
+token budget as the only bound. What can still overshoot is a single in-flight
+model call, because the caps are checked at iteration and tool boundaries.
+
 Coordination runs are paced: at most one run every 30 seconds per tenant. A
 single ready goal can no longer hold the controller loop, and a parent cannot
-spin turns while its execution child waits for the lease.
+spin turns while its execution child waits for the lease. The pacing clock
+lives in the controller process, so an engine that is crash-looping restarts
+it each time; the four ceilings still bound the total either way.
 
 Three consecutive repeated blocker reports stop automatic pursuit. Three runs
 without a new progress checkpoint or evidence also block — but note that the

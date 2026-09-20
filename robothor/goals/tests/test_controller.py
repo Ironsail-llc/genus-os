@@ -232,6 +232,35 @@ async def test_one_ready_goal_cannot_occupy_the_loop(db):  # noqa: F811
 
 
 @pytest.mark.asyncio
+async def test_the_run_budget_is_capped_by_the_money_not_just_the_tokens(db):  # noqa: F811
+    """A first run could spend the whole 1M-token budget before anything read
+    the $5.00 ceiling — $15 of Opus output, 3x the ceiling, in one run."""
+    store.create(
+        db, CreateGoal(objective="Deliver report", success_criteria=["Delivered"]), "operator"
+    )
+    seen = []
+
+    async def execute(**kwargs):
+        seen.append(binding.get().token_remaining)
+        return AgentRun(status=RunStatus.COMPLETED)
+
+    controller = GoalController(
+        SimpleNamespace(execute=execute), SimpleNamespace(tenant_id=db, manifest_dir="unused")
+    )
+    limits = SimpleNamespace(output_cost_per_token=0.000_015)  # $15/M
+    with (
+        patch(
+            "robothor.engine.config.load_agent_config_or_broken",
+            return_value=SimpleNamespace(model_primary="expensive-model"),
+        ),
+        patch("robothor.engine.model_registry.get_model_limits", return_value=limits),
+        patch("robothor.goals.events.capture"),
+    ):
+        await controller.tick()
+    assert seen == [333_333], seen
+
+
+@pytest.mark.asyncio
 async def test_serve_backs_off_while_pursuit_is_disabled(db):  # noqa: F811
     """A switched-off feature was opening ~86,400 connections a day to read a
     flag that changes a handful of times in a tenant's life."""

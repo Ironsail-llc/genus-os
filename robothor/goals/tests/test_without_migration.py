@@ -149,6 +149,19 @@ def test_a_cursor_that_cannot_answer_is_not_remembered():
     finally:
         compat.reset_probe()
 
+    # A plain (non-dict) cursor answers with a one-tuple, and `(False,)` is a
+    # real answer that must be believed — it is what a cursor without a dict
+    # factory returns on a database that genuinely lacks 126, and it is only
+    # distinguishable from a mock by the bool actually being a bool.
+    try:
+        for row, expected in (((False,), False), ((True,), True)):
+            compat.reset_probe()
+            plain = MagicMock()
+            plain.fetchone.return_value = row
+            assert compat.pursuit_installed(plain) is expected
+    finally:
+        compat.reset_probe()
+
 
 def test_a_negative_probe_is_re_probed_so_a_later_migration_is_seen():
     """`genus migrate` runs in its OWN process, so nothing it does can clear a
