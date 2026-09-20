@@ -208,6 +208,9 @@ def test_worker_cannot_override_its_paused_task_with_another_parent():
     session = SimpleNamespace(run=SimpleNamespace(task_id="paused-owned-task"))
     with (
         patch("robothor.engine.session_registry.lookup", return_value=session),
+        # This tenant has links, so the cheap skip in admit_tool does not apply
+        # and the real per-task predicate runs.
+        patch("robothor.goals.compat.tenant_links_tasks", return_value=True),
         patch(
             "robothor.goals.runtime.task_runnable",
             side_effect=lambda task, tenant: task != "paused-owned-task",

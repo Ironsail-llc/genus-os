@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import contextmanager
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -14,7 +15,7 @@ from psycopg2.extras import Json, RealDictCursor
 
 from robothor.crm.dal import benchmark_sandbox_active
 from robothor.db.connection import get_connection
-from robothor.goals.compat import pursuit_installed
+from robothor.goals.compat import note_task_linked, pursuit_installed
 from robothor.goals.model import (
     INACTIVE,
     CreateGoal,
@@ -25,6 +26,16 @@ from robothor.goals.model import (
     now_iso,
     transition,
 )
+
+logger = logging.getLogger(__name__)
+
+# How long a processed wake event and a journal entry are kept. The event
+# inbox is a work queue, not a record — its only reader is `reconcile`, which
+# has already acted on anything processed — so a week is generous. History is
+# the record an operator reads back, and 180 days outlives any goal that has
+# not already hit its 30-day deadline several times over.
+EVENT_RETENTION_DAYS = 7
+HISTORY_RETENTION_DAYS = 180
 
 
 @contextmanager
@@ -223,6 +234,7 @@ def update(
                            ON CONFLICT DO NOTHING""",
                 (tenant, goal_id, change.task_id),
             )
+            note_task_linked(tenant)
         save(cur, tenant, g)
         journal(cur, tenant, g, change.action, actor, change.model_dump(mode="json"))
         if before["status"] != g["status"] and g["status"] in {"complete", "review", "blocked"}:
@@ -326,16 +338,26 @@ def reconcile(cur: Any, tenant: str) -> None:
             (tenant, row["lease_id"]),
         )
         journal(cur, tenant, g, "recovered", "engine", {"attempt": str(row["lease_id"])})
-    cur.execute(
-        "SELECT * FROM pursuit_goal_events WHERE tenant_id=%s AND processed_at IS NULL ORDER BY created_at LIMIT 500",
-        (tenant,),
-    )
-    events = cur.fetchall()
+    # Waiting goals first: with none, there is nobody an event could wake, so
+    # the 500-row read below is pure cost — and this runs on every claim, about
+    # once a second. Anything pending is then retired in one statement instead
+    # of one per row.
     cur.execute(
         "SELECT data FROM pursuit_goals WHERE tenant_id=%s AND status='waiting' FOR UPDATE",
         (tenant,),
     )
     waiting = [r["data"] for r in cur.fetchall()]
+    if not waiting:
+        cur.execute(
+            "UPDATE pursuit_goal_events SET processed_at=now() WHERE tenant_id=%s AND processed_at IS NULL",
+            (tenant,),
+        )
+        return
+    cur.execute(
+        "SELECT * FROM pursuit_goal_events WHERE tenant_id=%s AND processed_at IS NULL ORDER BY created_at LIMIT 500",
+        (tenant,),
+    )
+    events = cur.fetchall()
     for g in waiting:
         wait = g.get("wait") or {}
         for event in events:
@@ -361,10 +383,30 @@ def reconcile(cur: Any, tenant: str) -> None:
                 save(cur, tenant, g)
                 journal(cur, tenant, g, "wake", "engine", {"event_id": event["id"]})
                 break
-    for event in events:
+    if events:
         cur.execute(
-            "UPDATE pursuit_goal_events SET processed_at=now() WHERE tenant_id=%s AND id=%s",
-            (tenant, event["id"]),
+            "UPDATE pursuit_goal_events SET processed_at=now() WHERE tenant_id=%s AND id=ANY(%s)",
+            (tenant, [event["id"] for event in events]),
+        )
+
+
+def prune(tenant: str) -> None:
+    """Drop processed wake events and aged journal entries.
+
+    Neither table had any retention: capture copied all eight bus streams into
+    PostgreSQL every sixty seconds and nothing ever deleted a row. Called from
+    the same once-a-minute timer as capture.
+    """
+    with transaction() as cur:
+        if not pursuit_installed(cur):
+            return
+        cur.execute(
+            "DELETE FROM pursuit_goal_events WHERE tenant_id=%s AND processed_at < now()-%s::interval",
+            (tenant, f"{EVENT_RETENTION_DAYS} days"),
+        )
+        cur.execute(
+            "DELETE FROM pursuit_goal_history WHERE tenant_id=%s AND created_at < now()-%s::interval",
+            (tenant, f"{HISTORY_RETENTION_DAYS} days"),
         )
 
 
@@ -545,18 +587,34 @@ def control(tenant: str, goal_id: str) -> dict[str, Any]:
 
 
 def notify(cur: Any, tenant: str, g: dict[str, Any], event: str, detail: str) -> None:
-    cur.execute(
-        """INSERT INTO crm_agent_notifications
-                   (id,tenant_id,from_agent,to_agent,notification_type,subject,body,metadata)
-                   VALUES (%s,%s,'goal-pursuit','main','info',%s,%s,%s)""",
-        (
-            str(uuid4()),
-            tenant,
-            f"Goal {event}: {g['objective'][:150]}",
-            detail,
-            Json({"goal_id": g["id"], "goal_event": event}),
-        ),
-    )
+    """Tell the operator's inbox, in a savepoint, because failing to tell them
+    must not undo the thing being told.
+
+    crm_agent_notifications has a tenant foreign key and pursuit_goals did not,
+    so a goal under a tenant that does not exist had every finish() roll back
+    here — and a rolled-back finish never releases the lease, so the goal was
+    stuck forever with no way out. 127 adds the missing key; this makes the
+    notification the one thing in the transaction that is allowed to fail.
+    """
+    cur.execute("SAVEPOINT goal_notify")
+    try:
+        cur.execute(
+            """INSERT INTO crm_agent_notifications
+                       (id,tenant_id,from_agent,to_agent,notification_type,subject,body,metadata)
+                       VALUES (%s,%s,'goal-pursuit','main','info',%s,%s,%s)""",
+            (
+                str(uuid4()),
+                tenant,
+                f"Goal {event}: {g['objective'][:150]}",
+                detail,
+                Json({"goal_id": g["id"], "goal_event": event}),
+            ),
+        )
+    except Exception:
+        cur.execute("ROLLBACK TO SAVEPOINT goal_notify")
+        logger.warning("Goal notification for %s could not be delivered", g["id"], exc_info=True)
+    else:
+        cur.execute("RELEASE SAVEPOINT goal_notify")
 
 
 def adopt(tenant: str, task_id: str, actor: str) -> dict[str, Any]:

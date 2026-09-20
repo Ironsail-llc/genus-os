@@ -24,6 +24,7 @@ calls ``reset_probe()``.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 _installed: bool | None = None
@@ -55,8 +56,51 @@ def task_gate(cur: Any, task: str, tenant: str) -> str:
     return f"pursuit_task_runnable({task},{tenant})" if pursuit_installed(cur) else "TRUE"
 
 
+_LINKED_TTL_SECONDS = 30
+_linked: dict[str, tuple[float, bool]] = {}
+
+
+def tenant_links_tasks(tenant: str) -> bool:
+    """Whether this tenant has any goal-linked task at all.
+
+    ``admit_tool`` ran ``pursuit_task_runnable`` — a database round trip — for
+    every tool call of every agent whose run carries a task id, on every
+    instance, whether or not a single goal existed. A task can only be gated
+    if something linked it, so a tenant with no links can skip the check
+    entirely.
+
+    Cached for thirty seconds, and invalidated in-process the moment this
+    process links a task. The only staleness that survives that is another
+    process creating a tenant's FIRST link, which delays the gate by up to the
+    TTL; every link after it is covered, because the answer has already
+    flipped to True and stays there.
+    """
+    cached = _linked.get(tenant)
+    now = time.monotonic()
+    if cached and now - cached[0] < _LINKED_TTL_SECONDS:
+        return cached[1]
+    try:
+        from robothor.goals.store import transaction
+
+        with transaction() as cur:
+            if not pursuit_installed(cur):
+                return False
+            cur.execute("SELECT 1 FROM pursuit_goal_tasks WHERE tenant_id=%s LIMIT 1", (tenant,))
+            answer = cur.fetchone() is not None
+    except Exception:  # noqa: BLE001 - an unanswered question is not a licence to skip
+        return True
+    _linked[tenant] = (now, answer)
+    return answer
+
+
+def note_task_linked(tenant: str) -> None:
+    """A link just happened in this process: stop skipping the gate now."""
+    _linked[tenant] = (time.monotonic(), True)
+
+
 def reset_probe() -> None:
-    """Forget the cached answer. For tests, and for a process that has just
+    """Forget the cached answers. For tests, and for a process that has just
     applied migrations in-band."""
     global _installed
     _installed = None
+    _linked.clear()

@@ -232,6 +232,35 @@ async def test_one_ready_goal_cannot_occupy_the_loop(db):  # noqa: F811
 
 
 @pytest.mark.asyncio
+async def test_serve_backs_off_while_pursuit_is_disabled(db):  # noqa: F811
+    """A switched-off feature was opening ~86,400 connections a day to read a
+    flag that changes a handful of times in a tenant's life."""
+    import asyncio
+
+    from robothor.goals.controller import DISABLED_POLL_SECONDS
+
+    controller = GoalController(
+        SimpleNamespace(execute=AsyncMock()), SimpleNamespace(tenant_id=db, manifest_dir="unused")
+    )
+    slept: list[float] = []
+
+    async def sleep(seconds):
+        slept.append(seconds)
+        raise asyncio.CancelledError
+
+    for enabled, expected in ((False, DISABLED_POLL_SECONDS), (True, 1)):
+        slept.clear()
+        store.set_enabled(db, enabled, "operator")
+        with (
+            patch("robothor.goals.controller.asyncio.sleep", sleep),
+            patch("robothor.goals.events.capture"),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await controller.serve()
+        assert slept == [expected]
+
+
+@pytest.mark.asyncio
 async def test_controller_failure_stops_runner_before_releasing_lease(db):  # noqa: F811
     import asyncio
 

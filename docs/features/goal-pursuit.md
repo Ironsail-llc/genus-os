@@ -7,7 +7,8 @@ watches. Ongoing goals assess a target repeatedly instead of completing.
 
 ## Enable and use
 
-Apply the canonical migration chain, including `crm/migrations/126_goal_pursuit.sql`, before
+Apply the canonical migration chain, including `crm/migrations/126_goal_pursuit.sql`
+and `crm/migrations/127_goal_pursuit_cost.sql`, before
 running the new engine or bridge. No existing session goal starts executing as a
 result of migration. The tenant switch starts disabled.
 
@@ -137,7 +138,11 @@ assessments require fresh evidence for each period and have a default daily revi
 Task-change wake records commit in the same PostgreSQL transaction as task updates.
 Existing Redis streams are replayed into a durable inbox with transactional
 per-tenant cursors and idempotent event IDs. Only explicitly tenant-scoped events
-can match a watch. Event capture runs at most once a minute between coordination
+can match a watch, and only event types some goal is currently waiting on are
+stored at all; cursors still advance across every stream, so a watch registered
+later starts from now rather than replaying a backlog. Processed events are kept
+seven days and goal history 180 days, trimmed on the same once-a-minute timer as
+capture. Event capture runs at most once a minute between coordination
 turns. No new external watcher integrations are installed. Every wait has a timed
 fallback, covering missing or trimmed stream events. Duplicate wakes coalesce,
 old events cannot satisfy newly registered watches, and paused goals cannot be
@@ -156,7 +161,19 @@ transaction tests. PostgreSQL tests launch and stop their own temporary cluster
 on a private Unix socket; they do not connect to the live database. UI tests live
 in `app/__tests__/components/goals-view.test.tsx`.
 
-Roll out by applying the migration, deploying engine/bridge/UI with execution
+### Cost when the feature is off
+
+An instance that never enables goal pursuit should not notice it. The
+controller polls once a minute rather than once a second while the tenant
+switch is off; the `crm_tasks` change trigger returns on a primary-key probe of
+that switch before doing any other lookup, and the two lookups behind it are
+indexed; and the per-tool-call admission check skips the database entirely for
+a tenant with no goal-linked tasks, re-checked at most every thirty seconds.
+The one consequence of that cache: if another process creates a tenant's very
+first goal-task link, the gate can take up to thirty seconds to start applying
+to it. Every link after the first is immediate.
+
+Roll out by applying the migrations, deploying engine/bridge/UI with execution
 disabled, then enabling one tenant. Disabling the switch is the runtime rollback;
 retain the additive tables and history. Apply code rollback only with execution
 disabled. No production migration, service restart or tenant activation is part of

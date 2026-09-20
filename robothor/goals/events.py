@@ -32,6 +32,20 @@ def capture(tenant: str) -> None:
         if not row:
             return
         cursors = row["cursors"] or {}
+        # Only the event types some goal is actually waiting on are stored.
+        # This used to copy all eight streams into PostgreSQL every sixty
+        # seconds whether or not anything could ever match, and nothing
+        # deleted a row afterwards. Cursors still advance across every stream,
+        # so a watch registered later starts from now rather than replaying a
+        # backlog — which is the existing contract: a wait cannot be satisfied
+        # by an event older than its registration.
+        cur.execute(
+            """SELECT DISTINCT data->'wait'->>'event_type' AS event_type FROM pursuit_goals
+                       WHERE tenant_id=%s AND status='waiting'
+                         AND data->'wait'->>'event_type' IS NOT NULL""",
+            (tenant,),
+        )
+        awaited = {r["event_type"] for r in cur.fetchall()}
         for stream in sorted(VALID_STREAMS):
             cursor = cursors.get(stream, f"{int(row['updated_at'].timestamp() * 1000)}-0")
             entries = client.xrange(_stream_key(stream), min="(" + cursor, max="+", count=1000)
@@ -43,7 +57,7 @@ def capture(tenant: str) -> None:
                     )
                     for k, v in raw.items()
                 }
-                if envelope.get("tenant_id") == tenant:
+                if envelope.get("tenant_id") == tenant and envelope.get("type", "") in awaited:
                     try:
                         payload = json.loads(envelope.get("payload", "{}"))
                         if not isinstance(payload, dict):

@@ -14,7 +14,7 @@ import psycopg2
 import pytest
 
 from robothor.goals import store
-from robothor.goals.model import CreateGoal, GoalUpdate
+from robothor.goals.model import DEFAULT_TOKEN_BUDGET, CreateGoal, GoalUpdate
 
 
 @pytest.fixture(scope="module")
@@ -59,13 +59,16 @@ def private_database(tmp_path_factory):
         command("createdb", "-h", socket, "-U", "goaltest", "goal_pursuit_test")
         dsn = f"dbname=goal_pursuit_test user=goaltest host={socket}"
         with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+            cur.execute("CREATE TABLE crm_tenants(id TEXT PRIMARY KEY,display_name TEXT)")
             cur.execute("""CREATE TABLE crm_tasks(id UUID PRIMARY KEY,tenant_id TEXT NOT NULL,title TEXT,
                 objective TEXT,status TEXT,resolution TEXT,deleted_at TIMESTAMPTZ,tags TEXT[],session_goal_meta JSONB)""")
             cur.execute("""CREATE TABLE crm_agent_notifications(id UUID,tenant_id TEXT,from_agent TEXT,
                 to_agent TEXT,notification_type TEXT,subject TEXT,body TEXT,metadata JSONB)""")
-            migration = Path(__file__).resolve().parents[3] / "crm/migrations/126_goal_pursuit.sql"
-            cur.execute(migration.read_text())
-            cur.execute(migration.read_text())  # migration is re-entrant
+            migrations = Path(__file__).resolve().parents[3] / "crm/migrations"
+            for name in ("126_goal_pursuit.sql", "127_goal_pursuit_cost.sql"):
+                sql = (migrations / name).read_text()
+                cur.execute(sql)
+                cur.execute(sql)  # every goal migration is re-entrant
         yield dsn
     finally:
         command("pg_ctl", "-D", data, "-m", "immediate", "-w", "stop")
@@ -82,9 +85,23 @@ def db(private_database, monkeypatch):
             conn.close()
 
     monkeypatch.setattr(store, "get_connection", connection)
-    tenant = str(uuid4())
+    tenant = register_tenant(str(uuid4()))
     store.set_enabled(tenant, True, "operator:test")
     return tenant
+
+
+def register_tenant(name):
+    """pursuit_goals.tenant_id is a foreign key, so a test tenant must exist.
+
+    That is the point of the key: a typo'd tenant used to produce a goal whose
+    every finish() rolled back on the notification insert and held its lease.
+    """
+    with store.transaction() as cur:
+        cur.execute(
+            "INSERT INTO crm_tenants(id,display_name) VALUES (%s,%s) ON CONFLICT DO NOTHING",
+            (name, name),
+        )
+    return name
 
 
 def create(tenant, **kwargs):
@@ -168,9 +185,10 @@ def test_task_changes_commit_with_wake_and_tenant_link_is_checked(db):
     with store.transaction() as cur:
         cur.execute("UPDATE crm_tasks SET status='DONE' WHERE id=%s", (task_id,))
     assert store.claim(db)[0]["id"] == g["id"]
-    other = create("another-tenant")
+    foreign = register_tenant("another-tenant")
+    other = create(foreign)
     with pytest.raises(ValueError, match="task not found"):
-        change("another-tenant", other, "link_task", task_id=task_id)
+        change(foreign, other, "link_task", task_id=task_id)
 
 
 def test_expired_lease_requires_reconciliation(db):
@@ -237,6 +255,35 @@ def test_cost_attempt_and_deadline_ceilings_block_at_claim(db):
         store.save(cur, db, overdue)
     assert store.claim(db) is None
     assert "deadline" in store.get(db, overdue["id"])["blocker"]
+
+
+def test_an_unknown_tenant_cannot_own_a_goal(db):
+    """Without the foreign key, a typo'd tenant produced a goal whose every
+    finish() rolled back on the notification insert and held its lease."""
+    import psycopg2
+
+    with pytest.raises(psycopg2.errors.ForeignKeyViolation):
+        create("tenant-that-was-never-created")
+
+
+def test_a_failed_notification_cannot_strand_the_lease(db):
+    first = create(db, request_key="notified")
+    second = create(db, request_key="next")
+    g, attempt = store.claim(db)
+    assert g["id"] == first["id"]
+    with store.transaction() as cur:
+        cur.execute(
+            "ALTER TABLE crm_agent_notifications ADD CONSTRAINT refuse CHECK (false) NOT VALID"
+        )
+    try:
+        store.finish(db, first["id"], attempt, tokens=DEFAULT_TOKEN_BUDGET)
+    finally:
+        with store.transaction() as cur:
+            cur.execute("ALTER TABLE crm_agent_notifications DROP CONSTRAINT refuse")
+    assert store.get(db, first["id"])["status"] == "blocked"
+    # The lease was released despite the undelivered notification, so the
+    # tenant's next goal can run.
+    assert store.claim(db)[0]["id"] == second["id"]
 
 
 def test_stale_update_and_tenant_reads(db):
@@ -324,7 +371,7 @@ def test_parent_budget_accounts_for_execution_children(db):
 
 def test_rls_policies_enforce_tenant_scope(db):
     g = create(db)
-    other = create("other-rls-tenant")
+    other = create(register_tenant("other-rls-tenant"))
     with store.transaction() as cur:
         cur.execute("CREATE ROLE goal_reader")
         cur.execute("GRANT SELECT ON pursuit_goals TO goal_reader")

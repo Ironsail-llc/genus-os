@@ -95,6 +95,7 @@ class GoalController:
 
                     try:
                         await asyncio.to_thread(capture, self.config.tenant_id)
+                        await asyncio.to_thread(store.prune, self.config.tenant_id)
                     except Exception:
                         logger.warning(
                             "Goal event capture unavailable; timed reviews remain active",

@@ -91,11 +91,19 @@ def admit_tool(name: str, args: dict[str, Any], ctx: ToolContext) -> None:
     current = binding.get()
     if current is None:
         from robothor.engine.session_registry import lookup
+        from robothor.goals.compat import tenant_links_tasks
 
         session = lookup(ctx.run_id) if ctx.run_id else None
         task_id = getattr(session.run, "task_id", None) if session else None
         task_ids = {task_id, args.get("parent_task_id")}
-        if any(task and not task_runnable(task, ctx.tenant_id) for task in task_ids):
+        # A task can only be gated if some goal linked it. Asking that once
+        # per tenant per thirty seconds is what keeps every OTHER agent's
+        # every tool call off the database entirely.
+        if (
+            any(task_ids - {None})
+            and tenant_links_tasks(ctx.tenant_id)
+            and any(task and not task_runnable(task, ctx.tenant_id) for task in task_ids)
+        ):
             raise ValueError("the goal owning this task is inactive")
         return
     from robothor.engine.tools.constants import READONLY_TOOLS
@@ -145,6 +153,8 @@ def prepare_task(
 
 
 def link_created_task(cur: Any, tenant: str, task_id: str) -> None:
+    from robothor.goals.compat import note_task_linked
+
     current = binding.get()
     if current and current.tenant == tenant:
         cur.execute(
@@ -152,6 +162,7 @@ def link_created_task(cur: Any, tenant: str, task_id: str) -> None:
                        ON CONFLICT DO NOTHING""",
             (tenant, current.goal_id, task_id),
         )
+        note_task_linked(tenant)
 
 
 def task_runnable(task_id: str, tenant: str) -> bool:
