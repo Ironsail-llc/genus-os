@@ -26,9 +26,15 @@ def records(private_database, monkeypatch):  # noqa: F811
 
     with connect() as conn, conn.cursor() as cur:
         cur.execute("""CREATE TABLE IF NOT EXISTS agent_runs (
-            id UUID PRIMARY KEY,tenant_id TEXT,user_id TEXT,parent_run_id UUID,
+            id UUID PRIMARY KEY,tenant_id TEXT,user_id TEXT,agent_id TEXT DEFAULT 'main',parent_run_id UUID,
             correlation_id UUID,runtime_context JSONB,status TEXT,output_text TEXT,
             error_message TEXT,verified_status TEXT,started_at TIMESTAMPTZ DEFAULT now())""")
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute("""CREATE TABLE IF NOT EXISTS agent_run_steps (
+            run_id UUID,step_number INTEGER,tool_name TEXT,tool_input JSONB,tool_output JSONB)""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS calendar_operations (
+            id UUID PRIMARY KEY,tenant_id TEXT,user_id TEXT,agent_id TEXT,status TEXT,result JSONB,
+            created_at TIMESTAMPTZ DEFAULT now())""")
     monkeypatch.setattr(chat_recovery, "get_connection", connect)
     return connect
 
@@ -148,3 +154,97 @@ async def test_http_recovery_reads_durable_answer_after_session_cache_loss(
     assert invalid.status_code == 400
     mock_runner.execute.assert_not_called()
     assert not _sessions
+
+
+def record_calendar_receipt(
+    connect, auth, run, *, status="completed", result=None, user=None, agent="main", output_id=None
+):
+    operation = str(uuid4())
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO calendar_operations(id,tenant_id,user_id,agent_id,status,result) VALUES (%s,%s,%s,%s,%s,%s)",
+            (
+                operation,
+                auth.tenant_id,
+                user or auth.user_id,
+                agent,
+                status,
+                Json(result or {"verification": "verified", "invitations_requested": True}),
+            ),
+        )
+        cur.execute(
+            "INSERT INTO agent_run_steps VALUES (%s,1,'gws_calendar_add_attendees',%s,%s)",
+            (
+                run,
+                Json({"operation_id": operation}),
+                Json({"operation_id": output_id or operation, "verification": "verified"}),
+            ),
+        )
+    return operation
+
+
+def test_interrupted_run_reports_verified_action_receipt_without_claiming_delivery(records):
+    auth, client = identity(), str(uuid4())
+    run = insert(
+        records, auth, client, "cancelled", error_message="Run interrupted", verified_status=None
+    )
+    operation = record_calendar_receipt(records, auth, run)
+    result = chat_recovery.read_outcome(auth, "web:main", client)
+    assert result["state"] == "cancelled" and not result["verified"]
+    assert result["effects"][0]["operation_id"] == operation
+    assert result["effects"][0]["verified"] is True
+    assert "calendar change is recorded as complete and verified" in result["text"]
+    assert "delivery is not verified" in result["text"]
+    assert "Run interrupted" in result["text"]
+
+
+@pytest.mark.parametrize("status", ["blocked", "executing"])
+def test_unverified_operation_overrides_successful_run_prose(records, status):
+    auth, client = identity(), str(uuid4())
+    run = insert(records, auth, client, output_text="Everything was completed successfully")
+    record_calendar_receipt(
+        records, auth, run, status=status, result={"verification": "unverified"}
+    )
+    result = chat_recovery.read_outcome(auth, "web:main", client)
+    assert not result["verified"]
+    assert "Everything was completed successfully" not in result["text"]
+    assert "not fully verified" in result["text"]
+
+
+@pytest.mark.parametrize("mismatch", ["principal", "agent", "operation_reference"])
+def test_run_reference_cannot_expose_another_receipt_or_conflicting_audit(records, mismatch):
+    auth, client = identity(), str(uuid4())
+    run = insert(records, auth, client)
+    record_calendar_receipt(
+        records,
+        auth,
+        run,
+        user="other" if mismatch == "principal" else None,
+        agent="other" if mismatch == "agent" else "main",
+        output_id=str(uuid4()) if mismatch == "operation_reference" else None,
+    )
+    result = chat_recovery.read_outcome(auth, "web:main", client)
+    assert not result["verified"]
+    assert all(not effect["verified"] for effect in result["effects"])
+    assert all(effect["status"] == "unmatched" for effect in result["effects"])
+    assert "Recorded result: task created once." not in result["text"]
+
+
+def test_equivalent_uuid_references_match_without_trusting_invalid_reference_text(records):
+    auth, client = identity(), str(uuid4())
+    run = insert(records, auth, client)
+    operation = record_calendar_receipt(records, auth, run)
+    with records() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE agent_run_steps SET tool_input=%s WHERE run_id=%s",
+            (Json({"operation_id": operation.upper()}), run),
+        )
+    assert chat_recovery.read_outcome(auth, "web:main", client)["effects"][0]["verified"]
+    with records() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE agent_run_steps SET tool_input=%s WHERE run_id=%s",
+            (Json({"operation_id": "untrusted invalid reference"}), run),
+        )
+    result = chat_recovery.read_outcome(auth, "web:main", client)
+    assert not result["verified"]
+    assert "untrusted invalid reference" not in result["text"]

@@ -589,6 +589,20 @@
       "provider_transport": "synthetic",
       "production_writes": 0,
       "general_automatic_reconciliation": false
+    },
+    "chat_business_receipt_recovery": {
+      "initial_conflicting_evidence_failures": 3,
+      "passed": 42,
+      "seconds": 5.21,
+      "scope": "Durable direct-calendar-step references and same-tenant/principal/agent operation records; actual synthetic calendar receipt included",
+      "provider_calls_during_recovery": 0,
+      "business_writes_during_recovery": 0,
+      "limitations": [
+        "Direct calendar tool references only",
+        "Recorded verification is not a fresh provider observation",
+        "Notification delivery is not established",
+        "General external-provider reconciliation remains incomplete"
+      ]
     }
   },
   "calendar": {
