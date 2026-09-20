@@ -215,7 +215,10 @@ async def operations(request: Request):
     for row in rows:
         for key in ("created_at", "updated_at"):
             row[key] = row[key].isoformat()
-    return _safe({"operations": rows})
+    from robothor.autonomy.handoffs import HandoffStore
+
+    handoffs = await asyncio.to_thread(HandoffStore(AutonomyStore()).list, scope)
+    return _safe({"operations": rows, "handoffs": handoffs})
 
 
 @router.post("/operations/{operation_id}/verification")
@@ -293,3 +296,39 @@ async def payment_status(operation_id: UUID, request: Request):
         raise HTTPException(404, "Payment record not found") from None
     except Exception:
         raise HTTPException(503, "Payment record unavailable") from None
+
+
+@router.post("/handoffs/{handoff_id}/check")
+async def check_external_handoff(handoff_id: UUID, request: Request):
+    from robothor.autonomy.handoffs import HandoffStore
+
+    scope = await require_personal_owner(request)
+    try:
+        private = await asyncio.to_thread(
+            HandoffStore(AutonomyStore()).acknowledge, scope, str(handoff_id)
+        )
+        confirmation = private["confirmation"]
+        plan = ExecutionPlan(
+            url=confirmation["url"],
+            submit_selector="__unused__",
+            success_selector=confirmation["selector"],
+            success_text=confirmation["text"],
+            session_resource_id=confirmation.get("session_resource_id"),
+        )
+    except Exception:
+        raise HTTPException(409, "External verification is unavailable or expired") from None
+
+    async def check():
+        try:
+            await run_browser(
+                scope, private["operation_id"], private["agent_id"], plan, reconcile=True
+            )
+        except Exception:
+            # The encrypted handoff survives interruption. Neither its URL nor
+            # private browser errors are suitable for logs or client responses.
+            return
+
+    task = asyncio.create_task(check())
+    _resumes.add(task)
+    task.add_done_callback(_resumes.discard)
+    return _safe({"id": str(handoff_id), "state": "checking"})

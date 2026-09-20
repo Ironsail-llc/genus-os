@@ -41,6 +41,7 @@ def test_only_genuinely_async_routes_run_on_the_event_loop():
         # Personal enrollment awaits request bodies; all synchronous vault and
         # journal calls use asyncio.to_thread. Verification starts an async
         # broker task, so it must also retain the event-loop context.
+        ("POST", "/api/autonomy/handoffs/{handoff_id}/check"),
         ("GET", "/api/autonomy/status"),
         ("GET", "/api/autonomy/operations"),
         ("GET", "/api/autonomy/operations/{operation_id}/payment"),

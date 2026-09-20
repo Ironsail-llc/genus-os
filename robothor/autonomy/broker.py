@@ -293,6 +293,9 @@ class BrowserBroker:
         if row["state"] != "reconciling":
             await asyncio.to_thread(self.store.finish, scope, operation_id, "reconciling")
         try:
+            from robothor.autonomy.readonly_browser import restrict_reconciliation
+
+            await restrict_reconciliation(page)
             await page.goto(plan.url, wait_until="domcontentloaded", timeout=30000)
             if url_origin(page.url) != destination:
                 raise PermissionError("destination_changed")
