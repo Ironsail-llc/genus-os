@@ -10,7 +10,14 @@ from fastapi.responses import JSONResponse
 
 from robothor.auth import tokens
 from robothor.autonomy.models import Scope
-from robothor.autonomy.workflows.protocol import AUDIENCE, RPC, SCOPE, ExecuteRequest, OpenRequest
+from robothor.autonomy.workflows.protocol import (
+    AUDIENCE,
+    RPC,
+    SCOPE,
+    ExecuteRequest,
+    OpenRequest,
+    ReconcileRequest,
+)
 
 if TYPE_CHECKING:
     from robothor.autonomy.workflows.manager import WorkflowManager
@@ -89,6 +96,16 @@ def create_app(manager: WorkflowManager) -> FastAPI:
                         verification_code=command.verification_code.get_secret_value()
                         if command.verification_code
                         else None,
+                    )
+                elif isinstance(command, ReconcileRequest):
+                    result = await manager.reconcile(
+                        scope,
+                        agent_id,
+                        str(command.workflow_id),
+                        str(command.command_id),
+                        command.revision,
+                        command.selector,
+                        command.text,
                     )
                 elif command.kind == "status":
                     result = await manager.status(scope, agent_id, str(command.workflow_id))

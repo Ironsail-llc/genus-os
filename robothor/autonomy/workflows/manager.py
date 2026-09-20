@@ -30,6 +30,7 @@ class LiveWorkflow:
     opened_at: float
     last_used: float
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    frozen: bool = False
 
 
 class WorkflowManager:
@@ -227,6 +228,13 @@ class WorkflowManager:
                 if self._live.get(workflow_id) is live:
                     await self._discard(workflow_id, live)
                 raise PermissionError("workflow_lost")
+            operation = await asyncio.to_thread(self.store.operation, scope, row["operation_id"])
+            if operation["state"] == "reconciling":
+                from robothor.autonomy.workflows.retained import inspect
+
+                result = await inspect(live, row["origin"])
+                live.last_used = self.clock()
+                return {"workflow_id": workflow_id, "revision": row["revision"], **result}
             grant = await asyncio.to_thread(
                 self.store.check_authority, scope, row["operation_id"], agent_id
             )
@@ -281,21 +289,31 @@ class WorkflowManager:
                     "workflow_id": workflow_id,
                 }
             try:
-                grant = await asyncio.to_thread(
-                    self.store.check_authority, scope, row["operation_id"], agent_id
+                operation = await asyncio.to_thread(
+                    self.store.operation, scope, row["operation_id"]
                 )
-                result = await live.broker.execute_on_page(
-                    scope,
-                    row["operation_id"],
-                    agent_id,
-                    plan,
-                    live.page,
-                    allowed_frames=grant.frame_origins,
-                    verification_code=verification_code,
-                    workflow_id=workflow_id,
-                    navigate=False,
-                    advance=advance,
-                )
+                if operation["state"] == "reconciling":
+                    result = {
+                        "state": "reconciling",
+                        "reason": "read_only_confirmation_required",
+                        "operation_id": row["operation_id"],
+                    }
+                else:
+                    grant = await asyncio.to_thread(
+                        self.store.check_authority, scope, row["operation_id"], agent_id
+                    )
+                    result = await live.broker.execute_on_page(
+                        scope,
+                        row["operation_id"],
+                        agent_id,
+                        plan,
+                        live.page,
+                        allowed_frames=grant.frame_origins,
+                        verification_code=verification_code,
+                        workflow_id=workflow_id,
+                        navigate=False,
+                        advance=advance,
+                    )
                 changed = (
                     result.get("reason")
                     in {"workflow_step_completed", "server_validation_required"}
@@ -312,15 +330,33 @@ class WorkflowManager:
                     advance=changed,
                 )
                 live.last_used = self.clock()
-                if result.get("state") in {"completed", "reconciling"}:
-                    await self._discard(
-                        workflow_id, live, "completed" if result["state"] == "completed" else "lost"
-                    )
+                if result.get("state") == "completed":
+                    await self._discard(workflow_id, live, "completed")
+                elif result.get("state") == "reconciling":
+                    from robothor.autonomy.workflows.retained import freeze
+
+                    await freeze(live)
                 return result
             except BaseException:
                 if self._live.get(workflow_id) is live:
                     await self._discard(workflow_id, live)
                 raise
+
+    async def reconcile(
+        self,
+        scope: Scope,
+        agent_id: str,
+        workflow_id: str,
+        command_id: str,
+        revision: int,
+        selector: str,
+        text: str,
+    ) -> dict[str, Any]:
+        from robothor.autonomy.workflows.retained import reconcile
+
+        return await reconcile(
+            self, scope, agent_id, workflow_id, command_id, revision, selector, text
+        )
 
     async def shutdown(self) -> None:
         for workflow_id, live in list(self._live.items()):
