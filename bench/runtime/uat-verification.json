@@ -166,6 +166,13 @@
       "python_ruff": "passed",
       "preview": "uat-unfinished-work.png",
       "manual_acceptance": false
+    },
+    "candidate_admission_boundaries": {
+      "passed": 10,
+      "failed": 0,
+      "initial_failures_preserved": 3,
+      "artifact": "uat-candidate-boundary-contracts.json",
+      "synthetic_only": true
     }
   },
   "calendar": {

@@ -46,6 +46,7 @@ jobs:
         run: |
           python -m venv /tmp/runtime-candidates
           /tmp/runtime-candidates/bin/pip install -r bench/runtime/candidates.lock
+          PYDANTIC_AI_NO_BANNER=1 /tmp/runtime-candidates/bin/python -m pytest -q bench/runtime/test_candidate_boundaries.py
           PYDANTIC_AI_NO_BANNER=1 /tmp/runtime-candidates/bin/python -m bench.runtime.screen_candidates --output /tmp/screening.json
           python -c 'import json; r=json.load(open("/tmp/screening.json")); assert all(s["status"]=="completed" and s["verified"] and s["single_write"] for s in r["samples"])'
 

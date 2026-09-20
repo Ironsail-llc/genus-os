@@ -1,0 +1,38 @@
+{
+  "scope": "Pinned experimental action adapters; synthetic provider and gateway, temporary filesystem backend; not production runtime parity.",
+  "versions": {
+    "pydantic-ai-slim": "2.46.0",
+    "deepagents": "0.7.15"
+  },
+  "initial": {
+    "passed": 5,
+    "failed": 3,
+    "failures": [
+      "stopped Pydantic admission began model work",
+      "wrong-tenant Pydantic admission began model work",
+      "wrong-tenant Deep Agents admission began model work"
+    ]
+  },
+  "final": {
+    "passed": 10,
+    "failed": 0,
+    "seconds": 2.45,
+    "checks": [
+      "denied admission before model work",
+      "stop during provider work denies proposed write",
+      "unrequested values cannot mutate and requests remain bounded",
+      "framework file-write proposal cannot reach temporary filesystem"
+    ]
+  },
+  "authorized_action_screening": {
+    "pydantic-ai": 30,
+    "deepagents": 30,
+    "artifact": "uat-candidate-boundary-screen.json"
+  },
+  "native_verified_outcomes": {
+    "passed": 5,
+    "failed": 0,
+    "seconds": 2.93
+  },
+  "promotion_eligible": false
+}

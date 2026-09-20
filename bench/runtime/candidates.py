@@ -21,11 +21,14 @@ class FixtureGateway:
     writes: int = 0
     dispatches: int = 0
 
+    def admit(self, tenant: str) -> None:
+        if tenant != self.tenant or self.stopped:
+            raise ValueError("tenant authority denied or stopped")
+
     async def dispatch(
         self, tenant: str, key: str | None = None, value: str | None = None, **extra
     ) -> dict:
-        if tenant != self.tenant or self.stopped:
-            raise ValueError("tenant authority denied or stopped")
+        self.admit(tenant)
         self.dispatches += 1
         if extra or (key, value) != ("report", "delivered"):
             return {"error": "Only storing key report with value delivered is authorized."}
@@ -54,6 +57,7 @@ class PydanticCandidate:
         self.model = model
 
     async def run(self, gateway, *, tenant, prompt=PROMPT):
+        gateway.admit(tenant)
         from pydantic_ai import Agent, Tool
         from pydantic_ai.usage import UsageLimits
 
@@ -75,6 +79,7 @@ class PydanticCandidate:
             ) as run,
         ):
             async for _node in run:
+                gateway.admit(tenant)
                 if gateway.values.get("report") == "delivered":
                     break
             usage = run.usage
@@ -90,6 +95,7 @@ class DeepAgentsCandidate:
         self.model = model
 
     async def run(self, gateway, *, tenant, prompt=PROMPT):
+        gateway.admit(tenant)
         from deepagents import create_deep_agent
         from langchain.agents.middleware import AgentMiddleware
         from langchain.agents.middleware.types import ModelResponse
@@ -110,8 +116,7 @@ class DeepAgentsCandidate:
         class Boundary(AgentMiddleware):
             async def awrap_model_call(self, request, handler):
                 nonlocal calls
-                if gateway.stopped:
-                    raise ValueError("stopped")
+                gateway.admit(tenant)
                 if gateway.values.get("report") == "delivered":
                     return ModelResponse(result=[AIMessage(content="Verified completion")])
                 if calls >= 4:
@@ -124,7 +129,8 @@ class DeepAgentsCandidate:
                 )
 
             async def awrap_tool_call(self, request, handler):
-                if request.tool_call["name"] != "record" or gateway.stopped:
+                gateway.admit(tenant)
+                if request.tool_call["name"] != "record":
                     raise ValueError("framework tool bypass denied")
                 return await handler(request)
 
