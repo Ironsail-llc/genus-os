@@ -66,7 +66,7 @@ goal. Automatic child keys include the parent, criteria and ongoing assessment
 period; use an explicit different key for intentionally distinct repeat work.
 
 Updates support progress, evidence, wait, block, complete, assess, pause, resume,
-cancel, approve, steer, revise, link_task, and reconciled. Evidence identifies a
+cancel, approve, steer, revise, link_task, unlink_task, and reconciled. Evidence identifies a
 zero-based criterion, reference, explanation and `satisfied` assessment. Latest
 assessment for each criterion controls completion; tests/commits are not required
 for non-coding goals. `revise` is operator-only and clears old criterion evidence;
@@ -86,9 +86,23 @@ The scheduler owns a background controller. It polls for newly ready work every
 second and continues immediately after each coordination run. One durable lease
 per tenant prevents concurrent goal coordinators, including across processes.
 Priority then oldest-ready ordering rotates work at run boundaries. Waiting goals
-consume no model calls. The ordinary task inbox excludes work owned by inactive
-goals. Pausing a parent pauses its children; resuming restores the children it
-paused. A running tool cannot be undone; cancellation stops subsequent work.
+consume no model calls. Pausing a parent pauses its children; resuming restores
+the children it paused. A running tool cannot be undone; cancellation stops
+subsequent work.
+
+### Which linked tasks the inbox hides
+
+A CRM task linked to a goal is held out of `list_agent_tasks` and the thread
+claim only while that goal is **paused, blocked or awaiting review** — live
+goals whose work is deliberately on hold, visible in the Goals view, and whose
+tasks come straight back on `resume`.
+
+A goal that is complete or canceled owns nothing: its tasks return to their
+agents' inboxes. So does every linked task when the tenant switch is off,
+because with pursuit disabled no coordinator can be dispatched to collide with
+them. Either behaviour would otherwise be permanent — nothing expires a link —
+so `update_pursuit_goal` also takes `unlink_task` with a `task_id`, which is
+allowed while a goal is held precisely because that is when it matters.
 
 Goal tool admission checks the lease and lifecycle state. A recovered execution
 must inspect prior tool results and external state and record `reconciled` before
@@ -176,7 +190,9 @@ first goal-task link, the gate can take up to thirty seconds to start applying
 to it. Every link after the first is immediate.
 
 Roll out by applying the migrations, deploying engine/bridge/UI with execution
-disabled, then enabling one tenant. Disabling the switch is the runtime rollback;
-retain the additive tables and history. Apply code rollback only with execution
+disabled, then enabling one tenant. Disabling the switch is the runtime rollback:
+it stops new dispatches and in-flight pursuit, leaves history intact, and
+returns every goal-linked CRM task to its agent's ordinary inbox. Retain the
+additive tables and history. Apply code rollback only with execution
 disabled. No production migration, service restart or tenant activation is part of
 the development/test workflow.

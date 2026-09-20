@@ -227,6 +227,13 @@ def update(
                 ):
                     return before
                 g["last_block_attempt"] = current.attempt
+        if change.action == "unlink_task":
+            if not change.task_id:
+                raise ValueError("unlink_task needs the task to release")
+            cur.execute(
+                "DELETE FROM pursuit_goal_tasks WHERE tenant_id=%s AND goal_id=%s AND task_id=%s",
+                (tenant, goal_id, change.task_id),
+            )
         if change.action == "link_task" or (change.action == "wait" and change.task_id):
             cur.execute(
                 "SELECT id FROM crm_tasks WHERE tenant_id=%s AND id=%s AND deleted_at IS NULL",

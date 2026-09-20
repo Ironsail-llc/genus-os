@@ -65,7 +65,11 @@ def private_database(tmp_path_factory):
             cur.execute("""CREATE TABLE crm_agent_notifications(id UUID,tenant_id TEXT,from_agent TEXT,
                 to_agent TEXT,notification_type TEXT,subject TEXT,body TEXT,metadata JSONB)""")
             migrations = Path(__file__).resolve().parents[3] / "crm/migrations"
-            for name in ("126_goal_pursuit.sql", "127_goal_pursuit_cost.sql"):
+            for name in (
+                "126_goal_pursuit.sql",
+                "127_goal_pursuit_cost.sql",
+                "128_goal_pursuit_task_release.sql",
+            ):
                 sql = (migrations / name).read_text()
                 cur.execute(sql)
                 cur.execute(sql)  # every goal migration is re-entrant
@@ -378,6 +382,80 @@ def test_parent_pause_resume_restores_child_and_task_dispatch(db):
     assert not task_runnable(task_id, db)
     change(db, parent, "resume")
     assert store.get(db, child["id"])["status"] == "queued"
+    assert task_runnable(task_id, db)
+
+
+def link_a_task(db, goal, title="Work"):
+    task_id = str(uuid4())
+    with store.transaction() as cur:
+        cur.execute(
+            "INSERT INTO crm_tasks(id,tenant_id,title,status) VALUES (%s,%s,%s,'TODO')",
+            (task_id, db, title),
+        )
+    change(db, goal, "link_task", task_id=task_id)
+    return task_id
+
+
+def test_a_finished_goal_releases_its_tasks_to_the_inbox(db):
+    """A goal that COMPLETES must not strand its linked tasks forever.
+
+    `pursuit_task_runnable` listed 'complete' and 'canceled' next to
+    paused/blocked/review, and nothing anywhere unlinks a task, so a long-term
+    goal that linked twenty tasks and then finished removed all twenty from
+    `list_agent_tasks` and `list_threads` permanently — while the tasks were
+    still TODO and still assigned, invisible to every agent, recoverable only
+    by a manual DELETE against production.
+    """
+    from robothor.goals.runtime import task_runnable
+
+    goal = create(db, kind="long")
+    task_id = link_a_task(db, goal)
+    assert task_runnable(task_id, db)
+
+    goal = change(db, store.get(db, goal["id"]), "pause")
+    assert not task_runnable(task_id, db), "a paused goal does hold its work"
+    change(db, goal, "resume")
+    assert task_runnable(task_id, db)
+
+    # Disabling the tenant switch is documented as the runtime rollback. A
+    # rollback that hides ordinary CRM tasks is not a rollback.
+    store.set_enabled(db, False, "operator:test")
+    assert task_runnable(task_id, db)
+    store.set_enabled(db, True, "operator:test")
+
+    goal = change(
+        db,
+        store.get(db, goal["id"]),
+        "evidence",
+        criterion=0,
+        reference="artifact:report",
+        satisfied=True,
+        note="Verified",
+    )
+    assert change(db, goal, "complete", note="Delivered")["status"] == "complete"
+    assert task_runnable(task_id, db), "a finished goal owns nothing"
+
+
+def test_a_canceled_goal_also_releases_its_tasks(db):
+    from robothor.goals.runtime import task_runnable
+
+    goal = create(db, kind="long")
+    task_id = link_a_task(db, goal)
+    assert change(db, store.get(db, goal["id"]), "cancel")["status"] == "canceled"
+    assert task_runnable(task_id, db)
+
+
+def test_an_operator_can_unlink_a_task_from_a_live_goal(db):
+    """The only way out of the link used to be a manual DELETE in production."""
+    from robothor.goals.runtime import task_runnable
+
+    goal = create(db, kind="long")
+    task_id = link_a_task(db, goal)
+    assert [str(t["id"]) for t in store.get(db, goal["id"])["tasks"]] == [task_id]
+    goal = change(db, store.get(db, goal["id"]), "pause")
+    assert not task_runnable(task_id, db)
+    change(db, goal, "unlink_task", task_id=task_id)
+    assert store.get(db, goal["id"])["tasks"] == []
     assert task_runnable(task_id, db)
 
 

@@ -138,6 +138,7 @@ class GoalUpdate(BaseModel):
         "approve",
         "steer",
         "link_task",
+        "unlink_task",
         "reconciled",
         "revise",
     ]
@@ -231,6 +232,9 @@ def transition(
         "steer",
         "pause",
         "revise",
+        # Held states are exactly when a linked task is hidden from its
+        # agent's inbox, so releasing one has to be reachable from here.
+        "unlink_task",
     }:
         raise ValueError("goal is inactive; resume it before recording work")
     if action in {"resume", "approve", "steer", "revise"} and not operator:
