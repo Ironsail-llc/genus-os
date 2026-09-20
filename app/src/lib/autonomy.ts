@@ -17,8 +17,15 @@
 /** Values an operator plausibly writes for "yes" in an env file. */
 const TRUTHY = new Set(["1", "true", "yes", "on"]);
 
+/**
+ * The parameter is the narrow shape this function actually reads, not
+ * `NodeJS.ProcessEnv`. That type requires `NODE_ENV`, which made every test
+ * that passes a one-key object a type error while proving nothing: this
+ * reads exactly one variable and has no opinion about the rest. `process.env`
+ * still satisfies it.
+ */
 export function personalAutomationEnabled(
-  env: NodeJS.ProcessEnv = process.env,
+  env: Record<string, string | undefined> = process.env,
 ): boolean {
   return TRUTHY.has((env.ROBOTHOR_AUTONOMY_ENABLED ?? "").trim().toLowerCase());
 }
