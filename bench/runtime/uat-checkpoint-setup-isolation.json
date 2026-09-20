@@ -1,0 +1,11 @@
+{
+  "initial_failure": "Checkpoint setup applied a foreign tenant saved plan mode because load_latest was called without tenant_id.",
+  "fix": "Pass the trusted tenant to the setup-stage checkpoint load.",
+  "positive_control": "Same-tenant checkpoint preserves plan-only execution.",
+  "negative_control": "Foreign checkpoint cannot alter plan/execute mode or identity.",
+  "focused_passed": 41,
+  "focused_seconds": 3.94,
+  "integration_command": ".venv/bin/python -m bench.runtime.migrated_integration",
+  "limits": "Setup checkpoint isolation tested against private canonical database. Full native saved-message checkpoint continuation and general identity revalidation remain separate checks.",
+  "integration_summary": "19 passed, 1 skipped, 1 warning in 5.78s"
+}

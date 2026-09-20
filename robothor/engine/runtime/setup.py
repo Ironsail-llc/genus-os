@@ -15,7 +15,7 @@ async def restored_context(
     from robothor.engine.task_context import read_context
 
     if run_id:
-        saved = await asyncio.to_thread(CheckpointManager.load_latest, run_id)
+        saved = await asyncio.to_thread(CheckpointManager.load_latest, run_id, tenant_id=tenant)
         context = read_context((saved or {}).get("messages") or [])
         if context and context.get("mode") == "plan":
             readonly, execution = True, False
