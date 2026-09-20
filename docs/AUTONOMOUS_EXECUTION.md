@@ -156,7 +156,8 @@ has been created” and “Application submitted successfully”; welcome pages,
 states and failure messages are insufficient. Discovery checks the main document
 and supports a bounded set of completion phrases, not arbitrary language or page
 layouts. Unsupported or ambiguous results remain reconciling. Verification links
-and reconciliation still require a specific confirmation selector and text.
+still require a specific confirmation selector and text. Read-only reconciliation
+can omit both to use the same affirmative outcome rules as submission.
 
 An already-visible confirmation prevents submission. If a confirmation appears
 during filling, the broker stops before clicking and preserves the operation for
@@ -282,7 +283,7 @@ rechecked before submission. Disabling execution does not prevent read-only
 reconciliation of a pending result.
 
 **Completion means observed website confirmation, not bank settlement or club
-admission.** Reconciliation needs a receipt-specific URL/selector/text tied to
+admission.** Reconciliation needs a receipt-specific URL tied to
 the operation; a generic welcome page is insufficient evidence. No issuer
 webhook, refund/dispute automation, settlement feed or virtual-card issuance is
 provided by this browser adapter. Recurring commitments are recorded and capped
@@ -653,7 +654,15 @@ For an observed SMS/device, push, passkey, biometric, issuer or unsupported webs
 challenge, `browser` autonomy supports `handoff {operation_id, handoff}`. The
 handoff contains a fresh UUID `request_id`, a `kind` (`sms`, `push`, `passkey`,
 `biometric`, `issuer` or `captcha`), and a `confirmation` with a same-origin status
-`url`, `selector` and task-specific confirmation `text`. An existing origin-bound
+`url`. Prefer omitting `selector` and `text` when the future page wording is
+unknown: the broker applies its existing affirmative, task-specific outcome
+rules to visible messages, accepting phrases such as “Order confirmed” and
+rejecting negated or pending messages. If the site supplies an exact criterion,
+provide both `selector` and `text`; do not invent them. New handoffs reject broad
+whole-page selectors (`body`, `html`, `*`, `:root`) with
+`use_automatic_or_specific_confirmation`, allowing the agent to retry using
+automatic detection. A request rejected before creation has no stored idempotent
+record. Previously saved handoffs remain readable. An existing origin-bound
 browser session can be supplied as `confirmation.session_resource_id`. The
 optional `lifetime_seconds` is 60–86400, defaulting to 900. Reuse the same request
 ID and content after a transport failure; a different active request cannot

@@ -285,8 +285,6 @@ class BrowserBroker:
             raise PermissionError("operation_not_pending")
         if plan.fields or plan.check_selectors:
             raise PermissionError("reconciliation_is_read_only")
-        if not plan.success_selector or not plan.success_text:
-            raise ValueError("specific_confirmation_required")
         destination = row["proposal"]["origin"]
         if url_origin(plan.url) != destination:
             raise PermissionError("destination_mismatch")
@@ -299,14 +297,22 @@ class BrowserBroker:
             await page.goto(plan.url, wait_until="domcontentloaded", timeout=30000)
             if url_origin(page.url) != destination:
                 raise PermissionError("destination_changed")
-            locator = page.locator(plan.success_selector)
-            await locator.wait_for(state="visible", timeout=15000)
-            text = await (await self._unique(locator)).inner_text()
-            if plan.success_text not in text:
-                raise ValueError("confirmation_missing")
+            if plan.success_selector:
+                locator = page.locator(plan.success_selector)
+                await locator.wait_for(state="visible", timeout=15000)
+                text = await (await self._unique(locator)).inner_text()
+                if not plan.success_text or plan.success_text not in text:
+                    raise ValueError("confirmation_missing")
+                proof = {"confirmation_sha256": self._confirmation_digest(text, plan)}
+            else:
+                from robothor.autonomy.confirmation import wait_for_confirmation
+
+                proof = await wait_for_confirmation(
+                    page, destination, row["proposal"]["action"], timeout_seconds=15
+                )
             evidence = {
                 "origin": destination,
-                "confirmation_sha256": self._confirmation_digest(text, plan),
+                **proof,
                 "verified_at": datetime.now(UTC).isoformat(),
                 "kind": "reconciled_confirmation",
             }
