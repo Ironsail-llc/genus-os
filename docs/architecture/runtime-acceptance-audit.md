@@ -30,7 +30,7 @@ The user need not identify whether an ordinary request became a task or a goal.
 | Tenant isolation / delegated controls / memory | Native engine and goal suites, including RLS and tenant/control tests | Native behavior tested; no equivalent candidate evidence |
 | Provider fallback | Native injected-primary-failure verified-outcome test | One verified write after fallback and no post-success calls; real configured-chain outage/load behavior remains unqualified |
 | Everyday requests competing with goals | `uat-mixed-runtime-final.jsonl` | 1,560 verified synthetic actions across 1/5/20 tenants; local resource limits published, not production capacity |
-| No introduced regressions | Latest broad native run: 10,862 passed; frontend: 1,617 passed; subsequent focused checks recorded in `uat-verification.json` | No observed regressions in those scopes. This does not prove every possible workflow or constitute manual acceptance |
+| No introduced regressions | Latest broad native run: 10,888 passed; frontend: 1,617 passed; subsequent focused checks recorded in `uat-verification.json` | No observed regressions in those scopes. This does not prove every possible workflow or constitute manual acceptance |
 
 ## Alternative runtimes and rollout
 

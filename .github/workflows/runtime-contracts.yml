@@ -31,6 +31,8 @@ jobs:
         run: >-
           python -m pytest -q --no-cov robothor/goals/tests
           robothor/engine/tests/test_runtime_contracts.py
+          robothor/engine/tests/test_runtime_native_gateway.py
+          robothor/engine/tests/test_tool_proxy.py
           robothor/engine/tests/test_runtime_controls.py
           robothor/engine/tests/test_runtime_deadlines.py
           robothor/engine/tests/test_runtime_verified_outcomes.py

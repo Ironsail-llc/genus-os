@@ -58,6 +58,7 @@ class StoreHost:
 
         ledger = await bind_goal(context, self.request_token_bound)
         gateway = await self.gateway_factory(request)
+        native_gateway = gateway
         if ledger is not None:
             from bench.runtime.goal_gateway import GoalGateway
 
@@ -79,6 +80,9 @@ class StoreHost:
             started_at=datetime.now(UTC),
             trigger_detail=f"goal:{context.goal_id}" if context.goal_id else None,
         )
+        bind_run = getattr(native_gateway, "bind_run", None)
+        if bind_run is not None:
+            bind_run(run)
         metadata = {**asdict(context), **asdict(identity)}
         metadata["deadline"] = context.deadline.isoformat() if context.deadline else None
         insertion = self._track(asyncio.to_thread(self._insert_and_attach, run, metadata))
@@ -154,13 +158,14 @@ class StoreHost:
                     raise ValueError("parent run not found in tenant")
             cur.execute(
                 """INSERT INTO agent_runs
-                   (id,tenant_id,user_id,agent_id,trigger_type,trigger_detail,correlation_id,parent_run_id,
-                    status,started_at,runtime_context) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,
+                   (id,tenant_id,user_id,user_role,agent_id,trigger_type,trigger_detail,correlation_id,parent_run_id,
+                    status,started_at,runtime_context) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,
                     'running',%s,%s)""",
                 (
                     run.id,
                     run.tenant_id,
                     run.user_id,
+                    run.user_role,
                     run.agent_id,
                     str(run.trigger_type),
                     run.trigger_detail,

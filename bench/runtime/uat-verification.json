@@ -9,13 +9,14 @@
   "replacement_selected": false,
   "checks": {
     "engine": {
-      "passed": 10862,
+      "passed": 10888,
       "failed": 0,
       "skipped": 29,
       "deselected": 173,
-      "seconds": 333.54,
+      "seconds": 358.9,
       "selection": "not slow and not integration and not llm and not e2e and not smoke",
-      "note": "Broad run plus subsequent focused checks for chat failure reporting and verified outcome contracts."
+      "note": "Broad run after durable async goal-budget binding at revision 0d5e3d2add1. Optional slow/integration/llm/e2e/smoke selections excluded. Subsequent native gateway checks recorded separately.",
+      "warnings": 398
     },
     "frontend": {
       "files": 146,
@@ -271,6 +272,19 @@
       "native_goal_runtime_size_passed": 76,
       "native_seconds": 11.28,
       "scope": "Existing goal controller and run/control stores execute both frameworks with shared durable budget ownership; parent/child, unknown usage, identity denial and competing native/candidate calls. Trusted bound derivation, ordinary admission, memory, checkpoints and performance incomplete."
+    },
+    "candidate_native_gateway": {
+      "passed": 38,
+      "failed": 0,
+      "seconds": 1.48,
+      "scope": "19 native gateway cases plus 19 existing proxy contracts; synthetic dispatch, prepared identity, native admission, independent verification and store binding. Does not establish production bootstrap or interactive approval parity."
+    },
+    "candidate_suite_after_native_gateway": {
+      "passed": 99,
+      "failed": 0,
+      "seconds": 14.54,
+      "warnings": 1,
+      "scope": "Pinned candidate environment; private databases and synthetic providers; native wire profile supplied. Warning: pytest-timeout is not installed in the isolated candidate environment."
     }
   },
   "calendar": {

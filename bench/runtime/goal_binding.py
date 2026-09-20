@@ -3,8 +3,6 @@
 import asyncio
 from copy import copy, deepcopy
 
-from bench.runtime.budgeted_models import BudgetedDeepModel, BudgetedPydanticModel, RequestBudget
-from bench.runtime.candidates import PydanticCandidate
 from robothor.goals.provider_ledger import DurableAttemptBudget
 from robothor.goals.runtime import binding
 
@@ -41,6 +39,13 @@ def bind_candidate(context, candidate, maximum):
     current = trusted_goal(context)
     if current is None:
         return candidate
+    from bench.runtime.budgeted_models import (
+        BudgetedDeepModel,
+        BudgetedPydanticModel,
+        RequestBudget,
+    )
+    from bench.runtime.candidates import PydanticCandidate
+
     if isinstance(candidate.model, BudgetedPydanticModel | BudgetedDeepModel):
         raise ValueError("candidate already has a budget owner")
     ledger = current.provider_budget
