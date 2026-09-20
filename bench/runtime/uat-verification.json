@@ -187,6 +187,14 @@
       "failed": 0,
       "seconds": 2.88,
       "scope": "Candidate boundary suite including actual mocked HTTP 429 and 503: exactly one attempt, no effects; no live provider calls."
+    },
+    "candidate_shared_request_budget": {
+      "passed": 27,
+      "failed": 0,
+      "seconds": 3.11,
+      "native_runtime_contracts_passed": 9,
+      "native_runtime_contracts_seconds": 0.17,
+      "scope": "Candidate boundary suite including concurrent shared request reservations, cancellation, provider failure, overrun and unknown usage; in-memory ledger with host-supplied bound. Durable family binding incomplete."
     }
   },
   "calendar": {

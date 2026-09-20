@@ -25,7 +25,9 @@ def candidate(
             on_request()
             return ModelResponse(
                 parts=[ToolCallPart(tool, args) for tool, args in proposals],
-                usage=RequestUsage(input_tokens=10, output_tokens=3),
+                usage=RequestUsage(input_tokens=10, output_tokens=3)
+                if report_usage
+                else RequestUsage(),
             )
 
         return PydanticCandidate(FunctionModel(response))
@@ -234,3 +236,137 @@ async def test_provider_failure_has_one_http_attempt_and_no_effect(status):
         assert error.value.status_code == status
         assert len(attempts) == 1
         assert gateway.writes == gateway.dispatches == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["pydantic-ai", "deepagents"])
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_concurrent_candidates_share_reserved_allowance(name, cancel):
+    import asyncio
+
+    from bench.runtime.budgeted_models import (
+        BudgetedDeepModel,
+        BudgetedPydanticModel,
+        RequestBudget,
+    )
+    from robothor.engine.runtime.budget import SharedBudget
+
+    ledger = SharedBudget(20)
+    budget = RequestBudget(ledger, 20)
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = []
+    adapter = candidate(name, [("record", {"key": "report", "value": "delivered"})], calls)
+    original = adapter.model
+    if name == "pydantic-ai":
+        from pydantic_ai.models.wrapper import WrapperModel
+
+        class WaitingModel(WrapperModel):
+            async def request(self, *args, **kwargs):
+                entered.set()
+                await release.wait()
+                return await self.wrapped.request(*args, **kwargs)
+
+        adapter.model = BudgetedPydanticModel(WaitingModel(original), budget)
+    else:
+        from langchain_core.runnables import RunnableLambda
+
+        class WaitingModel(type(original)):
+            def bind_tools(self, tools, **kwargs):
+                bound = super().bind_tools(tools, **kwargs)
+
+                async def invoke(messages, **options):
+                    entered.set()
+                    await release.wait()
+                    return await bound.ainvoke(messages, **options)
+
+                return RunnableLambda(invoke)
+
+        waiting = WaitingModel(callbacks=original.callbacks, responses=original.responses)
+        adapter.model = BudgetedDeepModel(wrapped=waiting, budget=budget)
+
+    first, second = FixtureGateway("fixture"), FixtureGateway("fixture")
+    task = asyncio.create_task(adapter.run(first, tenant="fixture"))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        assert ledger.charged == 20
+        with pytest.raises(ValueError, match="shared budget exhausted"):
+            await adapter.run(second, tenant="fixture")
+        assert second.writes == second.dispatches == 0
+        if cancel:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert ledger.charged == 20
+            assert first.writes == first.dispatches == 0
+    finally:
+        release.set()
+        if not task.cancelled():
+            result = await asyncio.wait_for(task, timeout=5)
+    if cancel:
+        return
+    assert result["verified"] and first.writes == 1
+    assert len(calls) == 1
+    assert ledger.charged == 13
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["pydantic-ai", "deepagents"])
+@pytest.mark.parametrize("failure", ["provider-error", "overrun"])
+async def test_candidate_reservations_survive_failed_requests(name, failure):
+    from bench.runtime.budgeted_models import RequestBudget
+    from robothor.engine.runtime.budget import SharedBudget
+
+    ledger = SharedBudget(20)
+    calls = []
+
+    def fail():
+        if failure == "provider-error":
+            raise RuntimeError("synthetic provider failure")
+
+    adapter = candidate(name, [("record", {"key": "report", "value": "delivered"})], calls, fail)
+    # Callback exceptions are swallowed by LangChain unless explicitly propagated.
+    if name == "deepagents":
+        for callback in adapter.model.callbacks:
+            callback.raise_error = True
+    adapter = type(adapter)(adapter.model, request_budget=RequestBudget(ledger, 10))
+    gateway = FixtureGateway("fixture")
+    expected = RuntimeError if failure == "provider-error" else ValueError
+    match = (
+        "synthetic provider failure" if failure == "provider-error" else "exceeded reserved bound"
+    )
+    with pytest.raises(expected, match=match):
+        await adapter.run(gateway, tenant="fixture")
+    assert gateway.writes == gateway.dispatches == 0
+    assert ledger.charged == (10 if failure == "provider-error" else 13)
+    if failure == "overrun":
+        with pytest.raises(ValueError, match="shared budget exhausted"):
+            ledger.reserve("next-call", 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["pydantic-ai", "deepagents"])
+async def test_candidate_missing_usage_keeps_entire_reservation(name):
+    from bench.runtime.budgeted_models import RequestBudget
+    from robothor.engine.runtime.budget import SharedBudget
+
+    ledger = SharedBudget(20)
+    adapter = candidate(
+        name, [("record", {"key": "report", "value": "delivered"})], [], report_usage=False
+    )
+    if name == "pydantic-ai":
+        from pydantic_ai.models.wrapper import WrapperModel
+        from pydantic_ai.usage import RequestUsage
+
+        class UnreportedUsage(WrapperModel):
+            async def request(self, *args, **kwargs):
+                response = await self.wrapped.request(*args, **kwargs)
+                # FunctionModel estimates absent usage; emulate a provider omitting it.
+                response.usage = RequestUsage()
+                return response
+
+        adapter.model = UnreportedUsage(adapter.model)
+    adapter = type(adapter)(adapter.model, request_budget=RequestBudget(ledger, 20))
+    result = await adapter.run(FixtureGateway("fixture"), tenant="fixture")
+    assert result["verified"]
+    assert result["input_tokens"] is None
+    assert ledger.charged == 20

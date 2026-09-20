@@ -90,7 +90,11 @@ def bound_tools(gateway, tenant):
 
 
 class PydanticCandidate:
-    def __init__(self, model, *, system_prompt=SYSTEM):
+    def __init__(self, model, *, system_prompt=SYSTEM, request_budget=None):
+        if request_budget is not None:
+            from bench.runtime.budgeted_models import BudgetedPydanticModel
+
+            model = BudgetedPydanticModel(model, request_budget)
         self.model = model
         self.system_prompt = system_prompt
 
@@ -136,7 +140,13 @@ class PydanticCandidate:
 
 
 class DeepAgentsCandidate:
-    def __init__(self, model, *, system_prompt=SYSTEM):
+    def __init__(self, model, *, system_prompt=SYSTEM, request_budget=None):
+        if request_budget is not None:
+            from bench.runtime.budgeted_models import BudgetedDeepModel
+
+            model = BudgetedDeepModel(
+                wrapped=model, budget=request_budget, profile=getattr(model, "profile", None)
+            )
         self.model = model
         self.system_prompt = system_prompt
 
