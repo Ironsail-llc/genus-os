@@ -348,6 +348,57 @@ TOOL_HINTS: dict[str, ToolHint] = {
             "fetch each page, check every file."
         ),
     ),
+    # ── The browser, and the words it lost ────────────────────────────
+    #
+    # `browser`'s description used to be 8,410 characters because the
+    # delegated-execution wording was appended to it. Splitting that back out
+    # (every agent on every instance was paying ~2,100 schema tokens for a
+    # feature nobody had enabled) also removed the only occurrences of words
+    # that have nothing to do with a grant. Measured over the whole registry,
+    # browser's rank before the split -> after it:
+    #
+    #     'submit a web form'              3 -> not in top 10
+    #     'enter credit card details'      4 -> gone
+    #     'fill in a payment form'         1 -> 8
+    #     'purchase something online'      1 -> gone
+    #     'pay for a subscription'         1 -> gone
+    #     'take a screenshot of a website' 4 -> 7
+    #     'log in to a website'            2 -> gone
+    #
+    # Restoring them HERE rather than in the description is the whole point of
+    # this table: the ranker reads them, `wire_schema` strips them, and the
+    # model pays nothing. Every word describes what a browser does with no
+    # grant at all — reaching a checkout page is Playwright; being allowed to
+    # pay at it is the broker's question, asked at execution time.
+    #
+    # Deliberately NOT here: "check", "read", "find", "open". `browser` won
+    # "check my email" on the word "check" before this table existed, and
+    # `test_browser_schema_paths_and_ranking.py` pins that it stays out of the
+    # mail, calendar and CRM queries.
+    "browser": ToolHint(
+        keywords=(
+            "web",
+            "website",
+            "site",
+            "page",
+            "url",
+            "form",
+            "submit",
+            "login",
+            "signin",
+            "checkout",
+            "cart",
+            "shop",
+            "order",
+            "purchase",
+            "buy",
+            "pay",
+            "payment",
+            "card",
+            "subscription",
+            "browse",
+        ),
+    ),
 }
 
 
