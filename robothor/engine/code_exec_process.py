@@ -171,8 +171,8 @@ def kill_descendants(census: DescendantCensus, pgid: int) -> int:
     ``subprocess.Popen(..., start_new_session=True)`` puts the child outside the
     process group, and ``os._exit`` skips the ``finally`` in which the snippet
     would have reaped it — so the boot reaper never runs and the census, which
-    samples on a tick, has nothing to have seen. Measured: one survivor, every
-    time. Nothing here can close it, because both halves of the defence depend
+    samples on a tick, can miss it if the parent exits between samples. A tick
+    that catches one child does not prove containment. Both defences depend
     on something the snippet controls (its own exit path) or on catching it in
     time. The closure is a cgroup the engine can kill as a unit, which needs
     ``Delegate=yes`` on the engine's unit — an operator change, not a code one.
