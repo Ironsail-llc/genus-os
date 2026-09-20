@@ -532,3 +532,30 @@ an identical retry keeps the original ID. On `workflow_revision_changed`, read
 `workflow_lost` requires external/status-page reconciliation, not a blind repeat.
 
 Malformed workflow commands return `invalid_workflow_request` before token issuance or browser RPC. Fixed `invalid_operation_id`, `invalid_workflow_id` and `invalid_command_id` reasons identify references that must come from prior results (or a fresh UUID for a new command). `confirmation_selector_and_text_required_together` requires both confirmation fields or neither. Other validation failures remain generic; submitted values and unknown field names are never echoed.
+
+
+### Payment lifecycle integration in progress
+
+The internal `payment_lifecycle` projection distinguishes a merchant submission
+confirmation from issuer authorization, charge, refund and authorization reversal.
+Repeated identical events are idempotent; a reused event key with changed content
+is rejected. Gross charged and refunded amounts remain separate, and verified
+amounts above the reservation or authorization are recorded with discrepancy flags.
+They are not hidden by execution-policy limits. Refunds do not by themselves free
+a spending reservation or end a recurring commitment.
+
+Migration 138 adds encrypted, owner-scoped payment facts. Broker payment completion
+records a submission fact atomically; concurrent identical deliveries are deduplicated,
+and conflicting deliveries cannot overwrite evidence. A fresh process can read the
+position using the native resource keyring. Unsupported or inconsistent facts remain
+stored with a reconciliation-required result rather than an invented balance.
+
+The journal is not yet an issuer integration. Its provenance field is descriptive, not authentication: only trusted adapters may
+supply facts after validating their evidence. Agent claims and unauthenticated
+callbacks must never become issuer facts. The Personal automation operation list includes a private Payment status view.
+The owner-only GET payment endpoint and agent-bound `payment_status` command
+return balances and discrepancy flags without issuer references. Neither accepts
+payment writes. A submission is explicitly labeled as not yet a verified charge.
+
+Encrypted receipt capture, validated evidence ingestion and budget reconciliation
+remain integration work before this capability can be considered complete.

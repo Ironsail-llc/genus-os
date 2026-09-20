@@ -100,6 +100,10 @@ async def handle(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         row = await asyncio.to_thread(store.operation, scope, operation_id)
         if row["agent_id"] != ctx.agent_id:
             raise PermissionError("agent_not_allowed")
+        if kind == "payment_status":
+            from robothor.autonomy.payment_journal import PaymentJournal
+
+            return await asyncio.to_thread(PaymentJournal(store).read, scope, operation_id)
         if kind == "operation":
             return row
         if kind == "cancel":

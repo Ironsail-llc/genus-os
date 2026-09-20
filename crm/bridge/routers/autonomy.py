@@ -277,3 +277,19 @@ async def terms_detail(operation_id: UUID, snapshot_id: UUID, request: Request):
         raise HTTPException(404, "Submission record not found") from None
     except Exception:
         raise HTTPException(503, "Submission record unavailable") from None
+
+
+@router.get("/operations/{operation_id}/payment")
+async def payment_status(operation_id: UUID, request: Request):
+    from robothor.autonomy.payment_journal import PaymentJournal
+
+    scope = await require_personal_owner(request)
+    try:
+        result = await asyncio.to_thread(
+            PaymentJournal(AutonomyStore()).read, scope, str(operation_id)
+        )
+        return _safe(result)
+    except PermissionError:
+        raise HTTPException(404, "Payment record not found") from None
+    except Exception:
+        raise HTTPException(503, "Payment record unavailable") from None
