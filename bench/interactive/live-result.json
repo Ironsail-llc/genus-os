@@ -1,0 +1,14 @@
+{
+  "passed": true,
+  "checks": {
+    "verified": true,
+    "only_test_participants": true,
+    "existing_rsvp_preserved": true,
+    "time_preserved": true,
+    "notifications_requested": true,
+    "no_duplicate_invitation": true
+  },
+  "operation_ms": 1036,
+  "test_event_removed": true,
+  "delivery_verified": false
+}

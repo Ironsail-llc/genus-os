@@ -44,17 +44,23 @@ def test_steer_missing_session_returns_false():
     assert steer_session("no-such-run", "x") is False
 
 
-def test_runner_registers_the_live_session():
-    """Without the registration there is nothing for interrupt_api to look up,
-    and every steer silently addresses a run that cannot be found."""
+async def test_runner_registers_the_live_session():
+    """Registration and cleanup cover the loop, including exceptional exits."""
     from robothor.engine import runner
+    from robothor.engine.context_control import control
+    from robothor.engine.request_runtime import observe_request
 
-    src = inspect.getsource(runner)
-    # The kwarg arms this run's status sink for the same window (see
-    # session_registry.register); the registration itself is what steering
-    # needs, and both are cleared by the one unregister below.
-    assert "session_registry.register(session, on_status=on_status)" in src
-    assert "session_registry.unregister(session)" in src
+    assert "async with observe_request(session, on_status) as report_status" in inspect.getsource(
+        runner
+    )
+    session = AgentSession(agent_id="a")
+    with pytest.raises(RuntimeError):
+        async with observe_request(session, None):
+            assert session_registry.lookup(session.run_id) is session
+            assert control.get() is not None
+            raise RuntimeError("loop interrupted")
+    assert session_registry.lookup(session.run_id) is None
+    assert control.get() is None
 
 
 def test_the_loop_consumes_steers_and_interrupts():

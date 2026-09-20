@@ -118,6 +118,7 @@ _TABLE: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("am I free this afternoon", "", ("gws_calendar_list",)),
     ("show me tomorrow's meetings", "gws_calendar_list", ()),
     ("schedule a meeting", "gws_calendar_create", ()),
+    ("add a guest to an existing meeting", "gws_calendar_add_attendees", ()),
     ("set up a meeting with attendees", "gws_calendar_create", ()),
     ("book a call", "", ("gws_calendar_create",)),
     ("invite someone to a meeting", "", ("gws_calendar_create",)),

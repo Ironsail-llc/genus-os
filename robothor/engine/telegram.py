@@ -513,6 +513,11 @@ class TelegramBot(TelegramAttachmentsMixin, TelegramHandlersMixin, PlanModeMixin
 
         async def on_tool(event: dict[str, Any]) -> None:
             nonlocal last_status_time, checklist_msg_id
+            if event.get("event") == "progress":
+                from robothor.engine.performance import show_progress
+
+                await show_progress(self.bot, chat_id, stream_msg_id, event["text"])
+                return
             if event.get("event") == "tool_start":
                 now = time.monotonic()
                 if (now - last_status_time) < tool_status_interval:
@@ -605,6 +610,7 @@ class TelegramBot(TelegramAttachmentsMixin, TelegramHandlersMixin, PlanModeMixin
                     trigger_type=TriggerType.TELEGRAM,
                     trigger_detail=_detail,
                     on_tool=on_tool,
+                    on_status=on_tool,
                     model_override=model,
                     conversation_history=history or None,
                     tenant_id=_tenant,

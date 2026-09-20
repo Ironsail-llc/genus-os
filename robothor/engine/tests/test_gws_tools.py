@@ -96,7 +96,8 @@ class TestGwsToolSchemas:
     def test_gws_tools_in_set(self):
         from robothor.engine.tools import GWS_TOOLS
 
-        assert len(GWS_TOOLS) == 11
+        assert len(GWS_TOOLS) == 12
+        assert "gws_calendar_add_attendees" in GWS_TOOLS
         assert "gws_gmail_search" in GWS_TOOLS
         assert "gws_chat_send" in GWS_TOOLS
         assert "gws_chat_list_spaces" in GWS_TOOLS

@@ -2145,7 +2145,9 @@ async def test_checkpoint_resume_reresolves_original_identity(
             return_value={"messages": messages},
         ),
         patch("robothor.identity.resolve_identity", return_value=current_identity) as resolve,
-        patch("robothor.engine.runner.resolve_run_identity", side_effect=IdentityReachedError) as apply,
+        patch(
+            "robothor.engine.runner.resolve_run_identity", side_effect=IdentityReachedError
+        ) as apply,
     ):
         with pytest.raises(IdentityReachedError):
             await runner.execute(
@@ -2167,3 +2169,52 @@ async def test_checkpoint_resume_reresolves_original_identity(
     else:
         assert apply.call_args.args[0] is None
         assert apply.call_args.kwargs["user_role"] != "owner"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("readonly", [False, True])
+async def test_confirmed_calendar_ends_without_model_or_repair_loop(
+    runner,
+    sample_agent_config,
+    monkeypatch,
+    readonly,
+):
+    from robothor.engine.routine_request import TOOL
+    from robothor.engine.tools.schemas import get_engine_schemas
+
+    async def bound(session, *args):
+        session.routine_operation_id = "00000000-0000-0000-0000-000000000001"
+
+    monkeypatch.setattr("robothor.engine.routine_request.bind_confirmation", bound)
+    runner.registry.build_for_agent.return_value = [get_engine_schemas()[TOOL]]
+    runner.registry.get_tool_names.return_value = [TOOL]
+    runner.registry.execute = AsyncMock(
+        return_value={
+            "status": "updated",
+            "verification": "verified",
+            "added": ["sam@example.com"],
+            "invitations_requested": True,
+        }
+    )
+    sample_agent_config.verification_enabled = True
+    with (
+        patch("robothor.engine.runner.create_run"),
+        patch("robothor.engine.runner.update_run"),
+        patch("robothor.engine.run_finalizer.create_step"),
+        patch("litellm.acompletion", new_callable=AsyncMock) as model,
+        patch(
+            "robothor.engine.runner.keep_context_within_budget", new_callable=AsyncMock
+        ) as compress,
+    ):
+        run = await runner.execute(
+            "test-agent", "Go", agent_config=sample_agent_config, readonly_mode=readonly
+        )
+    assert run.status == RunStatus.COMPLETED, run.error_message
+    model.assert_not_called()
+    compress.assert_not_called()
+    if readonly:
+        runner.registry.execute.assert_not_called()
+        assert "Added sam" not in run.output_text
+    else:
+        runner.registry.execute.assert_awaited_once()
+        assert "Added sam@example.com" in run.output_text

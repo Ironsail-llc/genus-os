@@ -1,0 +1,12 @@
+{
+  "benchmark": "native_operation_microbenchmark",
+  "samples": 200,
+  "scope": "in-memory merge/verification only; excludes DB, runner, auth, model and network",
+  "p50_ms": 0.022791995434090495,
+  "p95_ms": 0.02569600474089384,
+  "state_checks_passed": true,
+  "model_calls": 0,
+  "fixture_api_calls": 3,
+  "writes": 1,
+  "post_completion_tool_calls": 0
+}

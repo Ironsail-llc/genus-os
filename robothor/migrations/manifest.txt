@@ -149,3 +149,5 @@ crm/137_sales_analyst_permissions.sql
 crm/132_autonomy_enrollment_rls.sql
 crm/133_autonomy_terms_audit.sql
 crm/134_autonomy_material_documents.sql
+
+crm/126_calendar_operations.sql
