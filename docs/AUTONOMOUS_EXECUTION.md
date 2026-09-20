@@ -553,8 +553,8 @@ Delivery order does not determine financial dependency order: known authorizatio
 are evaluated before reversals, and known captures before refunds. A refund or
 reversal that arrives first stays unresolved until its prerequisite evidence
 arrives, then the read projection can recover without modifying earlier journal
-entries or releasing budget. This operates on one payment's initial evidence;
-renewal transaction grouping and corrections remain unfinished. Conflicting
+entries or releasing budget. Each initial or renewal payment is projected
+separately, as described below; corrections remain unfinished. Conflicting
 captures/reversals, excess refunds and multiple authorizations still require
 reconciliation.
 
@@ -612,3 +612,29 @@ execution authorization or a promise of completion. Preparation and submission
 continue to enforce current authority and concurrent spending limits. A matching
 already-prepared request returns its existing operation for status/reconciliation;
 it does not count the same reservation again or suggest another submission.
+
+### Renewal payment evidence
+
+A trusted issuer adapter can attach `renewal_id` (its stable transaction identity)
+and `renewal_on` (the billing-period due date) to an issuer fact. Both fields are
+required together and remain inside the encrypted journal. Merchant submissions
+cannot supply renewal facts. Existing facts without these fields continue to
+belong to the initial purchase or enrollment payment.
+
+Each renewal has independent charge/refund accounting; a refund cannot consume
+another renewal's charge. The initial `position` remains separate, and the
+owner/agent read result adds `renewals` with opaque ordinal references, due dates,
+balances and reconciliation flags. Private issuer transaction IDs are not returned.
+The owner Payment status view displays these separate balances and clears them
+when closed. A fresh process can recover them from the encrypted journal.
+
+Billing dates are checked against the saved recurrence, including month-end
+clamping and an optional end date. Unexpected dates and charges above the saved
+recurring allowance are recorded and flagged. Multiple transaction IDs in one
+billing period are checked against that period's allowance using gross charges;
+refunds do not authorize another purchase. Facts with inconsistent billing dates
+for one transaction remain unresolved. Revocation does not prevent recording
+money that has already moved, and evidence never releases the existing budget
+reservation or changes a membership. This adds no issuer connection or automatic
+renewal execution: authenticated ingestion, corrections and verified membership
+changes remain integration work.
