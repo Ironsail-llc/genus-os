@@ -56,7 +56,7 @@ def refresh_descriptors(store: AutonomyStore, scope: Scope) -> int:
     """Owner maintenance boundary: older records never acquire invented provenance."""
     keys = store.keys
     count = 0
-    with store.transaction() as cur:
+    with store.transaction(scope) as cur:
         cur.execute(
             "SELECT id::text,kind,encrypted_value,created_at FROM vault_resources "
             "WHERE tenant_id=%s AND owner_id=%s AND active AND descriptor='{}'::jsonb "

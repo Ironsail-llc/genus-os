@@ -152,7 +152,7 @@ class HandoffStore:
         fingerprint = hashlib.sha256(
             json.dumps([operation_id, agent_id, json.loads(payload)], sort_keys=True).encode()
         ).hexdigest()
-        with self.store.transaction() as cur:
+        with self.store.transaction(scope) as cur:
             self.store._lock(cur, scope)
             op = self.store._operation(cur, scope, operation_id)
             if op["agent_id"] != agent_id:
@@ -243,7 +243,7 @@ class HandoffStore:
             return result
 
     def list(self, scope: Scope, agent_id: str | None = None) -> list[dict[str, Any]]:
-        with self.store.transaction() as cur:
+        with self.store.transaction(scope) as cur:
             cur.execute(
                 "SELECT h.id,h.operation_id,h.kind,h.state,h.expires_at,h.check_attempts,"
                 "o.proposal->>'origin' AS origin,o.proposal->>'purpose' AS purpose "
@@ -262,7 +262,7 @@ class HandoffStore:
         caller's transaction rolls the release back with it -- which is how
         the operation stayed pinned in ``reconciling`` forever.
         """
-        with self.store.transaction() as cur:
+        with self.store.transaction(scope) as cur:
             self.store._lock(cur, scope)
             cur.execute(
                 "SELECT id,operation_id FROM autonomy_handoffs "
@@ -276,7 +276,7 @@ class HandoffStore:
 
     def acknowledge(self, scope: Scope, handoff_id: str) -> dict[str, Any]:
         self.release_expired(scope, handoff_id)
-        with self.store.transaction() as cur:
+        with self.store.transaction(scope) as cur:
             self.store._lock(cur, scope)
             cur.execute(
                 "SELECT * FROM autonomy_handoffs WHERE tenant_id=%s AND owner_id=%s AND id=%s",

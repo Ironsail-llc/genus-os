@@ -51,7 +51,7 @@ def task_readiness(
     if request.proposal.action in {"purchase", "subscription"} and not settings.payment_processing:
         blockers.append("payment_processing_not_enabled")
     existing_operation = None
-    with store.transaction() as cur:
+    with store.transaction(scope) as cur:
         cur.execute(
             "SELECT id::text,state,fingerprint FROM autonomy_operations "
             "WHERE tenant_id=%s AND owner_id=%s AND idempotency_key=%s",

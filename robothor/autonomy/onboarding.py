@@ -22,7 +22,7 @@ def import_contact_profile(store: AutonomyStore, scope: Scope) -> dict[str, Any]
         person_id = str(UUID(scope.owner_id.removeprefix("person:")))
     except ValueError:
         raise PermissionError("linked_contact_required") from None
-    with store.transaction() as cur:
+    with store.transaction(scope) as cur:
         cur.execute(
             "SELECT first_name,last_name,email,phone,job_title,city FROM crm_people "
             "WHERE id=%s AND tenant_id=%s AND deleted_at IS NULL",

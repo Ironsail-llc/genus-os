@@ -32,6 +32,8 @@ class HandoffChecks:
         disabled deployment returns nothing, and a busy one is bounded and
         rotates oldest-first as work is consumed.
         """
+        # Deliberately unbound: this exists to FIND the scopes, so it is
+        # the one query that must see every tenant.
         with self.store.transaction() as cur:
             cur.execute(
                 "SELECT h.tenant_id,h.owner_id FROM autonomy_handoffs h "
@@ -50,7 +52,7 @@ class HandoffChecks:
 
     def candidates(self, scope: Scope) -> list[str]:
         """Bound to one tenant and owner. This scanned every tenant."""
-        with self.store.transaction() as cur:
+        with self.store.transaction(scope) as cur:
             cur.execute(
                 "SELECT id FROM autonomy_handoffs WHERE tenant_id=%s AND owner_id=%s "
                 "AND state='checking' "
@@ -62,7 +64,7 @@ class HandoffChecks:
 
     def release_expired(self, scope: Scope) -> int:
         """Hand every lapsed handoff's operation back to the owner."""
-        with self.store.transaction() as cur:
+        with self.store.transaction(scope) as cur:
             self.store._lock(cur, scope)
             cur.execute(
                 "SELECT id,operation_id FROM autonomy_handoffs "
@@ -74,7 +76,7 @@ class HandoffChecks:
             return sum(release_expired_handoff(self.store, cur, scope, row) for row in rows)
 
     def claim(self, scope: Scope, handoff_id: str) -> dict[str, Any] | None:
-        with self.store.transaction() as cur:
+        with self.store.transaction(scope) as cur:
             self.store._lock(cur, scope)
             # Exhaustion returns to the owner without freeing a reservation or
             # permitting a new submission. Expiry releases the operation.
@@ -141,7 +143,7 @@ class HandoffChecks:
         return True
 
     def confirmation(self, scope: Scope, handoff_id: str, token: str) -> dict[str, Any]:
-        with self.store.transaction() as cur:
+        with self.store.transaction(scope) as cur:
             cur.execute(
                 "SELECT operation_id,encrypted_value FROM autonomy_handoffs "
                 "WHERE tenant_id=%s AND owner_id=%s AND id=%s AND check_token=%s "
@@ -162,7 +164,7 @@ class HandoffChecks:
             return spec.confirmation.model_dump()
 
     def finish(self, scope: Scope, handoff_id: str, token: str, *, retry: bool = False) -> None:
-        with self.store.transaction() as cur:
+        with self.store.transaction(scope) as cur:
             self.store._lock(cur, scope)
             cur.execute(
                 "UPDATE autonomy_handoffs SET state=CASE WHEN expires_at<=now() THEN 'expired' "

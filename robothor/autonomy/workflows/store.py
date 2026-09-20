@@ -39,11 +39,11 @@ class WorkflowStore:
         return dict(row)
 
     def get(self, scope: Scope, agent_id: str, workflow_id: str) -> dict[str, Any]:
-        with self.store.transaction() as cur:
+        with self.store.transaction(scope) as cur:
             return self._get(cur, scope, agent_id, workflow_id)
 
     def code_resume(self, scope: Scope, agent_id: str, workflow_id: str) -> dict[str, Any]:
-        with self.store.transaction() as cur:
+        with self.store.transaction(scope) as cur:
             row = self._get(cur, scope, agent_id, workflow_id)
             if row["state"] != "open":
                 raise PermissionError("workflow_not_open")
@@ -68,7 +68,7 @@ class WorkflowStore:
     ) -> dict[str, Any]:
         self.store.check_authority(scope, operation_id, agent_id)
         digest = fingerprint(request)
-        with self.store.transaction() as cur:
+        with self.store.transaction(scope) as cur:
             self.store._lock(cur, scope)
             operation = self.store._operation(cur, scope, operation_id)
             if operation["agent_id"] != agent_id or operation["state"] != "reserved":
@@ -111,7 +111,7 @@ class WorkflowStore:
     ) -> dict[str, Any] | None:
         safe = {key: value for key, value in request.items() if key != "verification_code"}
         digest = fingerprint(safe)
-        with self.store.transaction() as cur:
+        with self.store.transaction(scope) as cur:
             row = self._get(cur, scope, agent_id, workflow_id)
             cur.execute(
                 "SELECT fingerprint,state,result FROM autonomy_workflow_commands WHERE workflow_id=%s AND command_id=%s",
@@ -155,7 +155,7 @@ class WorkflowStore:
         *,
         advance: bool = False,
     ) -> None:
-        with self.store.transaction() as cur:
+        with self.store.transaction(scope) as cur:
             self._get(cur, scope, agent_id, workflow_id)
             cur.execute(
                 "UPDATE autonomy_workflow_commands SET state='completed',result=%s WHERE workflow_id=%s AND command_id=%s AND state='running'",
@@ -172,7 +172,7 @@ class WorkflowStore:
     def checkpoint(
         self, scope: Scope, agent_id: str, workflow_id: str, *, rejected: bool = False
     ) -> None:
-        with self.store.transaction() as cur:
+        with self.store.transaction(scope) as cur:
             self.store._lock(cur, scope)
             row = self._get(cur, scope, agent_id, workflow_id)
             operation = self.store._operation(cur, scope, row["operation_id"])
@@ -201,7 +201,7 @@ class WorkflowStore:
     def close(self, scope: Scope, agent_id: str, workflow_id: str, state: str) -> None:
         if state not in {"completed", "closed", "lost"}:
             raise ValueError("invalid_workflow_state")
-        with self.store.transaction() as cur:
+        with self.store.transaction(scope) as cur:
             self.store._lock(cur, scope)
             row = self._get(cur, scope, agent_id, workflow_id)
             if row["state"] != "open":

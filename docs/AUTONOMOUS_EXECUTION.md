@@ -541,6 +541,24 @@ used for the `after_confirmation` phase, which reports withholding through
 `terms_recorded`. A selection of material documents that cannot be read before
 filling still returns `material_terms_unavailable` and writes nothing.
 
+### Tenant isolation in the database
+
+Every autonomy table enables row-level security and every policy compares
+`tenant_id` against the `app.tenant_id` setting. `AutonomyStore.transaction()`
+binds that setting from the caller's scope, with `is_local => true` so it
+cannot outlive its transaction — the same binding `crm_dal` performs for the
+bridge. Until it did, the policies were inert for the product's own
+connection: they are permissive when the setting is unset, which is what keeps
+the migrator, `psql` and the CLI working, so a store that never set it read
+every tenant.
+
+Four operations are deliberately unbound because they are cross-tenant by
+design: the encryption keyring is per-instance; key rotation re-seals every
+owner's resources; external-verification recovery exists to find which owners
+have work; and the retention sweep runs as the platform. Making the policies
+themselves non-permissive would break those four along with the migrator, and
+needs a privileged-role concept the platform does not have yet.
+
 ### Erasure and retention
 
 A submission record holds the rendered review page: the owner's name, date of

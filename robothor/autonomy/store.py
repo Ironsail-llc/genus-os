@@ -148,6 +148,7 @@ class AutonomyStore:
         master = get_master_key()
         keys = {"native-v1": master}
         active = "native-v1"
+        # Deliberately unbound: the keyring is per-instance, not per-tenant.
         with self.transaction() as cur:
             cur.execute("SELECT id,encrypted_key,active FROM autonomy_key_versions")
             for row in cur.fetchall():
@@ -171,6 +172,7 @@ class AutonomyStore:
         from robothor.vault.crypto import encrypt, get_master_key
 
         master = get_master_key()
+        # Deliberately unbound: rotation re-seals EVERY owner's resources.
         with self.transaction() as cur:
             cur.execute("SELECT pg_advisory_xact_lock(hashtextextended('autonomy-key-rotation',0))")
             _, keys = self.resource_keyring()
@@ -197,7 +199,30 @@ class AutonomyStore:
             return len(rows)
 
     @contextmanager
-    def transaction(self) -> Iterator[Any]:
+    def transaction(self, scope: Scope | None = None) -> Iterator[Any]:
+        """Open a transaction, bound to ``scope``'s tenant where there is one.
+
+        Every autonomy migration enables row-level security and every policy
+        reads ``app.tenant_id``. Nothing ever set it. Because the policies are
+        permissive when it is unset —
+        ``COALESCE(current_setting('app.tenant_id',true),'') IN ('',tenant_id)``
+        — that made all of them decoration: a non-superuser probe read both
+        tenants' rows through this very method, and `test_enrollment_rls.py`
+        passed only because the test set the GUC itself. This is the binding
+        the CRM already does on every connection (``crm_dal``), applied here.
+
+        ``is_local => true`` ties it to THIS transaction. A binding that
+        outlived the commit would be worse than none, because the next caller
+        would silently inherit somebody else's tenant.
+
+        ``scope`` is optional because four callers are deliberately
+        cross-tenant and must stay that way: ``resource_keyring`` and
+        ``rotate_resource_keyring`` (the keyring is per-instance, and rotation
+        re-seals every owner's resources), ``HandoffChecks.enabled_scopes``
+        (it exists to FIND the scopes) and ``purge_expired`` (retention runs
+        as the platform). Everything else passes one — see the module test
+        that walks the call sites.
+        """
         if self._connect:
             conn = self._connect()
         else:
@@ -212,6 +237,10 @@ class AutonomyStore:
         try:
             with conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    if scope is not None:
+                        cur.execute(
+                            "SELECT set_config('app.tenant_id',%s,true)", (scope.tenant_id,)
+                        )
                     yield cur
         finally:
             conn.close()
@@ -240,7 +269,7 @@ class AutonomyStore:
         a refused observation, for instance. The operation must exist in scope;
         the event name is a module literal, never caller-supplied text.
         """
-        with self.transaction() as cur:
+        with self.transaction(scope) as cur:
             self._operation(cur, scope, operation_id)
             self._event(cur, scope, operation_id, event)
 
@@ -253,7 +282,7 @@ class AutonomyStore:
         source: Source = "secure_input",
     ) -> dict[str, Any]:
         prepared = self.prepare_resource(scope, resource, source=source)
-        with self.transaction() as cur:
+        with self.transaction(scope) as cur:
             return self.insert_resource(cur, scope, prepared, lifetime_seconds=lifetime_seconds)
 
     def prepare_resource(
@@ -313,7 +342,7 @@ class AutonomyStore:
         return reference
 
     def resources(self, scope: Scope) -> list[dict[str, Any]]:
-        with self.transaction() as cur:
+        with self.transaction(scope) as cur:
             cur.execute(
                 "SELECT id::text,kind,label,origin,descriptor FROM vault_resources "
                 "WHERE tenant_id=%s AND owner_id=%s AND active AND (expires_at IS NULL OR expires_at>now()) ORDER BY created_at",
@@ -340,7 +369,7 @@ class AutonomyStore:
         indefinitely turns one owner-requested check into an open-ended right
         to reopen the person's authenticated merchant account.
         """
-        with self.transaction() as cur:
+        with self.transaction(scope) as cur:
             cur.execute(
                 "SELECT kind,origin,encrypted_value FROM vault_resources "
                 "WHERE id=%s AND tenant_id=%s AND owner_id=%s AND active AND (expires_at IS NULL OR expires_at>now())",
@@ -388,6 +417,7 @@ class AutonomyStore:
             terms_days = get_settings().autonomy.terms_retention_days
         if terms_days <= 0:
             return {"terms_snapshots": 0}
+        # Deliberately unbound: retention runs as the platform, over every tenant.
         with self.transaction() as cur:
             cur.execute(
                 "DELETE FROM autonomy_terms_snapshots "
@@ -397,7 +427,7 @@ class AutonomyStore:
             return {"terms_snapshots": cur.rowcount}
 
     def revoke_resource(self, scope: Scope, resource_id: str) -> None:
-        with self.transaction() as cur:
+        with self.transaction(scope) as cur:
             cur.execute(
                 "UPDATE vault_resources SET active=false,updated_at=now() "
                 "WHERE id=%s AND tenant_id=%s AND owner_id=%s RETURNING id",
@@ -409,7 +439,7 @@ class AutonomyStore:
 
     def create_grant(self, scope: Scope, policy: Delegation) -> dict[str, Any]:
         grant_id = str(uuid4())
-        with self.transaction() as cur:
+        with self.transaction(scope) as cur:
             cur.execute(
                 "INSERT INTO autonomy_grants(id,tenant_id,owner_id,policy) VALUES (%s,%s,%s,%s)",
                 (grant_id, scope.tenant_id, scope.owner_id, Json(policy.model_dump(mode="json"))),
@@ -418,7 +448,7 @@ class AutonomyStore:
         return dict(id=grant_id, version=1, **policy.model_dump(mode="json"))
 
     def grants(self, scope: Scope) -> list[dict[str, Any]]:
-        with self.transaction() as cur:
+        with self.transaction(scope) as cur:
             cur.execute(
                 "SELECT id::text,version,policy,revoked_at IS NOT NULL AS revoked "
                 "FROM autonomy_grants WHERE tenant_id=%s AND owner_id=%s",
@@ -427,7 +457,7 @@ class AutonomyStore:
             return [dict(row) for row in cur.fetchall()]
 
     def revoke_grant(self, scope: Scope, grant_id: str) -> None:
-        with self.transaction() as cur:
+        with self.transaction(scope) as cur:
             self._lock(cur, scope)
             cur.execute(
                 "UPDATE autonomy_grants SET revoked_at=now(),version=version+1 "
@@ -513,7 +543,7 @@ class AutonomyStore:
         fingerprint = hashlib.sha256(
             json.dumps([grant_id, agent_id, payload], sort_keys=True).encode()
         ).hexdigest()
-        with self.transaction() as cur:
+        with self.transaction(scope) as cur:
             self._lock(cur, scope)
             cur.execute(
                 "SELECT id::text,state,fingerprint FROM autonomy_operations "
@@ -551,7 +581,7 @@ class AutonomyStore:
             return {"id": operation_id, "state": "reserved"}
 
     def operation(self, scope: Scope, operation_id: str) -> dict[str, Any]:
-        with self.transaction() as cur:
+        with self.transaction(scope) as cur:
             return self._operation(cur, scope, operation_id)
 
     def procedures(
@@ -576,7 +606,7 @@ class AutonomyStore:
     def begin_submit(
         self, scope: Scope, operation_id: str, agent_id: str, *, workflow_id: str | None = None
     ) -> None:
-        with self.transaction() as cur:
+        with self.transaction(scope) as cur:
             self._lock(cur, scope)
             row = self._operation(cur, scope, operation_id)
             if row.get("workflow_id") != workflow_id:
@@ -598,7 +628,7 @@ class AutonomyStore:
             self._event(cur, scope, operation_id, "submitting")
 
     def check_authority(self, scope: Scope, operation_id: str, agent_id: str) -> Delegation:
-        with self.transaction() as cur:
+        with self.transaction(scope) as cur:
             self._lock(cur, scope)
             row = self._operation(cur, scope, operation_id)
             if row["agent_id"] != agent_id or row["state"] not in {"reserved", "submitting"}:
@@ -622,7 +652,7 @@ class AutonomyStore:
         deliberately NOT re-decided -- the reservation this operation is about
         is already counted, so re-deciding it would refuse every recovery.
         """
-        with self.transaction() as cur:
+        with self.transaction(scope) as cur:
             self._lock(cur, scope)
             row = self._operation(cur, scope, operation_id)
             if row["agent_id"] != agent_id:
@@ -662,7 +692,7 @@ class AutonomyStore:
     def bind_plan(
         self, scope: Scope, operation_id: str, agent_id: str, plan: dict[str, Any]
     ) -> None:
-        with self.transaction() as cur:
+        with self.transaction(scope) as cur:
             self._lock(cur, scope)
             row = self._operation(cur, scope, operation_id)
             if row["agent_id"] != agent_id or row["state"] != "reserved":
@@ -691,7 +721,7 @@ class AutonomyStore:
         ordinary checkout shape work again: submit on one page, confirm on
         the page the merchant redirected to.
         """
-        with self.transaction() as cur:
+        with self.transaction(scope) as cur:
             self._lock(cur, scope)
             row = self._operation(cur, scope, operation_id)
             plan = dict(row["execution_plan"] or {})
@@ -716,7 +746,7 @@ class AutonomyStore:
             )
 
     def wait_for_code(self, scope: Scope, operation_id: str) -> None:
-        with self.transaction() as cur:
+        with self.transaction(scope) as cur:
             self._lock(cur, scope)
             row = self._operation(cur, scope, operation_id)
             if row["state"] != "reserved" or not row["execution_plan"]:
@@ -731,7 +761,7 @@ class AutonomyStore:
     def resume_with_code(self, scope: Scope, operation_id: str) -> dict[str, Any]:
         # Called only by the authenticated human endpoint. No code is passed
         # to this DAL, and uncertain submissions cannot enter this transition.
-        with self.transaction() as cur:
+        with self.transaction(scope) as cur:
             self._lock(cur, scope)
             row = self._operation(cur, scope, operation_id)
             if row["state"] != "awaiting_input" or row["input_reason"] != "code_before_submit":
@@ -745,7 +775,7 @@ class AutonomyStore:
             return row
 
     def settings(self, scope: Scope) -> RuntimeSettings:
-        with self.transaction() as cur:
+        with self.transaction(scope) as cur:
             cur.execute(
                 "SELECT settings FROM autonomy_settings WHERE tenant_id=%s AND owner_id=%s",
                 (scope.tenant_id, scope.owner_id),
@@ -754,7 +784,7 @@ class AutonomyStore:
             return RuntimeSettings.model_validate(row["settings"]) if row else RuntimeSettings()
 
     def configure(self, scope: Scope, settings: RuntimeSettings) -> None:
-        with self.transaction() as cur:
+        with self.transaction(scope) as cur:
             self._lock(cur, scope)
             cur.execute(
                 "INSERT INTO autonomy_settings(tenant_id,owner_id,settings) VALUES (%s,%s,%s) "
@@ -764,7 +794,7 @@ class AutonomyStore:
             self._event(cur, scope, str(uuid4()), "settings_changed")
 
     def spending_projection(self, scope: Scope) -> dict[str, Any]:
-        with self.transaction() as cur:
+        with self.transaction(scope) as cur:
             cur.execute(
                 "SELECT proposal,state,updated_at FROM autonomy_operations "
                 "WHERE tenant_id=%s AND owner_id=%s "
@@ -786,7 +816,7 @@ class AutonomyStore:
         return {"state": "ready", "months": result}
 
     def recent_operations(self, scope: Scope) -> list[dict[str, Any]]:
-        with self.transaction() as cur:
+        with self.transaction(scope) as cur:
             cur.execute(
                 "SELECT id::text,state,proposal,evidence,created_at,updated_at FROM autonomy_operations "
                 "WHERE tenant_id=%s AND owner_id=%s ORDER BY created_at DESC LIMIT 100",
@@ -811,7 +841,7 @@ class AutonomyStore:
         against a result nobody can observe. Only the authenticated owner may
         declare the attempt failed, which returns the reservation.
         """
-        with self.transaction() as cur:
+        with self.transaction(scope) as cur:
             self._lock(cur, scope)
             row = self._operation(cur, scope, operation_id)
             if row["state"] not in {"reconciling", "awaiting_input"}:
@@ -822,7 +852,7 @@ class AutonomyStore:
     def finish(
         self, scope: Scope, operation_id: str, state: str, evidence: dict[str, Any] | None = None
     ) -> None:
-        with self.transaction() as cur:
+        with self.transaction(scope) as cur:
             self._lock(cur, scope)
             self._finish(cur, scope, operation_id, state, evidence)
 

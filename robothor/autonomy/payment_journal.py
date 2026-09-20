@@ -88,7 +88,7 @@ class PaymentJournal:
 
     def append(self, scope: Scope, operation_id: str, fact: PaymentFact) -> dict[str, Any]:
         """Trusted adapter boundary, deliberately unavailable through tools/routes."""
-        with self.store.transaction() as cur:
+        with self.store.transaction(scope) as cur:
             self.store._lock(cur, scope)
             op = self.store._operation(cur, scope, operation_id)
             cur.execute(
@@ -103,7 +103,7 @@ class PaymentJournal:
             return self._append(cur, scope, op, fact)
 
     def read(self, scope: Scope, operation_id: str) -> dict[str, Any]:
-        with self.store.transaction() as cur:
+        with self.store.transaction(scope) as cur:
             op = self.store._operation(cur, scope, operation_id)
             return self._summary(op, self._facts(cur, scope, operation_id))
 

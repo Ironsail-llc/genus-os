@@ -1,4 +1,11 @@
-"""Enrollment isolation is also enforced by PostgreSQL for a scoped non-superuser."""
+"""Enrollment isolation is also enforced by PostgreSQL for a scoped non-superuser.
+
+This test sets ``app.tenant_id`` itself, which is the right shape for checking
+migration 132's POLICY — and for a long time it was the only place the GUC was
+ever set, because ``AutonomyStore.transaction()`` never did. It therefore
+certified a control the product had not switched on. ``test_store_rls.py`` is
+the one that goes through the product's own connection; read it too.
+"""
 
 from pathlib import Path
 from uuid import uuid4

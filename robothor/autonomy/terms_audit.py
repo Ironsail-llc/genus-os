@@ -135,7 +135,7 @@ class TermsAudit:
         record_id = str(uuid4())
         key_id, keys = self.store.resource_keyring()
         sealed = seal_resource(payload, keys, key_id, scope, f"terms:{operation_id}:{record_id}")
-        with self.store.transaction() as cur:
+        with self.store.transaction(scope) as cur:
             self.store._lock(cur, scope)
             op = self.store._operation(cur, scope, operation_id)
             version = self._authorize(cur, scope, op, agent_id, snapshot)
@@ -171,7 +171,7 @@ class TermsAudit:
         return result
 
     def list(self, scope: Scope, operation_id: str) -> list[dict[str, Any]]:
-        with self.store.transaction() as cur:
+        with self.store.transaction(scope) as cur:
             self.store._operation(cur, scope, operation_id)
             cur.execute(
                 "SELECT "
@@ -182,7 +182,7 @@ class TermsAudit:
             return [dict(row) for row in cur.fetchall()]
 
     def read(self, scope: Scope, operation_id: str, record_id: str) -> dict[str, Any]:
-        with self.store.transaction() as cur:
+        with self.store.transaction(scope) as cur:
             self.store._operation(cur, scope, operation_id)
             cur.execute(
                 "SELECT "
@@ -224,7 +224,7 @@ class TermsAudit:
         Returns the number of records erased by THIS call; erasing an already
         erased operation is not an error and does not move the stamp.
         """
-        with self.store.transaction() as cur:
+        with self.store.transaction(scope) as cur:
             # Scoped by the WHERE clause rather than by `_operation`: a delete
             # must not tell a caller whether an operation it cannot see exists.
             cur.execute(

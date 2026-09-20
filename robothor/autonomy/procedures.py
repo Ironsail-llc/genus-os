@@ -29,7 +29,7 @@ class ProcedureQuery(StrictModel):
 def find_procedures(
     store: AutonomyStore, scope: Scope, agent_id: str, query: ProcedureQuery
 ) -> list[dict[str, Any]]:
-    with store.transaction() as cur:
+    with store.transaction(scope) as cur:
         cur.execute(
             "SELECT id::text,execution_plan,updated_at FROM autonomy_operations "
             "WHERE tenant_id=%s AND owner_id=%s AND agent_id=%s AND state='completed' "
@@ -65,7 +65,7 @@ def find_procedures(
         candidates.append((row, template, ids))
     reusable_resources = set()
     if resource_ids:
-        with store.transaction() as cur:
+        with store.transaction(scope) as cur:
             cur.execute(
                 "SELECT id::text FROM vault_resources WHERE tenant_id=%s AND owner_id=%s "
                 "AND active AND expires_at IS NULL AND id=ANY(%s::uuid[])",

@@ -42,7 +42,7 @@ class EnrollmentStore:
 
     def create(self, scope: Scope, request: EnrollmentRequest) -> dict[str, Any]:
         token = secrets.token_urlsafe(32)
-        with self.store.transaction() as cur:
+        with self.store.transaction(scope) as cur:
             cur.execute(
                 "INSERT INTO autonomy_enrollments "
                 "(id,tenant_id,owner_id,token_hash,kind,origin,expires_at) "
@@ -80,13 +80,13 @@ class EnrollmentStore:
         return {**row, "expires_at": row["expires_at"].isoformat()}
 
     def inspect(self, scope: Scope, token: str) -> dict[str, Any]:
-        with self.store.transaction() as cur:
+        with self.store.transaction(scope) as cur:
             return self._read(cur, scope, token)
 
     def complete(self, scope: Scope, token: str, resource: ResourceInput) -> dict[str, Any]:
         # Seal before taking the intent lock; key discovery may use its own connection.
         prepared = self.store.prepare_resource(scope, resource)
-        with self.store.transaction() as cur:
+        with self.store.transaction(scope) as cur:
             row = self._read(cur, scope, token)
             if resource.kind != row["kind"] or resource.origin != row["origin"]:
                 raise PermissionError("enrollment_scope_mismatch")
