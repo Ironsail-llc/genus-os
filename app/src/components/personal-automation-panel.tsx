@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { PersonalAutomationPayment } from "./personal-automation-payment";
 import { PersonalAutomationAudit } from "./personal-automation-audit";
 
 type Resource = { id: string; kind: string; label: string; origin?: string;
@@ -12,7 +13,7 @@ type Settings = { enabled: boolean; managed_browser: boolean; payment_processing
   payment_assessment_reference: string };
 type Status = { resources: Resource[]; grants: Grant[]; settings: Settings;
   spending?: { state: string; months: Record<string, Record<string, number>> } };
-type Operation = { id: string; state: string; proposal: { purpose: string; origin: string } };
+type Operation = { id: string; state: string; proposal: { purpose: string; origin: string; action: string; currency: string } };
 const moneyDisplay = (minor: number, currency: string) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency }).format(minor / 100);
 const sources: Record<string, string> = {
@@ -158,6 +159,7 @@ export function PersonalAutomationPanel() {
         <p>{operation.proposal.purpose} · {operation.state.replaceAll("_", " ")}</p>
         <p className="text-sm text-muted-foreground">{operation.proposal.origin}</p>
         <PersonalAutomationAudit operationId={operation.id} />
+        {["purchase", "subscription"].includes(operation.proposal.action) && <PersonalAutomationPayment key={operation.id} operationId={operation.id} currency={operation.proposal.currency} />}
         {operation.state === "awaiting_input" && <form className="flex gap-2" autoComplete="off" onSubmit={event => {
           event.preventDefault(); const form = event.currentTarget;
           const code = String(new FormData(form).get("code") || "");

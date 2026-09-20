@@ -685,4 +685,8 @@ class AutonomyStore:
                 "UPDATE autonomy_operations SET state=%s,evidence=%s,updated_at=now() WHERE id=%s",
                 (state, Json(evidence), operation_id),
             )
+            if state == "completed":
+                from robothor.autonomy.payment_journal import record_submission
+
+                record_submission(cur, self, scope, row)
             self._event(cur, scope, operation_id, state)

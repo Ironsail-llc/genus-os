@@ -67,7 +67,7 @@ _BROWSER_DESCRIPTION = (
     "welcome, pending and failure messages do not count. Existing confirmation prevents submission. "
     "Verification links and reconciliation require a specific success_selector and success_text. "
     "A verification_link_id is used only for a login operation and must be same-origin. "
-    "kind=reconcile checks a receipt-specific confirmation using plan url/success_selector/success_text/session_resource_id without submitting; kind=operation checks progress; kind=cancel "
+    "kind=reconcile checks a receipt-specific confirmation using plan url/success_selector/success_text/session_resource_id without submitting; kind=operation checks progress; kind=payment_status {operation_id} reads recorded payment evidence without changing it. Submitted is not charged; reconciliation_required means payment evidence is unresolved. Never infer settlement or freed budget from browser success. kind=cancel "
     "cancels only before submission. Uncertain submissions require reconciliation, never blind retry. "
     "Use managed=true only when configured and local preflight fails. Never put card or credential "
     "values in arguments. Setup is at /account/autonomy. "
