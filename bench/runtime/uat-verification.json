@@ -247,6 +247,13 @@
       "failed": 0,
       "seconds": 7.66,
       "scope": "Actual initial provider JSON payload equality at two temperatures for both controlled candidates; screening records observed request fingerprints. Mock HTTP only; native equivalence and performance comparison incomplete."
+    },
+    "comparison_unknown_measurements": {
+      "comparator_and_size_passed": 24,
+      "comparator_seconds": 5.35,
+      "producer_transport_passed": 3,
+      "producer_seconds": 1.19,
+      "scope": "Unknown measurements retained without zero imputation; incomplete required metrics block qualification. Mock HTTP failures retain actual attempts, queue time, full elapsed time and unknown usage."
     }
   },
   "calendar": {

@@ -72,9 +72,11 @@ async def screen(manifest, output, samples):
     gate = asyncio.Semaphore(3)
 
     async def sample(model, runtime, index):
+        queued = time.perf_counter()
         async with gate:
             gateway = FixtureGateway("fixture")
             started = time.perf_counter()
+            queue_ms = (started - queued) * 1000
             trace_token = capture.start()
             try:
                 selected = model.removeprefix("openrouter/")
@@ -87,10 +89,14 @@ async def screen(manifest, output, samples):
                 result = {
                     "status": "timeout" if isinstance(exc, TimeoutError) else "failed",
                     "error_type": type(exc).__name__,
+                    "input_tokens": None,
+                    "output_tokens": None,
+                    "cost_usd": None,
                     "duration_ms": (time.perf_counter() - started) * 1000,
                 }
             finally:
                 provider_requests = capture.finish(trace_token)
+            execution_ms = (time.perf_counter() - started) * 1000
             row = {
                 "runtime": runtime,
                 "model": model,
@@ -99,6 +105,12 @@ async def screen(manifest, output, samples):
                 "dispatches": gateway.dispatches,
                 "provider_requests": provider_requests,
                 **result,
+                "framework_model_calls": result.get("model_calls"),
+                "model_calls": len(provider_requests),
+                "queue_ms": queue_ms,
+                "framework_duration_ms": result["duration_ms"],
+                "execution_ms": execution_ms,
+                "duration_ms": execution_ms + queue_ms,
             }
             rows.append(row)
             # Flush each outcome, including failures, before another sample starts.

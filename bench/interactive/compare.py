@@ -5,6 +5,7 @@ model, reasoning, startup (cold/warm), machine, prompt_hash, tools_hash,
 cohort (local/cloud), duration_ms,
 harness_ms, model_calls, input_tokens, post_completion_tool_calls, and
 state_checks (a nonempty mapping of independent fixture assertions to bool).
+Unknown measurements must be explicit nulls; duration_ms is always required.
 Never substitute transcript claims for fixture state checks.
 Qualification also requires nonempty model_settings and resources objects.
 Legacy records remain readable, but missing configuration cannot qualify a gate.
@@ -38,6 +39,17 @@ def percentile(values: list[float], p: float) -> float:
     return sorted(values)[max(0, math.ceil(len(values) * p) - 1)]
 
 
+def measurement_summary(rows, metric):
+    from bench.interactive.statistics import summary
+
+    known = [row[metric] for row in rows if row.get(metric) is not None]
+    return {**summary(known), "unknown_samples": len(rows) - len(known)}
+
+
+def complete_measurements(rows):
+    return all(row.get(metric) is not None for row in rows for metric in METRICS)
+
+
 def compare(records: list[dict[str, Any]]) -> dict[str, Any]:
     groups = defaultdict(list)
     cohorts = set()
@@ -56,12 +68,10 @@ def compare(records: list[dict[str, Any]]) -> dict[str, Any]:
             configuration.append(json.dumps(value, sort_keys=True, allow_nan=False))
         configurations.add(tuple(configuration))
         for metric in METRICS:
-            if (
-                isinstance(row.get(metric), bool)
-                or not isinstance(row.get(metric), (int, float))
-                or not math.isfinite(row[metric])
-                or row[metric] < 0
-            ):
+            value = row.get(metric)
+            if metric in row and value is None and metric != "duration_ms":
+                continue
+            if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
                 raise ValueError(f"Missing/invalid measurement: {metric}")
         if not isinstance(row.get("state_checks"), dict) or not row["state_checks"]:
             raise ValueError("Independent state checks are required")
@@ -74,7 +84,7 @@ def compare(records: list[dict[str, Any]]) -> dict[str, Any]:
         }:
             raise ValueError("Unknown terminal status")
         for metric in EXTRA_METRICS:
-            if metric in row and (
+            if row.get(metric) is not None and (
                 type(row[metric]) not in (int, float)
                 or not math.isfinite(row[metric])
                 or row[metric] < 0
@@ -85,8 +95,6 @@ def compare(records: list[dict[str, Any]]) -> dict[str, Any]:
         raise ValueError(
             "Compare exactly one matching model/tool/prompt/machine/configuration cohort at a time"
         )
-    from bench.interactive.statistics import summary
-
     report: dict[str, Any] = {}
     for harness, rows in groups.items():
         if len({r["version"] for r in rows}) != 1:
@@ -94,6 +102,7 @@ def compare(records: list[dict[str, Any]]) -> dict[str, Any]:
         report[harness] = {
             "sufficient_samples": min(Counter(r["case"] for r in rows).values()) >= 30,
             "samples": len(rows),
+            "measurements_complete": complete_measurements(rows),
             "finalist_samples": min(Counter(r["case"] for r in rows).values()) >= 100,
             "outcomes": dict(Counter(r.get("status", "completed") for r in rows)),
             "all_completed": all(r.get("status", "completed") == "completed" for r in rows),
@@ -105,7 +114,7 @@ def compare(records: list[dict[str, Any]]) -> dict[str, Any]:
                         v is True for r in case_rows for v in r["state_checks"].values()
                     ),
                     **{
-                        metric: summary([r[metric] for r in case_rows if metric in r])
+                        metric: measurement_summary(case_rows, metric)
                         for metric in (*METRICS, *EXTRA_METRICS)
                     },
                 }
@@ -116,13 +125,7 @@ def compare(records: list[dict[str, Any]]) -> dict[str, Any]:
             "all_state_checks_pass": all(
                 v is True for r in rows for v in r["state_checks"].values()
             ),
-            **{
-                metric: {
-                    "p50": percentile([r[metric] for r in rows], 0.5),
-                    "p95": percentile([r[metric] for r in rows], 0.95),
-                }
-                for metric in METRICS
-            },
+            **{metric: measurement_summary(rows, metric) for metric in METRICS},
         }
     # Require the same cases AND repetitions before asserting any improvement.
     case_counts = {h: sorted((r["case"],) for r in rows) for h, rows in groups.items()}
@@ -134,6 +137,16 @@ def compare(records: list[dict[str, Any]]) -> dict[str, Any]:
         "comparable_baseline": bool(comparable and configuration_complete),
     }
     if comparable and current is not None and optimized is not None:
+        gates["measurements_complete"] = (
+            current["measurements_complete"] and optimized["measurements_complete"]
+        )
+        gates["all_completed"] = current["all_completed"] and optimized["all_completed"]
+    if (
+        comparable
+        and current is not None
+        and optimized is not None
+        and gates["measurements_complete"]
+    ):
         gates.update(
             {
                 "sufficient_samples": optimized["sufficient_samples"]
@@ -155,6 +168,8 @@ def compare(records: list[dict[str, Any]]) -> dict[str, Any]:
         if optimized and candidate and case_counts[name] == case_counts["optimized"]:
             replacements[name] = (
                 configuration_complete
+                and candidate["measurements_complete"]
+                and optimized["measurements_complete"]
                 and candidate["all_completed"]
                 and optimized["all_completed"]
                 and candidate["sufficient_samples"]

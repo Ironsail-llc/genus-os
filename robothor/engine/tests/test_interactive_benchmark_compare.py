@@ -103,3 +103,55 @@ def test_finalist_requires_one_hundred_repetitions():
     rows = samples("optimized", 100) + samples("deepagents", 70)
     assert compare(rows)["replacement_latency_gate"]["deepagents"]
     assert not compare(rows)["finalist_latency_gate"]["deepagents"]
+
+
+@pytest.mark.parametrize("status", ["timeout", "failed", "cancelled", "completed"])
+def test_unknown_usage_is_retained_without_zero_imputation_or_qualification(status):
+    rows = samples("optimized", 100) + samples("deepagents", 70)
+    rows[-1].update(
+        status=status,
+        duration_ms=60000,
+        model_calls=None,
+        input_tokens=None,
+        cost_usd=None,
+        harness_ms=None,
+        post_completion_tool_calls=None,
+    )
+    report = compare(rows)
+    candidate = report["harnesses"]["deepagents"]
+    assert candidate["samples"] == 30
+    assert candidate["outcomes"][status] >= 1
+    assert candidate["duration_ms"]["samples"] == 30
+    assert candidate["duration_ms"]["unknown_samples"] == 0
+    assert candidate["model_calls"]["samples"] == 29
+    assert candidate["model_calls"]["unknown_samples"] == 1
+    cost = candidate["scenarios"]["add"]["cost_usd"]
+    assert cost["samples"] == 0 and cost["unknown_samples"] == 30
+    assert cost["p95"] is None
+    assert not candidate["measurements_complete"]
+    assert not report["replacement_latency_gate"]["deepagents"]
+
+
+def test_unknown_baseline_usage_does_not_qualify_known_candidate():
+    rows = samples("optimized", 100) + samples("deepagents", 70)
+    rows[0]["input_tokens"] = None
+    assert not compare(rows)["replacement_latency_gate"]["deepagents"]
+
+
+def test_unknown_optimization_usage_does_not_assert_reduction():
+    rows = samples("current", 100) + samples("optimized", 50)
+    for row in rows:
+        row["model_calls"] = row["input_tokens"] = None
+    report = compare(rows)
+    gates = report["optimization_gates"]
+    assert not gates["measurements_complete"]
+    assert "model_calls_reduced_80pct" not in gates
+    assert report["harnesses"]["current"]["input_tokens"]["p95"] is None
+
+
+@pytest.mark.parametrize("value", [None, -1, True, float("nan")])
+def test_missing_or_invalid_elapsed_time_is_not_a_measurement(value):
+    rows = samples("optimized", 100)
+    rows[0]["duration_ms"] = value
+    with pytest.raises(ValueError, match="duration_ms"):
+        compare(rows)
