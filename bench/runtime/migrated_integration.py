@@ -4,6 +4,7 @@ Invoke with the repository Python environment: python -m bench.runtime.migrated_
 No shared database is read, migrated or modified.
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -61,6 +62,14 @@ def main():
                     "139_goal_task_family_controls",
                 } <= set(applied)
                 assert apply(connection=conn) == []
+            pg("createdb", "-h", socket, "-U", "runtime_test", "runtime_upgrade_test")
+            from bench.runtime.populated_upgrade import upgrade
+
+            with psycopg2.connect(
+                f"dbname=runtime_upgrade_test user=runtime_test host={socket}"
+            ) as conn:
+                report = upgrade(conn, root)
+                print("POPULATED_UPGRADE " + json.dumps(report), flush=True)
             env = {
                 **os.environ,
                 "ROBOTHOR_DB_HOST": str(socket),

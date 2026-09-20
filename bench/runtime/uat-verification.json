@@ -875,6 +875,37 @@
       "migration_contract_passed": 52,
       "artifact": "uat-migrated-integration.json",
       "fixed": "Migrations 127_runtime_contract, 138_goal_provider_reservations and 139_goal_task_family_controls were missing from the canonical manifest and are now registered."
+    },
+    "populated_canonical_upgrade": {
+      "added_migrations": [
+        "127_runtime_contract",
+        "138_goal_provider_reservations",
+        "139_goal_task_family_controls"
+      ],
+      "preserved_tables": [
+        "crm_tasks",
+        "goal_pursuit_settings",
+        "pursuit_goals",
+        "pursuit_goal_tasks",
+        "pursuit_goal_history",
+        "pursuit_goal_attempts",
+        "agent_runs",
+        "agent_run_steps",
+        "agent_run_checkpoints",
+        "calendar_operations"
+      ],
+      "repeat_apply_noop": true,
+      "blocked_ancestor_denies_linked_task": true,
+      "ordinary_task_runnable": true,
+      "legacy_runtime_identity_added": true,
+      "tracking_integration_passed": 13,
+      "tracking_integration_seconds": 0.48,
+      "migration_contract_passed": 52,
+      "migration_contract_seconds": 0.2,
+      "command": ".venv/bin/python -m bench.runtime.migrated_integration",
+      "scope": "Private PostgreSQL 16: full current schema and prior canonical manifest excluding the three newly registered migrations. Synthetic persisted rows, no provider/model calls.",
+      "limitations": "Snapshot equality excludes the intentionally added runtime_context field, whose default is checked separately. This is a populated schema upgrade, not a complete application or daemon rollback drill.",
+      "artifact": "uat-populated-upgrade.json"
     }
   },
   "calendar": {
