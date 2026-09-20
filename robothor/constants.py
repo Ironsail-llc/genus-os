@@ -17,8 +17,17 @@ DEFAULT_TIMEZONE = "America/New_York"
 
 
 def platform_timezone() -> str:
-    """The instance's configured timezone, or the platform default."""
-    return os.environ.get("ROBOTHOR_TIMEZONE") or DEFAULT_TIMEZONE
+    """The instance's configured timezone, or the platform default.
+
+    Through the settings registry, not `os.environ`: `ROBOTHOR_TIMEZONE` is a
+    declared setting, and `tests/test_settings_registry.py` ratchets the number
+    of raw env reads downwards. Imported inside the function so this module
+    stays import-light for `robothor/crm/dal.py`, which must not pull the
+    settings model in at import time.
+    """
+    from robothor.settings import get_settings
+
+    return get_settings().engine.timezone or DEFAULT_TIMEZONE
 
 
 #: Prefix every benchmark-sandbox write refusal starts with (crm.py,

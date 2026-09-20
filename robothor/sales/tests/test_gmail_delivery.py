@@ -7,6 +7,7 @@ import pytest
 from robothor.sales.tests.test_delivery import setup
 from robothor.sales.tests.test_gmail import GmailCLI
 from robothor.sales.tests.test_guards import draft
+from robothor.settings import reset_settings
 
 
 def gmail_setup(sales, monkeypatch):
@@ -17,6 +18,10 @@ def gmail_setup(sales, monkeypatch):
     sales.configure({"email_provider": "gmail"}, "operator:test")
     monkeypatch.setenv("ROBOTHOR_SALES_GMAIL_TENANT_ID", sales.tenant)
     monkeypatch.setenv("ROBOTHOR_SALES_GMAIL_MAILBOX", "sales@example.com")
+    # The Gmail host binding is a declared setting now, and settings are
+    # resolved once per process; a test that reconfigures the host has to
+    # say so. `reset_settings` exists for exactly this.
+    reset_settings()
     cli = GmailCLI()
     worker = GmailDeliveryWorker(
         sales, Gmail(sales.tenant, runner=cli), clock=lambda: datetime(2026, 9, 18, 15, tzinfo=UTC)

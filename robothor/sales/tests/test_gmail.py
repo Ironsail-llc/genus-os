@@ -8,12 +8,17 @@ from email.parser import BytesParser
 import pytest
 
 from robothor.sales.providers import ProviderError, UnknownEffect
+from robothor.settings import reset_settings
 
 
 @pytest.fixture
 def mailbox(monkeypatch):
     monkeypatch.setenv("ROBOTHOR_SALES_GMAIL_TENANT_ID", "test-tenant")
     monkeypatch.setenv("ROBOTHOR_SALES_GMAIL_MAILBOX", "sales@example.com")
+    # The Gmail host binding is a declared setting now, and settings are
+    # resolved once per process; a test that reconfigures the host has to
+    # say so. `reset_settings` exists for exactly this.
+    reset_settings()
 
 
 class GmailCLI:

@@ -342,6 +342,11 @@ async def test_native_workflow_executes_registry_worker_and_persists_receipts(
     assert sales.ops.claim_action() is None
 
 
+# Marked by hand: this one builds its own `Sales` rather than taking the
+# `sales` fixture, because it races the FIRST creation of the settings row
+# and needs a tenant that has none. The conftest marks by fixture, so it
+# cannot see this one.
+@pytest.mark.integration
 def test_concurrent_first_configuration_preserves_both_operator_changes(monkeypatch):
     import time
     from uuid import uuid4

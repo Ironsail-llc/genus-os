@@ -4,6 +4,7 @@ import pytest
 
 from robothor.sales.tests.test_gmail_delivery import action, gmail_setup, sends
 from robothor.sales.tests.test_guards import draft
+from robothor.settings import reset_settings
 
 
 @pytest.mark.asyncio
@@ -85,6 +86,10 @@ async def test_local_stop_keeps_unknown_send_held_and_works_without_gmail_creden
     await worker.tick()
     sales.suppress("alice@example.com", "opt_out", "operator:test")
     monkeypatch.delenv("ROBOTHOR_SALES_GMAIL_TENANT_ID")
+    # The Gmail host binding is a declared setting now, and settings are
+    # resolved once per process; a test that reconfigures the host has to
+    # say so. `reset_settings` exists for exactly this.
+    reset_settings()
     stop = GmailStopWorker(sales)
     assert await stop.tick()
     assert action(sales, key)["status"] == "unknown"

@@ -14,7 +14,6 @@ import base64
 import binascii
 import hashlib
 import json
-import os
 import re
 from email import policy
 from email.header import decode_header, make_header
@@ -123,8 +122,11 @@ class Gmail:
     """One local OAuth account, explicitly assigned to one sales tenant."""
 
     def __init__(self, tenant_id, *, runner=None):
-        bound = os.environ.get("ROBOTHOR_SALES_GMAIL_TENANT_ID")
-        mailbox = os.environ.get("ROBOTHOR_SALES_GMAIL_MAILBOX", "")
+        from robothor.settings import get_settings
+
+        engine = get_settings().engine
+        bound = engine.sales_gmail_tenant_id
+        mailbox = engine.sales_gmail_mailbox
         if not tenant_id or bound != tenant_id or not mailbox:
             raise ProviderError("Gmail host tenant/mailbox binding required")
         try:

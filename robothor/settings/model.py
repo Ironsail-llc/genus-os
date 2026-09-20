@@ -1194,6 +1194,21 @@ class EngineSettings(SettingsGroup):
         "that restrict unprivileged user namespaces. Empty uses Chromium's "
         "default sandbox setup; rendering never disables the sandbox.",
     )
+    sales_gmail_tenant_id: str = declare(
+        "",
+        "ROBOTHOR_SALES_GMAIL_TENANT_ID",
+        "The one tenant the host's Google Workspace connection is bound to for "
+        "native sales delivery. There is no default and no cross-tenant use: "
+        "an unset value, or one that disagrees with the calling tenant, "
+        "refuses the Gmail provider outright.",
+    )
+    sales_gmail_mailbox: str = declare(
+        "",
+        "ROBOTHOR_SALES_GMAIL_MAILBOX",
+        "The single mailbox address that bound connection sends as. Every "
+        "approved sender is checked against it, and Gmail would silently "
+        "rewrite a From header that disagreed.",
+    )
 
 
 # ---------------------------------------------------------------------------

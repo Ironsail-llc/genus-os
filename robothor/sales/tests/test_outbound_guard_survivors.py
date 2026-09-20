@@ -23,6 +23,7 @@ from robothor.operations.store import Conflict, digest
 from robothor.sales.providers import ProviderError
 from robothor.sales.tests.test_delivery import setup
 from robothor.sales.tests.test_guards import approved, draft, prepared
+from robothor.settings import reset_settings
 
 # ── 1. handlers/sales.py — the service-workflow identity gate ──────────────
 
@@ -318,6 +319,10 @@ def _gmail(monkeypatch, mailbox="sales@example.com"):
 
     monkeypatch.setenv("ROBOTHOR_SALES_GMAIL_TENANT_ID", "tenant-under-test")
     monkeypatch.setenv("ROBOTHOR_SALES_GMAIL_MAILBOX", mailbox)
+    # The Gmail host binding is a declared setting now, and settings are
+    # resolved once per process; a test that reconfigures the host has to
+    # say so. `reset_settings` exists for exactly this.
+    reset_settings()
     cli = GmailCLI()
     return Gmail("tenant-under-test", runner=cli), cli
 
@@ -476,6 +481,10 @@ def _gmail_worker(sales, monkeypatch, clock):
 
     monkeypatch.setenv("ROBOTHOR_SALES_GMAIL_TENANT_ID", sales.tenant)
     monkeypatch.setenv("ROBOTHOR_SALES_GMAIL_MAILBOX", "sales@example.com")
+    # The Gmail host binding is a declared setting now, and settings are
+    # resolved once per process; a test that reconfigures the host has to
+    # say so. `reset_settings` exists for exactly this.
+    reset_settings()
     cli = GmailCLI()
     return GmailDeliveryWorker(sales, Gmail(sales.tenant, runner=cli), clock=lambda: clock), cli
 
