@@ -106,17 +106,19 @@ async def test_automatic_handoff_confirmation_uses_affirmative_observation_not_g
         ]:
             HandoffStore(store).acknowledge(identity, asked["id"])
 
-            async def merchant(route, message=message):
-                if route.request.method == "POST":
-                    posts.append("unexpected")
-                await route.fulfill(
-                    content_type="text/html",
-                    body="<p>"
-                    + message
-                    + '</p><script>fetch("/submit",{method:"POST"}).catch(()=>{});</script>',
-                )
+            async def run(scope, operation, agent, plan, *, reconcile, message=message):
+                # Playwright may pass (route, request) to a two-argument handler.
+                # Keep the merchant handler unary; bind scenario text here.
+                async def merchant(route):
+                    if route.request.method == "POST":
+                        posts.append("unexpected")
+                    await route.fulfill(
+                        content_type="text/html",
+                        body="<p>"
+                        + message
+                        + '</p><script>fetch("/submit",{method:"POST"}).catch(()=>{});</script>',
+                    )
 
-            async def run(scope, operation, agent, plan, *, reconcile):
                 assert reconcile and plan.success_selector is None and plan.success_text is None
                 browser = await pw.chromium.launch(headless=True)
                 try:
