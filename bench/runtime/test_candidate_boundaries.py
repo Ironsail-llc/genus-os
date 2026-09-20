@@ -208,3 +208,29 @@ async def test_proposed_framework_file_write_cannot_reach_backend(name, tmp_path
     assert not list(tmp_path.iterdir())
     assert gateway.writes == gateway.dispatches == 0
     assert 1 <= len(calls) <= 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [429, 503])
+async def test_provider_failure_has_one_http_attempt_and_no_effect(status):
+    import httpx
+    from pydantic_ai.exceptions import ModelHTTPError
+    from pydantic_ai.models.openai import OpenAIChatModel
+
+    from bench.runtime.live_candidates import screening_provider
+
+    attempts = []
+
+    def respond(request):
+        attempts.append(request)
+        return httpx.Response(status, json={"error": {"message": "synthetic failure"}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        provider = screening_provider("synthetic-test-key", http_client=client)
+        adapter = PydanticCandidate(OpenAIChatModel("synthetic-model", provider=provider))
+        gateway = FixtureGateway("fixture")
+        with pytest.raises(ModelHTTPError) as error:
+            await adapter.run(gateway, tenant="fixture")
+        assert error.value.status_code == status
+        assert len(attempts) == 1
+        assert gateway.writes == gateway.dispatches == 0

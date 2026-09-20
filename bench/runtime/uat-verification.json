@@ -181,6 +181,12 @@
       "native_verified_outcomes_passed": 5,
       "synthetic_actions_per_candidate": 30,
       "screening_artifact": "uat-candidate-host-tools-screen.json"
+    },
+    "candidate_transport_retry_contracts": {
+      "passed": 17,
+      "failed": 0,
+      "seconds": 2.88,
+      "scope": "Candidate boundary suite including actual mocked HTTP 429 and 503: exactly one attempt, no effects; no live provider calls."
     }
   },
   "calendar": {

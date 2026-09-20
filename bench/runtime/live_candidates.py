@@ -16,15 +16,28 @@ from bench.interactive.statistics import summary
 from bench.runtime.candidates import DeepAgentsCandidate, FixtureGateway, PydanticCandidate
 
 
+def screening_provider(api_key, *, http_client=None):
+    """One HTTP attempt per model request; the host owns retry policy."""
+    from openai import AsyncOpenAI
+    from pydantic_ai.providers.openai import OpenAIProvider
+
+    client = AsyncOpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=api_key,
+        max_retries=0,
+        http_client=http_client,
+    )
+    return OpenAIProvider(openai_client=client)
+
+
 async def screen(manifest, output, samples):
     from langchain_openai import ChatOpenAI
     from pydantic_ai.models.openai import OpenAIChatModel
-    from pydantic_ai.providers.openai import OpenAIProvider
 
     config = yaml.safe_load(manifest.read_text())["model"]
     models = list(dict.fromkeys([config["primary"], *config.get("fallbacks", [])]))
     key = os.environ["OPENROUTER_API_KEY"]
-    provider = OpenAIProvider(base_url="https://openrouter.ai/api/v1", api_key=key)
+    provider = screening_provider(key)
     rows = []
     gate = asyncio.Semaphore(3)
 
@@ -69,14 +82,17 @@ async def screen(manifest, output, samples):
                 file.write(json.dumps(row) + "\n")
 
     cloud = [model for model in models if model.startswith("openrouter/")]
-    for index in range(samples):
-        await asyncio.gather(
-            *(
-                sample(model, runtime, index)
-                for model in cloud
-                for runtime in ("pydantic-ai", "deepagents")
+    try:
+        for index in range(samples):
+            await asyncio.gather(
+                *(
+                    sample(model, runtime, index)
+                    for model in cloud
+                    for runtime in ("pydantic-ai", "deepagents")
+                )
             )
-        )
+    finally:
+        await provider.client.close()
     report = {
         "scope": "Configured cloud models, synthetic business gateway, no matched native-runner cohort; not a promotion result",
         "versions": {
