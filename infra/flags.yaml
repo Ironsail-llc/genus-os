@@ -68,7 +68,7 @@ flags:
   - name: ROBOTHOR_SANDBOX_DEFAULT_MODE
     owner: ops
     mode: observe
-    planned_promotion: "2026-09-16"
+    planned_promotion: "2026-10-04"
     soak: >
       BLOCKER: per-agent settlement first (main/crm-hygiene/email-analyst keep
       host with reason; conversation-inbox/vision-monitor lose exec;
@@ -144,6 +144,17 @@ flags:
       Note: an agent with an explicit manifest `sandbox: docker` now fails CLOSED
       on its own, regardless of this flag (#207) — the global mode is a default for
       agents that never asked, not an override for one that did.
+
+      Re-dated 2026-09-20 with the settlement measured, not assumed.
+      `opted_out_of_containment()` over the live manifests returns exactly
+      `[auto-agent, crm-hygiene, email-analyst, main]`, and conversation-inbox
+      and vision-monitor no longer hold `exec` — that part of the settlement is
+      done. Two items remain and they are the gate for this date: auto-agent
+      still declares `sandbox: host` although the 2026-09-02 decision was that
+      it declares `docker`, and `corrective-actions` now holds `exec` with no
+      sandbox declaration at all, so it is an exec holder nobody has settled.
+      Promote when those two manifests declare their sandbox explicitly; until
+      then a flip would still leave the widest blast radii exactly as they are.
 
   - name: ROBOTHOR_COMPLETION_CONTRACTS_MODE
     owner: ops
@@ -403,7 +414,7 @@ flags:
   - name: ROBOTHOR_HONESTY_SUITE_MODE
     owner: ops
     mode: observe
-    planned_promotion: "2026-09-12"
+    planned_promotion: "2026-10-04"
     soak: >
       NEW 2026-08-21. Merges docs/benchmarks/_honesty/tasks.yaml into EVERY
       agent's benchmark suite: four tasks the agent genuinely cannot do (a
@@ -440,10 +451,17 @@ flags:
       unexplained, and the aggregate score delta computed in advance. None
       of the three has been done; the suite has only run in observe.
 
+      Re-dated 2026-09-20. The gate is unchanged and still unmet: the four
+      measurements this entry names (verdict rows present, false-verdict
+      rate, unverifiable count at zero, latency unchanged) have not been
+      taken, because the suite has only ever run in observe. The measurement
+      is one honesty-suite run over the fleet's benchmark suites; it is
+      scheduled against this date rather than deferred again without one.
+
   - name: ROBOTHOR_BENCHMARK_SANDBOX_MODE
     owner: ops
     mode: observe
-    planned_promotion: "2026-09-10"
+    planned_promotion: "2026-10-04"
     soak: >
       NEW 2026-08-21. Seeded CRM fixtures in an isolated tenant, so write-heavy
       agents can be graded on what they DID instead of what they narrated. The
@@ -494,6 +512,13 @@ flags:
       flip. Evidence (3) is now cheap to gather: a cross-tenant write from a
       benchmark run logs one WARNING "benchmark isolation: refused …", so an
       empty grep over a fleet night is a real answer rather than a silence.
+
+      Re-dated 2026-09-20. The three preconditions this entry names are still
+      outstanding: state checks surfaced and triaged, zero `capability_live`
+      verdicts standing unexplained, and the aggregate score delta computed
+      in advance. Enforce folds state checks into the grade, so flipping
+      before the delta is known would move every write-heavy agent's score
+      for a reason nobody could attribute.
 
   - name: ROBOTHOR_PLUGIN_MANIFEST_MODE
     owner: platform
