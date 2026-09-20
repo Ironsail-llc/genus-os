@@ -269,6 +269,95 @@ def _display() -> str:
     return _cfg().desktop_display
 
 
+#: Chromium's product config directory name. "Chrome for Testing" is the build
+#: Playwright bundles, so this is where it puts its profile by default.
+_PROFILE_DIRNAME = "browser-profiles"
+
+
+def _browser_profile_dir(agent_id: str) -> str:
+    """A per-agent Chromium profile directory inside the workspace.
+
+    WHY THIS EXISTS. It is the target of ``XDG_CONFIG_HOME`` in
+    :func:`_browser_env`, and that redirect is what makes the launch work. The
+    unit sets ``ProtectHome=read-only`` and its ``ReadWritePaths`` allowlist
+    covers only ``/home/<user>/.config/{robothor,gws,gog,gogcli}``, so
+    ``$HOME/.config`` is not writable. Chromium spawns
+    ``chrome_crashpad_handler`` with a ``--database`` path derived from
+    ``$HOME/.config``; against a read-only home the handler exits immediately
+    (``chrome_crashpad_handler: --database is required``) and the browser dies
+    with it. The unit DOES grant write access to the workspace, so the profile
+    goes there instead. Verified by a real launch on the :99 display against a
+    read-only ``$HOME/.config``: bare env fails, redirected env loads a page.
+
+    THE INVARIANT, which any future edit must keep: **a browser profile path
+    must live inside the engine unit's ``ReadWritePaths``.** Moving this to
+    ``$HOME``, ``/tmp`` outside the private tmp, or anywhere else off that list
+    reintroduces the exact failure this fixes. See
+    ``docs/runbooks/BROWSER_PROFILE.md``.
+
+    PER AGENT, never shared. A shared *writable* profile would let the first
+    agent to authenticate log in every other agent — the same reasoning as
+    ``exec_env._empty_config_dir`` (Review R7). A spawned sub-agent carries its
+    own id, so it gets its own profile and inherits no cookies.
+
+    Persisted, not per-run: cookies surviving is the point of a profile, and a
+    directory per ``exec`` on a box doing hundreds a day is a leak. Retention is
+    deliberately left to the operator rather than guessed at here.
+    """
+    from pathlib import Path
+
+    from robothor.settings.sources import workspace_path
+
+    safe = re_mod.sub(r"[^A-Za-z0-9._-]", "_", agent_id or "") or "default"
+    root = workspace_path()
+    if root is None:
+        # No workspace resolves (no ROBOTHOR_WORKSPACE and no HOME). Fall back
+        # to the tmpdir, which PrivateTmp=yes makes writable for the service.
+        # The launch works; the profile just does not survive a restart.
+        import tempfile
+
+        root = Path(tempfile.gettempdir()) / "robothor-workspace"
+    path = root / "local" / _PROFILE_DIRNAME / safe
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
+
+
+def _browser_env(profile_dir: str, agent_id: str) -> dict[str, str]:
+    """The environment a host Chromium is launched with.
+
+    Two jobs.
+
+    It POINTS CHROMIUM AT THE WRITABLE PROFILE. ``XDG_CONFIG_HOME`` is the one
+    that matters for the EROFS failure; the cache and data homes are set to the
+    same tree so nothing else Chromium writes lands on a read-only path.
+
+    It is also the child environment, built through
+    :func:`robothor.engine.exec_env.build_exec_env` rather than a bare
+    ``{**os.environ}``. Previously this handed the browser the engine's whole
+    process environment — the ~50 credentials ``load-secrets.sh`` decrypted
+    from a root-owned SOPS file at boot — so a page that escaped the renderer
+    sandbox held the fleet's credentials. ``sandbox.py``'s LOCAL branch was
+    migrated to this accessor; this path was not.
+
+    ``base=dict(os.environ)`` deliberately: the semantics are "today's
+    environment minus what ``enforce`` would withhold", not a narrower snapshot
+    that could silently drop ``PATH``. ``ROBOTHOR_EXEC_ENV_MODE`` defaults to
+    ``observe``, which returns the environment UNCHANGED and only logs what
+    ``enforce`` would remove — so today this is a no-op on the credential
+    question and the removal lands when the operator promotes the flag on their
+    own evidence. ``grants=()``: a browser has no business holding a credential,
+    so nothing is injected.
+    """
+    from robothor.engine.exec_env import build_exec_env
+
+    env = build_exec_env(agent_id=agent_id, base=dict(os.environ), grants=()).env
+    env["DISPLAY"] = _display()
+    env["XDG_CONFIG_HOME"] = profile_dir
+    env["XDG_CACHE_HOME"] = f"{profile_dir}/cache"
+    env["XDG_DATA_HOME"] = f"{profile_dir}/data"
+    return env
+
+
 async def _get_playwright() -> Any:
     """Get or create the global Playwright instance."""
     global _playwright_instance
@@ -506,6 +595,16 @@ async def _action_start(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
                 )
                 page = context.pages[0] if context.pages else await context.new_page()
             else:
+                # The env, not the args, is what fixes the launch. Chromium
+                # spawns chrome_crashpad_handler with a --database path derived
+                # from $HOME/.config, which the unit's ProtectHome=read-only
+                # makes unwritable; the handler exits and takes the browser with
+                # it ("chrome_crashpad_handler: --database is required"). Pointing
+                # XDG_CONFIG_HOME at the workspace removes that path entirely.
+                # --user-data-dir is deliberately NOT passed: Playwright rejects
+                # it as a launch arg (it manages its own temp profile), and it is
+                # not what fails. See _browser_profile_dir / _browser_env.
+                profile_dir = _browser_profile_dir(agent_id)
                 browser = await pw.chromium.launch(
                     headless=False,
                     args=[
@@ -515,7 +614,7 @@ async def _action_start(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
                         "--window-size=1280,960",
                         "--window-position=0,0",
                     ],
-                    env={**os.environ, "DISPLAY": _display()},
+                    env=_browser_env(profile_dir, ctx.agent_id or ""),
                 )
                 context = await browser.new_context(
                     viewport={"width": 1280, "height": 960},
