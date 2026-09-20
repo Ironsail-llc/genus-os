@@ -45,6 +45,7 @@ def test_owner_check_uses_stored_read_only_confirmation_without_returning_it(
 
         client.portal.call(drain)
         assert browser.await_count == 1
+        assert HandoffStore(store).list(identity)[0]["state"] == "awaiting_external_action"
         assert browser.call_args.kwargs == {"reconcile": True}
         plan = browser.call_args.args[3]
         assert plan.fields == [] and plan.check_selectors == []

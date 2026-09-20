@@ -328,6 +328,14 @@ async def check_external_handoff(handoff_id: UUID, request: Request):
             # private browser errors are suitable for logs or client responses.
             return
 
+        finally:
+            try:
+                await asyncio.to_thread(
+                    HandoffStore(AutonomyStore()).check_finished, scope, str(handoff_id)
+                )
+            except Exception:
+                pass
+
     task = asyncio.create_task(check())
     _resumes.add(task)
     task.add_done_callback(_resumes.discard)
