@@ -116,6 +116,8 @@ class PydanticCandidate:
         self.model = model
         self.system_prompt = system_prompt
         self.model_settings = {"max_tokens": 512, "temperature": 0.5, **(model_settings or {})}
+        # A host may omit an adapter default when supplying the provider's exact wire field.
+        self.model_settings = {k: v for k, v in self.model_settings.items() if v is not None}
 
     async def run(self, gateway, *, tenant, prompt=PROMPT):
         await admit_gateway(gateway, tenant)
@@ -196,7 +198,14 @@ class DeepAgentsCandidate:
             )
             for spec, invoke in bound_tools(gateway, tenant)
         }
-        system_prompt = self.system_prompt
+        prompts = (
+            (self.system_prompt,)
+            if isinstance(self.system_prompt, str)
+            else tuple(self.system_prompt)
+        )
+        if not prompts:
+            raise ValueError("at least one host system prompt required")
+        system_prompt = prompts[0]
         model_settings, tool_choice = self.model_settings, self.tool_choice
         calls = 0
         tokens = {"input_tokens": 0, "output_tokens": 0}
@@ -217,6 +226,10 @@ class DeepAgentsCandidate:
                         model_settings={**request.model_settings, **model_settings},
                         tool_choice=tool_choice if tool_choice is not None else request.tool_choice,
                         system_message=SystemMessage(content=system_prompt),
+                        messages=[
+                            *(SystemMessage(content=p) for p in prompts[1:]),
+                            *request.messages,
+                        ],
                     )
                 )
                 usage_known &= bool(response.result)

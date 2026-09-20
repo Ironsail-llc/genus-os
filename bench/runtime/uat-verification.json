@@ -254,6 +254,14 @@
       "producer_transport_passed": 3,
       "producer_seconds": 1.19,
       "scope": "Unknown measurements retained without zero imputation; incomplete required metrics block qualification. Mock HTTP failures retain actual attempts, queue time, full elapsed time and unknown usage."
+    },
+    "native_candidate_provider_configuration": {
+      "native_http_capture_passed": 1,
+      "candidate_passed": 77,
+      "candidate_failed": 0,
+      "candidate_seconds": 9.38,
+      "artifact": "uat-native-provider-configuration.json",
+      "scope": "Native initial HTTP payload captured then matched by both candidate frameworks in separate dependency environments. Mock transport only; multi-turn/resource/performance parity incomplete."
     }
   },
   "calendar": {

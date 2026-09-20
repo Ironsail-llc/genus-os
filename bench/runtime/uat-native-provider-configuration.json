@@ -1,0 +1,32 @@
+{
+  "scope": "Initial synthetic action provider configuration only; no live provider or latency comparison",
+  "model": "deepseek/deepseek-v4.1-flash",
+  "model_settings": {
+    "temperature": 0.2,
+    "max_tokens": 16384,
+    "tool_choice": "auto",
+    "thinking": {
+      "type": "enabled",
+      "budget_tokens": 8192
+    },
+    "usage": {
+      "include": true
+    }
+  },
+  "prompt_hash": "b34066c28a9e01706cfa82440330b75e20c1d0cb3c9df81dd28f38859d962e63",
+  "tools_hash": "44fbc45125195f06b45280579445ae5cea431f8488dc2f32dbcccd695acc74ee",
+  "message_roles": [
+    "system",
+    "system",
+    "user"
+  ],
+  "matched_candidates": [
+    "pydantic-ai",
+    "deepagents"
+  ],
+  "normalization": "Only omitted stream versus explicit false; no token-limit, reasoning, prompt or tool normalization",
+  "normalized_request_hash": "b80e59e27ac6774829455f88d59a32114d839f24cf747ef4efd02737978282fc",
+  "candidate_suite_passed": 77,
+  "candidate_suite_seconds": 9.38,
+  "promotion_qualified": false
+}

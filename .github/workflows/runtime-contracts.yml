@@ -42,11 +42,15 @@ jobs:
           robothor/engine/tests/test_plan_mode.py
           robothor/engine/tests/test_plan_integrity.py
           robothor/engine/tests/test_interactive_benchmark_compare.py
+      - name: Capture the native provider configuration without network access
+        run: >-
+          ROBOTHOR_RUNTIME_NATIVE_WIRE_ARTIFACT=/tmp/runtime-native-request.json
+          python -m pytest -q --no-cov robothor/engine/tests/test_runtime_provider_configuration.py
       - name: Pinned candidate compatibility (synthetic tools only)
         run: |
           python -m venv /tmp/runtime-candidates
           /tmp/runtime-candidates/bin/pip install -r bench/runtime/candidates.lock
-          PYDANTIC_AI_NO_BANNER=1 /tmp/runtime-candidates/bin/python -m pytest -q bench/runtime/test_screening_configuration.py bench/runtime/test_store_host.py bench/runtime/test_adapter.py bench/runtime/test_candidate_boundaries.py bench/runtime/test_candidate_durable_budget.py
+          ROBOTHOR_RUNTIME_NATIVE_WIRE_ARTIFACT=/tmp/runtime-native-request.json PYDANTIC_AI_NO_BANNER=1 /tmp/runtime-candidates/bin/python -m pytest -q bench/runtime/test_native_profile.py bench/runtime/test_screening_configuration.py bench/runtime/test_store_host.py bench/runtime/test_adapter.py bench/runtime/test_candidate_boundaries.py bench/runtime/test_candidate_durable_budget.py
           PYDANTIC_AI_NO_BANNER=1 /tmp/runtime-candidates/bin/python -m bench.runtime.screen_candidates --output /tmp/screening.json
           python -c 'import json; r=json.load(open("/tmp/screening.json")); assert all(s["status"]=="completed" and s["verified"] and s["single_write"] for s in r["samples"])'
 
