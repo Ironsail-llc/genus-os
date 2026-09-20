@@ -23,6 +23,9 @@ import {
 } from "@/lib/chat/agent-session";
 import { Send, Square, Check, X, ClipboardList, MessageSquareText, Brain } from "lucide-react";
 
+const PLAN_OUTCOME_UNKNOWN =
+  "I couldn’t confirm the outcome. Some actions may have finished; check their status before trying again.";
+
 interface ChatMessage {
   id: string;
   role: "user" | "assistant";
@@ -849,9 +852,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       setActivePlan(null);
 
       if (!res.ok || !res.body) {
-        setIsPlanExecuting(false);
-        setIsDeepReasoning(false);
-        return;
+        throw new Error("Plan execution response unavailable");
       }
 
       // Stream the execution response
@@ -861,6 +862,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       let sseEventType = "";
       let sseData = "";
       let fullResponse = "";
+      let receivedTerminal = false;
       let costInfo: { time_s: number; cost: number } | null = null;
 
       const processLine = (line: string) => {
@@ -885,6 +887,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                   cost: parsed.cost_usd || 0,
                 };
               } else if (sseEventType === "done") {
+                receivedTerminal = true;
                 if (parsed.text) fullResponse = parsed.text;
                 if (parsed.cost_usd && !costInfo) {
                   costInfo = {
@@ -921,9 +924,14 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       if (sseData) {
         try {
           const parsed = JSON.parse(sseData);
-          if (sseEventType === "done") fullResponse = parsed.text || fullResponse;
+          if (sseEventType === "done") {
+            receivedTerminal = true;
+            fullResponse = parsed.text || fullResponse;
+          }
         } catch { /* skip */ }
       }
+
+      if (!receivedTerminal) fullResponse = PLAN_OUTCOME_UNKNOWN;
 
       const finalCost = costInfo as { time_s: number; cost: number } | null;
       if (finalCost) setDeepCost(finalCost);
@@ -943,8 +951,16 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
           },
         ]);
       }
-    } catch {
-      // ignore
+    } catch (error) {
+      setActivePlan(null);
+      if ((error as Error).name !== "AbortError") {
+        setMessages((prev) => [...prev, {
+          id: `err-${Date.now()}`,
+          role: "assistant",
+          content: PLAN_OUTCOME_UNKNOWN,
+          timestamp: new Date(),
+        }]);
+      }
     } finally {
       abortRef.current = null;
       setIsPlanExecuting(false);

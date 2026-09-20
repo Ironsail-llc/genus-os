@@ -478,6 +478,28 @@
       "provider_calls": 0,
       "business_effects": 0,
       "manual_acceptance": false
+    },
+    "approved_plan_browser_outcomes": {
+      "initial_terminal_browser": {
+        "passed": 16,
+        "seconds": 19.3
+      },
+      "premature_eof_reproduction": {
+        "failed": 2
+      },
+      "final_browser": {
+        "passed": 20,
+        "seconds": 23.7
+      },
+      "component_regression": {
+        "passed": 23,
+        "seconds": 1.64
+      },
+      "build": "passed",
+      "eslint": "passed",
+      "backend": "intercepted synthetic streams; isolated dead-port fallbacks",
+      "automatic_retries": 0,
+      "manual_acceptance": false
     }
   },
   "calendar": {

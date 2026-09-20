@@ -91,3 +91,10 @@ jobs:
         env:
           RUNTIME_UAT_MANAGED: '1'
           RUNTIME_UAT_PYTHON: python
+      - name: Build and verify terminal chat outcomes in the actual dashboard
+        run: |
+          pnpm build
+          pnpm exec playwright test e2e/deep-mode.spec.ts --workers=2
+        working-directory: app
+        env:
+          PLAYWRIGHT_PORT: '5323'

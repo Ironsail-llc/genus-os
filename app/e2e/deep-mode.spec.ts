@@ -502,3 +502,45 @@ test.describe("Deep Plan Mode", () => {
     await expect(planBadge).not.toBeVisible();
   });
 });
+
+for (const deep of [false, true]) {
+  for (const status of ["failed", "timeout", "cancelled", "disconnected", "transport_error"]) {
+    test(`${deep ? "deep" : "ordinary"} approved plan replaces partial success after ${status}`, async ({ page }) => {
+      await setupMocks(page);
+      await page.route("**/api/chat/plan/start", (route) => route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: mockPlanSSE("Check the requested result", "terminal-plan", deep),
+      }));
+      const explanation = ["disconnected", "transport_error"].includes(status)
+        ? "I couldn’t confirm the outcome. Some actions may have finished; check their status before trying again."
+        : `[Run ${status}: Outcome unresolved; reconcile the dispatched action before retrying]`;
+      let approvals = 0;
+      await page.route("**/api/chat/plan/approve", (route) => {
+        approvals += 1;
+        if (status === "transport_error") return route.abort("connectionfailed");
+        return route.fulfill({
+          status: 200,
+          contentType: "text/event-stream",
+          body: buildSSE([
+            { event: "delta", data: { text: "Everything is done." } },
+            ...(deep && status !== "disconnected" ? [{ event: "error", data: { error: "Outcome unresolved" } }] : []),
+            ...(status === "disconnected" ? [] : [{ event: "done", data: { text: explanation, status } }]),
+          ]),
+        });
+      });
+      await page.goto(BASE_URL, { waitUntil: "networkidle" });
+      await page.getByTestId(deep ? "deep-toggle" : "plan-toggle").click();
+      await page.getByTestId("chat-input").fill("Do the requested work");
+      await page.getByTestId("send-button").click();
+      await expect(page.getByTestId("plan-card")).toBeVisible();
+      await page.getByTestId("plan-approve").click();
+      const answer = page.getByTestId("message-assistant").last();
+      await expect(answer).toContainText(explanation);
+      await expect(page.getByTestId("message-assistant").filter({ hasText: "Everything is done." })).toHaveCount(0);
+      await expect(page.getByTestId("plan-card")).toHaveCount(0);
+      await expect(page.getByTestId("chat-input")).toBeEnabled();
+      expect(approvals).toBe(1);
+    });
+  }
+}
