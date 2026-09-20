@@ -58,9 +58,10 @@ def principal(config, agent_id, trigger, user_id, role, spawn, system_triggers):
 
 def bounded_timeout(timeout, session):
     from robothor.engine.runtime.current import active_context
+    from robothor.engine.runtime.deadlines import owns_deadline
 
     context = active_context.get()
-    if context and context.deadline:
+    if context and context.deadline and not owns_deadline(context):
         remaining = max(0, (context.deadline - datetime.now(UTC)).total_seconds())
         timeout = min(timeout, remaining) if timeout else remaining
     if getattr(session, "routine_operation_id", None):

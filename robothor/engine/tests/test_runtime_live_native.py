@@ -6,10 +6,13 @@ import asyncio
 import json
 import os
 import time
+from contextlib import nullcontext
 from contextvars import ContextVar
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
 import pytest
 import yaml
@@ -28,6 +31,8 @@ from robothor.engine.tests.test_runner import runner  # noqa: F401
 async def test_configured_native_provider_cohort(request, sample_agent_config):
     engine = request.getfixturevalue("runner")
     settings = json.loads(os.environ["ROBOTHOR_RUNTIME_LIVE_NATIVE"])
+    output = Path(settings["output"])
+    assert not output.exists(), "use a fresh artifact; preserve previous outcomes"
     samples = settings.get("samples", 30)
     assert samples >= 30 or settings.get("diagnostics"), "smaller runs are diagnostics only"
     config = yaml.safe_load(Path(settings["manifest"]).read_text())["model"]
@@ -48,17 +53,23 @@ async def test_configured_native_provider_cohort(request, sample_agent_config):
     engine.registry.get_tool_names.return_value = ["record"]
     current = ContextVar("fixture_gateway")
     traces = ContextVar("provider_trace")
+    counters = ContextVar("completion_counters")
     import litellm
 
     real_completion = litellm.acompletion
 
     async def completion(**kwargs):
+        counters.get()["provider_attempts"] += 1
+        if current.get().values.get("report") == "delivered":
+            counters.get()["post_success_provider_calls"] += 1
         if settings.get("diagnostics"):
             traces.get().append(json.loads(json.dumps(kwargs.get("messages", []))))
         return await real_completion(**kwargs)
 
     async def dispatch(name, args, **kwargs):
         assert name == "record"
+        if current.get().values.get("report") == "delivered":
+            counters.get()["post_success_tool_calls"] += 1
         return await current.get().dispatch("fixture", **args)
 
     engine.registry.execute = AsyncMock(side_effect=dispatch)
@@ -68,6 +79,12 @@ async def test_configured_native_provider_cohort(request, sample_agent_config):
         gateway = FixtureGateway("fixture")
         token = current.set(gateway)
         trace_token = traces.set([])
+        counts = {
+            "provider_attempts": 0,
+            "post_success_provider_calls": 0,
+            "post_success_tool_calls": 0,
+        }
+        counter_token = counters.set(counts)
         manifest = replace(
             sample_agent_config,
             model_primary=model,
@@ -80,12 +97,62 @@ async def test_configured_native_provider_cohort(request, sample_agent_config):
         )
         started = time.perf_counter()
         try:
-            run = await engine.execute("test-agent", PROMPT, agent_config=manifest)
+            from robothor.engine.output_validation import output_validation_scope
+            from robothor.engine.runtime import CurrentRuntime, ExecutionContext, RunRequest
+            from robothor.engine.workflow_completion import (
+                WorkflowCompletion,
+                workflow_completion_scope,
+            )
+
+            def complete():
+                if gateway.values.get("report") == "delivered" and gateway.writes == 1:
+                    return WorkflowCompletion(
+                        output="The requested value is independently verified in the fixture store."
+                    )
+                return None
+
+            contract = settings.get("contract", False)
+            scope = (
+                workflow_completion_scope(engine.config.tenant_id, "test-agent", complete)
+                if contract
+                else nullcontext()
+            )
+
+            def validate(run, text):
+                if gateway.values.get("report") != "delivered" or gateway.writes != 1:
+                    return 'The authorized action is incomplete: the independently checked store must contain key "report" with value "delivered" exactly once.'
+                return None
+
+            validation = (
+                output_validation_scope(validate)
+                if settings.get("require_outcome")
+                else nullcontext()
+            )
+            with scope, validation:
+                if contract:
+                    context = ExecutionContext(
+                        engine.config.tenant_id,
+                        "benchmark-operator",
+                        str(uuid4()),
+                        deadline=datetime.now(UTC) + timedelta(seconds=60),
+                    )
+                    result = await CurrentRuntime(engine.execute).run(
+                        RunRequest(
+                            context,
+                            "test-agent",
+                            PROMPT,
+                            options={"agent_config": manifest},
+                        )
+                    )
+                    run = result.run
+                else:
+                    run = await engine.execute("test-agent", PROMPT, agent_config=manifest)
             metrics = run_measurements(run)
             row = {
                 "model": model,
                 "repetition": index,
                 "status": str(run.status),
+                "error_message": run.error_message,
                 "duration_ms": (time.perf_counter() - started) * 1000,
                 "verified": gateway.values.get("report") == "delivered",
                 "writes": gateway.writes,
@@ -97,7 +164,6 @@ async def test_configured_native_provider_cohort(request, sample_agent_config):
             if settings.get("diagnostics"):
                 row.update(
                     output_text=run.output_text,
-                    error_message=run.error_message,
                     provider_messages=traces.get(),
                     steps=[
                         {
@@ -119,10 +185,19 @@ async def test_configured_native_provider_cohort(request, sample_agent_config):
                 "duration_ms": (time.perf_counter() - started) * 1000,
             }
         finally:
+            counters.reset(counter_token)
             traces.reset(trace_token)
             current.reset(token)
+        row.update(
+            mode="host_verified" if settings.get("contract") else "raw_native",
+            require_outcome=bool(settings.get("require_outcome")),
+            verified=gateway.values.get("report") == "delivered",
+            writes=gateway.writes,
+            dispatches=gateway.dispatches,
+            **counts,
+        )
         rows.append(row)
-        with Path(settings["output"]).open("a") as file:
+        with output.open("a") as file:
             file.write(json.dumps(row) + "\n")
 
     with (
@@ -138,3 +213,10 @@ async def test_configured_native_provider_cohort(request, sample_agent_config):
     assert all(
         row["status"] == "completed" and row["verified"] and row["writes"] == 1 for row in rows
     )
+
+    if settings.get("contract"):
+        assert all(
+            row["post_success_provider_calls"] == row["post_success_tool_calls"] == 0
+            and row["duration_ms"] <= 60000
+            for row in rows
+        )

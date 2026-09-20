@@ -183,3 +183,23 @@ async def test_shared_retry_helpers_do_not_retry_host_expiry():
         retry_sync(synchronous, max_attempts=3)
     asynchronous.assert_awaited_once()
     synchronous.assert_called_once()
+
+
+async def test_native_manifest_cap_remains_separate_from_adapter_owned_deadline():
+    from types import SimpleNamespace
+
+    from robothor.engine.runtime.setup import bounded_timeout
+
+    async def execute(**kwargs):
+        assert bounded_timeout(30, SimpleNamespace()) == 30
+        assert bounded_timeout(None, SimpleNamespace()) is None
+        assert bounded_timeout(120, SimpleNamespace(routine_operation_id="confirmed")) == 60
+        return AgentRun(status=RunStatus.COMPLETED)
+
+    await CurrentRuntime(execute).run(request(1))
+    token = active_context.set(request(1).context)
+    try:
+        # A legacy caller with no adapter owner still receives a native bound.
+        assert 0 < bounded_timeout(30, SimpleNamespace()) <= 1
+    finally:
+        active_context.reset(token)

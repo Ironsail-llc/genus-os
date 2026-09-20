@@ -21,10 +21,14 @@ class FixtureGateway:
     writes: int = 0
     dispatches: int = 0
 
-    async def dispatch(self, tenant: str, key: str, value: str) -> dict:
+    async def dispatch(
+        self, tenant: str, key: str | None = None, value: str | None = None, **extra
+    ) -> dict:
         if tenant != self.tenant or self.stopped:
             raise ValueError("tenant authority denied or stopped")
         self.dispatches += 1
+        if extra or (key, value) != ("report", "delivered"):
+            return {"error": "Only storing key report with value delivered is authorized."}
         if key in self.values and self.values[key] != value:
             raise ValueError("conflicting operation; reconcile instead of retrying")
         if key not in self.values:

@@ -84,3 +84,9 @@ def enclosing_deadline_reason(exc: BaseException) -> str:
     from robothor.engine.workflow_budget import WorkflowDeadlineError
 
     return str(exc) if isinstance(exc, WorkflowDeadlineError | RuntimeDeadlineError) else ""
+
+
+def owns_deadline(context) -> bool:
+    """The adapter already bounds this deadline, so native setup need not re-arm it."""
+    parent = _owned_deadline.get()
+    return bool(parent and context and context.deadline and parent[0] <= context.deadline)

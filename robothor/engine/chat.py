@@ -49,6 +49,7 @@ from starlette.responses import StreamingResponse
 from robothor.constants import DEFAULT_TENANT
 from robothor.engine.chat_history import MAX_HISTORY as _MAX_HISTORY
 from robothor.engine.chat_history import ChatHistory, append_turn, as_history
+from robothor.engine.chat_result import result_text
 from robothor.engine.chat_session_cache import SessionCache
 from robothor.engine.chat_store import (
     clear_plan_state_async,
@@ -405,23 +406,21 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 identity=identity,
             )
 
+            final_text = result_text(run)
             # Always record user message in session history
             append_turn(
                 session,
                 user_message=message,
-                assistant_text=(
-                    run.output_text
-                    or (f"[Run failed: {run.error_message}]" if run.error_message else None)
-                ),
+                assistant_text=final_text or None,
             )
 
             # Persist to DB (fire-and-forget)
-            if run.output_text and _config:
+            if final_text and _config:
                 asyncio.create_task(
                     save_exchange_async(
                         session_key,
                         message,
-                        run.output_text,
+                        final_text,
                         channel="webchat",
                         model_override=session.model_override,
                         tenant_id=auth.tenant_id,
@@ -452,7 +451,8 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 {
                     "event": "done",
                     "data": {
-                        "text": run.output_text or "",
+                        "text": final_text,
+                        "status": run.status.value,
                         "model": run.model_used,
                         "input_tokens": run.input_tokens,
                         "output_tokens": run.output_tokens,

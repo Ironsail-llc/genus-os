@@ -49,6 +49,27 @@ async def client(chat_app):
 
 
 class TestChatSend:
+    @pytest.mark.parametrize("status", [RunStatus.FAILED, RunStatus.TIMEOUT, RunStatus.CANCELLED])
+    async def test_unsuccessful_run_replaces_unverified_stream_and_history(
+        self, client, mock_runner, status
+    ):
+        async def execute(**kwargs):
+            await kwargs["on_content"]("Done!")
+            return AgentRun(
+                status=status,
+                output_text="Done!",
+                error_message="The independent check did not verify completion.",
+            )
+
+        mock_runner.execute = AsyncMock(side_effect=execute)
+        response = await client.post("/chat/send", json={"message": "Perform the action"})
+        done = next(e["data"] for e in _parse_sse(response.text) if e["event"] == "done")
+        assert done["status"] == status.value
+        assert "did not verify completion" in done["text"]
+        assert "Done!" not in done["text"]
+        session = next(iter(_sessions.values()))
+        assert session.history[-1]["content"] == done["text"]
+
     @pytest.mark.asyncio
     async def test_streams_sse_delta_and_done(self, client, mock_runner):
         """Verify delta + done events are streamed."""
