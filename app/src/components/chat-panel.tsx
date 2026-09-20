@@ -26,7 +26,7 @@ import { Send, Square, Check, X, ClipboardList, MessageSquareText, Brain } from 
 
 import { forgetRequest, journalRequest, pendingRequests } from "@/lib/chat/request-journal";
 
-import { OUTCOME_UNKNOWN, terminalOutcome } from "@/lib/chat/terminal-outcome";
+import { OUTCOME_UNKNOWN, requestFailure, terminalOutcome } from "@/lib/chat/terminal-outcome";
 
 interface ChatMessage {
   id: string;
@@ -656,15 +656,13 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       });
 
       if (!res.ok || !res.body) {
-        let errorText = OUTCOME_UNKNOWN;
-        try {
-          const errBody = await res.json();
-          if (errBody.error) errorText = errBody.error;
-        } catch { /* ignore */ }
+        const failure = await requestFailure(res);
+        const scope = requestScopes.current[requestIdRef.current!];
+        if (failure.rejected && scope) forgetRequest(scope, requestIdRef.current!);
         const errorMsg: ChatMessage = {
           id: `err-${Date.now()}`, role: "assistant",
-          content: errorText, timestamp: new Date(),
-          recovery: { requestId: requestIdRef.current!, agent, scope: requestScopes.current[requestIdRef.current!] },
+          content: failure.text, timestamp: new Date(),
+          ...(!failure.rejected ? { recovery: { requestId: requestIdRef.current!, agent, scope } } : {}),
         };
         setMessages((prev) => [...prev, errorMsg]);
         setIsStreaming(false);
@@ -904,7 +902,14 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       setActivePlan(null);
 
       if (!res.ok || !res.body) {
-        throw new Error("Plan execution response unavailable");
+        const failure = await requestFailure(res);
+        const scope = requestScopes.current[requestIdRef.current!];
+        if (failure.rejected && scope) forgetRequest(scope, requestIdRef.current!);
+        setMessages((prev) => [...prev, {
+          id: `err-${Date.now()}`, role: "assistant", content: failure.text, timestamp: new Date(),
+          ...(!failure.rejected ? { recovery: { requestId: requestIdRef.current!, agent, scope } } : {}),
+        }]);
+        return;
       }
 
       // Stream the execution response

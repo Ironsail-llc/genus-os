@@ -688,6 +688,16 @@
       "initial_findings": "Two redundant history reads corrected; fixed-delay streaming test replaced with explicit gate and tool-name assertion",
       "limitations": "Synthetic browser transport; separate backend persistence tests. Requires scoped history and available sessionStorage. Cross-device/tab-close recovery not established. Manual acceptance pending.",
       "production_deployed": false
+    },
+    "pre_execution_chat_refusals": {
+      "initial": "One expected exact-response assertion failed after adding request_admitted; corrected to preserve the explanation and include the explicit marker",
+      "focused": "41 passed in 1.34s",
+      "frontend": "149 files, 1648 passed in 9.74s",
+      "browser": "34 passed in 1.0m as reported; rebuilt isolated dashboard",
+      "evidence": "Explicit frontend validation/authorization refusals make no engine execution call; ordinary/approved request refusals show explanation and clear journal without recovery after reload; generic transport errors retain recovery",
+      "checks": "Build, ESLint, diff checks pass",
+      "limitations": "Synthetic browser transport; not a classifier for every engine-side rejection. Manual and full acceptance remain incomplete.",
+      "production_deployed": false
     }
   },
   "calendar": {

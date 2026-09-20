@@ -14,3 +14,15 @@ export function terminalOutcome(
   // Legacy streams use empty done text after an error event. Preserve that error.
   return data.text || (data.status === "completed" ? "" : partial);
 }
+
+
+/** Only an explicit pre-dispatch refusal can discard the pending request. */
+export async function requestFailure(response: Response): Promise<{ text: string; rejected: boolean }> {
+  try {
+    const body = await response.json();
+    const text = typeof body?.error === "string" && body.error ? body.error : OUTCOME_UNKNOWN;
+    return { text, rejected: response.ok === false && body?.request_admitted === false && text !== OUTCOME_UNKNOWN };
+  } catch {
+    return { text: OUTCOME_UNKNOWN, rejected: false };
+  }
+}

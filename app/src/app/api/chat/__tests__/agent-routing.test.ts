@@ -274,6 +274,7 @@ describe("the chat BFF routes refuse an agent rather than falling through to mai
       ok: false,
       status: 403,
       error: "that agent is not one this account may chat with",
+      request_admitted: false,
     });
     const { send } = await routes();
 
@@ -281,6 +282,7 @@ describe("the chat BFF routes refuse an agent rather than falling through to mai
 
     expect(await res.json()).toEqual({
       error: "that agent is not one this account may chat with",
+      request_admitted: false,
     });
   });
 
@@ -322,4 +324,35 @@ describe("history recovery namespace", () => {
     expect(result.headers.get("cache-control")).toBe("no-store");
     expect(engine.chatHistory).toHaveBeenCalledWith(50, KEY);
   });
+});
+
+describe("execution admission refusals", () => {
+  beforeEach(() => { vi.clearAllMocks(); resolveChatAgent.mockResolvedValue({ ok: true, key: KEY }); });
+  for (const kind of ["send", "planApprove"] as const) {
+    it(`${kind} marks validation refusals without contacting the engine`, async () => {
+      const handlers = await routes();
+      const response = await handlers[kind](post("http://test", { agent: "scheduler" }));
+      expect(response.status).toBe(400);
+      expect((await response.json()).request_admitted).toBe(false);
+      expect(engine.chatSend).not.toHaveBeenCalled();
+      expect(engine.planApprove).not.toHaveBeenCalled();
+    });
+    it(`${kind} marks authorization refusals without contacting the engine`, async () => {
+      resolveChatAgent.mockResolvedValue({ ok: false, error: "Not authorized", status: 403 });
+      const handlers = await routes();
+      const response = await handlers[kind](post("http://test", { agent: "scheduler", message: "work", plan_id: "plan" }));
+      expect(response.status).toBe(403);
+      expect((await response.json()).request_admitted).toBe(false);
+      expect(engine.chatSend).not.toHaveBeenCalled();
+      expect(engine.planApprove).not.toHaveBeenCalled();
+    });
+    it(`${kind} leaves transport failures unresolved`, async () => {
+      const method = kind === "send" ? engine.chatSend : engine.planApprove;
+      method.mockRejectedValueOnce(new Error("connection lost"));
+      const handlers = await routes();
+      const response = await handlers[kind](post("http://test", { agent: "scheduler", message: "work", plan_id: "plan" }));
+      expect(response.status).toBe(502);
+      expect((await response.json()).request_admitted).toBeUndefined();
+    });
+  }
 });

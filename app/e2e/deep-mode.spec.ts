@@ -717,3 +717,39 @@ test("delivered request clears its journal before a later reload", async ({ page
   expect(sends).toBe(1);
   expect(lookups).toBe(0);
 });
+
+for (const approved of [false, true]) {
+  for (const status of [400, 403]) {
+    test(`${approved ? "approved plan" : "ordinary request"} reports pre-execution refusal ${status} without pending recovery`, async ({ page }) => {
+      await setupMocks(page);
+      const scope = "30000000-0000-4000-8000-000000000004";
+      let lookups = 0;
+      let submissions = 0;
+      await page.route("**/api/chat/history", (route) => route.fulfill({ json: { messages: [], recoveryScope: scope } }));
+      await page.route("**/api/chat/outcome?*", (route) => {
+        lookups += 1;
+        return route.fulfill({ json: { state: "not_found", terminal: false } });
+      });
+      if (approved) {
+        await page.route("**/api/chat/plan/start", (route) => route.fulfill({
+          status: 200, contentType: "text/event-stream", body: mockPlanSSE("Requested work", "refused-plan", false),
+        }));
+      }
+      await page.route(approved ? "**/api/chat/plan/approve" : "**/api/chat/send", (route) => {
+        submissions += 1;
+        return route.fulfill({ status, json: { error: "This request was rejected before execution.", request_admitted: false } });
+      });
+      await page.goto(BASE_URL, { waitUntil: "networkidle" });
+      if (approved) await page.getByTestId("plan-toggle").click();
+      await page.getByTestId("chat-input").fill("Do the requested work");
+      await page.getByTestId("send-button").click();
+      if (approved) await page.getByTestId("plan-approve").click();
+      await expect(page.getByTestId("message-assistant").last()).toContainText("This request was rejected before execution.");
+      await expect(page.getByTestId("chat-input")).toBeEnabled();
+      expect(await page.evaluate((key) => sessionStorage.getItem(key), "helm.chat.pending.v1." + scope)).toBeNull();
+      await page.reload({ waitUntil: "networkidle" });
+      expect(lookups).toBe(0);
+      expect(submissions).toBe(1);
+    });
+  }
+}
