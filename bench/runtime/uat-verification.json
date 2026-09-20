@@ -922,6 +922,40 @@
       "tracking_integration_seconds": 0.27,
       "limitations": "Empty-fleet real-daemon startup/shutdown and worker launch. No active goals, provider readback, populated-workload restart, or application rollback certified.",
       "artifact": "uat-daemon-startup.json"
+    },
+    "stopped_work_daemon_restart": {
+      "command": ".venv/bin/python -m bench.runtime.migrated_integration --daemon --restart",
+      "restart_cycles": [
+        {
+          "health_ready": true,
+          "shutdown_exit_code": 0,
+          "shutdown_seconds": 1.3179914299998927,
+          "recovery_worker_spawns": 1
+        },
+        {
+          "health_ready": true,
+          "shutdown_exit_code": 0,
+          "shutdown_seconds": 1.1674857170000905,
+          "recovery_worker_spawns": 1
+        }
+      ],
+      "resume_enabled": true,
+      "goal_execution_enabled": true,
+      "resume_attempts_charged_to_stopped_run": 0,
+      "checkpoint_preserved": true,
+      "durable_cancel_preserved": true,
+      "paused_goal_preserved": true,
+      "blocked_uncertain_operation_preserved": true,
+      "new_steps_for_stopped_run": 0,
+      "unit_contract_passed": 31,
+      "unit_contract_seconds": 4.86,
+      "tracking_integration_passed": 13,
+      "tracking_integration_seconds": 0.28,
+      "initial_failure": "With a compatible checkpoint and resume enabled, daemon startup charged a resume attempt despite a durable operator stop.",
+      "fixture_correction": "Initial checkpoint used schema version 0 and did not exercise resume eligibility; corrected to current version 1 before reproducing failure.",
+      "scope": "Real daemon, two isolated restart cycles; synthetic stopped records. Eligible unstopped scan remains covered by a unit control. No live provider or production goal was resumed.",
+      "remaining": "Active-goal recovery, useful checkpoint continuation under load, and full application rollback are not certified.",
+      "artifact": "uat-stopped-restart.json"
     }
   },
   "calendar": {

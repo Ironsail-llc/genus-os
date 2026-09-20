@@ -84,6 +84,17 @@ def main():
                 from bench.runtime.daemon_drill import run
 
                 print("DAEMON_DRILL " + json.dumps(run(root, env)), flush=True)
+                if "--restart" in sys.argv:
+                    from bench.runtime.restart_state import seed, verify
+
+                    identifiers = seed(dsn)
+                    results = []
+                    for cycle in range(2):
+                        location = root / f"restart-{cycle}"
+                        location.mkdir()
+                        results.append(run(location, env, resume=True))
+                        verify(dsn, identifiers)
+                    print("STOPPED_RESTART " + json.dumps(results), flush=True)
             return subprocess.run(
                 [
                     sys.executable,

@@ -153,3 +153,25 @@ class TestResumeIsASystemAction:
                 f"resume uses {t.name}, which is interactive — runner.py:583 rejects it "
                 f"without a verified identity and the daemon reports success anyway"
             )
+
+
+def test_resume_scan_filters_durable_stops_before_checkpoint_access(monkeypatch):
+    from unittest.mock import MagicMock, Mock
+
+    from robothor.engine import daemon
+
+    connection = MagicMock()
+    cursor = connection.return_value.__enter__.return_value.cursor.return_value
+    cursor.fetchall.return_value = [
+        ("stopped", "main", 0, "daemon_restart", "tenant-a"),
+        ("allowed", "main", 0, "daemon_restart", "tenant-b"),
+    ]
+    monkeypatch.setattr("robothor.db.connection.get_connection", connection)
+    stopped = Mock(side_effect=lambda tenant, run: run == "stopped")
+    monkeypatch.setattr("robothor.engine.runtime.controls.stopped", stopped)
+    checkpoint = Mock(return_value={"messages": []})
+    monkeypatch.setattr("robothor.engine.checkpoint.CheckpointManager.load_latest", checkpoint)
+    candidates = daemon._resume_scan()
+    assert [candidate.run_id for candidate in candidates] == ["allowed"]
+    assert stopped.call_args_list[0].args == ("tenant-a", "stopped")
+    checkpoint.assert_called_once_with("allowed", tenant_id="tenant-b")

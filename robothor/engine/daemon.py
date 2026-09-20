@@ -267,11 +267,16 @@ def _resume_scan() -> list[ResumeCandidate]:
             # `resumable` needs the reason to tell them apart.
             cur.execute(
                 "SELECT id, agent_id, COALESCE(resume_attempts, 0), "
-                "COALESCE(error_message, '') FROM agent_runs "
+                "COALESCE(error_message, ''), tenant_id FROM agent_runs "
                 "WHERE status = ANY(%s) ORDER BY id",
                 (sorted(RESUMABLE_STATUSES),),
             )
             rows = cur.fetchall()
+        from robothor.engine.runtime.controls import stopped
+
+        # Durable operator controls override restart eligibility before any
+        # attempt is charged or a resume task is announced/scheduled.
+        rows = [r for r in rows if not stopped(str(r[4]), str(r[0]))]
     except Exception as e:
         logger.warning("Resume scan failed: %s", _sanitize(e))
         return []
@@ -281,7 +286,7 @@ def _resume_scan() -> list[ResumeCandidate]:
             run_id=str(r[0]),
             agent_id=str(r[1] or ""),
             resume_attempts=int(r[2] or 0),
-            has_checkpoint=bool(CheckpointManager.load_latest(str(r[0]))),
+            has_checkpoint=bool(CheckpointManager.load_latest(str(r[0]), tenant_id=str(r[4]))),
             error_message=str(r[3] or "") if len(r) > 3 else "",
         )
         for r in rows

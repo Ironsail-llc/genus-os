@@ -35,7 +35,7 @@ subprocess.Popen = PrivatePopen
 """
 
 
-def run(root, database_env):
+def run(root, database_env, *, resume=False):
     root = root / "daemon-drill"
     root.mkdir()
     workspace = root / "workspace"
@@ -86,6 +86,8 @@ def run(root, database_env):
                 "REDIS_URL": f"unix://{redis_socket}?db=15",
             }
         )
+        if resume:
+            env["ROBOTHOR_RESUME_IN_FLIGHT"] = "true"
         with (root / "daemon.log").open("w") as log:
             daemon = subprocess.Popen(
                 [sys.executable, "-m", "robothor.engine.daemon"],
@@ -114,6 +116,10 @@ def run(root, database_env):
             assert code == 0, (root / "daemon.log").read_text()[-6000:]
             log_text = (root / "daemon.log").read_text()
             assert "All subsystems started" in log_text, log_text[-6000:]
+            if resume:
+                assert "Resume scan failed" not in log_text, log_text[-6000:]
+                assert "Startup resume failed" not in log_text, log_text[-6000:]
+                assert "Checkpoint schema mismatch" not in log_text, log_text[-6000:]
             assert (root / "worker-spawns.jsonl").exists(), log_text[-6000:]
             spawns = (root / "worker-spawns.jsonl").read_text().splitlines()
             assert "Calendar recovery sweep deferred" not in log_text, log_text[-6000:]
