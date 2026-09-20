@@ -31,13 +31,20 @@ in force.
 All four tools require a verified owner or admin on the run. An unattended run —
 cron, heartbeat, scheduled: the runs that read inbound email — carries no
 identity and is refused, so content the agent reads cannot create, steer or
-cancel a goal. The single exception is the goal executor itself, which is
-already running an authorized goal and is recognised by that goal's lease
-rather than by a role — and it may only create an execution child of the goal
-it is running, never a top-level goal or a child of somebody else's, so one
-authorized goal cannot fan out into siblings with ceilings of their own.
-Autonomous goal creation is not available; if it is ever wanted it will be a
-per-tenant setting an operator turns on.
+cancel a goal.
+
+The single exception is the goal executor itself, which is already running an
+authorized goal and is recognised by that goal's lease rather than by a role.
+That exemption is scoped to the goal it was authorized for: it may **create**
+only an execution child of that goal, and may **update** only that goal or one
+of its own execution children. It cannot reach a top-level goal, somebody
+else's child, or any other goal in the tenant — so one authorized goal can
+neither fan out into siblings with ceilings of their own, nor record progress,
+fabricate evidence, cancel or complete work that is not its own. This matters
+because `complete` is the signal an operator reads to know work is finished
+and `evidence` is what backs it; a goal run is exactly where untrusted content
+lands. Autonomous goal creation is not available; if it is ever wanted it will
+be a per-tenant setting an operator turns on.
 
 CLI examples:
 

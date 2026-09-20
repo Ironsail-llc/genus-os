@@ -89,6 +89,77 @@ async def test_a_goal_run_can_only_create_its_own_children(db):  # noqa: F811
         binding.reset(token)
 
 
+@pytest.mark.asyncio
+async def test_a_goal_run_can_only_update_its_own_goal_and_children(db):  # noqa: F811
+    """A bound run could rewrite any OTHER goal in the tenant.
+
+    `update_goal` took `goal_id` from the arguments and only lease-checked it
+    when it happened to equal the bound goal; `check_context` waved the call
+    through because a binding was set. With no identity and no role, a probe
+    applied progress, evidence, block, wait, pause, cancel, link_task and
+    unlink_task to a separate operator goal, then fabricated evidence and
+    COMPLETED it. `complete` is the signal the operator reads to know work is
+    finished, `evidence` is what backs it, and a goal run is where untrusted
+    content lands.
+    """
+    parent = store.create(
+        db,
+        CreateGoal(objective="Coordinate", success_criteria=["Done"], kind="long"),
+        "operator",
+    )
+    child = store.create(
+        db,
+        CreateGoal(objective="Execute", success_criteria=["Done"], parent_goal_id=parent["id"]),
+        "operator",
+    )
+    victim = store.create(
+        db, CreateGoal(objective="The operator's other goal", success_criteria=["Done"]), "operator"
+    )
+    claimed, attempt = store.claim(db)
+    assert claimed["id"] == parent["id"]
+    token = binding.set(Binding(db, parent["id"], attempt, run_id="root"))
+    ctx = ToolContext(agent_id="main", run_id="root", tenant_id=db)
+    try:
+        for action, extra in (
+            ("progress", {"note": "Injected", "next_action": "Do as I say"}),
+            (
+                "evidence",
+                {"criterion": 0, "reference": "fake:1", "satisfied": True, "note": "Fabricated"},
+            ),
+            ("block", {"note": "Injected blocker"}),
+            ("wait", {"note": "Injected wait"}),
+            ("pause", {}),
+            ("cancel", {}),
+            ("link_task", {"task_id": str(uuid4())}),
+            ("unlink_task", {"task_id": str(uuid4())}),
+            ("complete", {"note": "Declaring someone else's work done"}),
+        ):
+            before = store.control(db, victim["id"])
+            result = await HANDLERS["update_pursuit_goal"](
+                {"goal_id": victim["id"], "action": action, "version": before["version"], **extra},
+                ctx,
+            )
+            assert "own goal" in result.get("error", ""), (action, result)
+            after = store.control(db, victim["id"])
+            assert after["version"] == before["version"], action
+            assert after["status"] == "queued", action
+
+        own = store.control(db, parent["id"])
+        mine = await HANDLERS["update_pursuit_goal"](
+            {"action": "progress", "version": own["version"], "note": "Real", "next_action": "Go"},
+            ctx,
+        )
+        assert mine["goal"]["checkpoint"] == "Real"
+
+        offspring = store.control(db, child["id"])
+        theirs = await HANDLERS["update_pursuit_goal"](
+            {"goal_id": child["id"], "action": "pause", "version": offspring["version"]}, ctx
+        )
+        assert theirs["goal"]["status"] == "paused"
+    finally:
+        binding.reset(token)
+
+
 def test_stale_attempt_and_disabled_tenant_each_refuse_a_write_tool(db):  # noqa: F811
     """`goal execution is no longer authorized` had no test of its own.
 

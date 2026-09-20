@@ -115,6 +115,18 @@ async def update_goal(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     goal_id = args.pop("goal_id", None) or (current.goal_id if current else None)
     if not goal_id:
         raise ValueError("goal_id is required outside goal execution")
+    # Same boundary create_pursuit_goal enforces, for the same reason. Nothing
+    # here required a bound run to address its OWN goal: check_context waved
+    # it through because a binding was set, and with `operator` False only the
+    # four operator-only actions were refused — so progress, evidence, block,
+    # wait, pause, cancel, link_task, unlink_task and complete all landed on
+    # whatever goal_id the arguments named. An injected instruction could
+    # close the operator's other goals with fabricated evidence, unattended,
+    # and all they would see is a completed goal.
+    if current is not None and goal_id != current.goal_id:
+        target = await asyncio.to_thread(store.control, ctx.tenant_id, goal_id)
+        if target.get("parent_goal_id") != current.goal_id:
+            raise ValueError("a goal run may only update its own goal or an execution child of it")
     change = GoalUpdate(**args)
     current = binding.get()
     if (
