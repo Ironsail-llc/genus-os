@@ -30,6 +30,13 @@ from robothor.autonomy.models import (
     Scope,
     WebOperation,
 )
+from robothor.autonomy.payment_hold import (
+    GATED_ACTIONS,
+    HOLD_CLEARED,
+    HOLD_PLACED,
+    REFUSAL,
+    grant_on_hold,
+)
 from robothor.entity.spend_limits import within_limit
 
 if TYPE_CHECKING:
@@ -376,9 +383,13 @@ class AutonomyStore:
     def grants(self, scope: Scope) -> list[dict[str, Any]]:
         with self.transaction() as cur:
             cur.execute(
-                "SELECT id::text,version,policy,revoked_at IS NOT NULL AS revoked "
-                "FROM autonomy_grants WHERE tenant_id=%s AND owner_id=%s",
-                (scope.tenant_id, scope.owner_id),
+                "SELECT g.id::text,g.version,g.policy,g.revoked_at IS NOT NULL AS revoked,"
+                " COALESCE((SELECT e.event FROM autonomy_events e"
+                "   WHERE e.tenant_id=g.tenant_id AND e.owner_id=g.owner_id"
+                "     AND e.subject_id=g.id AND e.event IN (%s,%s)"
+                "   ORDER BY e.id DESC LIMIT 1)=%s, false) AS payment_hold "
+                "FROM autonomy_grants g WHERE g.tenant_id=%s AND g.owner_id=%s",
+                (HOLD_PLACED, HOLD_CLEARED, HOLD_PLACED, scope.tenant_id, scope.owner_id),
             )
             return [dict(row) for row in cur.fetchall()]
 
@@ -393,6 +404,54 @@ class AutonomyStore:
             if not cur.fetchone():
                 raise PermissionError("grant_not_found")
             self._event(cur, scope, grant_id, "grant_revoked")
+
+    @staticmethod
+    def _assert_no_payment_hold(
+        cur: Any, scope: Scope, grant_id: str, proposal: WebOperation
+    ) -> None:
+        """Refuse new spend on a grant whose money already overshot.
+
+        Crossed by ``reserve``, ``begin_submit`` and ``check_authority`` -- the
+        three paths that authorise money -- and deliberately NOT by
+        ``check_reconcile_authority``: recording and finishing a payment that
+        has already left the account is not new spend, and refusing it would
+        strand the operation the hold exists to surface. Non-payment actions
+        are untouched; a hold is about money, not about access.
+        """
+        if proposal.action in GATED_ACTIONS and grant_on_hold(cur, scope, grant_id):
+            raise PermissionError(REFUSAL)
+
+    def _grant_row(self, cur: Any, scope: Scope, grant_id: str) -> None:
+        """Existence within the caller's scope, without the revocation check.
+
+        A revoked grant can still carry a hold; the owner must be able to see
+        and clear it.
+        """
+        cur.execute(
+            "SELECT 1 FROM autonomy_grants WHERE id=%s AND tenant_id=%s AND owner_id=%s",
+            (grant_id, scope.tenant_id, scope.owner_id),
+        )
+        if not cur.fetchone():
+            raise PermissionError("grant_not_found")
+
+    def payment_hold(self, scope: Scope, grant_id: str) -> bool:
+        """Whether this grant is frozen after evidence of overspend."""
+        with self.transaction() as cur:
+            self._grant_row(cur, scope, grant_id)
+            return grant_on_hold(cur, scope, grant_id)
+
+    def clear_payment_hold(self, scope: Scope, grant_id: str) -> None:
+        """Owner-only: the operator has reviewed the overspend, resume spending.
+
+        No agent, tool or broker path reaches this. Clearing is the operator
+        saying they have looked at the charge -- it is not a correction of the
+        evidence, which stays exactly as the issuer delivered it.
+        """
+        with self.transaction() as cur:
+            self._lock(cur, scope)
+            self._grant_row(cur, scope, grant_id)
+            if grant_on_hold(cur, scope, grant_id):
+                self._event(cur, scope, grant_id, HOLD_CLEARED)
 
     def _policy(self, cur: Any, scope: Scope, grant_id: str) -> tuple[Delegation, int]:
         cur.execute(
@@ -482,6 +541,7 @@ class AutonomyStore:
                     raise PermissionError("idempotency_conflict")
                 return {"id": existing["id"], "state": existing["state"]}
             policy, version = self._policy(cur, scope, grant_id)
+            self._assert_no_payment_hold(cur, scope, grant_id, proposal)
             decision = self._budget_decision(cur, scope, policy, proposal, agent_id)
             if decision != "allow":
                 raise PermissionError(decision)
@@ -544,6 +604,7 @@ class AutonomyStore:
             proposal = WebOperation.model_validate(row["proposal"])
             self._check_settings(cur, scope, proposal)
             policy = self._live_policy(cur, scope, row)
+            self._assert_no_payment_hold(cur, scope, row["grant_id"], proposal)
             decision = self._budget_decision(cur, scope, policy, proposal, agent_id, operation_id)
             if decision != "allow":
                 raise PermissionError(decision)
@@ -562,6 +623,7 @@ class AutonomyStore:
             proposal = WebOperation.model_validate(row["proposal"])
             self._check_settings(cur, scope, proposal)
             policy = self._live_policy(cur, scope, row)
+            self._assert_no_payment_hold(cur, scope, row["grant_id"], proposal)
             result = self._budget_decision(cur, scope, policy, proposal, agent_id, operation_id)
             if result != "allow":
                 raise PermissionError(result)

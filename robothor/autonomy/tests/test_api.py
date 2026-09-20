@@ -167,3 +167,29 @@ def test_intake_endpoints_authenticate_and_never_echo_bad_values(api, monkeypatc
     identity.is_service = True
     for endpoint in ("enrollments", "enrollments/inspect", "enrollments/complete"):
         assert client.post("/api/autonomy/" + endpoint, json={}).status_code == 403
+
+
+def test_clearing_a_payment_hold_is_owner_only_and_never_touches_evidence(api):
+    """The operator's route back out of an overspend freeze."""
+    from uuid import uuid4
+
+    client, identity, store = api
+    grant_id = str(uuid4())
+    response = client.delete(f"/api/autonomy/grants/{grant_id}/payment-hold")
+    assert response.status_code == 200 and response.json() == {"payment_hold": False}
+    store.clear_payment_hold.assert_called_once()
+    assert store.clear_payment_hold.call_args.args[1] == grant_id
+
+    store.clear_payment_hold.reset_mock()
+    identity.role = "viewer"
+    assert client.delete(f"/api/autonomy/grants/{grant_id}/payment-hold").status_code == 403
+    store.clear_payment_hold.assert_not_called()
+
+
+def test_clearing_an_unknown_payment_hold_is_a_plain_not_found(api):
+    from uuid import uuid4
+
+    client, _, store = api
+    store.clear_payment_hold.side_effect = PermissionError("grant_not_found")
+    response = client.delete(f"/api/autonomy/grants/{uuid4()}/payment-hold")
+    assert response.status_code == 404
