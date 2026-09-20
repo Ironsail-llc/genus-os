@@ -429,10 +429,9 @@ class TestFindSafeSplitIndex:
             {"role": "tool", "tool_call_id": "t1", "content": "result"},
             {"role": "user", "content": "next"},
         ]
-        # Target=2 (tool) backs up past assistant+tool_calls to user at 0
-        assert _find_safe_split_index(msgs, 2) == 0
-        # Target=1 is the assistant with tool_calls → backs up to 0
-        assert _find_safe_split_index(msgs, 1) == 0
+        # Retain the complete exchange, beginning with its assistant call.
+        assert _find_safe_split_index(msgs, 2) == 1
+        assert _find_safe_split_index(msgs, 1) == 1
         # Target=3 is a user msg after the group → safe
         assert _find_safe_split_index(msgs, 3) == 3
 
@@ -456,7 +455,7 @@ class TestFindSafeSplitIndex:
             {"role": "tool", "tool_call_id": "t3", "content": "r3"},
             {"role": "user", "content": "d"},
         ]
-        # Target=3 is inside first group (tool) → back up past assistant → idx 1 → then 0
-        assert _find_safe_split_index(msgs, 3) == 0
+        # The boundary before the first complete exchange is safe.
+        assert _find_safe_split_index(msgs, 3) == 1
         # Target=6 is safe (user message)
         assert _find_safe_split_index(msgs, 6) == 6

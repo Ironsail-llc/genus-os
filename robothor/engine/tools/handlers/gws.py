@@ -2314,6 +2314,44 @@ def _calendar_delete(args: dict[str, Any]) -> dict[str, Any]:
     return deleted
 
 
+def _calendar_add_attendees(args: dict[str, Any], *, run_id: str, tenant_id: str) -> dict[str, Any]:
+    name = "gws_calendar_add_attendees"
+    from robothor.engine.calendar_attendees import add_attendees
+
+    event_id = args.get("event_id")
+    emails = args.get("attendees")
+    if not isinstance(event_id, str) or not event_id.strip():
+        return {"error": "event_id is required"}
+    if (
+        not isinstance(emails, list)
+        or not emails
+        or any(
+            not isinstance(e, str)
+            or not re.fullmatch(r"[^\s@,<>]+@[^\s@,<>]+\.[^\s@,<>]+", e.strip())
+            for e in emails
+        )
+    ):
+        return {"error": "attendees must be a nonempty list of email addresses"}
+    try:
+        calendar_id, kind = _resolve_calendar(args)
+    except _InvalidCalendarError as bad:
+        return bad.as_result()
+    result = add_attendees(
+        calendar_id,
+        event_id.strip(),
+        sorted({e.strip().casefold() for e in emails}),
+        expected_event=args.get("_expected_event"),
+        cancelled=args.get("_cancel_event"),
+        screen=lambda *recipients: _dnc_refusal(
+            name,
+            *recipients,
+            run_id=run_id,
+            tenant_id=tenant_id,
+        ),
+    )
+    return {**result, "calendar": _calendar_block(calendar_id, kind)}
+
+
 def _handle_gws_tool(
     name: str, args: dict[str, Any], *, run_id: str = "", tenant_id: str | None = None
 ) -> dict[str, Any]:
@@ -2611,6 +2649,9 @@ def _handle_gws_tool(
     if name == "gws_calendar_create":
         return _calendar_create(args, run_id=run_id, tenant_id=tenant_id)
 
+    if name == "gws_calendar_add_attendees":
+        return _calendar_add_attendees(args, run_id=run_id, tenant_id=tenant_id)
+
     if name == "gws_calendar_delete":
         return _calendar_delete(args)
 
@@ -2673,6 +2714,7 @@ _GWS_MUTATING_TOOLS: frozenset[str] = frozenset(
         "gws_gmail_send",
         "gws_gmail_modify",
         "gws_calendar_create",
+        "gws_calendar_add_attendees",
         "gws_calendar_delete",
         "gws_chat_send",
     }
@@ -2713,6 +2755,7 @@ for _tool_name in (
     "gws_gmail_modify",
     "gws_calendar_list",
     "gws_calendar_create",
+    "gws_calendar_add_attendees",
     "gws_calendar_delete",
     "gws_chat_send",
     "gws_chat_list_spaces",
@@ -2723,6 +2766,20 @@ for _tool_name in (
         async def handler(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             if ctx.is_benchmark:
                 return _benchmark_refusal(tn)
+            if tn == "gws_calendar_add_attendees":
+                from robothor.engine.calendar_operations import OperationCancellation, perform
+                from robothor.settings import get_settings
+
+                if not get_settings().engine.calendar_operations_enabled:
+                    return {
+                        "error": "Native attendee updates are not enabled; report this capability gap and stop. Do not use a shell workaround."
+                    }
+                cancelled = OperationCancellation(ctx.run_id)
+                try:
+                    return await asyncio.to_thread(perform, args, ctx, cancelled=cancelled)
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
             return await asyncio.to_thread(
                 _handle_gws_tool, tn, args, run_id=ctx.run_id, tenant_id=ctx.tenant_id
             )
