@@ -993,6 +993,10 @@ class AgentRunner(
             engine_context=engine_preamble or None,
         )
 
+        from robothor.engine.routine_request import bind_confirmation
+
+        await bind_confirmation(session, message, conversation_history or [])
+
         watchdog.touch("session_started")
 
         from robothor.goals.runtime import initialize_token_budget
@@ -1115,7 +1119,9 @@ class AgentRunner(
                 # ── [PLANNER] Generate plan if enabled ──
                 plan_result = None
                 plan_context = ""
-                if self._should_plan(agent_config, route):
+                if not getattr(session, "routine_operation_id", None) and self._should_plan(
+                    agent_config, route
+                ):
                     plan_result = await self._run_planner(
                         agent_config, message, planner_tool_names(_prepared), models
                     )
@@ -1281,33 +1287,28 @@ class AgentRunner(
                 # tool_search reads. toolset_prep says why they are two things.
                 _toolset_tokens = publish_toolset(self.registry, agent_config, tool_names)
 
-                # Register the live session so external callers (Telegram /steer,
-                # /chat/steer, /chat/interrupt) can influence it mid-run — the
-                # loop-side consume is otherwise unreachable in production.
-                # Scoped to the loop window; always unregistered in the finally.
-                from robothor.engine import session_registry
-
-                session_registry.register(session, on_status=on_status)
+                from robothor.engine.request_runtime import observe_request
 
                 try:
-                    await self._run_loop(
-                        session,
-                        models,
-                        tool_schemas,
-                        agent_config,
-                        on_content,
-                        on_tool,
-                        max_iterations=max_iterations,
-                        route=route,
-                        plan_result=plan_result,
-                        trace=trace,
-                        resumed_scratchpad=resumed_scratchpad,
-                        spawn_context=spawn_context,
-                        readonly_mode=readonly_mode,
-                        execution_mode=execution_mode,
-                        on_status=on_status,
-                        on_stream_event=on_stream_event,
-                    )
+                    async with observe_request(session, on_status):
+                        await self._run_loop(
+                            session,
+                            models,
+                            tool_schemas,
+                            agent_config,
+                            on_content,
+                            on_tool,
+                            max_iterations=max_iterations,
+                            route=route,
+                            plan_result=plan_result,
+                            trace=trace,
+                            resumed_scratchpad=resumed_scratchpad,
+                            spawn_context=spawn_context,
+                            readonly_mode=readonly_mode,
+                            execution_mode=execution_mode,
+                            on_status=on_status,
+                            on_stream_event=on_stream_event,
+                        )
                     # A run the watchdog flagged that RETURNED (cooperative
                     # abort, or the loop's own wall-clock self-check) must
                     # finalize as TIMEOUT, exactly like one the cancel
@@ -1325,8 +1326,6 @@ class AgentRunner(
                             spawn_context=spawn_context,
                         )
                 finally:
-                    with contextlib.suppress(Exception):
-                        session_registry.unregister(session)
                     with contextlib.suppress(Exception):
                         withdraw_toolset(_toolset_tokens)
                     watchdog.stop()
@@ -1440,7 +1439,9 @@ class AgentRunner(
 
         # ── [VERIFIER] Self-validation step ──
         output_text = session.get_final_text()
-        if self._should_verify(agent_config, route, session):
+        if not getattr(session, "routine_operation_id", None) and self._should_verify(
+            agent_config, route, session
+        ):
             output_text = await self._run_verification(
                 agent_config,
                 session,
@@ -1456,6 +1457,10 @@ class AgentRunner(
                 on_status=on_status,
                 on_stream_event=on_stream_event,
             )
+
+        from robothor.engine.routine_request import attach_draft_reference
+
+        output_text = attach_draft_reference(session, output_text)
 
         # ── [TELEMETRY] Publish run metrics ──
         self._publish_run_telemetry(trace, session.run)
@@ -1717,6 +1722,14 @@ class AgentRunner(
         on_stream_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> None:
         """Core conversation loop: LLM call → tool execution → repeat."""
+        from robothor.engine.routine_request import TOOL, confirmed_response, finish_confirmation
+
+        if getattr(session, "routine_operation_id", None):
+            # The permission set is still checked by run_tool_turn. Advertise
+            # only the already granted operation for this bound confirmation.
+            from robothor.engine.tools.schemas import get_engine_schemas
+
+            tool_schemas = [get_engine_schemas()[TOOL]]
         # Track models that hit permanent errors (401/403/429) across iterations
         broken_models: set[str] = set()
 
@@ -1754,46 +1767,15 @@ class AgentRunner(
             )
             _current_spawn_context.set(fresh_ctx)
 
-        # ── v2: Initialize enhancement objects ──
-        scratchpad = self._create_scratchpad(agent_config, route, resumed_scratchpad)
-        escalation = self._create_escalation(agent_config)
-        checkpoint = self._create_checkpoint(agent_config, route, session.run_id)
-        guardrail_engine = self._create_guardrails(agent_config)
+        from robothor.engine.request_runtime import prepare_loop
 
-        # ── v2: Initialize in-conversation todo list ──
-        if agent_config.todo_list_enabled:
-            from robothor.engine.todolist import TodoList
-
-            session.todo_list = TodoList(items=[])
-
-        # Inject guardrail awareness into system prompt so LLM self-regulates
-        if guardrail_engine and guardrail_engine.enabled_policies:
-            from robothor.engine.guardrails import guardrail_summary
-
-            gr_text = guardrail_summary(guardrail_engine.enabled_policies)
-            if gr_text and session.messages and session.messages[0].get("role") == "system":
-                session.messages[0]["content"] += f"\n\n---\n\n{gr_text}"
-
-        # ── v2: Lifecycle hooks ──
-        from robothor.engine.hook_registry import (
-            HookContext,
-            HookEvent,
-            get_hook_registry,
+        scratchpad, escalation, checkpoint, guardrail_engine = prepare_loop(
+            self, session, agent_config, route, resumed_scratchpad
         )
 
-        hook_registry = get_hook_registry()
+        from robothor.engine.request_runtime import start_hooks
 
-        # Dispatch AGENT_START hook
-        if hook_registry:
-            try:
-                start_ctx = HookContext(
-                    event=HookEvent.AGENT_START,
-                    agent_id=agent_config.id,
-                    run_id=session.run.id,
-                )
-                await hook_registry.dispatch(HookEvent.AGENT_START, start_ctx)
-            except Exception as e:
-                logger.warning("AGENT_START hook error: %s", _sanitize(e))
+        hook_registry = await start_hooks(agent_config, session)
 
         # Build tool sets for runtime enforcement
         _allowed_tool_set: frozenset[str] = frozenset(
@@ -1976,15 +1958,16 @@ class AgentRunner(
             # against the model that will actually be tried next (G2b), runs
             # every iteration, and never raises — losing compaction costs
             # money, taking the run down with it costs the work.
-            await keep_context_within_budget(
-                session,
-                agent_config,
-                iteration=_iteration,
-                models=models,
-                broken_models=broken_models,
-                hook_registry=hook_registry,
-                pre_iteration_msg_idx=_pre_iteration_msg_idx,
-            )
+            if not getattr(session, "routine_operation_id", None):
+                await keep_context_within_budget(
+                    session,
+                    agent_config,
+                    iteration=_iteration,
+                    models=models,
+                    broken_models=broken_models,
+                    hook_registry=hook_registry,
+                    pre_iteration_msg_idx=_pre_iteration_msg_idx,
+                )
 
             # ── [SCRATCHPAD] Inject working state summary ──
             if scratchpad and scratchpad.should_inject():
@@ -2014,16 +1997,24 @@ class AgentRunner(
             # when the budget ends loses the whole run, so it is cancelled.
             try:
                 async with _stop.call_window():
-                    response, model_used, elapsed_ms, msg_dict = await self._llm_call_and_record(
-                        session,
-                        models,
-                        tool_schemas,
-                        on_content,
-                        broken_models,
-                        agent_config.temperature,
-                        trace,
-                        on_stream_event=on_stream_event,
-                    )
+                    if getattr(session, "routine_operation_id", None):
+                        response = confirmed_response(session)
+                    else:
+                        (
+                            response,
+                            model_used,
+                            elapsed_ms,
+                            msg_dict,
+                        ) = await self._llm_call_and_record(
+                            session,
+                            models,
+                            tool_schemas,
+                            on_content,
+                            broken_models,
+                            agent_config.temperature,
+                            trace,
+                            on_stream_event=on_stream_event,
+                        )
             except RunBudgetError:
                 end_run_at_budget(
                     session,
@@ -2118,6 +2109,10 @@ class AgentRunner(
             )
 
             # ── [ERROR RECOVERY] Attempt autonomous recovery before escalation ──
+            if getattr(session, "routine_operation_id", None):
+                await finish_confirmation(session, on_content)
+                return
+
             # robothor/engine/error_actions.py. `applied` suppresses the error
             # feedback below: doing both tells the agent to analyse a failure
             # the platform has just handled.

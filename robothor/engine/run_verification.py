@@ -781,9 +781,10 @@ _MEMORY_WRITE_TOOLS = frozenset(
         "leave_breadcrumb",
     }
 )
-# `gws_calendar_update` has never been registered: this platform creates and
-# deletes calendar events and does not update them.
-_CALENDAR_WRITE_TOOLS = frozenset({"gws_calendar_create", "gws_calendar_delete"})
+# Native calendar mutations that can support a verified calendar claim.
+_CALENDAR_WRITE_TOOLS = frozenset(
+    {"gws_calendar_create", "gws_calendar_delete", "gws_calendar_add_attendees"}
+)
 _SCHEDULE_WRITE_TOOLS = frozenset(
     {"register_user_cron", "register_cron", "create_schedule", "update_schedule"}
 )
@@ -911,6 +912,8 @@ def _tool_families(name: str | None, args: dict[str, Any]) -> frozenset[str]:
     Observe-mode data will show how often that costs a false positive.
     """
     if not name:
+        return frozenset()
+    if name == "gws_calendar_add_attendees" and args.get("draft"):
         return frozenset()
     families: set[str] = set()
     if name in _EMAIL_SEND_TOOLS or ("mail" in name and ("send" in name or "reply" in name)):

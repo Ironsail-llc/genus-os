@@ -508,7 +508,9 @@ def _build_retained_context_message(
 def _is_retained_context(msg: dict[str, Any]) -> bool:
     """Check if a message is a retained context marker."""
     content = msg.get("content", "")
-    return isinstance(content, str) and RETAINED_CONTEXT_MARKER in content
+    return isinstance(content, str) and (
+        RETAINED_CONTEXT_MARKER in content or content.startswith("[ACTIVE REQUEST]")
+    )
 
 
 #: Fallback when the settings read fails. Compaction must never break on config.
@@ -527,8 +529,10 @@ def _split_for_summary(
     """
     head_len = protected_prefix_len(messages)
     tail = messages[head_len:]
+    active = [m for m in tail if str(m.get("content", "")).startswith("[ACTIVE REQUEST]")]
+    tail = [m for m in tail if m not in active]
     return (
-        messages[:head_len],
+        [*messages[:head_len], *active],
         [m for m in tail if _is_retained_context(m)],
         [m for m in tail if not _is_retained_context(m)],
     )
@@ -583,13 +587,21 @@ def _find_safe_split_index(messages: list[dict[str, Any]], target_idx: int) -> i
         if msg.get("role") == "tool":
             idx -= 1
             continue
-        # assistant with tool_calls must stay with the tool results that follow
-        if msg.get("role") == "assistant" and msg.get("tool_calls"):
-            idx -= 1
-            continue
+        # The boundary BEFORE a call retains both the call and its results.
+        # Walking past it joins consecutive exchanges into one unbounded tail.
         break
 
     return idx
+
+
+def _recent_split(messages: list[dict[str, Any]], budget: int, keep_recent: int) -> int:
+    """Retain a token-bounded tail, cutting only before complete exchanges."""
+    from robothor.engine.context import estimate_tokens
+
+    start = max(0, len(messages) - keep_recent)
+    while start < len(messages) - 1 and estimate_tokens(messages[start:]) > budget:
+        start += 1
+    return _find_safe_split_index(messages, start)
 
 
 def _dedup_tool_results(
@@ -845,7 +857,7 @@ async def compact(
     # Split into old and recent (from non-retained messages).
     # Use a safe split point that never orphans tool_call/tool_result pairs.
     if len(non_retained) > KEEP_RECENT:
-        split_idx = _find_safe_split_index(non_retained, len(non_retained) - KEEP_RECENT)
+        split_idx = _recent_split(non_retained, max(1024, drain_to // 3), KEEP_RECENT)
         old_messages = non_retained[:split_idx]
         recent_messages = non_retained[split_idx:]
     else:

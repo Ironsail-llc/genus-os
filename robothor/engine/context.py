@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 from robothor.engine.reasoning_replay import REASONING_FIELDS
@@ -188,9 +189,29 @@ async def maybe_compress(
     # Offload to a thread: with the real tokenizer enabled this calls
     # litellm.token_counter, a synchronous, potentially CPU-bound call we must
     # not run on the event loop in the compaction hot path.
-    est = await asyncio.to_thread(estimate_tokens, messages, models[0] if models else None)
+    from robothor.engine.context_fit import next_reachable_model
+
+    model = next_reachable_model(models or [], broken_models)
+    est = await asyncio.to_thread(estimate_tokens, messages, model or None)
     if est < compress_at:
         return messages
+
+    from robothor.engine.context_control import control, fingerprint
+
+    state = control.get()
+    if state is not None and state.skip(messages, model, compress_at, est):
+        return messages
+    started = time.monotonic()
+    if (
+        state is not None
+        and state.active_request
+        and not any(str(m.get("content", "")).startswith("[ACTIVE REQUEST]") for m in messages)
+    ):
+        messages = [
+            messages[0],
+            {"role": "developer", "content": "[ACTIVE REQUEST]\n" + state.active_request},
+            *messages[1:],
+        ]
 
     # The count floor used to live here TOO, and returned before compact()
     # could act — so a 21-message, 225,015-token conversation reduced by 0.0%
@@ -216,11 +237,36 @@ async def maybe_compress(
         messages,
         models=models,
         threshold=compress_at,
-        drain_to=DRAIN_THRESHOLD,
+        drain_to=min(DRAIN_THRESHOLD, max(1, int(compress_at * 0.75))),
         broken_models=broken_models,
     )
 
     compressed = _restore_output_contract(messages, result.messages)
+    # Summarisation is best effort; reaching the target must not depend on it.
+    # Remove complete historical exchanges if a long reasoning/tool tail still
+    # fills the prompt. Keep provider-required reasoning on retained exchanges.
+    from robothor.engine.context_fit import ContextFit, estimate_for, shrink_to_fit
+
+    target = min(DRAIN_THRESHOLD, max(1, int(compress_at * 0.75)))
+    if estimate_for(compressed, model) > target:
+        outcome = shrink_to_fit(compressed, ContextFit(model, target, target, 0))
+        if outcome.tokens_after < outcome.tokens_before:
+            compressed = outcome.messages
+    after = estimate_for(compressed, model)
+    if state is not None:
+        state.fingerprint = fingerprint(compressed)
+        state.model = model
+        state.threshold = compress_at
+        state.stalled_tokens = after if after >= compress_at else 0
+        state.measurements.append(
+            {
+                "duration_ms": int((time.monotonic() - started) * 1000),
+                "tokens_before": est,
+                "tokens_after": after,
+                "target_tokens": target,
+                "target_reached": after <= target,
+            }
+        )
     logger.info(
         "Compaction complete: %d → %d messages, ~%d → ~%d tokens, "
         "%d facts extracted, %d passes used",

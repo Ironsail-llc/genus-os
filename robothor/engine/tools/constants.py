@@ -55,6 +55,7 @@ GWS_TOOLS = frozenset(
         "gws_gmail_modify",
         "gws_calendar_list",
         "gws_calendar_create",
+        "gws_calendar_add_attendees",
         "gws_calendar_delete",
         "gws_chat_send",
         "gws_chat_list_spaces",
@@ -373,6 +374,7 @@ CORE_TOOLS: frozenset[str] = frozenset(
         "get_pursuit_goal",
         "list_pursuit_goals",
         "update_pursuit_goal",
+        "gws_calendar_add_attendees",
         # File / shell
         "read_file",
         "write_file",

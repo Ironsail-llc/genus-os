@@ -129,5 +129,6 @@ crm/123_agent_run_task_text.sql
 crm/124_guardrail_context_overflow.sql
 crm/125_agent_run_step_batch.sql
 crm/126_goal_pursuit.sql
+crm/126_calendar_operations.sql
 crm/127_goal_pursuit_cost.sql
 crm/128_goal_pursuit_task_release.sql
