@@ -1,3 +1,9 @@
+## [1.101.1](https://github.com/Ironsail-llc/genus-os/compare/v1.101.0...v1.101.1) (2026-09-20)
+
+### Bug Fixes
+
+* **flags:** re-date three overdue promotions with their real gates ([#622](https://github.com/Ironsail-llc/genus-os/issues/622)) ([22b59a2](https://github.com/Ironsail-llc/genus-os/commit/22b59a20a36501e1756bb9beae1bca3d8fd5aec6))
+
 ## [1.101.0](https://github.com/Ironsail-llc/genus-os/compare/v1.100.2...v1.101.0) (2026-09-20)
 
 ### Features
