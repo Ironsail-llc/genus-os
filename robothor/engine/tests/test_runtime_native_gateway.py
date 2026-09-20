@@ -184,3 +184,15 @@ async def test_store_host_binds_before_persisting(prepared, monkeypatch):
     assert persisted == [run.id]
     await gateway.invoke(run.tenant_id, "read_file", {})
     assert p.runner.registry.execute.await_args.kwargs["run_id"] == run.id
+
+
+@pytest.mark.asyncio
+async def test_read_failure_does_not_poison_later_reads(prepared):
+    p = prepared
+    p.runner.registry.execute.side_effect = [{"error": "temporary read failure"}, {"ok": True}]
+    p.gateway.bind_run(p.run)
+    first = await p.gateway.invoke(p.run.tenant_id, "read_file", {})
+    assert first == {"error": "temporary read failure"}
+    second = await p.gateway.invoke(p.run.tenant_id, "read_file", {})
+    assert second == {"ok": True}
+    assert len(p.run.steps) == 2

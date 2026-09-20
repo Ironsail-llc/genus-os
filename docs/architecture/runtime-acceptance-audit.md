@@ -48,7 +48,12 @@ The user need not identify whether an ordinary request became a task or a goal.
 
 ## Next acceptance work
 
-The next user-facing case should be ordinary task work: show what remains unfinished,
+The user requested normal-chat acceptance review instead of the goal workspace preview.
+`uat-chat-goal-review.json` records the tested two-turn status/pause interaction through
+the native chat route and real goal store with a scripted model. Their review is pending;
+the script does not establish live language understanding.
+
+The user-facing case is ordinary task work: show what remains unfinished,
 why it is waiting or blocked, what evidence supports completion, and what Pause/Stop did.
 It must not depend on the user recognizing synthetic customer names or knowing the
 internal task-versus-goal distinction. Their feedback on the running installation does

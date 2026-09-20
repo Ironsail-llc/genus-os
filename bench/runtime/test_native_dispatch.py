@@ -46,7 +46,7 @@ def native(database, monkeypatch, tmp_path):
     monkeypatch.setattr("robothor.audit.logger.log_event", lambda **event: audits.append(event))
     monkeypatch.setattr(tracking, "log_guardrail_event", lambda **event: None)
     monkeypatch.setattr(tracking, "log_tool_event", lambda **event: None)
-    policy = {"deny": False}
+    policy = {"deny": False, "lose_reply": False, "receipt_visible": True}
 
     def authorize(role, actual_tenant, name, *, user_id):
         permissions.append((role, actual_tenant, name, user_id))
@@ -72,11 +72,17 @@ def native(database, monkeypatch, tmp_path):
                 (tenant, arguments["key"], arguments["value"]),
             )
             effects.append(cur.rowcount)
+        if policy["lose_reply"]:
+            import httpx
+
+            raise httpx.ReadTimeout("synthetic provider reply lost after commit")
         return {"ok": True}
 
     monkeypatch.setattr(dispatch, "_get_handlers", lambda: {"record": record})
 
     def verified():
+        if not policy["receipt_visible"]:
+            return False
         with connect() as conn, conn.cursor() as cur:
             cur.execute(
                 "SELECT key,value FROM synthetic_native_receipts WHERE tenant_id=%s", (tenant,)
@@ -132,6 +138,8 @@ def native(database, monkeypatch, tmp_path):
         "stop",
         "lost-step-ack",
         "lost-step-ack-queued",
+        "lost-provider-reply-verified",
+        "lost-provider-reply-unresolved",
     ],
 )
 async def test_framework_native_dispatch_and_durable_outcome(native, name, outcome, monkeypatch):
@@ -152,13 +160,16 @@ async def test_framework_native_dispatch_and_durable_outcome(native, name, outco
             raise ConnectionError("synthetic lost step acknowledgement")
 
         monkeypatch.setattr(tracking, "create_steps_batch", lost_ack)
+    elif outcome.startswith("lost-provider-reply"):
+        p.policy["lose_reply"] = True
+        p.policy["receipt_visible"] = outcome.endswith("verified")
 
     def during_provider():
         if outcome == "stop":
             controls.issue(p.tenant, p.turn.session.run.id, "cancel")
 
     proposals = [("record", {"key": "report", "value": "delivered"})]
-    if outcome in {"duplicate-proposal", "lost-step-ack-queued"}:
+    if outcome in {"duplicate-proposal", "lost-step-ack-queued", "lost-provider-reply-unresolved"}:
         proposals *= 2
     adapter = candidate(name, proposals, p.calls, during_provider)
     runtime = CandidateRuntime(adapter, p.host)
@@ -183,6 +194,12 @@ async def test_framework_native_dispatch_and_durable_outcome(native, name, outco
         assert not result.verified and result.unresolved and saved["status"] == "failed"
         assert p.effects == [1] and len(p.calls) == 1
         assert steps == [("record", None)]  # committed despite the uncertain acknowledgement
+    elif outcome.startswith("lost-provider-reply"):
+        assert p.effects == [1] and len(p.calls) == 1
+        assert len(steps) == 1 and steps[0][1]
+        assert result.verified is p.policy["receipt_visible"]
+        assert result.unresolved is not p.policy["receipt_visible"]
+        assert saved["status"] == ("completed" if p.policy["receipt_visible"] else "failed")
     else:
         assert not result.verified and result.unresolved and not p.effects
         assert saved["status"] == ("cancelled" if outcome == "stop" else "failed")

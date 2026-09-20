@@ -85,6 +85,7 @@ class NativeGateway:
             if self.verified:
                 return {"status": "already_verified", "message": "No further tool work required."}
             try:
+                responses_before = len(self._proxy.responses)
                 result = await self._proxy.call(name, arguments)
                 run = self.turn.session.run
                 pending = run.steps[run.persisted_step_count :]
@@ -93,6 +94,18 @@ class NativeGateway:
                 # Native batch insertion is idempotent on host-minted step IDs.
                 await asyncio.to_thread(create_steps_batch, pending)
                 run.persisted_step_count = len(run.steps)
+                if (
+                    result.get("error")
+                    and len(self._proxy.responses) > responses_before
+                    and name not in self.turn.readonly_tool_set
+                    and not self.verified
+                ):
+                    # A structured tool error is not proof that a write did not
+                    # happen. Reconcile against host-owned state, never a model
+                    # proposal to retry. Unknown direct tools are effectful here.
+                    raise RuntimeError(
+                        "Tool outcome is not verified; reconcile before repeating the action"
+                    )
                 return result
             except BaseException:
                 self._uncertain = True

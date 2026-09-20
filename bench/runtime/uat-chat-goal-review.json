@@ -1,0 +1,24 @@
+{
+  "scope": "Native chat route/runner and goal handlers; scripted model, private PostgreSQL, no business connectors or scheduler.",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "One of the two tasks is done. \u2018Check the remaining item\u2019 is still open, so the goal isn't complete. It's waiting for that check, and no completion evidence has been recorded."
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Paused the goal. The unfinished task is still open; I haven't marked the goal complete."
+    }
+  ],
+  "tool_calls": [
+    "get_pursuit_goal",
+    "get_pursuit_goal",
+    "update_pursuit_goal"
+  ],
+  "final_goal_status": "paused",
+  "final_task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}
