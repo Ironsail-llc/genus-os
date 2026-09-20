@@ -8,12 +8,12 @@ with an unresolved projection, never silently converted into recovered funds.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from robothor.autonomy.crypto import open_resource, seal_resource
-from robothor.autonomy.payment_lifecycle import PaymentFact, project_payment
+from robothor.autonomy.payment_groups import summarize_payments
+from robothor.autonomy.payment_lifecycle import PaymentFact
 
 if TYPE_CHECKING:
     from robothor.autonomy.models import Scope
@@ -54,19 +54,7 @@ class PaymentJournal:
 
     @staticmethod
     def _summary(op: dict[str, Any], facts: list[PaymentFact]) -> dict[str, Any]:
-        try:
-            position = project_payment(
-                facts,
-                limit_minor=op["proposal"]["amount_minor"],
-                currency=op["proposal"]["currency"],
-            )
-        except ValueError:
-            return {"event_count": len(facts), "position": None, "reconciliation_required": True}
-        return {
-            "event_count": len(facts),
-            "position": {**asdict(position), "net_charged_minor": position.net_charged_minor},
-            "reconciliation_required": position.limit_exceeded or position.authorization_exceeded,
-        }
+        return summarize_payments(op, facts)
 
     def _append(
         self, cur: Any, scope: Scope, op: dict[str, Any], fact: PaymentFact

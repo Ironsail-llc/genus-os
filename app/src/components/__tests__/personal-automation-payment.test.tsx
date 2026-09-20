@@ -30,3 +30,18 @@ it("offers payment status for recurring subscription operations", async () => {
   render(<PersonalAutomationPanel />);
   expect(await screen.findByRole("button", {name: "Payment status"})).toBeTruthy();
 });
+
+it("keeps renewal balances separate and clears them when closed", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => ({ok:true,json:async()=>({event_count:3,reconciliation_required:true,
+    position:{state:"charged",authorized_minor:0,charged_minor:100,refunded_minor:0,net_charged_minor:100},
+    renewals:[{id:"opaque-renewal",due_on:"2026-02-28",schedule_matches:true,period_limit_exceeded:true,reconciliation_required:true,
+      position:{state:"partially_refunded",authorized_minor:0,charged_minor:600,refunded_minor:200,net_charged_minor:400}}]})})));
+  render(<PersonalAutomationPayment operationId="membership-1" currency="USD" />);
+  fireEvent.click(screen.getByRole("button", {name:"Payment status"}));
+  expect(await screen.findByText("Renewal due 2026-02-28")).toBeTruthy();
+  expect(screen.getByText("Net charged: $1.00")).toBeTruthy();
+  expect(screen.getByText("Net charged: $4.00")).toBeTruthy();
+  expect(screen.getByText("Recorded charges exceed the recurring allowance for this billing period.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", {name:"Close payment status"}));
+  expect(screen.queryByText("Renewal due 2026-02-28")).toBeNull();
+});

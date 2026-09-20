@@ -7,9 +7,10 @@ Refunds here do not automatically release a reservation or recurring commitment.
 """
 
 from dataclasses import dataclass
+from datetime import date  # noqa: TC003 -- Pydantic field type
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from robothor.autonomy.models import StrictModel
 
@@ -20,6 +21,16 @@ class PaymentFact(StrictModel):
     amount_minor: int = Field(ge=0, le=10**12, strict=True)
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     source: Literal["merchant", "issuer"]
+    renewal_id: str | None = Field(default=None, min_length=1, max_length=128, repr=False)
+    renewal_on: date | None = None
+
+    @model_validator(mode="after")
+    def renewal_identity(self) -> "PaymentFact":
+        if (self.renewal_id is None) != (self.renewal_on is None):
+            raise ValueError("renewal_identity_and_date_required")
+        if self.renewal_id is not None and self.source != "issuer":
+            raise ValueError("issuer_renewal_evidence_required")
+        return self
 
 
 @dataclass(slots=True)
@@ -104,6 +115,8 @@ def project_payment(
     # dependency order; the encrypted journal still preserves arrival order.
     # Refunds require known captures, and reversals require an authorization.
     # Conflicting captures/reversals remain invalid whichever arrived first.
+    if len({(fact.renewal_id, fact.renewal_on) for fact in seen.values()}) > 1:
+        raise ValueError("payment_group_mismatch")
     priority = {"submitted": 0, "authorized": 1, "charged": 2, "reversed": 2, "refunded": 3}
     for fact in sorted(seen.values(), key=lambda value: priority[value.kind]):
         _apply(position, fact)
