@@ -16,7 +16,9 @@ result of migration. The tenant switch starts disabled.
 exactly as it did before goal pursuit existed: the agent task inbox and the
 thread claim keep returning tasks, and the feature reports itself off. The same
 holds after rolling 126 back. The check is a single probe per process, so the
-task inbox pays nothing per query for it.
+task inbox pays nothing per query for it — which also means a long-running
+engine that was started before the goal migrations were applied needs a
+restart before it will see them.
 
 The Goals view supports creation, execution enable/disable, progress inspection,
 pause/resume, cancellation, steering and completion approval. Chat has four tools:

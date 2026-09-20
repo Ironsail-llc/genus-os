@@ -12,10 +12,12 @@
 --
 --    The settings row is a primary-key probe and answers "is this feature on
 --    for this tenant at all" before anything else, and the two lookups behind
---    it now have indexes. Behaviour is unchanged when the feature is enabled:
---    pursuit_task_runnable already treats a disabled tenant as owning no
---    runnable task, so a wake record for a disabled tenant could not be acted
---    on anyway.
+--    it now have indexes. Behaviour is unchanged while the feature is enabled.
+--    While it is OFF, a task change no longer leaves a wake record behind: a
+--    goal that was waiting on that task will therefore wake on its timed
+--    fallback review after the tenant is switched back on, rather than
+--    immediately. Every wait has such a fallback by construction, and no goal
+--    can be dispatched while the switch is off in any case.
 CREATE INDEX IF NOT EXISTS pursuit_goal_tasks_by_task
     ON pursuit_goal_tasks(tenant_id, task_id);
 CREATE INDEX IF NOT EXISTS pursuit_goals_wait_task
