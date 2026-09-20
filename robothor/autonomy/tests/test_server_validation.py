@@ -205,13 +205,16 @@ async def test_ambiguous_or_financial_rejection_does_not_authorize_retry(
             )
             result = await manager.execute(identity, "main", wid, command, 0, plan)
             assert result["state"] == "reconciling", result
-            assert manager.active_count == 0
+            assert manager.active_count == 1
             assert posts
             count = len(posts)
             assert await manager.execute(identity, "main", wid, command, 0, plan) == result
             assert len(posts) == count
-            with pytest.raises(PermissionError):
-                await manager.execute(identity, "main", wid, str(uuid4()), 0, plan)
+            retry = await manager.execute(identity, "main", wid, str(uuid4()), 0, plan)
+            assert retry["state"] == "reconciling"
+            assert len(posts) == count
+            observation = await manager.inspect(identity, "main", wid)
+            assert "secret-fixture" not in json.dumps(observation)
             assert "secret-fixture" not in json.dumps(result)
         finally:
             await manager.shutdown()

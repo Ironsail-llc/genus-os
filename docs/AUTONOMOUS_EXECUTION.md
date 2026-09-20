@@ -121,6 +121,7 @@ Use the existing `browser` tool with `action="autonomy"` and `request`:
 | `workflow_inspect` | Inspect the same page using `{workflow_id}` without reloading it. |
 | `workflow_execute` | Execute `{workflow_id,command_id,revision,plan,advance?}` on that page. Reuse the exact command ID and payload after a transport failure. |
 | `workflow_status` | Read durable workflow and operation state with `{workflow_id}`. |
+| `workflow_reconcile` | Match a newly observed confirmation on an uncertain retained page with `{workflow_id,command_id,revision,selector,text}`; no navigation, input or submit. |
 | `workflow_close` | Close `{workflow_id}`; unfinished effects retain their budget reservation and require reconciliation. |
 | `inspect` | Discover field selectors, labels, option labels, billing terms and authorized frame fields, never input values. |
 | `generate_credential` | Create an origin-bound username/password reference using an enrolled profile. |
@@ -197,7 +198,8 @@ cannot authorize a retry through this path. Commands are journaled before
 execution; duplicates return the original result and changed payloads are refused.
 Secure code entry resumes the same page without retaining the code in the journal.
 Up to 16 contexts are retained, for 15 idle minutes and at most one hour total.
-Completion, uncertain outcomes, expiry and shutdown close the browser. Restarting
+Completion, expiry and shutdown close the browser. Uncertain submissions retain
+their page with network requests blocked for read-only reconciliation. Restarting
 the browser service loses page state and requires reconciliation; a controller
 restart does not. Closing a workflow does not assert cancellation or release money.
 
@@ -494,3 +496,30 @@ It extends metadata constraints without rewriting existing encrypted records.
 If an earlier workflow step has already entered a transient code, new material
 selections cannot be collected from that page; use a supported fresh source.
 The normal post-code submit phase retains its earlier pre-input observations.
+
+### Retained submission recovery
+
+When a persistent submission is uncertain, `workflow_inspect` returns bounded,
+private-masked candidate messages from its frozen page. These are untrusted
+merchant observations, not automatically verified success. The agent must identify
+an affirmative confirmation for the requested operation, then pass that exact
+selector and text to `workflow_reconcile`. The broker matches the current
+observation and records its masked-text hash; it does not infer bank settlement.
+Unknown or negative messages must remain uncertain, not be selected as success.
+
+The broker captures text digests immediately before the click, excludes unchanged
+messages and hidden/editable/control content, uses structural selectors, masks
+known form/session values, and applies existing audit redaction. Reconciliation
+cannot navigate, fill, upload, click, or change authority. Network is blocked on
+the retained context. A mistaken execute retry returns the pending state without
+another submission. Command replay, owner/agent binding and revision checks still
+apply. Revoked grants or disabled execution do not prevent read-only completion
+of an already pending operation.
+
+The observation inventory is bounded to 3,000 candidate elements and 80 messages
+of at most 300 characters. Oversized/incomplete inventories offer no candidate
+rather than treating an omitted old message as new. Transient-code/TOTP entry
+also suppresses recovery text. Missing evidence, unsupported protected challenges,
+expiry or service loss still require external/status-page reconciliation; this
+feature does not make uncertain effects safe to repeat. The existing 15-minute
+idle and one-hour absolute browser limits still apply.

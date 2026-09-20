@@ -40,6 +40,18 @@ class ExecuteRequest(StrictModel):
     verification_code: SecretStr | None = None
 
 
-RPC: TypeAdapter[OpenRequest | InspectRequest | ExecuteRequest] = TypeAdapter(
-    Annotated[OpenRequest | InspectRequest | ExecuteRequest, Field(discriminator="kind")]
+class ReconcileRequest(StrictModel):
+    kind: Literal["reconcile"]
+    workflow_id: UUID
+    command_id: UUID
+    revision: int = Field(ge=0)
+    selector: str = Field(min_length=1, max_length=500)
+    text: str = Field(min_length=3, max_length=300)
+
+
+RPC: TypeAdapter[OpenRequest | InspectRequest | ExecuteRequest | ReconcileRequest] = TypeAdapter(
+    Annotated[
+        OpenRequest | InspectRequest | ExecuteRequest | ReconcileRequest,
+        Field(discriminator="kind"),
+    ]
 )

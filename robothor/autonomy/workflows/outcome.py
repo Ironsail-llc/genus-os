@@ -28,6 +28,12 @@ async def submit_and_observe(
     *,
     advance: bool,
 ) -> dict[str, Any]:
+    from robothor.autonomy.workflows.retained import messages
+
+    baseline = await messages(page, proposal.origin)
+    broker.reconciliation_baseline = (
+        {item["digest"] for item in baseline} if baseline is not None else None
+    )
     before = (
         signature(await broker.inspect(page, proposal.origin, allowed_frames)) if advance else set()
     )
