@@ -105,6 +105,28 @@ def wire_schema(schema: dict[str, Any]) -> dict[str, Any]:
     return stripped
 
 
+def with_autonomy(schema: dict[str, Any], autonomy: bool) -> dict[str, Any]:
+    """The ``browser`` schema plus its autonomy half, or the schema as-is.
+
+    Copies before it writes. ``wire_schema`` hands back a structure that
+    shares the stored description string, and appending in place would leak
+    one run's grant wording into every later run in the process.
+
+    Module-level rather than a ``ToolRegistry`` method because a schema
+    reaches a model by four routes — ``build_for_agent``, ``get_schema`` (what
+    ``tool_describe`` serves) and both Managed Agents bridge builders — and
+    only the first of them was widening. One function they all call is the
+    only way they stay in agreement.
+    """
+    if not autonomy or schema.get("function", {}).get("name") != "browser":
+        return schema
+    from robothor.engine.tools.schemas import BROWSER_AUTONOMY_DESCRIPTION
+
+    function = dict(schema["function"])
+    function["description"] = str(function.get("description", "")) + BROWSER_AUTONOMY_DESCRIPTION
+    return {**schema, "function": function}
+
+
 def builtin_schema_names() -> set[str]:
     """The names :func:`builtin_schemas` provides — what a plugin may not claim."""
     return set(builtin_schemas())
@@ -814,25 +836,7 @@ class ToolRegistry:
                     seen.add(n)
                     advertised.append(n)
             names = advertised
-        return [self._with_autonomy(wire_schema(self._schemas[n]), autonomy) for n in names]
-
-    @staticmethod
-    def _with_autonomy(schema: dict[str, Any], autonomy: bool) -> dict[str, Any]:
-        """The ``browser`` schema plus its autonomy half, or the schema as-is.
-
-        Copies before it writes. ``wire_schema`` hands back a structure that
-        shares the stored description string, and appending in place would
-        leak one run's grant wording into every later run in the process.
-        """
-        if not autonomy or schema.get("function", {}).get("name") != "browser":
-            return schema
-        from robothor.engine.tools.schemas import BROWSER_AUTONOMY_DESCRIPTION
-
-        function = dict(schema["function"])
-        function["description"] = str(function.get("description", "")) + (
-            BROWSER_AUTONOMY_DESCRIPTION
-        )
-        return {**schema, "function": function}
+        return [with_autonomy(wire_schema(self._schemas[n]), autonomy) for n in names]
 
     def should_defer(self, config: AgentConfig) -> bool:
         """True iff this agent's toolset should be deferred (Rip 16 / G4).
@@ -956,10 +960,22 @@ class ToolRegistry:
 
         return absent_capability_note(query)
 
-    def get_schema(self, name: str) -> dict[str, Any] | None:
-        """Return the full OpenAI-function schema for one tool, or None."""
+    def get_schema(self, name: str, *, autonomy: bool = False) -> dict[str, Any] | None:
+        """Return the full OpenAI-function schema for one tool, or None.
+
+        ``autonomy`` widens ``browser`` exactly as :meth:`build_for_agent`
+        does, and for the same reason: this is the OTHER way a schema reaches
+        a model. ``tool_describe`` serves what this returns, so on a deferred
+        run a granted agent told to call ``browser(action='autonomy', ...)``
+        read the 436-character base, found ``autonomy`` in the action enum and
+        nothing at all about what ``request`` should contain. Off by default,
+        so an agent with no grant still pays nothing on this path either.
+        """
         self._refresh_plugin_schemas_if_stale()
-        return self._schemas.get(name)
+        schema = self._schemas.get(name)
+        if schema is None:
+            return None
+        return with_autonomy(schema, autonomy)
 
     def _readonly_names(self) -> set[str]:
         """Core's table plus whatever installed plugins declared about their own tools.

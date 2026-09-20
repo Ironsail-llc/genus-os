@@ -52,10 +52,22 @@ class TestTheSystemPromptParagraphIsConditional:
 
 class TestTheBrowserSchemaDoesNotGrowForEveryone:
     #: The description on ``main`` before autonomy was 422 characters; the
-    #: ``act`` line then legitimately gained ``check`` and ``upload``. Anything
-    #: beyond this and a product feature has leaked back into the base schema
-    #: of every agent on every instance.
-    BASE_MAX = 460
+    #: ``act`` line then legitimately gained ``check`` and ``upload``, taking
+    #: it to 436. Anything beyond this and a product feature has leaked back
+    #: into the base schema of every agent on every instance.
+    #:
+    #: Raised from 460 to 490 once, deliberately. Trimming the description to
+    #: 436 also removed the only occurrences of "form", "submit" and
+    #: "website" — words that describe what the browser does with NO grant —
+    #: and ``tool_search`` ranks on description words, so "fill in a payment
+    #: form" went from rank 1 to rank 8 and "log in to a website" fell out of
+    #: the top ten entirely. One 47-character sentence buys both back. The
+    #: rest of the lost vocabulary (checkout, purchase, card, cart) is in
+    #: ``TOOL_HINTS``, which the ranker reads and ``wire_schema`` strips, so
+    #: it cost zero schema tokens; the cap is 483 actual + 7, not a budget to
+    #: spend. ``test_browser_schema_paths_and_ranking.py`` holds the
+    #: measurement.
+    BASE_MAX = 490
 
     def _browser(self, schemas):
         found = [s for s in schemas if s.get("function", {}).get("name") == "browser"]

@@ -18,6 +18,14 @@ from robothor.engine.vision_fallback import PROVENANCE_NOTE
 #: the same way ``tool_search`` varies a run's advertised set.
 #:
 #: ``test_autonomy_inertness.py`` asserts the character count. Do not append.
+#:
+#: The closing sentence is the one thing the split took out that was not about
+#: grants: the action list says ``fill`` and ``click`` but never named a form
+#: or a website, and ``tool_search`` reads these words. It buys back "fill in
+#: a payment form" (gone -> 1) and "log in to a website" (gone -> 1) for 47
+#: characters; the rest of the operator's web vocabulary — checkout, purchase,
+#: card, cart — is in ``TOOL_HINTS`` instead, where the ranker sees it and the
+#: model never pays for it. See ``test_browser_schema_paths_and_ranking.py``.
 _BROWSER_DESCRIPTION = (
     "Full browser automation via Playwright. Manages a persistent Chromium session. "
     "Actions: start (launch browser), stop (close), navigate (go to URL), "
@@ -25,6 +33,7 @@ _BROWSER_DESCRIPTION = (
     "act (interact: click/fill/type/press/scroll/select/check/upload using refs or selectors), "
     "tabs (list open tabs), pdf (export page), evaluate (run JavaScript), "
     "console (read console), status (check session). "
+    "Fills in and submits web forms on any website. "
 )
 
 #: The autonomy half. Attached to the base description above, per run, only

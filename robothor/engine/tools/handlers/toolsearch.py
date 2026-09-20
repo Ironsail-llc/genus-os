@@ -146,6 +146,38 @@ async def _tool_search(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
     return out
 
 
+#: The only tool whose advertised schema varies with a standing grant. Asking
+#: the question for any other name would be a database round-trip per
+#: ``tool_describe`` call for an answer that cannot change anything.
+_AUTONOMY_VARIANT = "browser"
+
+
+async def _autonomy_for(name: str, ctx: ToolContext) -> bool:
+    """Is THIS run under a live grant — the same question the runner asks?
+
+    ``tool_describe`` is the second way a schema reaches a model, and it is
+    the ONLY way on a deferred run. The runner answers this once in
+    ``toolset_prep`` for the advertised set, but nothing carries the answer
+    into a handler, so it is asked again here — for ``browser`` only, and
+    behind ``feature_offered()``, which is an env flag and the whole answer on
+    every instance that has not enrolled. Best-effort, exactly like the
+    runner's copy: a wrong "no" costs a hint and a wrong "yes" costs tokens,
+    never authority. The broker re-checks real authority on every operation.
+    """
+    if name != _AUTONOMY_VARIANT:
+        return False
+    import asyncio
+    import logging
+
+    try:
+        from robothor.autonomy.availability import autonomy_active
+
+        return await asyncio.to_thread(autonomy_active, ctx.tenant_id, ctx.user_id, ctx.agent_id)
+    except Exception as e:  # noqa: BLE001 - a schema hint must not fail a call
+        logging.getLogger(__name__).debug("Autonomy availability skipped: %s", type(e).__name__)
+        return False
+
+
 async def _tool_describe(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.engine.tools.registry import get_registry
 
@@ -160,7 +192,7 @@ async def _tool_describe(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
             "error": f"tool '{name}' is not in your allow-list",
             "did_you_mean": _closest(name, candidates),
         }
-    schema = get_registry().get_schema(name)
+    schema = get_registry().get_schema(name, autonomy=await _autonomy_for(name, ctx))
     if not schema:
         return {
             "error": f"unknown tool: {name}",
