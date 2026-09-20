@@ -171,6 +171,21 @@ def test_plugin_surface_must_match_in_both_directions(source, tmp_path, extra_de
 def test_release_cannot_carry_enabled_sales_settings(source, tmp_path, switch):
     from robothor.templates.fleet_release import ReleaseError, build_release
 
-    (source / "config/settings.yaml").write_text(yaml.safe_dump({switch: True}))
+    # `email_provider` defaults to "none", and SalesSettings refuses
+    # sending_enabled without a provider — a different, earlier refusal. Name a
+    # provider so this case reaches the switch check it is actually about.
+    settings = {switch: True}
+    if switch == "sending_enabled":
+        settings["email_provider"] = "instantly"
+    (source / "config/settings.yaml").write_text(yaml.safe_dump(settings))
     with pytest.raises(ReleaseError, match="switches disabled"):
+        build_release(source, tmp_path / "release", spec(sales_settings="config/settings.yaml"))
+
+
+def test_a_release_cannot_enable_sending_without_a_provider_either(source, tmp_path):
+    """The earlier refusal the default change introduced, pinned on its own."""
+    from robothor.templates.fleet_release import ReleaseError, build_release
+
+    (source / "config/settings.yaml").write_text(yaml.safe_dump({"sending_enabled": True}))
+    with pytest.raises(ReleaseError):
         build_release(source, tmp_path / "release", spec(sales_settings="config/settings.yaml"))
