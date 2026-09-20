@@ -127,3 +127,98 @@ def test_origin_limits_and_missing_operation_fail_without_values(store, identity
                 "documents": [{"origin": "https://club.example", "text": "x" * 200001}],
             }
         )
+
+
+def _events(store, identity, subject_id):
+    with store.transaction() as cur:
+        cur.execute(
+            "SELECT event FROM autonomy_events WHERE tenant_id=%s AND owner_id=%s AND subject_id=%s "
+            "ORDER BY id",
+            (identity.tenant_id, identity.owner_id, subject_id),
+        )
+        return [row["event"] for row in cur.fetchall()]
+
+
+class _NoPageAccess:
+    """Any attribute read means the suppressed path looked at the page."""
+
+    def __getattr__(self, name):
+        raise AssertionError(f"suppressed terms capture touched the page: {name}")
+
+
+async def test_suppression_after_transient_code_is_itself_recorded(store, identity):
+    """Zero snapshots must not be indistinguishable from the feature being off."""
+    from robothor.autonomy.broker import BrowserBroker
+    from robothor.autonomy.terms_audit import TermsAudit
+    from robothor.autonomy.terms_capture import capture_terms
+
+    op = operation(store, identity)
+    store.begin_submit(identity, op["id"], "main")
+    broker = BrowserBroker(store)
+    broker._used_transient_code = True
+    ref = await capture_terms(
+        broker,
+        identity,
+        op["id"],
+        "main",
+        _NoPageAccess(),
+        "https://club.example",
+        frozenset(),
+        phase="before_submit",
+    )
+    assert ref is not None
+    audit = TermsAudit(store)
+    rows = audit.list(identity, op["id"])
+    assert [(r["phase"], r["coverage"], r["document_count"]) for r in rows] == [
+        ("before_submit", "suppressed_after_code", 1)
+    ]
+    saved = audit.read(identity, op["id"], ref["id"])["snapshot"]
+    assert saved["documents"][0]["text"] == "" and saved["documents"][0]["links"] == []
+    assert "terms_suppressed" in _events(store, identity, op["id"])
+
+
+async def test_suppression_still_refuses_material_terms_before_input(store, identity):
+    from robothor.autonomy.broker import BrowserBroker
+    from robothor.autonomy.material_documents import (
+        MaterialTermsUnavailableError,
+        MaterialTermTarget,
+    )
+    from robothor.autonomy.terms_audit import TermsAudit
+    from robothor.autonomy.terms_capture import capture_terms
+
+    op = operation(store, identity)
+    broker = BrowserBroker(store)
+    broker._used_transient_code = True
+    with pytest.raises(MaterialTermsUnavailableError):
+        await capture_terms(
+            broker,
+            identity,
+            op["id"],
+            "main",
+            _NoPageAccess(),
+            "https://club.example",
+            frozenset(),
+            phase="before_input",
+            material_terms=[MaterialTermTarget(selector="#terms")],
+        )
+    assert TermsAudit(store).list(identity, op["id"]) == []
+
+
+def test_suppressed_coverage_cannot_carry_page_data_or_a_receipt_phase():
+    from robothor.autonomy.terms_audit import TermsDocument, TermsSnapshot
+
+    with pytest.raises(ValueError):
+        TermsSnapshot(
+            origin="https://club.example",
+            phase="before_submit",
+            coverage="suppressed_after_code",
+            documents=[TermsDocument(origin="https://club.example", text="leaked")],
+        )
+    with pytest.raises(ValueError):
+        TermsSnapshot(
+            origin="https://club.example",
+            phase="after_confirmation",
+            confirmation_sha256="a" * 64,
+            coverage="suppressed_after_code",
+            documents=[TermsDocument(origin="https://club.example", text="")],
+        )

@@ -233,6 +233,17 @@ class AutonomyStore:
             (scope.tenant_id, scope.owner_id, subject_id, event),
         )
 
+    def record_operation_event(self, scope: Scope, operation_id: str, event: str) -> None:
+        """Append one operation event without reading, spending or changing state.
+
+        For facts that belong in the trail but have no record of their own --
+        a refused observation, for instance. The operation must exist in scope;
+        the event name is a module literal, never caller-supplied text.
+        """
+        with self.transaction() as cur:
+            self._operation(cur, scope, operation_id)
+            self._event(cur, scope, operation_id, event)
+
     def put_resource(
         self,
         scope: Scope,

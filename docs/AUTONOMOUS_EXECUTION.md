@@ -530,6 +530,17 @@ available; do not describe it as a later pre-submit snapshot. Failed or rejected
 attempts retain their own observations, and a snapshot alone never changes an
 operation's state or authorizes another submission.
 
+The refusal itself is recorded. Coverage `suppressed_after_code` is a zero-text
+row — one document, empty text, no links — written in place of the observation
+that was declined. Every card payment and every emailed or TOTP account creation
+reaches this path, so without the row those operations would show an empty audit
+trail indistinguishable from the observation feature being switched off. The row
+carries no page data (the model and the constraint both refuse it) and is never
+used for the `after_confirmation` phase, which reports withholding through
+`capture_status` instead. Its event is `terms_suppressed` rather than
+`terms_recorded`. A selection of material documents that cannot be read before
+filling still returns `material_terms_unavailable` and writes nothing.
+
 ### Erasure and retention
 
 A submission record holds the rendered review page: the owner's name, date of
@@ -562,8 +573,9 @@ states the policy — these are financial records and a jurisdiction may require
 them for that long — and acting on it is an operator decision against a closed
 operation, not a background job.
 
-Apply migration 143 with the others below. It adds `redacted_at` and the two
-age indexes; it rewrites no encrypted record.
+Apply migration 142 with the rest of the chain: it widens the `coverage`
+constraint to admit `suppressed_after_code`. Apply migration 143 with it: it
+adds `redacted_at` and the two age indexes, and rewrites no encrypted record.
 
 Apply migration 133 through the canonical migrator before deploying the broker
 and bridge changes. The new table applies tenant row-level security inline and
@@ -678,6 +690,20 @@ the original origin and confirmation witness before and after extraction, masks
 known private values, and returns only archive metadata to the agent. Capture or
 storage failure leaves the completed operation intact and never retries submission.
 After transient-code entry it does not access the page or browser storage.
+
+Receipt text is additionally scrubbed line by line for credential- and
+payment-shaped runs, on top of the masking of values the broker itself supplied.
+The scrub is bounded to the line because the generic whole-value scrub replaces
+an entire string once it finds any 12-19 digit run, and an order or tracking
+number would otherwise delete the whole receipt.
+
+A fourth status, `denied`, is returned to the caller — never stored in a
+snapshot — when an agent asks for an operation assigned to a different agent.
+That is an authorization refusal, not a torn page, and reporting it as
+`unavailable` made a cross-agent probe look like a network blip. The refusal
+appends a `receipt_capture_denied` operation event, reads nothing, and still
+does not raise, so a durably completed operation is never re-labelled by a
+caller's error handling.
 
 The owner can open “Submission and receipts” for a purchase or subscription and
 view “Receipt after confirmation” observations. Withheld or unavailable text is

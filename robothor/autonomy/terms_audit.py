@@ -53,9 +53,9 @@ class TermsSnapshot(StrictModel):
     phase: Literal["before_input", "before_submit", "after_confirmation"]
     documents: list[TermsDocument] = Field(min_length=1, max_length=26)
     confirmation_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
-    coverage: Literal["visible_text_only", "visible_text_and_selected_documents"] = (
-        "visible_text_only"
-    )
+    coverage: Literal[
+        "visible_text_only", "visible_text_and_selected_documents", "suppressed_after_code"
+    ] = "visible_text_only"
     capture_status: Literal["captured", "withheld_after_code", "unavailable"] = "captured"
     omitted_frames: int = Field(default=0, ge=0)
 
@@ -70,6 +70,14 @@ class TermsSnapshot(StrictModel):
             or any(doc.text or doc.links or doc.source != "rendered" for doc in self.documents)
         ):
             raise ValueError("withheld_receipt_cannot_contain_page_data")
+        # ``suppressed_after_code`` records the FACT that a pre-click observation
+        # was refused after transient-code entry. It carries no page data, and it
+        # is a pre-submission coverage value: a receipt uses ``capture_status``.
+        if self.coverage == "suppressed_after_code" and (
+            self.phase == "after_confirmation"
+            or any(doc.text or doc.links or doc.source != "rendered" for doc in self.documents)
+        ):
+            raise ValueError("suppressed_terms_cannot_contain_page_data")
         return self
 
 
@@ -93,7 +101,7 @@ class TermsAudit:
                 op["state"] != "completed"
                 or op["proposal"]["action"] not in {"purchase", "subscription"}
                 or (op["evidence"] or {}).get("confirmation_sha256") != snapshot.confirmation_sha256
-                or snapshot.coverage == "visible_text_and_selected_documents"
+                or snapshot.coverage != "visible_text_only"
                 or any(
                     doc.origin != snapshot.origin or doc.source != "rendered"
                     for doc in snapshot.documents
@@ -153,12 +161,13 @@ class TermsAudit:
                 ),
             )
             result = dict(cur.fetchone())
-            self.store._event(
-                cur,
-                scope,
-                operation_id,
-                "receipt_recorded" if snapshot.phase == "after_confirmation" else "terms_recorded",
-            )
+            if snapshot.phase == "after_confirmation":
+                event = "receipt_recorded"
+            elif snapshot.coverage == "suppressed_after_code":
+                event = "terms_suppressed"
+            else:
+                event = "terms_recorded"
+            self.store._event(cur, scope, operation_id, event)
         return result
 
     def list(self, scope: Scope, operation_id: str) -> list[dict[str, Any]]:
