@@ -114,9 +114,9 @@ async def handle(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
             if kind == "handoffs":
                 rows = await asyncio.to_thread(handoffs.list, scope, ctx.agent_id)
                 return {"handoffs": [item for item in rows if item["operation_id"] == operation_id]}
-            spec = HandoffRequest.model_validate(args.get("handoff", {}))
+            handoff_spec = HandoffRequest.model_validate(args.get("handoff", {}))
             result = await asyncio.to_thread(
-                handoffs.create, scope, operation_id, ctx.agent_id, spec
+                handoffs.create, scope, operation_id, ctx.agent_id, handoff_spec
             )
             return {
                 **result,
