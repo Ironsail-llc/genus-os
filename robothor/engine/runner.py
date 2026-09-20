@@ -78,6 +78,7 @@ from robothor.engine.models import (
     TriggerType,
 )
 from robothor.engine.output_validation import request_output_repair, validated_completion
+from robothor.engine.plan_integrity import nudge_for_plan_research
 from robothor.engine.prompts import (
     EXECUTION_MODE_PREAMBLE,
 )
@@ -2024,21 +2025,7 @@ class AgentRunner(
 
             # Check if we're done (no tool calls)
             if not assistant_msg.tool_calls:
-                # In plan mode, nudge the agent to research if it skipped tools
-                # on the very first iteration (only fires once).
-                if readonly_mode and _iteration == 0:
-                    session.messages.append(
-                        {
-                            "role": ENGINE_CONTEXT_ROLE,
-                            "content": (
-                                "[SYSTEM] You proposed a plan without using any tools to "
-                                "research first. Before finalizing, use your tools to discover "
-                                "and verify. For example: `list_directory` to find files, "
-                                "`read_file` to read them, `search_memory` for context. "
-                                "Do NOT ask the user to look things up for you."
-                            ),
-                        }
-                    )
+                if readonly_mode and nudge_for_plan_research(session, _iteration):
                     continue
 
                 if readonly_mode:

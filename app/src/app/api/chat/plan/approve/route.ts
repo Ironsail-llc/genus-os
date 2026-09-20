@@ -23,7 +23,7 @@ export async function POST(req: Request) {
   const client = getEngineClient();
 
   try {
-    const engineRes = await client.planApprove(planId, sessionKey);
+    const engineRes = await (body.request_id === undefined ? client.planApprove(planId, sessionKey) : client.planApprove(planId, sessionKey, body.request_id));
 
     if (!engineRes.body) {
       return new Response(

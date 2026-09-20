@@ -271,6 +271,10 @@ _BENCHMARK_EXCLUDED_TOOLS: frozenset[str] = _BENCHMARK_WITHHELD_READS | frozense
         "sales_process_queue",
         "sales_research_parallel",
         "sales_propose_email",
+        "sales_create_request",
+        "sales_get_request",
+        "sales_get_report",
+        "sales_get_workspace",
         # Notifications / inbox state.
         "ack_notification",
         "send_notification",
@@ -2082,6 +2086,20 @@ def _error_result(task: dict[str, Any], error: str) -> dict[str, Any]:
     }
 
 
+def _scored_task_result(task: dict[str, Any], run: Any, score: float) -> dict[str, Any]:
+    return {
+        "task_id": task["id"],
+        "category": task.get("category", "correctness"),
+        "weight": task.get("weight", 1.0),
+        "score": round(score, 3),
+        "outcome": _OUTCOME_SCORED,
+        "cost_usd": round(run.total_cost_usd, 4),
+        "steps": len(run.steps),
+        "status": run.status.value,
+        "output_preview": (run.output_text or "")[:200],
+    }
+
+
 async def _execute_suite_tasks(
     *,
     runner: Any,
@@ -2227,17 +2245,7 @@ async def _execute_suite_tasks(
             judge_error = score_detail.pop("judge_error", None)
             total_cost += run.total_cost_usd
 
-            task_result: dict[str, Any] = {
-                "task_id": task["id"],
-                "category": task.get("category", "correctness"),
-                "weight": task.get("weight", 1.0),
-                "score": round(score, 3),
-                "outcome": _OUTCOME_SCORED,
-                "cost_usd": round(run.total_cost_usd, 4),
-                "steps": len(run.steps),
-                "status": run.status.value,
-                "output_preview": output[:200] if output else "",
-            }
+            task_result = _scored_task_result(task, run, score)
             if seeded is not None or state_results:
                 task_result["state_checks"] = [r.as_dict() for r in state_results]
                 task_result["state_checks_scored"] = state_checks_scored()
@@ -2254,10 +2262,10 @@ async def _execute_suite_tasks(
                     task["id"],
                     judge_error,
                 )
-            results.append(task_result)
             from robothor.engine.performance import run_measurements
 
             task_result["performance"] = run_measurements(run)
+            results.append(task_result)
 
         except Exception as e:
             logger.warning("Benchmark task %s failed: %s", task["id"], e)

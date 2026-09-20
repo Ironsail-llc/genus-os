@@ -252,6 +252,21 @@ def _record_execution_mode(model: str) -> None:
         logger.debug("Execution-mode signal failed for %s", model, exc_info=True)
 
 
+async def _emit_buffered_completion(result, on_content, emit) -> None:
+    content = str(result.choices[0].message.content or "")
+    if on_content and content:
+        await on_content(content)
+    await emit({"type": "text_delta", "delta": content, "accumulated": content})
+    await emit(
+        {
+            "type": "usage",
+            "input_tokens": 0,
+            "output_tokens": 0,
+        }
+    )
+    await emit({"type": "message_stop"})
+
+
 def _per_call_timeout(model: str, timeout_override: float | None) -> float:
     """Seconds one provider call may take before the chain walk gives up on it.
 
@@ -2562,20 +2577,7 @@ class LLMClient:
                         with self._watchdog_wait(f"llm_inflight:{model}", per_call_timeout):
                             async with asyncio.timeout(per_call_timeout):
                                 result = await bounded_completion(codex_acompletion, **kwargs)
-                        content = str(result.choices[0].message.content or "")
-                        if on_content and content:
-                            await on_content(content)
-                        await _emit(
-                            {"type": "text_delta", "delta": content, "accumulated": content}
-                        )
-                        await _emit(
-                            {
-                                "type": "usage",
-                                "input_tokens": 0,
-                                "output_tokens": 0,
-                            }
-                        )
-                        await _emit({"type": "message_stop"})
+                        await _emit_buffered_completion(result, on_content, _emit)
                         note_outcome(model, attempt_started, shape=describe_completion(result))
                         return result
 

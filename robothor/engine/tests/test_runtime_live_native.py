@@ -47,6 +47,15 @@ async def test_configured_native_provider_cohort(request, sample_agent_config):
     engine.registry.build_for_agent.return_value = [schema]
     engine.registry.get_tool_names.return_value = ["record"]
     current = ContextVar("fixture_gateway")
+    traces = ContextVar("provider_trace")
+    import litellm
+
+    real_completion = litellm.acompletion
+
+    async def completion(**kwargs):
+        if settings.get("diagnostics"):
+            traces.get().append(json.loads(json.dumps(kwargs.get("messages", []))))
+        return await real_completion(**kwargs)
 
     async def dispatch(name, args, **kwargs):
         assert name == "record"
@@ -58,6 +67,7 @@ async def test_configured_native_provider_cohort(request, sample_agent_config):
     async def sample(model, index):
         gateway = FixtureGateway("fixture")
         token = current.set(gateway)
+        trace_token = traces.set([])
         manifest = replace(
             sample_agent_config,
             model_primary=model,
@@ -88,6 +98,7 @@ async def test_configured_native_provider_cohort(request, sample_agent_config):
                 row.update(
                     output_text=run.output_text,
                     error_message=run.error_message,
+                    provider_messages=traces.get(),
                     steps=[
                         {
                             "type": str(step.step_type),
@@ -108,12 +119,14 @@ async def test_configured_native_provider_cohort(request, sample_agent_config):
                 "duration_ms": (time.perf_counter() - started) * 1000,
             }
         finally:
+            traces.reset(trace_token)
             current.reset(token)
         rows.append(row)
         with Path(settings["output"]).open("a") as file:
             file.write(json.dumps(row) + "\n")
 
     with (
+        patch("litellm.acompletion", side_effect=completion),
         patch("robothor.engine.runner.create_run"),
         patch("robothor.engine.runner.update_run"),
         patch("robothor.engine.run_finalizer.create_step"),

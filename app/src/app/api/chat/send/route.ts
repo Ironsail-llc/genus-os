@@ -40,7 +40,7 @@ export async function POST(req: Request) {
     // system message its instructions never mention.
     if (!sessionKey) ensureCanvasPromptInjected().catch(() => {});
 
-    const engineRes = await client.chatSend(message, sessionKey);
+    const engineRes = await (body.request_id === undefined ? client.chatSend(message, sessionKey) : client.chatSend(message, sessionKey, body.request_id));
 
     if (!engineRes.body) {
       return new Response(

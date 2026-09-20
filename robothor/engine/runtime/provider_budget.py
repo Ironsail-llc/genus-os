@@ -106,9 +106,13 @@ async def assert_provider_authorized():
 
     from robothor.engine.runtime.activity import current
     from robothor.engine.runtime.controls import stopped
+    from robothor.engine.runtime.current import active_context
 
     activity = current.get()
+    context = active_context.get()
     if activity and activity.sessions:
         session = next(iter(activity.sessions.values()))
         if await asyncio.to_thread(stopped, session.run.tenant_id, session.run_id):
             raise RequestBudgetError("Durable stop denies another provider request")
+    elif context and await asyncio.to_thread(stopped, context.tenant_id, ""):
+        raise RequestBudgetError("Durable stop denies another provider request")

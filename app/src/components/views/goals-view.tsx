@@ -144,7 +144,7 @@ export function GoalsView({ visible }: { visible: boolean }) {
           <h2 className="font-semibold">{selected.objective}</h2>
           <p>{selected.status} · {selected.tokens_used.toLocaleString()} tokens{selected.token_budget ? ` / ${selected.token_budget.toLocaleString()}` : ""} · ${selected.cost_usd.toFixed(4)}</p>
           {selected.parent_goal_id && <button className="underline" onClick={() => void select(selected.parent_goal_id!)}>Open parent goal</button>}
-          <p>{selected.checkpoint}</p><p>{selected.next_action}</p>
+          <p>{selected.checkpoint}</p>{!["complete", "canceled"].includes(selected.status) && <p>{selected.next_action}</p>}
           {selected.recovery_required && <p role="status">External effects need reconciliation before more actions or completion.</p>}
           {selected.blocker && <p>Blocker: {selected.blocker}</p>}
           {selected.token_budget !== null && <p>Remaining family budget: {Math.max(0, selected.token_budget - selected.tokens_used).toLocaleString()} tokens</p>}

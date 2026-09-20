@@ -54,4 +54,7 @@ def test_telegram_wires_bundle_resolution():
     from robothor.engine import telegram_handlers
 
     src = inspect.getsource(telegram_handlers)
-    assert "resolve_slash_command(" in src
+    assert "expand_slash_command(user_text)" in src
+    from robothor.engine.skill_bundles import expand_slash_command
+
+    assert "resolve_slash_command(" in inspect.getsource(expand_slash_command)

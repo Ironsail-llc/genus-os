@@ -857,17 +857,18 @@ class TestExecutionModePreamble:
         assert "EXECUTION MODE" not in system_msg
 
 
+@pytest.mark.usefixtures("_mock_run_persistence")
 class TestPlanModeResearchNudge:
-    """Verify the research nudge fires on first no-tool-call iteration.
+    """Exercise repeated text-only replies without bypassing the runner loop."""
 
-    These tests exercise the full runner loop and take >10s due to runner overhead.
+    @pytest.fixture(autouse=True)
+    def aligned_plan(self):
+        # Alignment has its own contracts; these tests count research turns.
+        with patch(
+            "robothor.engine.plan_integrity.check_alignment", new=AsyncMock(return_value=True)
+        ):
+            yield
 
-    NOTE: these terminate because the tool rate limit fires, not because the
-    plan-mode loop bounds itself. Raising DEFAULT_RATE_LIMIT turns them into
-    runaway loops — see the constant's docstring.
-    """
-
-    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_nudge_fires_when_no_tools_on_first_iteration(
         self, runner, sample_agent_config, mock_litellm_response
@@ -905,9 +906,7 @@ class TestPlanModeResearchNudge:
         # The nudge message was injected between calls
         second_call_messages = mock_llm.call_args_list[1].kwargs["messages"]
         nudge_msgs = [
-            m
-            for m in second_call_messages
-            if m.get("role") == "user" and "without using any tools" in m.get("content", "")
+            m for m in second_call_messages if "without using any tools" in m.get("content", "")
         ]
         assert len(nudge_msgs) == 1
         # Nudge mentions discovery tools
@@ -916,7 +915,6 @@ class TestPlanModeResearchNudge:
         # Nudge discourages asking the user
         assert "Do NOT ask the user" in nudge_msgs[0]["content"]
 
-    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_nudge_does_not_fire_in_normal_mode(
         self, runner, sample_agent_config, mock_litellm_response
@@ -945,7 +943,6 @@ class TestPlanModeResearchNudge:
         # Only one LLM call — no nudge
         assert call_count == 1
 
-    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_nudge_only_fires_once(self, runner, sample_agent_config, mock_litellm_response):
         """The nudge only fires on iteration 0; subsequent text-only responses end the loop."""
@@ -977,7 +974,6 @@ class TestPlanModeResearchNudge:
         # Exactly two calls: first attempt + one retry after nudge
         assert call_count == 2
 
-    @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_no_nudge_when_tools_used_on_first_iteration(
         self, runner, sample_agent_config, mock_litellm_response
@@ -1023,9 +1019,7 @@ class TestPlanModeResearchNudge:
         # No nudge in the messages — second call should not contain nudge text
         second_call_messages = mock_llm.call_args_list[1].kwargs["messages"]
         nudge_msgs = [
-            m
-            for m in second_call_messages
-            if m.get("role") == "user" and "without using any tools" in m.get("content", "")
+            m for m in second_call_messages if "without using any tools" in m.get("content", "")
         ]
         assert len(nudge_msgs) == 0
 

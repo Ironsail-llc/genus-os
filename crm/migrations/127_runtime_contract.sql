@@ -18,3 +18,20 @@ CREATE POLICY tenant_isolation ON agent_runtime_controls
            OR tenant_id=current_setting('app.tenant_id',true))
     WITH CHECK (current_setting('app.tenant_id',true) IS NULL OR current_setting('app.tenant_id',true)=''
            OR tenant_id=current_setting('app.tenant_id',true));
+
+-- A request can be stopped before its run row exists (e.g. during admission).
+CREATE TABLE IF NOT EXISTS agent_runtime_request_stops (
+    tenant_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, request_id)
+);
+ALTER TABLE agent_runtime_request_stops ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_runtime_request_stops FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON agent_runtime_request_stops;
+CREATE POLICY tenant_isolation ON agent_runtime_request_stops
+    USING (current_setting('app.tenant_id',true) IS NULL OR current_setting('app.tenant_id',true)=''
+           OR tenant_id=current_setting('app.tenant_id',true))
+    WITH CHECK (current_setting('app.tenant_id',true) IS NULL OR current_setting('app.tenant_id',true)=''
+           OR tenant_id=current_setting('app.tenant_id',true));

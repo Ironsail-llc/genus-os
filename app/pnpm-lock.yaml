@@ -147,6 +147,9 @@ importers:
       typescript:
         specifier: ^5
         version: 5.9.3
+      vite:
+        specifier: 8.1.4
+        version: 8.1.4(@types/node@20.19.33)(jiti@2.6.1)
       vitest:
         specifier: ^4.1.11
         version: 4.1.11(@types/node@20.19.33)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@1.8.0))(msw@2.12.10(@types/node@20.19.33)(typescript@5.9.3))(vite@8.1.4(@types/node@20.19.33)(jiti@2.6.1))

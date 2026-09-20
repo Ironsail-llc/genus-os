@@ -106,11 +106,14 @@ async def test_an_existing_funded_scope_cannot_be_reset(entry, monkeypatch):
     execute.assert_not_awaited()
 
 
-async def test_task_loop_accounts_for_judge_and_refuses_unfunded_next_request(entry, monkeypatch):
+@pytest.mark.parametrize("telemetry_failure", [False, True])
+async def test_task_loop_accounts_for_judge_and_refuses_unfunded_next_request(
+    entry, monkeypatch, telemetry_failure
+):
     import litellm
 
     from robothor.engine import config, key_pool
-    from robothor.engine.models import RunStatus
+    from robothor.engine.models import AgentRun, RunStatus
 
     suite, blocks, ctx = entry
     suite["tasks"][0]["expected"]["judge"] = {"rubric": ["Says yes"], "threshold": 1.0}
@@ -136,17 +139,26 @@ async def test_task_loop_accounts_for_judge_and_refuses_unfunded_next_request(en
 
     async def execute(**kwargs):
         await bounded_completion(provider, model="example/agent")
-        return SimpleNamespace(
+        return AgentRun(
             output_text="yes", total_cost_usd=0.000040, steps=[], status=RunStatus.COMPLETED
         )
 
     monkeypatch.setattr(benchmark, "_execute_task_run", execute)
+    if telemetry_failure:
+        from robothor.engine import performance
+
+        def fail_measurements(run):
+            raise RuntimeError("fixture telemetry unavailable")
+
+        monkeypatch.setattr(performance, "run_measurements", fail_measurements)
     result = await benchmark._benchmark_run(
         {"agent_id": "example", "suite_id": "fixture", "tag": "run-1"}, ctx
     )
-    assert result["passed"] == 1 and result["failed"] == 1
+    assert result["passed"] == (0 if telemetry_failure else 1)
+    assert result["failed"] == (2 if telemetry_failure else 1)
     assert provider.await_count == 2
     rows = blocks["benchmark_run:fixture:run-1"]["task_results"]
+    assert len(rows) == 2  # A telemetry failure must not append a second result for one task.
     assert rows[0]["charged_units"] == 80 and rows[0]["cost_usd"] == 0.000080
     assert rows[1]["charged_units"] == 0 and rows[1]["outcome"] == "error"
     assert result["total_cost_usd"] == 0.000080

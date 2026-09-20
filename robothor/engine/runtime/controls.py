@@ -29,6 +29,28 @@ def issue(tenant: str, run_id: str, action: str, note: str = "") -> dict[str, An
             (tenant, run_id, action, note),
         )
         result = dict(cur.fetchone())
+    signal_stopped(tenant, note)
+    return {
+        **result,
+        "status": "stopping",
+        "external_effects": "in-flight requests may finish; reconcile receipts",
+    }
+
+
+def issue_request(tenant: str, request_id: str, note: str = "") -> None:
+    """Trusted host identity binds this stop, including pre-admission requests."""
+    if not tenant or not request_id:
+        raise ValueError("tenant and request identity required")
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO agent_runtime_request_stops(tenant_id,request_id,note)
+               VALUES (%s,%s,%s) ON CONFLICT (tenant_id,request_id) DO NOTHING""",
+            (tenant, request_id, note),
+        )
+    signal_stopped(tenant, note)
+
+
+def signal_stopped(tenant: str, note: str) -> None:
     # A local signal is an optimization. The database is authoritative for every descendant.
     from robothor.engine.runtime.activity import runs, stop_local
     from robothor.engine.session_registry import active_run_ids, lookup
@@ -40,25 +62,28 @@ def issue(tenant: str, run_id: str, action: str, note: str = "") -> dict[str, An
         session = lookup(active_id)
         if session and session.run.tenant_id == tenant and stopped(tenant, active_id):
             session.interrupt(note or "Operator stopped execution")
-    return {
-        **result,
-        "status": "stopping",
-        "external_effects": "in-flight requests may finish; reconcile receipts",
-    }
 
 
 def stopped(tenant: str, run_id: str) -> bool:
-    if not run_id:
-        return False
+    from robothor.engine.runtime.activity import current
+    from robothor.engine.runtime.current import active_context
+
+    context, activity = active_context.get(), current.get()
+    own_run = not run_id or (activity is not None and run_id in activity.sessions)
+    request_id = context.request_id if own_run and context and context.tenant_id == tenant else None
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """WITH RECURSIVE family AS (
-            SELECT id,parent_run_id FROM agent_runs WHERE tenant_id=%s AND id=%s
+            SELECT id,parent_run_id,runtime_context FROM agent_runs WHERE tenant_id=%s AND id=%s
             UNION
-            SELECT r.id,r.parent_run_id FROM agent_runs r JOIN family f ON r.id=f.parent_run_id
+            SELECT r.id,r.parent_run_id,r.runtime_context FROM agent_runs r JOIN family f ON r.id=f.parent_run_id
             WHERE r.tenant_id=%s
         ) SELECT 1 FROM agent_runtime_controls c JOIN family f ON f.id=c.run_id
-          WHERE c.tenant_id=%s LIMIT 1""",
-            (tenant, run_id, tenant, tenant),
+          WHERE c.tenant_id=%s
+          UNION ALL
+          SELECT 1 FROM agent_runtime_request_stops c WHERE c.tenant_id=%s AND
+          (c.request_id=%s OR c.request_id IN (SELECT runtime_context->>'request_id' FROM family))
+          LIMIT 1""",
+            (tenant, run_id or None, tenant, tenant, tenant, request_id),
         )
         return cur.fetchone() is not None

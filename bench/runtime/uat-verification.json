@@ -1,0 +1,254 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-20",
+  "baseline_revision": "eea3252b15",
+  "initial_implementation_revision": "a0bcefed70",
+  "production_deployed": false,
+  "full_acceptance_passed": false,
+  "manual_uat_accepted": false,
+  "replacement_selected": false,
+  "checks": {
+    "engine": {
+      "passed": 10850,
+      "failed": 0,
+      "skipped": 29,
+      "deselected": 173,
+      "seconds": 330.06,
+      "selection": "not slow and not integration and not llm and not e2e and not smoke"
+    },
+    "frontend": {
+      "files": 146,
+      "passed": 1617,
+      "failed": 0
+    },
+    "goals_private_database": {
+      "passed": 58,
+      "failed": 0
+    },
+    "stop_controls_private_database": {
+      "passed": 7,
+      "failed": 0,
+      "includes": "real abort route, cancellation resistance, early stop, isolation and restart"
+    },
+    "benchmark_accounting": {
+      "passed": 12,
+      "failed": 0
+    },
+    "browser_goals": {
+      "passed": 4,
+      "failed": 0,
+      "managed_disposable_database": true
+    },
+    "mixed_native_goal_workload": {
+      "passed": 3,
+      "failed": 0,
+      "verified_actions": 1560
+    },
+    "typescript": "passed",
+    "changed_python_ruff": "passed",
+    "changed_frontend_eslint": "passed",
+    "git_diff_check": "passed"
+  },
+  "calendar": {
+    "ordinary": {
+      "baseline_ms": {
+        "samples": 100,
+        "p50": 107.93569800443947,
+        "p95": 138.15005304059014,
+        "p95_ci95": [
+          133.9845799957402,
+          139.17446497362107
+        ]
+      },
+      "uat_ms": {
+        "samples": 100,
+        "p50": 41.75434401258826,
+        "p95": 53.91643301118165,
+        "p95_ci95": [
+          51.369492954108864,
+          61.45399098750204
+        ]
+      },
+      "model_calls": [
+        2
+      ]
+    },
+    "confirmed": {
+      "baseline_ms": {
+        "samples": 100,
+        "p50": 76.92136097466573,
+        "p95": 122.54737899638712,
+        "p95_ci95": [
+          104.70941697712988,
+          125.80447597429156
+        ]
+      },
+      "uat_ms": {
+        "samples": 100,
+        "p50": 27.01243298361078,
+        "p95": 34.29330000653863,
+        "p95_ci95": [
+          33.77350198570639,
+          34.74803996505216
+        ]
+      },
+      "model_calls": [
+        0
+      ]
+    }
+  },
+  "mixed": [
+    {
+      "concurrent_tenants": 1,
+      "scope": "native runner + goal coordinator; synthetic provider/business tools; private goal database; deployment queue excluded",
+      "summary": {
+        "goal": {
+          "duration_ms": {
+            "samples": 30,
+            "p50": 51.51312204543501,
+            "p95": 66.61492498824373,
+            "p95_ci95": [
+              62.44841398438439,
+              71.17723202100024
+            ]
+          },
+          "ack_ms": {
+            "samples": 30,
+            "p50": 0.053216994274407625,
+            "p95": 0.06368098547682166,
+            "p95_ci95": [
+              0.05956902168691158,
+              0.1139369560405612
+            ]
+          }
+        },
+        "interactive": {
+          "duration_ms": {
+            "samples": 30,
+            "p50": 25.818002002779394,
+            "p95": 53.19891800172627,
+            "p95_ci95": [
+              33.44306402141228,
+              106.65563098154962
+            ]
+          },
+          "ack_ms": {
+            "samples": 30,
+            "p50": 0.07772905519232154,
+            "p95": 0.12137700105085969,
+            "p95_ci95": [
+              0.09966501966118813,
+              0.12536096619442105
+            ]
+          }
+        }
+      }
+    },
+    {
+      "concurrent_tenants": 5,
+      "scope": "native runner + goal coordinator; synthetic provider/business tools; private goal database; deployment queue excluded",
+      "summary": {
+        "goal": {
+          "duration_ms": {
+            "samples": 150,
+            "p50": 209.70176195260137,
+            "p95": 319.4946880103089,
+            "p95_ci95": [
+              307.1869980194606,
+              327.97651004511863
+            ]
+          },
+          "ack_ms": {
+            "samples": 150,
+            "p50": 0.03580801421776414,
+            "p95": 0.06248103454709053,
+            "p95_ci95": [
+              0.05791999865323305,
+              0.07059297058731318
+            ]
+          }
+        },
+        "interactive": {
+          "duration_ms": {
+            "samples": 150,
+            "p50": 176.1742010130547,
+            "p95": 280.1638650125824,
+            "p95_ci95": [
+              273.41338800033554,
+              285.12492805020884
+            ]
+          },
+          "ack_ms": {
+            "samples": 150,
+            "p50": 0.06958504673093557,
+            "p95": 0.1341290189884603,
+            "p95_ci95": [
+              0.11030497262254357,
+              0.1685299794189632
+            ]
+          }
+        }
+      }
+    },
+    {
+      "concurrent_tenants": 20,
+      "scope": "native runner + goal coordinator; synthetic provider/business tools; private goal database; deployment queue excluded",
+      "summary": {
+        "goal": {
+          "duration_ms": {
+            "samples": 600,
+            "p50": 930.4993040277623,
+            "p95": 1383.6056619766168,
+            "p95_ci95": [
+              1348.806812951807,
+              1437.4769039568491
+            ]
+          },
+          "ack_ms": {
+            "samples": 600,
+            "p50": 0.028609007131308317,
+            "p95": 0.05811301525682211,
+            "p95_ci95": [
+              0.05596899427473545,
+              0.06043305620551109
+            ]
+          }
+        },
+        "interactive": {
+          "duration_ms": {
+            "samples": 600,
+            "p50": 763.7082159635611,
+            "p95": 1052.393439982552,
+            "p95_ci95": [
+              1024.383400043007,
+              1075.9630689863116
+            ]
+          },
+          "ack_ms": {
+            "samples": 600,
+            "p50": 0.04126498242840171,
+            "p95": 0.0986569793894887,
+            "p95_ci95": [
+              0.0909930095076561,
+              0.11720199836418033
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "artifacts": {
+    "calendar": "uat-current-runtime-final.json",
+    "mixed": "uat-mixed-runtime-final.jsonl",
+    "baseline_live_mimo": "uat-live-native-baseline.jsonl",
+    "reverted_prompt_trial": "uat-mimo-clarification-screen.jsonl"
+  },
+  "remaining": [
+    "Native live MiMo reliability: initial implementation 15/30 verified; accepted baseline 14/30; discarded prompt trial 13/30.",
+    "Configured local Ollama cohort and live fallback under mixed load unqualified.",
+    "Network queue/progress/acknowledgement SLOs not certified.",
+    "Candidate full-runtime contract parity and matched finalist comparison incomplete; keep current runtime.",
+    "Deployment/rollback drill unperformed; no production deployment authorized.",
+    "Manual user acceptance pending."
+  ]
+}

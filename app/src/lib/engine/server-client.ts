@@ -87,11 +87,11 @@ class EngineClient {
    * Send a chat message. Returns the raw Response with SSE body.
    * Caller is responsible for reading the SSE stream.
    */
-  async chatSend(message: string, sessionKey = ""): Promise<Response> {
+  async chatSend(message: string, sessionKey = "", requestId?: string): Promise<Response> {
     const res = await fetch(`${ENGINE_URL}/chat/send`, {
       method: "POST",
       headers: await engineHeaders(true),
-      body: JSON.stringify({ message, ...keyed(sessionKey) }),
+      body: JSON.stringify({ message, ...keyed(sessionKey), ...(requestId ? { request_id: requestId } : {}) }),
       signal: AbortSignal.timeout(120_000),
     });
     if (!res.ok) {
@@ -130,11 +130,11 @@ class EngineClient {
   }
 
   /** Cancel the running response for a session. */
-  async chatAbort(sessionKey = ""): Promise<{ ok: boolean; aborted: boolean }> {
+  async chatAbort(sessionKey = "", requestId?: string): Promise<{ ok: boolean; aborted: boolean; durable_stopped?: boolean }> {
     const res = await fetch(`${ENGINE_URL}/chat/abort`, {
       method: "POST",
       headers: await engineHeaders(true),
-      body: JSON.stringify(keyed(sessionKey)),
+      body: JSON.stringify({ ...keyed(sessionKey), ...(requestId ? { request_id: requestId } : {}) }),
       signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) {
@@ -160,11 +160,11 @@ class EngineClient {
   // ── Plan Mode ──
 
   /** Start plan mode: explore with read-only tools. Returns SSE stream. */
-  async planStart(message: string, deepPlan = false, sessionKey = ""): Promise<Response> {
+  async planStart(message: string, deepPlan = false, sessionKey = "", requestId?: string): Promise<Response> {
     const res = await fetch(`${ENGINE_URL}/chat/plan/start`, {
       method: "POST",
       headers: await engineHeaders(true),
-      body: JSON.stringify({ message, deep_plan: deepPlan, ...keyed(sessionKey) }),
+      body: JSON.stringify({ message, deep_plan: deepPlan, ...keyed(sessionKey), ...(requestId ? { request_id: requestId } : {}) }),
       signal: AbortSignal.timeout(120_000),
     });
     if (!res.ok) {
@@ -174,11 +174,11 @@ class EngineClient {
   }
 
   /** Approve a pending plan. Returns SSE stream of execution. */
-  async planApprove(planId: string, sessionKey = ""): Promise<Response> {
+  async planApprove(planId: string, sessionKey = "", requestId?: string): Promise<Response> {
     const res = await fetch(`${ENGINE_URL}/chat/plan/approve`, {
       method: "POST",
       headers: await engineHeaders(true),
-      body: JSON.stringify({ plan_id: planId, ...keyed(sessionKey) }),
+      body: JSON.stringify({ plan_id: planId, ...keyed(sessionKey), ...(requestId ? { request_id: requestId } : {}) }),
       signal: AbortSignal.timeout(120_000),
     });
     if (!res.ok) {
@@ -220,11 +220,11 @@ class EngineClient {
   // ── Deep Mode ──
 
   /** Start deep reasoning. Returns SSE stream. */
-  async deepStart(query: string, sessionKey = ""): Promise<Response> {
+  async deepStart(query: string, sessionKey = "", requestId?: string): Promise<Response> {
     const res = await fetch(`${ENGINE_URL}/chat/deep/start`, {
       method: "POST",
       headers: await engineHeaders(true),
-      body: JSON.stringify({ query, ...keyed(sessionKey) }),
+      body: JSON.stringify({ query, ...keyed(sessionKey), ...(requestId ? { request_id: requestId } : {}) }),
       signal: AbortSignal.timeout(120_000),
     });
     if (!res.ok) {

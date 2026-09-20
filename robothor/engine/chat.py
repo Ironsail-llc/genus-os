@@ -61,6 +61,7 @@ from robothor.engine.chat_store import (
 )
 from robothor.engine.feature_flags import per_user_sessions_mode
 from robothor.engine.models import PLAN_TTL_SECONDS, DeepRunState, PlanState, TriggerType
+from robothor.engine.runtime.chat_control import start, stop
 from robothor.engine.sanitize import sanitize_log
 
 if TYPE_CHECKING:
@@ -224,6 +225,7 @@ class ChatSession:
         super().__setattr__(name, value)
 
     active_task: asyncio.Task[Any] | None = None
+    active_request_id: str | None = None
     model_override: str | None = None
     plan_mode: bool = False
     active_plan: PlanState | None = None
@@ -475,11 +477,11 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
             await queue.put({"event": "error", "data": {"error": str(e)}})
         finally:
             await queue.put(None)  # Sentinel
-            session.active_task = None
+            if session.active_task is asyncio.current_task():
+                session.active_task = None
 
     # Start agent as background task
-    task = asyncio.create_task(run_agent())
-    session.active_task = task
+    task = start(session, run_agent, auth, session_key, body.get("request_id"))
 
     async def sse_generator() -> AsyncGenerator[str, None]:
         """Yield SSE events from the queue, with keepalive comments."""
@@ -571,13 +573,7 @@ async def chat_abort(request: Request) -> JSONResponse:
     auth = _auth_context(request)
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
-    aborted = False
-
-    if session.active_task and not session.active_task.done():
-        session.active_task.cancel()
-        aborted = True
-
-    return JSONResponse({"ok": True, "aborted": aborted})
+    return JSONResponse(await stop(session, auth, session_key, body.get("request_id")))
 
 
 @router.post("/clear")
@@ -833,10 +829,10 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
             await queue.put({"event": "error", "data": {"error": str(e)}})
         finally:
             await queue.put(None)
-            session.active_task = None
+            if session.active_task is asyncio.current_task():
+                session.active_task = None
 
-    task = asyncio.create_task(run_plan_agent())
-    session.active_task = task
+    task = start(session, run_plan_agent, auth, session_key, body.get("request_id"))
 
     async def sse_generator() -> AsyncGenerator[str, None]:
         import json as _json
@@ -1122,10 +1118,10 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
             await queue.put({"event": "error", "data": {"error": str(e)}})
         finally:
             await queue.put(None)
-            session.active_task = None
+            if session.active_task is asyncio.current_task():
+                session.active_task = None
 
-    task = asyncio.create_task(run_approved())
-    session.active_task = task
+    task = start(session, run_approved, auth, session_key, body.get("request_id"))
 
     async def sse_generator() -> AsyncGenerator[str, None]:
         import json as _json
@@ -1335,10 +1331,10 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
             await queue.put({"event": "error", "data": {"error": str(e)}})
         finally:
             await queue.put(None)
-            session.active_task = None
+            if session.active_task is asyncio.current_task():
+                session.active_task = None
 
-    task = asyncio.create_task(run_iteration())
-    session.active_task = task
+    task = start(session, run_iteration, auth, session_key, body.get("request_id"))
 
     async def sse_generator() -> AsyncGenerator[str, None]:
         import json as _json
@@ -1531,11 +1527,11 @@ async def deep_start(request: Request) -> StreamingResponse | JSONResponse:
             await queue.put({"event": "error", "data": {"error": str(e)}})
         finally:
             await queue.put(None)
-            session.active_task = None
+            if session.active_task is asyncio.current_task():
+                session.active_task = None
             session.active_deep = None
 
-    task = asyncio.create_task(run_deep())
-    session.active_task = task
+    task = start(session, run_deep, auth, session_key, body.get("request_id"))
 
     async def sse_generator() -> AsyncGenerator[str, None]:
         import json as _json

@@ -177,12 +177,14 @@ class TestTheEngineConsultsIt:
 class TestDiscovery:
     def test_it_reads_real_entry_points_when_none_are_passed(self, monkeypatch):
         """The default path must consult importlib.metadata, not return {}."""
-        called = {}
+        from importlib.metadata import EntryPoints
+
+        called = []
 
         def fake_entry_points(**kwargs):
-            called.update(kwargs)
-            return []
+            called.append(kwargs)
+            return EntryPoints(())
 
         monkeypatch.setattr("robothor.plugins.loader.metadata.entry_points", fake_entry_points)
         load_plugins()
-        assert called, "load_plugins() never queried the entry-point registry"
+        assert called == [{}], "discovery must read one fresh entry-point snapshot"

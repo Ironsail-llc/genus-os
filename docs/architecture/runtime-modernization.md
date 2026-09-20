@@ -4,6 +4,8 @@ This change starts from the accepted integration revision `eea3252b15`. The curr
 
 **Promotion is not approved by these results.** The native confirmed-operation and goal/control contracts pass. The live native synthetic action cohort exposed unsatisfied outcomes with MiMo, and the candidate smoke runs are not a matched native-workload comparison. Candidate checkpoint, delegated authority, memory and provider-fallback parity must be established before selecting a replacement. The 20% replacement gate has not been established for either candidate.
 
+The local acceptance follow-up, fixes, and latest test results are recorded in [runtime UAT](runtime-uat.md). The measurements below preserve the original implementation evaluation.
+
 ## Product and execution boundaries
 
 `robothor/engine/runtime/contracts.py` defines execution identity, requests, checkpoint envelopes, progress, usage, results and the runtime protocol. `CurrentRuntime` wraps `AgentRunner.execute`; the existing runner owns model retries, compaction and delivery. The goal controller accepts an injected runtime and otherwise uses this adapter. Business state remains in the existing stores.
@@ -57,7 +59,7 @@ The mixed native/coordinator workload completed all **1,560 verified synthetic a
 
 The live native cohorts each stayed below 20 seconds p95. Both configured DeepSeek models achieved 30/30 verified synthetic outcomes. MiMo achieved **15/30**, including one failed runtime result. These failures remain in the artifact and prevent claiming that the live everyday-action acceptance suite passes across the complete configured chain. Both candidate smoke adapters achieved 30/30 on each configured cloud model, but their simpler prompt/tool environment cannot establish superiority over the native runner.
 
-The final broad engine run passed **10,828 tests**, with 29 skipped, 177 deselected and **10 failures**, all reproduced on the untouched integration checkout. New unset-tenant diagnostics and optional-runner initialization regressions were corrected, and native setup was extracted to keep the runner smaller. The final focused goal/runtime/budget suite passes 101 tests; the separate mixed-workload suite passes three tests, and the goal workspace passes six UI tests and TypeScript checking. `verification.json` records scope and remaining failures; inherited failing checks are not waived by this document.
+The initial broad engine run passed **10,828 tests**, with 29 skipped, 177 deselected and **10 failures**, all reproduced on the untouched integration checkout. New unset-tenant diagnostics and optional-runner initialization regressions were corrected, and native setup was extracted to keep the runner smaller. The final focused goal/runtime/budget suite passes 101 tests; the separate mixed-workload suite passes three tests, and the goal workspace passes six UI tests and TypeScript checking. `verification.json` records scope and remaining failures; inherited failing checks are not waived by this document.
 
 Example commands from a clean checkout:
 

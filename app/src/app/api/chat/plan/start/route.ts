@@ -26,7 +26,7 @@ export async function POST(req: Request) {
   const client = getEngineClient();
 
   try {
-    const engineRes = await client.planStart(message, deepPlan, sessionKey);
+    const engineRes = await (body.request_id === undefined ? client.planStart(message, deepPlan, sessionKey) : client.planStart(message, deepPlan, sessionKey, body.request_id));
 
     if (!engineRes.body) {
       return new Response(

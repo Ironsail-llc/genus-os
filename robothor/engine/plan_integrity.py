@@ -83,3 +83,25 @@ async def require_alignment(runner: Any, session: Any, models: list[str], text: 
         }
     )
     return False
+
+
+def nudge_for_plan_research(session: Any, iteration: int) -> bool:
+    """Ask for research once, even if subsequent replies contain no tool calls."""
+    from robothor.engine.session import ENGINE_CONTEXT_ROLE
+
+    if iteration != 0 or getattr(session, "_plan_research_nudged", False):
+        return False
+    session._plan_research_nudged = True
+    session.messages.append(
+        {
+            "role": ENGINE_CONTEXT_ROLE,
+            "content": (
+                "[SYSTEM] You proposed a plan without using any tools to "
+                "research first. Before finalizing, use your tools to discover "
+                "and verify. For example: `list_directory` to find files, "
+                "`read_file` to read them, `search_memory` for context. "
+                "Do NOT ask the user to look things up for you."
+            ),
+        }
+    )
+    return True

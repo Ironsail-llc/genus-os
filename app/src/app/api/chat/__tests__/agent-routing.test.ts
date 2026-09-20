@@ -30,6 +30,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const engine = {
   chatSend: vi.fn(),
+  chatAbort: vi.fn(),
   chatHistory: vi.fn(),
   planStart: vi.fn(),
   planApprove: vi.fn(),
@@ -76,6 +77,7 @@ function post(url: string, body: unknown) {
 async function routes() {
   return {
     send: (await import("../send/route")).POST,
+    abort: (await import("../abort/route")).POST,
     history: (await import("../history/route")).GET,
     planStart: (await import("../plan/start/route")).POST,
     planApprove: (await import("../plan/approve/route")).POST,
@@ -92,6 +94,7 @@ async function callEachWithAgent(): Promise<Response[]> {
   return [
     await r.send(post("http://helm.test/x", { message: "hi", agent: "scheduler" })),
     await r.history(new Request("http://helm.test/x?agent=scheduler")),
+    await r.abort(post("http://helm.test/x", { agent: "scheduler", request_id: "request-1" })),
     await r.planStart(post("http://helm.test/x", { message: "hi", agent: "scheduler" })),
     await r.planApprove(post("http://helm.test/x", { plan_id: "p-1", agent: "scheduler" })),
     await r.planReject(post("http://helm.test/x", { plan_id: "p-1", agent: "scheduler" })),
@@ -105,6 +108,7 @@ describe("the chat BFF routes and the chosen agent", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     engine.chatSend.mockResolvedValue({ body: emptyStream() });
+    engine.chatAbort.mockResolvedValue({ ok: true, durable_stopped: true });
     engine.chatHistory.mockResolvedValue({ messages: [], sessionKey: "agent:main:primary" });
     engine.planStart.mockResolvedValue({ body: emptyStream() });
     engine.planApprove.mockResolvedValue({ body: emptyStream() });
@@ -119,6 +123,23 @@ describe("the chat BFF routes and the chosen agent", () => {
 
   afterEach(() => {
     vi.resetModules();
+  });
+
+  it("stops the authenticated agent request and ignores browser session keys", async () => {
+    const { abort } = await routes();
+    const res = await abort(post("http://helm.test/x", {
+      agent: "scheduler", request_id: "request-1", session_key: "someone-else",
+    }));
+    expect(engine.chatAbort).toHaveBeenCalledWith(KEY, "request-1");
+    expect(await res.json()).toEqual({ ok: true, durable_stopped: true });
+  });
+
+  it("reports an unconfirmed stop when the engine cannot persist it", async () => {
+    engine.chatAbort.mockRejectedValueOnce(new Error("unavailable"));
+    const { abort } = await routes();
+    const res = await abort(post("http://helm.test/x", { request_id: "request-1" }));
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "Stop could not be confirmed" });
   });
 
   it("sends no session key when the body names no agent", async () => {
@@ -206,6 +227,7 @@ describe("the chat BFF routes refuse an agent rather than falling through to mai
   beforeEach(() => {
     vi.clearAllMocks();
     engine.chatSend.mockResolvedValue({ body: emptyStream() });
+    engine.chatAbort.mockResolvedValue({ ok: true, durable_stopped: true });
     engine.chatHistory.mockResolvedValue({ messages: [], sessionKey: "" });
     engine.planStart.mockResolvedValue({ body: emptyStream() });
     engine.planApprove.mockResolvedValue({ body: emptyStream() });
@@ -227,7 +249,7 @@ describe("the chat BFF routes refuse an agent rather than falling through to mai
 
     const responses = await callEachWithAgent();
 
-    expect(responses.map((res) => res.status)).toEqual([403, 403, 403, 403, 403, 403, 403, 403]);
+    expect(responses.map((res) => res.status)).toEqual([403, 403, 403, 403, 403, 403, 403, 403, 403]);
     for (const call of Object.values(engine)) {
       expect(call).not.toHaveBeenCalled();
     }
@@ -238,7 +260,7 @@ describe("the chat BFF routes refuse an agent rather than falling through to mai
 
     const responses = await callEachWithAgent();
 
-    expect(responses.map((res) => res.status)).toEqual([400, 400, 400, 400, 400, 400, 400, 400]);
+    expect(responses.map((res) => res.status)).toEqual([400, 400, 400, 400, 400, 400, 400, 400, 400]);
     for (const call of Object.values(engine)) {
       expect(call).not.toHaveBeenCalled();
     }

@@ -186,7 +186,7 @@ def runtime_entrypoint(execute):
         context = ExecutionContext(
             tenant,
             values.get("user_id") or "service:" + agent_id,
-            values.get("correlation_id") or str(uuid4()),
+            values.get("correlation_id") or (inherited.request_id if inherited else str(uuid4())),
             parent_id=getattr(spawn, "parent_run_id", None)
             or (inherited.parent_id if inherited else None),
             goal_id=inherited.goal_id if inherited else None,

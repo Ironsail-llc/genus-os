@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from robothor.engine.models import AgentConfig, DeliveryMode, RunStatus
+from robothor.engine.models import AgentConfig, DeliveryMode, RunStatus, StepType
 from robothor.engine.runner import AgentRunner
 
 
@@ -150,7 +150,10 @@ class TestPlanModeGate:
             runner, agent_config, tool_name="send_email", readonly_mode=True
         )
         assert run.status == RunStatus.COMPLETED
-        assert run.output_text == "done"
+        # The model continued after the refusal, but its bare "done" is not
+        # a valid plan. The separate plan verifier must still reject it.
+        assert sum(step.step_type == StepType.LLM_CALL for step in run.steps) >= 2
+        assert run.output_text.startswith("[PLAN_FAILED]")
 
 
 class TestToolsAllowedGate:

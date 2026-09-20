@@ -108,6 +108,10 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
   const [showFeedbackInput, setShowFeedbackInput] = useState(false);
   const [planFeedback, setPlanFeedback] = useState("");
   const [activeToolName, setActiveToolName] = useState<string | null>(null);
+  const [runtimeProgress, setRuntimeProgress] = useState<string | null>(null);
+  const [stopNotice, setStopNotice] = useState<string | null>(null);
+  const [isStopping, setIsStopping] = useState(false);
+  const requestIdRef = useRef<string | null>(null);
   const [currentIteration, setCurrentIteration] = useState(0);
   const [maxIterations, setMaxIterations] = useState(0);
   const [deepMode, setDeepMode] = useState(false);
@@ -208,6 +212,13 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     (eventType: string, parsed: Record<string, unknown>): boolean => {
       if (eventType === "approval_required") {
         handleApprovalRequired(parsed);
+        return true;
+      }
+      if (["accepted", "queued", "waiting", "progress", "stopping"].includes(eventType)) {
+        const activity = typeof parsed.text === "string" ? parsed.text : eventType;
+        const elapsed = typeof parsed.elapsed_s === "number" && !activity.includes("elapsed")
+          ? ` · ${parsed.elapsed_s}s elapsed` : "";
+        setRuntimeProgress(activity + elapsed);
         return true;
       }
       return false;
@@ -452,12 +463,16 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
 
     const controller = new AbortController();
     abortRef.current = controller;
+    requestIdRef.current = crypto.randomUUID();
+    setStopNotice(null);
+    setIsStopping(false);
+    setRuntimeProgress("Submitting request…");
 
     try {
       const res = await fetch("/api/chat/plan/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, deep_plan: deepPlan, ...(agent ? { agent } : {}) }),
+        body: JSON.stringify({ message: text, request_id: requestIdRef.current, deep_plan: deepPlan, ...(agent ? { agent } : {}) }),
         signal: controller.signal,
       });
 
@@ -593,12 +608,16 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
 
     const controller = new AbortController();
     abortRef.current = controller;
+    requestIdRef.current = crypto.randomUUID();
+    setStopNotice(null);
+    setIsStopping(false);
+    setRuntimeProgress("Submitting request…");
 
     try {
       const res = await fetch("/api/chat/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, ...(agent ? { agent } : {}) }),
+        body: JSON.stringify({ message: text, request_id: requestIdRef.current, ...(agent ? { agent } : {}) }),
         signal: controller.signal,
       });
 
@@ -805,6 +824,13 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     setIsPlanExecuting(true);
     setStreamingText("");
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+    requestIdRef.current = crypto.randomUUID();
+    setStopNotice(null);
+    setIsStopping(false);
+    setRuntimeProgress("Submitting request…");
+
     // Show deep reasoning progress if this is a deep plan
     if (isDeepPlan) {
       setIsDeepReasoning(true);
@@ -816,7 +842,8 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       const res = await fetch("/api/chat/plan/approve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plan_id: activePlan.plan_id, ...(agent ? { agent } : {}) }),
+        body: JSON.stringify({ plan_id: activePlan.plan_id, request_id: requestIdRef.current, ...(agent ? { agent } : {}) }),
+        signal: controller.signal,
       });
 
       setActivePlan(null);
@@ -919,6 +946,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     } catch {
       // ignore
     } finally {
+      abortRef.current = null;
       setIsPlanExecuting(false);
       setIsDeepReasoning(false);
       setDeepElapsed(0);
@@ -961,8 +989,31 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     }
   };
 
-  const handleAbort = () => {
-    abortRef.current?.abort();
+  const handleAbort = async () => {
+    if (isStopping) return;
+    const stoppedRequest = requestIdRef.current;
+    const stoppedController = abortRef.current;
+    setIsStopping(true);
+    setStopNotice("Stopping…");
+    try {
+      const response = await fetch("/api/chat/abort", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...(agent ? { agent } : {}), request_id: stoppedRequest }),
+      });
+      if (!response.ok) throw new Error("stop unconfirmed");
+      const result = await response.json();
+      if (!result.ok || !result.durable_stopped) throw new Error("stop unconfirmed");
+      if (requestIdRef.current === stoppedRequest) {
+        setStopNotice("Stop acknowledged. Already dispatched requests may finish; check their results before retrying.");
+      }
+      stoppedController?.abort();
+    } catch {
+      if (requestIdRef.current === stoppedRequest) {
+        setStopNotice("Stop could not be confirmed. The request may still be running.");
+      }
+    } finally {
+      if (requestIdRef.current === stoppedRequest) setIsStopping(false);
+    }
   };
 
   const suggestedPrompts = [
@@ -1187,6 +1238,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
           {(isStreaming || isPlanExecuting || isPlanning) && (
             <div className="flex justify-start" data-testid="streaming-message">
               <div className={`max-w-[85%] rounded-lg px-3 py-2 text-sm bg-muted ${isPlanning ? "border border-warning/30" : ""}`}>
+                {runtimeProgress && <p role="status" className="text-xs text-muted-foreground mb-2">{runtimeProgress}</p>}
                 {isPlanning ? (
                   <div className="space-y-2">
                     <div className="flex items-center gap-2 text-warning" data-testid="planning-indicator">
@@ -1362,11 +1414,14 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
             disabled={isStreaming || isPlanExecuting || isPlanning || isDeepReasoning}
             data-testid="chat-input"
           />
-          {isStreaming || isPlanning || isDeepReasoning ? (
+          {stopNotice && <p role="status" className="text-xs text-muted-foreground">{stopNotice}</p>}
+          {isStreaming || isPlanning || isDeepReasoning || isPlanExecuting ? (
             <Button
               size="icon"
               variant="ghost"
               onClick={handleAbort}
+              disabled={isStopping}
+              aria-label={isStopping ? "Stopping request" : "Stop request"}
               className="shrink-0"
               data-testid="abort-button"
             >

@@ -82,6 +82,51 @@ def test_stopped_source_remains_stopped_across_new_runtime_admissions(runtime_db
 
 
 @pytest.mark.asyncio
+async def test_chat_stop_before_admission_denies_provider_and_is_principal_scoped(runtime_db):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from robothor.engine.request_budget import RequestBudgetError, bounded_completion
+    from robothor.engine.runtime.chat_control import start, stop
+
+    auth = SimpleNamespace(tenant_id="tenant-a", user_id="owner-a")
+    session = SimpleNamespace(active_request_id=None, active_task=None)
+    client_id = str(uuid4())
+    receipt = await stop(session, auth, "shared-session", client_id)
+    assert receipt == {"ok": True, "aborted": False, "durable_stopped": True}
+    provider = AsyncMock(return_value={"usage": {"total_tokens": 1}})
+
+    async def work():
+        return await bounded_completion(provider, messages=[], model="fixture")
+
+    with pytest.raises(RequestBudgetError, match="Durable stop"):
+        await start(session, work, auth, "shared-session", client_id)
+    provider.assert_not_awaited()
+    # A guessed client UUID cannot stop another caller, even in a shared session.
+    other = SimpleNamespace(tenant_id="tenant-a", user_id="owner-b")
+    await start(session, work, other, "shared-session", client_id)
+    provider.assert_awaited_once()
+
+
+def test_request_stop_survives_restart_and_stops_descendant_runs(runtime_db):
+    import json
+
+    parent, child, request_id = [str(uuid4()) for _ in range(3)]
+    with runtime_db() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO agent_runs VALUES (%s,%s,NULL,%s::jsonb)",
+            (parent, "request-test", json.dumps({"request_id": request_id})),
+        )
+        cur.execute(
+            "INSERT INTO agent_runs VALUES (%s,%s,%s,DEFAULT)", (child, "request-test", parent)
+        )
+    controls.issue_request("request-test", request_id)
+    assert controls.stopped("request-test", parent)
+    assert controls.stopped("request-test", child)
+    assert not controls.stopped("another-tenant", child)
+
+
+@pytest.mark.asyncio
 async def test_measured_durable_stop_cancels_active_descendants(runtime_db, tmp_path):
     import asyncio
     import json
@@ -138,3 +183,75 @@ async def test_measured_durable_stop_cancels_active_descendants(runtime_db, tmp_
         Path(output).write_text(json.dumps(report, indent=2) + "\n")
     assert report["stop_ack_ms"]["p95"] < 2000
     assert report["descendant_control_ms"]["p95"] < 5000
+
+
+def test_request_context_does_not_stop_unrelated_runs_in_same_tenant(runtime_db):
+    from robothor.engine.runtime.contracts import ExecutionContext
+    from robothor.engine.runtime.current import active_context
+
+    request_id, unrelated = str(uuid4()), str(uuid4())
+    with runtime_db() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO agent_runs VALUES (%s,%s,NULL,DEFAULT)", (unrelated, "context-test")
+        )
+    token = active_context.set(ExecutionContext("context-test", "owner", request_id))
+    try:
+        controls.issue_request("context-test", request_id)
+        assert controls.stopped("context-test", "")
+        assert not controls.stopped("context-test", unrelated)
+    finally:
+        active_context.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_chat_abort_route_commits_before_ack_and_denies_cancel_resistant_work(
+    runtime_db, monkeypatch
+):
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    from robothor.auth.deps import AuthContext
+    from robothor.engine import chat
+    from robothor.engine.request_budget import RequestBudgetError, bounded_completion
+    from robothor.engine.runtime.chat_control import start
+
+    auth = AuthContext(user_id="owner", tenant_id="route-test", role="owner", typ="user")
+    session = chat.ChatSession()
+    monkeypatch.setattr(chat, "_get_session", lambda key: session)
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def authenticate(request, call_next):
+        request.state.auth = auth
+        return await call_next(request)
+
+    app.include_router(chat.router)
+    provider = AsyncMock()
+    ready = asyncio.Event()
+
+    async def resistant_work():
+        ready.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            # A transport/library swallowing cancellation must not regain authority.
+            await bounded_completion(provider, messages=[], model="fixture")
+
+    client_id = str(uuid4())
+    task = start(session, resistant_work, auth, "agent:main:primary", client_id)
+    await ready.wait()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/chat/abort", json={"session_key": "agent:main:primary", "request_id": client_id}
+        )
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "aborted": True, "durable_stopped": True}
+    with runtime_db() as conn, conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM agent_runtime_request_stops WHERE tenant_id='route-test'")
+        assert cur.fetchone()[0] == 1
+    with pytest.raises(RequestBudgetError, match="Durable stop"):
+        await task
+    provider.assert_not_awaited()

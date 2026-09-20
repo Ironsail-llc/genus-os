@@ -308,13 +308,15 @@ def _platform_installed(dist: Any, lock: Any) -> bool:
 
 
 def _discover() -> list[Any]:
-    found: list[Any] = []
-    for group in _GROUPS:
-        try:
-            found.extend(metadata.entry_points(group=group))
-        except Exception as e:  # a broken distribution must not stop boot
-            logger.warning("Plugin discovery failed for %s: %s", group, e)
-    return found
+    # entry_points(group=...) still scans every installed distribution. Doing
+    # that once per group stalls each run admission on twelve identical scans.
+    # Take one fresh snapshot; retain group ordering and do not cache authority.
+    try:
+        entries = metadata.entry_points()
+        return [entry for group in _GROUPS for entry in entries.select(group=group)]
+    except Exception as e:  # a broken distribution must not stop boot
+        logger.warning("Plugin discovery failed: %s", e)
+        return []
 
 
 def load_plugins(

@@ -1284,6 +1284,24 @@ def _attach_sales_runtime(scheduler, config, sales_runtime_assets):
     )
 
 
+async def _bootstrap_owner_links() -> None:
+    # Link the operator's CRM row to tenant_users.person_id (idempotent).
+    # Driven by ~/.robothor/owner.yaml; no-op if not configured.
+    try:
+        from robothor.crm.dal import bootstrap_owner_person_links
+
+        link_result = await asyncio.to_thread(bootstrap_owner_person_links)
+        if link_result.get("linked"):
+            logger.info(
+                "Operator identity: linked tenant=%s → person_id=%s%s",
+                link_result.get("tenant_id"),
+                link_result.get("person_id"),
+                " (created new person)" if link_result.get("created_person") else "",
+            )
+    except Exception:
+        logger.exception("bootstrap_owner_person_links failed (non-fatal)")
+
+
 async def main() -> int:
     """Start all engine subsystems. Returns the process exit code."""
     # Own SIGTERM/SIGINT before anything slow, so a stop during startup also
@@ -1318,21 +1336,7 @@ async def main() -> int:
     # can be classified as 'daemon_restart' rather than 'post_llm_crash'.
     _set_daemon_start_ts()
 
-    # Link the operator's CRM row to tenant_users.person_id (idempotent).
-    # Driven by ~/.robothor/owner.yaml; no-op if not configured.
-    try:
-        from robothor.crm.dal import bootstrap_owner_person_links
-
-        link_result = await asyncio.to_thread(bootstrap_owner_person_links)
-        if link_result.get("linked"):
-            logger.info(
-                "Operator identity: linked tenant=%s → person_id=%s%s",
-                link_result.get("tenant_id"),
-                link_result.get("person_id"),
-                " (created new person)" if link_result.get("created_person") else "",
-            )
-    except Exception:
-        logger.exception("bootstrap_owner_person_links failed (non-fatal)")
+    await _bootstrap_owner_links()
 
     # Vault-held provider keys into os.environ before any subsystem reads one.
     await load_provider_secrets_at_startup()
