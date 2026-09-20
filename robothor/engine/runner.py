@@ -1295,7 +1295,7 @@ class AgentRunner(
                 from robothor.engine.request_runtime import observe_request
 
                 try:
-                    async with observe_request(session, on_status):
+                    async with observe_request(session, on_status) as report_status:
                         await self._run_loop(
                             session,
                             models,
@@ -1311,7 +1311,7 @@ class AgentRunner(
                             spawn_context=spawn_context,
                             readonly_mode=readonly_mode,
                             execution_mode=execution_mode,
-                            on_status=on_status,
+                            on_status=report_status,
                             on_stream_event=on_stream_event,
                         )
                     # A run the watchdog flagged that RETURNED (cooperative

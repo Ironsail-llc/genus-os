@@ -80,3 +80,25 @@ def test_active_request_is_retained_verbatim_once():
     )
     assert head.count(task) == 1
     assert task not in retained and task not in rest
+
+
+def test_soft_drain_preserves_oversized_pinned_request():
+    from robothor.engine.context_control import drain_history
+
+    messages = [{"role": "system", "content": "rules" * 1000}]
+    assert drain_history(messages, "", 100) is messages
+
+
+def test_soft_drain_preserves_latest_user_and_complete_tool_result():
+    from robothor.engine.context_control import drain_history
+
+    head = [
+        {"role": "system", "content": "rules"},
+        {"role": "user", "content": "original"},
+        {"role": "assistant", "content": "acknowledged"},
+    ]
+    latest = [{"role": "user", "content": "current request"}, *exchanges(1)]
+    result = drain_history([*head, *exchanges(), *latest], "", 3000)
+    assert result[:3] == head
+    assert result[-len(latest) :] == latest
+    assert len(result) < 15

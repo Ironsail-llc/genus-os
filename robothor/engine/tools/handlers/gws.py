@@ -2314,7 +2314,9 @@ def _calendar_delete(args: dict[str, Any]) -> dict[str, Any]:
     return deleted
 
 
-def _calendar_add_attendees(args: dict[str, Any], *, run_id: str, tenant_id: str) -> dict[str, Any]:
+def _calendar_add_attendees(
+    args: dict[str, Any], *, run_id: str, tenant_id: str | None
+) -> dict[str, Any]:
     name = "gws_calendar_add_attendees"
     from robothor.engine.calendar_attendees import add_attendees
 

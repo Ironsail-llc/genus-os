@@ -305,6 +305,12 @@ def no_backoff(monkeypatch):
 
     from robothor.engine import llm_client, model_breaker
 
+    # These tests inject errors into the answering provider. Summarization
+    # uses the same LiteLLM entrypoint and must not consume that injection.
+    async def no_summary(messages, **kwargs):
+        return messages
+
+    monkeypatch.setattr("robothor.engine.context.maybe_compress", no_summary)
     slept = AsyncMock()
     monkeypatch.setattr(llm_client.asyncio, "sleep", slept)
     fresh = model_breaker.ModelBreaker(on_open=None)

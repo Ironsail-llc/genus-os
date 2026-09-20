@@ -1,6 +1,6 @@
 """Offline microbenchmark of attendee merge/verification, never real Google.
 
-Run from the repository root: python bench/interactive/measure_native.py
+Run from the repository root: python -m bench.interactive.measure_native
 This excludes authentication, DB, runner setup, model and network latency.
 """
 
@@ -8,14 +8,11 @@ from __future__ import annotations
 
 import json
 import statistics
-import sys
 import time
 from copy import deepcopy
-from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from robothor.engine.calendar_attendees import add_attendees  # noqa: E402
+from robothor.engine.calendar_attendees import add_attendees
 
 
 class FixtureCalendar:
@@ -24,7 +21,7 @@ class FixtureCalendar:
             "id": "fixture",
             "etag": '"v1"',
             "summary": "Fixture only",
-            "attendees": [{"email": "existing@example.test", "responseStatus": "accepted"}],
+            "attendees": [{"email": "existing@example.com", "responseStatus": "accepted"}],
             "start": {"dateTime": "2026-09-22T16:00:00-04:00"},
             "end": {"dateTime": "2026-09-22T16:30:00-04:00"},
         }
@@ -53,7 +50,7 @@ def main():
         with patch("robothor.engine.calendar_attendees.CalendarTransport", return_value=api):
             start = time.perf_counter()
             result = add_attendees(
-                "fixture", "fixture", ["new@example.test"], screen=lambda *a: None
+                "fixture", "fixture", ["new@example.com"], screen=lambda *a: None
             )
             samples.append((time.perf_counter() - start) * 1000)
         assert result["verification"] == "verified"

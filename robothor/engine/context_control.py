@@ -33,3 +33,27 @@ def fingerprint(messages: list[dict[str, Any]]) -> str:
 
 
 control: ContextVar[ContextControl | None] = ContextVar("context_control", default=None)
+
+
+def drain_history(messages: list[dict[str, Any]], model: str, target: int) -> list[dict[str, Any]]:
+    """Drop old complete exchanges without truncating pinned or recent content."""
+    from robothor.engine.compaction import _find_safe_split_index, _split_for_summary
+    from robothor.engine.context import estimate_tokens
+
+    if estimate_tokens(messages, model or None) <= target:
+        return messages
+    head, retained, tail = _split_for_summary(messages)
+    # Keep the last user turn and everything following it, or the last complete
+    # tool exchange when all user turns have already been pinned in the head.
+    keep = max((i for i, m in enumerate(tail) if m.get("role") == "user"), default=-1)
+    if keep < 0:
+        keep = _find_safe_split_index(tail, max(0, len(tail) - 1))
+    start = 0
+    while (
+        start < keep and estimate_tokens([*head, *retained, *tail[start:]], model or None) > target
+    ):
+        end = start + 1
+        while end < keep and tail[end].get("role") == "tool":
+            end += 1
+        start = end
+    return [*head, *retained, *tail[start:]] if start else messages

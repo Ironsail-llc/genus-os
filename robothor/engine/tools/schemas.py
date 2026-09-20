@@ -13,10 +13,9 @@ _CALENDAR_ATTENDEE_SCHEMA = {
         "name": "gws_calendar_add_attendees",
         "description": (
             "Use this to add attendees to an EXISTING meeting while preserving existing guests and RSVPs. "
-            "For a requested draft pass draft=true; after confirmation pass only its operation_id. "
-            "Requests Google notifications and verifies once. Report its result and stop checking; "
-            "notifications requested does not mean inbox delivery verified. On error, report the "
-            "partial result and record a separate repair task; never remove/re-add guests or upgrade tools."
+            "For a draft pass draft=true; confirm with operation_id only. "
+            "Verifies once and stops. Notifications requested is not delivery proof. "
+            "On error report partial state; never remove/re-add guests, resend, or upgrade tools."
         ),
         "parameters": {
             "type": "object",
