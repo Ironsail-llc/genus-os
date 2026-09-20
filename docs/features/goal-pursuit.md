@@ -33,8 +33,11 @@ cron, heartbeat, scheduled: the runs that read inbound email — carries no
 identity and is refused, so content the agent reads cannot create, steer or
 cancel a goal. The single exception is the goal executor itself, which is
 already running an authorized goal and is recognised by that goal's lease
-rather than by a role. Autonomous goal creation is not available; if it is ever
-wanted it will be a per-tenant setting an operator turns on.
+rather than by a role — and it may only create an execution child of the goal
+it is running, never a top-level goal or a child of somebody else's, so one
+authorized goal cannot fan out into siblings with ceilings of their own.
+Autonomous goal creation is not available; if it is ever wanted it will be a
+per-tenant setting an operator turns on.
 
 CLI examples:
 

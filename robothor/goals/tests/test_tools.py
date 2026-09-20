@@ -48,6 +48,47 @@ async def test_every_chat_tool_requires_an_operator_role_positively(name, ctx):
     assert "operator role" in result["error"], result
 
 
+@pytest.mark.asyncio
+async def test_a_goal_run_can_only_create_its_own_children(db):  # noqa: F811
+    """The executor exemption is not a licence to fan out into siblings.
+
+    `check_context` rightly skips the role check when an authorized binding is
+    set — but `create_pursuit_goal` did not have to name a parent, so from
+    inside one goal's run, with no identity and no role, five TOP-LEVEL goals
+    could be created, each with its own fresh default cost ceiling. A goal run
+    is exactly where untrusted content lands.
+    """
+    parent = store.create(
+        db,
+        CreateGoal(objective="Coordinate", success_criteria=["Done"], kind="long"),
+        "operator",
+    )
+    claimed, attempt = store.claim(db)
+    stranger = store.create(
+        db,
+        CreateGoal(objective="Unrelated", success_criteria=["Done"], kind="long"),
+        "operator",
+    )
+    token = binding.set(Binding(db, claimed["id"], attempt, run_id="root"))
+    ctx = ToolContext(agent_id="main", run_id="root", tenant_id=db)
+    try:
+        sibling = {"objective": "Sibling", "success_criteria": ["Done"]}
+        result = await HANDLERS["create_pursuit_goal"](sibling, ctx)
+        assert "execution child" in result["error"], result
+
+        result = await HANDLERS["create_pursuit_goal"](
+            {**sibling, "parent_goal_id": stranger["id"]}, ctx
+        )
+        assert "execution child" in result["error"], result
+
+        child = await HANDLERS["create_pursuit_goal"](
+            {**sibling, "parent_goal_id": parent["id"]}, ctx
+        )
+        assert child["goal"]["parent_goal_id"] == parent["id"]
+    finally:
+        binding.reset(token)
+
+
 def test_stale_attempt_and_disabled_tenant_each_refuse_a_write_tool(db):  # noqa: F811
     """`goal execution is no longer authorized` had no test of its own.
 

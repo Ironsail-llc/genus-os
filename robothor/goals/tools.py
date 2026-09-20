@@ -77,6 +77,15 @@ def check_context(ctx: ToolContext) -> None:
 
 async def create_goal(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     check_context(ctx)
+    current = binding.get()
+    # The executor exemption in check_context lets a run with no identity and
+    # no role reach this tool. That is only defensible for the children the
+    # authorized goal is entitled to spawn: without this, one goal run could
+    # create unlimited TOP-LEVEL siblings, each with its own fresh ceilings,
+    # and a goal run is exactly where untrusted content lands. PURSUIT_
+    # INSTRUCTIONS already says children only; this makes it true.
+    if current is not None and args.get("parent_goal_id") != current.goal_id:
+        raise ValueError("a goal run may only create an execution child of its own goal")
     return {
         "goal": await asyncio.to_thread(
             store.create, ctx.tenant_id, CreateGoal(**args), ctx.user_id or ctx.agent_id
