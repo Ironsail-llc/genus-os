@@ -39,6 +39,7 @@ _BROWSER_DESCRIPTION = (
     "billing terms and frame authority states; generate_credential "
     "{operation_id,profile_id}; email_verification {operation_id,profile_id,mode:code|link,source_operation_id?} "
     "returns a short-lived credential reference (field=password), never the code/link itself. "
+    "Additional mail sender domains must be saved by the owner in the standing grant for that website; request arguments cannot authorize them. "
     "execute {operation_id,plan:{url,session_resource_id?,verification_link_id?,"
     "fields:[{selector,resource_id,kind,field,method:fill|select|upload,frame_selector?,frame_origin?}],"
     "check_selectors:[],material_terms:[{selector,frame_selector?,frame_origin?}]?,submit_selector,success_selector?,success_text?,amount_selector?,"
