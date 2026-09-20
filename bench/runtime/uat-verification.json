@@ -736,6 +736,14 @@
       "checks": "Ruff, formatting and diff checks pass",
       "limitations": "Deployment must apply migration 139. No shared or production database change. Full acceptance incomplete.",
       "production_deployed": false
+    },
+    "populated_goal_guard_upgrade": {
+      "result": "1 passed in 0.94s",
+      "evidence": "Original migration-126 guard replaced twice by migration 139 against populated disposable state; linked child admission corrected, ordinary task allowed, all snapshotted records identical",
+      "baseline_compatibility": "Accepted revision eea3252b15 CRM DAL and thread pool retain the same SQL function call signature",
+      "checks": "Ruff, formatting and diff checks pass",
+      "limitations": "Source-level application compatibility, not a full application rollback drill. Keep migration 139 when rolling back application admissions; reverting the function reintroduces the demonstrated defect.",
+      "production_deployed": false
     }
   },
   "calendar": {
