@@ -665,8 +665,15 @@ code or biometric data. The authenticated owner endpoint loads the stored plan
 and requests a read-only browser check. Acknowledgment is not proof of completion:
 only observed website confirmation resolves the operation and its handoff.
 Existing uncertain work can still be checked after revocation or disabling
-execution. The encrypted handoff survives process restart; if a background check
-is interrupted, the same button can safely request another status check.
+execution. Migration 141 makes requested checks a durable queue. Bridge startup
+and a five-second scan recover interrupted checks after their 240-second lease
+expires. A lease token prevents stale workers from overwriting newer attempts;
+concurrent owner clicks cannot steal an active lease. Browser work has a
+185-second deadline, below the lease duration. Transient failure retries after
+20 seconds, with at most three attempts per owner request; exhausting retries
+returns the handoff to the owner without resubmitting or releasing its budget.
+A missing confirmation returns to waiting immediately. Expired handoffs are not
+retried. Checks are recovered even when new execution is disabled.
 
 Status recovery uses a fresh context with service workers disabled. It permits
 GET/HEAD through existing destination network checks and blocks other HTTP
@@ -681,5 +688,6 @@ Use the existing secure numeric-code path or authorized mailbox/TOTP integration
 when available, and configured managed challenge handling where supported.
 Handoffs do not add a phone connection, passkey signer, biometric capability or
 CAPTCHA solver, and do not replace standing authority with routine final approval.
-Automatic recovery scheduling and real issuer/device-provider acceptance remain
-part of the broader integration work.
+Real issuer/device-provider acceptance remains part of the broader integration
+work. Recovery schedules only a previously requested read-only check; it does not
+complete a device challenge for the person or automatically acknowledge one.
