@@ -86,8 +86,18 @@ Existing owner Gmail access can provide a fresh six-digit code or same-origin
 verification link without passing it to the model. The agent must already have
 both Gmail search and read tools, and the connector must belong to the same
 primary-tenant owner. Extraction checks recipient, time, sender domain and the
-Gmail authentication result. Other mailboxes, delegated sender domains, SMS and
-push approvals need adapters; no account authority implies mailbox authority.
+Gmail authentication result. The owner can configure `verification_senders` in a
+standing grant or use **Additional verification senders** on the Personal
+automation page: each HTTPS website maps to exact additional mail sender domains.
+These domains are bound to that destination, do not include their subdomains,
+and still require authenticated mail addressed to the enrolled recipient.
+Agent arguments and page content cannot add trusted senders. Additional senders
+do not authorize off-origin verification links. Authority is checked again after
+mailbox I/O; revoked grants cannot enroll the retrieved factor. Existing grants
+retain same-domain behavior. The operation cutoff floors fractional seconds so
+an immediate verification message is not excluded by timestamp rounding.
+Other mailboxes, SMS and push approvals need adapters; no account authority
+implies mailbox authority.
 TOTP generation uses an origin-bound enrolled authenticator resource.
 
 For a card verification code or other supported transient numeric challenge,

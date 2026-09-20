@@ -487,7 +487,7 @@ class AutonomyStore:
     @staticmethod
     def _operation(cur: Any, scope: Scope, operation_id: str) -> dict[str, Any]:
         cur.execute(
-            "SELECT id::text,grant_id::text,grant_version,agent_id,proposal,request_context,state,evidence,execution_plan,input_reason,workflow_id::text,extract(epoch FROM created_at)::bigint AS created_epoch "
+            "SELECT id::text,grant_id::text,grant_version,agent_id,proposal,request_context,state,evidence,execution_plan,input_reason,workflow_id::text,floor(extract(epoch FROM created_at))::bigint AS created_epoch "
             "FROM autonomy_operations WHERE id=%s AND tenant_id=%s AND owner_id=%s",
             (operation_id, scope.tenant_id, scope.owner_id),
         )

@@ -1,5 +1,7 @@
 """Strict public reference, delegation and operation contracts."""
 
+import ipaddress
+import re
 from datetime import UTC, date, datetime
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
@@ -141,6 +143,38 @@ class Delegation(StrictModel):
     annual_minor: Minor = 0
     frame_origins: frozenset[str] = frozenset()
     allowed_purposes: frozenset[str] = Field(default=frozenset(), max_length=80)
+    verification_senders: dict[str, frozenset[str]] = Field(default_factory=dict, max_length=80)
+
+    @field_validator("verification_senders")
+    @classmethod
+    def valid_verification_senders(
+        cls, values: dict[str, frozenset[str]]
+    ) -> dict[str, frozenset[str]]:
+        result = {}
+        for destination, domains in values.items():
+            destination = origin(destination)
+            if destination in result or not 1 <= len(domains) <= 20:
+                raise ValueError("invalid or duplicate verification destination")
+            normalized = set()
+            for domain in domains:
+                domain = domain.encode("idna").decode("ascii").lower()
+                if (
+                    len(domain) > 253
+                    or "." not in domain
+                    or any(
+                        not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+                        for label in domain.split(".")
+                    )
+                ):
+                    raise ValueError("expected an exact mail sender domain")
+                try:
+                    ipaddress.ip_address(domain)
+                except ValueError:
+                    normalized.add(domain)
+                else:
+                    raise ValueError("mail sender must be a DNS domain")
+            result[destination] = frozenset(normalized)
+        return result
 
     @field_validator("allowed_purposes")
     @classmethod
