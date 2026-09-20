@@ -559,3 +559,19 @@ payment writes. A submission is explicitly labeled as not yet a verified charge.
 
 Encrypted receipt capture, validated evidence ingestion and budget reconciliation
 remain integration work before this capability can be considered complete.
+
+
+### Receipt capture integration in progress
+
+Migration 139 extends the existing encrypted observation archive with an
+`after_confirmation` phase. Receipt observations are limited to completed
+`purchase` or `subscription` operations, the assigned agent, the original origin,
+and the exact confirmation digest already recorded on the operation. Revocation
+does not discard evidence for an already completed payment. These observations
+remain merchant page evidence, not proof of issuer settlement.
+
+An encrypted `capture_status` distinguishes captured content from content withheld
+after verification-code entry or unavailable content. Non-captured records cannot
+contain page text or links. The archive foundation is implemented; automatic
+browser capture and receipt labels in the private viewer are still being connected.
+No new receipt is produced until that integration is completed.
