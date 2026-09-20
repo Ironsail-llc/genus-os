@@ -1,3 +1,13 @@
+## [1.101.0](https://github.com/Ironsail-llc/genus-os/compare/v1.100.2...v1.101.0) (2026-09-20)
+
+### Features
+
+* **engine:** a snippet's spawned curl is evidence too, and a crash keeps it ([#602](https://github.com/Ironsail-llc/genus-os/issues/602)) ([b792d90](https://github.com/Ironsail-llc/genus-os/commit/b792d90ab469ede6449c394c48f88a2e90cf094a))
+
+### Documentation
+
+* **bench:** per-task Hermes data is not published, and that is checked ([#456](https://github.com/Ironsail-llc/genus-os/issues/456)) ([83cf3ce](https://github.com/Ironsail-llc/genus-os/commit/83cf3ce0514e7e77a5020ee8c07fbf08782a1fb6))
+
 ## [1.100.2](https://github.com/Ironsail-llc/genus-os/compare/v1.100.1...v1.100.2) (2026-09-18)
 
 ### Bug Fixes
