@@ -108,12 +108,17 @@ def bound_tools(gateway, tenant):
 
 
 class PydanticCandidate:
-    def __init__(self, model, *, system_prompt=SYSTEM, request_budget=None, model_settings=None):
+    def __init__(
+        self, model, *, system_prompt=SYSTEM, request_budget=None, model_settings=None, history=()
+    ):
         if request_budget is not None:
             from bench.runtime.budgeted_models import BudgetedPydanticModel
 
             model = BudgetedPydanticModel(model, request_budget)
         self.model = model
+        from bench.runtime.conversation import text_history
+
+        self.history = text_history(history)
         self.system_prompt = system_prompt
         self.model_settings = {"max_tokens": 512, "temperature": 0.5, **(model_settings or {})}
         # A host may omit an adapter default when supplying the provider's exact wire field.
@@ -123,6 +128,8 @@ class PydanticCandidate:
         await admit_gateway(gateway, tenant)
         from pydantic_ai import Agent, Tool
         from pydantic_ai.usage import UsageLimits
+
+        from bench.runtime.conversation import pydantic_history
 
         agent = Agent(
             self.model,
@@ -140,7 +147,9 @@ class PydanticCandidate:
         async with (
             candidate_timeout(),
             agent.iter(
-                prompt, usage_limits=UsageLimits(request_limit=4, tool_calls_limit=4)
+                prompt,
+                message_history=pydantic_history(self.system_prompt, self.history),
+                usage_limits=UsageLimits(request_limit=4, tool_calls_limit=4),
             ) as run,
         ):
             async for _node in run:
@@ -169,6 +178,7 @@ class DeepAgentsCandidate:
         request_budget=None,
         model_settings=None,
         tool_choice=None,
+        history=(),
     ):
         if request_budget is not None:
             from bench.runtime.budgeted_models import BudgetedDeepModel
@@ -177,6 +187,9 @@ class DeepAgentsCandidate:
                 wrapped=model, budget=request_budget, profile=getattr(model, "profile", None)
             )
         self.model = model
+        from bench.runtime.conversation import text_history
+
+        self.history = text_history(history)
         self.system_prompt = system_prompt
         self.model_settings = dict(model_settings or {})
         self.tool_choice = tool_choice
@@ -188,6 +201,8 @@ class DeepAgentsCandidate:
         from langchain.agents.middleware.types import ModelResponse
         from langchain_core.messages import AIMessage, SystemMessage
         from langchain_core.tools import StructuredTool
+
+        from bench.runtime.conversation import text_history
 
         host_tools = {
             spec["name"]: StructuredTool.from_function(
@@ -258,7 +273,8 @@ class DeepAgentsCandidate:
         )
         async with candidate_timeout():
             await agent.ainvoke(
-                {"messages": [{"role": "user", "content": prompt}]}, config={"recursion_limit": 12}
+                {"messages": [*text_history(self.history), {"role": "user", "content": prompt}]},
+                config={"recursion_limit": 12},
             )
         return {
             "duration_ms": (time.perf_counter() - started) * 1000,

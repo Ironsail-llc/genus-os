@@ -744,6 +744,18 @@
       "checks": "Ruff, formatting and diff checks pass",
       "limitations": "Source-level application compatibility, not a full application rollback drill. Keep migration 139 when rolling back application admissions; reverting the function reintroduces the demonstrated defect.",
       "production_deployed": false
+    },
+    "audit_recovery_recheck": {
+      "passed": 62,
+      "failed": 0,
+      "seconds": 3.07,
+      "scope": "Synthetic chat recovery, calendar readback and operation tests; no production actions; no new manual acceptance."
+    },
+    "candidate_text_history": {
+      "profile_passed": 8,
+      "boundary_budget_dispatch_passed": 61,
+      "failed": 0,
+      "scope": "Exact mock HTTP payload parity for initial and paired text conversations. No live calls, tool history, native memory bootstrap or checkpoint certification."
     }
   },
   "calendar": {

@@ -2,6 +2,7 @@
 
 import json
 import os
+from copy import deepcopy
 from pathlib import Path
 
 import httpx
@@ -17,7 +18,8 @@ from bench.runtime.native_profile import candidate_from_native
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("runtime", ["pydantic-ai", "deepagents"])
-async def test_native_initial_configuration_survives_candidate_transport(runtime):
+@pytest.mark.parametrize("with_history", [False, True])
+async def test_native_initial_configuration_survives_candidate_transport(runtime, with_history):
     artifact = os.environ.get("ROBOTHOR_RUNTIME_NATIVE_WIRE_ARTIFACT")
     payload = (
         json.loads(Path(artifact).read_text())
@@ -37,6 +39,14 @@ async def test_native_initial_configuration_survives_candidate_transport(runtime
             "usage": {"include": True},
         }
     )
+    if with_history:
+        payload["messages"][-1:-1] = [
+            {"role": "user", "content": "Remember the report destination is delivered."},
+            {"role": "assistant", "content": "Understood; no action taken yet."},
+            {"role": "user", "content": "Keep the key report."},
+            {"role": "assistant", "content": "The key remains report."},
+        ]
+    original = deepcopy(payload)
     captured = []
 
     def respond(request):
@@ -76,6 +86,23 @@ async def test_native_initial_configuration_survives_candidate_transport(runtime
         provider = screening_provider("synthetic-key", http_client=client)
         candidate, prompt = candidate_from_native(runtime, payload, provider, client)
         result = await candidate.run(FixtureGateway("fixture"), tenant="fixture", prompt=prompt)
+    assert payload == original
     assert result["verified"] and len(captured) == 1
     # The Chat Completions API defines omitted stream as false; preserve every other field.
     assert captured[0] == {**payload, "stream": False}
+
+
+@pytest.mark.parametrize(
+    "history",
+    [
+        [{"role": "user", "content": "unfinished"}],
+        [{"role": "assistant", "content": "wrong order"}, {"role": "user", "content": "x"}],
+        [{"role": "user", "content": "x"}, {"role": "assistant", "content": "x", "tool_calls": []}],
+        [{"role": "tool", "content": "x"}, {"role": "assistant", "content": "x"}],
+    ],
+)
+def test_unsupported_history_refused_before_execution(history):
+    from bench.runtime.conversation import text_history
+
+    with pytest.raises(ValueError, match="complete user/assistant text pairs"):
+        text_history(history)
