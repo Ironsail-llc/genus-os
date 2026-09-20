@@ -241,6 +241,12 @@
       "failed": 0,
       "seconds": 10.53,
       "scope": "Both frameworks exit immediately after one private-database synthetic receipt; fresh concurrent recovery preserves the effect and denies replay. Includes tenant/native exclusion and usage retention. Checkpoint continuation and production recovery scheduling incomplete."
+    },
+    "candidate_observed_configuration": {
+      "passed": 74,
+      "failed": 0,
+      "seconds": 7.66,
+      "scope": "Actual initial provider JSON payload equality at two temperatures for both controlled candidates; screening records observed request fingerprints. Mock HTTP only; native equivalence and performance comparison incomplete."
     }
   },
   "calendar": {

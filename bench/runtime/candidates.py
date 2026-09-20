@@ -108,13 +108,14 @@ def bound_tools(gateway, tenant):
 
 
 class PydanticCandidate:
-    def __init__(self, model, *, system_prompt=SYSTEM, request_budget=None):
+    def __init__(self, model, *, system_prompt=SYSTEM, request_budget=None, model_settings=None):
         if request_budget is not None:
             from bench.runtime.budgeted_models import BudgetedPydanticModel
 
             model = BudgetedPydanticModel(model, request_budget)
         self.model = model
         self.system_prompt = system_prompt
+        self.model_settings = {"max_tokens": 512, "temperature": 0.5, **(model_settings or {})}
 
     async def run(self, gateway, *, tenant, prompt=PROMPT):
         await admit_gateway(gateway, tenant)
@@ -125,7 +126,7 @@ class PydanticCandidate:
             self.model,
             system_prompt=self.system_prompt,
             retries=0,
-            model_settings={"max_tokens": 512, "temperature": 0.5},
+            model_settings=self.model_settings,
             tools=[
                 Tool.from_schema(
                     invoke, spec["name"], spec.get("description", ""), spec["parameters"]
@@ -158,7 +159,15 @@ class PydanticCandidate:
 
 
 class DeepAgentsCandidate:
-    def __init__(self, model, *, system_prompt=SYSTEM, request_budget=None):
+    def __init__(
+        self,
+        model,
+        *,
+        system_prompt=SYSTEM,
+        request_budget=None,
+        model_settings=None,
+        tool_choice=None,
+    ):
         if request_budget is not None:
             from bench.runtime.budgeted_models import BudgetedDeepModel
 
@@ -167,6 +176,8 @@ class DeepAgentsCandidate:
             )
         self.model = model
         self.system_prompt = system_prompt
+        self.model_settings = dict(model_settings or {})
+        self.tool_choice = tool_choice
 
     async def run(self, gateway, *, tenant, prompt=PROMPT):
         await admit_gateway(gateway, tenant)
@@ -186,6 +197,7 @@ class DeepAgentsCandidate:
             for spec, invoke in bound_tools(gateway, tenant)
         }
         system_prompt = self.system_prompt
+        model_settings, tool_choice = self.model_settings, self.tool_choice
         calls = 0
         tokens = {"input_tokens": 0, "output_tokens": 0}
         usage_known = True
@@ -202,6 +214,8 @@ class DeepAgentsCandidate:
                 response = await handler(
                     request.override(
                         tools=list(host_tools.values()),
+                        model_settings={**request.model_settings, **model_settings},
+                        tool_choice=tool_choice if tool_choice is not None else request.tool_choice,
                         system_message=SystemMessage(content=system_prompt),
                     )
                 )

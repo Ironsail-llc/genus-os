@@ -10,10 +10,12 @@ import os
 import time
 from pathlib import Path
 
+import httpx
 import yaml
 
 from bench.interactive.statistics import summary
 from bench.runtime.candidates import DeepAgentsCandidate, FixtureGateway, PydanticCandidate
+from bench.runtime.provider_capture import ProviderCapture
 
 
 def screening_provider(api_key, *, http_client=None):
@@ -30,14 +32,42 @@ def screening_provider(api_key, *, http_client=None):
     return OpenAIProvider(openai_client=client)
 
 
-async def screen(manifest, output, samples):
-    from langchain_openai import ChatOpenAI
-    from pydantic_ai.models.openai import OpenAIChatModel
+def screening_candidate(runtime, model, config, key, provider, *, http_client=None):
+    """Controlled settings, separate from framework-default evaluation."""
+    temperature = config.get("temperature", 0.5)
+    if runtime == "pydantic-ai":
+        from pydantic_ai.models.openai import OpenAIChatModel
 
+        return PydanticCandidate(
+            OpenAIChatModel(model, provider=provider),
+            model_settings={"temperature": temperature, "max_tokens": 512},
+        )
+    if runtime != "deepagents":
+        raise ValueError("unsupported screening runtime")
+    from langchain_openai import ChatOpenAI
+
+    return DeepAgentsCandidate(
+        ChatOpenAI(
+            model=model,
+            base_url="https://openrouter.ai/api/v1",
+            api_key=key,
+            temperature=temperature,
+            max_tokens=512,
+            max_retries=0,
+            http_async_client=http_client,
+        ),
+        model_settings={"strict": True},
+        tool_choice="auto",
+    )
+
+
+async def screen(manifest, output, samples):
     config = yaml.safe_load(manifest.read_text())["model"]
     models = list(dict.fromkeys([config["primary"], *config.get("fallbacks", [])]))
     key = os.environ["OPENROUTER_API_KEY"]
-    provider = screening_provider(key)
+    capture = ProviderCapture()
+    client = httpx.AsyncClient(timeout=60, event_hooks={"request": [capture.record]})
+    provider = screening_provider(key, http_client=client)
     rows = []
     gate = asyncio.Semaphore(3)
 
@@ -45,21 +75,12 @@ async def screen(manifest, output, samples):
         async with gate:
             gateway = FixtureGateway("fixture")
             started = time.perf_counter()
+            trace_token = capture.start()
             try:
                 selected = model.removeprefix("openrouter/")
-                if runtime == "pydantic-ai":
-                    candidate = PydanticCandidate(OpenAIChatModel(selected, provider=provider))
-                else:
-                    candidate = DeepAgentsCandidate(
-                        ChatOpenAI(
-                            model=selected,
-                            base_url="https://openrouter.ai/api/v1",
-                            api_key=key,
-                            max_tokens=512,
-                            temperature=config.get("temperature", 0.5),
-                            max_retries=0,
-                        )
-                    )
+                candidate = screening_candidate(
+                    runtime, selected, config, key, provider, http_client=client
+                )
                 result = await candidate.run(gateway, tenant="fixture")
                 result["status"] = "completed" if result["verified"] else "failed"
             except Exception as exc:
@@ -68,12 +89,15 @@ async def screen(manifest, output, samples):
                     "error_type": type(exc).__name__,
                     "duration_ms": (time.perf_counter() - started) * 1000,
                 }
+            finally:
+                provider_requests = capture.finish(trace_token)
             row = {
                 "runtime": runtime,
                 "model": model,
                 "repetition": index,
                 "writes": gateway.writes,
                 "dispatches": gateway.dispatches,
+                "provider_requests": provider_requests,
                 **result,
             }
             rows.append(row)
