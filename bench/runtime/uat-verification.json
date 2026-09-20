@@ -1122,6 +1122,30 @@
         "legacy children and grandchildren excluded"
       ],
       "limits": "Preserves goal ownership during generic startup selection; full native active-goal continuation and application rollback remain unverified."
+    },
+    "native_goal_recovery": {
+      "command": ".venv/bin/python -m bench.runtime.migrated_integration",
+      "integration_passed": 15,
+      "seconds": 4.29,
+      "warnings": 1,
+      "native_model_calls": 3,
+      "native_tool_outcomes": [
+        "wait denied: reconciliation required",
+        "reconciled accepted",
+        "wait accepted"
+      ],
+      "prior_tokens": 30,
+      "final_tokens": 480,
+      "durable_run_and_tool_audit_verified": true,
+      "waiting_tick_calls": 0,
+      "stale_finish_double_charge": false,
+      "fixture_failures": [
+        "Attempted assignment to frozen EngineConfig; corrected with dataclasses.replace.",
+        "MagicMock provider usage could not be persisted and triggered conservative reservations; replaced with structured ModelResponse.",
+        "Automatic planning consumed the first scripted response; pinned simple difficulty and required all three durable tool outcomes.",
+        "Diagnostic SQL used ambiguous error_message; qualified column."
+      ],
+      "scope": "Real native runner, tool registry/dispatch, runtime adapter, goal controller and canonical private database; scripted model responses and seeded test permissions. Expired lease recovery, not a daemon process crash or real provider readback."
     }
   },
   "calendar": {
