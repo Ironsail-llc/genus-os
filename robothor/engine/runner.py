@@ -511,13 +511,13 @@ class AgentRunner(
                 trigger_type is SUB_AGENT, not an interactive one).
         Returns the completed AgentRun with full metadata.
         """
+        from robothor.engine.chat_backstop import protect_if_human_chat
+
+        message = protect_if_human_chat(message, trigger_type)
         # A run created inside a ``tenant_scope`` must record under that tenant.
         # Falling through to the config default writes a row the connection's RLS
         # binding refuses, and the refusal arrives as an opaque
         # InsufficientPrivilege at INSERT time. See test_nested_run_tenant.py.
-        from robothor.autonomy.intake import protect_payment_text
-
-        message = protect_payment_text(message)
         resolved_tenant = tenant_id or current_tenant_scope() or self.config.tenant_id
 
         reason = f"Agent config not found: {agent_id}"

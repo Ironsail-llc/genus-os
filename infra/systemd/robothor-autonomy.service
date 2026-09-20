@@ -9,9 +9,11 @@ Wants=network-online.target
 # Unlike robothor-engine (StartLimitIntervalSec=0: for the engine, silence is
 # the worse failure and the crash-loop breaker lives elsewhere), this service
 # is opt-in and nothing else depends on it, so stopping loudly beats grinding
-# quietly. Twelve tries in five minutes rides out a slow Postgres or a
-# transient socket; past that the unit enters `failed`, which fires the
-# OnFailure drop-in and pages the operator with the cause the entry point
+# quietly. Twelve tries at RestartSec=5 is about a minute of retrying, which
+# rides out a slow Postgres or a socket still held by the old process; the
+# 300s interval is the window systemd measures those twelve against, not how
+# long the retrying lasts. Past twelve the unit enters `failed`, which fires
+# the OnFailure drop-in and pages the operator with the cause the entry point
 # now logs. `systemctl reset-failed robothor-autonomy` re-arms it.
 StartLimitIntervalSec=300
 StartLimitBurst=12

@@ -18,6 +18,10 @@ existing native vault; no external password manager is required.
    enrols, switches execution on, and writes a grant naming the agents it
    covers. The engine attaches the prompt paragraph and the schema wording to a
    run only when this flag is on **and** a live grant names that run's agent.
+   The bridge reads the same flag: with it off, every `/api/autonomy/*` route
+   answers 404 to an authenticated caller of any role, including the
+   enrollment and grant endpoints that store a payment card and set spending
+   authority. Restart the bridge after changing it.
 1. Apply packaged migrations `127_autonomous_execution.sql`,
    `128_autonomy_resource_descriptors.sql`, and `129_autonomy_workflows.sql` through the normal
    upgrade process. Preserve the existing vault master key and encrypted backups.

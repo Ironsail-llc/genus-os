@@ -257,8 +257,30 @@ async def prepare_toolset(
     return PreparedToolset(tool_schemas=tool_schemas, tool_names=tool_names, system_prompt=wrapped)
 
 
+#: How long a run will wait to find out how wordy its own prompt should be.
+#:
+#: The lookup already bounds itself — one connection, one statement timeout —
+#: so reaching this means something the database-side bounds do not cover: a
+#: thread-pool with no free worker, a DNS stall, a connect that hangs past
+#: ``connect_timeout``. One second is far longer than the answer ever takes
+#: and far shorter than anyone would notice.
+_AUTONOMY_LOOKUP_TIMEOUT_S = 1.0
+
+
 async def _autonomy_active(tenant_id: str | None, actor_id: str | None, agent_id: str) -> bool:
-    """Off-thread, best-effort, and never a reason a run fails.
+    """Off-thread, time-boxed, best-effort, and never a reason a run fails.
+
+    ``except Exception`` catches errors, not latency, and that is the gap this
+    closes: the lookup used to make three separate connections, each bounded
+    only by ``connect_timeout=5``, so a hanging Postgres could spend fifteen
+    seconds of an agent run on a prompt hint and the swallow below would never
+    fire. Now the wait is bounded here as well as inside.
+
+    ``asyncio.to_thread`` is not cancellable, so a timeout abandons the thread
+    rather than stopping it: the thread finishes into a future nobody reads
+    and its connection closes on its own. What matters is that the RUN stops
+    waiting. Leaking a worker for the rest of a stalled connect is the cheaper
+    of the two failures by a wide margin.
 
     Plan mode never reaches here: a read-only run cannot submit a form, so
     the autonomy wording would be tokens spent describing an action the run
@@ -269,9 +291,20 @@ async def _autonomy_active(tenant_id: str | None, actor_id: str | None, agent_id
     try:
         from robothor.autonomy.availability import autonomy_active
 
-        return await asyncio.to_thread(autonomy_active, tenant_id, actor_id, agent_id)
+        return await asyncio.wait_for(
+            asyncio.to_thread(autonomy_active, tenant_id, actor_id, agent_id),
+            timeout=_AUTONOMY_LOOKUP_TIMEOUT_S,
+        )
+    except TimeoutError:
+        # Not a warning: `availability` warns for the cases it can see, and a
+        # slow database is already this box's loudest problem.
+        logger.info(
+            "Autonomy availability timed out after %.1fs; this run assumes no grant",
+            _AUTONOMY_LOOKUP_TIMEOUT_S,
+        )
+        return False
     except Exception as e:  # noqa: BLE001 - a prompt hint must not fail a run
-        logger.debug("Autonomy availability skipped: %s", _sanitize(e))
+        logger.warning("Autonomy availability skipped: %s", _sanitize(e))
         return False
 
 

@@ -23,7 +23,7 @@ import asyncio
 import logging
 
 import httpx
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 
 logger = logging.getLogger(__name__)
 
@@ -216,7 +216,17 @@ app.include_router(automations_router)
 app.include_router(approvals_router)
 from routers.autonomy import router as autonomy_router
 
-app.include_router(autonomy_router)
+# Personal automation, behind the instance-level switch that governs the rest
+# of the feature. `require_personal_owner` inside the router checks role and
+# identity; it does not ask whether this appliance offers the feature at all,
+# so with ROBOTHOR_AUTONOMY_ENABLED off any authenticated member could still
+# POST an enrollment or a grant -- the endpoints that store a payment card and
+# hand an agent spending authority. Applied here rather than in the router so
+# it covers every route including later ones, and so the routes stay in the
+# assembled app for test_mutations_are_gated.py to enumerate.
+from crm.bridge.autonomy_gate import require_feature_offered
+
+app.include_router(autonomy_router, dependencies=[Depends(require_feature_offered)])
 # Who may reach this instance over a channel. Beside approvals because both are
 # "a person has to decide something", and one of the decisions here is the only
 # way a pairing code is ever spent over the network -- the channel that issued

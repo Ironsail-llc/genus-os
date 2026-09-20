@@ -500,20 +500,30 @@ class TestRedactCarriesNoProductProse:
     #: Valid IMEI (Luhn check digit 8). Every IMEI is Luhn-valid by design.
     IMEI = "490154203237518"
 
+    #: Luhn-valid, 12 and 15 digits, and deliberately NOT card-shaped: no
+    #: network issues an IIN beginning 8 or 9. The point of these cases is
+    #: that a long Luhn-valid run is not evidence of a card, so using a real
+    #: Visa test PAN to make it — as the first version of this file did —
+    #: teaches the next reader the opposite of the lesson.
+    CONSIGNMENT = "800123456785"
+    ORDER = "900111222333441"
+
     def test_an_imei_survives_intact(self):
         text = f"IMEI {self.IMEI} registered"
         assert redact(text) == text
 
     def test_a_tracking_number_survives_intact(self):
-        # UPS 1Z tracking tail / a long numeric consignment id, Luhn-valid.
-        text = "carrier consignment 4242424242424242 delivered"
+        text = f"carrier consignment {self.CONSIGNMENT} delivered"
         assert redact(text) == text
 
     def test_no_advisory_text_is_appended_to_any_string(self):
         for text in (
+            # A real PAN too: even here `redact` must stay a redactor. The
+            # chat boundary is where a card is withheld, and it is the only
+            # place that may say so.
             "log line: card 4242424242424242 charged ok",
             f"IMEI {self.IMEI} registered",
-            "order 4000056655665556 shipped",
+            f"order {self.ORDER} shipped",
         ):
             out = redact(text)
             assert "[" not in out and "]" not in out, out
