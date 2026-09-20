@@ -1,0 +1,26 @@
+{
+  "scope": "Synthetic per-user chat fixture; diagnostic HTTP TCP interception refused connections before provider access.",
+  "reproduced_test": "TestPlanEndpointsIsolation::test_plan_iterate_targets_derived_session",
+  "before": {
+    "attempted_destination": "127.0.0.1:11434",
+    "path": [
+      "chat_store._embed_turns",
+      "ollama.get_embeddings_batch_async",
+      "ollama.get_embedding_async",
+      "httpx.AsyncClient.post",
+      "httpcore.AnyIOBackend.connect_tcp"
+    ]
+  },
+  "change": "chat_app fixture mocks batch embeddings with an empty synthetic result; product embedding behavior is unchanged.",
+  "after": {
+    "test_passed": true,
+    "http_tcp_attempts": 0
+  },
+  "focused_regression": {
+    "passed": 127,
+    "failed": 0,
+    "seconds": 4.01,
+    "runtime_warnings_are_errors": true
+  },
+  "limits": "This demonstrates and removes a hidden local-service dependency in this fixture. It does not prove every source of the intermittent connect_tcp warning is fixed."
+}

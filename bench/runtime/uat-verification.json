@@ -9,23 +9,24 @@
   "replacement_selected": false,
   "checks": {
     "engine": {
-      "revision": "b68204804a5",
-      "passed": 10982,
+      "revision": "da202e576fb",
+      "passed": 10995,
       "failed": 0,
       "skipped": 29,
       "deselected": 173,
-      "seconds": 354.79,
-      "warnings": 396,
+      "seconds": 348.1,
+      "warnings": 394,
       "selection": "not slow and not integration and not llm and not e2e and not smoke",
-      "log": "/tmp/runtime-engine-regression-b682048.log",
-      "note": "Post audit-recovery and unattended-worker broad run. Unawaited alert coroutine warnings in loop-guard tests and a connect_tcp coroutine warning remain unresolved; passing tests do not certify warning-free execution or full acceptance."
+      "log": "/tmp/runtime-engine-regression-da202e.log",
+      "note": "Broad run includes delegated receipt and goal changes, before chat fixture embedding isolation. Two connect_tcp unawaited coroutine warnings remain in this run; no full acceptance or warning-free claim."
     },
     "frontend": {
-      "files": 146,
-      "passed": 1622,
+      "revision": "da202e576fb",
+      "files": 149,
+      "passed": 1648,
       "failed": 0,
-      "seconds": 10.36,
-      "note": "Broad run at 04e9a05d10d; before automatic audit recovery."
+      "seconds": 9.09,
+      "log": "/tmp/runtime-frontend-regression-da202e.log"
     },
     "goals_private_database": {
       "passed": 58,
@@ -764,6 +765,41 @@
       "scope": "Private PostgreSQL root/child/grandchild receipts; tenant/principal isolation; conflicting references; executor-specific readback routing; existing calendar and chat regressions. No live provider calls.",
       "initial_failure": "Both child and grandchild executing effects were omitted, incorrectly preserving parent success.",
       "limitations": "General external-tool recovery remains incomplete. Existing intermittent connect_tcp warning appeared in an earlier run and is not declared resolved."
+    },
+    "engine_previous_b682048": {
+      "revision": "b68204804a5",
+      "passed": 10982,
+      "failed": 0,
+      "skipped": 29,
+      "deselected": 173,
+      "seconds": 354.79,
+      "warnings": 396,
+      "selection": "not slow and not integration and not llm and not e2e and not smoke",
+      "log": "/tmp/runtime-engine-regression-b682048.log",
+      "note": "Post audit-recovery and unattended-worker broad run. Unawaited alert coroutine warnings in loop-guard tests and a connect_tcp coroutine warning remain unresolved; passing tests do not certify warning-free execution or full acceptance."
+    },
+    "frontend_previous_record": {
+      "files": 146,
+      "passed": 1622,
+      "failed": 0,
+      "seconds": 10.36,
+      "note": "Broad run at 04e9a05d10d; before automatic audit recovery."
+    },
+    "goals_current_broad": {
+      "revision": "da202e576fb",
+      "passed": 84,
+      "failed": 0,
+      "seconds": 10.28,
+      "warnings": 2,
+      "log": "/tmp/runtime-goals-regression-da202e.log"
+    },
+    "chat_fixture_network_isolation": {
+      "artifact": "uat-chat-network-isolation.json",
+      "passed": 127,
+      "failed": 0,
+      "seconds": 4.01,
+      "runtime_warnings_are_errors": true,
+      "note": "Post broad-run fixture-only correction; diagnostic plan-iteration test makes zero HTTP TCP connection attempts. All coroutine warning sources are not certified resolved."
     }
   },
   "calendar": {
