@@ -159,7 +159,7 @@ export function PersonalAutomationPanel() {
         <p>{operation.proposal.purpose} · {operation.state.replaceAll("_", " ")}</p>
         <p className="text-sm text-muted-foreground">{operation.proposal.origin}</p>
         <PersonalAutomationAudit operationId={operation.id} />
-        {["purchase", "membership"].includes(operation.proposal.action) && <PersonalAutomationPayment key={operation.id} operationId={operation.id} currency={operation.proposal.currency} />}
+        {["purchase", "subscription"].includes(operation.proposal.action) && <PersonalAutomationPayment key={operation.id} operationId={operation.id} currency={operation.proposal.currency} />}
         {operation.state === "awaiting_input" && <form className="flex gap-2" autoComplete="off" onSubmit={event => {
           event.preventDefault(); const form = event.currentTarget;
           const code = String(new FormData(form).get("code") || "");

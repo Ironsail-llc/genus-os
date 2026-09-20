@@ -545,7 +545,7 @@ They are not hidden by execution-policy limits. Refunds do not by themselves fre
 a spending reservation or end a recurring commitment.
 
 Migration 138 adds encrypted, owner-scoped payment facts. Broker payment completion
-records a submission fact atomically; concurrent identical deliveries are deduplicated,
+records a submission fact atomically for `purchase` and initial `subscription` enrollment; concurrent identical deliveries are deduplicated,
 and conflicting deliveries cannot overwrite evidence. A fresh process can read the
 position using the native resource keyring. Unsupported or inconsistent facts remain
 stored with a reconciliation-required result rather than an invented balance.

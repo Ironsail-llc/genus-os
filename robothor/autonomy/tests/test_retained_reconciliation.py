@@ -11,6 +11,7 @@ from robothor.autonomy.models import Delegation, RuntimeSettings, WebOperation
 from robothor.autonomy.workflows.manager import WorkflowManager
 
 
+@pytest.mark.e2e
 @pytest.mark.timeout(45)
 async def test_uncertain_account_retains_confirmation_for_read_only_reconciliation(
     store, identity, monkeypatch
@@ -176,6 +177,7 @@ async def test_uncertain_account_retains_confirmation_for_read_only_reconciliati
             await manager.shutdown()
 
 
+@pytest.mark.e2e
 async def test_candidate_evidence_excludes_prior_hidden_editable_and_masks_reflections():
     import base64
     from types import SimpleNamespace

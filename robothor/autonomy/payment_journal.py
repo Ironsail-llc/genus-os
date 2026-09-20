@@ -72,7 +72,7 @@ class PaymentJournal:
         self, cur: Any, scope: Scope, op: dict[str, Any], fact: PaymentFact
     ) -> dict[str, Any]:
         fact = PaymentFact.model_validate(fact.model_dump())
-        if op["proposal"]["action"] not in {"purchase", "membership"}:
+        if op["proposal"]["action"] not in {"purchase", "subscription"}:
             raise PermissionError("payment_operation_required")
         if fact.source == "merchant" and (fact.kind != "submitted" or fact.amount_minor):
             raise PermissionError("issuer_evidence_required")
@@ -122,7 +122,7 @@ class PaymentJournal:
 
 def record_submission(cur: Any, store: AutonomyStore, scope: Scope, op: dict[str, Any]) -> None:
     """Called in the broker's completion transaction; never a settlement claim."""
-    if op["proposal"]["action"] in {"purchase", "membership"}:
+    if op["proposal"]["action"] in {"purchase", "subscription"}:
         PaymentJournal(store)._append(
             cur,
             scope,
