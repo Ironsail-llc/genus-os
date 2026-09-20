@@ -92,6 +92,14 @@ jobs:
         env:
           RUNTIME_UAT_MANAGED: '1'
           RUNTIME_UAT_PYTHON: python
+      - name: Verify chat recovery under audit outages
+        run: >-
+          pnpm exec vitest run
+          src/components/__tests__/chat-recovery.test.tsx
+          src/components/__tests__/chat-panel*.test.tsx
+          src/app/api/chat/__tests__/agent-routing.test.ts
+          src/lib/engine/__tests__/server-client-session.test.ts
+        working-directory: app
       - name: Build and verify terminal chat outcomes in the actual dashboard
         run: |
           pnpm build

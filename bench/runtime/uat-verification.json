@@ -559,6 +559,20 @@
         "Run records do not independently verify every external effect; general provider receipt reconciliation remains incomplete"
       ],
       "production_deployed": false
+    },
+    "chat_audit_recovery_outages": {
+      "files": 6,
+      "passed": 53,
+      "seconds": 1.55,
+      "new_cases": 3,
+      "covers": [
+        "unavailable then missing then running then completed record",
+        "capped backoff and polling shutdown",
+        "late transport response cannot update an unmounted conversation"
+      ],
+      "clock": "fake timer for outage delays",
+      "model_calls": 0,
+      "business_calls": 0
     }
   },
   "calendar": {
