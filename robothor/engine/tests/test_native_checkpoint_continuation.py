@@ -120,3 +120,5 @@ async def test_native_checkpoint_continues_saved_conversation(engine_config, sam
         status, task, runtime = cur.fetchone()
         assert status == "completed" and task == "Summarize the saved task status"
         assert runtime["tenant_id"] == tenant and runtime["runtime_id"] == "current"
+
+        assert runtime["resume_from_run_id"] == original

@@ -1,0 +1,12 @@
+{
+  "initial_failure": "The actual resumed run had no durable resume origin in runtime_context.",
+  "fix": "AgentRun carries resume_from_run_id, the native runner sets it from explicit resume admission, and run_identity persists it separately from parent_id.",
+  "focused_passed": 122,
+  "focused_seconds": 4.85,
+  "focused_warnings": 1,
+  "integration_passed": 20,
+  "integration_seconds": 6.3,
+  "integration_skipped": 1,
+  "integration_warnings": 1,
+  "limits": "Persists checkpoint lineage for new native resumes. Existing historical rows are not backfilled and chat recovery does not yet traverse this reference."
+}

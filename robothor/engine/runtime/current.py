@@ -181,6 +181,7 @@ def run_identity(run: Any) -> dict[str, Any]:
         "principal_id": run.user_id or "service:" + run.agent_id,
         "request_id": context.request_id if context else (run.correlation_id or run.id),
         "parent_id": run.parent_run_id,
+        "resume_from_run_id": getattr(run, "resume_from_run_id", None),
         "goal_id": goal.goal_id if goal else None,
         "parent_goal_id": context.parent_goal_id if context else None,
         "attempt_id": goal.attempt if goal else None,

@@ -588,6 +588,9 @@ class AgentRun:
     cost_budget_usd: float = 0.0
     budget_exhausted: bool = False
 
+    # Checkpoint lineage is distinct from delegated parent/child work.
+    resume_from_run_id: str | None = None
+
     # Sub-agent tracking
     parent_run_id: str | None = None
     nesting_depth: int = 0

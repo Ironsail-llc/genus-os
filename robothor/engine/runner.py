@@ -606,6 +606,7 @@ class AgentRunner(
         # User identity threading
         session.run.user_id = effective_user_id
         session.run.user_role = effective_user_role
+        session.run.resume_from_run_id = resume_from_run_id
 
         # Benchmark sandbox marker — stamps the AgentRun (read by the tool
         # wrappers) and the task-local run context (read by the memory write
