@@ -3,20 +3,22 @@
 import asyncio
 import os
 import tempfile
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from typing import Any
 
 from robothor.engine.web_render_network import RenderError, RenderNetwork, public_url
 from robothor.settings import get_settings
 
 
 class RenderRoutes:
-    def __init__(self, network, initial=None):
+    def __init__(self, network: Any, initial: Any = None) -> None:
         self.network = network
         self.initial = initial
-        self.page = None
+        self.page: Any = None
         self.blocked = 0
 
-    async def handle(self, route):
+    async def handle(self, route: Any) -> None:
         request = route.request
         if request.method != "GET" or request.resource_type not in {
             "document",
@@ -56,10 +58,10 @@ class RenderRoutes:
 
 
 @asynccontextmanager
-async def rejecting_proxy():
+async def rejecting_proxy() -> AsyncIterator[str]:
     """Backstop any browser networking that route interception does not cover."""
 
-    def reject(reader, writer):
+    def reject(reader: Any, writer: Any) -> None:
         writer.close()
 
     server = await asyncio.start_server(reject, "127.0.0.1", 0)
@@ -67,7 +69,7 @@ async def rejecting_proxy():
         yield f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
 
 
-async def render(url):
+async def render(url: str) -> dict[str, Any]:
     from playwright.async_api import TimeoutError as PlaywrightTimeout
     from playwright.async_api import async_playwright
 
@@ -79,7 +81,11 @@ async def render(url):
         raise RenderError("Rendering requires an HTML document")
     routes = RenderRoutes(network, initial)
     with tempfile.TemporaryDirectory(prefix="genus-web-render-") as home:
-        env = {"HOME": home, "PATH": os.defpath, "LANG": "C.UTF-8"}
+        env: dict[str, str | float | bool] = {
+            "HOME": home,
+            "PATH": os.defpath,
+            "LANG": "C.UTF-8",
+        }
         helper = get_settings().engine.web_render_sandbox_helper
         if helper:
             env["CHROME_DEVEL_SANDBOX"] = helper
@@ -99,7 +105,7 @@ async def render(url):
                 context = await browser.new_context(service_workers="block", accept_downloads=False)
                 await context.route("**/*", routes.handle)
 
-                async def close_socket(socket):
+                async def close_socket(socket: Any) -> None:
                     await socket.close()
 
                 await context.route_web_socket("**/*", close_socket)
@@ -125,17 +131,19 @@ async def render(url):
                     bytes=network.bytes,
                     blocked_resources=routes.blocked,
                 )
-                return result
+                rendered: dict[str, Any] = result
+                return rendered
             finally:
                 await browser.close()
 
 
-async def web_render(args, ctx):
-    if set(args) != {"url"} or not public_url(args.get("url")):
+async def web_render(args: dict[str, Any], ctx: Any) -> dict[str, Any]:
+    url = args.get("url")
+    if set(args) != {"url"} or not isinstance(url, str) or not public_url(url):
         return {"error": "web_render accepts only a public HTTP(S) URL without credentials"}
     try:
         async with asyncio.timeout(35):
-            return await render(args["url"])
+            return await render(url)
     except asyncio.CancelledError:
         raise
     except Exception as exc:

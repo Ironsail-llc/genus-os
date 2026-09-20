@@ -1,7 +1,7 @@
 """Normalize portable operator review packets without publishing or fetching sources."""
 
 import json
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field
 
@@ -12,7 +12,7 @@ from robothor.sales.models import Contract, QualificationPolicy
 class LibraryPacket(Contract):
     kind: Literal["qualification", "knowledge"]
     version: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
-    data: dict
+    data: dict[str, Any]
 
 
 def preview(value):

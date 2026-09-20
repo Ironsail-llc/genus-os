@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 from uuid import UUID  # noqa: TC003 — FastAPI resolves this annotation at runtime.
 
 from fastapi import APIRouter, HTTPException, Request
@@ -31,7 +32,7 @@ class Empty(Contract):
     pass
 
 
-def _summary(record):
+def _summary(record: dict[str, Any] | None) -> dict[str, Any] | None:
     if record is None:
         return None
     fields = (
@@ -64,7 +65,7 @@ def _summary(record):
     return result
 
 
-def _history(runtime):
+def _history(runtime: Any) -> tuple[list[dict[str, Any] | None], dict[str, Any] | None]:
     with runtime.coordinator.sales.ops.transaction() as cur:
         cur.execute(
             "SELECT * FROM sales_deployments WHERE tenant_id=%s ORDER BY created_at DESC LIMIT 20",
@@ -79,7 +80,7 @@ def _history(runtime):
     return recent, rollback
 
 
-async def _result(work):
+async def _result(work: Any) -> Any:
     try:
         return await work
     except Conflict as exc:
@@ -92,10 +93,10 @@ async def _result(work):
         ) from None
 
 
-def register(app, scheduler):
+def register(app: Any, scheduler: Any) -> None:
     router = APIRouter(prefix="/api/admin/sales-deployment", tags=["sales-deployment"])
 
-    def human(request):
+    def human(request: Request) -> tuple[Any, str]:
         context = request_context(request)
         if (
             context.is_service
@@ -112,7 +113,7 @@ def register(app, scheduler):
         return runtime, "operator:" + context.actor_id
 
     @router.get("")
-    async def status(request: Request):
+    async def status(request: Request) -> dict[str, Any]:
         runtime, _ = human(request)
         state = await _result(asyncio.to_thread(runtime._state))
         ready, reason = False, None
@@ -143,10 +144,10 @@ def register(app, scheduler):
         }
 
     @router.get("/releases/{release_id}")
-    async def inspect_release(release_id: str, request: Request):
+    async def inspect_release(release_id: str, request: Request) -> dict[str, Any]:
         runtime, _ = human(request)
 
-        async def inspect():
+        async def inspect() -> dict[str, Any]:
             root = staged_release_path(runtime.workspace, release_id)
             snapshot = await asyncio.to_thread(load_snapshot, root, expected_digest=release_id)
             metadata = snapshot.metadata()
@@ -168,27 +169,28 @@ def register(app, scheduler):
                 ],
             }
 
-        return await _result(inspect())
+        described: dict[str, Any] = await _result(inspect())
+        return described
 
     @router.post("/prepare")
-    async def prepare(body: Prepare, request: Request):
+    async def prepare(body: Prepare, request: Request) -> Any:
         runtime, actor = human(request)
         return _summary(await _result(runtime.prepare(**body.model_dump(), actor=actor)))
 
     @router.post("/transitions/{transition_id}/commit")
-    async def commit(transition_id: UUID, body: Empty, request: Request):
+    async def commit(transition_id: UUID, body: Empty, request: Request) -> Any:
         runtime, actor = human(request)
         return _summary(await _result(runtime.commit(str(transition_id), actor=actor)))
 
     @router.post("/transitions/{transition_id}/abort")
-    async def abort(transition_id: UUID, body: Reason, request: Request):
+    async def abort(transition_id: UUID, body: Reason, request: Request) -> Any:
         runtime, actor = human(request)
         return _summary(
             await _result(runtime.abort(str(transition_id), actor=actor, reason=body.reason))
         )
 
     @router.post("/transitions/{transition_id}/rollback")
-    async def rollback(transition_id: UUID, body: RevisionReason, request: Request):
+    async def rollback(transition_id: UUID, body: RevisionReason, request: Request) -> Any:
         runtime, actor = human(request)
         return _summary(
             await _result(

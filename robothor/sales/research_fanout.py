@@ -7,6 +7,7 @@ import json
 from contextlib import contextmanager
 from contextvars import ContextVar
 from hashlib import sha256
+from typing import Any
 
 from robothor.operations.store import Conflict, digest
 from robothor.sales.models import Dossier
@@ -20,7 +21,9 @@ def merge_fragments(parts: dict[str, Dossier], buying_case: str) -> Dossier:
     """Preserve all cited evidence, including disagreement; never manufacture a criterion."""
     if set(parts) != set(TOPICS):
         raise Conflict("All three planned research topics are required")
-    evidence, criteria, summaries = [], {}, []
+    evidence: list[Any] = []
+    criteria: dict[str, Any] = {}
+    summaries: list[Any] = []
     fields: dict[str, list[str]] = {
         k: [] for k in ("services", "providers", "locations", "unanswered")
     }
@@ -60,9 +63,11 @@ class ResearchFanout:
         self.closed = False
         self.buying_case = None
         self.dossier: Dossier | None = None
-        self.provenance: dict = {}
+        self.provenance: dict[str, Any] = {}
         self.parts: dict[str, Dossier] = {}
-        self.children: dict = {}
+        self.children: dict[str, Any] = {}
+        #: Set by research_manifest once it has chosen the worker's read tool.
+        self.first_read_tool: str | None = None
         self.recovery = None
         self.sources = None
         self._record_lock = asyncio.Lock()
@@ -118,7 +123,7 @@ class ResearchFanout:
             async def capture(index, result):
                 await self.record(missing[index], result)
 
-            options = {"_on_result": capture} if self.recovery is not None else {}
+            options: dict[str, Any] = {"_on_result": capture} if self.recovery is not None else {}
             if self.sources is not None:
                 options["_child_scope"] = self.sources.child_scope
             response = await _handle_spawn_agents({"agents": specs}, ctx=ctx, **options)
@@ -202,7 +207,9 @@ class ResearchFanout:
             return WorkflowCompletion(error="Research bundle did not complete all validated topics")
         return WorkflowCompletion(output=json.dumps(self.result()))
 
-    def result(self):
+    def result(self) -> dict[str, Any]:
+        if self.dossier is None:
+            raise Conflict("Research bundle has no validated dossier to report")
         return {"dossier": self.dossier.model_dump(mode="json"), "provenance": self.provenance}
 
 
@@ -217,8 +224,9 @@ def research_scope(fanout):
         _active.reset(token)
 
 
-async def delegate_research(buying_case, ctx):
+async def delegate_research(buying_case: Any, ctx: Any) -> dict[str, Any]:
     fanout = _active.get()
     if fanout is None:
         raise Conflict("Research delegation requires a bounded native research stage")
-    return await fanout.run(buying_case, ctx)
+    bundle: dict[str, Any] = await fanout.run(buying_case, ctx)
+    return bundle

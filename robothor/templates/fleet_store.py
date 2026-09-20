@@ -24,7 +24,7 @@ class StagedRelease:
     already_present: bool
 
 
-def _sync_directory(path):
+def _sync_directory(path: Path) -> None:
     descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
     try:
         os.fsync(descriptor)

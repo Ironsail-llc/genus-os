@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
@@ -25,17 +25,18 @@ class FleetSnapshot:
     _knowledge: tuple[str, ...] = field(repr=False)
     _metadata: bytes = field(repr=False)
 
-    def metadata(self):
+    def metadata(self) -> dict[str, Any]:
         """A fresh metadata document, independent of the captured snapshot."""
-        return json.loads(self._metadata)
+        document: dict[str, Any] = json.loads(self._metadata)
+        return document
 
-    def document(self, path):
+    def document(self, path: str | None) -> Any:
         """Parse a captured YAML member without returning a mutable shared object."""
         if not path or path not in dict(self._files) or not path.endswith(".yaml"):
             raise ReleaseError("Document is not part of the verified fleet snapshot")
         return yaml.safe_load(dict(self._files)[path])
 
-    def agent(self, agent_id):
+    def agent(self, agent_id: str) -> Any:
         """Fresh native config with captured knowledge; no ambient config merge."""
         from robothor.engine.config import manifest_to_agent_config
 

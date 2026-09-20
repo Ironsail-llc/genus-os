@@ -7,6 +7,7 @@ import re
 import tempfile
 from importlib import metadata
 from pathlib import Path
+from typing import Any
 
 from packaging.utils import canonicalize_name
 
@@ -15,7 +16,7 @@ from robothor.plugins.wheel import MAX_WHEEL_BYTES, open_wheel
 from robothor.templates.safety import contained_path, trusted_directory, validate_sha256
 
 
-def _generated(path, expected, dist_info):
+def _generated(path: str, expected: dict[str, Path], dist_info: str) -> bool:
     if path in {
         f"{dist_info}/{name}" for name in ("RECORD", "INSTALLER", "REQUESTED", "direct_url.json")
     }:
@@ -29,8 +30,12 @@ def _generated(path, expected, dist_info):
 
 
 def verify_installed_wheel(
-    wheel_path: Path, *, expected_digest: str, lock_path: Path, distribution=None
-) -> dict:
+    wheel_path: Path,
+    *,
+    expected_digest: str,
+    lock_path: Path,
+    distribution: metadata.Distribution | None = None,
+) -> dict[str, Any]:
     """Verify governed payload bytes and package membership; never import code.
 
     Generated installer metadata and caches for declared Python sources are not
@@ -76,7 +81,7 @@ def verify_installed_wheel(
                 distribution.metadata["Name"]
             ) != canonicalize_name(wheel.name):
                 raise ValueError("Installed plugin version differs")
-            root = trusted_directory(Path(distribution.locate_file(".")).resolve())
+            root = trusted_directory(Path(str(distribution.locate_file("."))).resolve())
             expected = {
                 path.relative_to(wheel.root).as_posix(): path
                 for path in wheel.root.rglob("*")
@@ -93,7 +98,7 @@ def verify_installed_wheel(
                 expected_bytes = source.read_bytes()
                 if (
                     relative not in recorded
-                    or Path(distribution.locate_file(relative)) != target
+                    or Path(str(distribution.locate_file(relative))) != target
                     or not target.is_file()
                     or target.stat().st_size != len(expected_bytes)
                 ):

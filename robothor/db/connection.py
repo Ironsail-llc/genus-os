@@ -301,7 +301,7 @@ def _warn_once_about_a_superuser_connection(conn: psycopg2.extensions.connection
         return
     _warned_superuser = True
     try:
-        with conn.cursor() as cur:  # type: ignore[attr-defined]
+        with conn.cursor() as cur:
             cur.execute("SELECT rolsuper FROM pg_roles WHERE rolname = current_user")
             row = cur.fetchone()
     except Exception as exc:  # noqa: BLE001 -- a probe must never break the pool

@@ -1,6 +1,7 @@
 """Prepare review work from Genus CRM independently of external CRM promotion."""
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from robothor.operations.store import Conflict
 from robothor.sales.models import Contact, SalesSettings
@@ -57,9 +58,9 @@ class InitialDraftPlanner:
                     or p["conversation_version"]
                 ):
                     continue
-                q = p["qualification"] or {}
+                q: dict[str, Any] = p["qualification"] or {}
                 if q.get("decision") != "qualified" or settings.active_policy_versions.get(
-                    q.get("buying_case")
+                    q.get("buying_case") or ""
                 ) != q.get("policy_version"):
                     continue
                 try:

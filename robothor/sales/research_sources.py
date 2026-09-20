@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from datetime import UTC, datetime
 from hashlib import sha256
+from typing import Any
 from unicodedata import normalize
 from urllib.parse import urlsplit
 
@@ -42,7 +43,7 @@ class ResearchSources:
             raise ValueError("Research requires an available page retrieval tool")
         self.tenant_id, self.agent_id = tenant_id, agent_id
         self.first_read_tool = first_read_tool
-        self.runs: dict[str, list[dict]] = {}
+        self.runs: dict[str, list[dict[str, Any]]] = {}
 
     @contextmanager
     def child_scope(self, index):

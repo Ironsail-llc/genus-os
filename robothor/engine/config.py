@@ -470,7 +470,7 @@ def _tool_policy(manifest: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _spawn_options(v2):
+def _spawn_options(v2: dict[str, Any]) -> dict[str, Any]:
     """Parse the manifest's delegation limits and target scope."""
     return {
         "can_spawn_agents": v2.get("can_spawn_agents", False),

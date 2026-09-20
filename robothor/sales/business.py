@@ -5,6 +5,7 @@ models neither merge businesses nor declare orders fulfilled.
 """
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import uuid4
 
 from psycopg2.extras import Json
@@ -79,11 +80,12 @@ class BusinessObservations:
             revision=revision,
             observed_at=observed_at,
         )
-        record = (
-            {"practice": PracticeRecord, "signup": SignupRecord, "order": OrderRecord}[key.kind]
-            .model_validate(data)
-            .model_dump(mode="json")
-        )
+        contracts: dict[str, Any] = {
+            "practice": PracticeRecord,
+            "signup": SignupRecord,
+            "order": OrderRecord,
+        }
+        record = contracts[key.kind].model_validate(data).model_dump(mode="json")
         if cur is None:
             with self.ops.transaction() as cursor:
                 return self.observe(

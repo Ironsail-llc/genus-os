@@ -4,6 +4,7 @@ import asyncio
 import time
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import uuid4
 
 from psycopg2.extras import Json
@@ -225,7 +226,7 @@ class ProviderStatusWorker:
     def _observe_lead(self, cur, payload, record, workspace):
         if not isinstance(record, dict):
             raise Conflict("Invalid provider lead status response")
-        result = {}
+        result: dict[str, Any] = {}
         if (
             record.get("id") != payload["lead_id"]
             or record.get("campaign") != payload["campaign_id"]
@@ -233,8 +234,8 @@ class ProviderStatusWorker:
             or record.get("organization") != workspace
         ):
             raise Conflict("Lead status workspace or owned identity mismatch")
-        status = record.get("status")
-        interest = record.get("lt_interest_status")
+        status: Any = record.get("status")
+        interest: Any = record.get("lt_interest_status")
         if (
             type(status) is not int
             or status not in {1, 2, 3, -1, -2, -3}
@@ -242,10 +243,10 @@ class ProviderStatusWorker:
         ):
             raise Conflict("Unknown provider status contract")
         if status in {-1, -2} or interest in {-1, -2}:
-            reason = {-1: "bounced", -2: "unsubscribed"}.get(status) or {
-                -1: "not_interested",
-                -2: "wrong_person",
-            }[interest]
+            # `interest` is a validated int whenever `status` is not itself
+            # the negative signal — the guard above refuses any other shape.
+            negative: dict[Any, str] = {-1: "not_interested", -2: "wrong_person"}
+            reason = {-1: "bounced", -2: "unsubscribed"}.get(status) or negative[interest]
             self.sales.suppress(
                 payload["email"], "provider_status:" + reason, "service:provider-status", cur=cur
             )

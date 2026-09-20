@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
 
@@ -11,9 +12,12 @@ from robothor.operations.store import Conflict
 from robothor.sales.service import Sales
 from robothor.sales.tool_schemas import CONTRACTS
 
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
-def handler(name):
-    async def call(args, ctx):
+
+def handler(name: str) -> Callable[[dict[str, Any], Any], Awaitable[dict[str, Any]]]:
+    async def call(args: dict[str, Any], ctx: Any) -> dict[str, Any]:
         try:
             parsed = CONTRACTS[name][0].model_validate(args)
         except ValidationError:

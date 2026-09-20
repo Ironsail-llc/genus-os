@@ -1362,7 +1362,7 @@ def strip_image_blocks(
     return out, changed
 
 
-def _bind_attempt_key(pool, kwargs):
+def _bind_attempt_key(pool: Any, kwargs: dict[str, Any]) -> str | None:
     """Bind and return the credential this attempt actually uses.
 
     Failure handling must retire this key, even if a concurrent run rotates the

@@ -15,6 +15,7 @@ from email import policy
 from email.message import Message as EmailHeaders
 from email.parser import BytesParser
 from email.utils import getaddresses
+from typing import Any
 
 from psycopg2.extras import Json
 
@@ -55,8 +56,9 @@ def parse_report(raw, mailbox):
         for part in parts:
             kind = part.get_content_type()
             if kind in {"text/rfc822-headers", "message/global-headers"}:
+                raw = part.get_payload(decode=True)
                 original = BytesParser(policy=policy.default).parsebytes(
-                    part.get_payload(decode=True) or b""
+                    raw if isinstance(raw, bytes) else b""
                 )
                 ids.add(one(original, "Message-ID"))
             elif kind in {"message/rfc822", "message/global"}:
@@ -68,10 +70,12 @@ def parse_report(raw, mailbox):
                 status_parts += 1
                 blocks = part.get_payload()
                 if kind == "message/global-delivery-status":
+                    decoded = part.get_payload(decode=True)
+                    first = blocks[0] if isinstance(blocks, list) and len(blocks) == 1 else None
                     content = (
-                        blocks[0].as_bytes()
-                        if isinstance(blocks, list) and len(blocks) == 1
-                        else (part.get_payload(decode=True) or b"")
+                        first.as_bytes()
+                        if isinstance(first, EmailHeaders)
+                        else (decoded if isinstance(decoded, bytes) else b"")
                     )
                     blocks = [
                         BytesParser(policy=policy.default).parsebytes(block)
@@ -166,7 +170,7 @@ class GmailBounceWorker:
                 "mailbox": self.provider.mailbox,
                 "after": after.isoformat(),
                 "through": now.isoformat(),
-                "full_at": (now if full else full_at).isoformat(),
+                "full_at": (now if full or full_at is None else full_at).isoformat(),
                 "cursor": None,
                 "seen_cursors": [],
                 "page": 1,
@@ -209,7 +213,7 @@ class GmailBounceWorker:
             or len(ids) != len(set(ids))
         ):
             raise ProviderError("Gmail delivery-report page identity invalid")
-        observations = []
+        observations: list[Any] = []
         for raw_id in ids:
             meta = await self.provider.get_metadata(raw_id)
             if meta.get("id") != raw_id:

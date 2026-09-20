@@ -2313,7 +2313,7 @@ def _sandbox_lock_refusal(status: str, tenant_id: str, suite_id: str) -> dict[st
 
 
 @_handler("benchmark_run")
-def _make_benchmark_budget(suite):
+def _make_benchmark_budget(suite: dict[str, Any]) -> Any:
     from robothor.engine.request_budget import RequestBudget, active_budget
 
     units = _suite_request_units(suite)
@@ -2322,7 +2322,7 @@ def _make_benchmark_budget(suite):
     return RequestBudget(units) if units is not None else None
 
 
-def _benchmark_budget_receipt(budget):
+def _benchmark_budget_receipt(budget: Any) -> dict[str, Any]:
     return {
         "limit_units": budget.limit_units,
         "charged_units": budget.charged_units,
@@ -2331,8 +2331,15 @@ def _benchmark_budget_receipt(budget):
 
 
 async def _execute_funded_benchmark(
-    runner, agent_id, suite, suite_id, tasks, suite_tenant, spawn_context, request_budget
-):
+    runner: Any,
+    agent_id: str,
+    suite: dict[str, Any],
+    suite_id: str,
+    tasks: Any,
+    suite_tenant: str | None,
+    spawn_context: Any,
+    request_budget: Any,
+) -> Any:
     """Keep suite funding and sandbox ownership around all task execution."""
     from robothor.engine.request_budget import budget_scope
 
@@ -3057,18 +3064,15 @@ async def _benchmark_run_for_agent(args: dict[str, Any], ctx: ToolContext) -> di
     suite_id = suite["id"]
     relative_path = f"docs/benchmarks/{agent_id}/suite.yaml"
 
-    return cast(
-        "dict[str, Any]",
-        await _benchmark_run(
-            {
-                "agent_id": agent_id,
-                "suite_id": suite_id,
-                "tag": tag,
-                "tasks": args.get("tasks"),
-                "triggered_by": args.get("triggered_by"),
-                "experiment_id": args.get("experiment_id"),
-                "config_file": relative_path,
-            },
-            ctx,
-        ),
+    return await _benchmark_run(
+        {
+            "agent_id": agent_id,
+            "suite_id": suite_id,
+            "tag": tag,
+            "tasks": args.get("tasks"),
+            "triggered_by": args.get("triggered_by"),
+            "experiment_id": args.get("experiment_id"),
+            "config_file": relative_path,
+        },
+        ctx,
     )

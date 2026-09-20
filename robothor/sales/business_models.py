@@ -1,7 +1,7 @@
 """Minimized current business records. Raw provider payloads never enter storage."""
 
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import Field, StrictBool, StrictInt, field_validator, model_validator
 
@@ -135,7 +135,7 @@ class BusinessScan(Contract):
 class BusinessPageItem(Contract):
     external_id: Identity
     revision: Identity
-    data: dict
+    data: dict[str, Any]
 
 
 class HistoryCoverage(Contract):

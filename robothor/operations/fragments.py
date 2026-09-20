@@ -1,6 +1,7 @@
 """Lease-fenced immutable fragments for recovering partially completed paid work."""
 
 import re
+from typing import Any
 
 from psycopg2.extras import Json
 
@@ -8,10 +9,10 @@ from robothor.operations.store import Conflict, digest
 
 
 class Fragments:
-    def __init__(self, operations):
+    def __init__(self, operations: Any) -> None:
         self.ops = operations
 
-    def _read(self, cur, job, input_hash):
+    def _read(self, cur: Any, job: dict[str, Any], input_hash: str) -> dict[str, Any]:
         if not isinstance(input_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", input_hash):
             raise ValueError("Invalid fragment input hash")
         cur.execute(
@@ -44,11 +45,11 @@ class Fragments:
             raise Conflict("Fragment inputs or stored content changed; review required")
         return {row["fragment_key"]: row["payload"] for row in rows}
 
-    def read(self, job, input_hash):
+    def read(self, job: dict[str, Any], input_hash: str) -> dict[str, Any]:
         with self.ops.transaction() as cur:
             return self._read(cur, job, input_hash)
 
-    def put(self, job, key, input_hash, payload):
+    def put(self, job: dict[str, Any], key: str, input_hash: str, payload: dict[str, Any]) -> None:
         if not isinstance(key, str) or not 0 < len(key) <= 100 or not isinstance(payload, dict):
             raise ValueError("Invalid fragment key or payload")
         payload_hash = digest(payload)

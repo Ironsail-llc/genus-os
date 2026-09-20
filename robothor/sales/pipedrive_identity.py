@@ -3,7 +3,7 @@
 import asyncio
 import json
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 from psycopg2.extras import Json
@@ -63,7 +63,7 @@ class IdentityReview:
                     result.append({"id": item["id"], "name": str(item.get("name", ""))[:300]})
             return result
 
-        people = []
+        people: list[Any] = []
         for contact in state["contacts"][:5]:
             found = await self.provider.search_people(contact["email"])
             people.extend({**p, "searched_email": contact["email"]} for p in items(found))
@@ -84,12 +84,12 @@ class IdentityReview:
             or organization.get("active_flag") is False
         ):
             raise Conflict("Selected Pipedrive organization is missing or deleted")
-        records = {
+        records: dict[str, Any] = {
             "organization": {k: organization.get(k) for k in ("id", "name", "update_time")},
             "people": [],
             "lead": None,
         }
-        ids = {"organization_id": selection.organization_id}
+        ids: dict[str, Any] = {"organization_id": selection.organization_id}
         known_emails = {c["email"] for c in state["contacts"]}
         for person_id in sorted(set(selection.person_ids)):
             person = await self.provider.person_record(person_id)

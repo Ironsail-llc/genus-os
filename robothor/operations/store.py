@@ -10,11 +10,15 @@ from __future__ import annotations
 import hashlib
 import json
 from contextlib import contextmanager
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from psycopg2.extras import Json, RealDictCursor
 
 from robothor.db.connection import get_connection
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Iterator
 
 
 class Conflict(ValueError):  # noqa: N818
@@ -25,8 +29,12 @@ class BudgetExceeded(ValueError):  # noqa: N818
     """A missing or exhausted spending allowance."""
 
 
-def digest(payload: dict) -> str:
-    """Canonical digest binds authorization to exact, JSON-serializable content."""
+def digest(payload: Any) -> str:
+    """Canonical digest binds authorization to exact, JSON-serializable content.
+
+    Any JSON value, not only a mapping: callers hash lists of observations and
+    of evidence ids as well as payload dicts.
+    """
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     ).hexdigest()
@@ -41,7 +49,7 @@ class Operations:
         self.tenant = tenant_id
 
     @contextmanager
-    def transaction(self):
+    def transaction(self) -> Iterator[Any]:
         """Yield a dict cursor under a transaction-local RLS identity."""
         with get_connection() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -49,7 +57,14 @@ class Operations:
                 yield cur
             conn.commit()
 
-    def audit(self, cur, entity: str, event: str, actor="system", detail=None):
+    def audit(
+        self,
+        cur: Any,
+        entity: str,
+        event: str,
+        actor: str = "system",
+        detail: dict[str, Any] | None = None,
+    ) -> None:
         """Record transitions transactionally; avoid message bodies in audit details."""
         cur.execute(
             "INSERT INTO operation_audit(tenant_id,entity_id,event,actor,detail) "
@@ -61,11 +76,11 @@ class Operations:
         self,
         kind: str,
         key: str,
-        payload: dict,
+        payload: dict[str, Any],
         *,
-        max_attempts=5,
-        deadline_seconds=86400,
-        cur=None,
+        max_attempts: int = 5,
+        deadline_seconds: int = 86400,
+        cur: Any = None,
     ) -> str:
         """Idempotently schedule a stage, optionally within the producer transaction."""
         if cur is None:
@@ -127,7 +142,7 @@ class Operations:
             )
             return True
 
-    def claim(self, kind: str, *, lease_seconds=900) -> dict | None:
+    def claim(self, kind: str, *, lease_seconds: int = 900) -> dict[str, Any] | None:
         """Claim one ready job with SKIP LOCKED; retire exhausted/expired jobs."""
         if lease_seconds < 1:
             raise ValueError("Positive lease required")
@@ -158,7 +173,7 @@ class Operations:
             self.audit(cur, str(row["id"]), "work.claimed")
             return claimed
 
-    def complete(self, job_id: str, token: str, result: dict, *, cur=None):
+    def complete(self, job_id: str, token: str, result: dict[str, Any], *, cur: Any = None) -> None:
         """Complete a current lease, atomically with domain writes when supplied a cursor."""
         if cur is None:
             with self.transaction() as cursor:
@@ -173,7 +188,7 @@ class Operations:
         self.audit(cur, job_id, "work.completed")
         return None
 
-    def checkpoint(self, job_id: str, token: str, payload: dict):
+    def checkpoint(self, job_id: str, token: str, payload: dict[str, Any]) -> None:
         """Persist paid work before domain commit; a replacement may reuse it.
 
         The active lease fences writes. A checkpoint cannot change in place;
@@ -190,7 +205,15 @@ class Operations:
                 raise Conflict("Work lease expired, replaced, or checkpoint changed")
             self.audit(cur, job_id, "work.checkpointed")
 
-    def defer(self, job_id: str, token: str, reason: str, *, delay_seconds=60, busy=False):
+    def defer(
+        self,
+        job_id: str,
+        token: str,
+        reason: str,
+        *,
+        delay_seconds: int = 60,
+        busy: bool = False,
+    ) -> None:
         """Retry a known-safe stage; busy admission does not consume an attempt."""
         with self.transaction() as cur:
             cur.execute(
@@ -202,7 +225,7 @@ class Operations:
             if cur.rowcount != 1:
                 raise Conflict("Work lease expired or replaced")
 
-    def get_job(self, job_id):
+    def get_job(self, job_id: str) -> dict[str, Any] | None:
         """Read a job only within this tenant."""
         with self.transaction() as cur:
             cur.execute(
@@ -211,7 +234,7 @@ class Operations:
             row = cur.fetchone()
             return dict(row) if row else None
 
-    def set_budget(self, scope: str, limit: int, *, cur=None):
+    def set_budget(self, scope: str, limit: int, *, cur: Any = None) -> None:
         """Set a finite allowance; reducing it never erases consumption."""
         if type(limit) is not int or limit < 0:
             raise ValueError("Budget must be nonnegative integer micro-USD")
@@ -230,7 +253,15 @@ class Operations:
         """Serialize reservations against a scope, including concurrent children."""
         return self.reserve_many([scope], key, amount)[0]
 
-    def reserve_many(self, scopes, key: str, amount: int, *, active_only=False, cur=None):
+    def reserve_many(
+        self,
+        scopes: Iterable[str],
+        key: str,
+        amount: int,
+        *,
+        active_only: bool = False,
+        cur: Any = None,
+    ) -> list[str]:
         """Reserve every scope together, or none. Lock scopes in canonical order.
 
         A caller supplying a cursor must roll back the transaction on failure.
@@ -281,11 +312,11 @@ class Operations:
             reservations.append(reservation)
         return reservations
 
-    def settle(self, reservation: str, actual: int):
+    def settle(self, reservation: str, actual: int) -> None:
         """Record consumption once, retaining overruns so future calls stop."""
         self.settle_many([reservation], actual)
 
-    def settle_many(self, reservations, actual: int):
+    def settle_many(self, reservations: Iterable[str], actual: int) -> None:
         """Settle a group atomically, preserving each scope on conflict or crash."""
         if type(actual) is not int or actual < 0:
             raise ValueError("Actual spend must be nonnegative integer micro-USD")
@@ -323,14 +354,16 @@ class Operations:
                     (actual, self.tenant, row["id"]),
                 )
 
-    def receive(self, provider: str, event_id: str, payload: dict, *, cur=None) -> bool:
+    def receive(
+        self, provider: str, event_id: str, payload: dict[str, Any], *, cur: Any = None
+    ) -> bool:
         """Durably accept a provider event once; processing occurs separately."""
         if cur is None:
             with self.transaction() as cursor:
                 return self.receive(provider, event_id, payload, cur=cursor)
         return self._receive(cur, provider, event_id, payload)
 
-    def _receive(self, cur, provider, event_id, payload):
+    def _receive(self, cur: Any, provider: str, event_id: str, payload: dict[str, Any]) -> bool:
         cur.execute(
             "INSERT INTO operation_inbox(tenant_id,provider,event_id,payload) VALUES(%s,%s,%s,%s) "
             "ON CONFLICT DO NOTHING",
@@ -347,7 +380,13 @@ class Operations:
         return False
 
     def propose(
-        self, kind: str, key: str, payload: dict, *, expires_seconds=86400, cur=None
+        self,
+        kind: str,
+        key: str,
+        payload: dict[str, Any],
+        *,
+        expires_seconds: int = 86400,
+        cur: Any = None,
     ) -> str:
         """Create an immutable draft. Changed content needs a new key and approval."""
         if cur is None:
@@ -372,7 +411,7 @@ class Operations:
             raise Conflict("Draft key already bound to different content")
         return str(row["id"])
 
-    def decide(self, action: str, approved: bool, actor: str):
+    def decide(self, action: str, approved: bool, actor: str) -> None:
         """Persist a human decision. Caller must authenticate the actor before entry."""
         if not actor.startswith("operator:"):
             raise Conflict("Human operator decision required")
@@ -386,7 +425,9 @@ class Operations:
                 raise Conflict("Draft is missing, expired, or already decided")
             self.audit(cur, action, "action.approved" if approved else "action.rejected", actor)
 
-    def claim_action(self, *, kind=None, lease_seconds=120) -> dict | None:
+    def claim_action(
+        self, *, kind: str | None = None, lease_seconds: int = 120
+    ) -> dict[str, Any] | None:
         """Claim an approved exact action. Expired sends become UNKNOWN, never ready."""
         with self.transaction() as cur:
             cur.execute(
@@ -417,7 +458,15 @@ class Operations:
             self.audit(cur, str(row["id"]), "action.claimed")
             return row
 
-    def finish_action(self, action: str, token: str, status: str, receipt: dict, *, cur=None):
+    def finish_action(
+        self,
+        action: str,
+        token: str,
+        status: str,
+        receipt: dict[str, Any],
+        *,
+        cur: Any = None,
+    ) -> None:
         """Record evidence about a claimed effect without permitting blind retries."""
         if status not in {"completed", "unknown", "cancelled", "failed"}:
             raise ValueError("Invalid action outcome")

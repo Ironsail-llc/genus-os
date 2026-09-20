@@ -1,12 +1,13 @@
 """Construct root delegation state from the effective native agent manifest."""
 
 import uuid
+from typing import Any
 
 from robothor.engine.models import SpawnContext
 from robothor.engine.spawn_limits import extend_limits
 
 
-def make_spawn_context(agent_config, session, trace):
+def make_spawn_context(agent_config: Any, session: Any, trace: Any) -> SpawnContext:
     return SpawnContext(
         # An untracked run (tracking_disabled) has no agent_runs row —
         # advertising its id would make every child's insert fail the

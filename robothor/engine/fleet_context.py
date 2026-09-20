@@ -11,7 +11,10 @@ from robothor.operations.store import Conflict
 @dataclass(frozen=True)
 class FleetInvocation:
     tenant: str
-    release_id: str
+    # None is the unmanaged baseline: `assert_current` treats a missing release
+    # and a missing context together, and the scheduler registers jobs with
+    # whatever `reconcile` resolved, which is None for an empty snapshot.
+    release_id: str | None
     workflow_id: str
     verify_current: Callable[[], object] = field(repr=False)
 
@@ -19,7 +22,7 @@ class FleetInvocation:
 invocation: ContextVar[FleetInvocation | None] = ContextVar("fleet_invocation", default=None)
 
 
-async def assert_current(tenant, release_id, workflow_id):
+async def assert_current(tenant: str, release_id: str | None, workflow_id: str) -> None:
     context = invocation.get()
     if release_id is None and context is None:
         return  # Existing unmanaged workflows retain their native behavior.

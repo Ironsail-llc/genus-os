@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Generic, Literal, TypeVar
+from typing import Annotated, Any, Generic, Literal, TypeVar
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
@@ -97,7 +97,7 @@ class QualificationPolicy(Contract):
             raise ValueError("Required criteria must be scored")
         return self
 
-    def evaluate(self, dossier: Dossier, now: datetime | None = None) -> dict:
+    def evaluate(self, dossier: Dossier, now: datetime | None = None) -> dict[str, Any]:
         """Calculate from supported, current evidence; unknown stays unknown."""
         now = now or datetime.now(UTC)
         facts = {e.id: e for e in dossier.evidence}

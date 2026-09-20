@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 from dataclasses import asdict
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from apscheduler.schedulers.base import STATE_RUNNING
@@ -18,8 +19,11 @@ from robothor.engine.fleet_context import FleetInvocation, invocation
 from robothor.engine.workflow import parse_workflow
 from robothor.operations.store import Conflict
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
-def _cron_identity(trigger):
+
+def _cron_identity(trigger: Any) -> tuple[Any, ...]:
     if type(trigger) is not CronTrigger:
         raise Conflict("Managed workflow trigger changed")
     return (
@@ -39,7 +43,13 @@ class FleetSchedules:
     A fresh process starts with no ownership and cannot adopt loose definitions.
     """
 
-    def __init__(self, native_scheduler, *, tenant, admission_verifier=None):
+    def __init__(
+        self,
+        native_scheduler: Any,
+        *,
+        tenant: str,
+        admission_verifier: Callable[..., Any] | None = None,
+    ) -> None:
         self.native = native_scheduler
         self.engine = native_scheduler.workflow_engine
         if self.engine is None or self.engine.config.tenant_id != tenant:
@@ -47,11 +57,13 @@ class FleetSchedules:
         self.tenant = tenant
         self._admission_verifier = admission_verifier
         self._loop = asyncio.get_running_loop()
-        self._owned = {}
-        self._release_id = None
-        self._generation = None
+        # Holds (definition, cron) in the steady state, and transiently a None
+        # per id while `reconcile` retains ownership through a partial mutation.
+        self._owned: dict[str, Any] = {}
+        self._release_id: str | None = None
+        self._generation: str | None = None
 
-    def _on_loop(self):
+    def _on_loop(self) -> None:
         if asyncio.get_running_loop() is not self._loop:
             raise Conflict("Managed schedules require their owning event loop")
         if (
@@ -60,7 +72,7 @@ class FleetSchedules:
         ):
             raise Conflict("Managed workflow engine identity changed")
 
-    def reconcile(self, snapshot):
+    def reconcile(self, snapshot: Any) -> str:
         """Reconcile reviewed definitions while durable deployment blocks admission.
 
         Partial mutation leaves the generation invalid. Retrying reconciles the
@@ -113,7 +125,7 @@ class FleetSchedules:
         self._generation = generation
         return generation
 
-    def verify(self, release_id, generation):
+    def verify(self, release_id: str | None, generation: str | None) -> dict[str, Any]:
         self._on_loop()
         if not generation or (release_id, generation) != (self._release_id, self._generation):
             raise Conflict("Managed workflow generation is retired or incomplete")
@@ -148,7 +160,7 @@ class FleetSchedules:
             "workflows": sorted(self._owned),
         }
 
-    async def _run(self, workflow_id, release_id, generation):
+    async def _run(self, workflow_id: str, release_id: str | None, generation: str) -> Any:
         self.verify(release_id, generation)
         if workflow_id not in self._owned:
             raise Conflict("Managed workflow is no longer owned")
@@ -171,7 +183,7 @@ class FleetSchedules:
         finally:
             invocation.reset(token)
 
-    async def _verify_admission(self, release_id, generation):
+    async def _verify_admission(self, release_id: str | None, generation: str) -> None:
         self.verify(release_id, generation)
         if self._admission_verifier is not None:
             await self._admission_verifier(release_id, generation)

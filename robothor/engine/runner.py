@@ -1471,7 +1471,7 @@ class AgentRunner(
         self._publish_run_telemetry(trace, session.run)
 
         return self._finish_run(
-            validated_completion(session, output_text),
+            validated_completion(session, output_text or ""),
             trace=trace,
             agent_config=agent_config,
             session=session,

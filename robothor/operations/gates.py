@@ -6,12 +6,18 @@ import asyncio
 import json
 import sys
 from contextlib import contextmanager
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from robothor.operations.store import Conflict
 
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable, Iterator
+
+T = TypeVar("T")
+
 
 @contextmanager
-def gate(operations, scope: str, *, shared: bool = False):
+def gate(operations: Any, scope: str, *, shared: bool = False) -> Iterator[Any]:
     """Hold a PostgreSQL transaction gate; a busy gate fails without waiting.
 
     The caller must acquire this before any settings or work-row locks. The
@@ -29,7 +35,7 @@ def gate(operations, scope: str, *, shared: bool = False):
         yield cur
 
 
-async def run_shared(operations, scope: str, work):
+async def run_shared(operations: Any, scope: str, work: Callable[[], Awaitable[T]]) -> T:
     """Run async work under a shared gate; cancellation waits for actual cleanup.
 
     Cancelling the caller cannot free the maintenance gate while provider work
@@ -37,7 +43,7 @@ async def run_shared(operations, scope: str, work):
     All connection acquisition and cleanup run outside the event loop.
     """
 
-    async def execute():
+    async def execute() -> T:
         context = gate(operations, scope, shared=True)
         await asyncio.to_thread(context.__enter__)
         try:

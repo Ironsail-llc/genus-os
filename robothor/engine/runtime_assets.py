@@ -8,6 +8,7 @@ import tempfile
 from dataclasses import dataclass, field
 from importlib import metadata
 from pathlib import Path
+from typing import Any
 
 import yaml
 from packaging.utils import canonicalize_name
@@ -21,15 +22,15 @@ from robothor.templates.fleet_release import _read
 from robothor.templates.safety import contained_path, trusted_directory
 
 
-def _lock_digest(path):
+def _lock_digest(path: Path | None) -> str:
     if path is None or path.stat().st_size > 2 * 1024 * 1024:
         raise ValueError("Plugin governance is unavailable")
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _signature(name):
+def _signature(name: str) -> tuple[str, str, tuple[tuple[str, int, int, int, int], ...]]:
     dist = metadata.distribution(name)
-    root = trusted_directory(Path(dist.locate_file(".")).resolve())
+    root = trusted_directory(Path(str(dist.locate_file("."))).resolve())
     files = []
     for relative in sorted(str(path) for path in dist.files or ()):
         if "__pycache__" in Path(relative).parts:
@@ -47,12 +48,12 @@ class PluginBootIdentity:
     path: Path | None = field(repr=False)
     digest: str | None = field(repr=False)
     generation: int
-    signatures: dict = field(repr=False)
+    signatures: dict[str, Any] = field(repr=False)
 
     @classmethod
-    def capture(cls, path=None):
+    def capture(cls, path: Path | None = None) -> PluginBootIdentity:
         path = path if path is not None else lockfile_path()
-        signatures = {}
+        signatures: dict[str, Any] = {}
         digest = None
         try:
             digest = _lock_digest(path)
@@ -62,16 +63,16 @@ class PluginBootIdentity:
             for row in lock.rows.values():
                 if row.enabled:
                     try:
-                        signatures[canonicalize_name(row.name)] = _signature(row.name)
+                        signatures[str(canonicalize_name(row.name))] = _signature(row.name)
                     except Exception:
                         continue  # This distribution cannot pass later verification.
         except Exception:
             digest = None
         return cls(path, digest, plugins.generation(), signatures)
 
-    def verify(self, name):
+    def verify(self, name: str) -> None:
         try:
-            key = canonicalize_name(name)
+            key = str(canonicalize_name(name))
             if (
                 not self.digest
                 or plugins.generation() != self.generation
@@ -90,7 +91,7 @@ class RuntimeAssets:
     plugin_boot: PluginBootIdentity | None
 
     @classmethod
-    def capture(cls):
+    def capture(cls) -> RuntimeAssets:
         # Ordinary unmanaged engines can run without Git. Managed deployment
         # verification remains unavailable until build provenance is supported.
         try:
@@ -99,7 +100,7 @@ class RuntimeAssets:
             source = None
         return cls(source, PluginBootIdentity.capture())
 
-    def verify(self, snapshot, root):
+    def verify(self, snapshot: Any, root: Path) -> dict[str, Any]:
         if self.source is None:
             raise ValueError("Managed fleet requires verified runtime source provenance")
         self.source.verify(snapshot.platform_revision)
@@ -117,14 +118,17 @@ class RuntimeAssets:
             if hashlib.sha256(wheel_bytes).hexdigest() != digest:
                 raise ValueError("Runtime plugin artifact changed")
             dist = metadata.distribution(name)
-            installed_root = Path(dist.locate_file(".")).resolve()
+            installed_root = Path(str(dist.locate_file("."))).resolve()
             with tempfile.TemporaryDirectory(prefix="genus-runtime-plugin-") as folder:
                 wheel_path = Path(folder) / Path(contract["path"]).name
                 wheel_path.write_bytes(wheel_bytes)
+                lock_path = self.plugin_boot.path
+                if lock_path is None:
+                    raise ValueError("Plugin governance lockfile is unavailable")
                 receipt = verify_installed_wheel(
                     wheel_path,
                     expected_digest=digest,
-                    lock_path=self.plugin_boot.path,
+                    lock_path=lock_path,
                 )
                 wheel = open_wheel(wheel_path, Path(folder) / "wheel")
                 manifest = yaml.safe_load(wheel.manifest_text)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from robothor.engine.fleet_schedules import FleetSchedules
 from robothor.operations.store import Conflict
@@ -13,8 +14,13 @@ from robothor.sales.service import operator
 from robothor.templates.fleet_snapshot import load_snapshot
 from robothor.templates.fleet_store import staged_release_path
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
-def _fingerprint(record):
+T = TypeVar("T")
+
+
+def _fingerprint(record: dict[str, Any]) -> str:
     keys = (
         "id",
         "tenant_id",
@@ -29,7 +35,7 @@ def _fingerprint(record):
     return json.dumps({key: record[key] for key in keys}, sort_keys=True, default=str)
 
 
-def _managed(state):
+def _managed(state: dict[str, Any]) -> bool:
     """Has sales ever been turned on for this tenant?
 
     A release selection, a deployment mid-flight, or pre-existing unmanaged
@@ -47,7 +53,7 @@ def _managed(state):
     )
 
 
-async def _drain_thread(function):
+async def _drain_thread(function: Callable[[], T]) -> T:
     """Cancellation cannot release the control lock before its transaction ends."""
     task = asyncio.create_task(asyncio.to_thread(function))
     try:
@@ -66,7 +72,9 @@ async def _drain_thread(function):
 
 
 class NativeSalesRuntime:
-    def __init__(self, native_scheduler, sales, workspace, assets):
+    def __init__(
+        self, native_scheduler: Any, sales: Any, workspace: Path | str, assets: Any
+    ) -> None:
         self.native = native_scheduler
         self.workspace = Path(workspace)
         self.coordinator = DeploymentCoordinator(sales, self.workspace)
@@ -76,19 +84,19 @@ class NativeSalesRuntime:
             native_scheduler, tenant=sales.tenant, admission_verifier=self.verify_admission
         )
         self._lock = asyncio.Lock()
-        self._snapshot = None
-        self._generation = None
-        self._bound = None
-        self._operation = None
+        self._snapshot: Any = None
+        self._generation: Any = None
+        self._bound: tuple[str, bool] | None = None
+        self._operation: tuple[str, bool] | None = None
         self._booted = False
         # None = not yet determined. False is only ever set from a state read
         # that positively said so, never from a failure to read: "I could not
         # ask" is not "sales is off". Every route by which sales becomes
         # managed runs through a control method on this object, and each one
         # re-arms this to True.
-        self._managed = None
+        self._managed: bool | None = None
 
-    def _state(self):
+    def _state(self) -> dict[str, Any]:
         # One database snapshot, rather than mixing settings from before a
         # concurrent commit with the absence of its pending row afterwards.
         with self.coordinator.sales.ops.transaction() as cur:
@@ -101,7 +109,7 @@ class NativeSalesRuntime:
             row = cur.fetchone()
             return dict(row) if row else {"config": {}, "revision": 0, "pending": None}
 
-    def _selection_state(self):
+    def _selection_state(self) -> dict[str, Any] | None:
         """State, or None when this instance has no sales schema at all.
 
         Migrations 126+ create these tables. An instance running ahead of its
@@ -115,7 +123,7 @@ class NativeSalesRuntime:
         except psycopg2.errors.UndefinedTable:
             return None
 
-    async def _apply(self, release_id):
+    async def _apply(self, release_id: str | None) -> None:
         self._bound = None
         self._generation = None
         snapshot = None
@@ -127,7 +135,7 @@ class NativeSalesRuntime:
         self.schedules.verify(release_id, generation)
         self._snapshot, self._generation = snapshot, generation
 
-    async def bootstrap(self):
+    async def bootstrap(self) -> None:
         async with self._lock:
             state = await asyncio.to_thread(self._selection_state)
             if state is None:
@@ -143,7 +151,7 @@ class NativeSalesRuntime:
             await self._apply(release)
             self._booted = True
 
-    async def _reconcile(self, transition_id, *, restoring=False):
+    async def _reconcile(self, transition_id: Any, *, restoring: bool = False) -> dict[str, Any]:
         state = await asyncio.to_thread(self._state)
         record = state["pending"]
         if record is None or str(record["id"]) != str(transition_id):
@@ -156,16 +164,19 @@ class NativeSalesRuntime:
         await self._apply(release)
         self._bound = (_fingerprint(record), restoring)
         self._booted = self._managed = True
-        return record
+        pending: dict[str, Any] = record
+        return pending
 
-    async def reconcile(self, transition_id, *, restoring=False):
+    async def reconcile(self, transition_id: Any, *, restoring: bool = False) -> Any:
         async with self._lock:
             await self._reconcile(transition_id, restoring=restoring)
             return self.schedules.verify(
                 self._snapshot.release_id if self._snapshot else None, self._generation
             )
 
-    async def prepare(self, release_id, *, expected_revision, actor, reason):
+    async def prepare(
+        self, release_id: str, *, expected_revision: int, actor: str, reason: str
+    ) -> Any:
         operator(actor)
         async with self._lock:
             state = await asyncio.to_thread(self._state)
@@ -182,7 +193,9 @@ class NativeSalesRuntime:
                 )
             )
 
-    async def prepare_rollback(self, transition_id, *, expected_revision, actor, reason):
+    async def prepare_rollback(
+        self, transition_id: Any, *, expected_revision: int, actor: str, reason: str
+    ) -> Any:
         operator(actor)
         async with self._lock:
             return await _drain_thread(
@@ -191,7 +204,7 @@ class NativeSalesRuntime:
                 )
             )
 
-    async def verify_admission(self, release_id, generation):
+    async def verify_admission(self, release_id: str, generation: Any) -> None:
         self.schedules.verify(release_id, generation)
         snapshot = self._snapshot
         if snapshot is None or snapshot.release_id != release_id:
@@ -204,7 +217,7 @@ class NativeSalesRuntime:
             raise Conflict("Runtime selection changed during admission")
         self.schedules.verify(release_id, generation)
 
-    async def _verify_transition(self, record, restoring):
+    async def _verify_transition(self, record: dict[str, Any], restoring: bool) -> dict[str, Any]:
         operation = (str(record["id"]), restoring)
         if self._operation != operation or self._bound != (_fingerprint(record), restoring):
             raise Conflict("Native runtime was not reconciled for this control operation")
@@ -225,7 +238,7 @@ class NativeSalesRuntime:
             "restoring": restoring,
         }
 
-    def verify(self, record, *, restoring=False):
+    def verify(self, record: dict[str, Any], *, restoring: bool = False) -> dict[str, Any]:
         """Coordinator-only synchronous bridge; never inspect scheduler off-loop."""
         try:
             if asyncio.get_running_loop() is self.loop:
@@ -243,7 +256,7 @@ class NativeSalesRuntime:
             future.cancel()
             raise
 
-    async def commit(self, transition_id, *, actor):
+    async def commit(self, transition_id: Any, *, actor: str) -> Any:
         operator(actor)
         async with self._lock:
             await self._reconcile(transition_id)
@@ -255,7 +268,7 @@ class NativeSalesRuntime:
             finally:
                 self._operation = None
 
-    async def abort(self, transition_id, *, actor, reason):
+    async def abort(self, transition_id: Any, *, actor: str, reason: str) -> Any:
         operator(actor)
         if not isinstance(reason, str) or not 10 <= len(reason.strip()) <= 2000:
             raise ValueError("An explicit abort reason is required")
@@ -269,7 +282,7 @@ class NativeSalesRuntime:
             finally:
                 self._operation = None
 
-    async def readiness(self):
+    async def readiness(self) -> str:
         # This check is registered in the engine's readiness map unconditionally
         # and any non-"ok" answer is a 503 for the WHOLE engine. An instance
         # that never enabled sales has nothing here to be ready ABOUT, and must

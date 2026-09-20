@@ -8,6 +8,7 @@ it never accepts runtime proof documents from an external caller.
 from __future__ import annotations
 
 from copy import deepcopy
+from typing import Any
 from uuid import uuid4
 
 from psycopg2.extras import Json
@@ -54,7 +55,7 @@ def assert_queue_open(sales):
 
 
 class DeploymentCoordinator:
-    def __init__(self, sales, workspace):
+    def __init__(self, sales: Any, workspace: Any) -> None:
         self.sales, self.workspace = sales, workspace
 
     def _settings(self, cur):
@@ -71,7 +72,7 @@ class DeploymentCoordinator:
             raise Conflict("Configure sales settings before deployment")
         return row
 
-    def _record(self, cur, transition_id):
+    def _record(self, cur: Any, transition_id: Any) -> dict[str, Any]:
         cur.execute(
             "SELECT * FROM sales_deployments WHERE tenant_id=%s AND id=%s FOR UPDATE",
             (self.sales.tenant, str(transition_id)),
@@ -131,7 +132,9 @@ class DeploymentCoordinator:
                 "pending": dict(row) if row else None,
             }
 
-    def prepare(self, release_id, *, expected_revision, actor, reason):
+    def prepare(
+        self, release_id: str, *, expected_revision: int, actor: str, reason: str
+    ) -> dict[str, Any]:
         operator(actor)
         artifact, settings = self._artifact(release_id)
         if settings is None:
@@ -140,7 +143,9 @@ class DeploymentCoordinator:
         target["fleet_release_id"] = release_id
         return self._prepare(target, artifact, expected_revision, actor, reason, "deploy")
 
-    def prepare_rollback(self, transition_id, *, expected_revision, actor, reason):
+    def prepare_rollback(
+        self, transition_id: Any, *, expected_revision: int, actor: str, reason: str
+    ) -> dict[str, Any]:
         operator(actor)
         with self.sales.ops.transaction() as cur:
             prior = self._record(cur, transition_id)
@@ -151,7 +156,16 @@ class DeploymentCoordinator:
             prior["previous_config"], artifact, expected_revision, actor, reason, "rollback", prior
         )
 
-    def _prepare(self, desired, artifact, expected_revision, actor, reason, direction, prior=None):
+    def _prepare(
+        self,
+        desired: Any,
+        artifact: Any,
+        expected_revision: int,
+        actor: str,
+        reason: str,
+        direction: str,
+        prior: Any = None,
+    ) -> dict[str, Any]:
         operator(actor)
         if (
             type(expected_revision) is not int
@@ -251,7 +265,7 @@ class DeploymentCoordinator:
             for key in ("transition_id", "release_id", "runtime_generation", "restoring")
         }
 
-    def commit(self, transition_id, runtime, *, actor):
+    def commit(self, transition_id: Any, runtime: Any, *, actor: str) -> dict[str, Any]:
         operator(actor)
         with gate(self.sales.ops, "sales-fleet") as cur:
             self._idle(cur)
@@ -273,7 +287,7 @@ class DeploymentCoordinator:
             self.sales.ops.audit(cur, transition_id, "sales.deployment.committed", actor, proof)
             return self._record(cur, transition_id)
 
-    def abort(self, transition_id, runtime, *, actor, reason):
+    def abort(self, transition_id: Any, runtime: Any, *, actor: str, reason: str) -> dict[str, Any]:
         operator(actor)
         if not isinstance(reason, str) or not 10 <= len(reason.strip()) <= 2000:
             raise ValueError("An explicit abort reason is required")

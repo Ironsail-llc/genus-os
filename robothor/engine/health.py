@@ -220,7 +220,7 @@ def _mount_subsystem_routers(
     mount_plugin_channel_routers(app, runner=runner, tenant_id=config.tenant_id)
 
 
-async def _sales_runtime_readiness(scheduler) -> str:
+async def _sales_runtime_readiness(scheduler: Any) -> str:
     runtime = getattr(scheduler, "sales_runtime", None)
     return await runtime.readiness() if runtime is not None else "ok"
 

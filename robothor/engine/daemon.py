@@ -1263,7 +1263,7 @@ def _harden_and_state_posture() -> None:
     _log_pending_migrations()
 
 
-async def _create_runner_with_assets(config):
+async def _create_runner_with_assets(config: Any) -> tuple[Any, Any]:
     # Create subsystems
     from robothor.engine.runtime_assets import RuntimeAssets
 
@@ -1275,7 +1275,7 @@ async def _create_runner_with_assets(config):
     return runner, sales_runtime_assets
 
 
-def _attach_sales_runtime(scheduler, config, sales_runtime_assets):
+def _attach_sales_runtime(scheduler: Any, config: Any, sales_runtime_assets: Any) -> None:
     from robothor.engine.sales_runtime import NativeSalesRuntime
     from robothor.sales.service import Sales
 

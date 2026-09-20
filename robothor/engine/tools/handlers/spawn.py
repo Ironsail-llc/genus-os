@@ -440,7 +440,7 @@ async def _handle_spawn_agents(
     if len(agents_list) > max_batch:
         return {"error": f"Max {max_batch} parallel sub-agents allowed, got {len(agents_list)}"}
 
-    async def run_child(index, spawn_args):
+    async def run_child(index: int, spawn_args: dict[str, Any]) -> Any:
         from contextlib import nullcontext
 
         with _child_scope(index) if _child_scope is not None else nullcontext():

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 from uuid import uuid4
 
 from robothor.operations.store import Conflict, digest
@@ -50,7 +51,10 @@ class BusinessPlanner:
                 return 0
             planned = 0
             for source in settings.business_sources:
-                scopes = [("practice", None), ("signup", None)]
+                scopes: list[tuple[Literal["practice", "signup", "order"], str | None]] = [
+                    ("practice", None),
+                    ("signup", None),
+                ]
                 cur.execute(
                     "SELECT o.external_id FROM sales_customer_bindings b JOIN sales_business_observations o "
                     "ON o.tenant_id=b.tenant_id AND o.id=b.observation_id "

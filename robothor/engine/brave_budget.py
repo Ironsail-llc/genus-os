@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_CEILING, Decimal
 from html.parser import HTMLParser
+from typing import Any
 
 import httpx
 
@@ -25,28 +26,28 @@ _cached: tuple[float, SearchPrice] | None = None
 
 
 class _SearchSection(HTMLParser):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.hidden = 0
         self.heading: list[str] | None = None
         self.selected = False
         self.parts: list[str] = []
 
-    def handle_starttag(self, tag, attrs):
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag in ("script", "style"):
             self.hidden += 1
         if tag == "h3" and not self.hidden:
             self.selected = False
             self.heading = []
 
-    def handle_endtag(self, tag):
+    def handle_endtag(self, tag: str) -> None:
         if tag in ("script", "style"):
             self.hidden = max(0, self.hidden - 1)
         if tag == "h3" and self.heading is not None:
             self.selected = "".join(self.heading).strip() == "Search"
             self.heading = None
 
-    def handle_data(self, data):
+    def handle_data(self, data: str) -> None:
         if self.hidden:
             return
         if self.heading is not None:
@@ -101,14 +102,14 @@ async def current_search_price() -> SearchPrice:
 
 
 class BraveSearchBudget:
-    def __init__(self, budget: RequestBudget):
+    def __init__(self, budget: RequestBudget) -> None:
         self.budget = budget
-        self.attempts: list[dict] = []
+        self.attempts: list[dict[str, Any]] = []
 
-    async def prepare(self):
+    async def prepare(self) -> None:
         await current_search_price()
 
-    async def reserve(self) -> dict:
+    async def reserve(self) -> dict[str, Any]:
         price = await current_search_price()
         self.budget.reserve(price.unit_units)
         attempt = {
@@ -123,7 +124,7 @@ class BraveSearchBudget:
         self.attempts.append(attempt)
         return attempt
 
-    def receipt(self) -> dict:
+    def receipt(self) -> dict[str, Any]:
         return {
             "basis": "standard_search_public_rate_without_credits",
             "invoice_verified": False,

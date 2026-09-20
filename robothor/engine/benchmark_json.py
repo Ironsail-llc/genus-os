@@ -2,12 +2,13 @@
 
 import json
 import re
+from typing import Any
 
 _MISSING = object()
 _TYPES = {"object", "array", "string", "boolean", "integer", "number", "null"}
 
 
-def validate_assertions(checks):
+def validate_assertions(checks: Any) -> str | None:
     if not isinstance(checks, list) or not 1 <= len(checks) <= 100:
         return "json_assertions must contain 1–100 checks"
     for check in checks:
@@ -46,7 +47,7 @@ def validate_assertions(checks):
     return None
 
 
-def _pairs(pairs):
+def _pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     value = {}
     for key, item in pairs:
         if key in value:
@@ -55,11 +56,11 @@ def _pairs(pairs):
     return value
 
 
-def _nonfinite(_):
+def _nonfinite(_: str) -> Any:
     raise ValueError("Nonfinite JSON number")
 
 
-def _resolve(root, path):
+def _resolve(root: Any, path: str) -> Any:
     value = root
     for token in path.split("/")[1:] if path else []:
         token = token.replace("~1", "/").replace("~0", "~")
@@ -73,9 +74,9 @@ def _resolve(root, path):
     return value
 
 
-def _equal(left, right):
+def _equal(left: Any, right: Any) -> bool:
     if type(left) in (int, float) and type(right) in (int, float):
-        return left == right
+        return bool(left == right)
     if type(left) is not type(right):
         return False
     if isinstance(left, dict):
@@ -84,15 +85,15 @@ def _equal(left, right):
         return len(left) == len(right) and all(
             _equal(a, b) for a, b in zip(left, right, strict=True)
         )
-    return left == right
+    return bool(left == right)
 
 
-def _matches(value, check):
+def _matches(value: Any, check: dict[str, Any]) -> bool:
     op, wanted = check["op"], check.get("value")
     if op == "absent":
         return value is _MISSING
     if value is _MISSING:
-        return check.get("optional", False)
+        return bool(check.get("optional", False))
     if op == "equals":
         return _equal(value, wanted)
     if op == "length":
@@ -108,10 +109,12 @@ def _matches(value, check):
         "number": type(value) in (int, float),
         "null": value is None,
     }
-    return types[wanted]
+    # `wanted` is a validated type name here: validate_assertions refuses any
+    # `op: "type"` check whose value is not one of _TYPES.
+    return types[str(wanted)]
 
 
-def grade_json(output, checks):
+def grade_json(output: Any, checks: Any) -> dict[str, Any]:
     """Return diagnostics without copying source data into the grading record."""
     error = validate_assertions(checks)
     if error:

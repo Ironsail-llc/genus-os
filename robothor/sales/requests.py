@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 from math import ceil
-from typing import Literal
+from typing import Any, Literal
 from uuid import uuid4
 
 from psycopg2.extras import Json
@@ -35,7 +35,7 @@ class RequestChange(Contract):
 
 
 class Requests:
-    def __init__(self, sales):
+    def __init__(self, sales: Any) -> None:
         self.sales = sales
         self.tenant = sales.tenant
 

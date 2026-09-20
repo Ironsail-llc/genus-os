@@ -13,7 +13,7 @@ class SpawnAllowance:
         self.lock = Lock()
 
 
-def extend_limits(inherited: tuple[SpawnAllowance, ...], limit: int):
+def extend_limits(inherited: tuple[SpawnAllowance, ...], limit: int) -> tuple[SpawnAllowance, ...]:
     """Zero adds no limit; it never removes an ancestor's limit."""
     if type(limit) is not int or not 0 <= limit <= 100:
         raise ValueError("max_spawn_total must be an integer between 0 and 100")

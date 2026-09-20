@@ -4,7 +4,7 @@ import asyncio
 import json
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from pydantic import Field
 
@@ -42,7 +42,7 @@ def validate_analysis(output, dataset):
 class Reports:
     MAX_COMPANIES = 1000
 
-    def __init__(self, sales):
+    def __init__(self, sales: Any) -> None:
         self.sales, self.tenant = sales, sales.tenant
 
     def capture(self):

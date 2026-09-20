@@ -16,7 +16,7 @@ from pathlib import Path
 from robothor.templates.safety import contained_path, trusted_directory
 
 
-def _git(root, *args):
+def _git(root: Path, *args: str) -> bytes:
     result = subprocess.run(
         ["git", "-C", str(root), *args], capture_output=True, timeout=10, check=False
     )
@@ -25,7 +25,7 @@ def _git(root, *args):
     return result.stdout
 
 
-def _probe(root):
+def _probe(root: Path) -> tuple[str, str]:
     if Path(_git(root, "rev-parse", "--show-toplevel").decode().strip()).resolve() != root:
         raise ValueError("Runtime source must be its repository root")
     revision = _git(root, "rev-parse", "HEAD").decode().strip()
@@ -59,7 +59,7 @@ class SourceIdentity:
     inventory: str = field(repr=False)
 
     @classmethod
-    def capture(cls, root: Path):
+    def capture(cls, root: Path) -> SourceIdentity:
         try:
             root = trusted_directory(root, label="runtime source")
             revision, inventory = _probe(root)
@@ -68,10 +68,10 @@ class SourceIdentity:
             raise ValueError("Clean source-checkout runtime identity is required") from None
 
     @classmethod
-    def capture_current(cls):
+    def capture_current(cls) -> SourceIdentity:
         return cls.capture(Path(__file__).resolve().parents[2])
 
-    def verify(self, expected_revision: str):
+    def verify(self, expected_revision: str) -> None:
         try:
             if expected_revision != self.revision or _probe(self.root) != (
                 self.revision,

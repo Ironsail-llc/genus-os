@@ -1,5 +1,6 @@
 """Agent-facing sales contracts, deliberately excluding operator decisions."""
 
+from typing import Any
 from uuid import UUID
 
 from pydantic import Field
@@ -38,7 +39,13 @@ class RequestRef(Contract):
     request_id: UUID
 
 
-CONTRACTS = {
+#: tool name -> (argument contract, agent-facing description). The contract is
+#: `Any` on purpose: the engine's handler dispatches over this heterogeneous
+#: table and reads a different concrete contract's fields in each branch, so a
+#: common base type would be a lie about what each branch actually has. It is
+#: still annotated, because the handler is strictly checked and an unannotated
+#: table makes `model_validate` read as a call on the metaclass.
+CONTRACTS: dict[str, tuple[Any, str]] = {
     "sales_get_report": (
         ReportRef,
         "Read a measured sales intelligence report in your tenant. Omit report_id for the latest completed report. Separate observed counts, incomplete coverage and proposed changes; this tool cannot activate proposals or approve sales.",

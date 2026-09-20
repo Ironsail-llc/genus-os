@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import re
 from html import escape
+from typing import Any
 from urllib.parse import quote
 
 import httpx
@@ -93,6 +94,13 @@ class Provider:
 
 class Pipedrive(Provider):
     provider = "pipedrive"
+    #: Set by a caller that has already read and bound the account scope.
+    #: DECLARED, NOT ASSIGNED. `connection` below reads it with
+    #: `getattr(self, "expected_scope", origin)` and relies on the attribute
+    #: being ABSENT until a caller binds it — giving it a class-level value
+    #: makes that default unreachable and every connection raise "Pipedrive
+    #: account changed during the operation".
+    expected_scope: Any
 
     async def connection(self):
         domain = await self.secret("providers/pipedrive/company_domain")

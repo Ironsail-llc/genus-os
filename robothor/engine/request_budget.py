@@ -15,9 +15,12 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
 from decimal import ROUND_CEILING, Decimal, InvalidOperation
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from robothor.engine.request_routes import RequestRoutes
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable, Iterator
 
 
 class RequestBudgetError(RuntimeError):
@@ -32,7 +35,7 @@ _ACTIVE: ContextVar[RequestBudget | None] = ContextVar("request_budget", default
 _MICRO = Decimal(1_000_000)
 
 
-def _decimal(value):
+def _decimal(value: Any) -> Decimal:
     if isinstance(value, bool) or value is None:
         raise ValueError("Not a cost")
     try:
@@ -44,7 +47,7 @@ def _decimal(value):
     return result
 
 
-def _cost_units(response):
+def _cost_units(response: Any) -> int | None:
     usage = (
         response.get("usage") if isinstance(response, dict) else getattr(response, "usage", None)
     )
@@ -70,7 +73,12 @@ def _cost_units(response):
 class RequestBudget:
     """One funded run envelope, inherited by async children and to_thread work."""
 
-    def __init__(self, limit_units: int, *, quote=None):
+    def __init__(
+        self,
+        limit_units: int,
+        *,
+        quote: Callable[[dict[str, Any]], Awaitable[tuple[int, dict[str, Any]]]] | None = None,
+    ) -> None:
         if type(limit_units) is not int or limit_units < 0:
             raise ValueError("Nonnegative integer micro-USD required")
         self.limit_units = limit_units
@@ -81,11 +89,11 @@ class RequestBudget:
         self._lock = threading.Lock()
 
     @property
-    def charged_units(self):
+    def charged_units(self) -> int:
         with self._lock:
             return self._charged
 
-    def reserve(self, units):
+    def reserve(self, units: int) -> None:
         if type(units) is not int or units < 0:
             raise RequestBudgetError("Invalid request cost bound")
         with self._lock:
@@ -93,7 +101,7 @@ class RequestBudget:
                 raise RequestBudgetError("Request spending allowance exhausted or closed")
             self._charged += units
 
-    def settle(self, reserved, actual):
+    def settle(self, reserved: int, actual: int | None) -> None:
         with self._lock:
             if actual is not None and actual > reserved:
                 # Never hide a provider contract violation behind the cap.
@@ -103,18 +111,18 @@ class RequestBudget:
             if actual is not None and not self._closed:
                 self._charged -= reserved - actual
 
-    def close(self):
+    def close(self) -> None:
         with self._lock:
             self._closed = True
 
 
-def active_budget():
+def active_budget() -> RequestBudget | None:
     """Allow non-LLM paid adapters to reject unpriced work in a bounded run."""
     return _ACTIVE.get()
 
 
 @contextmanager
-def budget_scope(budget):
+def budget_scope(budget: RequestBudget) -> Iterator[RequestBudget]:
     """Scope one funded envelope. Nested scopes cannot reset an existing cap."""
     if active_budget() is not None:
         raise RequestBudgetError("A funded budget scope is already active")
@@ -126,7 +134,7 @@ def budget_scope(budget):
         _ACTIVE.reset(token)
 
 
-async def bounded_completion(call, **kwargs):
+async def bounded_completion(call: Callable[..., Awaitable[Any]], **kwargs: Any) -> Any:
     """Wrap each actual provider attempt, not the caller's whole retry loop."""
     budget = active_budget()
     if budget is None:
@@ -148,19 +156,25 @@ async def bounded_completion(call, **kwargs):
 
 
 class _BudgetStream:
-    def __init__(self, source, budget, units, route=None):
+    def __init__(
+        self,
+        source: Any,
+        budget: RequestBudget,
+        units: int,
+        route: tuple[str, str] | None = None,
+    ) -> None:
         self.route = route
         self.source = source
         self.iterator = source.__aiter__()
         self.budget = budget
         self.units = units
-        self.actual = None
+        self.actual: int | None = None
         self.done = False
 
-    def __aiter__(self):
+    def __aiter__(self) -> _BudgetStream:
         return self
 
-    async def __anext__(self):
+    async def __anext__(self) -> Any:
         if self.done:
             raise StopAsyncIteration
         try:
@@ -181,18 +195,18 @@ class _BudgetStream:
         self.actual = cost
         return chunk
 
-    async def _close_source(self):
+    async def _close_source(self) -> None:
         close = getattr(self.source, "aclose", None)
         if close is not None:
             await close()
 
-    async def aclose(self):
+    async def aclose(self) -> None:
         if not self.done:
             self.done = True
             await self._close_source()
 
 
-def _text_only(messages):
+def _text_only(messages: list[dict[str, Any]]) -> bool:
     for message in messages:
         content = message.get("content")
         if isinstance(content, list):
@@ -203,7 +217,9 @@ def _text_only(messages):
     return True
 
 
-def openrouter_quote(kwargs, endpoints):
+def openrouter_quote(
+    kwargs: dict[str, Any], endpoints: list[dict[str, Any]]
+) -> tuple[int, dict[str, Any]]:
     """Pin one published endpoint and reserve its FULL input context.
 
     No tokenizer estimate or registry price is a spending authorization. The
@@ -272,7 +288,7 @@ def openrouter_quote(kwargs, endpoints):
             if not isinstance(tag, str) or not tag:
                 continue
 
-            def matches(values, tag=tag):
+            def matches(values: Any, tag: str = tag) -> bool:
                 return any(
                     tag.lower() == str(v).lower() or tag.lower().startswith(str(v).lower() + "/")
                     for v in values
@@ -358,7 +374,7 @@ def openrouter_quote(kwargs, endpoints):
             "No published endpoint satisfies the bounded request contract"
         )
 
-    def preference(row):
+    def preference(row: tuple[Any, ...]) -> tuple[Any, ...]:
         order = routing.get("order", [])
         rank = next(
             (
@@ -392,10 +408,10 @@ def openrouter_quote(kwargs, endpoints):
 class OpenRouterQuotes:
     """Anonymous, short-lived endpoint metadata; no credentials or registry guesses."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
-    async def __call__(self, kwargs):
+    async def __call__(self, kwargs: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         model = kwargs.get("model", "")
         if not re.fullmatch(r"openrouter/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+", model):
             raise RequestBudgetError("No bounded pricing policy for this model")

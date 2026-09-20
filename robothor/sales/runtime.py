@@ -11,6 +11,7 @@ import json
 import math
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -26,7 +27,7 @@ class StageResult:
     status: str
     total_cost_usd: float
     output_text: str | None = None
-    stage_provenance: dict = field(default_factory=dict)
+    stage_provenance: dict[str, Any] = field(default_factory=dict)
     error_message: str = ""
 
 
@@ -117,7 +118,9 @@ class NativeStageRunner:
             scout_scope(stage, tenant_id, agent_id, message) as scout,
             contact_scope(stage, tenant_id, agent_id) as contacts,
         ):
-            result = await runner.execute(
+            # A StageResult replaces the AgentRun below once a scoped
+            # attestation has validated the stage's own deliverable.
+            result: Any = await runner.execute(
                 agent_id=agent_id,
                 message=message,
                 agent_config=bounded,
@@ -395,7 +398,7 @@ class DraftWorker(ResearchWorker):
             return False
         try:
             followup = job["payload"].get("purpose") == "followup"
-            basis = None
+            basis: Any = None
             if followup:
                 basis = await asyncio.to_thread(
                     Followups(self.sales).basis, job["payload"]["prospect_id"]

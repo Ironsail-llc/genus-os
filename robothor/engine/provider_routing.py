@@ -1,12 +1,14 @@
 """Model-specific provider allowlists owned by one agent dispatch scope."""
 
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
+from typing import Any
 
 
-def parse_provider_order(value):
+def parse_provider_order(value: Any) -> dict[str, list[str]]:
     """Reject ambiguous routing rather than silently broadening a manifest."""
     if not isinstance(value, dict):
         raise ValueError("model.provider_order must map OpenRouter model paths to provider lists")
@@ -33,7 +35,7 @@ _routes: ContextVar[_Routes | None] = ContextVar("agent_provider_order", default
 
 
 @contextmanager
-def provider_order_scope(order):
+def provider_order_scope(order: Any) -> Iterator[None]:
     routes = _Routes(parse_provider_order(order))
     token = _routes.set(routes)
     try:
@@ -43,7 +45,7 @@ def provider_order_scope(order):
         _routes.reset(token)
 
 
-def apply_provider_order(model, kwargs):
+def apply_provider_order(model: str, kwargs: dict[str, Any]) -> None:
     routes = _routes.get()
     providers = routes.order.get(model) if routes and routes.active else None
     if not providers:

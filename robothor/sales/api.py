@@ -7,7 +7,7 @@ is supplied by the bridge, and no request body may select a tenant or actor.
 from __future__ import annotations
 
 from functools import wraps
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID  # noqa: TC003 — FastAPI resolves this annotation at runtime.
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -89,7 +89,7 @@ class Discovery(Contract):
 
 class Knowledge(Contract):
     version: str
-    data: dict
+    data: dict[str, Any]
 
 
 class Suppression(Contract):
@@ -113,7 +113,7 @@ class ReadRepair(Contract):
 
 class SettingsReview(ReadRepair):
     expected_revision: int = Field(ge=0, strict=True)
-    changes: dict = Field(min_length=1)
+    changes: dict[str, Any] = Field(min_length=1)
 
     @field_validator("changes")
     @classmethod

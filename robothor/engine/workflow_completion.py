@@ -1,10 +1,11 @@
 """Trusted workflow decisions after a native tool turn; never model-authored flags."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 from robothor.engine.models import RunStep, StepType
 
@@ -32,7 +33,9 @@ _completion: ContextVar[_Completion | None] = ContextVar("workflow_completion", 
 
 
 @contextmanager
-def workflow_completion_scope(tenant_id, agent_id, resolve):
+def workflow_completion_scope(
+    tenant_id: str, agent_id: str, resolve: Callable[[], WorkflowCompletion | None]
+) -> Iterator[None]:
     state = _Completion(tenant_id, agent_id, resolve)
     token = _completion.set(state)
     try:
@@ -42,7 +45,7 @@ def workflow_completion_scope(tenant_id, agent_id, resolve):
         _completion.reset(token)
 
 
-def finish_after_tools(session):
+def finish_after_tools(session: Any) -> bool:
     """Resolve only after tools finish; the runner retains normal final validation."""
     state = _completion.get()
     if (

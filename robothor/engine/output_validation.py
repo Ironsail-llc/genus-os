@@ -1,9 +1,10 @@
 """Bounded corrections for trusted workflow-owned output validators."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from typing import Any
 
 
 class OutputValidationError(ValueError):
@@ -12,7 +13,7 @@ class OutputValidationError(ValueError):
 
 @dataclass
 class _Validation:
-    validate: Callable
+    validate: Callable[..., Any]
     max_repairs: int
     repairs: int = 0
     active: bool = True
@@ -22,7 +23,9 @@ _validation: ContextVar[_Validation | None] = ContextVar("workflow_output_valida
 
 
 @contextmanager
-def output_validation_scope(validate, *, max_repairs=2):
+def output_validation_scope(
+    validate: Callable[..., Any], *, max_repairs: int = 2
+) -> Iterator[None]:
     if type(max_repairs) is not int or not 0 <= max_repairs <= 2:
         raise ValueError("Output repair limit must be between zero and two")
     state = _Validation(validate, max_repairs)
@@ -34,7 +37,7 @@ def output_validation_scope(validate, *, max_repairs=2):
         _validation.reset(token)
 
 
-def _problem(session, text):
+def _problem(session: Any, text: str) -> tuple[_Validation | None, str | None]:
     state = _validation.get()
     if state is None or not state.active:
         return state, None
@@ -45,10 +48,12 @@ def _problem(session, text):
     return state, str(problem)[:1500] if problem else None
 
 
-def request_output_repair(session):
+def request_output_repair(session: Any) -> bool:
     """Use another ordinary iteration; never add time, tools, tokens or money."""
     state, problem = _problem(session, session.get_final_text())
-    if not problem:
+    # `_problem` returns a problem only when it had a live validation state to
+    # ask, so these two are never out of step; say so rather than imply it.
+    if state is None or not problem:
         return False
     if state.repairs >= state.max_repairs:
         raise OutputValidationError("Workflow output validation failed: " + problem)
@@ -66,7 +71,7 @@ def request_output_repair(session):
     return True
 
 
-def validated_completion(session, text):
+def validated_completion(session: Any, text: str) -> Any:
     """Budget/finalizer exits cannot bypass the workflow's acceptance contract."""
     _, problem = _problem(session, text)
     if problem:

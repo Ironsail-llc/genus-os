@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import re
 from datetime import UTC, datetime
+from typing import Any
 
 from psycopg2.extras import Json
 
@@ -331,13 +332,13 @@ class GmailThreadWorker:
             for a in actions
         ):
             raise Conflict("Resolve earlier Gmail writes before another send")
-        roots = {}
+        roots: dict[str, Any] = {}
         for a in actions:
             receipt = a["provider_receipt"] or {}
             if a["effect_status"] == "completed":
                 if receipt.get("mailbox") != self.provider.mailbox:
                     raise Conflict("Gmail conversation account changed")
-                roots.setdefault(receipt.get("thread_id"), a)
+                roots.setdefault(str(receipt.get("thread_id")), a)
         if len(roots) > 10:
             raise Conflict("Gmail preflight exceeds the ten-thread review bound")
         for root in roots.values():

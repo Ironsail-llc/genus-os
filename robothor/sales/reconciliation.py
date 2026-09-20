@@ -69,7 +69,7 @@ class ReconciliationWorker:
                     "after": start.isoformat(),
                     "through": now.isoformat(),
                     "cursor": None,
-                    "full_at": (now if full else full_at).isoformat(),
+                    "full_at": (now if full or full_at is None else full_at).isoformat(),
                     "workspace": last["result"].get("workspace") if last else None,
                     "seen_cursors": [],
                 }

@@ -1,6 +1,7 @@
 """Reviewable sales integration configuration and secret-name-only readiness."""
 
 from datetime import UTC, datetime
+from typing import Any
 
 from pydantic import Field, field_validator
 
@@ -20,7 +21,7 @@ SETUP_FIELDS = {
 
 
 class SetupChange(Contract):
-    changes: dict = Field(min_length=1)
+    changes: dict[str, Any] = Field(min_length=1)
     expected_revision: int = Field(ge=0, strict=True)
     reason: str = Field(min_length=10, max_length=2000)
 

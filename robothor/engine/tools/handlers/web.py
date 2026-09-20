@@ -1457,7 +1457,9 @@ def _retry_after_seconds(resp: Any) -> float:
     return min(max(value, 0.0), _BRAVE_MAX_BACKOFF_S)
 
 
-async def _brave_search(query: str, limit: int, *, accounting=None) -> list[dict[str, str]] | None:
+async def _brave_search(
+    query: str, limit: int, *, accounting: Any = None
+) -> list[dict[str, str]] | None:
     """Brave Search API, if the operator configured a key. None = not available."""
     from robothor.engine.brave_budget import BraveSearchBudget
     from robothor.engine.request_budget import RequestBudgetError, active_budget

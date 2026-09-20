@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -21,7 +22,7 @@ from robothor.sales.models import (
 )
 
 
-def operator(actor):
+def operator(actor: str | None) -> None:
     """Require a caller authenticated as a human by the interface boundary."""
     if not actor or not actor.startswith("operator:"):
         raise Conflict("Human operator required")
@@ -44,7 +45,7 @@ def domain_of(url):
 class Sales:
     """Domain writes and their follow-on work are committed together."""
 
-    def __init__(self, tenant_id):
+    def __init__(self, tenant_id: str) -> None:
         self.ops = Operations(tenant_id)
         self.tenant = tenant_id
 
@@ -528,7 +529,7 @@ class Sales:
         if not settings.agents.get("qualify"):
             return None
         p = self.require(prospect_id, cur)
-        qualification = p["qualification"] or {}
+        qualification: dict[str, Any] = p["qualification"] or {}
         receipt = qualification.get("assessment_receipt") or {}
         if (
             not qualification.get("assessment")
@@ -537,7 +538,7 @@ class Sales:
             or receipt.get("dossier_hash") != digest(p["dossier"])
             or receipt.get("agent_id") != settings.agents["qualify"]
             or receipt.get("fleet_release_id") != settings.fleet_release_id
-            or settings.active_policy_versions.get(qualification.get("buying_case"))
+            or settings.active_policy_versions.get(qualification.get("buying_case") or "")
             != qualification.get("policy_version")
         ):
             raise Conflict("Current independent qualification assessment required")
@@ -865,10 +866,10 @@ class Sales:
             raise Conflict("Accepted prospect required")
         if payload["knowledge_version"] != settings.active_knowledge_version:
             raise Conflict("Active knowledge version changed")
-        q = p["qualification"] or {}
+        q: dict[str, Any] = p["qualification"] or {}
         self.require_assessment(p["id"], cur=cur)
         if q.get("decision") != "qualified" or settings.active_policy_versions.get(
-            q.get("buying_case")
+            q.get("buying_case") or ""
         ) != q.get("policy_version"):
             raise Conflict("Active qualification policy changed")
         if payload["sender"] not in settings.senders:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from robothor.operations.gates import run_shared
@@ -31,10 +32,10 @@ from robothor.sales.verification import VerificationWorker
 
 
 class QueueDriver:
-    def __init__(self, sales):
+    def __init__(self, sales: Any) -> None:
         self.sales = sales
 
-    async def tick(self, stage, workflow_id):
+    async def tick(self, stage: str, workflow_id: str) -> dict[str, Any]:
         return await run_shared(
             self.sales.ops, "sales-fleet", lambda: self._tick(stage, workflow_id)
         )

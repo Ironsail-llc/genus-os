@@ -8,10 +8,14 @@ reconciliation, including one abandoned by process death.
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING, Any
 
 from psycopg2.extras import Json
 
 from robothor.operations.store import Conflict, Operations, digest
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
 
 class UnresolvedEffect(Conflict):
@@ -19,10 +23,10 @@ class UnresolvedEffect(Conflict):
 
 
 class Effects:
-    def __init__(self, tenant_id):
+    def __init__(self, tenant_id: str) -> None:
         self.ops = Operations(tenant_id)
 
-    def _begin(self, kind, key, payload):
+    def _begin(self, kind: str, key: str, payload: dict[str, Any]) -> dict[str, Any] | None:
         payload_hash = digest(payload)
         with self.ops.transaction() as cur:
             cur.execute(
@@ -42,9 +46,10 @@ class Effects:
                 raise Conflict("External effect key reused with different content")
             if row["status"] != "completed":
                 raise UnresolvedEffect("External effect requires provider reconciliation")
-            return row["receipt"]
+            receipt: dict[str, Any] = row["receipt"]
+            return receipt
 
-    def _finish(self, kind, key, status, receipt):
+    def _finish(self, kind: str, key: str, status: str, receipt: dict[str, Any]) -> None:
         with self.ops.transaction() as cur:
             cur.execute(
                 "UPDATE operation_effects SET status=%s,receipt=%s,updated_at=now() "
@@ -55,7 +60,13 @@ class Effects:
                 raise Conflict("External effect state changed during execution")
             self.ops.audit(cur, key, "effect." + status, detail={"kind": kind})
 
-    async def perform(self, kind, key, payload, call):
+    async def perform(
+        self,
+        kind: str,
+        key: str,
+        payload: dict[str, Any],
+        call: Callable[..., Awaitable[Any]],
+    ) -> dict[str, Any]:
         existing = await asyncio.to_thread(self._begin, kind, key, payload)
         if existing is not None:
             return existing
@@ -73,7 +84,9 @@ class Effects:
         await asyncio.to_thread(self._finish, kind, key, "completed", receipt)
         return receipt
 
-    def reconcile(self, kind, key, receipt, actor, reason):
+    def reconcile(
+        self, kind: str, key: str, receipt: dict[str, Any], actor: str, reason: str
+    ) -> None:
         """Record the provider receipt an authenticated human actually verified."""
         if not actor.startswith("operator:") or not reason.strip() or not receipt.get("id"):
             raise Conflict("Human reconciliation, reason and provider receipt required")

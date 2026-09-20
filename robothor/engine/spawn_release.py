@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 
-async def load_child_config(agent_id, engine_config, release_id):
+async def load_child_config(
+    agent_id: str, engine_config: Any, release_id: str | None
+) -> tuple[Any, str]:
     # `not release_id`, not `is None`: an empty release id is the absence of a
     # pinned release, never a lookup key. staged_release_path(workspace, "") is a
     # bug, and its failure used to read to the parent as "your child's reviewed

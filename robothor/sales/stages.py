@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -19,7 +20,10 @@ from robothor.sales.runtime import ResearchWorker
 
 class StructuredWorker(ResearchWorker):
     stage = ""
-    schema = None
+    #: Each concrete worker names its own output contract, and supplies its
+    #: own `commit`; this base only orchestrates them.
+    schema: Any = None
+    commit: Any = None
     instruction = ""
     switch = "research_enabled"
 

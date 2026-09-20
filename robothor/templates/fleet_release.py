@@ -11,7 +11,7 @@ import hashlib
 import json
 import tempfile
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -37,7 +37,7 @@ class ReleaseSpec(BaseModel):
     plugins: list[str] = Field(default_factory=list, max_length=10)
     sales_settings: str | None = None
 
-    def paths(self):
+    def paths(self) -> list[str]:
         return [
             *self.agents,
             *self.workflows,
@@ -47,7 +47,7 @@ class ReleaseSpec(BaseModel):
         ]
 
     @model_validator(mode="after")
-    def canonical_inventory(self):
+    def canonical_inventory(self) -> ReleaseSpec:
         paths = self.paths()
         if len(paths) > MAX_BUNDLE_FILES or len(set(paths)) != len(paths):
             raise ValueError("Release member count or duplicate path invalid")
@@ -66,17 +66,17 @@ class ReleaseSpec(BaseModel):
         return self
 
 
-def _canonical(value):
+def _canonical(value: Any) -> bytes:
     return json.dumps(
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False
     ).encode()
 
 
-def _sha(data):
+def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _read(root, path):
+def _read(root: Path, path: str) -> bytes:
     member = contained_path(root, path)
     limit = 50 * 1024 * 1024 if path.endswith(".whl") else 2 * 1024 * 1024
     if not member.is_file() or member.stat().st_size > limit:
@@ -87,7 +87,7 @@ def _read(root, path):
     return data
 
 
-def _contracts(root, spec):
+def _contracts(root: Path, spec: ReleaseSpec) -> dict[str, Any]:
     from apscheduler.triggers.cron import CronTrigger
 
     from robothor.engine.manifest_schema import validate
@@ -96,7 +96,9 @@ def _contracts(root, spec):
     from robothor.plugins.wheel import open_wheel
 
     listed = set(spec.paths())
-    agents, workflows, plugins = {}, {}, []
+    agents: dict[str, Any] = {}
+    workflows: dict[str, Any] = {}
+    plugins: list[dict[str, Any]] = []
     documents = {}
     for path in listed - set(spec.plugins):
         content = _read(root, path).decode("utf-8")
@@ -205,7 +207,7 @@ def _contracts(root, spec):
     return {"agents": sorted(agents), "workflows": sorted(workflows), "plugins": plugins}
 
 
-def build_release(source: Path, destination: Path, specification: dict) -> dict:
+def build_release(source: Path, destination: Path, specification: dict[str, Any]) -> dict[str, Any]:
     """Publish a new verified artifact directory atomically; never overwrite one."""
     try:
         spec = ReleaseSpec.model_validate(specification)
@@ -243,7 +245,7 @@ def build_release(source: Path, destination: Path, specification: dict) -> dict:
         raise ReleaseError(f"Release build refused ({type(exc).__name__})") from None
 
 
-def verify_release(root: Path, *, expected_digest: str) -> dict:
+def verify_release(root: Path, *, expected_digest: str) -> dict[str, Any]:
     """Compare every member to the externally pinned release fingerprint."""
     try:
         root = trusted_directory(root, label="release artifact")
@@ -277,7 +279,8 @@ def verify_release(root: Path, *, expected_digest: str) -> dict:
                 raise ReleaseError(f"Release member drift: {path}")
         if _contracts(root, spec) != document["contracts"]:
             raise ReleaseError("Release contract summary differs from its contents")
-        return document
+        verified: dict[str, Any] = document
+        return verified
     except ReleaseError:
         raise
     except Exception as exc:

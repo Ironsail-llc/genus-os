@@ -18,10 +18,11 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from robothor.engine.config import EngineConfig
+    from robothor.engine.runner import AgentRunner
     from robothor.engine.session import AgentSession
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 from robothor.engine.llm_attempts import is_attempt_step
 
@@ -363,7 +364,9 @@ class RunLifecycleMixin:
                     identity=getattr(session, "identity", None),
                 ),
                 agent_id=agent_config.id,
-                _runner=self,
+                # This mixin is only ever composed into AgentRunner, which is what
+                # the spawn handler needs; the mixin has no runner type of its own.
+                _runner=cast("AgentRunner", self),
             )
             if result.get("error") or result.get("status") != "completed":
                 logger.debug("Recovery helper refused or failed")

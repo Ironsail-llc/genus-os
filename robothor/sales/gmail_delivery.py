@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+from typing import Any
 
 from robothor.operations.effects import Effects, UnresolvedEffect
 from robothor.operations.store import Conflict
@@ -19,7 +20,7 @@ from robothor.sales.providers import ProviderError
 
 class GmailDeliveryWorker:
     _window = staticmethod(DeliveryWorker._window)
-    _reserve_slot = DeliveryWorker._reserve_slot
+    _reserve_slot: Any = DeliveryWorker._reserve_slot
 
     def __init__(self, sales, provider=None, *, clock=None):
         self.sales = sales

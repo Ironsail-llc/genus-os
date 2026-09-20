@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from robothor.operations.store import Conflict, digest
@@ -50,9 +51,9 @@ class Followups:
         ):
             raise Conflict("Follow-up requires an accepted prospect without customer activity")
         self.sales.require_assessment(prospect_id, cur=cur)
-        q = p["qualification"] or {}
+        q: dict[str, Any] = p["qualification"] or {}
         if q.get("decision") != "qualified" or settings.active_policy_versions.get(
-            q.get("buying_case")
+            q.get("buying_case") or ""
         ) != q.get("policy_version"):
             raise Conflict("Follow-up qualification is stale")
         cur.execute(
@@ -110,7 +111,7 @@ class Followups:
                 raise Conflict("Follow-up requires an owned activated campaign")
         else:
             raise Conflict("Follow-up email provider is not configured")
-        previous = None
+        previous: Any = None
         for index, message in enumerate(messages):
             matches = [
                 a

@@ -1,6 +1,7 @@
 """Bounded public GET transport for rendering; the browser never opens target sockets."""
 
 import asyncio
+from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
@@ -10,7 +11,7 @@ class RenderError(ValueError):
     pass
 
 
-def public_url(url):
+def public_url(url: str) -> bool:
     try:
         p = urlsplit(url)
         return (
@@ -29,12 +30,12 @@ class RenderNetwork:
     max_resource_bytes = 4 * 1024 * 1024
     max_total_bytes = 12 * 1024 * 1024
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.requests = 0
         self.bytes = 0
         self.slots = asyncio.Semaphore(4)
 
-    async def get(self, url):
+    async def get(self, url: str) -> dict[str, Any]:
         async with self.slots:
             for _ in range(7):
                 response = await self._one(url)
@@ -47,7 +48,7 @@ class RenderNetwork:
                     return response
             raise RenderError("Render redirect limit exceeded")
 
-    async def _one(self, url):
+    async def _one(self, url: str) -> dict[str, Any]:
         from robothor.engine.tools.handlers import web
 
         if not public_url(url):

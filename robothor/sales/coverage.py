@@ -3,6 +3,7 @@
 import hashlib
 import json
 from datetime import datetime
+from typing import Any
 
 
 def fingerprint(members):
@@ -24,7 +25,10 @@ def finish_scan(cur, tenant, scan, page, current):
     if len(pages) > 1000 or len({after for after, _ in pages}) != len(pages):
         return None
     by_cursor = dict(pages)
-    cursor, members, proofs, visited = None, [], [], set()
+    cursor: Any = None
+    members: list[Any] = []
+    proofs: list[Any] = []
+    visited: set[Any] = set()
     while cursor in by_cursor and cursor not in visited:
         visited.add(cursor)
         result = by_cursor[cursor]
