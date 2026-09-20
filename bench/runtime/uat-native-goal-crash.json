@@ -1,0 +1,19 @@
+{
+  "command": ".venv/bin/python -m bench.runtime.migrated_integration",
+  "integration_passed": 16,
+  "skipped": 1,
+  "skip_reason": "Crash-only worker skips unless its parent test launches it in a subprocess.",
+  "seconds": 7.39,
+  "warnings": 1,
+  "crash": "SIGKILL during second native model request, after first progress update and tool-step persistence. Parent requires subprocess return code -SIGKILL and pre-kill readiness marker.",
+  "recovery": [
+    "new attempt requires reconciliation",
+    "uncertain provider reservation remains charged",
+    "original progress tool effect and audit occur exactly once",
+    "old attempt status interrupted with retained charged tokens",
+    "stale finish cannot double-charge",
+    "new native run reaches waiting with three recorded tool outcomes",
+    "waiting tick performs no model calls"
+  ],
+  "scope": "Real process termination and native controller/runner/dispatch/database recovery with scripted provider responses and seeded test permissions. Lease expiry accelerated in SQL. Not a full daemon kill/restart, saved-message checkpoint continuation, real external provider readback, or rollback."
+}

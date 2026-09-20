@@ -2,6 +2,9 @@
 
 import json
 import os
+import signal
+import subprocess
+import sys
 from dataclasses import replace
 from unittest.mock import patch
 from uuid import uuid4
@@ -20,7 +23,10 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.mark.asyncio
-async def test_native_goal_recovery_reconciles_before_waiting(engine_config, sample_agent_config):
+@pytest.mark.parametrize("crash", [False, True])
+async def test_native_goal_recovery_reconciles_before_waiting(
+    engine_config, sample_agent_config, crash
+):
     dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
     if "host=/tmp/runtime-migrated-" not in dsn:
         pytest.skip("requires the disposable canonical migration harness")
@@ -43,8 +49,26 @@ async def test_native_goal_recovery_reconciles_before_waiting(engine_config, sam
         ),
         "operator",
     )
-    _, old_attempt = store.claim(tenant)
-    store.heartbeat(tenant, goal["id"], old_attempt, tokens=30)
+    if crash:
+        env = {key: value for key, value in os.environ.items() if key.startswith("ROBOTHOR_DB_")}
+        env.update(PATH=os.environ["PATH"], ROBOTHOR_TEST_DB_DSN=dsn, RUNTIME_CRASH_TENANT=tenant)
+        child = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", "-s", __file__ + "::test_native_crash_worker"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert child.returncode == -signal.SIGKILL, child.stdout + child.stderr
+        marker = next(
+            line.removeprefix("NATIVE_CRASH ")
+            for line in child.stdout.splitlines()
+            if line.startswith("NATIVE_CRASH ")
+        )
+        old_attempt = json.loads(marker)["attempt"]
+    else:
+        _, old_attempt = store.claim(tenant)
+        store.heartbeat(tenant, goal["id"], old_attempt, tokens=30)
     with store.transaction() as cur:
         cur.execute(
             "UPDATE pursuit_goals SET lease_until=now()-interval '1 minute' WHERE tenant_id=%s",
@@ -52,6 +76,8 @@ async def test_native_goal_recovery_reconciles_before_waiting(engine_config, sam
         )
     recovered, attempt = store.claim(tenant)
     assert recovered["recovery_required"] and attempt != old_attempt
+    prior_tokens = recovered["tokens_used"]
+    assert prior_tokens > 150 if crash else prior_tokens == 30
     calls = []
 
     async def provider(**kwargs):
@@ -113,11 +139,14 @@ async def test_native_goal_recovery_reconciles_before_waiting(engine_config, sam
     assert len(calls) == 3
     assert result["status"] == "waiting", result
     assert not result["recovery_required"]
-    assert result["tokens_used"] == 480
+    assert result["tokens_used"] == prior_tokens + 450
     store.finish(tenant, goal["id"], old_attempt, tokens=30)
-    assert store.get(tenant, goal["id"])["tokens_used"] == 480
+    assert store.get(tenant, goal["id"])["tokens_used"] == prior_tokens + 450
     with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
-        cur.execute("SELECT status,runtime_context FROM agent_runs WHERE tenant_id=%s", (tenant,))
+        cur.execute(
+            "SELECT status,runtime_context FROM agent_runs WHERE tenant_id=%s AND runtime_context->>'attempt_id'=%s",
+            (tenant, attempt),
+        )
         rows = cur.fetchall()
         assert len(rows) == 1
         assert rows[0][0] == "completed"
@@ -125,11 +154,95 @@ async def test_native_goal_recovery_reconciles_before_waiting(engine_config, sam
         assert rows[0][1]["attempt_id"] == attempt
 
         cur.execute(
-            "SELECT s.tool_input,s.tool_output FROM agent_run_steps s JOIN agent_runs r ON r.id=s.run_id WHERE r.tenant_id=%s AND s.tool_name='update_pursuit_goal' ORDER BY s.step_number",
-            (tenant,),
+            "SELECT s.tool_input,s.tool_output FROM agent_run_steps s JOIN agent_runs r ON r.id=s.run_id WHERE r.tenant_id=%s AND r.runtime_context->>'attempt_id'=%s AND s.tool_name='update_pursuit_goal' ORDER BY s.step_number",
+            (tenant, attempt),
         )
         tools = cur.fetchall()
         assert [args["action"] for args, _ in tools] == ["wait", "reconciled", "wait"]
         assert "inspect previous run results" in json.dumps(tools[0][1])
         assert tools[1][1]["goal"]["recovery_required"] is False
         assert tools[2][1]["goal"]["status"] == "waiting"
+        if crash:
+            cur.execute(
+                "SELECT count(*) FROM agent_run_steps s JOIN agent_runs r ON r.id=s.run_id WHERE r.tenant_id=%s AND s.tool_input->>'action'='progress'",
+                (tenant,),
+            )
+            assert cur.fetchone()[0] == 1, "recovery repeated the pre-crash update"
+            cur.execute(
+                "SELECT status,tokens FROM pursuit_goal_attempts WHERE tenant_id=%s AND id=%s",
+                (tenant, old_attempt),
+            )
+            assert cur.fetchone() == ("interrupted", prior_tokens)
+
+
+@pytest.mark.asyncio
+async def test_native_crash_worker(engine_config, sample_agent_config):
+    """Only the parent test enables this worker in its private database."""
+    tenant = os.environ.get("RUNTIME_CRASH_TENANT")
+    dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
+    if not tenant or "host=/tmp/runtime-migrated-" not in dsn:
+        pytest.skip("subprocess crash worker only")
+    engine_config = replace(engine_config, tenant_id=tenant)
+    sample_agent_config.id = "main"
+    sample_agent_config.task_protocol = False
+    sample_agent_config.difficulty_class = "simple"
+    sample_agent_config.tools_allowed = ["get_pursuit_goal", "update_pursuit_goal"]
+    sample_agent_config.model_fallbacks = []
+    goal, attempt = store.claim(tenant)
+    calls = 0
+
+    async def provider(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            # The first native tool effect and its step must already be durable.
+            with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+                cur.execute(
+                    "SELECT count(*) FROM agent_run_steps s JOIN agent_runs r ON r.id=s.run_id WHERE r.tenant_id=%s AND s.tool_input->>'action'='progress'",
+                    (tenant,),
+                )
+                assert cur.fetchone()[0] == 1
+            assert store.control(tenant, goal["id"])["checkpoint"] == "Saved before crash"
+            print("NATIVE_CRASH " + json.dumps({"attempt": attempt}), flush=True)
+            os.kill(os.getpid(), signal.SIGKILL)
+        state = store.control(tenant, goal["id"])
+        return litellm.ModelResponse(
+            model=sample_agent_config.model_primary,
+            choices=[
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "before_crash",
+                                "type": "function",
+                                "function": {
+                                    "name": "update_pursuit_goal",
+                                    "arguments": json.dumps(
+                                        {
+                                            "goal_id": goal["id"],
+                                            "version": state["version"],
+                                            "action": "progress",
+                                            "note": "Saved before crash",
+                                            "next_action": "Read saved progress",
+                                        }
+                                    ),
+                                },
+                            }
+                        ],
+                    },
+                }
+            ],
+            usage={"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+        )
+
+    with (
+        patch(
+            "robothor.engine.config.load_agent_config_or_broken", return_value=sample_agent_config
+        ),
+        patch("litellm.acompletion", side_effect=provider),
+    ):
+        await GoalController(AgentRunner(engine_config), engine_config).execute(goal, attempt)
+    pytest.fail("worker returned instead of reaching the crash point")
