@@ -80,3 +80,58 @@ async def test_external_approval_reconciles_with_no_second_post_or_script_mutati
                 await browser.close()
         assert len(status_reads) == 2
         assert HandoffStore(store).list(identity)[0]["state"] == "resolved"
+
+
+async def test_automatic_handoff_confirmation_uses_affirmative_observation_not_guess(
+    store, identity, monkeypatch
+):
+    from robothor.autonomy import confirmation, handoff_worker
+    from robothor.autonomy.handoff_recovery import HandoffChecks
+
+    original_wait = confirmation.wait_for_confirmation
+
+    async def short_wait(page, destination, action, **kwargs):
+        return await original_wait(page, destination, action, timeout_seconds=0.2)
+
+    monkeypatch.setattr(confirmation, "wait_for_confirmation", short_wait)
+    op = pending(store, identity)
+    asked = HandoffStore(store).create(
+        identity, op["id"], "main", request(confirmation={"url": "https://shop.example/status"})
+    )
+    posts = []
+    async with async_playwright() as pw:
+        for message, expected in [
+            ("Your order is not confirmed.", "reconciling"),
+            ("Order confirmed.", "completed"),
+        ]:
+            HandoffStore(store).acknowledge(identity, asked["id"])
+
+            async def run(scope, operation, agent, plan, *, reconcile, message=message):
+                # Playwright may pass (route, request) to a two-argument handler.
+                # Keep the merchant handler unary; bind scenario text here.
+                async def merchant(route):
+                    if route.request.method == "POST":
+                        posts.append("unexpected")
+                    await route.fulfill(
+                        content_type="text/html",
+                        body="<p>"
+                        + message
+                        + '</p><script>fetch("/submit",{method:"POST"}).catch(()=>{});</script>',
+                    )
+
+                assert reconcile and plan.success_selector is None and plan.success_text is None
+                browser = await pw.chromium.launch(headless=True)
+                try:
+                    page = await browser.new_page()
+                    await page.route("**/*", merchant)
+                    return await BrowserBroker(store).reconcile_on_page(
+                        scope, operation, agent, plan, page
+                    )
+                finally:
+                    await browser.close()
+
+            monkeypatch.setattr(handoff_worker, "run_browser", run)
+            await handoff_worker.check_one(HandoffChecks(store), identity, asked["id"])
+            assert store.operation(identity, op["id"])["state"] == expected
+        assert posts == []
+        assert HandoffStore(store).list(identity)[0]["state"] == "resolved"

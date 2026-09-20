@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID, uuid4  # noqa: TC003 -- Pydantic field type
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from robothor.autonomy.broker import url_origin
 from robothor.autonomy.crypto import open_resource, seal_resource
@@ -21,9 +21,15 @@ if TYPE_CHECKING:
 
 class Confirmation(StrictModel):
     url: str = Field(min_length=1, max_length=2000)
-    selector: str = Field(min_length=1, max_length=500)
-    text: str = Field(min_length=3, max_length=300)
+    selector: str | None = Field(default=None, min_length=1, max_length=500)
+    text: str | None = Field(default=None, min_length=3, max_length=300)
     session_resource_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def paired_confirmation(self) -> Confirmation:
+        if bool(self.selector) != bool(self.text):
+            raise ValueError("confirmation_selector_and_text_required_together")
+        return self
 
     @field_validator("url")
     @classmethod
@@ -78,6 +84,8 @@ class HandoffStore:
                 if prior["fingerprint"] != fingerprint:
                     raise PermissionError("handoff_request_changed")
                 return _public(prior)
+            if (spec.confirmation.selector or "").strip().lower() in {"body", "html", "*", ":root"}:
+                raise PermissionError("use_automatic_or_specific_confirmation")
             if op["state"] not in {"reserved", "submitting", "reconciling"}:
                 raise PermissionError("operation_not_pending")
             if url_origin(spec.confirmation.url) != op["proposal"]["origin"]:
