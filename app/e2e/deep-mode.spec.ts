@@ -628,3 +628,92 @@ test("chat follows pending calendar evidence after a cancelled run", async ({ pa
   expect(lookups).toBeGreaterThanOrEqual(2);
   expect(sends).toBe(1);
 });
+
+for (const approved of [false, true]) {
+  test(`${approved ? "approved plan" : "ordinary request"} recovers after page reload without resubmission`, async ({ page }) => {
+    await setupMocks(page);
+    const scope = "30000000-0000-4000-8000-000000000001";
+    let histories = 0;
+    let executions = 0;
+    let originalId = "";
+    await page.route("**/api/chat/history", (route) => {
+      histories += 1;
+      return route.fulfill({ json: { messages: [], recoveryScope: scope } });
+    });
+    await page.route("**/api/chat/outcome?*", (route) => {
+      expect(new URL(route.request().url()).searchParams.get("request_id")).toBe(originalId);
+      return route.fulfill({ json: histories < 2
+        ? { state: "running", terminal: false }
+        : { state: "completed", terminal: true, text: "Recovered the original request after reload." } });
+    });
+    if (approved) {
+      await page.route("**/api/chat/plan/start", (route) => route.fulfill({
+        status: 200, contentType: "text/event-stream", body: mockPlanSSE("Requested work", "reload-plan", false),
+      }));
+    }
+    await page.route(approved ? "**/api/chat/plan/approve" : "**/api/chat/send", (route) => {
+      executions += 1;
+      originalId = route.request().postDataJSON().request_id;
+      return route.abort("connectionfailed");
+    });
+    await page.goto(BASE_URL, { waitUntil: "networkidle" });
+    if (approved) await page.getByTestId("plan-toggle").click();
+    await page.getByTestId("chat-input").fill("Do the requested work");
+    await page.getByTestId("send-button").click();
+    if (approved) await page.getByTestId("plan-approve").click();
+    await expect(page.getByTestId("message-assistant").last()).toContainText("original run is still working");
+    expect(await page.evaluate((key) => sessionStorage.getItem(key), "helm.chat.pending.v1." + scope)).toBe(JSON.stringify([originalId]));
+    await page.reload({ waitUntil: "networkidle" });
+    await expect(page.getByTestId("message-assistant").last()).toContainText("Recovered the original request after reload.");
+    expect(executions).toBe(1);
+    expect(await page.evaluate((key) => sessionStorage.getItem(key), "helm.chat.pending.v1." + scope)).toBeNull();
+  });
+}
+
+test("reload recovery ignores identifiers from another authenticated scope", async ({ page }) => {
+  await setupMocks(page);
+  await page.addInitScript(() => {
+    sessionStorage.setItem("helm.chat.pending.v1.30000000-0000-4000-8000-000000000001",
+      JSON.stringify(["40000000-0000-4000-8000-000000000001"]));
+  });
+  await page.route("**/api/chat/history", (route) => route.fulfill({ json: {
+    messages: [], recoveryScope: "30000000-0000-4000-8000-000000000002",
+  } }));
+  let lookups = 0;
+  await page.route("**/api/chat/outcome?*", (route) => {
+    lookups += 1;
+    return route.fulfill({ json: { state: "not_found", terminal: false } });
+  });
+  await page.goto(BASE_URL, { waitUntil: "networkidle" });
+  await expect(page.getByTestId("chat-input")).toBeEnabled();
+  await expect(page.getByTestId("message-assistant")).toHaveCount(0);
+  expect(lookups).toBe(0);
+});
+
+test("delivered request clears its journal before a later reload", async ({ page }) => {
+  await setupMocks(page);
+  const scope = "30000000-0000-4000-8000-000000000003";
+  await page.route("**/api/chat/history", (route) => route.fulfill({ json: { messages: [], recoveryScope: scope } }));
+  let sends = 0;
+  let lookups = 0;
+  await page.route("**/api/chat/send", async (route) => {
+    sends += 1;
+    const id = route.request().postDataJSON().request_id;
+    expect(await page.evaluate((key) => sessionStorage.getItem(key), "helm.chat.pending.v1." + scope)).toBe(JSON.stringify([id]));
+    return route.fulfill({ status: 200, contentType: "text/event-stream",
+      body: buildSSE([{ event: "done", data: { status: "completed", text: "Recorded completion." } }]),
+    });
+  });
+  await page.route("**/api/chat/outcome?*", (route) => {
+    lookups += 1;
+    return route.fulfill({ json: { state: "not_found", terminal: false } });
+  });
+  await page.goto(BASE_URL, { waitUntil: "networkidle" });
+  await page.getByTestId("chat-input").fill("Complete the requested action");
+  await page.getByTestId("send-button").click();
+  await expect(page.getByTestId("message-assistant").last()).toContainText("Recorded completion.");
+  expect(await page.evaluate((key) => sessionStorage.getItem(key), "helm.chat.pending.v1." + scope)).toBeNull();
+  await page.reload({ waitUntil: "networkidle" });
+  expect(sends).toBe(1);
+  expect(lookups).toBe(0);
+});

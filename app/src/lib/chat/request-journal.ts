@@ -34,3 +34,20 @@ export function forgetRequest(scope: string, requestId: string): void {
     // Storage unavailability must not discard a recovered answer from chat.
   }
 }
+
+/** Resolve server-authenticated scope before dispatch when initial history is still loading. */
+export async function journalRequest(agent: string, requestId: string, scope?: string, signal?: AbortSignal): Promise<string | undefined> {
+  if (scope === undefined) {
+    try {
+      const query = agent ? `?agent=${encodeURIComponent(agent)}` : "";
+      const response = await fetch(`/api/chat/history${query}`, {
+        cache: "no-store",
+        signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(2000)]),
+      });
+      if (response.ok) scope = (await response.json()).recoveryScope;
+    } catch {
+      // Ordinary chat remains usable when history/storage recovery is unavailable.
+    }
+  }
+  return scope && rememberRequest(scope, requestId) ? scope : undefined;
+}

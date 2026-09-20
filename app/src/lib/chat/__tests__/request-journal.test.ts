@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { forgetRequest, pendingRequests, rememberRequest } from "../request-journal";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { forgetRequest, journalRequest, pendingRequests, rememberRequest } from "../request-journal";
 
 const scope = "10000000-0000-4000-8000-000000000001";
 const other = "10000000-0000-4000-8000-000000000002";
@@ -7,6 +7,7 @@ const request = "20000000-0000-4000-8000-000000000001";
 
 describe("scoped pending request journal", () => {
   beforeEach(() => { sessionStorage.clear(); vi.restoreAllMocks(); });
+  afterEach(() => { vi.unstubAllGlobals(); });
   it("retains one identifier across readers and isolates conversations", () => {
     expect(rememberRequest(scope, request)).toBe(true);
     rememberRequest(scope, request);
@@ -33,4 +34,19 @@ describe("scoped pending request journal", () => {
     expect(pendingRequests(scope)).toEqual([]);
     expect(() => forgetRequest(scope, request)).not.toThrow();
   });
+  it("resolves authenticated history scope before storing an early request", async () => {
+    const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ recoveryScope: scope }) });
+    vi.stubGlobal("fetch", fetch);
+    expect(await journalRequest("scheduler", request)).toBe(scope);
+    expect(pendingRequests(scope)).toEqual([request]);
+    expect(fetch).toHaveBeenCalledWith("/api/chat/history?agent=scheduler", expect.objectContaining({ cache: "no-store" }));
+  });
+  it("does not re-read history when scope support has already been resolved", async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    expect(await journalRequest("", request, "")).toBeUndefined();
+    expect(await journalRequest("", request, scope)).toBe(scope);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
 });

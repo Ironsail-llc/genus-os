@@ -39,7 +39,8 @@ describe("ChatPanel streaming UX", () => {
   });
 
   it("tool_start SSE event shows tool name in normal chat mode", async () => {
-    // Use a delayed stream so we can observe intermediate state
+    let finish!: () => void;
+    const release = new Promise<void>((resolve) => { finish = resolve; });
     const stream = new ReadableStream({
       async start(controller) {
         const encoder = new TextEncoder();
@@ -48,8 +49,7 @@ describe("ChatPanel streaming UX", () => {
             `event: tool_start\ndata: ${JSON.stringify({ tool: "search_memory", call_id: "c1" })}\n\n`
           )
         );
-        // Small delay so React can render the tool indicator
-        await new Promise((r) => setTimeout(r, 50));
+        await release;
         controller.enqueue(
           encoder.encode(
             `event: tool_end\ndata: ${JSON.stringify({ tool: "search_memory", call_id: "c1" })}\n\n`
@@ -79,14 +79,13 @@ describe("ChatPanel streaming UX", () => {
       await typeAndSend(input, "test");
     });
 
-    // During streaming, tool indicator should briefly appear
-    await waitFor(
-      () => {
-        // Tool indicator may flash — just verify the component renders without crash
-        expect(screen.getByTestId("streaming-message")).toBeTruthy();
-      },
-      { timeout: 2000 }
-    );
+    try {
+      await waitFor(() => expect(screen.getByText("search memory")).toBeTruthy());
+    } finally {
+      await act(async () => { finish(); });
+    }
+    await waitFor(() => expect(screen.queryByTestId("streaming-message")).toBeNull());
+
   });
 
   it("iteration_start SSE event shows step progress when multi-step", async () => {

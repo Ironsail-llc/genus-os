@@ -7,6 +7,7 @@ import remarkGfm from "remark-gfm";
 export interface ChatRecoveryRequest {
   requestId: string;
   agent: string;
+  scope?: string;
 }
 
 /** Reattach delivery by reading the original run; this component never executes work. */

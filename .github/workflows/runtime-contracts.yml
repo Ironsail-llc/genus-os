@@ -96,6 +96,7 @@ jobs:
       - name: Verify chat recovery under audit outages
         run: >-
           pnpm exec vitest run
+          src/lib/chat/__tests__/request-journal.test.ts
           src/components/__tests__/chat-recovery.test.tsx
           src/components/__tests__/chat-panel*.test.tsx
           src/app/api/chat/__tests__/agent-routing.test.ts

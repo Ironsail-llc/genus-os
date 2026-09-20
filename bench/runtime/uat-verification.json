@@ -677,6 +677,17 @@
       "evidence": "Authenticated tenant/principal/session scope, no-cache history forwarding, UUID-only sessionStorage journal, malformed/unavailable storage handling",
       "limitations": "Journal not yet wired into ChatPanel admission or restoration; reload recovery remains incomplete.",
       "production_deployed": false
+    },
+    "chat_reload_recovery": {
+      "frontend": "148 files, 1633 passed in 9.13s before two additional journal assertions; 5 focused journal cases passed in 0.821s",
+      "browser": "30 passed in 52.2s; rebuilt isolated server at port 15324",
+      "build": "passed",
+      "eslint": "passed",
+      "diff_check": "passed",
+      "evidence": "Journal before execution; same-tab reload restores original scoped request for ordinary and approved-plan execution; one execution only; clears delivered/recovered entries; ignores another authenticated scope",
+      "initial_findings": "Two redundant history reads corrected; fixed-delay streaming test replaced with explicit gate and tool-name assertion",
+      "limitations": "Synthetic browser transport; separate backend persistence tests. Requires scoped history and available sessionStorage. Cross-device/tab-close recovery not established. Manual acceptance pending.",
+      "production_deployed": false
     }
   },
   "calendar": {
@@ -879,7 +890,7 @@
     "Runtime deadlines are enforced when supplied; classification and enforcement of the 60-second policy across all simple conversational actions remain unproven.",
     "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded; production ingress, selected-provider p95 and mixed-load fallback operating limits are not certified.",
     "Candidate full-runtime parity, matched configuration workloads and 100-repetition finalist comparison remain incomplete; retain the current runtime.",
-    "Calendar audit recovery and unattended readback are locally tested; browser-reload recovery, general external-provider coverage and full daemon startup validation remain incomplete.",
+    "Calendar audit recovery, unattended readback and same-tab browser reload are locally tested. General external-provider coverage, recovery without browser storage, cross-device restoration and full daemon startup validation remain incomplete.",
     "The normal-chat unfinished-work/pause case is accepted. Manual acceptance of the newer recovery behavior and remaining goal controls is pending.",
     "Production deployment is not authorized. Concrete rollout/rollback review and end-to-end finalist upgrade compatibility remain unfinished."
   ],

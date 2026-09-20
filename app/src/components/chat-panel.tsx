@@ -24,6 +24,8 @@ import {
 } from "@/lib/chat/agent-session";
 import { Send, Square, Check, X, ClipboardList, MessageSquareText, Brain } from "lucide-react";
 
+import { forgetRequest, journalRequest, pendingRequests } from "@/lib/chat/request-journal";
+
 import { OUTCOME_UNKNOWN, terminalOutcome } from "@/lib/chat/terminal-outcome";
 
 interface ChatMessage {
@@ -79,9 +81,14 @@ interface ChatPanelProps {
 
 export function ChatPanel({ mobile = false }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const recoveryScopes = useRef<Record<string, string>>({});
+  const requestScopes = useRef<Record<string, string>>({});
   const recoverMessage = useCallback((id: string, text: string) => {
-    setMessages((prev) => prev.map((item) => item.id === id
-      ? { ...item, content: text, recovery: undefined } : item));
+    setMessages((prev) => prev.map((item) => {
+      if (item.id !== id) return item;
+      if (item.recovery?.scope) forgetRequest(item.recovery.scope, item.recovery.requestId);
+      return { ...item, content: text, recovery: undefined };
+    }));
   }, []);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -326,11 +333,16 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     let cancelled = false;
     setMessages([]);
     fetch(`/api/chat/history${agentQuery}`)
-      .then((res) => res.json())
+      .then((res) => {
+        if (res.ok === false) throw new Error("History unavailable");
+        return res.json();
+      })
       .then((data) => {
         if (cancelled) return;
-        if (data.messages?.length) {
-          const loaded: ChatMessage[] = data.messages
+        const scope = typeof data.recoveryScope === "string" ? data.recoveryScope : undefined;
+        recoveryScopes.current[agent] = scope ?? "";
+        {
+          const loaded: ChatMessage[] = (Array.isArray(data.messages) ? data.messages : [])
             .filter(
               (m: { role: string }) =>
                 m.role === "user" || m.role === "assistant"
@@ -353,7 +365,13 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
                 timestamp: new Date(),
               })
             );
-          setMessages(loaded);
+          const restored: ChatMessage[] = scope ? pendingRequests(scope)
+            .filter((requestId) => requestId !== requestIdRef.current)
+            .map((requestId) => ({
+              id: `recovery-${requestId}`, role: "assistant", content: OUTCOME_UNKNOWN,
+              timestamp: new Date(), recovery: { requestId, agent, scope },
+            })) : [];
+          setMessages([...loaded, ...restored]);
         }
       })
       .catch(() => {
@@ -362,7 +380,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [agentQuery]);
+  }, [agentQuery, agent]);
 
   // Recover pending plan on page refresh
   //
@@ -393,7 +411,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [agentQuery]);
+  }, [agentQuery, agent]);
 
   // Keyboard shortcut: Ctrl/Cmd+Shift+P toggles plan mode, Ctrl/Cmd+Shift+D toggles deep+plan
   useEffect(() => {
@@ -440,7 +458,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [agentQuery]);
+  }, [agentQuery, agent]);
 
   const sendPlanMessage = useCallback(async (overrideText?: string) => {
     const text = overrideText || input.trim();
@@ -572,7 +590,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
             id: `asst-${Date.now()}`,
             role: "assistant",
             content: stripResidualMarkers(fullResponse).trim(),
-        ...(fullResponse === OUTCOME_UNKNOWN ? { recovery: { requestId: requestIdRef.current!, agent } } : {}),
+        ...(fullResponse === OUTCOME_UNKNOWN ? { recovery: { requestId: requestIdRef.current!, agent, scope: requestScopes.current[requestIdRef.current!] } } : {}),
             timestamp: new Date(),
           },
         ]);
@@ -623,6 +641,13 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     setRuntimeProgress("Submitting request…");
 
     try {
+      const requestId = requestIdRef.current!;
+      const scope = await journalRequest(agent, requestId, recoveryScopes.current[agent], controller.signal);
+      if (scope) requestScopes.current[requestId] = scope;
+      if (controller.signal.aborted) {
+        if (scope) forgetRequest(scope, requestId);
+        controller.signal.throwIfAborted();
+      }
       const res = await fetch("/api/chat/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -639,7 +664,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
         const errorMsg: ChatMessage = {
           id: `err-${Date.now()}`, role: "assistant",
           content: errorText, timestamp: new Date(),
-          recovery: { requestId: requestIdRef.current!, agent },
+          recovery: { requestId: requestIdRef.current!, agent, scope: requestScopes.current[requestIdRef.current!] },
         };
         setMessages((prev) => [...prev, errorMsg]);
         setIsStreaming(false);
@@ -789,13 +814,17 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       setMaxIterations(0);
 
       if (!receivedTerminal) fullResponse = OUTCOME_UNKNOWN;
+      else if (fullResponse !== OUTCOME_UNKNOWN) {
+        const scope = requestScopes.current[requestIdRef.current!];
+        if (scope) forgetRequest(scope, requestIdRef.current!);
+      }
 
       // Finalize the message
       const assistantMsg: ChatMessage = {
         id: `asst-${Date.now()}`,
         role: "assistant",
         content: stripResidualMarkers(fullResponse).trim(),
-        ...(fullResponse === OUTCOME_UNKNOWN ? { recovery: { requestId: requestIdRef.current!, agent } } : {}),
+        ...(fullResponse === OUTCOME_UNKNOWN ? { recovery: { requestId: requestIdRef.current!, agent, scope: requestScopes.current[requestIdRef.current!] } } : {}),
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, assistantMsg]);
@@ -822,7 +851,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
           id: `err-${Date.now()}`,
           role: "assistant",
           content: OUTCOME_UNKNOWN,
-          recovery: { requestId: requestIdRef.current!, agent },
+          recovery: { requestId: requestIdRef.current!, agent, scope: requestScopes.current[requestIdRef.current!] },
           timestamp: new Date(),
         };
         setMessages((prev) => [...prev, errorMsg]);
@@ -858,6 +887,13 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     }
 
     try {
+      const requestId = requestIdRef.current!;
+      const scope = await journalRequest(agent, requestId, recoveryScopes.current[agent], controller.signal);
+      if (scope) requestScopes.current[requestId] = scope;
+      if (controller.signal.aborted) {
+        if (scope) forgetRequest(scope, requestId);
+        controller.signal.throwIfAborted();
+      }
       const res = await fetch("/api/chat/plan/approve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -954,6 +990,10 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       }
 
       if (!receivedTerminal) fullResponse = OUTCOME_UNKNOWN;
+      else if (fullResponse !== OUTCOME_UNKNOWN) {
+        const scope = requestScopes.current[requestIdRef.current!];
+        if (scope) forgetRequest(scope, requestIdRef.current!);
+      }
 
       const finalCost = costInfo as { time_s: number; cost: number } | null;
       if (finalCost) setDeepCost(finalCost);
@@ -969,7 +1009,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
             id: `asst-${Date.now()}`,
             role: "assistant",
             content: stripResidualMarkers(fullResponse).trim() + costSuffix,
-            ...(fullResponse === OUTCOME_UNKNOWN ? { recovery: { requestId: requestIdRef.current!, agent } } : {}),
+            ...(fullResponse === OUTCOME_UNKNOWN ? { recovery: { requestId: requestIdRef.current!, agent, scope: requestScopes.current[requestIdRef.current!] } } : {}),
             timestamp: new Date(),
           },
         ]);
@@ -981,7 +1021,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
           id: `err-${Date.now()}`,
           role: "assistant",
           content: OUTCOME_UNKNOWN,
-          recovery: { requestId: requestIdRef.current!, agent },
+          recovery: { requestId: requestIdRef.current!, agent, scope: requestScopes.current[requestIdRef.current!] },
           timestamp: new Date(),
         }]);
       }
