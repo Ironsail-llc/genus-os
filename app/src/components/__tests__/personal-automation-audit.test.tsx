@@ -34,3 +34,15 @@ it("identifies captured linked documents without calling their references uncapt
   expect(screen.getByText(/Captured linked document/)).toBeTruthy();
   expect(screen.queryByText(/Contents of these links were not captured/)).toBeNull();
 });
+
+it("labels receipts and explains withheld text without rendering page contents", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (url:string) => ({ok:true,json:async()=>url.endsWith("/terms")
+    ? {snapshots:[{id:"receipt-1",version:3,grant_version:1,phase:"after_confirmation",created_at:"2030-01-01"}]}
+    : {snapshot:{phase:"after_confirmation",capture_status:"withheld_after_code",omitted_frames:0,documents:[{origin:"https://shop.example",text:"Private field",links:[]}]}}})));
+  render(<PersonalAutomationAudit operationId="operation-1" includeReceipts />);
+  fireEvent.click(screen.getByRole("button",{name:"Submission and receipts"}));
+  expect(await screen.findByText(/Receipt after confirmation/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button",{name:"View snapshot 3"}));
+  expect(await screen.findByText("Receipt text was not saved because a verification code was used.")).toBeTruthy();
+  expect(screen.queryByText("Private field")).toBeNull();
+});

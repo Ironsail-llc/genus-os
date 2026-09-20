@@ -150,7 +150,12 @@ class TermsAudit:
                 ),
             )
             result = dict(cur.fetchone())
-            self.store._event(cur, scope, operation_id, "terms_recorded")
+            self.store._event(
+                cur,
+                scope,
+                operation_id,
+                "receipt_recorded" if snapshot.phase == "after_confirmation" else "terms_recorded",
+            )
         return result
 
     def list(self, scope: Scope, operation_id: str) -> list[dict[str, Any]]:
