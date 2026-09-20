@@ -108,8 +108,11 @@ one that may have landed. A barrier has to have a way out, and there are three:
    ```
 
    A row still stuck in `status = 'executing'` (the process died mid-write) is
-   settled by confirming that operation once more, which runs the reconciliation
-   in step 1 rather than writing.
+   settled by calling `gws_calendar_add_attendees` again with that
+   `operation_id`, which runs the reconciliation in step 1 rather than writing.
+   Note that a bare "Go" will **not** do it: a confirmation binds only to a
+   draft, so an `executing` row is reconciled by asking the agent for that
+   operation by id, never by a one-word reply.
 3. **It is never armed with nobody watching.** If the repair task could not be
    filed, the operation records `barrier_released: true` and does *not* block
    later changes — a barrier whose only clearing path is a task that does not
