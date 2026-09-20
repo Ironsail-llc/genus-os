@@ -91,8 +91,10 @@ one that may have landed. A barrier has to have a way out, and there are three:
 1. **It clears itself when the evidence is conclusive.** On reconciliation the
    event is read back. If its version is unchanged from the recorded pre-write
    `etag` and none of the requested attendees are present, the request never
-   reached Google: the operation records `invitations_requested: false` and stops
-   blocking. Nothing is retried; the operator prepares a new draft.
+   reached Google: the operation records `invitations_requested: false` and
+   `no_write_confirmed: true`, and stops blocking. Nothing is retried, and no
+   repair task is filed — there is nothing for a human to reconcile. The
+   operator prepares a new draft.
 2. **The repair task clears it.** For a genuinely uncertain outcome, the
    unassigned repair task is the record. After a human confirms in Google
    Calendar what actually happened, release the barrier with:
