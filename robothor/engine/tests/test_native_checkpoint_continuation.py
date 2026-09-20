@@ -139,3 +139,7 @@ async def test_native_checkpoint_continues_saved_conversation(engine_config, sam
     outcome = read_outcome(auth, "web:main", client)
     assert outcome["run_id"] == resumed.id and outcome["state"] == "completed"
     assert outcome["text"] == "The saved task is done."
+
+    from robothor.engine.daemon import _resume_scan
+
+    assert original not in {candidate.run_id for candidate in _resume_scan(tenant)}

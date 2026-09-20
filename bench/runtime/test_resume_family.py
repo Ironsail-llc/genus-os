@@ -98,3 +98,41 @@ async def test_checkpoint_setup_keeps_plan_mode_within_its_tenant(same_tenant):
         with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
             cur.execute("DELETE FROM agent_runs WHERE id=%s", (run,))
             cur.execute("DELETE FROM crm_tenants WHERE id=ANY(%s)", ([owner, requester],))
+
+
+@pytest.mark.parametrize("status", ["completed", "cancelled", "running"])
+def test_only_latest_checkpoint_remains_eligible_and_old_charge_is_denied(status):
+    from psycopg2.extras import Json
+
+    from robothor.engine.daemon import _charge_resume_attempt
+
+    dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
+    if "host=/tmp/runtime-migrated-" not in dsn:
+        pytest.skip("requires the disposable canonical migration harness")
+    tenant = "superseded-" + uuid4().hex
+    old, latest = str(uuid4()), str(uuid4())
+    try:
+        with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+            cur.execute("INSERT INTO crm_tenants(id,display_name) VALUES (%s,%s)", (tenant, tenant))
+            for identifier, state, metadata in [
+                (old, "cancelled", {}),
+                (latest, status, {"resume_from_run_id": old}),
+            ]:
+                cur.execute(
+                    "INSERT INTO agent_runs(id,tenant_id,agent_id,trigger_type,status,error_message,runtime_context) VALUES (%s,%s,'main','event',%s,'daemon_restart',%s)",
+                    (identifier, tenant, state, Json(metadata)),
+                )
+                cur.execute(
+                    "INSERT INTO agent_run_checkpoints(run_id,step_number,messages,schema_version) VALUES (%s,1,'[]',1)",
+                    (identifier,),
+                )
+        expected = set() if status == "completed" else {latest}
+        assert {c.run_id for c in _resume_scan(tenant)} == expected
+        assert not _charge_resume_attempt(old, tenant)
+        with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+            cur.execute("SELECT COALESCE(resume_attempts,0) FROM agent_runs WHERE id=%s", (old,))
+            assert cur.fetchone()[0] == 0
+    finally:
+        with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM agent_runs WHERE id=ANY(%s::uuid[])", ([old, latest],))
+            cur.execute("DELETE FROM crm_tenants WHERE id=%s", (tenant,))

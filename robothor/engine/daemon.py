@@ -201,7 +201,10 @@ def _charge_resume_attempt(run_id: str, tenant_id: str) -> bool:
             cur = conn.cursor()
             cur.execute(
                 "UPDATE agent_runs SET resume_attempts = COALESCE(resume_attempts, 0) + 1 "
-                "WHERE id = %s AND tenant_id = %s",
+                "WHERE id = %s AND tenant_id = %s "
+                "AND NOT EXISTS (SELECT 1 FROM agent_runs resumed "
+                "WHERE resumed.tenant_id=agent_runs.tenant_id "
+                "AND resumed.runtime_context->>'resume_from_run_id'=agent_runs.id::text) ",
                 (run_id, tenant_id),
             )
             charged = cur.rowcount == 1
@@ -284,6 +287,9 @@ def _resume_scan(tenant_id: str) -> list[ResumeCandidate]:
                 "COALESCE(error_message, ''), tenant_id FROM agent_runs "
                 "WHERE tenant_id = %s AND status = ANY(%s) "
                 "AND NOT EXISTS (SELECT 1 FROM goal_family g WHERE g.id=agent_runs.id) "
+                "AND NOT EXISTS (SELECT 1 FROM agent_runs resumed "
+                "WHERE resumed.tenant_id=agent_runs.tenant_id "
+                "AND resumed.runtime_context->>'resume_from_run_id'=agent_runs.id::text) "
                 "ORDER BY id",
                 (tenant_id, tenant_id, tenant_id, sorted(RESUMABLE_STATUSES)),
             )

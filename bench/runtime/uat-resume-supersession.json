@@ -1,0 +1,13 @@
+{
+  "initial_failure": "A successfully continued native checkpoint remained eligible for startup resumption again.",
+  "fix": "Startup selection excludes runs with a same-tenant recorded continuation; charging rechecks this condition to reject stale selections.",
+  "focused_passed": 26,
+  "focused_seconds": 3.79,
+  "integration_passed": 23,
+  "integration_seconds": 7.76,
+  "integration_skipped": 1,
+  "integration_warnings": 1,
+  "positive_controls": "The latest cancelled or running continuation remains selectable when it has its own checkpoint. Completed latest work is not selected.",
+  "full_daemon_command": ".venv/bin/python -m bench.runtime.migrated_integration --daemon --restart --goal-crash",
+  "limits": "Prevents replay of an original after a continuation record exists. Concurrent first admissions before either writes a continuation record are not made mutually exclusive by this change."
+}

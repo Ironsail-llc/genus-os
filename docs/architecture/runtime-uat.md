@@ -717,3 +717,10 @@ The canonical native checkpoint test now reads the actual resumed outcome using 
 Three failing private-store tests found that durable run/request stops did not reach checkpoint continuations. Stop ancestry now follows both delegated parent links and explicit resume origins, constrained to the tenant at every step. UNION terminates cycles; a validated UUID cast keeps the run ID lookup directly usable and safely ignores malformed references. Tests include mixed continuation/delegation chains, unrelated and foreign work, cycles, malformed origins, and actual runtime tool-admission denial after either kind of original stop.
 
 All 65 focused control/runtime/chat/size tests pass (3.53s), and 20 canonical integrations pass (6.32s, one intentional worker-only skip and one warning). The combined real-daemon restart/crash drill also passed before the final equivalent UUID lookup refinement. Ruff and diff checks pass. Evidence: `bench/runtime/uat-continuation-stop.json`. This increment does not certify a stop-latency cohort or prevent an already dispatched external request from finishing. Nothing was deployed.
+
+
+## Do not repeat superseded checkpoints
+
+The successful native checkpoint integration exposed the original canceled run remaining eligible for another startup resume. Startup scan now excludes records with a same-tenant recorded continuation, and charging repeats that check so a stale selection cannot restart an already superseded origin. The latest canceled/running continuation remains selectable with its own checkpoint; completed latest work does not. A denied old charge leaves its attempt count unchanged.
+
+All 26 focused resume/size tests pass (3.79s). The combined canonical migration, real-daemon restart and full goal-crash command passes, including 23 integrations (7.76s, one worker-only skip and one warning). Ruff and diff checks pass. Evidence: `bench/runtime/uat-resume-supersession.json`. Concurrent first admissions before either continuation row exists remain a separate atomic-claim concern; this test does not certify that race. Nothing was deployed.
