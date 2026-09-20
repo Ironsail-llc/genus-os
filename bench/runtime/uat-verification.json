@@ -9,14 +9,16 @@
   "replacement_selected": false,
   "checks": {
     "engine": {
-      "passed": 10933,
+      "revision": "b68204804a5",
+      "passed": 10982,
       "failed": 0,
       "skipped": 29,
       "deselected": 173,
-      "seconds": 355.77,
-      "warnings": 398,
+      "seconds": 354.79,
+      "warnings": 396,
       "selection": "not slow and not integration and not llm and not e2e and not smoke",
-      "note": "Broad run at 04e9a05d10d, before automatic chat audit recovery and watchdog fixture correction; focused follow-ups recorded separately."
+      "log": "/tmp/runtime-engine-regression-b682048.log",
+      "note": "Post audit-recovery and unattended-worker broad run. Unawaited alert coroutine warnings in loop-guard tests and a connect_tcp coroutine warning remain unresolved; passing tests do not certify warning-free execution or full acceptance."
     },
     "frontend": {
       "files": 146,
@@ -640,6 +642,24 @@
       "evidence": "Private database and fake provider; acknowledged/lost acknowledgement, repeated GET failure, automatic sweep, exactly one PATCH; preserves known notification request without claiming delivery",
       "checks": "Ruff, formatting and diff checks pass",
       "production_deployed": false
+    },
+    "engine_before_audit_recovery": {
+      "passed": 10933,
+      "failed": 0,
+      "skipped": 29,
+      "deselected": 173,
+      "seconds": 355.77,
+      "warnings": 398,
+      "selection": "not slow and not integration and not llm and not e2e and not smoke",
+      "note": "Broad run at 04e9a05d10d, before automatic chat audit recovery and watchdog fixture correction; focused follow-ups recorded separately."
+    },
+    "goals_after_audit_recovery": {
+      "revision": "b68204804a5",
+      "passed": 69,
+      "failed": 0,
+      "warnings": 2,
+      "seconds": 9.27,
+      "log": "/tmp/runtime-goals-regression-b682048.log"
     }
   },
   "calendar": {
@@ -838,12 +858,13 @@
     "deadline_calendar": "uat-deadline-calendar.json"
   },
   "remaining": [
-    "Native live MiMo reliability: initial implementation 15/30 verified; accepted baseline 14/30; discarded prompt trial 13/30.",
-    "Local Ollama verified 30/30, but one action took 74.7s/20 model calls. Enforced simple-action deadlines, stopping after verified success, and live fallback under mixed load remain unqualified.",
-    "Network queue/progress/acknowledgement SLOs not certified.",
-    "Candidate full-runtime contract parity and matched finalist comparison incomplete; keep current runtime.",
-    "Deployment/rollback drill unperformed; no production deployment authorized.",
-    "Manual user acceptance pending."
+    "Live representative-workload reliability and latency remain unqualified. Later configured-model contracts verified primary 30/30 and MiMo 29/30; retain the single 60.009-second unresolved failure with zero writes and the earlier diagnostic failures.",
+    "Runtime deadlines are enforced when supplied; classification and enforcement of the 60-second policy across all simple conversational actions remain unproven.",
+    "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded; production ingress, selected-provider p95 and mixed-load fallback operating limits are not certified.",
+    "Candidate full-runtime parity, matched configuration workloads and 100-repetition finalist comparison remain incomplete; retain the current runtime.",
+    "Calendar audit recovery and unattended readback are locally tested; browser-reload recovery, general external-provider coverage and full daemon startup validation remain incomplete.",
+    "The normal-chat unfinished-work/pause case is accepted. Manual acceptance of the newer recovery behavior and remaining goal controls is pending.",
+    "Production deployment is not authorized. Concrete rollout/rollback review and end-to-end finalist upgrade compatibility remain unfinished."
   ],
   "local_model_screening": {
     "artifact": "uat-local-native-summary.json",
@@ -1065,5 +1086,13 @@
         }
       }
     }
-  }
+  },
+  "remaining_initial_snapshot": [
+    "Native live MiMo reliability: initial implementation 15/30 verified; accepted baseline 14/30; discarded prompt trial 13/30.",
+    "Local Ollama verified 30/30, but one action took 74.7s/20 model calls. Enforced simple-action deadlines, stopping after verified success, and live fallback under mixed load remain unqualified.",
+    "Network queue/progress/acknowledgement SLOs not certified.",
+    "Candidate full-runtime contract parity and matched finalist comparison incomplete; keep current runtime.",
+    "Deployment/rollback drill unperformed; no production deployment authorized.",
+    "Manual user acceptance pending."
+  ]
 }
