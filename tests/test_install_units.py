@@ -337,6 +337,14 @@ def test_unknown_robothor_var_fails_the_render(tmp_path: Path):
 #: the fix for an unauthenticated 0.0.0.0 bind. Pinning the sets here means a
 #: new drop-in has to be added deliberately, in a reviewed diff.
 EXPECTED_DROPINS: dict[str, set[str]] = {
+    # No restart-forever.conf here, deliberately: robothor-autonomy.service
+    # carries a START LIMIT instead. It is opt-in, nothing depends on it, and
+    # a permanent misconfiguration (runtime dir not 0700, socket bound, no
+    # Chromium) was an endless five-second loop. Stopping loudly beats
+    # grinding quietly — which is the opposite trade to the engine's.
+    "robothor-autonomy.service.d": {
+        "onfailure.conf",
+    },
     "robothor-engine.service.d": {
         "boot-guard.conf",
         "hardening.conf",

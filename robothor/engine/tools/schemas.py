@@ -7,6 +7,17 @@ from typing import Any
 from robothor.engine.prompts import EVIDENCE_OUTRANKS_NAMES
 from robothor.engine.vision_fallback import PROVENANCE_NOTE
 
+#: What EVERY agent on EVERY instance sees, enrolled in autonomy or not.
+#:
+#: It was 422 characters on ``main``; ``check``/``upload`` are real new
+#: capabilities and took it to 435. Then the autonomy wording was appended
+#: here and it became several thousand — paid for by every agent, every turn,
+#: on instances with no enrolment, no grants and no way to use any of it. The
+#: autonomy half now lives in ``BROWSER_AUTONOMY_DESCRIPTION`` below and is
+#: attached per run by ``ToolRegistry.build_for_agent(config, autonomy=True)``,
+#: the same way ``tool_search`` varies a run's advertised set.
+#:
+#: ``test_autonomy_inertness.py`` asserts the character count. Do not append.
 _BROWSER_DESCRIPTION = (
     "Full browser automation via Playwright. Manages a persistent Chromium session. "
     "Actions: start (launch browser), stop (close), navigate (go to URL), "
@@ -14,6 +25,12 @@ _BROWSER_DESCRIPTION = (
     "act (interact: click/fill/type/press/scroll/select/check/upload using refs or selectors), "
     "tabs (list open tabs), pdf (export page), evaluate (run JavaScript), "
     "console (read console), status (check session). "
+)
+
+#: The autonomy half. Attached to the base description above, per run, only
+#: when the feature is on for this owner AND a live grant names this agent.
+#: Everything here describes actions an agent without a grant cannot take.
+BROWSER_AUTONOMY_DESCRIPTION = (
     "For accounts, applications and purchases use action=autonomy with request.kind=status first. "
     "This uses native-vault resource references and standing grants: do not request another approval "
     "when a grant covers the action. request.kind=prepare accepts grant_id and proposal "

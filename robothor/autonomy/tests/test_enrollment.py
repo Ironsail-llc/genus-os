@@ -114,16 +114,19 @@ def test_enrollment_spec_rejects_unusable_and_sensitive_metadata():
 def test_secure_intent_is_scrubbed_by_shared_history_and_runner_backstop():
     from robothor.autonomy.intake import protect_payment_text
     from robothor.engine.chat_history import ChatHistory
-    from robothor.secrets.redaction import redact
+    from robothor.secrets.redaction import PLACEHOLDER, redact
 
     text = '/secure profile\n{"legal_name":"private-person-canary"}'
-    for value in (
-        protect_payment_text(text),
-        redact(text),
-        str(ChatHistory([{"role": "user", "content": text}])),
-    ):
+    chat = protect_payment_text(text)
+    assert "private-person-canary" not in chat
+    assert "withheld" in chat
+    # ``redact`` scrubs the same payload, but as a bare placeholder: it is the
+    # platform-wide primitive — ``ChatHistory`` runs on it too, as do logs and
+    # scrubbed page text — so the chat advisory would be product prose that
+    # anything quoting a ``/secure`` line could inject.
+    for value in (redact(text), str(ChatHistory([{"role": "user", "content": text}]))):
         assert "private-person-canary" not in value
-        assert "withheld" in value
+        assert PLACEHOLDER in value
 
 
 def test_enrollment_migration_is_packaged():

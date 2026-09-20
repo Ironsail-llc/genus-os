@@ -24,7 +24,7 @@ sudo systemctl daemon-reload
 
 # 2. Wire anything the repo does not already carry a drop-in for.
 #    install-units.sh installs robothor-*.service.d/*.conf too, so
-#    robothor-engine, -bridge, -orchestrator and -vision are already wired by
+#    robothor-engine, -bridge, -orchestrator, -vision and -autonomy are wired by
 #    step 1 (each has a mirrored onfailure.conf). Name only the rest:
 sudo scripts/install_onfailure_alerts.sh robothor-nats.service
 sudo systemctl daemon-reload
@@ -77,6 +77,7 @@ Telegram's notification preview, legible without opening the message.
 | `*orchestrator*` | Workflows are not being scheduled or advanced; approvals and queued work sit untouched | the orchestrator journal |
 | `*nats*` | The message fabric is down — agent mail and federation traffic are dropping, not queuing | `docs/runbooks/FEDERATION.md` |
 | `robothor-vision.service`, `robothor-vision*` | Vision capture is down — no camera events; presence and face recognition are blind | the vision journal |
+| `robothor-autonomy.service` | The protected browser service is down — delegated accounts, applications and purchases cannot run, and open workflows are gone. Unlike the units above it has a start limit (12 starts / 300 s), so a persistent misconfiguration stops instead of looping; the entry point logs the exception type and message first | the autonomy journal for the `workflow_service_failed: <Type>: <message>` line; then `systemctl reset-failed robothor-autonomy` to re-arm. `docs/AUTONOMOUS_EXECUTION.md` |
 | `*liveness*` | The liveness watchdog itself is down — nothing is checking whether the engine is alive | this runbook, "Liveness watchdog" below |
 | `*backup-volume-guard*` | The backup volume guard is down — a USB drop will no longer be detected or remapped, and every backup tier it gates goes quiet instead of failing | `docs/instance/BACKUP_VOLUME_GUARD.md`; `journalctl -u robothor-backup-volume-guard` |
 | `*robothor-slo*` | The hourly SLO probe is down — backup freshness, liveness staleness and LLM availability will not page until it is back, however far they drift | `docs/runbooks/SLOS.md`; `systemctl status robothor-slo.timer` |

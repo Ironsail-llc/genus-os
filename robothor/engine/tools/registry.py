@@ -784,7 +784,9 @@ class ToolRegistry:
         """Just the adapter-provided names — the ones that leave this process."""
         return set(self._adapter_routes)
 
-    def build_for_agent(self, config: AgentConfig) -> list[dict[str, Any]]:
+    def build_for_agent(
+        self, config: AgentConfig, *, autonomy: bool = False
+    ) -> list[dict[str, Any]]:
         """Return filtered tool schemas for an agent based on allow/deny lists.
 
         When deferral (Rip 16 / G4) is active for this agent, advertise only the
@@ -793,6 +795,13 @@ class ToolRegistry:
         allow-list lives in the tool_call/tool_describe handlers, which check the
         ``_deferred_allowed`` set the runner publishes via ``set_deferred_allowed``
         (see deferred_whitelist) — so tool_call cannot reach a denied tool.
+
+        ``autonomy`` widens the ``browser`` description with the delegated
+        account/payment wording. It is off unless the feature is enabled for
+        this run's owner AND a live grant names this agent — the runner works
+        that out once, in toolset_prep. Left always-on it cost roughly 1,100
+        schema tokens per turn to every agent on every instance, including the
+        overwhelming majority that can never reach a grant.
         """
         self._refresh_plugin_schemas_if_stale()
         names = self._get_filtered_names(config)
@@ -804,8 +813,26 @@ class ToolRegistry:
                 if in_core and n in self._schemas and n not in seen:
                     seen.add(n)
                     advertised.append(n)
-            return [wire_schema(self._schemas[n]) for n in advertised]
-        return [wire_schema(self._schemas[n]) for n in names]
+            names = advertised
+        return [self._with_autonomy(wire_schema(self._schemas[n]), autonomy) for n in names]
+
+    @staticmethod
+    def _with_autonomy(schema: dict[str, Any], autonomy: bool) -> dict[str, Any]:
+        """The ``browser`` schema plus its autonomy half, or the schema as-is.
+
+        Copies before it writes. ``wire_schema`` hands back a structure that
+        shares the stored description string, and appending in place would
+        leak one run's grant wording into every later run in the process.
+        """
+        if not autonomy or schema.get("function", {}).get("name") != "browser":
+            return schema
+        from robothor.engine.tools.schemas import BROWSER_AUTONOMY_DESCRIPTION
+
+        function = dict(schema["function"])
+        function["description"] = str(function.get("description", "")) + (
+            BROWSER_AUTONOMY_DESCRIPTION
+        )
+        return {**schema, "function": function}
 
     def should_defer(self, config: AgentConfig) -> bool:
         """True iff this agent's toolset should be deferred (Rip 16 / G4).

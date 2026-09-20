@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-413 settings in 14 groups.
+414 settings in 14 groups.
 
 ## autonomy
 
@@ -51,6 +51,7 @@ Host paths for the isolated personal browser service and clients.
 | --- | --- | --- | --- | --- | --- | --- |
 | `ROBOTHOR_AUTONOMY_CHROMIUM_EXECUTABLE` | str | _(empty)_ | `robothor-autonomy`, `robothor-engine`, `robothor-bridge` | no | legacy | Sandbox-capable Chromium executable for protected browsing. Empty uses system Chromium, then Playwright's installed browser. Requires the host's user-namespace policy. |
 | `ROBOTHOR_AUTONOMY_DASHBOARD_ORIGIN` | str | _(empty)_ | `robothor-autonomy`, `robothor-engine`, `robothor-bridge` | no | legacy | Public HTTPS origin of the authenticated dashboard for secure enrollment links. Empty returns a relative account path; never use a merchant-provided destination. |
+| `ROBOTHOR_AUTONOMY_ENABLED` | bool | `false` | `robothor-autonomy`, `robothor-engine`, `robothor-bridge` | no | legacy | Whether this instance offers personal automation at all: delegated accounts, applications and purchases under standing grants. Off by default, and off means absent — no dashboard page, no autonomy paragraph on any agent's system prompt, no autonomy wording in the browser tool schema, and no database lookup to decide. Turning it on only makes the feature reachable; each owner still enrols, switches execution on and writes a grant naming the agents it covers. |
 | `ROBOTHOR_AUTONOMY_SOCKET` | str | `/run/robothor-autonomy/broker.sock` | `robothor-autonomy`, `robothor-engine`, `robothor-bridge` | no | legacy | Private Unix socket shared by the protected browser service and its authenticated clients. Its parent directory must be owned by the service user with mode 0700. |
 
 ## paths

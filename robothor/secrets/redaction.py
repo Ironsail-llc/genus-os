@@ -50,6 +50,18 @@ __all__ = [
 #: and does not go hunting for a token that "changed".
 PLACEHOLDER = "<redacted>"
 
+#: The line an operator types to hand this platform a private value out of
+#: band: ``/secure`` or ``/secure@botname``, optionally with a kind after it.
+#: Everything from the marker on is the payload, so the whole tail goes.
+#:
+#: It lives here, not in the chat feature that reads it, because ``redact``
+#: has to know the shape too — the marker is a secret marker, and a chat line
+#: carrying one reaches logs, audit rows and exception text like any other
+#: string. ``robothor.autonomy.intake`` imports it from here; the dependency
+#: does not run the other way, because a platform-wide redaction primitive
+#: must not pull a product module in on its hot path.
+SECURE_MARKER = re.compile(r"(?im)^\s*/secure(?:@[a-zA-Z0-9_]+)?(?:\s|$)")
+
 #: Credential shapes this platform issues, accepts or forwards.
 #:
 #: ``xox[...]-``/``xapp-`` — every Slack token kind (bot, user, app-level,
@@ -299,13 +311,29 @@ def redact(text: str) -> str:
     Never raises and never returns ``None``: every caller is on a path that is
     already reporting a failure, and a redactor that could fail there would be
     the second bug in one line.
+
+    What it returns is a REDACTION and nothing else. For one release it also
+    ran the autonomy chat backstop, which appended
+    ``[Payment details were withheld from chat. Enroll securely at
+    /account/autonomy.]`` to whatever it touched. That sentence is product
+    prose on a platform-wide primitive: it fired on every Luhn-valid 12-19
+    digit run — every IMEI is Luhn-valid by construction, and tracking and
+    order numbers hit it too — and, being ``[...]``-shaped, let any merchant
+    page or inbound message inject a pseudo-system line into the model's
+    context just by containing a long number. The payment backstop now lives
+    only at the chat-intake boundary that wants it
+    (:func:`robothor.autonomy.intake.protect_payment_text`).
     """
     if not text:
         return text
     try:
-        from robothor.autonomy.intake import protect_payment_text
-
-        text = protect_payment_text(text)
+        # A ``/secure`` line is an explicit secret marker, so the payload after
+        # it goes — as a plain placeholder. Truncating a log at an attacker's
+        # ``/secure`` and replacing the tail with an advisory sentence was the
+        # same injection surface as the payment prose.
+        marker = SECURE_MARKER.search(text)
+        if marker:
+            text = text[: marker.start()] + PLACEHOLDER
         named = _ASSIGNMENT.sub(_redact_assignment, text)
         return _CREDENTIAL_SHAPED.sub(PLACEHOLDER, named)
     except Exception:  # noqa: BLE001 - pragma: no cover - a regex that cannot fail
