@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
@@ -45,6 +46,40 @@ async def test_unbound_implicit_goal_and_workers_are_refused():
 async def test_every_chat_tool_requires_an_operator_role_positively(name, ctx):
     result = await HANDLERS[name]({}, ctx)
     assert "operator role" in result["error"], result
+
+
+def test_stale_attempt_and_disabled_tenant_each_refuse_a_write_tool(db):  # noqa: F811
+    """`goal execution is no longer authorized` had no test of its own.
+
+    The test named for it —
+    ``test_recovery_refuses_external_writes_and_stopped_lease_refuses_all`` —
+    exercises the ``status in {paused, canceled, blocked}`` branch on the NEXT
+    line, so deleting this refusal left the whole suite green. Both halves
+    below keep the goal's own status at ``running``, so nothing but this line
+    can be what refuses.
+    """
+    store.create(
+        db, CreateGoal(objective="Deliver report", success_criteria=["Delivered"]), "operator"
+    )
+    g, attempt = store.claim(db)
+
+    stale = binding.set(Binding(db, g["id"], str(uuid4()), run_id="root"))
+    try:
+        with pytest.raises(ValueError, match="no longer authorized"):
+            admit_tool("exec", {}, SimpleNamespace())
+    finally:
+        binding.reset(stale)
+
+    live = binding.set(Binding(db, g["id"], attempt, run_id="root"))
+    try:
+        admit_tool("exec", {}, SimpleNamespace())  # the lease holder is admitted
+        store.set_enabled(db, False, "operator")  # ...until the tenant switch goes off
+        with pytest.raises(ValueError, match="no longer authorized"):
+            admit_tool("exec", {}, SimpleNamespace())
+        assert store.control(db, g["id"])["status"] == "running"
+    finally:
+        binding.reset(live)
+        store.set_enabled(db, True, "operator")
 
 
 def test_recovery_refuses_external_writes_and_stopped_lease_refuses_all(db):  # noqa: F811
