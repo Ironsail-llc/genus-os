@@ -76,6 +76,38 @@ def load_operation(operation_id: str, tenant: str, user: str, agent: str) -> dic
         return dict(row) if row else None
 
 
+def _reconcile_interrupted(calendar_id: str, event_id: str, stored: dict) -> dict:
+    from robothor.engine.calendar_transport import CalendarTransport
+
+    with CalendarTransport() as api:
+        event = api.request("GET", calendar_id, event_id)
+    attendees = event.get("attendees", []) if isinstance(event, dict) else None
+    if (
+        not isinstance(event, dict)
+        or "error" in event
+        or event.get("id") != event_id
+        or not isinstance(attendees, list)
+        or any(
+            not isinstance(a, dict) or not isinstance(a.get("email", ""), str) for a in attendees
+        )
+    ):
+        return {
+            "error": "Provider read unavailable or invalid; reconciliation remains pending",
+            "event_id": event_id,
+            "reconciliation_pending": True,
+            "invitations_requested": None,
+            "verification": "unverified",
+        }
+    present = {a.get("email", "").casefold() for a in attendees}
+    return {
+        "error": "Interrupted write reconciled without retry; notification outcome unknown",
+        "event_id": event_id,
+        "attendees_present": sorted(present & set(stored["attendees"])),
+        "invitations_requested": None,
+        "verification": "unverified",
+    }
+
+
 def _perform_locked(args: dict[str, Any], ctx: Any, *, cancelled: Any = None) -> dict[str, Any]:
     from robothor.engine.calendar_transport import CalendarTransport
     from robothor.engine.tools.handlers.gws import _handle_gws_tool, _resolve_calendar
@@ -194,16 +226,7 @@ def _perform_locked(args: dict[str, Any], ctx: Any, *, cancelled: Any = None) ->
                     + operation_id,
                 }
             if row and row["status"] == "executing":
-                with CalendarTransport() as api:
-                    event = api.request("GET", calendar_id, event_id)
-                present = {a.get("email", "").casefold() for a in event.get("attendees", [])}
-                result = {
-                    "error": "Interrupted write reconciled without retry; notification outcome unknown",
-                    "event_id": event_id,
-                    "attendees_present": sorted(present & set(stored["attendees"])),
-                    "invitations_requested": None,
-                    "verification": "unverified",
-                }
+                result = _reconcile_interrupted(calendar_id, event_id, stored)
             else:
                 cur.execute(
                     "UPDATE calendar_operations SET status='executing',updated_at=now() WHERE id=%s",
@@ -216,7 +239,13 @@ def _perform_locked(args: dict[str, Any], ctx: Any, *, cancelled: Any = None) ->
                 result = _handle_gws_tool(
                     "gws_calendar_add_attendees", stored, run_id=ctx.run_id, tenant_id=ctx.tenant_id
                 )
-            status = "blocked" if result.get("error") else "completed"
+            status = (
+                "executing"
+                if result.get("reconciliation_pending")
+                else "blocked"
+                if result.get("error")
+                else "completed"
+            )
             cur.execute(
                 "UPDATE calendar_operations SET status=%s,result=%s::jsonb,updated_at=now() WHERE id=%s",
                 (status, json.dumps(result), operation_id),
@@ -236,7 +265,12 @@ def perform(args: dict[str, Any], ctx: Any, *, cancelled: Any = None) -> dict[st
     first connection. Concurrent failures must not exhaust the pool in a cycle.
     """
     result = _perform_locked(args, ctx, cancelled=cancelled)
-    if not result.get("error") or not result.get("operation_id") or result.get("replayed"):
+    if (
+        not result.get("error")
+        or not result.get("operation_id")
+        or result.get("replayed")
+        or result.get("reconciliation_pending")
+    ):
         return result
     from robothor.engine.calendar_repair import attach_repair_task
 

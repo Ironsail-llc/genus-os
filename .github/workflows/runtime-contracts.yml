@@ -36,6 +36,7 @@ jobs:
           robothor/engine/tests/test_runtime_chat_goal_acceptance.py
           robothor/engine/tests/test_chat_plan_outcomes.py
           robothor/engine/tests/test_chat_recovery.py
+          robothor/engine/tests/test_calendar_recovery_readback.py
           robothor/engine/tests/test_tool_proxy.py
           robothor/engine/tests/test_runtime_controls.py
           robothor/engine/tests/test_runtime_deadlines.py

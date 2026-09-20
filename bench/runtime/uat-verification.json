@@ -573,6 +573,22 @@
       "clock": "fake timer for outage delays",
       "model_calls": 0,
       "business_calls": 0
+    },
+    "calendar_recovery_readback": {
+      "initial_failed": 3,
+      "readback_attendee_size": {
+        "passed": 21,
+        "seconds": 6.38
+      },
+      "existing_operations": {
+        "passed": 10,
+        "seconds": 0.68
+      },
+      "scope": "Invalid/unavailable/wrong-event GET preserves durable pending state; later valid GET reports attendee state without another write",
+      "notifications_verified": false,
+      "provider_transport": "synthetic",
+      "production_writes": 0,
+      "general_automatic_reconciliation": false
     }
   },
   "calendar": {
