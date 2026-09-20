@@ -31,7 +31,8 @@ async def test_synthetic_gateway_rejects_unrequested_writes_and_deduplicates():
 
 @pytest.mark.usefixtures("_mock_run_persistence")
 @pytest.mark.parametrize(
-    "perpetual_clarification,missing_arguments", [(False, False), (False, True), (True, False)]
+    "perpetual_clarification,missing_arguments,primary_outage",
+    [(False, False, False), (False, True, False), (True, False, False), (False, False, True)],
 )
 async def test_native_verified_action_repairs_or_fails_without_false_completion(
     request,
@@ -40,6 +41,7 @@ async def test_native_verified_action_repairs_or_fails_without_false_completion(
     monkeypatch,
     perpetual_clarification,
     missing_arguments,
+    primary_outage,
 ):
     import litellm
 
@@ -71,6 +73,8 @@ async def test_native_verified_action_repairs_or_fails_without_false_completion(
     async def provider(**kwargs):
         assert not writes, "No provider work after independently verified success"
         calls.append(kwargs)
+        if primary_outage and kwargs["model"] == sample_agent_config.model_primary:
+            raise ValueError("Synthetic primary-provider failure")
         if (len(calls) == 1 and not missing_arguments) or perpetual_clarification:
             return mock_litellm_response(content="Which key and value should I store?")
         tool = MagicMock()
@@ -120,3 +124,8 @@ async def test_native_verified_action_repairs_or_fails_without_false_completion(
         assert result.run.output_text == "Stored and verified."
         assert len(calls) == 2
         assert verified()
+        if primary_outage:
+            assert [call["model"] for call in calls] == [
+                sample_agent_config.model_primary,
+                sample_agent_config.model_fallbacks[0],
+            ]

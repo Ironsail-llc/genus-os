@@ -118,6 +118,37 @@
       "corrected_mimo_samples": 30,
       "full_acceptance_passed": false,
       "note": "One unresolved attempt hit the host deadline at 60.009 seconds with zero writes. No false completion or post-success calls. Incomplete actions remain failures; the interval includes the deadline sample."
+    },
+    "native_http_and_fallback_contracts": {
+      "passed": 10,
+      "failed": 0,
+      "seconds": 29.92,
+      "scope": "Loopback TCP, native runner, private durable stop store; synthetic provider wait and deterministic fallback fault injection, plus size checks.",
+      "http_samples": 30,
+      "ack_ms": {
+        "samples": 30,
+        "p50": 42.365698027424514,
+        "p95": 43.53774501942098,
+        "p95_ci95": [
+          42.95087401987985,
+          43.725474970415235
+        ]
+      },
+      "stop_ack_ms": {
+        "samples": 30,
+        "p50": 12.895981024485081,
+        "p95": 15.309209004044533,
+        "p95_ci95": [
+          13.89071298763156,
+          16.010337974876165
+        ]
+      },
+      "progress_arrivals_ms": [
+        10084.847185993567,
+        20085.604260966647
+      ],
+      "progress_interval_ms": 10000.75707497308,
+      "artifact": "uat-native-http.json"
     }
   },
   "calendar": {

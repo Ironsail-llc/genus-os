@@ -33,6 +33,8 @@ jobs:
           robothor/engine/tests/test_runtime_contracts.py
           robothor/engine/tests/test_runtime_controls.py
           robothor/engine/tests/test_runtime_deadlines.py
+          robothor/engine/tests/test_runtime_verified_outcomes.py
+          robothor/engine/tests/test_runtime_http_acceptance.py
           robothor/engine/tests/test_runtime_mixed.py
           robothor/engine/tests/test_request_budget.py
           robothor/engine/tests/test_checkpoint.py
