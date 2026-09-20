@@ -530,3 +530,5 @@ arguments: a new logical command (such as reconciliation) needs its own ID, whil
 an identical retry keeps the original ID. On `workflow_revision_changed`, read
 `workflow_status` and use its revision. `command_in_progress` requires waiting;
 `workflow_lost` requires external/status-page reconciliation, not a blind repeat.
+
+Malformed workflow commands return `invalid_workflow_request` before token issuance or browser RPC. Fixed `invalid_operation_id`, `invalid_workflow_id` and `invalid_command_id` reasons identify references that must come from prior results (or a fresh UUID for a new command). `confirmation_selector_and_text_required_together` requires both confirmation fields or neither. Other validation failures remain generic; submitted values and unknown field names are never echoed.
