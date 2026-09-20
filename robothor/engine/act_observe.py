@@ -27,11 +27,16 @@ run so it can be tested against a table of names and command strings:
 * :func:`unread_proxy_responses` — how many ``genus_tools`` calls a snippet
   made whose response it never printed. This is the task-5 failure expressed
   as a number the model can see.
-* :func:`raw_http_responses` — the same pairs for the HTTP a snippet made on
-  its OWN, through ``urllib`` or ``requests``, as the sandbox recorder saw it
-  (`sandbox_runtime/http_recorder.py`). Measured 2026-09-17: the rerun of the
-  same task sent everything with ``urllib`` and printed ``OK`` per call, and
-  the proxied count was an honest, useless zero.
+
+The same rules over the HTTP a snippet made on its OWN — through ``urllib``
+as the sandbox recorder saw it, or through a spawned ``curl`` as the spawn
+recorder saw it — live in :mod:`robothor.engine.http_evidence`
+(``raw_http_responses``, ``lost_responses``, ``accepted_write``,
+``http_origin``, ``clean_url``). They were here until the second hostile
+review of #602, when the ratchet asked for an extraction rather than a fourth
+bigger number: what this module is, is a classification with no session and
+no payload behind it, and what that module is, is the handling of records a
+snippet-controlled process wrote.
 
 Conservative in one direction on purpose: an unrecognised call is ``neither``,
 never ``change``. A false "you changed something" teaches an agent to ignore
@@ -40,10 +45,8 @@ the note, and a note that is ignored is worse than no note.
 
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
-from urllib.parse import urlsplit
 
 __all__ = [
     "CHANGE",
@@ -54,8 +57,6 @@ __all__ = [
     "act_observe_note",
     "SAFE_METHODS",
     "classify",
-    "http_origin",
-    "raw_http_responses",
     "remote_tokens",
     "response_evidence",
     "source_tokens",
@@ -76,9 +77,12 @@ _SHELL_TOOLS = frozenset({"exec", "execute_code"})
 #: command text. That last clause is the point — the target is very often a
 #: variable (`requests.post(url, json=m)`, `curl -X POST "$ENDPOINT"`), and
 #: requiring a literal host in the string would make the control blind to
-#: exactly the loop the measured run wrote.
+#: exactly the loop the measured run wrote. The argv-LIST spelling —
+#: `"-X", "POST"` inside a `subprocess.run([...])` — is the same verb with a
+#: quote and a comma between the flag and its value; measured 2026-09-18,
+#: eighteen writes in that spelling classified as nothing at all.
 _MUTATING_VERB = re.compile(
-    r"(?:-X|--request)\s+[\"']?(?:POST|PUT|PATCH|DELETE)\b"
+    r"(?:-X|--request)(?:\s+|[\"']\s*,\s*)[\"']?(?:POST|PUT|PATCH|DELETE)\b"
     r"|\brequests\.(?:post|put|patch|delete)\s*\("
     r"|\bsession\.(?:post|put|patch|delete)\s*\("
     r"|\bhttpx\.(?:post|put|patch|delete)\s*\("
@@ -91,7 +95,18 @@ _MUTATING_VERB = re.compile(
 #: "POST" appearing near some of them. Weak because `--data` is a flag other
 #: programs also take, so this one needs a source in the command before it
 #: counts.
-_MUTATING_BODY_FLAG = re.compile(r"--data(?:-raw|-binary|-urlencode)?\b", re.IGNORECASE)
+_MUTATING_BODY_FLAG = re.compile(
+    r"--data(?:-raw|-binary|-urlencode|-ascii)?\b|--json\b|--form(?:-string)?\b"
+    r"|--post-(?:data|file)\b|--body-(?:data|file)\b",
+    re.IGNORECASE,
+)
+
+#: The SHORT body flags, which count only beside `curl` or `wget` in the same
+#: command text: a `-d` on its own is `date -d yesterday`, and a `-F` is
+#: `awk -F,`. The measured 2026-09-18 snippet used `"-d", json.dumps(body)`
+#: and nothing longer.
+_SHORT_BODY_FLAG = re.compile(r"(?<![\w-])-(?:d|F)(?=[\s\"',=]|$)")
+_HTTP_CLI_WORD = re.compile(r"\bcurl\b|\bwget\b", re.IGNORECASE)
 
 #: A shell command that READS something at the other end. A command with no
 #: source token at all reads nothing this module has an opinion about.
@@ -266,6 +281,8 @@ def classify(tool_name: str, tool_input: dict[str, Any], read_only: frozenset[st
             return NEITHER
         if _MUTATING_BODY_FLAG.search(program):
             return CHANGE
+        if _HTTP_CLI_WORD.search(program) and _SHORT_BODY_FLAG.search(program):
+            return CHANGE
         return READ if _FETCHING_SHELL.search(program) else NEITHER
     if tool_name in read_only:
         return READ
@@ -338,105 +355,6 @@ def unread_proxy_responses(
             "and look."
         ),
     }
-
-
-#: What a host may look like once it is going to be quoted in a note: a DNS
-#: name or IPv4 literal, or a bracketed IPv6 literal. The URL came from a
-#: process the snippet controlled; a netloc is not allowed to carry a
-#: `[SYSTEM]`, a backtick or a space into the model's context. Underscores
-#: are allowed: `mock_slack:9110` is what a docker-compose network calls a
-#: service, and refusing it would make every such write sourceless.
-_HOSTNAME = re.compile(
-    r"^(?:[a-z0-9_](?:[a-z0-9_-]{0,62}\.?)+|\[[0-9a-f:.]{2,45}\])$", re.IGNORECASE
-)
-
-
-def http_origin(url: str) -> str:
-    """``scheme://host[:port]`` — the SOURCE a recorded call touched.
-
-    The origin rather than the path, because that is what "read that source
-    again" has to mean for a service: a POST to ``/slack/send`` is answered by
-    a GET of ``/slack/messages`` on the same host, and never by another call
-    to ``/slack/send``.
-
-    Rebuilt from the parsed host and port, not copied from the netloc: no
-    userinfo, lower-cased, and "" for anything that is not a hostname — a
-    call against no origin is a call this control says nothing about.
-    """
-    try:
-        parts = urlsplit(str(url or ""))
-        host, port = parts.hostname, parts.port
-    except ValueError:
-        return ""
-    if parts.scheme.lower() not in ("http", "https") or not host:
-        return ""
-    if ":" in host:
-        host = f"[{host}]"
-    if not _HOSTNAME.match(host):
-        return ""
-    return f"{parts.scheme.lower()}://{host}{f':{port}' if port else ''}"
-
-
-#: A JSON string literal, for a body the recorder cut and `json.loads` can no
-#: longer parse. Linear on hostile input: each character is either not a
-#: quote/backslash or a backslash pair, so the two alternatives never overlap.
-_JSON_LITERAL = re.compile(r'"((?:[^"\\]|\\.){' + str(MIN_EVIDENCE_CHARS) + r',})"')
-
-
-def _cut_body_evidence(body: str) -> tuple[str, ...]:
-    """What can still prove a CUT body was printed: the string literals that
-    survived the cut, never the raw head. `print(resp)` shows a repr with
-    single quotes and `json.dumps(resp, indent=2)` re-wraps, so the raw head
-    is in neither — but the literals are in both. A cut body with no literal
-    in it has nothing to look for and is never counted (D3)."""
-    found = [m.group(1)[:MAX_EVIDENCE_CHARS] for m in _JSON_LITERAL.finditer(body)]
-    return tuple(found[:MAX_EVIDENCE_VALUES])
-
-
-def _is_recorded_write(call: dict[str, Any]) -> bool:
-    """A state-changing method that the service ACCEPTED. A 4xx or 5xx is a
-    refusal — the measured snippet's 429s changed nothing and were retried —
-    and counting one is the false positive that gets a note ignored."""
-    method = str(call.get("method") or "").upper()
-    status = int(call.get("status") or 0)
-    return bool(method) and method not in SAFE_METHODS and status < 400
-
-
-def raw_http_responses(calls: list[dict[str, Any]]) -> list[tuple[str, tuple[str, ...]]]:
-    """``(name, evidence)`` per recorded state-changing call, proxied-shaped.
-
-    The name is ``METHOD url`` so the note can say which call. The evidence is
-    what :func:`response_evidence` would take from the body parsed as JSON —
-    a snippet that printed the parsed dict shows Python's repr, in which the
-    leaf strings still appear — plus the raw head for a body that is not JSON.
-    A body the snippet never read, or one the recorder could not keep as text,
-    yields no evidence and so is never counted (D3: the rule is the same as
-    for a proxied ``{"ok": true}``).
-    """
-    out: list[tuple[str, tuple[str, ...]]] = []
-    for call in calls:
-        if not isinstance(call, dict) or not _is_recorded_write(call):
-            continue
-        # The same gate the ledger applies: a call against nothing that
-        # parses as an origin is a call this control says nothing about — and
-        # its URL, which came from a process the snippet controlled, is quoted
-        # to the model only with its whitespace and control characters gone.
-        url = re.sub(r"[\s\x00-\x1f\x7f]+", "", str(call.get("url") or ""))[:2048]
-        if not http_origin(url):
-            continue
-        body = str(call.get("body") or "")
-        if call.get("truncated"):
-            evidence = _cut_body_evidence(body)
-        else:
-            try:
-                # JSON: the leaf strings, and ONLY those — `{"ok": true}` is
-                # twelve characters of nothing to look for, not a body worth
-                # flagging.
-                evidence = response_evidence(json.loads(body))
-            except ValueError:
-                evidence = (body[:MAX_EVIDENCE_CHARS],) if len(body) >= MIN_EVIDENCE_CHARS else ()
-        out.append((f"{str(call.get('method')).upper()} {url}", evidence))
-    return out
 
 
 def act_observe_note(changes: list[tuple[int, str, frozenset[str]]]) -> str:

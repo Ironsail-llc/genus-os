@@ -860,7 +860,12 @@ flags:
       agent that has genuinely finished has to be able to finish. The same
       rerun sent everything with `urllib` inside `execute_code`, so the
       sandbox now records the snippet's own HTTP and the unread-response
-      count covers it. The classification reuses
+      count covers it; the next rerun (2026-09-18, 0.495) sent everything
+      with `subprocess.run(["curl", …])` and then crashed one line after
+      eighteen writes, so the sandbox also records what the snippet's child
+      processes did (`http_calls[].via`, `spawned`, `egress_unobserved`)
+      and a snippet that fails after its writes carries the response bodies
+      it never printed (`lost_responses`). The classification reuses
       `tools/read_only.declared_read_only_tools`, the same table the parallel
       planner trusts, so the two controls cannot disagree about whether a tool
       writes.

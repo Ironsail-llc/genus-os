@@ -7,7 +7,7 @@ HERE, beside ``genus_tools.py``, because the two files copied into a sandbox
 are one subject — and because ninety lines of in-sandbox source inside the
 handler is the shape the client module was deliberately not written in.
 
-It does four things the engine cannot do from outside:
+It does five things the engine cannot do from outside:
 
 * puts the per-call directory on ``sys.path`` (``-I`` deliberately leaves it
   off) so ``genus_tools`` is importable and nothing else the venv holds is on
@@ -17,8 +17,15 @@ It does four things the engine cannot do from outside:
   which is that the child's environment holds nothing worth importing the
   engine for;
 * installs the outbound-HTTP recorder (``http_recorder.py``, copied beside
-  it) so a write the snippet makes with ``urllib`` is as visible to the
-  engine's unread-response check as one made through ``genus_tools``;
+  it) so a write the snippet makes with ``urllib``, ``requests`` or
+  ``http.client`` is as visible to the engine's unread-response check as one
+  made through ``genus_tools``;
+* installs the spawn recorder (``spawn_recorder.py``, likewise) right after
+  it, so a write the snippet makes with ``subprocess.run(["curl", …])`` — the
+  measured 2026-09-18 shape, which no hook inside the interpreter's HTTP
+  stack can see — is recorded at the same layer, with the stdout head the
+  snippet received, and a snippet that crashes after its writes leaves the
+  evidence outside the dead process;
 * kills what the snippet started, on the way out, FROM INSIDE. The engine also
   kills (the process group, plus the descendants its census saw) but the engine
   can only sample: a snippet that spawns fifteen detached children and exits
@@ -81,6 +88,16 @@ try:
     import {recorder} as _genus_http
 
     _genus_http.install(os.path.join(_DIR, {record_file!r}))
+except Exception:
+    pass
+
+# And what its CHILD PROCESSES do: a `subprocess.run(["curl", "-X", "POST",
+# …])` never touches http.client, so the spawn recorder reads the argv and
+# keeps the stdout head the snippet got back. Same fail-open contract.
+try:
+    import {spawn_recorder} as _genus_spawn
+
+    _genus_spawn.install(os.path.join(_DIR, {spawn_record_file!r}))
 except Exception:
     pass
 

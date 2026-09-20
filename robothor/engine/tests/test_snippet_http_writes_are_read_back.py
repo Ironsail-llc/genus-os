@@ -582,12 +582,12 @@ class TestTheSchemeOfAUrllib3Connection:
 
 class TestTheOriginIsSanitised:
     def test_userinfo_never_reaches_the_note(self) -> None:
-        from robothor.engine.act_observe import http_origin
+        from robothor.engine.http_evidence import http_origin
 
         assert http_origin("http://alice:hunter2@example.com:9110/x") == "http://example.com:9110"
 
     def test_a_netloc_that_is_not_a_hostname_yields_no_origin(self) -> None:
-        from robothor.engine.act_observe import http_origin
+        from robothor.engine.http_evidence import http_origin
 
         assert http_origin("http://evil host/`x`/") == ""
         assert http_origin("http://svc.invalid:notaport/") == ""
@@ -597,12 +597,12 @@ class TestTheOriginIsSanitised:
     def test_a_compose_service_name_with_an_underscore_is_a_host(self) -> None:
         """`mock_slack:9110` is what a docker-compose network calls a service;
         refusing the underscore would make every such write sourceless."""
-        from robothor.engine.act_observe import http_origin
+        from robothor.engine.http_evidence import http_origin
 
         assert http_origin("http://mock_slack:9110/slack/send") == "http://mock_slack:9110"
 
     def test_ipv6_and_case_are_normalised(self) -> None:
-        from robothor.engine.act_observe import http_origin
+        from robothor.engine.http_evidence import http_origin
 
         assert http_origin("HTTP://SVC.Invalid:9110/x") == "http://svc.invalid:9110"
         assert http_origin("http://[::1]:9110/x") == "http://[::1]:9110"
@@ -636,7 +636,8 @@ class TestNothingSubstantialIsNeverUnread:
 def test_the_evidence_rule_is_the_proxied_one() -> None:
     """Unit-level: the raw path builds `(name, evidence)` pairs the way the
     proxied path does, so `unread_proxy_responses` treats both alike."""
-    from robothor.engine.act_observe import raw_http_responses, unread_proxy_responses
+    from robothor.engine.act_observe import unread_proxy_responses
+    from robothor.engine.http_evidence import raw_http_responses
 
     calls = [
         {"method": "GET", "url": "http://svc.invalid:9110/inbox", "status": 200, "body": "x" * 40},
@@ -678,7 +679,7 @@ def test_the_evidence_rule_is_the_proxied_one() -> None:
 def test_a_truncated_non_json_body_yields_nothing() -> None:
     """The raw head is never evidence for a cut body — and a cut body with no
     string literal in it has nothing to look for, so it is never unread."""
-    from robothor.engine.act_observe import raw_http_responses
+    from robothor.engine.http_evidence import raw_http_responses
 
     call = {
         "method": "POST",
