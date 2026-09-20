@@ -26,9 +26,9 @@ from robothor.operations.store import Conflict
 @pytest.fixture
 async def runtime(tmp_path):
     """A NativeSalesRuntime whose only database is a counter we control."""
-    from robothor.engine.sales_runtime import NativeSalesRuntime
-
     from apscheduler.schedulers.base import STATE_RUNNING
+
+    from robothor.engine.sales_runtime import NativeSalesRuntime
 
     engine = SimpleNamespace(config=SimpleNamespace(tenant_id="tenant-under-test"))
     apscheduler = Mock(state=STATE_RUNNING)

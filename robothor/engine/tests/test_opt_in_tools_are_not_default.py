@@ -74,4 +74,4 @@ def test_the_opt_in_list_cannot_drift_from_the_sales_package():
 
 def test_every_opt_in_tool_has_a_registered_schema(registry):
     """An opt-in name with no schema is a manifest key that silently does nothing."""
-    assert OPT_IN_TOOLS <= set(registry._schemas)
+    assert set(registry._schemas) >= OPT_IN_TOOLS

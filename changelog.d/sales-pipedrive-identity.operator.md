@@ -1,1 +1,0 @@
-Sales operators can fetch, review and adopt existing Pipedrive organizations, people and leads without creating duplicates. Adoption checks current relationships and account scope, expires stale reviews, and reconciles matching uncertain receipts. Promotion now rechecks pauses after searches and leaves duplicate-draft admission to the native draft planner.

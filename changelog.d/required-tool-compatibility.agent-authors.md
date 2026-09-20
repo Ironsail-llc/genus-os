@@ -1,1 +1,0 @@
-Bounded named-tool requests can now use required-only endpoints by offering exactly the one already-authorized tool. No auto-choice fallback or new permission is introduced, and missing or ambiguous target schemas are refused. See `docs/AGENT_BUILDER.md`.

@@ -243,6 +243,31 @@ status, known warmup history of at least 14 days and a reported score of at leas
 90. These are conservative initial settings, not guarantees of deliverability;
 domain authentication and mailbox usage outside this workflow need operator review.
 
+## Installing, and what rolling back costs
+
+Every switch below defaults off. An instance that never selects a sales fleet
+release runs no sales schedule, is advertised none of the `sales_*` tools, and
+is not reported unready because of them; the engine's `/ready` answers for sales
+only once a release has been selected through the deployment coordinator.
+
+**Rolling back is not a code-only operation.** Migrations 126 to 138 create the
+sales schema, the durable operations tables and the role-permission rows this
+subsystem needs, and the migration chain is forward-only: there are no down
+migrations. On an instance where they have already been applied, reverting to a
+release whose packaged manifest stops at 125 leaves the database ahead of the
+code, and `genus migrate` refuses to run against a database carrying migrations
+it does not know. Restoring that instance means restoring a snapshot taken
+before the upgrade — see
+[Snapshot and restore](runbooks/SNAPSHOT_RESTORE.md) — not reverting the
+deployment. Take that snapshot before upgrading.
+
+Migration 138 also tightens role permissions: `web_render` and `sales_*` are
+denied for the `__default__` `service`, `user` and `member` roles, so an agent
+that relied on the catch-all allow to reach either needs its own role or a
+tenant-scoped permission row. `sales_process_queue` stays allowed for `service`
+because the native workflow runner is that role; its gate is the handler's
+service-workflow identity check, not RBAC.
+
 ## Configuration and secrets
 
 The authenticated `/api/sales` API derives tenant and human actor from verified
@@ -636,9 +661,9 @@ Both panels load only within the visible owner/admin Sales view.
 
 ## Native agent deployment
 
-Store manifests under the instance's `docs/agents/`, instructions and the shared
-Sales Brain under `brain/`, and workflow declarations in its native workflow
-directory. Keep business-specific claims, buying cases, pricing, geography and
+Store manifests under the instance's `docs/agents/`, instructions and the
+shared Sales Brain under the instance's gitignored `brain/`, and workflow
+declarations in its native workflow directory. Keep business-specific claims, buying cases, pricing, geography and
 provider configuration in a private version-controlled instance repository.
 Scaffold through the native agent builder; do not put instance data in platform
 source. Workers run the existing Genus runner with explicit tenant, service role,

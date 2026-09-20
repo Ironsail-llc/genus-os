@@ -792,6 +792,25 @@ def _streaming_skip_reason(model: str, pool: KeyPool | None) -> str | None:
     return None
 
 
+def _funding_refusal(exc: RequestBudgetError, model: str) -> RequestBudgetError:
+    """Advance to the next model, or re-raise: a budget stop is not a model fault.
+
+    ``RequestRouteUnavailableError`` means no provider request was admitted at
+    all -- shared workers may have excluded this model's last endpoint -- so the
+    chain moves on without blaming this model's breaker and without bypassing
+    the next model's own quote and reservation. Any OTHER budget error is the
+    run's hard stop and has to reach the caller, rather than be swallowed by the
+    generic ``except Exception`` that follows each of these clauses.
+
+    Returns the exception so a call site records it as its last error in one
+    line. The three sites that had this inline were character-identical.
+    """
+    if not isinstance(exc, RequestRouteUnavailableError):
+        raise exc
+    logger.info("No eligible funded route for %s — advancing", _sanitize(model))
+    return exc
+
+
 def _advance_without_blaming_the_model(e: Exception, model: str) -> bool:
     """True when the chain must advance WITHOUT marking this model broken.
 
@@ -1234,11 +1253,8 @@ async def llm_call(
                 retryable_exceptions=_RETRYABLE_EXCEPTIONS,
                 backoff_base=1.0,
             )
-        except RequestRouteUnavailableError as exc:
-            last = exc
-            logger.info("No eligible funded route for %s — advancing", _sanitize(candidate))
-        except RequestBudgetError:
-            raise
+        except RequestBudgetError as exc:
+            last = _funding_refusal(exc, candidate)
         except Exception as exc:  # noqa: BLE001 - the next model is the point
             last = exc
             # Judge, buddy review and the background legs never touch
@@ -2392,15 +2408,9 @@ class LLMClient:
                     if not noted:
                         note_outcome(model, attempt_started, error=ce)
                     raise
-                except RequestRouteUnavailableError as exc:
-                    # No provider request was admitted. Shared workers may have
-                    # excluded this model's last endpoint; do not blame its
-                    # breaker or bypass the next model's own quote/reservation.
-                    last_error = exc
-                    logger.info("No eligible funded route for %s — advancing", _sanitize(model))
+                except RequestBudgetError as exc:
+                    last_error = _funding_refusal(exc, model)
                     break
-                except RequestBudgetError:
-                    raise
                 except Exception as e:
                     last_error = e
                     # `noted` is already True when the response itself was the
@@ -2673,12 +2683,9 @@ class LLMClient:
                     get_model_breaker().record_success(model)
                     _record_execution_mode(model)
                     return rebuilt
-                except RequestRouteUnavailableError as exc:
-                    last_error = exc
-                    logger.info("No eligible funded route for %s — advancing", _sanitize(model))
+                except RequestBudgetError as exc:
+                    last_error = _funding_refusal(exc, model)
                     break
-                except RequestBudgetError:
-                    raise
                 except TimeoutError as te:
                     note_outcome(model, attempt_started, error=te)
                     self._handle_model_error(te, model, broken_models, streaming=True)

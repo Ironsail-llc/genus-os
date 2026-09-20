@@ -1,1 +1,0 @@
-The native sales analyst now prepares durable weekly reports from measured funnel, cohort, qualification, fulfillment and cost data. Operators and the sales coordinator can read reports, distinguish incomplete history from retention, and review proposed changes. Code validates supporting counts; analyst proposals cannot change active policies or approve messages.

@@ -1,1 +1,0 @@
-Sales operators can return a reviewed conversation to Robothor and request new research, assessment, contacts or draft preparation through the prospect console. Recovery is bound to the displayed state, preserves cancelled approvals, and refuses running work, uncertain delivery and unsettled spending. Fresh research withdraws prior prospect acceptance.

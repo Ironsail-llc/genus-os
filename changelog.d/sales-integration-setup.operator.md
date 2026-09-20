@@ -1,3 +1,0 @@
-Sales operators can review integration configuration without entering secrets or enabling providers. Native account/lead status reads recover missed negative events and check owned lead status immediately before delivery; sender changes invalidate pending approvals.
-Complete revision manifests now distinguish measured retention from missing history. Native analysis admits its report-only manifest, and an isolated rehearsal exercises the full workflow dispatch path through approval, replies, opt-out and fulfillment.
-The packaged migration inventory includes the research, request, CRM-scope and analyst additions through migration 137, so standard installations receive the required schema and permissions.

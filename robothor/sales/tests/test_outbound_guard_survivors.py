@@ -24,7 +24,6 @@ from robothor.sales.providers import ProviderError
 from robothor.sales.tests.test_delivery import setup
 from robothor.sales.tests.test_guards import approved, draft, prepared
 
-
 # ── 1. handlers/sales.py — the service-workflow identity gate ──────────────
 
 
@@ -181,7 +180,10 @@ def _rehash(sales, payload):
     """The sender_context_hash the CURRENT settings would produce."""
     from robothor.sales.setup import sender_context_hash
 
-    return {**payload, "sender_context_hash": sender_context_hash(sales.settings(), payload["sender"])}
+    return {
+        **payload,
+        "sender_context_hash": sender_context_hash(sales.settings(), payload["sender"]),
+    }
 
 
 def test_a_send_is_refused_when_its_sender_leaves_the_allowlist(sales):
@@ -262,7 +264,9 @@ def test_a_stale_mailbox_review_stops_the_send(sales, label, approved_until):
     settings = SalesSettings.model_validate(
         {
             "senders": ["sales@example.com"],
-            "mailbox_approved_until": ({"sales@example.com": approved_until} if approved_until else {}),
+            "mailbox_approved_until": (
+                {"sales@example.com": approved_until} if approved_until else {}
+            ),
         }
     )
 
@@ -300,7 +304,9 @@ def test_one_senders_review_does_not_cover_another(sales):
     )
 
     with pytest.raises(Conflict, match="mailbox readiness review"):
-        DeliveryWorker._check_mailbox(settings, "other@example.com", _account("other@example.com"), now)
+        DeliveryWorker._check_mailbox(
+            settings, "other@example.com", _account("other@example.com"), now
+        )
 
 
 # ── 6. sales/gmail.py — the approved sender must BE the host mailbox ───────

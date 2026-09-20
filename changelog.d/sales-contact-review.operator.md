@@ -1,1 +1,0 @@
-Sales operators can review public contact sources, correct business identities and add contacts for provider verification. Contact identity changes invalidate pending email drafts, and later agent research cannot overwrite a reviewed identity. Human identity review remains separate from deliverability verification.

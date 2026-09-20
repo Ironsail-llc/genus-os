@@ -20,6 +20,7 @@ def platform_timezone() -> str:
     """The instance's configured timezone, or the platform default."""
     return os.environ.get("ROBOTHOR_TIMEZONE") or DEFAULT_TIMEZONE
 
+
 #: Prefix every benchmark-sandbox write refusal starts with (crm.py,
 #: memory.py handler gates; robothor/crm/dal.py's create_session_goal guard).
 #: Lives here rather than in robothor.engine.benchmark_sandbox because

@@ -35,7 +35,9 @@ def _session(**overrides):
 
 def test_root_context_from_an_unpinned_manifest_is_not_release_pinned():
     """No manifest key can set fleet_release_id, so an ordinary agent is unpinned."""
-    context = make_spawn_context(AgentConfig(id="main", name="Main", can_spawn_agents=True), _session(), None)
+    context = make_spawn_context(
+        AgentConfig(id="main", name="Main", can_spawn_agents=True), _session(), None
+    )
 
     assert context.fleet_release_id is None
 
@@ -61,7 +63,9 @@ async def test_unpinned_root_spawn_resolves_from_live_manifests(monkeypatch, tmp
 
     monkeypatch.setattr("robothor.engine.config.load_agent_config_or_reason", fake_load)
     monkeypatch.setattr("robothor.templates.fleet_store.staged_release_path", refuse)
-    context = make_spawn_context(AgentConfig(id="main", name="Main", can_spawn_agents=True), _session(), None)
+    context = make_spawn_context(
+        AgentConfig(id="main", name="Main", can_spawn_agents=True), _session(), None
+    )
     engine_config = SimpleNamespace(workspace=tmp_path, manifest_dir=tmp_path / "docs/agents")
 
     child, reason = await load_child_config("worker", engine_config, context.fleet_release_id)

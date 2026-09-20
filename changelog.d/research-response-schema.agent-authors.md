@@ -1,1 +1,0 @@
-Native research workers now request the trusted dossier JSON Schema after attempting retrieval, instead of accepting arbitrary JSON as a provider contract. Budget admission requires endpoint structured-output support; local schema validation and source attestation still determine acceptance. See `docs/SALES_INTELLIGENCE.md`.

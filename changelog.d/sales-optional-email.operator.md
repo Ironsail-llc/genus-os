@@ -1,1 +1,0 @@
-Sales fleets can explicitly exclude email delivery with `email_provider: none`. Setup omits the excluded provider's credential requirements and its native queue pumps remain inactive; research and CRM work can proceed independently.
