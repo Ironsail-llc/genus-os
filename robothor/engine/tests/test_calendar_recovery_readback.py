@@ -369,3 +369,39 @@ def test_returned_readback_failure_is_scheduled_without_repeating_write(
     assert recovered["result"]["attendees_present"] == ["sam@example.com"]
     assert recovered["result"]["invitations_requested"] is (None if lost_ack else True)
     assert sum(method == "PATCH" for method, _ in google.calls) == 1
+
+
+async def test_stalled_recovery_batch_is_reaped_before_next_sweep(monkeypatch):
+    import asyncio
+    import sys
+
+    from robothor.engine import calendar_recovery_worker as worker
+
+    spawn = asyncio.create_subprocess_exec
+    children = []
+    delays = []
+
+    async def launch(*args):
+        child = await spawn(sys.executable, "-c", "import time; time.sleep(60)")
+        children.append(child)
+        return child
+
+    async def after_batch(seconds):
+        delays.append(seconds)
+        assert children[0].returncode is not None
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(worker, "BATCH_TIMEOUT_SECONDS", 0.05, raising=False)
+    monkeypatch.setattr(worker.asyncio, "create_subprocess_exec", launch)
+    monkeypatch.setattr(worker.asyncio, "sleep", after_batch)
+    task = asyncio.create_task(worker.run("isolated-test"))
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=2)
+        assert delays == [30]
+    finally:
+        task.cancel()
+        for child in children:
+            if child.returncode is None:
+                child.kill()
+                await child.wait()

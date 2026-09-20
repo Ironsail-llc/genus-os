@@ -698,6 +698,14 @@
       "checks": "Build, ESLint, diff checks pass",
       "limitations": "Synthetic browser transport; not a classifier for every engine-side rejection. Manual and full acceptance remain incomplete.",
       "production_deployed": false
+    },
+    "bounded_recovery_batches": {
+      "initial": "Real stalled child reached outer two-second test timeout; no batch deadline",
+      "final": "31 passed in 7.03s",
+      "evidence": "Five-minute batch bound; real child with shortened test deadline is terminated/reaped before the next sweep delay",
+      "checks": "Ruff, formatting and diff checks pass",
+      "limitations": "No production daemon startup validation; full acceptance remains incomplete",
+      "production_deployed": false
     }
   },
   "calendar": {

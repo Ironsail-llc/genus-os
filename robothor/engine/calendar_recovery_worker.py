@@ -13,6 +13,10 @@ from robothor.engine.calendar_reconciliation import reconcile_record
 
 logger = logging.getLogger(__name__)
 
+# Five sequential provider reads may each need credential refresh and readback.
+# Bound the whole process too, including database connection/query stalls.
+BATCH_TIMEOUT_SECONDS = 300
+
 
 def sweep(tenant_id: str) -> int:
     """Inspect a bounded oldest-first batch; the shared writer lock decides eligibility."""
@@ -44,7 +48,7 @@ async def run(tenant_id: str) -> None:
             process = await asyncio.create_subprocess_exec(
                 sys.executable, "-m", __name__, "--tenant", tenant_id
             )
-            code = await process.wait()
+            code = await asyncio.wait_for(process.wait(), timeout=BATCH_TIMEOUT_SECONDS)
             if code:
                 logger.warning("Calendar recovery batch exited (%s)", code)
         except Exception as exc:
@@ -56,7 +60,8 @@ async def run(tenant_id: str) -> None:
                 try:
                     await asyncio.wait_for(process.wait(), timeout=1)
                 except TimeoutError:
-                    process.kill()
+                    with suppress(ProcessLookupError):
+                        process.kill()
                     await process.wait()
         await asyncio.sleep(30)
 
