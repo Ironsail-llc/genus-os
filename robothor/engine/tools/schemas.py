@@ -8,6 +8,19 @@ from robothor.engine.prompts import EVIDENCE_OUTRANKS_NAMES
 from robothor.engine.vision_fallback import PROVENANCE_NOTE
 from robothor.sales.tool_schemas import SALES_SCHEMAS
 
+# `robothor.sales` is imported at module scope deliberately. It is not an
+# optional extra: the wheel ships `packages = ["robothor"]` (pyproject.toml), so
+# the sales package is in every build that contains the engine, and
+# `handlers/sales.py` already imports it. Wrapping the import in a
+# try/except ImportError would invent a packaging split that does not exist and
+# would turn a broken install into ten silently missing tools rather than an
+# import error naming the cause.
+#
+# What sales must NOT be is a DEFAULT capability, which is a different question
+# and is answered in two other places: `OPT_IN_TOOLS` keeps these schemas out of
+# the set an agent with no `tools_allowed` is offered, and migration 138 denies
+# them to the broad `__default__` roles.
+
 _WEB_READ_SCHEMAS = {
     "web_fetch": {
         "type": "function",
