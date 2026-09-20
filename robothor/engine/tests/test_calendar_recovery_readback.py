@@ -324,3 +324,48 @@ def test_unattended_batches_are_bounded_and_rotate_after_failed_reads(
     assert sweep(ctx.tenant_id) == 2
     assert reads == ["GET"] * 7
     assert sweep(ctx.tenant_id) == 0
+
+
+@pytest.mark.parametrize("lost_ack", [False, True])
+def test_returned_readback_failure_is_scheduled_without_repeating_write(
+    store,  # noqa: F811
+    google,  # noqa: F811
+    ctx,  # noqa: F811
+    monkeypatch,
+    lost_ack,
+):
+    from robothor.engine.calendar_recovery_worker import sweep
+
+    operation_id = draft(ctx)["operation_id"]
+    original = google.request
+    wrote = False
+
+    def interrupted(method, *args, **kwargs):
+        nonlocal wrote
+        if method == "GET" and wrote:
+            return {"error": "readback unavailable"}
+        result = original(method, *args, **kwargs)
+        if method == "PATCH":
+            wrote = True
+            if lost_ack:
+                return {"error": "connection lost", "outcome_unknown": True}
+        return result
+
+    monkeypatch.setattr(google, "request", interrupted)
+    result = operations.perform({"operation_id": operation_id}, ctx)
+    assert result["reconciliation_pending"]
+    assert "repair_task_id" not in result
+    pending = operations.load_operation(operation_id, ctx.tenant_id, ctx.user_id, ctx.agent_id)
+    assert pending["status"] == "executing"
+    age_operation(store, operation_id)
+    assert sweep(ctx.tenant_id) == 1
+    pending = operations.load_operation(operation_id, ctx.tenant_id, ctx.user_id, ctx.agent_id)
+    assert pending["status"] == "executing"
+    assert pending["result"]["invitations_requested"] is (None if lost_ack else True)
+    monkeypatch.setattr(google, "request", original)
+    age_operation(store, operation_id)
+    assert sweep(ctx.tenant_id) == 1
+    recovered = operations.load_operation(operation_id, ctx.tenant_id, ctx.user_id, ctx.agent_id)
+    assert recovered["result"]["attendees_present"] == ["sam@example.com"]
+    assert recovered["result"]["invitations_requested"] is (None if lost_ack else True)
+    assert sum(method == "PATCH" for method, _ in google.calls) == 1

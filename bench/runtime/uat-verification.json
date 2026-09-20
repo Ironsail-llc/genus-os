@@ -633,6 +633,13 @@
       "checks": "Module CLI bootstrap, Ruff, formatting and diff checks pass",
       "limitations": "No production daemon startup/deployment or operating-limit measurement. Other providers, browser reload and full acceptance remain incomplete.",
       "production_deployed": false
+    },
+    "returned_calendar_readback_failure": {
+      "initial": "2 failed: returned readback failures were not marked pending",
+      "final": "67 passed in 7.18s; 10 existing calendar-operation checks passed in 0.59s",
+      "evidence": "Private database and fake provider; acknowledged/lost acknowledgement, repeated GET failure, automatic sweep, exactly one PATCH; preserves known notification request without claiming delivery",
+      "checks": "Ruff, formatting and diff checks pass",
+      "production_deployed": false
     }
   },
   "calendar": {

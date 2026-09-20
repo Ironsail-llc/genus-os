@@ -108,5 +108,7 @@ def receipt_summary(receipts):
             )
             if receipt["invitations_requested"] is None:
                 finding += " Whether notifications were sent remains unknown."
+            elif not receipt["verified"] and receipt["invitations_requested"] is True:
+                finding += " Notifications were requested; delivery is not verified."
         lines.append(f"{finding} (Operation {receipt['operation_id']})")
     return "\n\n".join(lines)

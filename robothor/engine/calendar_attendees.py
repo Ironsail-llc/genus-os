@@ -90,7 +90,16 @@ def add_attendees(
             ):
                 return {**written, "invitations_requested": False, "verification": "failed"}
             after = api.request("GET", calendar_id, event_id)
-            present = "error" not in after and requested <= _emails(after)
+            if "error" in after:
+                return {
+                    "error": "Calendar readback unavailable; automatic reconciliation remains pending",
+                    "event_id": event_id,
+                    "reconciliation_pending": True,
+                    "verification": "unverified",
+                    "invitations_requested": None if "error" in written else True,
+                    "delivery_verified": False,
+                }
+            present = requested <= _emails(after)
             preserved = (
                 present
                 and all(

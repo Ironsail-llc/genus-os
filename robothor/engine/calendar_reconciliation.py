@@ -43,7 +43,7 @@ def reconcile_record(operation_id, auth, agent_id):
             )
             conn.commit()
             result = operations._reconcile_interrupted(
-                row["calendar_id"], row["event_id"], row["arguments"]
+                row["calendar_id"], row["event_id"], row["arguments"], row.get("result")
             )
             status = "executing" if result.get("reconciliation_pending") else "blocked"
             cur.execute(

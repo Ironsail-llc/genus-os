@@ -369,6 +369,36 @@ async def test_http_recovery_initiates_scoped_readback_without_replaying_action(
     assert "Readback found these requested attendees: sam@example.com" in second.json()["text"]
     assert "Whether notifications were sent remains unknown" in second.json()["text"]
     readback.assert_called_once_with(
-        "fixture-calendar", "fixture-event", {"attendees": ["sam@example.com"]}
+        "fixture-calendar",
+        "fixture-event",
+        {"attendees": ["sam@example.com"]},
+        {"verification": "verified", "invitations_requested": True},
     )
     mock_runner.execute.assert_not_called()
+
+
+@pytest.mark.parametrize("acknowledged", [True, None])
+def test_recovered_attendees_keep_known_notification_request_distinct_from_delivery(
+    records, acknowledged
+):
+    auth, client = identity(), str(uuid4())
+    run = insert(records, auth, client, "cancelled", verified_status=None)
+    record_calendar_receipt(
+        records,
+        auth,
+        run,
+        status="blocked",
+        result={
+            "verification": "unverified",
+            "attendees_present": ["sam@example.com"],
+            "invitations_requested": acknowledged,
+        },
+    )
+    result = chat_recovery.read_outcome(auth, "web:main", client)
+    assert not result["verified"]
+    assert "sam@example.com" in result["text"]
+    if acknowledged:
+        assert "Notifications were requested; delivery is not verified" in result["text"]
+        assert "Whether notifications were sent remains unknown" not in result["text"]
+    else:
+        assert "Whether notifications were sent remains unknown" in result["text"]

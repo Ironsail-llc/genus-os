@@ -76,9 +76,12 @@ def load_operation(operation_id: str, tenant: str, user: str, agent: str) -> dic
         return dict(row) if row else None
 
 
-def _reconcile_interrupted(calendar_id: str, event_id: str, stored: dict) -> dict:
+def _reconcile_interrupted(
+    calendar_id: str, event_id: str, stored: dict, previous: dict | None = None
+) -> dict:
     from robothor.engine.calendar_transport import CalendarTransport
 
+    invitations = True if (previous or {}).get("invitations_requested") is True else None
     with CalendarTransport() as api:
         event = api.request("GET", calendar_id, event_id)
     attendees = event.get("attendees", []) if isinstance(event, dict) else None
@@ -95,7 +98,7 @@ def _reconcile_interrupted(calendar_id: str, event_id: str, stored: dict) -> dic
             "error": "Provider read unavailable or invalid; reconciliation remains pending",
             "event_id": event_id,
             "reconciliation_pending": True,
-            "invitations_requested": None,
+            "invitations_requested": invitations,
             "verification": "unverified",
         }
     present = {a.get("email", "").casefold() for a in attendees}
@@ -103,7 +106,7 @@ def _reconcile_interrupted(calendar_id: str, event_id: str, stored: dict) -> dic
         "error": "Interrupted write reconciled without retry; notification outcome unknown",
         "event_id": event_id,
         "attendees_present": sorted(present & set(stored["attendees"])),
-        "invitations_requested": None,
+        "invitations_requested": invitations,
         "verification": "unverified",
     }
 
@@ -226,7 +229,7 @@ def _perform_locked(args: dict[str, Any], ctx: Any, *, cancelled: Any = None) ->
                     + operation_id,
                 }
             if row and row["status"] == "executing":
-                result = _reconcile_interrupted(calendar_id, event_id, stored)
+                result = _reconcile_interrupted(calendar_id, event_id, stored, row.get("result"))
             else:
                 cur.execute(
                     "UPDATE calendar_operations SET status='executing',updated_at=now() WHERE id=%s",
