@@ -281,3 +281,155 @@ def test_legacy_descriptor_backfill_is_scoped_and_does_not_claim_unknown_provena
     assert descriptor["fields"] == ["email"]
     assert descriptor["source"] == "legacy_enrollment"
     assert descriptor["recorded_at"].startswith("2001-01-01")
+
+
+def submitting(store, identity, key="evidence-1"):
+    grant = store.create_grant(identity, policy())
+    operation = store.reserve(identity, grant["id"], "main", proposal(key))
+    store.begin_submit(identity, operation["id"], "main")
+    return operation["id"]
+
+
+def test_completion_without_evidence_is_refused(store, identity):
+    operation = submitting(store, identity)
+    for evidence in (None, {}):
+        with pytest.raises(ValueError, match="completion_requires_evidence"):
+            store.finish(identity, operation, "completed", evidence)
+    assert store.operation(identity, operation)["state"] == "submitting"
+    store.finish(identity, operation, "completed", {"confirmation_sha256": "a" * 64})
+    assert store.operation(identity, operation)["state"] == "completed"
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"screenshot": "data:image/png;base64,AAAA"},
+        {"page_text": "Thanks Alice, your card ending 4242 was charged"},
+        {"note": "trust me"},
+        {"Origin": "https://shop.example"},
+    ],
+)
+def test_completion_evidence_is_limited_to_the_declared_keys(store, identity, extra):
+    operation = submitting(store, identity)
+    evidence = {"origin": "https://shop.example", "confirmation_sha256": "a" * 64, **extra}
+    with pytest.raises(ValueError, match="unsafe_evidence"):
+        store.finish(identity, operation, "completed", evidence)
+    assert store.operation(identity, operation)["state"] == "submitting"
+    assert store.operation(identity, operation)["evidence"] is None
+
+
+def test_every_allowlisted_evidence_key_is_still_accepted(store, identity):
+    operation = submitting(store, identity)
+    store.finish(
+        identity,
+        operation,
+        "completed",
+        {
+            "origin": "https://shop.example",
+            "confirmation_sha256": "a" * 64,
+            "verified_at": datetime.now(UTC).isoformat(),
+            "kind": "merchant_confirmation",
+            "confirmation_rule": "order_confirmed",
+        },
+    )
+    assert store.operation(identity, operation)["state"] == "completed"
+
+
+@pytest.mark.parametrize(
+    "rule,accepted",
+    [
+        ("account_created", True),
+        ("application_received", True),
+        ("order_confirmed", True),
+        ("membership_active", True),
+        ("login_confirmed", True),
+        ("looks_done", False),
+        ("order_confirmed ", False),
+        ("Order_confirmed", False),
+        ("", False),
+    ],
+)
+def test_confirmation_rule_must_be_one_the_platform_defined(store, identity, rule, accepted):
+    operation = submitting(store, identity, key="rule-" + (rule.strip().lower() or "blank"))
+    evidence = {"confirmation_sha256": "a" * 64, "confirmation_rule": rule}
+    if accepted:
+        store.finish(identity, operation, "completed", evidence)
+        assert store.operation(identity, operation)["state"] == "completed"
+    else:
+        with pytest.raises(ValueError, match="unsafe_confirmation_rule"):
+            store.finish(identity, operation, "completed", evidence)
+        assert store.operation(identity, operation)["state"] == "submitting"
+
+
+def test_expired_resource_is_neither_listed_nor_released(store, identity):
+    ref = store.put_resource(
+        identity,
+        ResourceInput(
+            kind="credential",
+            label="One-time login",
+            origin="https://shop.example",
+            payload=json.dumps({"username": "alice", "password": "private"}),
+        ),
+        lifetime_seconds=600,
+    )
+    assert [row["id"] for row in store.resources(identity)] == [ref["id"]]
+    assert store.consume_resource(identity, ref["id"], "https://shop.example")["password"] == (
+        "private"
+    )
+    with store.transaction() as cur:
+        cur.execute(
+            "UPDATE vault_resources SET expires_at=now() - interval '1 second' WHERE id=%s",
+            (ref["id"],),
+        )
+    with pytest.raises(PermissionError, match="resource_not_authorized"):
+        store.consume_resource(identity, ref["id"], "https://shop.example")
+    assert store.resources(identity) == []
+
+
+@pytest.mark.parametrize(
+    "lifetime,accepted",
+    [(None, True), (1, True), (600, True), (0, False), (-1, False), (601, False)],
+)
+def test_verification_resource_lifetime_is_bounded(store, identity, lifetime, accepted):
+    def enrol():
+        return store.put_resource(
+            identity,
+            ResourceInput(
+                kind="credential",
+                label="Emailed sign-in code",
+                origin="https://shop.example",
+                payload=json.dumps({"username": "alice", "password": "739215"}),
+            ),
+            lifetime_seconds=lifetime,
+        )
+
+    if accepted:
+        assert enrol()["id"]
+        assert len(store.resources(identity)) == 1
+    else:
+        with pytest.raises(ValueError, match="invalid_verification_lifetime"):
+            enrol()
+        assert store.resources(identity) == []
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "Loyalty 1234-5678-9012-3456",
+        "Card 4242 4242 4242 4242",
+        "ghp_" + "A" * 36,
+        "Bearer abcdefghijklmnopqrstuvwx",
+    ],
+)
+def test_resource_label_may_not_carry_the_secret_it_names(store, identity, label):
+    with pytest.raises(ValueError, match="resource_label_contains_secret"):
+        store.put_resource(
+            identity,
+            ResourceInput(
+                kind="credential",
+                label=label,
+                origin="https://shop.example",
+                payload=json.dumps({"username": "alice", "password": "private"}),
+            ),
+        )
+    assert store.resources(identity) == []
