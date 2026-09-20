@@ -71,8 +71,14 @@ async def retrieve_verification(
     result = await gws.HANDLERS["gws_gmail_search"](
         {"query": f"to:{recipient} {{{senders}}} after:{after}", "max_results": 5}, ctx
     )
-    for candidate in result.get("messages", []):
-        raw = await asyncio.to_thread(gws._fetch_message, candidate["id"], "full")
+    fetched = [
+        await asyncio.to_thread(gws._fetch_message, candidate["id"], "full")
+        for candidate in result.get("messages", [])[:5]
+    ]
+    # The mailbox answers newest first. An authorized sender could otherwise
+    # send their own message after the website's and be read instead of it, so
+    # the earliest message that carries a verification is the one that counts.
+    for raw in sorted(fetched, key=_sent_at):
         value = extract_verification(
             raw,
             recipient=recipient,
@@ -101,3 +107,11 @@ async def retrieve_verification(
         "state": "awaiting_external_action",
         "reason": "verification_email_not_available",
     }
+
+
+def _sent_at(message: dict[str, Any]) -> int:
+    """The mailbox's own receipt stamp; an unreadable one sorts last."""
+    try:
+        return int(message.get("internalDate", 0))
+    except (TypeError, ValueError):
+        return 2**63 - 1

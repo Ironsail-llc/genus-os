@@ -167,3 +167,22 @@ def test_intake_endpoints_authenticate_and_never_echo_bad_values(api, monkeypatc
     identity.is_service = True
     for endpoint in ("enrollments", "enrollments/inspect", "enrollments/complete"):
         assert client.post("/api/autonomy/" + endpoint, json={}).status_code == 403
+
+
+def test_a_shared_mail_provider_is_refused_when_authority_is_granted(api):
+    """The owner learns the rule at configuration time, without their input echoed."""
+    client, _, store = api
+    response = client.post(
+        "/api/autonomy/grants",
+        json={
+            "agent_ids": ["main"],
+            "origins": ["https://shop.example"],
+            "actions": ["purchase"],
+            "expires_at": "2030-01-01T00:00:00+00:00",
+            "verification_senders": {"https://shop.example": ["gmail.com"]},
+        },
+    )
+    assert response.status_code == 422
+    assert "gmail.com" not in response.text
+    assert "belongs to that website" in response.text
+    store.create_grant.assert_not_called()

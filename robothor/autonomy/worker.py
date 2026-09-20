@@ -12,7 +12,7 @@ import socket
 import sys
 from functools import partial
 from typing import TYPE_CHECKING, Any, cast
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 import psycopg2
@@ -48,26 +48,100 @@ def browser_environment() -> dict[str, str]:
     return process_env_allowlist(("PATH", "HOME", "LANG", "TMPDIR", "PLAYWRIGHT_BROWSERS_PATH"))
 
 
-async def public_request(route: Route) -> None:
-    """Reject non-public destinations on every request, including redirects.
+#: A material document is parsed into Chromium before anything can reject it,
+#: so the transfer itself is bounded. The text taken out of it is capped at
+#: 200_000 characters, and 2 MiB of markup carries that much text with room for
+#: ordinary boilerplate. Without this bound a 40 MB response spent 20.6 s of
+#: the 30 s collection budget in collect_material_documents, twice per
+#: operation, before the text cap could refuse it.
+MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
+#: Redirects are followed here, not by Chromium: a fulfilled response's
+#: redirect is not routed again, so Chromium would fetch the target with no
+#: destination or size check at all. Only same-origin hops are followed --
+#: the page keeps the requested URL, and the origin re-check after the read
+#: must not be answered by a different site's document.
+MAX_DOCUMENT_REDIRECTS = 3
+
+
+async def public_destination(url: str) -> bool:
+    """A public, resolvable HTTP(S) destination and nothing else.
 
     Deployments must additionally enforce broker network egress at the container
     boundary to close DNS rebinding between this resolution and Chromium's.
     """
+    parsed = urlsplit(url)
+    if parsed.scheme not in {"https", "http"} or not parsed.hostname:
+        return False
+    addresses = await asyncio.get_running_loop().getaddrinfo(
+        parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM
+    )
+    return bool(addresses) and all(ipaddress.ip_address(row[4][0]).is_global for row in addresses)
+
+
+async def public_request(route: Route) -> None:
+    """Reject non-public destinations on every request, including redirects."""
     try:
-        parsed = urlsplit(route.request.url)
-        if parsed.scheme not in {"https", "http"} or not parsed.hostname:
+        if await public_destination(route.request.url):
+            await route.continue_()
+        else:
             await route.abort()
-            return
-        addresses = await asyncio.get_running_loop().getaddrinfo(
-            parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM
-        )
-        if not addresses or any(not ipaddress.ip_address(row[4][0]).is_global for row in addresses):
-            await route.abort()
-            return
-        await route.continue_()
     except Exception:
         await route.abort()
+
+
+async def public_document_request(route: Route) -> None:
+    """A public destination, and a document small enough to be worth parsing."""
+    try:
+        url = route.request.url
+        # The reading context carries no applicant state; keep it that way by
+        # forwarding only what identifies the request as an ordinary read.
+        headers = {
+            name: value
+            for name, value in route.request.headers.items()
+            if name.lower() in {"accept", "accept-language", "user-agent"}
+        }
+        async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
+            for _ in range(MAX_DOCUMENT_REDIRECTS + 1):
+                if not await public_destination(url):
+                    break
+                async with client.stream("GET", url, headers=headers) as response:
+                    if response.status_code in {301, 302, 303, 307, 308}:
+                        target = urljoin(url, response.headers.get("location", ""))
+                        if _same_origin(target, url):
+                            url = target
+                            continue
+                        break
+                    declared = response.headers.get("content-length")
+                    if declared is not None and (
+                        not declared.isdigit() or int(declared) > MAX_DOCUMENT_BYTES
+                    ):
+                        break
+                    body = bytearray()
+                    oversized = False
+                    async for chunk in response.aiter_bytes():
+                        body.extend(chunk)
+                        if len(body) > MAX_DOCUMENT_BYTES:
+                            oversized = True
+                            break
+                    if oversized:
+                        break
+                    # httpx has already decoded any content encoding, so the
+                    # response's own transfer headers no longer describe these
+                    # bytes. Only the media type survives.
+                    await route.fulfill(
+                        status=response.status_code,
+                        headers={"content-type": response.headers.get("content-type", "")},
+                        body=bytes(body),
+                    )
+                    return
+        await route.abort()
+    except Exception:
+        await route.abort()
+
+
+def _same_origin(target: str, source: str) -> bool:
+    left, right = urlsplit(target), urlsplit(source)
+    return (left.scheme, left.hostname, left.port) == (right.scheme, right.hostname, right.port)
 
 
 async def handle(data: dict[str, Any]) -> dict[str, Any]:

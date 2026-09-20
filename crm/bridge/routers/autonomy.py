@@ -48,7 +48,7 @@ async def require_personal_owner(request: Request):
         raise HTTPException(409, "Link your account identity before personal enrollment") from None
 
 
-async def _body(request: Request, model):
+async def _body(request: Request, model, invalid="Invalid enrollment data; no values were stored"):
     # Do not use automatic FastAPI model parsing here: validation responses
     # otherwise echo rejected input (including a pasted card or password).
     try:
@@ -57,7 +57,7 @@ async def _body(request: Request, model):
             raise ValueError
         return model.model_validate(json.loads(raw))
     except Exception:
-        raise HTTPException(422, "Invalid enrollment data; no values were stored") from None
+        raise HTTPException(422, invalid) from None
 
 
 def _safe(value):
@@ -176,7 +176,12 @@ async def revoke_resource(resource_id: UUID, request: Request):
 @router.post("/grants")
 async def delegate(request: Request):
     scope = await require_personal_owner(request)
-    policy = await _body(request, Delegation)
+    policy = await _body(
+        request,
+        Delegation,
+        "Invalid authority; no authority was granted. Each verification sender must be a"
+        " mail domain that belongs to that website alone, never a shared mail provider.",
+    )
     return _safe(await asyncio.to_thread(AutonomyStore().create_grant, scope, policy))
 
 
