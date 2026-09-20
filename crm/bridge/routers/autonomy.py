@@ -1,6 +1,7 @@
 """Personal onboarding, authority and operation status. Secrets travel inward only."""
 
 import asyncio
+import contextlib
 import json
 from uuid import UUID
 
@@ -329,12 +330,12 @@ async def check_external_handoff(handoff_id: UUID, request: Request):
             return
 
         finally:
-            try:
+            # A failed journal update leaves a resumable checking record. Never
+            # log private browser/confirmation data while handling that failure.
+            with contextlib.suppress(Exception):
                 await asyncio.to_thread(
                     HandoffStore(AutonomyStore()).check_finished, scope, str(handoff_id)
                 )
-            except Exception:
-                pass
 
     task = asyncio.create_task(check())
     _resumes.add(task)
