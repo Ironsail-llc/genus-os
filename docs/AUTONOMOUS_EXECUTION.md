@@ -544,7 +544,7 @@ amounts above the reservation or authorization are recorded with discrepancy fla
 They are not hidden by execution-policy limits. Refunds do not by themselves free
 a spending reservation or end a recurring commitment.
 
-Migration 135 adds encrypted, owner-scoped payment facts. Broker payment completion
+Migration 138 adds encrypted, owner-scoped payment facts. Broker payment completion
 records a submission fact atomically; concurrent identical deliveries are deduplicated,
 and conflicting deliveries cannot overwrite evidence. A fresh process can read the
 position using the native resource keyring. Unsupported or inconsistent facts remain
@@ -552,5 +552,10 @@ stored with a reconciliation-required result rather than an invented balance.
 
 The journal is not yet an issuer integration. Its provenance field is descriptive, not authentication: only trusted adapters may
 supply facts after validating their evidence. Agent claims and unauthenticated
-callbacks must never become issuer facts. Encrypted receipt capture, validated evidence ingestion, budget reconciliation
-and the operator view remain integration work before this capability can be considered complete.
+callbacks must never become issuer facts. The Personal automation operation list includes a private Payment status view.
+The owner-only GET payment endpoint and agent-bound `payment_status` command
+return balances and discrepancy flags without issuer references. Neither accepts
+payment writes. A submission is explicitly labeled as not yet a verified charge.
+
+Encrypted receipt capture, validated evidence ingestion and budget reconciliation
+remain integration work before this capability can be considered complete.
