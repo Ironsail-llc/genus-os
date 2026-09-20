@@ -18,7 +18,10 @@ def make_spawn_context(agent_config, session, trace):
         max_nesting_depth=agent_config.max_nesting_depth,
         max_spawn_batch=agent_config.max_spawn_batch,
         allowed_agents=frozenset(agent_config.spawn_allowed_agents) or None,
-        fleet_release_id=agent_config.fleet_release_id,
+        # `or None`: belt and braces against the empty string. A falsy-but-not-None
+        # release id is not a release, and load_child_config must see None so the
+        # child resolves from live manifests instead of staged_release_path(ws, "").
+        fleet_release_id=agent_config.fleet_release_id or None,
         spawn_limits=extend_limits((), agent_config.max_spawn_total),
         remaining_token_budget=session.run.token_budget,
         parent_trace_id=trace.trace_id if trace else "",

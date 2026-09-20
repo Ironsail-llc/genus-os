@@ -29,6 +29,24 @@ def _fingerprint(record):
     return json.dumps({key: record[key] for key in keys}, sort_keys=True, default=str)
 
 
+def _managed(state):
+    """Has sales ever been turned on for this tenant?
+
+    A release selection, a deployment mid-flight, or pre-existing unmanaged
+    bindings. Anything less and there is no sales runtime to hold ready: the
+    engine's whole /ready must not answer for a feature this instance never
+    enabled. Same three keys `prepare` and `_reconcile` treat as a baseline
+    that needs a verified migration.
+    """
+    config = state["config"] or {}
+    return bool(
+        state["pending"]
+        or config.get("fleet_release_id")
+        or config.get("agents")
+        or config.get("workflow_bindings")
+    )
+
+
 async def _drain_thread(function):
     """Cancellation cannot release the control lock before its transaction ends."""
     task = asyncio.create_task(asyncio.to_thread(function))
@@ -63,6 +81,12 @@ class NativeSalesRuntime:
         self._bound = None
         self._operation = None
         self._booted = False
+        # None = not yet determined. False is only ever set from a state read
+        # that positively said so, never from a failure to read: "I could not
+        # ask" is not "sales is off". Every route by which sales becomes
+        # managed runs through a control method on this object, and each one
+        # re-arms this to True.
+        self._managed = None
 
     def _state(self):
         # One database snapshot, rather than mixing settings from before a
@@ -76,6 +100,20 @@ class NativeSalesRuntime:
             )
             row = cur.fetchone()
             return dict(row) if row else {"config": {}, "revision": 0, "pending": None}
+
+    def _selection_state(self):
+        """State, or None when this instance has no sales schema at all.
+
+        Migrations 126+ create these tables. An instance running ahead of its
+        migrations has, by construction, never selected a sales release — so a
+        lagging migration is an unconfigured instance, not an unready engine.
+        """
+        import psycopg2
+
+        try:
+            return self._state()
+        except psycopg2.errors.UndefinedTable:
+            return None
 
     async def _apply(self, release_id):
         self._bound = None
@@ -91,7 +129,14 @@ class NativeSalesRuntime:
 
     async def bootstrap(self):
         async with self._lock:
-            state = await asyncio.to_thread(self._state)
+            state = await asyncio.to_thread(self._selection_state)
+            if state is None:
+                self._managed, self._booted = False, True
+                return
+            # Read BEFORE _apply: an instance that really did select a release
+            # must stay unready when reconciling it fails, and the scheduler
+            # only logs that failure.
+            self._managed = _managed(state)
             # Recovery never chooses commit versus abort on the operator's behalf.
             # Durable pending state holds admission closed after a process restart.
             release = None if state["pending"] else state["config"].get("fleet_release_id")
@@ -110,7 +155,7 @@ class NativeSalesRuntime:
         release = record["source_release_id"] if restoring else record["target_release_id"]
         await self._apply(release)
         self._bound = (_fingerprint(record), restoring)
-        self._booted = True
+        self._booted = self._managed = True
         return record
 
     async def reconcile(self, transition_id, *, restoring=False):
@@ -130,6 +175,7 @@ class NativeSalesRuntime:
                 raise Conflict(
                     "Existing unmanaged sales bindings need a verified migration baseline"
                 )
+            self._managed = True
             return await _drain_thread(
                 lambda: self.coordinator.prepare(
                     release_id, expected_revision=expected_revision, actor=actor, reason=reason
@@ -224,9 +270,18 @@ class NativeSalesRuntime:
                 self._operation = None
 
     async def readiness(self):
+        # This check is registered in the engine's readiness map unconditionally
+        # and any non-"ok" answer is a 503 for the WHOLE engine. An instance
+        # that never enabled sales has nothing here to be ready ABOUT, and must
+        # not pay a database round trip per poll to say so either.
+        if self._managed is False:
+            return "ok"
+        state = await asyncio.to_thread(self._selection_state)
+        if state is None or not (_managed(state) or self._booted):
+            self._managed = False
+            return "ok"
         if not self._booted:
             raise Conflict("Managed sales startup verification has not completed")
-        state = await asyncio.to_thread(self._state)
         if state["pending"] is not None:
             raise Conflict("Sales deployment awaits verified commit or restoration")
         release = state["config"].get("fleet_release_id")
