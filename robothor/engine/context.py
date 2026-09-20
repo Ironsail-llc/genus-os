@@ -162,6 +162,44 @@ def _clear_old_tool_results(
     return messages
 
 
+def _pin_active_request(messages: list[dict[str, Any]], request: str) -> list[dict[str, Any]]:
+    """Mark the user turn that carries this run's request so compaction keeps it.
+
+    The pin is a key the ENGINE sets, not a string in the content. Content is
+    model- and tool-controlled: a plain user turn, or a tool result, that merely
+    began with the old ``[ACTIVE REQUEST]`` text was pinned and hoisted into the
+    protected head, which is an unauthenticated promotion.
+
+    The user's OWN turn is marked rather than a copy injected beside it, so the
+    request cannot end up in the head twice. Copy-on-write: the caller's message
+    dicts are never mutated. Idempotent — a history that already carries the pin
+    is returned unchanged, so a second compaction adds nothing.
+    """
+    from robothor.engine.compaction import ACTIVE_REQUEST_PIN, PIN_KEY
+
+    if not messages or any(m.get(PIN_KEY) == ACTIVE_REQUEST_PIN for m in messages):
+        return messages
+    wanted = request.strip()
+    if wanted:
+        for i in range(len(messages) - 1, -1, -1):
+            msg = messages[i]
+            content = msg.get("content")
+            if msg.get("role") == "user" and isinstance(content, str) and wanted in content:
+                return [*messages[:i], {**msg, PIN_KEY: ACTIVE_REQUEST_PIN}, *messages[i + 1 :]]
+    # No surviving user turn to mark (a resumed or already-compacted history):
+    # one pinned developer turn, which the idempotence check above then keeps
+    # from ever being added a second time.
+    return [
+        messages[0],
+        {
+            "role": "developer",
+            "content": "[ACTIVE REQUEST]\n" + request,
+            PIN_KEY: ACTIVE_REQUEST_PIN,
+        },
+        *messages[1:],
+    ]
+
+
 async def maybe_compress(
     messages: list[dict[str, Any]],
     models: list[str] | None = None,
@@ -202,16 +240,8 @@ async def maybe_compress(
     if state is not None and state.skip(messages, model, compress_at, est):
         return messages
     started = time.monotonic()
-    if (
-        state is not None
-        and state.active_request
-        and not any(str(m.get("content", "")).startswith("[ACTIVE REQUEST]") for m in messages)
-    ):
-        messages = [
-            messages[0],
-            {"role": "developer", "content": "[ACTIVE REQUEST]\n" + state.active_request},
-            *messages[1:],
-        ]
+    if state is not None and state.active_request:
+        messages = _pin_active_request(messages, state.active_request)
 
     # The count floor used to live here TOO, and returned before compact()
     # could act — so a 21-message, 225,015-token conversation reduced by 0.0%
@@ -247,7 +277,10 @@ async def maybe_compress(
     from robothor.engine.context_control import drain_history
 
     target = min(DRAIN_THRESHOLD, max(1, int(compress_at * 0.75)))
-    compressed = drain_history(compressed, model, target)
+    # Off the loop for the same reason as the two estimates above, and more so:
+    # this one prices every drop candidate. Measured at 2024ms on a real
+    # 121-message history, which is 2s of stalled Telegram, /health and cron.
+    compressed = await asyncio.to_thread(drain_history, compressed, model, target)
     after = await asyncio.to_thread(estimate_tokens, compressed, model or None)
     if state is not None:
         state.fingerprint = fingerprint(compressed)
