@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 import sys
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 # Prevent double-import when run as __main__: ensure 'bridge_service' module
 # name resolves to THIS instance so routers see the same http_client.
@@ -134,14 +134,19 @@ async def lifespan(app: FastAPI):
     # not use the SSO exchange), so this is a loud log line rather than a raise.
     sso_secret_present()
     http_client = httpx.AsyncClient(timeout=30.0)
+    from robothor.autonomy.handoff_worker import recover_checks
+
     trigger_task = asyncio.create_task(_routine_trigger_loop())
-    yield
-    trigger_task.cancel()
+    recovery_task = asyncio.create_task(recover_checks())
     try:
-        await trigger_task
-    except asyncio.CancelledError:
-        pass
-    await http_client.aclose()
+        yield
+    finally:
+        trigger_task.cancel()
+        recovery_task.cancel()
+        for task in (trigger_task, recovery_task):
+            with suppress(asyncio.CancelledError):
+                await task
+        await http_client.aclose()
 
 
 # ─── App Assembly ────────────────────────────────────────────────────────

@@ -1,7 +1,6 @@
 """Personal onboarding, authority and operation status. Secrets travel inward only."""
 
 import asyncio
-import contextlib
 import json
 from uuid import UUID
 
@@ -301,43 +300,18 @@ async def payment_status(operation_id: UUID, request: Request):
 
 @router.post("/handoffs/{handoff_id}/check")
 async def check_external_handoff(handoff_id: UUID, request: Request):
+    from robothor.autonomy.handoff_recovery import HandoffChecks
+    from robothor.autonomy.handoff_worker import check_one
     from robothor.autonomy.handoffs import HandoffStore
 
     scope = await require_personal_owner(request)
+    store = AutonomyStore()
     try:
-        private = await asyncio.to_thread(
-            HandoffStore(AutonomyStore()).acknowledge, scope, str(handoff_id)
-        )
-        confirmation = private["confirmation"]
-        plan = ExecutionPlan(
-            url=confirmation["url"],
-            submit_selector="__unused__",
-            success_selector=confirmation["selector"],
-            success_text=confirmation["text"],
-            session_resource_id=confirmation.get("session_resource_id"),
-        )
+        await asyncio.to_thread(HandoffStore(store).acknowledge, scope, str(handoff_id))
     except Exception:
         raise HTTPException(409, "External verification is unavailable or expired") from None
 
-    async def check():
-        try:
-            await run_browser(
-                scope, private["operation_id"], private["agent_id"], plan, reconcile=True
-            )
-        except Exception:
-            # The encrypted handoff survives interruption. Neither its URL nor
-            # private browser errors are suitable for logs or client responses.
-            return
-
-        finally:
-            # A failed journal update leaves a resumable checking record. Never
-            # log private browser/confirmation data while handling that failure.
-            with contextlib.suppress(Exception):
-                await asyncio.to_thread(
-                    HandoffStore(AutonomyStore()).check_finished, scope, str(handoff_id)
-                )
-
-    task = asyncio.create_task(check())
+    task = asyncio.create_task(check_one(HandoffChecks(store), scope, str(handoff_id)))
     _resumes.add(task)
     task.add_done_callback(_resumes.discard)
     return _safe({"id": str(handoff_id), "state": "checking"})
