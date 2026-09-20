@@ -155,7 +155,7 @@ def _perform_locked(args: dict[str, Any], ctx: Any, *, cancelled: Any = None) ->
         for e in emails
     ):
         return {"error": "Invalid attendee email"}
-    stored = {
+    stored: dict[str, Any] = {
         "calendar_id": calendar_id,
         "event_id": event_id,
         "attendees": sorted({e.strip().casefold() for e in emails}),
