@@ -906,6 +906,22 @@
       "scope": "Private PostgreSQL 16: full current schema and prior canonical manifest excluding the three newly registered migrations. Synthetic persisted rows, no provider/model calls.",
       "limitations": "Snapshot equality excludes the intentionally added runtime_context field, whose default is checked separately. This is a populated schema upgrade, not a complete application or daemon rollback drill.",
       "artifact": "uat-populated-upgrade.json"
+    },
+    "isolated_real_daemon_startup": {
+      "health_ready": true,
+      "shutdown_exit_code": 0,
+      "shutdown_seconds": 1.2685810059992946,
+      "recovery_worker_spawns": 1,
+      "owned_process_group_empty_after_shutdown": true,
+      "all_subsystems_started_logged": true,
+      "command": ".venv/bin/python -m bench.runtime.migrated_integration --daemon",
+      "resources": "Disposable canonically migrated PostgreSQL 16, private Redis Unix socket, empty temporary workspace/fleet, clean credential-free environment.",
+      "isolation": "Drill-only Python connection guard permits only its private Unix sockets; subprocess guard permits only the calendar recovery Python worker. Parent probes only the allocated loopback health port.",
+      "initial_harness_failure": "First guard compared tuple arguments to a list and refused worker spawn; corrected argument normalization before the passing rerun.",
+      "tracking_integration_passed": 13,
+      "tracking_integration_seconds": 0.27,
+      "limitations": "Empty-fleet real-daemon startup/shutdown and worker launch. No active goals, provider readback, populated-workload restart, or application rollback certified.",
+      "artifact": "uat-daemon-startup.json"
     }
   },
   "calendar": {
@@ -1108,7 +1124,7 @@
     "Runtime deadlines are enforced when supplied; classification and enforcement of the 60-second policy across all simple conversational actions remain unproven.",
     "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded; production ingress, selected-provider p95 and mixed-load fallback operating limits are not certified.",
     "Candidate full-runtime parity, matched configuration workloads and 100-repetition finalist comparison remain incomplete; retain the current runtime.",
-    "Calendar audit recovery, unattended readback and same-tab browser reload are locally tested. General external-provider coverage, recovery without browser storage, cross-device restoration and full daemon startup validation remain incomplete.",
+    "Calendar audit recovery, unattended readback and same-tab browser reload are locally tested. General external-provider coverage, recovery without browser storage, cross-device restoration and loaded-fleet and active-goal daemon restart validation remain incomplete (isolated empty-fleet startup/shutdown now passes).",
     "The normal-chat unfinished-work/pause case is accepted. Manual acceptance of the newer recovery behavior and remaining goal controls is pending.",
     "Production deployment is not authorized. Concrete rollout/rollback review and end-to-end finalist upgrade compatibility remain unfinished."
   ],

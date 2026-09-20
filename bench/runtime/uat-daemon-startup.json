@@ -1,0 +1,15 @@
+{
+  "health_ready": true,
+  "shutdown_exit_code": 0,
+  "shutdown_seconds": 1.2685810059992946,
+  "recovery_worker_spawns": 1,
+  "owned_process_group_empty_after_shutdown": true,
+  "all_subsystems_started_logged": true,
+  "command": ".venv/bin/python -m bench.runtime.migrated_integration --daemon",
+  "resources": "Disposable canonically migrated PostgreSQL 16, private Redis Unix socket, empty temporary workspace/fleet, clean credential-free environment.",
+  "isolation": "Drill-only Python connection guard permits only its private Unix sockets; subprocess guard permits only the calendar recovery Python worker. Parent probes only the allocated loopback health port.",
+  "initial_harness_failure": "First guard compared tuple arguments to a list and refused worker spawn; corrected argument normalization before the passing rerun.",
+  "tracking_integration_passed": 13,
+  "tracking_integration_seconds": 0.27,
+  "limitations": "Empty-fleet real-daemon startup/shutdown and worker launch. No active goals, provider readback, populated-workload restart, or application rollback certified."
+}

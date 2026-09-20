@@ -80,6 +80,10 @@ def main():
                 "ROBOTHOR_TEST_DB_DSN": dsn,
                 "ROBOTHOR_DEFAULT_TENANT": "default",
             }
+            if "--daemon" in sys.argv:
+                from bench.runtime.daemon_drill import run
+
+                print("DAEMON_DRILL " + json.dumps(run(root, env)), flush=True)
             return subprocess.run(
                 [
                     sys.executable,
