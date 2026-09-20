@@ -298,6 +298,25 @@ async def payment_status(operation_id: UUID, request: Request):
         raise HTTPException(503, "Payment record unavailable") from None
 
 
+@router.post("/operations/{operation_id}/abandon")
+async def abandon_operation(operation_id: UUID, request: Request):
+    """The owner's way out of an operation nobody can resolve.
+
+    An external verification that lapses leaves money reserved against a
+    result no check can observe. Only the authenticated person may declare
+    that attempt failed; nothing automatic takes this decision.
+    """
+    scope = await require_personal_owner(request)
+    await _body(request, StrictModel)
+    try:
+        await asyncio.to_thread(AutonomyStore().abandon, scope, str(operation_id))
+    except (PermissionError, ValueError):
+        raise HTTPException(409, "This task is not waiting to be cleared") from None
+    except Exception:
+        raise HTTPException(503, "Personal automation storage is not ready") from None
+    return _safe({"operation_id": str(operation_id), "state": "failed"})
+
+
 @router.post("/handoffs/{handoff_id}/check")
 async def check_external_handoff(handoff_id: UUID, request: Request):
     from robothor.autonomy.handoff_recovery import HandoffChecks

@@ -166,12 +166,12 @@ async def test_retained_reconciliation_captures_receipt_before_page_closes(
     async def merchant(route):
         if route.request.method == "POST":
             posts.append(route.request.url)
-            await route.fulfill(body="Payment request accepted. Receipt ready.")
+            await route.fulfill(body="Your order has been confirmed.")
         else:
             await route.fulfill(
                 content_type="text/html",
                 body="""<p id="amount">$6.00</p>
-            <button id="buy" onclick="fetch('/buy',{method:'POST'}).then(r=>r.text()).then(t=>document.querySelector('#done').textContent=t)">Buy</button><p id="done"></p>""",
+            <button id="buy" onclick="fetch('/buy',{method:'POST'}).then(r=>r.text()).then(t=>setTimeout(()=>{document.querySelector('#done').textContent=t;},1500))">Buy</button><p id="done"></p><p>Receipt ready</p>""",
             )
 
     async with async_playwright() as pw:
@@ -196,8 +196,11 @@ async def test_retained_reconciliation_captures_receipt_before_page_closes(
                 ),
             )
             assert result["state"] == "reconciling"
+            await manager._live[wid].page.wait_for_timeout(2000)
             observed = await manager.inspect(identity, "main", wid)
-            message = next(c for c in observed["confirmations"] if "Receipt ready" in c["text"])
+            message = next(
+                c for c in observed["confirmations"] if "has been confirmed" in c["text"]
+            )
             result = await manager.reconcile(
                 identity, "main", wid, str(uuid4()), 0, message["selector"], message["text"]
             )

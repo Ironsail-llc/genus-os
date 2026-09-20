@@ -23,7 +23,16 @@ def test_specific_confirmation_requires_both_fields_and_a_specific_element():
     )
 
 
-def test_new_handoff_refuses_a_whole_page_guess(store, identity):
+@pytest.mark.parametrize("selector", ["body", "html", "*", ":root", "  BODY  ", "Html"])
+def test_new_handoff_refuses_a_whole_page_guess(store, identity, selector):
+    """The cheap early refusal. It is a hint, not the guard.
+
+    Strengthened 2026-09-20: the denylist has exactly four entries, so
+    ``html body``, ``main``, ``p``, ``div``, ``body *`` and ``body > *`` all
+    walked through it. What actually decides is the check-time bound on matched
+    element count and text length, proved against a real page by
+    ``test_kill_switch.py::test_a_whole_page_guess_is_rejected_at_check_time``.
+    """
     from robothor.autonomy.handoffs import HandoffStore
     from robothor.autonomy.tests.test_handoffs import pending, request
 
@@ -36,7 +45,7 @@ def test_new_handoff_refuses_a_whole_page_guess(store, identity):
             request(
                 confirmation={
                     "url": "https://shop.example/status",
-                    "selector": "body",
+                    "selector": selector,
                     "text": "Approved",
                 }
             ),

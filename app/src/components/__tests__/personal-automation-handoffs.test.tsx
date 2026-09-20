@@ -16,6 +16,12 @@ it("requests only a status check and never labels acknowledgment as completion",
 });
 it("keeps expired verification uncertain and offers no resubmit button", () => {
   render(<PersonalAutomationHandoffs handoffs={[{id:"old",operation_id:"op",kind:"issuer",state:"expired",origin:"https://shop.example",purpose:"Requested checkout",expires_at:"2020-01-01T00:00:00Z"}]} refresh={vi.fn()} />);
-  expect(screen.getByText("This verification handoff expired. The task still needs reconciliation.")).toBeTruthy();
+  expect(screen.getByText("This verification handoff expired. The task is waiting for you to clear it.")).toBeTruthy();
   expect(screen.queryByRole("button")).toBeNull();
+});
+it("does not redraw an exhausted check as though it had never been checked", () => {
+  render(<PersonalAutomationHandoffs handoffs={[{id:"tried",operation_id:"op",kind:"push",state:"unconfirmed",origin:"https://shop.example",purpose:"Requested checkout",expires_at:"2030-01-01T00:00:00Z"}]} refresh={vi.fn()} />);
+  expect(screen.getByRole("status").textContent).toContain("could not tell whether it completed");
+  expect(screen.getByRole("button",{name:"Check again"})).toBeTruthy();
+  expect(screen.queryByRole("button",{name:"Check status after verification"})).toBeNull();
 });

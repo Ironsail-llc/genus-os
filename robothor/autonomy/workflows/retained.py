@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from robothor.autonomy.broker import url_origin
+from robothor.autonomy.confirmation import classify
 from robothor.autonomy.inspection import _SELECTOR, _scrub
 
 if TYPE_CHECKING:
@@ -99,6 +100,13 @@ async def reconcile(
     text: str,
 ) -> dict[str, Any]:
     row = await asyncio.to_thread(manager.repository.get, scope, agent_id, workflow_id)
+    # Settings and grant BEFORE the command is journalled, so a refusal is not
+    # recorded as an attempt and does not cost the retained page. Completing
+    # here writes durable completion, a payment fact and a receipt: revoking
+    # the grant or switching the feature off must stop it.
+    await asyncio.to_thread(
+        manager.store.check_reconcile_authority, scope, row["operation_id"], agent_id
+    )
     live = manager._live.get(workflow_id)
     lock = live.lock if live else asyncio.Lock()
     async with lock:
@@ -133,12 +141,21 @@ async def reconcile(
                 "state": "reconciling",
                 "reason": "confirmation_not_found",
             }
+            # An exactly-quoted candidate is still only merchant text. It must
+            # read as success FOR THIS ACTION under the same rules the
+            # automatic path uses -- "Refund issued: your order was CANCELLED
+            # and $0.00 was charged." matched by exact quotation before.
+            rule = classify(text, operation["proposal"]["action"])
+            if matches and rule is None:
+                result["reason"] = "confirmation_not_affirmative"
+                matches = []
             if len(matches) == 1:
                 evidence = {
                     "origin": row["origin"],
                     "confirmation_sha256": hashlib.sha256(text.encode()).hexdigest(),
                     "verified_at": datetime.now(UTC).isoformat(),
                     "kind": "reconciled_confirmation",
+                    "confirmation_rule": rule,
                 }
                 await asyncio.to_thread(
                     manager.store.finish, scope, row["operation_id"], "completed", evidence

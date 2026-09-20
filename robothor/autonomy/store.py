@@ -300,8 +300,21 @@ class AutonomyStore:
         return refresh_descriptors(self, scope)
 
     def consume_resource(
-        self, scope: Scope, resource_id: str, destination: str, *, kind: str | None = None
+        self,
+        scope: Scope,
+        resource_id: str,
+        destination: str,
+        *,
+        kind: str | None = None,
+        one_shot: bool = False,
     ) -> dict[str, Any]:
+        """Read a sealed resource for one destination.
+
+        ``one_shot`` spends it in the same transaction. Restored browser
+        sessions are consumed this way: a saved session that can be replayed
+        indefinitely turns one owner-requested check into an open-ended right
+        to reopen the person's authenticated merchant account.
+        """
         with self.transaction() as cur:
             cur.execute(
                 "SELECT kind,origin,encrypted_value FROM vault_resources "
@@ -316,6 +329,12 @@ class AutonomyStore:
             ):
                 raise PermissionError("resource_not_authorized")
             plaintext = open_resource(bytes(row["encrypted_value"]), self.keys, scope, resource_id)
+            if one_shot:
+                cur.execute(
+                    "UPDATE vault_resources SET active=false,updated_at=now() WHERE id=%s",
+                    (resource_id,),
+                )
+                self._event(cur, scope, resource_id, "resource_spent")
             self._event(cur, scope, resource_id, "resource_consumed")
             return cast("dict[str, Any]", json.loads(plaintext))
 
@@ -508,11 +527,9 @@ class AutonomyStore:
                 raise PermissionError("reconciliation_required")
             if row["agent_id"] != agent_id:
                 raise PermissionError("agent_not_allowed")
-            policy, version = self._policy(cur, scope, row["grant_id"])
-            if version != row["grant_version"]:
-                raise PermissionError("grant_changed")
             proposal = WebOperation.model_validate(row["proposal"])
             self._check_settings(cur, scope, proposal)
+            policy = self._live_policy(cur, scope, row)
             decision = self._budget_decision(cur, scope, policy, proposal, agent_id, operation_id)
             if decision != "allow":
                 raise PermissionError(decision)
@@ -528,15 +545,43 @@ class AutonomyStore:
             row = self._operation(cur, scope, operation_id)
             if row["agent_id"] != agent_id or row["state"] not in {"reserved", "submitting"}:
                 raise PermissionError("operation_not_executable")
-            policy, version = self._policy(cur, scope, row["grant_id"])
-            if version != row["grant_version"]:
-                raise PermissionError("grant_changed")
             proposal = WebOperation.model_validate(row["proposal"])
             self._check_settings(cur, scope, proposal)
+            policy = self._live_policy(cur, scope, row)
             result = self._budget_decision(cur, scope, policy, proposal, agent_id, operation_id)
             if result != "allow":
                 raise PermissionError(result)
             return policy
+
+    def check_reconcile_authority(
+        self, scope: Scope, operation_id: str, agent_id: str
+    ) -> Delegation:
+        """The one gate every completion path crosses, submission or not.
+
+        Reconciliation is not a read: it writes durable completion, a payment
+        fact and a receipt, so it consults the owner's runtime settings first
+        and then the grant, exactly as ``check_authority`` does. The budget is
+        deliberately NOT re-decided -- the reservation this operation is about
+        is already counted, so re-deciding it would refuse every recovery.
+        """
+        with self.transaction() as cur:
+            self._lock(cur, scope)
+            row = self._operation(cur, scope, operation_id)
+            if row["agent_id"] != agent_id:
+                raise PermissionError("agent_not_allowed")
+            self._check_settings(cur, scope, WebOperation.model_validate(row["proposal"]))
+            return self._live_policy(cur, scope, row)
+
+    def _live_policy(self, cur: Any, scope: Scope, row: dict[str, Any]) -> Delegation:
+        """Existence, version, revocation and expiry, in that order."""
+        policy, version = self._policy(cur, scope, row["grant_id"])
+        if version != row["grant_version"]:
+            raise PermissionError("grant_changed")
+        if not policy.enabled:
+            raise PermissionError("grant_disabled")
+        if policy.expires_at <= datetime.now(UTC):
+            raise PermissionError("grant_expired")
+        return policy
 
     @staticmethod
     def _check_settings(cur: Any, scope: Scope, proposal: WebOperation) -> None:
@@ -645,15 +690,49 @@ class AutonomyStore:
             )
             return [dict(row) for row in cur.fetchall()]
 
+    #: The only legal moves. Every writer goes through ``_finish``; a direct
+    #: ``UPDATE autonomy_operations SET state=...`` is how #618 reached
+    #: ``reconciling`` from ``reserved``, which this table forbids.
+    TRANSITIONS = {
+        "reserved": {"cancelled", "failed", "awaiting_input"},
+        "submitting": {"reconciling", "completed", "awaiting_input"},
+        "reconciling": {"completed", "failed", "awaiting_input"},
+        "awaiting_input": {"reconciling", "cancelled", "failed"},
+    }
+
+    def abandon(self, scope: Scope, operation_id: str, reason: str = "owner_abandoned") -> None:
+        """The owner's route out of a wedged uncertain operation.
+
+        A handoff that expires without a confirmation leaves money reserved
+        against a result nobody can observe. Only the authenticated owner may
+        declare the attempt failed, which returns the reservation.
+        """
+        with self.transaction() as cur:
+            self._lock(cur, scope)
+            row = self._operation(cur, scope, operation_id)
+            if row["state"] not in {"reconciling", "awaiting_input"}:
+                raise ValueError("invalid_transition")
+            self._finish(cur, scope, operation_id, "failed")
+            self._event(cur, scope, operation_id, reason)
+
     def finish(
         self, scope: Scope, operation_id: str, state: str, evidence: dict[str, Any] | None = None
     ) -> None:
-        allowed = {
-            "reserved": {"cancelled", "failed", "awaiting_input"},
-            "submitting": {"reconciling", "completed", "awaiting_input"},
-            "reconciling": {"completed", "failed", "awaiting_input"},
-            "awaiting_input": {"reconciling", "cancelled"},
-        }
+        with self.transaction() as cur:
+            self._lock(cur, scope)
+            self._finish(cur, scope, operation_id, state, evidence)
+
+    def _finish(
+        self,
+        cur: Any,
+        scope: Scope,
+        operation_id: str,
+        state: str,
+        evidence: dict[str, Any] | None = None,
+        *,
+        input_reason: str | None = None,
+    ) -> None:
+        allowed = self.TRANSITIONS
         # This method is broker-only. Routes/tools never accept arbitrary
         # completion evidence from the model or client.
         if state == "completed" and not evidence:
@@ -676,23 +755,22 @@ class AutonomyStore:
             }
         ):
             raise ValueError("unsafe_confirmation_rule")
-        with self.transaction() as cur:
-            self._lock(cur, scope)
-            row = self._operation(cur, scope, operation_id)
-            if state not in allowed.get(row["state"], set()):
-                raise ValueError("invalid_transition")
-            cur.execute(
-                "UPDATE autonomy_operations SET state=%s,evidence=%s,updated_at=now() WHERE id=%s",
-                (state, Json(evidence), operation_id),
-            )
-            if state == "completed":
-                from robothor.autonomy.payment_journal import record_submission
+        row = self._operation(cur, scope, operation_id)
+        if state not in allowed.get(row["state"], set()):
+            raise ValueError("invalid_transition")
+        cur.execute(
+            "UPDATE autonomy_operations SET state=%s,evidence=%s,updated_at=now(),"
+            "input_reason=CASE WHEN %s THEN %s ELSE input_reason END WHERE id=%s",
+            (state, Json(evidence), input_reason is not None, input_reason, operation_id),
+        )
+        if state == "completed":
+            from robothor.autonomy.payment_journal import record_submission
 
-                record_submission(cur, self, scope, row)
-                cur.execute(
-                    "UPDATE autonomy_handoffs SET state='resolved',updated_at=now() "
-                    "WHERE tenant_id=%s AND owner_id=%s AND operation_id=%s "
-                    "AND state<>'resolved'",
-                    (scope.tenant_id, scope.owner_id, operation_id),
-                )
-            self._event(cur, scope, operation_id, state)
+            record_submission(cur, self, scope, row)
+            cur.execute(
+                "UPDATE autonomy_handoffs SET state='resolved',updated_at=now() "
+                "WHERE tenant_id=%s AND owner_id=%s AND operation_id=%s "
+                "AND state<>'resolved'",
+                (scope.tenant_id, scope.owner_id, operation_id),
+            )
+        self._event(cur, scope, operation_id, state)

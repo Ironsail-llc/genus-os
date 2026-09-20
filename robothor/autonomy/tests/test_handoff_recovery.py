@@ -45,7 +45,9 @@ def test_only_acknowledged_unexpired_owner_scoped_checks_are_claimable(store, id
             (asked["id"],),
         )
     assert queue.claim(identity, asked["id"]) is None
-    assert store.operation(identity, op["id"])["state"] == "reconciling"
+    # An expired handoff releases the operation to the owner rather than
+    # pinning it in reconciling forever with its reservation still counted.
+    assert store.operation(identity, op["id"])["state"] == "awaiting_input"
 
 
 def test_crash_retries_are_bounded_and_owner_click_does_not_steal_active_lease(store, identity):
@@ -62,7 +64,9 @@ def test_crash_retries_are_bounded_and_owner_click_does_not_steal_active_lease(s
                 (asked["id"],),
             )
     assert queue.claim(identity, asked["id"]) is None
-    assert HandoffStore(store).list(identity)[0]["state"] == "awaiting_external_action"
+    # Exhausted is not byte-identical to never-checked: the owner must be able
+    # to tell "we looked three times and could not tell" from "not looked at".
+    assert HandoffStore(store).list(identity)[0]["state"] == "unconfirmed"
     HandoffStore(store).acknowledge(identity, asked["id"])
     assert queue.claim(identity, asked["id"]) is not None
 

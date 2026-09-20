@@ -50,7 +50,8 @@ async def test_uncertain_account_retains_confirmation_for_read_only_reconciliati
                 content_type="text/html",
                 body="""
                 <button id="submit" onclick="fetch('/register',{method:'POST'}).then(()=>{
-                document.querySelector('#confirmation').textContent='Account created. Email verification required.';
+                setTimeout(()=>{document.querySelector('#confirmation').textContent=
+                'Your account has been created.';},1500);
                 })">Create account</button><p id="confirmation"></p>""",
             )
 
@@ -71,9 +72,10 @@ async def test_uncertain_account_retains_confirmation_for_read_only_reconciliati
             assert result["state"] == "reconciling"
             assert sum(method == "POST" for method, _ in requests) == 1
             assert manager.active_count == 1, "The only confirmation page was discarded"
+            await manager._live[wid].page.wait_for_timeout(2000)
             observed = await manager.inspect(identity, "main", wid)
             confirmation = next(
-                item for item in observed["confirmations"] if "Account created" in item["text"]
+                item for item in observed["confirmations"] if "has been created" in item["text"]
             )
             before = list(requests)
             mismatch = await manager.reconcile(
@@ -117,9 +119,28 @@ async def test_uncertain_account_retains_confirmation_for_read_only_reconciliati
                 "fetch('/extra-submit',{method:'POST'}).catch(()=>null)"
             )
             assert requests == before
-            # Revocation stops new actions, but read-only reconciliation must survive.
-            store.revoke_grant(identity, grant["id"])
+            # Rewritten 2026-09-20. This asserted the bypass -- "read-only
+            # reconciliation must survive" a revoked grant and enabled=False.
+            # It does not: this path writes durable completion, a payment fact
+            # and a receipt, so the owner's switch governs it. Revocation is
+            # covered by test_kill_switch.py; the switch is reversible, so it
+            # is the one probed here.
             store.configure(identity, RuntimeSettings(enabled=False))
+            with pytest.raises(PermissionError, match="autonomous_execution_not_enabled"):
+                await manager.inspect(identity, "main", wid)
+            with pytest.raises(PermissionError, match="autonomous_execution_not_enabled"):
+                await manager.reconcile(
+                    identity,
+                    "main",
+                    wid,
+                    str(uuid4()),
+                    0,
+                    confirmation["selector"],
+                    confirmation["text"],
+                )
+            assert store.operation(identity, op["id"])["state"] == "reconciling"
+            assert requests == before
+            store.configure(identity, RuntimeSettings(enabled=True))
             command = str(uuid4())
             import httpx
 

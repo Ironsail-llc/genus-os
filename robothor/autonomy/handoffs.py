@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID, uuid4  # noqa: TC003 -- Pydantic field type
 
 from pydantic import Field, field_validator, model_validator
@@ -45,17 +45,113 @@ class HandoffRequest(StrictModel):
     lifetime_seconds: int = Field(default=900, ge=60, le=86400, strict=True)
 
 
+#: One owner request buys at most this many browser attempts.
+MAX_CHECK_ATTEMPTS = 3
+
+
+def _public_state(row: dict[str, Any]) -> str:
+    """ "We looked and could not tell" is not "we have not looked".
+
+    Before this, an exhausted check returned to ``awaiting_external_action``,
+    byte-identical to a handoff nobody had ever checked, and the page redrew
+    the same button as though nothing had happened.
+    """
+    if row["state"] == "resolved":
+        return "resolved"
+    if row["expires_at"] <= datetime.now(UTC):
+        return "expired"
+    if (
+        row["state"] == "awaiting_external_action"
+        and (row.get("check_attempts") or 0) >= MAX_CHECK_ATTEMPTS
+    ):
+        return "unconfirmed"
+    return cast("str", row["state"])
+
+
 def _public(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": str(row["id"]),
         "operation_id": str(row["operation_id"]),
         "kind": row["kind"],
-        "state": "expired"
-        if row["state"] != "resolved" and row["expires_at"] <= datetime.now(UTC)
-        else row["state"],
+        "state": _public_state(row),
         "expires_at": row["expires_at"].isoformat(),
         **({"origin": row["origin"], "purpose": row["purpose"]} if "origin" in row else {}),
     }
+
+
+def release_expired_handoff(
+    store: AutonomyStore, cur: Any, scope: Scope, row: dict[str, Any]
+) -> bool:
+    """Mark an expired handoff expired and hand its operation to the owner.
+
+    An expired handoff used to leave the operation in ``reconciling`` with
+    nothing left that could ever move it, so its reservation burned the
+    monthly cap for good and ``cancel`` answered ``invalid_transition``.
+    The operation is not completed and no money is freed here -- it becomes
+    ``awaiting_input``, which is visible, actionable, and still counted until
+    the owner says otherwise through ``AutonomyStore.abandon``.
+    """
+    cur.execute(
+        "UPDATE autonomy_handoffs SET state='expired',check_token=NULL,check_lease_until=NULL,"
+        "updated_at=now() WHERE tenant_id=%s AND owner_id=%s AND id=%s "
+        "AND state IN ('awaiting_external_action','checking') RETURNING operation_id",
+        (scope.tenant_id, scope.owner_id, str(row["id"])),
+    )
+    if not cur.fetchone():
+        return False
+    operation_id = str(row["operation_id"])
+    store._event(cur, scope, operation_id, "external_action_expired")
+    cur.execute(
+        "SELECT 1 FROM autonomy_handoffs WHERE tenant_id=%s AND owner_id=%s AND operation_id=%s "
+        "AND state IN ('awaiting_external_action','checking')",
+        (scope.tenant_id, scope.owner_id, operation_id),
+    )
+    if cur.fetchone():
+        return True
+    if store._operation(cur, scope, operation_id)["state"] == "reconciling":
+        store._finish(
+            cur,
+            scope,
+            operation_id,
+            "awaiting_input",
+            input_reason="external_verification_expired",
+        )
+    return True
+
+
+def registered_confirmation_urls(store: AutonomyStore, scope: Scope, operation_id: str) -> set[str]:
+    """The confirmation pages this operation actually has on record.
+
+    Two sources, both written before any check runs: the bound execution plan
+    -- the page the broker was on when it submitted -- and the confirmation
+    URL of each durable handoff, which is what the owner was shown and what
+    survives a restart. ``reconcile_on_page`` used to accept whatever URL its
+    caller handed it as long as the origin matched, so a help article on the
+    same site could stand in for a checkout.
+    """
+    with store.transaction() as cur:
+        operation = store._operation(cur, scope, operation_id)
+        cur.execute(
+            "SELECT id::text,operation_id,encrypted_value FROM autonomy_handoffs "
+            "WHERE tenant_id=%s AND owner_id=%s AND operation_id=%s",
+            (scope.tenant_id, scope.owner_id, operation_id),
+        )
+        rows = list(cur.fetchall())
+    urls = set()
+    submitted = (operation.get("execution_plan") or {}).get("url")
+    if isinstance(submitted, str):
+        urls.add(submitted)
+    for row in rows:
+        spec = HandoffRequest.model_validate_json(
+            open_resource(
+                bytes(row["encrypted_value"]),
+                store.keys,
+                scope,
+                "handoff:" + str(row["operation_id"]) + ":" + row["id"],
+            )
+        )
+        urls.add(spec.confirmation.url)
+    return urls
 
 
 class HandoffStore:
@@ -75,6 +171,34 @@ class HandoffStore:
             op = self.store._operation(cur, scope, operation_id)
             if op["agent_id"] != agent_id:
                 raise PermissionError("agent_not_allowed")
+            proposal = WebOperation.model_validate(op["proposal"])
+            # Settings, then the grant, then everything else -- and all of it
+            # BEFORE the idempotent replay is answered. The early return used
+            # to sit above this block, so replaying the same request after
+            # revocation or after the switch went off returned success and
+            # left the handoff armed.
+            self.store._check_settings(cur, scope, proposal)
+            policy = self.store._live_policy(cur, scope, op)
+            if (spec.confirmation.selector or "").strip().lower() in {"body", "html", "*", ":root"}:
+                raise PermissionError("use_automatic_or_specific_confirmation")
+            if not spec.confirmation.selector and proposal.action in {"purchase", "subscription"}:
+                # Automatic outcome detection is the SUBMISSION classifier. It
+                # recognizes an affirmative sentence anywhere on the origin,
+                # which is not a basis for calling money settled.
+                raise PermissionError("specific_confirmation_required_for_payment")
+            if op["state"] not in {"submitting", "reconciling"}:
+                # A handoff means "a person is finishing something we started".
+                # Before begin_submit nothing has been started, and admitting
+                # 'reserved' let prepare -> handoff -> reconcile reach completed
+                # with no preflight, terms audit or price verification.
+                raise PermissionError("operation_not_pending")
+            if url_origin(spec.confirmation.url) != proposal.origin:
+                raise PermissionError("destination_mismatch")
+            decision = self.store._budget_decision(
+                cur, scope, policy, proposal, agent_id, operation_id
+            )
+            if decision != "allow":
+                raise PermissionError(decision)
             cur.execute(
                 "SELECT * FROM autonomy_handoffs WHERE tenant_id=%s AND owner_id=%s AND request_id=%s",
                 (scope.tenant_id, scope.owner_id, str(spec.request_id)),
@@ -84,26 +208,6 @@ class HandoffStore:
                 if prior["fingerprint"] != fingerprint:
                     raise PermissionError("handoff_request_changed")
                 return _public(prior)
-            if (spec.confirmation.selector or "").strip().lower() in {"body", "html", "*", ":root"}:
-                raise PermissionError("use_automatic_or_specific_confirmation")
-            if op["state"] not in {"reserved", "submitting", "reconciling"}:
-                raise PermissionError("operation_not_pending")
-            if url_origin(spec.confirmation.url) != op["proposal"]["origin"]:
-                raise PermissionError("destination_mismatch")
-            self.store._check_settings(cur, scope, WebOperation.model_validate(op["proposal"]))
-            policy, version = self.store._policy(cur, scope, op["grant_id"])
-            if version != op["grant_version"]:
-                raise PermissionError("grant_changed")
-            decision = self.store._budget_decision(
-                cur,
-                scope,
-                policy,
-                WebOperation.model_validate(op["proposal"]),
-                agent_id,
-                operation_id,
-            )
-            if decision != "allow":
-                raise PermissionError(decision)
             cur.execute(
                 "UPDATE autonomy_handoffs SET state='expired',updated_at=now() WHERE tenant_id=%s AND owner_id=%s AND operation_id=%s AND state IN ('awaiting_external_action','checking') AND expires_at<=now()",
                 (scope.tenant_id, scope.owner_id, operation_id),
@@ -137,17 +241,18 @@ class HandoffStore:
             result = _public(cur.fetchone())
             # A device action might complete a commitment externally. Never
             # restore a submit-capable state, including after expiry or restart.
-            cur.execute(
-                "UPDATE autonomy_operations SET state='reconciling',updated_at=now() WHERE id=%s",
-                (operation_id,),
-            )
+            # This goes through the journal's transition table rather than a
+            # direct UPDATE: the table is what says reserved cannot become
+            # reconciling, and a raw UPDATE simply ignored it.
+            if op["state"] != "reconciling":
+                self.store._finish(cur, scope, operation_id, "reconciling")
             self.store._event(cur, scope, operation_id, "external_action_requested")
             return result
 
     def list(self, scope: Scope, agent_id: str | None = None) -> list[dict[str, Any]]:
         with self.store.transaction() as cur:
             cur.execute(
-                "SELECT h.id,h.operation_id,h.kind,h.state,h.expires_at,"
+                "SELECT h.id,h.operation_id,h.kind,h.state,h.expires_at,h.check_attempts,"
                 "o.proposal->>'origin' AS origin,o.proposal->>'purpose' AS purpose "
                 "FROM autonomy_handoffs h JOIN autonomy_operations o ON o.id=h.operation_id "
                 "AND o.tenant_id=h.tenant_id AND o.owner_id=h.owner_id "
@@ -157,7 +262,27 @@ class HandoffStore:
             )
             return [_public(row) for row in cur.fetchall()]
 
+    def release_expired(self, scope: Scope, handoff_id: str) -> None:
+        """Commit the release in its own transaction, before any refusal.
+
+        ``acknowledge`` raises on an expired handoff, and a raise inside the
+        caller's transaction rolls the release back with it -- which is how
+        the operation stayed pinned in ``reconciling`` forever.
+        """
+        with self.store.transaction() as cur:
+            self.store._lock(cur, scope)
+            cur.execute(
+                "SELECT id,operation_id FROM autonomy_handoffs "
+                "WHERE tenant_id=%s AND owner_id=%s AND id=%s AND expires_at<=now() "
+                "AND state IN ('awaiting_external_action','checking')",
+                (scope.tenant_id, scope.owner_id, handoff_id),
+            )
+            row = cur.fetchone()
+            if row:
+                release_expired_handoff(self.store, cur, scope, row)
+
     def acknowledge(self, scope: Scope, handoff_id: str) -> dict[str, Any]:
+        self.release_expired(scope, handoff_id)
         with self.store.transaction() as cur:
             self.store._lock(cur, scope)
             cur.execute(
@@ -175,6 +300,11 @@ class HandoffStore:
                 or op["state"] != "reconciling"
             ):
                 raise PermissionError("handoff_not_pending")
+            # Arming a check decrypts the private confirmation plan and leads
+            # to durable completion, a payment fact and a receipt. Settings
+            # first, then the grant -- the same gate as any other advance.
+            self.store._check_settings(cur, scope, WebOperation.model_validate(op["proposal"]))
+            self.store._live_policy(cur, scope, op)
             spec = HandoffRequest.model_validate_json(
                 open_resource(
                     bytes(row["encrypted_value"]),

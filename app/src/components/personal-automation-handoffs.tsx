@@ -32,10 +32,14 @@ export function PersonalAutomationHandoffs({handoffs,refresh}: {handoffs:Externa
     {pending.map(item=><div key={item.id} className="space-y-2 rounded border p-3">
       <p className="font-medium">{kinds[item.kind]||"External verification"}</p>
       <p>{item.purpose}</p><p className="text-sm text-muted-foreground">{item.origin}</p>
-      {item.state==="expired"?<p>This verification handoff expired. The task still needs reconciliation.</p>:<>
+      {item.state==="expired"?<p>This verification handoff expired. The task is waiting for you to clear it.</p>:<>
+        {item.state==="unconfirmed"&&<p role="status" className="text-sm font-medium">
+          We checked this three times and still could not tell whether it completed. Confirm on
+          the merchant’s or issuer’s own website before checking again.
+        </p>}
         <p className="text-sm">Status checks available until {new Date(item.expires_at).toLocaleString()}.</p>
         <button type="button" disabled={busy!==null} className="rounded border px-3 py-2" onClick={()=>void check(item.id)}>
-          {busy===item.id?"Requesting status check…":"Check status after verification"}
+          {busy===item.id?"Requesting status check…":item.state==="unconfirmed"?"Check again":"Check status after verification"}
         </button>
       </>}
     </div>)}

@@ -10,6 +10,7 @@ import logging
 import shutil
 import socket
 import sys
+from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlsplit
 
@@ -78,24 +79,27 @@ async def handle(data: dict[str, Any]) -> dict[str, Any]:
     )
     settings = await asyncio.to_thread(store.settings, scope)
     reconcile = bool(data.get("reconcile"))
-    if not settings.enabled and not reconcile:
+    # The broker re-reads the switch itself. It is a separate process started
+    # from a payload, so it cannot take the parent's word for authority.
+    if not settings.enabled:
         return {"error": "autonomous_execution_not_enabled"}
     row = await asyncio.to_thread(store.operation, scope, data["operation_id"])
     if (
         row["proposal"]["action"] in {"purchase", "subscription"}
         and not settings.payment_processing
-        and not reconcile
     ):
         return {"error": "payment_processing_not_enabled"}
     if row["agent_id"] != data["agent_id"]:
         raise PermissionError("agent_not_allowed")
-    grant = (
-        None
-        if reconcile
-        else await asyncio.to_thread(
+    if reconcile:
+        await asyncio.to_thread(
+            store.check_reconcile_authority, scope, data["operation_id"], data["agent_id"]
+        )
+        grant = None
+    else:
+        grant = await asyncio.to_thread(
             store.check_authority, scope, data["operation_id"], data["agent_id"]
         )
-    )
     plan = ExecutionPlan.model_validate(data["plan"]) if data.get("plan") else None
     destination = row["proposal"]["origin"]
     url = data.get("inspect_url") or (plan.url if plan else "")
@@ -106,8 +110,15 @@ async def handle(data: dict[str, Any]) -> dict[str, Any]:
         str(plan.session_resource_id) if plan and plan.session_resource_id else None
     )
     if session_ref:
+        # A restored session is spent by the attempt that uses it. Left
+        # reusable, one owner-requested check becomes an indefinite right to
+        # reopen their authenticated merchant account after a restart.
         storage = await asyncio.to_thread(
-            store.consume_resource, scope, session_ref, destination, kind="browser_session"
+            partial(store.consume_resource, one_shot=reconcile),
+            scope,
+            session_ref,
+            destination,
+            kind="browser_session",
         )
     broker = BrowserBroker(store)
     broker.protected_values.session(storage)

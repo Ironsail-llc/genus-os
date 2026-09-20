@@ -57,14 +57,34 @@ async def check_one(queue: HandoffChecks, scope: Scope, handoff_id: str) -> None
         await asyncio.to_thread(queue.finish, scope, handoff_id, claim["token"], retry=retry)
 
 
+#: How often an owner with the switch ON is rescanned.
+ACTIVE_POLL_SECONDS = 5
+#: How often the daemon looks for an owner who has turned the switch on. With
+#: nobody enabled it touches the handoff queue not at all.
+IDLE_POLL_SECONDS = 60
+
+
+async def recover_once(queue: HandoffChecks) -> int:
+    """One pass, bound to the owners who have the feature enabled.
+
+    Returns the number of owners scanned, which is zero when the feature is
+    off everywhere -- and zero handoffs are read, claimed or expired in that
+    case, because "off" has to mean the daemon does nothing.
+    """
+    scopes = await asyncio.to_thread(queue.enabled_scopes)
+    for scope in scopes:
+        await asyncio.to_thread(queue.release_expired, scope)
+        for handoff_id in await asyncio.to_thread(queue.candidates, scope):
+            await check_one(queue, scope, handoff_id)
+    return len(scopes)
+
+
 async def recover_checks() -> None:
     """All bridge workers may scan; a database lease admits only one checker."""
     while True:
+        active = False
         try:
-            queue = HandoffChecks(AutonomyStore())
-            candidates = await asyncio.to_thread(queue.candidates)
-            for scope, handoff_id in candidates:
-                await check_one(queue, scope, handoff_id)
+            active = await recover_once(HandoffChecks(AutonomyStore())) > 0
         except Exception:
             logger.warning("External verification recovery temporarily unavailable")
-        await asyncio.sleep(5)
+        await asyncio.sleep(ACTIVE_POLL_SECONDS if active else IDLE_POLL_SECONDS)

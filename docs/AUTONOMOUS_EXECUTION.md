@@ -128,7 +128,7 @@ Use the existing `browser` tool with `action="autonomy"` and `request`:
 | `email_verification` | Obtain a short-lived code/link reference from the authorized owner's Gmail. |
 | `execute` | Fill resource references, upload documents, check required boxes and submit. |
 | `operation` | Read the durable state and confirmation evidence. |
-| `reconcile` | Check a receipt-specific confirmation without filling or clicking. |
+| `reconcile` | Check a receipt-specific confirmation without filling or clicking, on the page the operation submitted on or a page registered by one of its handoffs. |
 | `cancel` | Cancel a reserved operation or one waiting before submission. |
 
 A proposal names `origin`, `action` (`account`, `login`, `application`, `purchase`,
@@ -269,7 +269,8 @@ The journal is authoritative:
 - `reserved`: no protected fill has begun. Native validation failures can be
   corrected within the same operation before its plan is bound. Other bad plans
   can be cancelled and prepared again with a new idempotency key.
-- `awaiting_input`: the bound plan is waiting for a code before submission.
+- `awaiting_input`: the bound plan is waiting for a code before submission, or
+  an external verification lapsed and the task is waiting for you to clear it.
 - `submitting`: atomically claimed before the first protected fill; scripts
   can initiate requests during input, so even a later failure is uncertain.
 - `reconciling`: an external outcome is unknown. Do not repeat the submission.
@@ -278,9 +279,24 @@ The journal is authoritative:
 
 Identical preparation requests return the same operation. A different proposal
 with the same idempotency key is refused. Concurrent reservations cannot exceed
-the monthly cap. Grant revocation, expiry and execution/payment settings are
-rechecked before submission. Disabling execution does not prevent read-only
-reconciliation of a pending result.
+the monthly cap.
+
+**The owner's switch governs completion, not only submission.** Every path that
+can advance, complete or capture evidence for an operation consults, in this
+order, the runtime settings (`enabled`, plus `payment_processing` where money is
+involved) and the grant (existence, version, revocation, expiry). That includes
+reconciliation, external-verification handoffs and automatic recovery after a
+restart: they write durable completion, a payment fact and a receipt, so
+"read-only" is not an exemption. With the feature disabled no background worker
+polls, no daemon claims a check, no retained browser is kept open, and every
+entry point refuses with the reason it refused for.
+
+An operation nobody can resolve is not left pinned forever. When an external
+verification lapses, its operation moves to `awaiting_input` with the reason
+`external_verification_expired`; its reservation still counts against the cap
+until you clear it with `POST /api/autonomy/operations/{id}/abandon`, which is
+owner-authenticated and records `failed`. Nothing automatic takes that
+decision, because only a person can say that no money moved.
 
 **Completion means observed website confirmation, not bank settlement or club
 admission.** Reconciliation needs a receipt-specific URL tied to
@@ -514,8 +530,12 @@ known form/session values, and applies existing audit redaction. Reconciliation
 cannot navigate, fill, upload, click, or change authority. Network is blocked on
 the retained context. A mistaken execute retry returns the pending state without
 another submission. Command replay, owner/agent binding and revision checks still
-apply. Revoked grants or disabled execution do not prevent read-only completion
-of an already pending operation.
+apply, and so do the runtime settings and the grant: a revoked, changed,
+disabled or expired grant, or a disabled feature, refuses reconciliation rather
+than completing it. A quoted candidate must additionally read as success for
+the requested action under the same affirmative rules the automatic path uses,
+and the evidence records which rule matched -- exactly quoting "Refund issued:
+your order was CANCELLED and $0.00 was charged." is not a confirmation.
 
 The observation inventory is bounded to 3,000 candidate elements and 80 messages
 of at most 300 characters. Oversized/incomplete inventories offer no candidate
@@ -658,22 +678,51 @@ handoff contains a fresh UUID `request_id`, a `kind` (`sms`, `push`, `passkey`,
 unknown: the broker applies its existing affirmative, task-specific outcome
 rules to visible messages, accepting phrases such as “Order confirmed” and
 rejecting negated or pending messages. If the site supplies an exact criterion,
-provide both `selector` and `text`; do not invent them. New handoffs reject broad
-whole-page selectors (`body`, `html`, `*`, `:root`) with
-`use_automatic_or_specific_confirmation`, allowing the agent to retry using
-automatic detection. A request rejected before creation has no stored idempotent
-record. Previously saved handoffs remain readable. An existing origin-bound
-browser session can be supplied as `confirmation.session_resource_id`. The
+provide both `selector` and `text`; do not invent them. **A `purchase` or
+`subscription` handoff must supply them**: automatic detection is the submission
+classifier, which accepts an affirmative sentence anywhere on the origin, and
+that is not a basis for declaring money settled
+(`specific_confirmation_required_for_payment`).
+
+New handoffs reject the obvious whole-page selectors (`body`, `html`, `*`,
+`:root`) with `use_automatic_or_specific_confirmation`, but that list is a hint,
+not the guard: what decides is checked when the page is read. The matched
+selector must resolve to exactly one visible element whose whole text is no
+longer than a declared criterion may be (300 characters), so `html body`,
+`main`, `div`, `p`, `body *` and `body > *` are refused against a real page
+rather than by spelling.
+
+A handoff is admissible only once the operation has actually entered
+`submitting` or `reconciling`: before the first external commitment there is
+nothing for a person to finish, and admitting `reserved` allowed
+prepare -> handoff -> reconcile to reach `completed` with no preflight, terms
+audit or price verification. The operation's move to `reconciling` goes through
+the journal's transition table like every other move.
+
+A request rejected before creation has no stored idempotent record. Previously
+saved handoffs remain readable. An existing origin-bound browser session can be
+supplied as `confirmation.session_resource_id`; it is spent by the attempt that
+uses it, so a saved session cannot be replayed indefinitely after a restart. The
 optional `lifetime_seconds` is 60–86400, defaulting to 900. Reuse the same request
 ID and content after a transport failure; a different active request cannot
-replace a pending handoff. `handoffs {operation_id}` reads its public state.
+replace a pending handoff -- and a replay is re-authorized against the current
+settings and grant before it is answered, so replaying after revocation is
+refused rather than returning the earlier success.
+`handoffs {operation_id}` reads its public state.
 
 Migration 140 stores the confirmation plan encrypted and binds it to the owner,
 operation and handoff. Public results expose the handoff ID, kind and deadline,
 never its private URL or browser session. Starting a handoff rechecks current
 execution settings, grant and budget. The operation then remains `reconciling`
-because a person may complete a commitment outside the broker; handoff expiry
-cannot free money or enable resubmission. A replay cannot extend the deadline.
+because a person may complete a commitment outside the broker. Handoff expiry
+cannot free money or enable resubmission: it moves the operation to
+`awaiting_input` so you can see it and clear it, and the reservation keeps
+counting until you do. A replay cannot extend the deadline.
+
+The public state distinguishes `awaiting_external_action` (waiting for you),
+`checking` (a browser check is running), `unconfirmed` (three attempts have run
+and none could tell), `expired` and `resolved`. `unconfirmed` is deliberately
+not the same value as never-checked.
 
 The Personal automation page displays **External verification** and a **Check
 status after verification** button. The person completes the challenge on their
@@ -681,21 +730,33 @@ trusted device or merchant/issuer website; this page does not collect their SMS
 code or biometric data. The authenticated owner endpoint loads the stored plan
 and requests a read-only browser check. Acknowledgment is not proof of completion:
 only observed website confirmation resolves the operation and its handoff.
-Existing uncertain work can still be checked after revocation or disabling
-execution. Migration 141 makes requested checks a durable queue. Bridge startup
-and a five-second scan recover interrupted checks after their 240-second lease
-expires. A lease token prevents stale workers from overwriting newer attempts;
-concurrent owner clicks cannot steal an active lease. Browser work has a
-185-second deadline, below the lease duration. Transient failure retries after
-20 seconds, with at most three attempts per owner request; exhausting retries
-returns the handoff to the owner without resubmitting or releasing its budget.
-A missing confirmation returns to waiting immediately. Expired handoffs are not
-retried. Checks are recovered even when new execution is disabled.
+Arming a check decrypts the private confirmation plan and leads to durable
+completion, so it is refused after revocation or with execution disabled.
+
+Migration 141 makes requested checks a durable queue. The recovery scan is bound
+to one tenant and owner at a time and only visits owners whose `enabled` flag is
+on; with the feature off everywhere it reads no handoff at all. It recovers
+interrupted checks after their 240-second lease expires. Every claim re-reads the
+settings and the grant -- a restart is not a grant -- and a revoked grant or a
+disabled feature **expires** the handoff instead of checking it. A lease token
+prevents stale workers from overwriting newer attempts; concurrent owner clicks
+cannot steal an active lease. Browser work has a 185-second deadline, below the
+lease duration. Transient failure retries after 20 seconds, with at most three
+attempts per owner request; exhausting retries returns the handoff to the owner
+as `unconfirmed`, without resubmitting or releasing its budget. A missing
+confirmation returns to waiting immediately. Expired handoffs are not retried.
 
 Status recovery uses a fresh context with service workers disabled. It permits
 GET/HEAD through existing destination network checks and blocks other HTTP
 methods and WebSockets, including script-initiated attempts to repeat checkout.
-It does not click or fill. Sites requiring a mutating status API need a dedicated
+It does not click or fill. The page it reads is pinned by its **full URL** --
+scheme, host, port, path and query -- so a redirect or a page that rewrites its
+own address cannot substitute another page (`confirmation_page_changed`). That
+URL must also be one the operation has on record: the page the broker was on
+when it submitted (its bound execution plan) or the confirmation URL of a
+handoff created for it. A same-origin help article quoting "Your order has been
+confirmed" is neither (`confirmation_page_not_registered`). The same pin
+applies to the agent's own `reconcile` action. Sites requiring a mutating status API need a dedicated
 validated adapter; a GET endpoint must still have read-only server semantics.
 Missing confirmation, authentication or an expired handoff leaves the task
 uncertain. A preexisting broker session is needed for authenticated status pages;

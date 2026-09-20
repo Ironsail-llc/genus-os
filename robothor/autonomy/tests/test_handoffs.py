@@ -23,9 +23,17 @@ def request(**changes):
     )
 
 
-def pending(store, identity):
+def reserved(store, identity):
+    """Before the first external commitment: a handoff is not yet admissible."""
     grant = store.create_grant(identity, policy())
     return store.reserve(identity, grant["id"], "main", proposal())
+
+
+def pending(store, identity):
+    """After begin_submit: the outcome is uncertain, so a handoff is admissible."""
+    op = reserved(store, identity)
+    store.begin_submit(identity, op["id"], "main")
+    return op
 
 
 def test_acknowledgment_preserves_uncertainty_and_budget_and_does_not_reexecute(store, identity):
@@ -96,7 +104,13 @@ def test_expiration_does_not_free_budget_or_reenable_submission(store, identity)
     assert handoffs.list(identity)[0]["state"] == "expired"
     with pytest.raises(PermissionError, match="handoff_expired"):
         handoffs.acknowledge(identity, asked["id"])
-    assert store.operation(identity, op["id"])["state"] == "reconciling"
+    # Expiry releases the operation from the handoff's grip so the owner can
+    # act on it, but it neither frees the reservation nor re-enables submission.
+    row = store.operation(identity, op["id"])
+    assert row["state"] == "awaiting_input"
+    assert row["input_reason"] == "external_verification_expired"
+    with pytest.raises(PermissionError):
+        store.begin_submit(identity, op["id"], "main")
     assert sum(store.spending_projection(identity)["months"]["USD"].values()) == 600
 
 
@@ -119,7 +133,7 @@ def test_foreign_confirmation_and_revoked_grant_cannot_start_handoff(store, iden
     store.revoke_grant(identity, store.operation(identity, op["id"])["grant_id"])
     with pytest.raises(PermissionError):
         handoffs.create(identity, op["id"], "main", request())
-    assert store.operation(identity, op["id"])["state"] == "reserved"
+    assert store.operation(identity, op["id"])["state"] == "submitting"
 
 
 def test_fresh_process_can_resume_encrypted_handoff_without_secret_output(store, identity):
@@ -152,13 +166,29 @@ print(json.dumps({'confirmation_recovered':private['confirmation']['selector']==
     assert "PrivateLinkCanary" not in result.stdout + result.stderr
 
 
-def test_existing_handoff_check_survives_revocation_and_disabled_execution(store, identity):
+def test_an_existing_handoff_check_does_not_survive_revocation_or_a_disabled_switch(
+    store, identity
+):
+    """Rewritten 2026-09-20. This asserted the bypass: arming a check decrypts
+    the private confirmation plan and leads to durable completion, a payment
+    fact and a receipt, so it is governed by the switch and the grant like any
+    other advance. "Read-only" is not an exemption."""
     from robothor.autonomy.models import RuntimeSettings
 
     op = pending(store, identity)
     handoffs = HandoffStore(store)
     asked = handoffs.create(identity, op["id"], "main", request())
-    store.revoke_grant(identity, store.operation(identity, op["id"])["grant_id"])
     store.configure(identity, RuntimeSettings(enabled=False))
-    assert handoffs.acknowledge(identity, asked["id"])["operation_id"] == op["id"]
+    with pytest.raises(PermissionError, match="autonomous_execution_not_enabled"):
+        handoffs.acknowledge(identity, asked["id"])
+    store.configure(
+        identity,
+        RuntimeSettings(
+            enabled=True, payment_processing=True, payment_assessment_reference="synthetic-test"
+        ),
+    )
+    store.revoke_grant(identity, store.operation(identity, op["id"])["grant_id"])
+    with pytest.raises(PermissionError, match="grant_revoked"):
+        handoffs.acknowledge(identity, asked["id"])
     assert store.operation(identity, op["id"])["state"] == "reconciling"
+    assert handoffs.list(identity)[0]["state"] == "awaiting_external_action"

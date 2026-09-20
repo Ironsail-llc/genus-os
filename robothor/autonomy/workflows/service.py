@@ -104,6 +104,9 @@ async def serve(manager: WorkflowManager, listener: socket.socket) -> None:
             await asyncio.sleep(5)
             try:
                 await manager.expire_idle()
+                # A revoked grant or a flipped switch closes retained browsers
+                # within one sweep instead of up to an hour.
+                await manager.expire_unauthorized()
             except Exception:
                 # The manager closes expired contexts even if journaling fails.
                 # Never log Playwright exceptions containing page data.

@@ -32,7 +32,9 @@ async def run_browser(
 ) -> dict[str, Any]:
     store = AutonomyStore()
     settings = await asyncio.to_thread(store.settings, scope)
-    if not settings.enabled and not reconcile:
+    # Reconciliation is not exempt. It writes durable completion, a payment
+    # fact and a receipt, so the switch governs it like any other advance.
+    if not settings.enabled:
         return {"error": "autonomous_execution_not_enabled", "setup_path": "/account/autonomy"}
     row = await asyncio.to_thread(store.operation, scope, operation_id)
     if row["agent_id"] != agent_id:
@@ -40,13 +42,19 @@ async def run_browser(
     if (
         row["proposal"]["action"] in {"purchase", "subscription"}
         and not settings.payment_processing
-        and not reconcile
     ):
         return {"error": "payment_processing_not_enabled", "setup_path": "/account/autonomy"}
     if managed and not settings.managed_browser:
         return {"error": "managed_browser_not_enabled"}
-    if not reconcile:
-        await asyncio.to_thread(store.check_authority, scope, operation_id, agent_id)
+    check = store.check_reconcile_authority if reconcile else store.check_authority
+    try:
+        await asyncio.to_thread(check, scope, operation_id, agent_id)
+    except PermissionError as refusal:
+        if not reconcile:
+            raise
+        # A recovery caller retries on an error; a refusal is durable, so it
+        # must come back as a result rather than an exception it would retry.
+        return {"error": str(refusal), "operation_id": operation_id}
     if row.get("workflow_id") and not reconcile:
         # Only the authenticated secure-input route supplies a transient code.
         # Attached operations must never reopen a one-shot browser.

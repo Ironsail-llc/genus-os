@@ -58,6 +58,8 @@ def test_only_genuinely_async_routes_run_on_the_event_loop():
         ("DELETE", "/api/autonomy/grants/{grant_id}"),
         ("PUT", "/api/autonomy/settings"),
         ("POST", "/api/autonomy/operations/{operation_id}/verification"),
+        # The owner's route out of an operation no check can ever resolve.
+        ("POST", "/api/autonomy/operations/{operation_id}/abandon"),
         ("GET", "/health"),
         ("GET", "/ready"),
         ("GET", "/api/memory/entity/{name}"),

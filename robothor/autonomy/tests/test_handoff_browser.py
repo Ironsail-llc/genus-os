@@ -5,13 +5,13 @@ from playwright.async_api import async_playwright
 
 from robothor.autonomy.broker import BrowserBroker, ExecutionPlan
 from robothor.autonomy.handoffs import HandoffStore
-from robothor.autonomy.tests.test_handoffs import pending, request
+from robothor.autonomy.tests.test_handoffs import request, reserved
 
 pytestmark = pytest.mark.e2e
 
 
 async def test_external_approval_reconciles_with_no_second_post_or_script_mutation(store, identity):
-    op = pending(store, identity)
+    op = reserved(store, identity)
     submitted = []
     status_reads = []
     approved = False
@@ -85,8 +85,18 @@ async def test_external_approval_reconciles_with_no_second_post_or_script_mutati
 async def test_automatic_handoff_confirmation_uses_affirmative_observation_not_guess(
     store, identity, monkeypatch
 ):
+    """Automatic outcome detection stays available for non-payment operations.
+
+    Rewritten 2026-09-20: this used a $6 purchase. Reusing the submission
+    classifier to reconcile money is exactly the F4 defect, so the same
+    behaviour is now proved on an account operation; the payment case is
+    refused by test_a_payment_cannot_be_reconciled_by_the_submission_classifier.
+    """
+    from datetime import UTC, datetime, timedelta
+
     from robothor.autonomy import confirmation, handoff_worker
     from robothor.autonomy.handoff_recovery import HandoffChecks
+    from robothor.autonomy.models import Delegation, WebOperation
 
     original_wait = confirmation.wait_for_confirmation
 
@@ -94,15 +104,38 @@ async def test_automatic_handoff_confirmation_uses_affirmative_observation_not_g
         return await original_wait(page, destination, action, timeout_seconds=0.2)
 
     monkeypatch.setattr(confirmation, "wait_for_confirmation", short_wait)
-    op = pending(store, identity)
+    grant = store.create_grant(
+        identity,
+        Delegation(
+            agent_ids={"main"},
+            origins={"https://account.example"},
+            actions={"account"},
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        ),
+    )
+    op = store.reserve(
+        identity,
+        grant["id"],
+        "main",
+        WebOperation(
+            origin="https://account.example",
+            action="account",
+            purpose="Requested account",
+            idempotency_key="automatic-handoff-account",
+        ),
+    )
+    store.begin_submit(identity, op["id"], "main")
     asked = HandoffStore(store).create(
-        identity, op["id"], "main", request(confirmation={"url": "https://shop.example/status"})
+        identity,
+        op["id"],
+        "main",
+        request(confirmation={"url": "https://account.example/status"}),
     )
     posts = []
     async with async_playwright() as pw:
         for message, expected in [
-            ("Your order is not confirmed.", "reconciling"),
-            ("Order confirmed.", "completed"),
+            ("Your account is not created.", "reconciling"),
+            ("Your account has been created.", "completed"),
         ]:
             HandoffStore(store).acknowledge(identity, asked["id"])
 

@@ -57,7 +57,6 @@ def test_encrypted_journal_resolves_partial_release_without_changing_budget(stor
     from robothor.autonomy.tests.test_handoffs import pending
 
     op = pending(store, identity)
-    store.begin_submit(identity, op["id"], "main")
     before = store.spending_projection(identity)
     journal = PaymentJournal(store)
     assert journal.append(identity, op["id"], fact("reversed", 200))["reconciliation_required"]

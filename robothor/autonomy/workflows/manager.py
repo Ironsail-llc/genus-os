@@ -94,6 +94,37 @@ class WorkflowManager:
                 if self._live.get(workflow_id) is live and self._expired(live):
                     await self._discard(workflow_id, live)
 
+    async def expire_unauthorized(self) -> None:
+        """Close browsers whose authority has gone, without waiting an hour.
+
+        Revoking a grant or switching the feature off happens in the bridge;
+        the retained contexts live in this process, and the only thing that
+        used to close them was the 15-minute idle / 1-hour absolute limit.
+        The durable settings and grant are re-read here, so no cross-process
+        signal has to arrive for the owner's decision to take effect.
+        """
+        for workflow_id, live in list(self._live.items()):
+            if live.lock.locked():
+                continue
+            async with live.lock:
+                if self._live.get(workflow_id) is not live:
+                    continue
+                try:
+                    row = await asyncio.to_thread(
+                        self.repository.get, live.scope, live.agent_id, workflow_id
+                    )
+                    await asyncio.to_thread(
+                        self.store.check_reconcile_authority,
+                        live.scope,
+                        row["operation_id"],
+                        live.agent_id,
+                    )
+                except PermissionError:
+                    await self._discard(workflow_id, live, "lost")
+                except Exception:
+                    # A journal or database blip must not close live work.
+                    continue
+
     async def status(self, scope: Scope, agent_id: str, workflow_id: str) -> dict[str, Any]:
         async with self._opening:
             return await self._status(scope, agent_id, workflow_id)
@@ -230,6 +261,12 @@ class WorkflowManager:
                 raise PermissionError("workflow_lost")
             operation = await asyncio.to_thread(self.store.operation, scope, row["operation_id"])
             if operation["state"] == "reconciling":
+                # This branch used to return before any authority check, which
+                # is what made _check_settings unreachable for the whole
+                # retained-reconciliation path.
+                await asyncio.to_thread(
+                    self.store.check_reconcile_authority, scope, row["operation_id"], agent_id
+                )
                 from robothor.autonomy.workflows.retained import inspect
 
                 result = await inspect(live, row["origin"])

@@ -112,6 +112,28 @@ def url_origin(url: str) -> str:
     return origin(f"{parsed.scheme}://{parsed.netloc}")
 
 
+#: A declared confirmation criterion is at most 300 characters, so the element
+#: it is read from may not carry more text than that either.
+MAX_CONFIRMATION_TEXT = 300
+
+
+def same_page(left: str, right: str) -> bool:
+    """Full-URL identity: scheme, host, port, path and query. Not just origin.
+
+    Pinning the origin alone let a status check read any other page the site
+    happened to serve, including a help article quoting "Your order has been
+    confirmed". The fragment is ignored: it never reaches the server.
+    """
+    first, second = urlsplit(left), urlsplit(right)
+    if first.username or first.password or second.username or second.password:
+        raise ValueError("credentialed_url")
+    return (
+        url_origin(left) == url_origin(right)
+        and (first.path or "/") == (second.path or "/")
+        and first.query == second.query
+    )
+
+
 def totp(secret: str, timestamp: float | None = None) -> str:
     key = base64.b32decode(secret.upper(), casefold=True)
     digest = hmac.new(
@@ -288,6 +310,29 @@ class BrowserBroker:
         destination = row["proposal"]["origin"]
         if url_origin(plan.url) != destination:
             raise PermissionError("destination_mismatch")
+        await asyncio.to_thread(self.store.check_reconcile_authority, scope, operation_id, agent_id)
+        if not plan.success_selector and row["proposal"]["action"] in {"purchase", "subscription"}:
+            # The automatic path is the SUBMISSION classifier: it accepts an
+            # affirmative sentence anywhere on the origin. That is not a basis
+            # for declaring money settled.
+            return {
+                "operation_id": operation_id,
+                "state": row["state"],
+                "reason": "specific_confirmation_required_for_payment",
+            }
+        from robothor.autonomy.handoffs import registered_confirmation_urls
+
+        registered = await asyncio.to_thread(
+            registered_confirmation_urls, self.store, scope, operation_id
+        )
+        if not registered or not any(same_page(plan.url, url) for url in registered):
+            # Origin was the only pin, so any same-origin page the caller named
+            # would do -- a help article matched a checkout.
+            return {
+                "operation_id": operation_id,
+                "state": row["state"],
+                "reason": "confirmation_page_not_registered",
+            }
         if row["state"] != "reconciling":
             await asyncio.to_thread(self.store.finish, scope, operation_id, "reconciling")
         try:
@@ -295,12 +340,14 @@ class BrowserBroker:
 
             await restrict_reconciliation(page)
             await page.goto(plan.url, wait_until="domcontentloaded", timeout=30000)
-            if url_origin(page.url) != destination:
-                raise PermissionError("destination_changed")
+            if not same_page(page.url, plan.url):
+                # Path and query, not just origin: the page that answers must
+                # be the page that was pinned in the durable handoff.
+                raise PermissionError("confirmation_page_changed")
             if plan.success_selector:
                 locator = page.locator(plan.success_selector)
                 await locator.wait_for(state="visible", timeout=15000)
-                text = await (await self._unique(locator)).inner_text()
+                text = await self._specific_text(locator)
                 if not plan.success_text or plan.success_text not in text:
                     raise ValueError("confirmation_missing")
                 proof = {"confirmation_sha256": self._confirmation_digest(text, plan)}
@@ -310,6 +357,8 @@ class BrowserBroker:
                 proof = await wait_for_confirmation(
                     page, destination, row["proposal"]["action"], timeout_seconds=15
                 )
+            if not same_page(page.url, plan.url):
+                raise PermissionError("confirmation_page_changed")
             evidence = {
                 "origin": destination,
                 **proof,
@@ -338,6 +387,22 @@ class BrowserBroker:
         if await locator.count() != 1 or not await locator.is_visible():
             raise ValueError("selector_not_unique_and_visible")
         return locator
+
+    @classmethod
+    async def _specific_text(cls, locator: Locator) -> str:
+        """Bound the element a confirmation may be read from, at check time.
+
+        The creation-time denylist held four literals, so ``html body``,
+        ``main``, ``p``, ``div``, ``body *`` and ``body > *`` all walked past
+        it and ``html body`` completed an operation on a page that read "Your
+        order is still pending". What makes a selector specific is not its
+        spelling: it is that it matches one element whose whole visible text
+        is no longer than a declared criterion may be.
+        """
+        text = await (await cls._unique(locator)).inner_text()
+        if len(" ".join(text.split())) > MAX_CONFIRMATION_TEXT:
+            raise ValueError("confirmation_element_not_specific")
+        return text
 
     async def _prices(
         self,
