@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { PersonalAutomationPayment } from "./personal-automation-payment";
+import { PersonalAutomationHandoffs, type ExternalHandoff } from "./personal-automation-handoffs";
 import { PersonalAutomationAudit } from "./personal-automation-audit";
 
 type Resource = { id: string; kind: string; label: string; origin?: string;
@@ -80,10 +81,11 @@ export function PersonalAutomationPanel() {
   const [answerCount, setAnswerCount] = useState(1);
   const [anyWebsite, setAnyWebsite] = useState(false);
   const [operations, setOperations] = useState<Operation[]>([]);
+  const [handoffs, setHandoffs] = useState<ExternalHandoff[]>([]);
 
   async function refresh() {
     const [state, journal] = await Promise.all([api("status"), api("operations")]);
-    setStatus(state); setOperations(journal.operations);
+    setStatus(state); setOperations(journal.operations); setHandoffs(journal.handoffs || []);
   }
   useEffect(() => {
     refresh().catch(e => setMessage(e.message));
@@ -153,6 +155,7 @@ export function PersonalAutomationPanel() {
 
   return <div className="space-y-8">
     {message && <p role="status" className="rounded border p-3">{message}</p>}
+    <PersonalAutomationHandoffs handoffs={handoffs} refresh={refresh} />
     {operations.length > 0 && <section className="space-y-3">
       <h2 className="text-lg font-medium">Recent tasks</h2>
       {operations.slice(0,10).map(operation => <div key={operation.id} className="space-y-2 rounded border p-3">

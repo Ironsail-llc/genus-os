@@ -638,3 +638,48 @@ money that has already moved, and evidence never releases the existing budget
 reservation or changes a membership. This adds no issuer connection or automatic
 renewal execution: authenticated ingestion, corrections and verified membership
 changes remain integration work.
+
+### Durable external verification handoffs
+
+For an observed SMS/device, push, passkey, biometric, issuer or unsupported website
+challenge, `browser` autonomy supports `handoff {operation_id, handoff}`. The
+handoff contains a fresh UUID `request_id`, a `kind` (`sms`, `push`, `passkey`,
+`biometric`, `issuer` or `captcha`), and a `confirmation` with a same-origin status
+`url`, `selector` and task-specific confirmation `text`. An existing origin-bound
+browser session can be supplied as `confirmation.session_resource_id`. The
+optional `lifetime_seconds` is 60–86400, defaulting to 900. Reuse the same request
+ID and content after a transport failure; a different active request cannot
+replace a pending handoff. `handoffs {operation_id}` reads its public state.
+
+Migration 140 stores the confirmation plan encrypted and binds it to the owner,
+operation and handoff. Public results expose the handoff ID, kind and deadline,
+never its private URL or browser session. Starting a handoff rechecks current
+execution settings, grant and budget. The operation then remains `reconciling`
+because a person may complete a commitment outside the broker; handoff expiry
+cannot free money or enable resubmission. A replay cannot extend the deadline.
+
+The Personal automation page displays **External verification** and a **Check
+status after verification** button. The person completes the challenge on their
+trusted device or merchant/issuer website; this page does not collect their SMS
+code or biometric data. The authenticated owner endpoint loads the stored plan
+and requests a read-only browser check. Acknowledgment is not proof of completion:
+only observed website confirmation resolves the operation and its handoff.
+Existing uncertain work can still be checked after revocation or disabling
+execution. The encrypted handoff survives process restart; if a background check
+is interrupted, the same button can safely request another status check.
+
+Status recovery uses a fresh context with service workers disabled. It permits
+GET/HEAD through existing destination network checks and blocks other HTTP
+methods and WebSockets, including script-initiated attempts to repeat checkout.
+It does not click or fill. Sites requiring a mutating status API need a dedicated
+validated adapter; a GET endpoint must still have read-only server semantics.
+Missing confirmation, authentication or an expired handoff leaves the task
+uncertain. A preexisting broker session is needed for authenticated status pages;
+no post-payment browser storage or verification code is retained for this purpose.
+
+Use the existing secure numeric-code path or authorized mailbox/TOTP integration
+when available, and configured managed challenge handling where supported.
+Handoffs do not add a phone connection, passkey signer, biometric capability or
+CAPTCHA solver, and do not replace standing authority with routine final approval.
+Automatic recovery scheduling and real issuer/device-provider acceptance remain
+part of the broader integration work.
