@@ -173,6 +173,14 @@
       "initial_failures_preserved": 3,
       "artifact": "uat-candidate-boundary-contracts.json",
       "synthetic_only": true
+    },
+    "candidate_host_tool_boundary": {
+      "passed": 15,
+      "failed": 0,
+      "scope": "Public framework tool/schema dispatch and host outcome hooks; synthetic normal and built-in-colliding tool names, admission denial, missing usage. Full runtime protocol parity remains unimplemented.",
+      "native_verified_outcomes_passed": 5,
+      "synthetic_actions_per_candidate": 30,
+      "screening_artifact": "uat-candidate-host-tools-screen.json"
     }
   },
   "calendar": {

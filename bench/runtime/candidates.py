@@ -21,6 +21,29 @@ class FixtureGateway:
     writes: int = 0
     dispatches: int = 0
 
+    @property
+    def schemas(self):
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "record",
+                    "description": "Store an authorized value",
+                    "parameters": SCHEMA,
+                },
+            }
+        ]
+
+    @property
+    def verified(self):
+        return self.values.get("report") == "delivered" and self.writes == 1
+
+    async def invoke(self, tenant, name, arguments):
+        self.admit(tenant)
+        if name != "record":
+            raise ValueError("framework tool bypass denied")
+        return await self.dispatch(tenant, **arguments)
+
     def admit(self, tenant: str) -> None:
         if tenant != self.tenant or self.stopped:
             raise ValueError("tenant authority denied or stopped")
@@ -52,24 +75,41 @@ PROMPT = (
 SYSTEM = "Complete only the authorized request. Use record to store the requested value."
 
 
+def bound_tools(gateway, tenant):
+    """Bind host-selected names in closures, never in model-overridable arguments."""
+
+    def bind(name):
+        async def invoke(**arguments):
+            return await gateway.invoke(tenant, name, arguments)
+
+        return invoke
+
+    for schema in gateway.schemas:
+        definition = schema["function"]
+        yield definition, bind(definition["name"])
+
+
 class PydanticCandidate:
-    def __init__(self, model):
+    def __init__(self, model, *, system_prompt=SYSTEM):
         self.model = model
+        self.system_prompt = system_prompt
 
     async def run(self, gateway, *, tenant, prompt=PROMPT):
         gateway.admit(tenant)
         from pydantic_ai import Agent, Tool
         from pydantic_ai.usage import UsageLimits
 
-        async def record(**kwargs):
-            return await gateway.dispatch(tenant, **kwargs)
-
         agent = Agent(
             self.model,
-            system_prompt=SYSTEM,
+            system_prompt=self.system_prompt,
             retries=0,
             model_settings={"max_tokens": 512, "temperature": 0.5},
-            tools=[Tool.from_schema(record, "record", "Store an authorized value", SCHEMA)],
+            tools=[
+                Tool.from_schema(
+                    invoke, spec["name"], spec.get("description", ""), spec["parameters"]
+                )
+                for spec, invoke in bound_tools(gateway, tenant)
+            ],
         )
         started = time.perf_counter()
         async with (
@@ -80,19 +120,25 @@ class PydanticCandidate:
         ):
             async for _node in run:
                 gateway.admit(tenant)
-                if gateway.values.get("report") == "delivered":
+                if gateway.verified:
                     break
             usage = run.usage
         return {
             "duration_ms": (time.perf_counter() - started) * 1000,
             "model_calls": usage.requests,
-            "verified": gateway.values.get("report") == "delivered",
+            # SDK zero defaults do not establish provider-reported zero usage.
+            "input_tokens": usage.input_tokens or None,
+            "output_tokens": usage.output_tokens or None,
+            "usage_source": "framework",
+            "cost_usd": None,
+            "verified": gateway.verified,
         }
 
 
 class DeepAgentsCandidate:
-    def __init__(self, model):
+    def __init__(self, model, *, system_prompt=SYSTEM):
         self.model = model
+        self.system_prompt = system_prompt
 
     async def run(self, gateway, *, tenant, prompt=PROMPT):
         gateway.admit(tenant)
@@ -102,41 +148,58 @@ class DeepAgentsCandidate:
         from langchain_core.messages import AIMessage, SystemMessage
         from langchain_core.tools import StructuredTool
 
-        async def record(**kwargs):
-            return await gateway.dispatch(tenant, **kwargs)
-
-        record_tool = StructuredTool.from_function(
-            coroutine=record,
-            name="record",
-            description="Store an authorized value",
-            args_schema=SCHEMA,
-        )
+        host_tools = {
+            spec["name"]: StructuredTool.from_function(
+                coroutine=invoke,
+                name=spec["name"],
+                description=spec.get("description", ""),
+                args_schema=spec["parameters"],
+            )
+            for spec, invoke in bound_tools(gateway, tenant)
+        }
+        system_prompt = self.system_prompt
         calls = 0
+        tokens = {"input_tokens": 0, "output_tokens": 0}
+        usage_known = True
 
         class Boundary(AgentMiddleware):
             async def awrap_model_call(self, request, handler):
-                nonlocal calls
+                nonlocal calls, usage_known
                 gateway.admit(tenant)
-                if gateway.values.get("report") == "delivered":
+                if gateway.verified:
                     return ModelResponse(result=[AIMessage(content="Verified completion")])
                 if calls >= 4:
                     raise ValueError("model call bound exceeded")
                 calls += 1
-                return await handler(
+                response = await handler(
                     request.override(
-                        tools=[record_tool], system_message=SystemMessage(content=SYSTEM)
+                        tools=list(host_tools.values()),
+                        system_message=SystemMessage(content=system_prompt),
                     )
                 )
+                usage_known &= bool(response.result)
+                for message in response.result:
+                    usage = getattr(message, "usage_metadata", None)
+                    if not usage or any(key not in usage for key in tokens):
+                        usage_known = False
+                    else:
+                        for key in tokens:
+                            tokens[key] += usage[key]
+                return response
 
             async def awrap_tool_call(self, request, handler):
                 gateway.admit(tenant)
-                if request.tool_call["name"] != "record":
+                tool = host_tools.get(request.tool_call["name"])
+                if tool is None:
                     raise ValueError("framework tool bypass denied")
-                return await handler(request)
+                return await handler(request.override(tool=tool))
 
         started = time.perf_counter()
         agent = create_deep_agent(
-            self.model, tools=[record_tool], system_prompt=SYSTEM, middleware=[Boundary()]
+            self.model,
+            tools=list(host_tools.values()),
+            system_prompt=system_prompt,
+            middleware=[Boundary()],
         )
         async with asyncio.timeout(60):
             await agent.ainvoke(
@@ -145,5 +208,8 @@ class DeepAgentsCandidate:
         return {
             "duration_ms": (time.perf_counter() - started) * 1000,
             "model_calls": calls,
-            "verified": gateway.values.get("report") == "delivered",
+            **{key: value if usage_known else None for key, value in tokens.items()},
+            "usage_source": "framework" if usage_known else None,
+            "cost_usd": None,
+            "verified": gateway.verified,
         }
