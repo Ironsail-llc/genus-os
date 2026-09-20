@@ -222,6 +222,9 @@ async def _execute_resume(runner: Any, candidate: Any, claim: Any = None) -> Non
     there is one way to resume a run rather than two that can drift.
     """
     from robothor.engine.models import TriggerType
+    from robothor.engine.resume_claim import current
+
+    claim_token = current.set(claim)
 
     try:
         # TriggerType.EVENT, not MANUAL. MANUAL is INTERACTIVE: runner.py:583
@@ -242,6 +245,7 @@ async def _execute_resume(runner: Any, candidate: Any, claim: Any = None) -> Non
     except Exception:
         logger.exception("Resume of run %s failed", candidate.run_id)
     finally:
+        current.reset(claim_token)
         if claim is not None:
             claim.close()
 

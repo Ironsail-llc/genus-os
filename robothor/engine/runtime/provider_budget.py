@@ -130,6 +130,11 @@ async def assert_provider_authorized():
     from robothor.engine.runtime.deadlines import require_time
 
     require_time()
+    from robothor.engine.resume_claim import current as resume_claim
+    from robothor.engine.resume_claim import require_owned
+
+    if resume_claim.get() is not None:
+        await asyncio.to_thread(require_owned)
     activity = current.get()
     context = active_context.get()
     if activity and activity.sessions:

@@ -6,10 +6,12 @@ with a lock held. Normal exit, cancellation and process death release ownership.
 
 import json
 import logging
+from contextvars import ContextVar
 
 import psycopg2
 
 logger = logging.getLogger(__name__)
+current: ContextVar[object | None] = ContextVar("startup_resume_claim", default=None)
 
 
 def acquire(tenant, run_id):
@@ -33,3 +35,18 @@ def acquire(tenant, run_id):
     if connection is not None:
         connection.close()
     return None
+
+
+def require_owned():
+    """A disconnected session no longer owns the startup admission lock."""
+    connection = current.get()
+    if connection is None:
+        return
+    from robothor.engine.request_budget import RequestBudgetError
+
+    try:
+        with connection.cursor() as cur:
+            cur.execute("SELECT 1")
+            assert cur.fetchone()[0] == 1
+    except Exception as exc:
+        raise RequestBudgetError("Resume claim lost; reconcile before further execution") from exc

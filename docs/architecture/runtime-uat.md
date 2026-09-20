@@ -733,3 +733,10 @@ An overlapping-startup integration test reproduced two launches and two charges 
 The private database test proves one launch/charge, then successful reacquisition after either completion or cancellation. A focused early-cancel check proves no runner call and released ownership. All 27 focused resume/size checks pass (4.41s), and the combined real-daemon restart/goal-crash command passes with 25 integrations (6.22s, one worker-only skip, one warning). Ruff and diff checks pass. Evidence: `bench/runtime/uat-resume-claim.json`.
 
 Each active startup resume holds a dedicated DB connection. Session loss while a worker survives and cross-process failure injection for this claim remain unverified; this is not general HA fencing certification. Nothing was deployed.
+
+
+## Refuse further admission after resume claim loss
+
+A private PostgreSQL failure-injection test terminated the advisory-lock session while its startup worker remained alive. Provider admission initially still succeeded, reproducing the gap. The worker now carries its dedicated claim in task context, and resumed provider/tool admission verifies that connection before proceeding. Connection failure refuses admission with an explicit reconcile-before-continuing error. Worker exit resets the context and closes ownership; a subsequent unrelated provider admission remains usable.
+
+All 37 focused resume/control/size checks pass (3.86s), 105 tool/admission/request-budget checks pass (2.71s), and 26 canonical integrations pass (7.92s, one intentional worker-only skip and one warning). Ruff and diff checks pass. Evidence: `bench/runtime/uat-resume-claim-loss.json`. This covers detected PostgreSQL session loss before admission. In-flight effects, network-blackhole timing, database failover and general production fencing are not certified. Nothing was deployed.

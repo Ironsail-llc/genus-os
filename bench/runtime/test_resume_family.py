@@ -193,3 +193,44 @@ async def test_concurrent_startup_workers_launch_one_continuation(monkeypatch, c
         with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
             cur.execute("DELETE FROM agent_runs WHERE id=%s", (run,))
             cur.execute("DELETE FROM crm_tenants WHERE id=%s", (tenant,))
+
+
+@pytest.mark.asyncio
+async def test_lost_resume_claim_denies_provider_and_tool_dispatch():
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from robothor.engine.daemon import _execute_resume
+    from robothor.engine.request_budget import RequestBudgetError
+    from robothor.engine.resume_claim import acquire
+    from robothor.engine.runtime.provider_budget import assert_provider_authorized
+    from robothor.engine.tools.dispatch import ToolContext, _runtime_denial
+
+    dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
+    if "host=/tmp/runtime-migrated-" not in dsn:
+        pytest.skip("requires the disposable canonical migration harness")
+    tenant, run = "lost-claim-" + uuid4().hex, str(uuid4())
+    claim = acquire(tenant, run)
+    assert claim is not None
+    checks = []
+
+    async def execute(**kwargs):
+        await assert_provider_authorized()
+        with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+            cur.execute("SELECT pg_terminate_backend(%s)", (claim.get_backend_pid(),))
+            assert cur.fetchone()[0]
+        with pytest.raises(RequestBudgetError, match="Resume claim"):
+            await assert_provider_authorized()
+        with patch("robothor.engine.tools.dispatch._audit_tool_call"):
+            denial = await _runtime_denial("create_task", {}, ToolContext(tenant_id=tenant))
+        assert "Resume claim" in denial["error"]
+        checks.append("provider and tool denied")
+
+    await _execute_resume(
+        SimpleNamespace(execute=execute),
+        SimpleNamespace(agent_id="main", run_id=run, tenant_id=tenant),
+        claim,
+    )
+    assert checks == ["provider and tool denied"]
+    assert claim.closed
+    await assert_provider_authorized()  # ownership failure does not leak into later requests

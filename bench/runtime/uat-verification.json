@@ -1330,6 +1330,26 @@
       ],
       "full_daemon_command": ".venv/bin/python -m bench.runtime.migrated_integration --daemon --restart --goal-crash",
       "limits": "Each active resume holds one dedicated database connection, bounded by startup resume concurrency. Database-session loss while a worker survives and cross-process failure injection for the claim itself remain unverified; no general HA fencing claim."
+    },
+    "resume_claim_loss": {
+      "initial_failure": "A startup worker still passed provider admission after PostgreSQL terminated the session holding its resume claim.",
+      "fix": "Carry the dedicated claim in task context; validate the session before resumed provider and tool admissions. Reset context and close the session on worker exit.",
+      "failure_injection": "pg_terminate_backend against the isolated claim connection, while the worker remains alive.",
+      "focused_passed": 37,
+      "focused_seconds": 3.86,
+      "tool_budget_regression_passed": 105,
+      "tool_budget_regression_seconds": 2.71,
+      "integration_passed": 26,
+      "integration_seconds": 7.92,
+      "integration_skipped": 1,
+      "integration_warnings": 1,
+      "checks": [
+        "claim initially admits provider work",
+        "lost claim refuses next provider admission",
+        "lost claim refuses next runtime tool admission",
+        "claim closes and unrelated subsequent admission remains usable"
+      ],
+      "limits": "Checks detected database-session loss before admission. Already admitted/in-flight effects may finish and require reconciliation. Network blackhole timing, database failover and production fencing remain unqualified."
     }
   },
   "calendar": {
