@@ -613,8 +613,16 @@ class BrowserBroker:
         landed: list[str] = []
 
         def _landed(frame: Frame) -> None:
-            if frame is page.main_frame and len(landed) <= MAX_LANDED_PAGES:
-                landed.append(frame.url)
+            if frame is not page.main_frame:
+                return
+            landed.append(frame.url)
+            if len(landed) > MAX_LANDED_PAGES:
+                # Drop from the MIDDLE. The first landing is where the
+                # commitment was made and the last is where the merchant
+                # finally put the browser, which is the page a confirmation
+                # check almost always needs; keeping the oldest ten threw that
+                # away for any site that redirects more than ten times.
+                del landed[1]
 
         page.on("framenavigated", _landed)
         try:

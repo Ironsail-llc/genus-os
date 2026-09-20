@@ -699,7 +699,11 @@ that is not a basis for declaring money settled
 
 The agent does not get to choose the page it will be judged against. While
 an operation is executing, the broker records every main-frame address its
-browser lands on (same-origin, at most ten) into `execution_plan.landed_urls`.
+browser lands on, same-origin, into `execution_plan.landed_urls`. At most ten
+are kept: the first, which is where the commitment was made, and the most
+recent, because the page a merchant finally leaves the browser on is the one
+a confirmation check usually needs. A site that redirects more times than
+that loses the middle of its chain, not its ends.
 A `confirmation.url` must match one of those in full, including path and
 query, or it is refused with `confirmation_page_not_observed`. This is what
 makes the ordinary checkout work: a POST that redirects to
@@ -750,6 +754,17 @@ The landing record is not a secret. It sits beside the agent's plan in
 the pages a browser visited are evidence rather than confidential material.
 A confirmation URL carrying a one-time token is therefore visible to the agent
 that ran the operation; do not treat a status link as a bearer secret.
+
+**Known limitation: a login completed through a verification link cannot be
+handed off afterwards.** On that path the page the broker navigates to *is*
+the credential -- a one-time sign-in link, consumed from the vault and masked
+through the broker's protected values. Recording it as a landing would write
+it into the plaintext `execution_plan` the agent can read back, which would
+hand the agent the magic link, so that path records nothing. The operation
+completes or reconciles on its own; if it ends uncertain, clear it with
+`POST /api/autonomy/operations/{id}/abandon` rather than expecting a status
+check. Making it handoff-checkable needs a place to keep a landing that is
+sealed rather than plaintext, which is a schema change and is not done.
 
 Migration 140 stores the confirmation plan encrypted and binds it to the owner,
 operation and handoff. Public results expose the handoff ID, kind and deadline,

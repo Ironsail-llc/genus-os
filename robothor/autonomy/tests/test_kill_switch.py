@@ -1360,3 +1360,213 @@ async def test_an_ordinary_merchant_confirmation_panel_is_accepted(store, identi
         finally:
             await browser.close()
     assert result["state"] == "completed", result
+
+
+# --------------------------------------------------------------------------
+# Fourth review round: the landing record kept the wrong ten, and the
+# verification-link path records nothing at all -- deliberately, it turns out.
+# --------------------------------------------------------------------------
+
+
+def test_the_landing_record_keeps_the_final_page_not_the_first_ten(store, identity):
+    """The cap dropped the page that matters.
+
+    Truncating to the FIRST ten landings throws away the confirmation page of
+    any merchant that redirects more than ten times -- the one page a check
+    almost always needs. The page the commitment was made on is worth keeping
+    too, so the record keeps the first landing and the most recent ones.
+    """
+    from robothor.autonomy.broker import MAX_LANDED_PAGES
+    from robothor.autonomy.tests.test_handoffs import reserved
+
+    op = reserved(store, identity)
+    store.bind_plan(
+        identity,
+        op["id"],
+        "main",
+        {"url": "https://shop.example/checkout", "submit_selector": "#submit"},
+    )
+    chain = [
+        "https://shop.example/checkout",
+        *[f"https://shop.example/hop/{n}" for n in range(14)],
+        "https://shop.example/order/final",
+    ]
+    store.record_landed_pages(identity, op["id"], chain)
+    landed = store.operation(identity, op["id"])["execution_plan"]["landed_urls"]
+    assert len(landed) == MAX_LANDED_PAGES
+    assert landed[0] == "https://shop.example/checkout", "the commitment page"
+    assert landed[-1] == "https://shop.example/order/final", "the page that matters"
+
+    store.begin_submit(identity, op["id"], "main")
+    asked = HandoffStore(store).create(
+        identity,
+        op["id"],
+        "main",
+        request(
+            confirmation={
+                "url": "https://shop.example/order/final",
+                "selector": "#done",
+                "text": "Order confirmed",
+            }
+        ),
+    )
+    assert asked["state"] == "awaiting_external_action"
+
+
+@pytest.mark.e2e
+@pytest.mark.timeout(90)
+async def test_a_long_redirect_chain_still_registers_where_it_ended(store, identity):
+    """Twelve hops, then the confirmation page. The browser went there."""
+    from robothor.autonomy.tests.test_handoffs import reserved
+
+    op = reserved(store, identity)
+    hops = 12
+
+    async def merchant(route):
+        url = route.request.url
+        if route.request.method == "POST":
+            await route.fulfill(body="ok")
+            return
+        if "/hop/" in url:
+            step = int(url.rsplit("/", 1)[1])
+            target = f"/hop/{step + 1}" if step + 1 < hops else "/order/final"
+            await route.fulfill(
+                content_type="text/html",
+                body=f"<script>location.replace('{target}')</script>",
+            )
+            return
+        if "/order/final" in url:
+            await route.fulfill(
+                content_type="text/html", body="<p id='done'>Awaiting your device approval</p>"
+            )
+            return
+        await route.fulfill(
+            content_type="text/html",
+            body="""<p id="amount">$6.00</p>
+            <button id="submit" onclick="fetch('/pay',{method:'POST'}).then(()=>{
+            location.href='/hop/0';})">Buy</button><p id="done"></p>""",
+        )
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        try:
+            page = await browser.new_page()
+            await page.route("**/*", merchant)
+            result = await BrowserBroker(store).execute_on_page(
+                identity,
+                op["id"],
+                "main",
+                ExecutionPlan(
+                    url="https://shop.example/checkout",
+                    submit_selector="#submit",
+                    amount_selector="#amount",
+                    success_selector="#done",
+                    success_text="Order confirmed",
+                ),
+                page,
+            )
+            assert result["state"] == "reconciling", result
+        finally:
+            await browser.close()
+    from robothor.autonomy.broker import MAX_LANDED_PAGES
+
+    landed = store.operation(identity, op["id"])["execution_plan"]["landed_urls"]
+    # More hops than the cap, so this only holds if the record drops from the
+    # middle: keeping the oldest ten would have lost the final page.
+    assert len(landed) == MAX_LANDED_PAGES, landed
+    assert landed[0] == "https://shop.example/checkout", landed
+    assert "https://shop.example/order/final" in landed, landed
+    asked = HandoffStore(store).create(
+        identity,
+        op["id"],
+        "main",
+        request(
+            confirmation={
+                "url": "https://shop.example/order/final",
+                "selector": "#done",
+                "text": "Order confirmed",
+            }
+        ),
+    )
+    assert asked["state"] == "awaiting_external_action"
+
+
+@pytest.mark.e2e
+@pytest.mark.timeout(45)
+async def test_a_verification_link_is_never_recorded_as_a_landing(store, identity):
+    """Why the verification-link path deliberately records nothing.
+
+    On that path the page the broker navigates to IS the credential: a
+    one-time sign-in link, consumed from the vault and masked through
+    ``protected_values``. ``execution_plan`` is plaintext and the agent can
+    read it back through ``operation``, so recording that landing would hand
+    the agent the magic link. The cost is that a login completed this way can
+    never be handoff-checked afterwards; the alternative is disclosing a
+    credential, so the gap is intentional and documented.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from robothor.autonomy.handoffs import observed_submission_pages
+    from robothor.autonomy.models import Delegation, ResourceInput, WebOperation
+
+    secret_link = "https://shop.example/magic?token=MagicLinkCanary9"
+    grant = store.create_grant(
+        identity,
+        Delegation(
+            agent_ids={"main"},
+            origins={"https://shop.example"},
+            actions={"login"},
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        ),
+    )
+    op = store.reserve(
+        identity,
+        grant["id"],
+        "main",
+        WebOperation(
+            origin="https://shop.example",
+            action="login",
+            purpose="Sign in",
+            idempotency_key="verification-link-landing",
+        ),
+    )
+    link = store.put_resource(
+        identity,
+        ResourceInput(
+            kind="credential",
+            label="Sign-in link",
+            origin="https://shop.example",
+            payload=json.dumps({"username": "alice", "password": secret_link}),
+        ),
+    )
+
+    async def merchant(route):
+        await route.fulfill(content_type="text/html", body="<p id='done'>You are signed in</p>")
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        try:
+            page = await browser.new_page()
+            await page.route("**/*", merchant)
+            result = await BrowserBroker(store).execute_on_page(
+                identity,
+                op["id"],
+                "main",
+                ExecutionPlan(
+                    url="https://shop.example/signin",
+                    submit_selector="__unused__",
+                    success_selector="#done",
+                    success_text="You are signed in",
+                    verification_link_id=link["id"],
+                ),
+                page,
+            )
+            assert result["state"] == "completed", result
+        finally:
+            await browser.close()
+    row = store.operation(identity, op["id"])
+    assert "MagicLinkCanary9" not in json.dumps(row["execution_plan"])
+    assert (row["execution_plan"] or {}).get("landed_urls") is None
+    # No landing on record means no page a handoff could ever name: the gate
+    # has nothing to match against, so it refuses rather than guessing.
+    assert observed_submission_pages(row) == set()

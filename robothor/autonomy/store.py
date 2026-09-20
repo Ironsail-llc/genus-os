@@ -662,7 +662,10 @@ class AutonomyStore:
                 except ValueError:
                     continue
                 known.append(url)
-            plan["landed_urls"] = known[:MAX_LANDED_PAGES]
+            if len(known) > MAX_LANDED_PAGES:
+                # Keep the commitment page and the most recent landings.
+                known = [known[0], *known[1 - MAX_LANDED_PAGES :]]
+            plan["landed_urls"] = known
             cur.execute(
                 "UPDATE autonomy_operations SET execution_plan=%s WHERE id=%s",
                 (Json(plan), operation_id),
