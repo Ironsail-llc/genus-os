@@ -756,6 +756,14 @@
       "boundary_budget_dispatch_passed": 61,
       "failed": 0,
       "scope": "Exact mock HTTP payload parity for initial and paired text conversations. No live calls, tool history, native memory bootstrap or checkpoint certification."
+    },
+    "delegated_calendar_audit_recovery": {
+      "passed": 129,
+      "failed": 0,
+      "seconds": 4.13,
+      "scope": "Private PostgreSQL root/child/grandchild receipts; tenant/principal isolation; conflicting references; executor-specific readback routing; existing calendar and chat regressions. No live provider calls.",
+      "initial_failure": "Both child and grandchild executing effects were omitted, incorrectly preserving parent success.",
+      "limitations": "General external-tool recovery remains incomplete. Existing intermittent connect_tcp warning appeared in an earlier run and is not declared resolved."
     }
   },
   "calendar": {

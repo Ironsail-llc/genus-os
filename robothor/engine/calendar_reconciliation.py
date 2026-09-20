@@ -67,7 +67,7 @@ def reconcile_outcome(auth, session_key, client_id):
             return
         for effect in outcome.get("effects", []):
             if effect["status"] == "executing":
-                reconcile_record(effect["operation_id"], auth, outcome["agent_id"])
+                reconcile_record(effect["operation_id"], auth, effect["agent_id"])
     except Exception as exc:
         # Leave the uncertainty barrier intact; the next chat poll can retry a
         # read. Do not expose provider credentials or dispatch a repair action.

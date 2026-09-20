@@ -112,3 +112,30 @@ def receipt_summary(receipts):
                 finding += " Notifications were requested; delivery is not verified."
         lines.append(f"{finding} (Operation {receipt['operation_id']})")
     return "\n\n".join(lines)
+
+
+def family_calendar_receipts(cur, run, auth):
+    """Read delegated evidence without crossing tenant or principal boundaries."""
+    cur.execute(
+        """WITH RECURSIVE family AS (
+            SELECT id,agent_id FROM agent_runs
+            WHERE id=%s AND tenant_id=%s AND user_id=%s
+            UNION
+            SELECT child.id,child.agent_id FROM agent_runs child
+            JOIN family parent ON child.parent_run_id=parent.id
+            WHERE child.tenant_id=%s AND child.user_id=%s
+        ) SELECT id,agent_id FROM family ORDER BY id""",
+        (run["id"], auth.tenant_id, auth.user_id, auth.tenant_id, auth.user_id),
+    )
+    members = cur.fetchall()
+    receipts = {}
+    for member in members:
+        for receipt in calendar_receipts(cur, member, auth):
+            # Keep the recorded executor: a parent's identity cannot recover a
+            # different agent's operation. Deduplicate shared audit references.
+            receipt["agent_id"] = member["agent_id"]
+            key = (member["agent_id"], receipt["operation_id"])
+            previous = receipts.get(key)
+            if previous is None or receipt["status"] == "unmatched":
+                receipts[key] = receipt
+    return list(receipts.values())

@@ -441,3 +441,75 @@ async def test_history_exposes_authenticated_noncacheable_recovery_namespace(
     assert response.json()["recoveryScope"] == recovery_scope(auth, "web:main")
     assert response.headers["cache-control"] == "no-store"
     mock_runner.execute.assert_not_called()
+
+
+@pytest.mark.parametrize("depth", [1, 2])
+def test_delegated_calendar_effect_prevents_false_parent_completion(records, monkeypatch, depth):
+    from unittest.mock import Mock
+
+    from robothor.engine import calendar_reconciliation
+
+    auth, client = identity(), str(uuid4())
+    parent = insert(records, auth, client, output_text="Everything was completed successfully")
+    child = parent
+    for _ in range(depth):
+        child = insert(records, auth, str(uuid4()), parent_run_id=child, agent_id="delegate")
+    operation = record_calendar_receipt(
+        records,
+        auth,
+        child,
+        agent="delegate",
+        status="executing",
+        result={"verification": "unverified", "reconciliation_pending": True},
+    )
+    outcome = chat_recovery.read_outcome(auth, "web:main", client)
+    assert outcome["reconciliation_pending"] and not outcome["verified"]
+    assert "Everything was completed successfully" not in outcome["text"]
+    assert outcome["effects"][0]["operation_id"] == operation
+    assert outcome["effects"][0]["agent_id"] == "delegate"
+    readback = Mock()
+    monkeypatch.setattr(calendar_reconciliation, "reconcile_record", readback)
+    calendar_reconciliation.reconcile_outcome(auth, "web:main", client)
+    readback.assert_called_once_with(operation, auth, "delegate")
+
+
+@pytest.mark.parametrize("boundary", ["tenant", "principal", "unrelated"])
+def test_delegated_receipts_cannot_cross_run_authority(records, boundary):
+    auth, client = identity(), str(uuid4())
+    parent = insert(records, auth, client)
+    other = (
+        identity()
+        if boundary == "tenant"
+        else AuthContext(user_id="other", tenant_id=auth.tenant_id, role="owner", typ="user")
+        if boundary == "principal"
+        else auth
+    )
+    child = insert(
+        records, other, str(uuid4()), parent_run_id=None if boundary == "unrelated" else parent
+    )
+    # Even a same-principal grandchild beneath a foreign boundary is excluded.
+    grandchild = insert(records, auth, str(uuid4()), parent_run_id=child)
+    record_calendar_receipt(records, other, child, status="executing")
+    record_calendar_receipt(records, auth, grandchild, status="executing")
+    outcome = chat_recovery.read_outcome(auth, "web:main", client)
+    assert outcome["effects"] == []
+    assert not outcome["reconciliation_pending"]
+
+
+@pytest.mark.parametrize("conflict_first", [True, False])
+def test_family_receipts_preserve_conflicting_evidence(records, conflict_first):
+    auth, client = identity(), str(uuid4())
+    parent_id, child_id = sorted([str(uuid4()), str(uuid4())])
+    parent = insert(records, auth, client, id=parent_id)
+    child = insert(records, auth, str(uuid4()), parent_run_id=parent, id=child_id)
+    conflict, valid = (parent, child) if conflict_first else (child, parent)
+    operation = record_calendar_receipt(records, auth, valid)
+    with records() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO agent_run_steps VALUES (%s,1,'gws_calendar_add_attendees',%s,%s)",
+            (conflict, Json({"operation_id": operation}), Json({"operation_id": str(uuid4())})),
+        )
+    outcome = chat_recovery.read_outcome(auth, "web:main", client)
+    assert len(outcome["effects"]) == 1
+    assert outcome["effects"][0]["status"] == "unmatched"
+    assert not outcome["verified"]
