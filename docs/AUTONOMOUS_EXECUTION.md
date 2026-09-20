@@ -544,9 +544,13 @@ amounts above the reservation or authorization are recorded with discrepancy fla
 They are not hidden by execution-policy limits. Refunds do not by themselves free
 a spending reservation or end a recurring commitment.
 
-This projection is not yet a durable transaction ledger or an issuer integration.
-Its provenance field is descriptive, not authentication: only trusted adapters may
+Migration 135 adds encrypted, owner-scoped payment facts. Broker payment completion
+records a submission fact atomically; concurrent identical deliveries are deduplicated,
+and conflicting deliveries cannot overwrite evidence. A fresh process can read the
+position using the native resource keyring. Unsupported or inconsistent facts remain
+stored with a reconciliation-required result rather than an invented balance.
+
+The journal is not yet an issuer integration. Its provenance field is descriptive, not authentication: only trusted adapters may
 supply facts after validating their evidence. Agent claims and unauthenticated
-callbacks must never become issuer facts. Durable records, encrypted receipt
-capture, validated evidence ingestion, budget reconciliation and the operator
-view remain integration work before this capability can be considered complete.
+callbacks must never become issuer facts. Encrypted receipt capture, validated evidence ingestion, budget reconciliation
+and the operator view remain integration work before this capability can be considered complete.
