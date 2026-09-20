@@ -820,6 +820,15 @@
       "raw": "uat-confirmed-admission.jsonl",
       "scope": "Supported ordinary calendar confirmations receive a 60-second deadline at current-runtime admission, before setup. Existing shorter deadlines preserved; goal/delegated/resume/planning/benchmark requests retain prior policy. Authorization still occurs in native dispatch.",
       "remaining": "General conversational simple-action classification and ingress-to-admission timing remain incomplete."
+    },
+    "admission_timeout_audit": {
+      "focused_passed": 49,
+      "focused_seconds": 5.25,
+      "wider_passed": 155,
+      "wider_seconds": 8.53,
+      "failed": 0,
+      "scope": "Host native-entrypoint pre-execution expiry audit; private PostgreSQL scoped outcome recovery; ASGI send/outcome without replay; existing tracking and native cancellation regressions.",
+      "limitations": "Audit persistence waits at most one second and can fail or finish later. Minimal private schema uses replacement DAL functions. Native setup after execution entry and non-deadline early cancellation are outside this new path."
     }
   },
   "calendar": {

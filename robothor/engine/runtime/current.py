@@ -28,8 +28,11 @@ active_context: ContextVar[ExecutionContext | None] = ContextVar("runtime_contex
 class CurrentRuntime:
     identity = StateEnvelope()
 
-    def __init__(self, execute: Callable[..., Awaitable[AgentRun]]) -> None:
+    def __init__(
+        self, execute: Callable[..., Awaitable[AgentRun]], *, audit_admission=False
+    ) -> None:
         self._execute = execute
+        self._audit_admission = audit_admission
 
     async def run(self, request: RunRequest, on_event=None) -> RuntimeResult:
         from robothor.engine.runtime.action_policy import apply_action_deadline
@@ -38,11 +41,22 @@ class CurrentRuntime:
         request = apply_action_deadline(request)
         # Admission reads and progress delivery consume the same deadline as
         # execution; a stalled checkpoint must not defer the start of the clock.
-        return await execute_before_deadline(
-            constrain_context(request.context), lambda: self._run(request, on_event)
-        )
+        entered = [False]
+        try:
+            return await execute_before_deadline(
+                constrain_context(request.context), lambda: self._run(request, on_event, entered)
+            )
+        except (TimeoutError, asyncio.CancelledError):
+            from robothor.engine.runtime.deadlines import remaining
 
-    async def _run(self, request: RunRequest, on_event=None) -> RuntimeResult:
+            left = remaining(request.context)
+            if self._audit_admission and not entered[0] and left is not None and left <= 0:
+                from robothor.engine.runtime.admission_audit import record_timeout
+
+                await record_timeout(request)
+            raise
+
+    async def _run(self, request: RunRequest, on_event, entered) -> RuntimeResult:
         from robothor.engine.models import StepType
         from robothor.engine.runtime.deadlines import constrain_context
 
@@ -129,6 +143,7 @@ class CurrentRuntime:
 
         try:
             require_time(context)
+            entered[0] = True
             run = await self._execute(agent_id=request.agent_id, message=request.message, **options)
         finally:
             remove(activity)
@@ -218,6 +233,6 @@ def runtime_entrypoint(execute):
         async def native(**options):
             return await execute(self, **options)
 
-        return (await CurrentRuntime(native).run(request)).run
+        return (await CurrentRuntime(native, audit_admission=True).run(request)).run
 
     return wrapped
