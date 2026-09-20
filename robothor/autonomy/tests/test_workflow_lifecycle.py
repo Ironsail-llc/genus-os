@@ -31,13 +31,18 @@ async def opened(store, identity, monkeypatch):
     await manager.shutdown()
 
 
-async def test_expiry_preserves_uncertainty_and_releases_browser(opened, store, identity):
+async def test_expiry_releases_the_browser_without_inventing_uncertainty(opened, store, identity):
+    """Rewritten 2026-09-20: this asserted `reconciling` for an operation that
+    had never submitted. Losing a browser is not evidence of an external
+    effect; calling it uncertain pinned the reservation against a result that
+    never existed, and it reached that state through a raw UPDATE the journal's
+    transition table forbids."""
     manager, result, operation, browser, clock = opened
     clock[0] = 901
     await manager.expire_idle()
     assert manager.active_count == 0
     browser.close.assert_awaited_once()
-    assert store.operation(identity, operation["id"])["state"] == "reconciling"
+    assert store.operation(identity, operation["id"])["state"] == "failed"
     assert (await manager.status(identity, "main", result["workflow_id"]))["state"] == "lost"
 
 
@@ -69,14 +74,22 @@ async def test_uncertain_action_freezes_context_and_returns_cached_result(opened
     live.broker.execute_on_page.assert_awaited_once()
 
 
-async def test_close_is_owner_bound_and_does_not_release_budget(opened, store, identity):
+async def test_close_is_owner_bound_and_returns_a_never_submitted_reservation(
+    opened, store, identity
+):
+    """Rewritten 2026-09-20: the old name and assertion said closing a
+    workflow must not release the budget. That is right once something has
+    been committed -- and is covered for a submitted operation by
+    test_kill_switch.py -- but here nothing was ever submitted, so holding the
+    reservation burned the monthly cap against nothing."""
     manager, result, operation, browser, _ = opened
     wid = result["workflow_id"]
     with pytest.raises(PermissionError):
         await manager.close(identity.model_copy(update={"owner_id": "bob"}), "main", wid)
     browser.close.assert_not_awaited()
     await manager.close(identity, "main", wid)
-    assert store.operation(identity, operation["id"])["state"] == "reconciling"
+    assert store.operation(identity, operation["id"])["state"] == "failed"
+    assert store.spending_projection(identity)["months"].get("USD", {}) == {}
     browser.close.assert_awaited_once()
 
 

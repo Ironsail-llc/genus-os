@@ -115,6 +115,12 @@ def url_origin(url: str) -> str:
 #: A declared confirmation criterion is at most 300 characters, so the element
 #: it is read from may not carry more text than that either.
 MAX_CONFIRMATION_TEXT = 300
+#: ...and the criterion has to be the SUBSTANCE of that element, not a needle
+#: in it. A flat 300-character bound was satisfied by padding: a 277-character
+#: node reading "Order confirmed. " + 260 filler characters completed an
+#: operation. This is the room a real merchant needs around the phrase --
+#: an order number, a thank-you, a delivery estimate -- and no more.
+CONFIRMATION_CONTEXT_SLACK = 80
 
 
 def same_page(left: str, right: str) -> bool:
@@ -123,15 +129,23 @@ def same_page(left: str, right: str) -> bool:
     Pinning the origin alone let a status check read any other page the site
     happened to serve, including a help article quoting "Your order has been
     confirmed". The fragment is ignored: it never reaches the server.
+
+    Total by construction: anything this cannot parse, or that carries
+    credentials, is simply not the same page. It is called from guard
+    positions outside a try, where a raised ValueError would surface as
+    ``broker_request_failed`` instead of a refusal.
     """
-    first, second = urlsplit(left), urlsplit(right)
-    if first.username or first.password or second.username or second.password:
-        raise ValueError("credentialed_url")
-    return (
-        url_origin(left) == url_origin(right)
-        and (first.path or "/") == (second.path or "/")
-        and first.query == second.query
-    )
+    try:
+        first, second = urlsplit(left), urlsplit(right)
+        if first.username or first.password or second.username or second.password:
+            return False
+        return (
+            url_origin(left) == url_origin(right)
+            and (first.path or "/") == (second.path or "/")
+            and first.query == second.query
+        )
+    except ValueError:
+        return False
 
 
 def totp(secret: str, timestamp: float | None = None) -> str:
@@ -320,12 +334,10 @@ class BrowserBroker:
                 "state": row["state"],
                 "reason": "specific_confirmation_required_for_payment",
             }
-        from robothor.autonomy.handoffs import registered_confirmation_urls
+        from robothor.autonomy.handoffs import observed_submission_page
 
-        registered = await asyncio.to_thread(
-            registered_confirmation_urls, self.store, scope, operation_id
-        )
-        if not registered or not any(same_page(plan.url, url) for url in registered):
+        submitted = observed_submission_page(row)
+        if not submitted or not same_page(plan.url, submitted):
             # Origin was the only pin, so any same-origin page the caller named
             # would do -- a help article matched a checkout.
             return {
@@ -347,7 +359,7 @@ class BrowserBroker:
             if plan.success_selector:
                 locator = page.locator(plan.success_selector)
                 await locator.wait_for(state="visible", timeout=15000)
-                text = await self._specific_text(locator)
+                text = await self._specific_text(locator, plan.success_text or "")
                 if not plan.success_text or plan.success_text not in text:
                     raise ValueError("confirmation_missing")
                 proof = {"confirmation_sha256": self._confirmation_digest(text, plan)}
@@ -389,18 +401,19 @@ class BrowserBroker:
         return locator
 
     @classmethod
-    async def _specific_text(cls, locator: Locator) -> str:
+    async def _specific_text(cls, locator: Locator, expected: str) -> str:
         """Bound the element a confirmation may be read from, at check time.
 
         The creation-time denylist held four literals, so ``html body``,
         ``main``, ``p``, ``div``, ``body *`` and ``body > *`` all walked past
         it and ``html body`` completed an operation on a page that read "Your
         order is still pending". What makes a selector specific is not its
-        spelling: it is that it matches one element whose whole visible text
-        is no longer than a declared criterion may be.
+        spelling: it is that it matches exactly one element whose visible text
+        IS the declared criterion plus ordinary surrounding wording.
         """
         text = await (await cls._unique(locator)).inner_text()
-        if len(" ".join(text.split())) > MAX_CONFIRMATION_TEXT:
+        normalized = " ".join(text.split())
+        if len(normalized) > min(MAX_CONFIRMATION_TEXT, len(expected) + CONFIRMATION_CONTEXT_SLACK):
             raise ValueError("confirmation_element_not_specific")
         return text
 

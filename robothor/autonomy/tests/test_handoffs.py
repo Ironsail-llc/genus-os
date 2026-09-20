@@ -7,6 +7,12 @@ import pytest
 from robothor.autonomy.handoffs import HandoffRequest, HandoffStore
 from robothor.autonomy.tests.test_store import policy, proposal
 
+#: The page the broker submits on, and therefore the only page a handoff for
+#: these fixtures may name. The query string is the canary for the private-URL
+#: assertions: it must never appear in a public result or in storage the owner
+#: has not unsealed.
+SUBMISSION_URL = "https://shop.example/checkout?receipt=PrivateLinkCanary"
+
 
 def request(**changes):
     return HandoffRequest.model_validate(
@@ -14,7 +20,7 @@ def request(**changes):
             "request_id": str(uuid4()),
             "kind": "push",
             "confirmation": {
-                "url": "https://shop.example/status?receipt=PrivateLinkCanary",
+                "url": SUBMISSION_URL,
                 "selector": "#done",
                 "text": "Order confirmed",
             },
@@ -30,8 +36,15 @@ def reserved(store, identity):
 
 
 def pending(store, identity):
-    """After begin_submit: the outcome is uncertain, so a handoff is admissible."""
+    """After begin_submit: the outcome is uncertain, so a handoff is admissible.
+
+    The plan is bound first because the broker binds it just before the click,
+    and it is the only record of which page the commitment was made on.
+    """
     op = reserved(store, identity)
+    store.bind_plan(
+        identity, op["id"], "main", {"url": SUBMISSION_URL, "submit_selector": "#submit"}
+    )
     store.begin_submit(identity, op["id"], "main")
     return op
 

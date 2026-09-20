@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from robothor.autonomy.crypto import open_resource
 from robothor.autonomy.handoffs import HandoffRequest, release_expired_handoff
-from robothor.autonomy.models import RuntimeSettings, Scope, WebOperation
+from robothor.autonomy.models import Scope, WebOperation
 
 if TYPE_CHECKING:
     from robothor.autonomy.store import AutonomyStore
@@ -17,24 +17,36 @@ class HandoffChecks:
     def __init__(self, store: AutonomyStore) -> None:
         self.store = store
 
-    def enabled_scopes(self) -> list[Scope]:
-        """Only owners who have the switch ON are scanned at all.
+    #: One pass visits at most this many owners, oldest work first.
+    SCAN_LIMIT = 32
 
-        The daemon used to poll every five seconds regardless, so "off" still
-        meant a worker reading the handoff queue and claiming work.
+    def enabled_scopes(self) -> list[Scope]:
+        """Owners who have the switch ON *and* have work waiting.
+
+        Two earlier shapes were both wrong. The original scanned every tenant
+        in the database with no binding at all. Replacing it with a full
+        ``SELECT ... FROM autonomy_settings`` fixed the disabled owner but not
+        the process: no WHERE, no LIMIT, no sharding, in every bridge worker
+        every 60 seconds. This asks the opposite question -- which owners have
+        a check to run or a lapsed handoff to release -- so an idle or
+        disabled deployment returns nothing, and a busy one is bounded and
+        rotates oldest-first as work is consumed.
         """
         with self.store.transaction() as cur:
-            cur.execute("SELECT tenant_id,owner_id,settings FROM autonomy_settings")
-            rows = list(cur.fetchall())
-        scopes = []
-        for row in rows:
-            try:
-                enabled = RuntimeSettings.model_validate(row["settings"]).enabled
-            except ValueError:
-                continue
-            if enabled:
-                scopes.append(Scope(tenant_id=row["tenant_id"], owner_id=row["owner_id"]))
-        return scopes
+            cur.execute(
+                "SELECT h.tenant_id,h.owner_id FROM autonomy_handoffs h "
+                "JOIN autonomy_settings s ON s.tenant_id=h.tenant_id AND s.owner_id=h.owner_id "
+                "WHERE COALESCE((s.settings->>'enabled')::boolean,false) AND ("
+                "  (h.state='checking'"
+                "   AND (h.check_lease_until IS NULL OR h.check_lease_until<=now()))"
+                "  OR (h.state IN ('awaiting_external_action','checking') AND h.expires_at<=now())"
+                ") GROUP BY h.tenant_id,h.owner_id ORDER BY min(h.updated_at) LIMIT %s",
+                (self.SCAN_LIMIT,),
+            )
+            return [
+                Scope(tenant_id=row["tenant_id"], owner_id=row["owner_id"])
+                for row in cur.fetchall()
+            ]
 
     def candidates(self, scope: Scope) -> list[str]:
         """Bound to one tenant and owner. This scanned every tenant."""

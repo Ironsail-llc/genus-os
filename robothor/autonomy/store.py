@@ -569,6 +569,11 @@ class AutonomyStore:
             row = self._operation(cur, scope, operation_id)
             if row["agent_id"] != agent_id:
                 raise PermissionError("agent_not_allowed")
+            if row["state"] in {"completed", "failed", "cancelled"}:
+                # Every caller checks state too, but a gate described as the
+                # one gate every completion path crosses has to refuse an
+                # operation that is already over.
+                raise PermissionError("operation_not_pending")
             self._check_settings(cur, scope, WebOperation.model_validate(row["proposal"]))
             return self._live_policy(cur, scope, row)
 

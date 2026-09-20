@@ -27,7 +27,7 @@ from robothor.autonomy.broker import BrowserBroker, ExecutionPlan
 from robothor.autonomy.handoff_recovery import HandoffChecks
 from robothor.autonomy.handoffs import HandoffStore
 from robothor.autonomy.models import Delegation, RuntimeSettings, WebOperation
-from robothor.autonomy.tests.test_handoffs import pending, request
+from robothor.autonomy.tests.test_handoffs import SUBMISSION_URL, pending, request
 from robothor.autonomy.tests.test_store import policy, proposal
 
 DISABLED = RuntimeSettings(enabled=False)
@@ -57,6 +57,21 @@ def account_proposal(key="kill-switch-account"):
 # --------------------------------------------------------------------------
 # F1 -- retained reconciliation completes with the switch off
 # --------------------------------------------------------------------------
+
+
+def oldest_work(store, identity):
+    """Put this owner at the front of the bounded scan.
+
+    ``enabled_scopes`` takes the 32 owners with the oldest waiting work, and
+    the suite shares one database, so a freshly created tenant is otherwise
+    behind every handoff every other test left behind.
+    """
+    with store.transaction() as cur:
+        cur.execute(
+            "UPDATE autonomy_handoffs SET updated_at=now()-interval '30 days' "
+            "WHERE tenant_id=%s AND owner_id=%s",
+            (identity.tenant_id, identity.owner_id),
+        )
 
 
 def test_reconcile_authority_refuses_revoked_expired_and_disabled(store, identity):
@@ -407,6 +422,7 @@ def test_a_disabled_owner_is_never_scanned(store, identity):
     op = pending(store, identity)
     asked = HandoffStore(store).create(identity, op["id"], "main", request())
     HandoffStore(store).acknowledge(identity, asked["id"])
+    oldest_work(store, identity)
     queue = HandoffChecks(store)
     assert identity in queue.enabled_scopes()
     store.configure(identity, DISABLED)
@@ -522,6 +538,7 @@ async def test_reconciliation_will_not_read_a_different_page_on_the_same_origin(
                 page,
             )
             assert result["state"] == "reconciling"
+            assert result.get("reason") != "confirmation_page_not_registered"
             assert store.operation(identity, op["id"])["state"] == "reconciling"
         finally:
             await browser.close()
@@ -551,7 +568,7 @@ async def test_a_whole_page_guess_is_rejected_at_check_time(store, identity, sel
         "main",
         request(
             confirmation={
-                "url": "https://shop.example/status?receipt=PrivateLinkCanary",
+                "url": SUBMISSION_URL,
                 "selector": selector,
                 "text": "Order confirmed",
             }
@@ -691,6 +708,7 @@ def test_the_feature_ships_disabled_and_inert(store, identity):
     handoffs.acknowledge(identity, asked["id"])
     store.configure(identity, DISABLED)
 
+    oldest_work(store, identity)
     queue = HandoffChecks(store)
     assert identity not in queue.enabled_scopes()
     assert queue.claim(identity, asked["id"]) is None
@@ -725,7 +743,7 @@ async def test_run_browser_refuses_reconciliation_while_the_switch_is_off(
         op["id"],
         "main",
         ExecutionPlan(
-            url="https://shop.example/status?receipt=PrivateLinkCanary",
+            url=SUBMISSION_URL,
             submit_selector="__unused__",
             success_selector="#done",
             success_text="Order confirmed",
@@ -756,7 +774,7 @@ async def test_worker_handle_refuses_reconciliation_while_the_switch_is_off(stor
             "key_id": "v1",
             "reconcile": True,
             "plan": {
-                "url": "https://shop.example/status?receipt=PrivateLinkCanary",
+                "url": SUBMISSION_URL,
                 "submit_selector": "__unused__",
                 "success_selector": "#done",
                 "success_text": "Order confirmed",
@@ -850,19 +868,14 @@ async def test_the_real_recovery_path_refuses_and_then_works(store, identity, mo
         second = store.reserve(
             identity, second_grant["id"], "main", proposal(key="kill-switch-real-path", amount=100)
         )
-        store.begin_submit(identity, second["id"], "main")
-        live = handoffs.create(
+        store.bind_plan(
             identity,
             second["id"],
             "main",
-            request(
-                confirmation={
-                    "url": "https://shop.example/status",
-                    "selector": "#done",
-                    "text": "Order confirmed",
-                }
-            ),
+            {"url": SUBMISSION_URL, "submit_selector": "#submit"},
         )
+        store.begin_submit(identity, second["id"], "main")
+        live = handoffs.create(identity, second["id"], "main", request())
         handoffs.acknowledge(identity, live["id"])
         monkeypatch.setenv("ROBOTHOR_DB_HOST", _dsn().get("host", ""))
         monkeypatch.setenv("ROBOTHOR_DB_NAME", _dsn()["dbname"])
@@ -876,7 +889,7 @@ async def test_the_real_recovery_path_refuses_and_then_works(store, identity, mo
             second["id"],
             "main",
             ExecutionPlan(
-                url="https://shop.example/status",
+                url=SUBMISSION_URL,
                 submit_selector="__unused__",
                 success_selector="#done",
                 success_text="Order confirmed",
@@ -893,7 +906,7 @@ async def test_the_real_recovery_path_refuses_and_then_works(store, identity, mo
             second["id"],
             "main",
             ExecutionPlan(
-                url="https://shop.example/status",
+                url=SUBMISSION_URL,
                 submit_selector="__unused__",
                 success_selector="#done",
                 success_text="Order confirmed",
@@ -919,7 +932,7 @@ async def test_the_real_recovery_path_refuses_and_then_works(store, identity, mo
             "key_id": "v1",
             "reconcile": True,
             "plan": {
-                "url": "https://shop.example/status?receipt=PrivateLinkCanary",
+                "url": SUBMISSION_URL,
                 "submit_selector": "__unused__",
                 "success_selector": "#done",
                 "success_text": "Order confirmed",
@@ -932,3 +945,194 @@ async def test_the_real_recovery_path_refuses_and_then_works(store, identity, mo
     finally:
         server.shutdown()
         server.server_close()
+
+
+# --------------------------------------------------------------------------
+# Second review round. The bypasses above refuse, but the agent could still
+# choose the page it was judged against, one raw state UPDATE survived the
+# centralisation, and the daemon's owner scan was unbounded.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.e2e
+@pytest.mark.timeout(45)
+async def test_an_agent_cannot_register_the_page_it_wants_to_be_judged_against(store, identity):
+    """The residual after the first round: `handoffs.create` pinned only the
+    origin, and the registered set unioned every handoff's own URL, so the
+    agent satisfied the pin with its own declaration -- and completed a
+    purchase on "Order confirmed? You have 30 days to return it."
+    """
+    from robothor.autonomy.tests.test_handoffs import reserved
+
+    op = reserved(store, identity)
+    store.bind_plan(
+        identity,
+        op["id"],
+        "main",
+        {"url": "https://shop.example/checkout", "submit_selector": "#submit"},
+    )
+    store.begin_submit(identity, op["id"], "main")
+    with pytest.raises(PermissionError, match="confirmation_page_not_observed"):
+        HandoffStore(store).create(
+            identity,
+            op["id"],
+            "main",
+            request(
+                confirmation={
+                    "url": "https://shop.example/help/article/refund-policy?v=2",
+                    "selector": "#q3",
+                    "text": "Order confirmed",
+                }
+            ),
+        )
+    assert HandoffStore(store).list(identity) == []
+
+
+def test_a_handoff_needs_a_page_the_broker_actually_submitted_on(store, identity):
+    """With no bound plan there is no observed page, so nothing is registrable."""
+    from robothor.autonomy.tests.test_handoffs import reserved
+
+    op = reserved(store, identity)
+    store.begin_submit(identity, op["id"], "main")
+    with pytest.raises(PermissionError, match="confirmation_page_not_observed"):
+        HandoffStore(store).create(
+            identity,
+            op["id"],
+            "main",
+            request(
+                confirmation={
+                    "url": "https://shop.example/status",
+                    "selector": "#d",
+                    "text": "Order confirmed",
+                }
+            ),
+        )
+
+
+@pytest.mark.e2e
+@pytest.mark.timeout(45)
+async def test_a_padded_element_is_not_a_specific_confirmation(store, identity):
+    """A 277-character node stayed inside a flat 300-character bound. The
+    declared criterion has to be the substance of the element, not a needle."""
+    from robothor.autonomy.tests.test_handoffs import reserved
+
+    op = reserved(store, identity)
+    url = "https://shop.example/checkout"
+    store.bind_plan(identity, op["id"], "main", {"url": url, "submit_selector": "#submit"})
+    store.begin_submit(identity, op["id"], "main")
+
+    async def merchant(route):
+        await route.fulfill(
+            content_type="text/html",
+            body="<p id='done'>Order confirmed. " + "x" * 260 + "</p>",
+        )
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        try:
+            page = await browser.new_page()
+            await page.route("**/*", merchant)
+            result = await BrowserBroker(store).reconcile_on_page(
+                identity,
+                op["id"],
+                "main",
+                ExecutionPlan(
+                    url=url,
+                    submit_selector="__unused__",
+                    success_selector="#done",
+                    success_text="Order confirmed",
+                ),
+                page,
+            )
+        finally:
+            await browser.close()
+    assert result["state"] == "reconciling", result
+    assert store.operation(identity, op["id"])["state"] != "completed"
+
+
+def test_losing_a_workflow_cannot_invent_uncertainty_for_a_reserved_operation(store, identity):
+    """`close(..., "lost")` did the exact raw UPDATE the transition table
+    forbids, with no operation event -- and expire_unauthorized calls it, so
+    revoking a grant pushed a never-submitted operation into reconciling."""
+    from robothor.autonomy.tests.test_handoffs import reserved
+    from robothor.autonomy.workflows.store import WorkflowStore
+
+    op = reserved(store, identity)
+    repository = WorkflowStore(store)
+    workflow = repository.open(
+        identity, "main", op["id"], str(uuid4()), {"url": "https://shop.example/checkout"}
+    )
+    with pytest.raises(ValueError, match="invalid_transition"):
+        store.finish(identity, op["id"], "reconciling")
+    repository.close(identity, "main", workflow["id"], "lost")
+    assert store.operation(identity, op["id"])["state"] == "failed"
+    with store.transaction() as cur:
+        cur.execute(
+            "SELECT event FROM autonomy_events WHERE tenant_id=%s AND owner_id=%s AND subject_id=%s",
+            (identity.tenant_id, identity.owner_id, op["id"]),
+        )
+        assert "failed" in [row["event"] for row in cur.fetchall()]
+
+
+def test_losing_a_workflow_after_submission_still_means_uncertainty(store, identity):
+    from robothor.autonomy.tests.test_handoffs import reserved
+    from robothor.autonomy.workflows.store import WorkflowStore
+
+    op = reserved(store, identity)
+    repository = WorkflowStore(store)
+    workflow = repository.open(
+        identity, "main", op["id"], str(uuid4()), {"url": "https://shop.example/checkout"}
+    )
+    store.begin_submit(identity, op["id"], "main", workflow_id=workflow["id"])
+    repository.close(identity, "main", workflow["id"], "lost")
+    assert store.operation(identity, op["id"])["state"] == "reconciling"
+
+
+def test_the_owner_scan_is_bounded_and_driven_by_pending_work(store, identity):
+    """SELECT tenant_id, owner_id, settings FROM autonomy_settings had no
+    WHERE, no LIMIT and no sharding, in every bridge worker every 60 seconds."""
+    queue = HandoffChecks(store)
+    # Settings exist for this owner (the fixture enables them) but there is no
+    # handoff to check, so the daemon has no reason to visit them at all.
+    assert identity not in queue.enabled_scopes()
+
+    op = pending(store, identity)
+    asked = HandoffStore(store).create(identity, op["id"], "main", request())
+    HandoffStore(store).acknowledge(identity, asked["id"])
+    oldest_work(store, identity)
+    assert identity in queue.enabled_scopes()
+    assert len(queue.enabled_scopes()) <= HandoffChecks.SCAN_LIMIT
+
+
+def test_an_expired_handoff_still_reaches_the_sweep(store, identity):
+    """Releasing a lapsed handoff is work too, so its owner must stay visible."""
+    op = pending(store, identity)
+    asked = HandoffStore(store).create(identity, op["id"], "main", request())
+    with store.transaction() as cur:
+        cur.execute(
+            "UPDATE autonomy_handoffs SET expires_at=now()-interval '1 second' WHERE id=%s",
+            (asked["id"],),
+        )
+    oldest_work(store, identity)
+    assert identity in HandoffChecks(store).enabled_scopes()
+
+
+def test_same_page_answers_rather_than_raising_on_a_url_it_cannot_parse():
+    from robothor.autonomy.broker import same_page
+
+    assert same_page("https://shop.example/a?b=1", "https://shop.example/a?b=1")
+    assert not same_page("http://shop.example/a", "https://shop.example/a")
+    assert not same_page("https://shop.example/a", "not a url at all")
+    assert not same_page("https://alice:secret@shop.example/a", "https://shop.example/a")
+
+
+def test_the_one_gate_refuses_a_terminal_operation(store, identity):
+    op = pending(store, identity)
+    store.finish(
+        identity,
+        op["id"],
+        "completed",
+        {"origin": "https://shop.example", "confirmation_sha256": "a" * 64},
+    )
+    with pytest.raises(PermissionError, match="operation_not_pending"):
+        store.check_reconcile_authority(identity, op["id"], "main")

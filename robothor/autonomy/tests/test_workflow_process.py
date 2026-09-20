@@ -179,7 +179,9 @@ def test_controller_restart_preserves_page_broker_restart_requires_reconciliatio
         proc = launch()
         result = call({"kind": "status", "workflow_id": opened["workflow_id"]})
         assert result["state"] == "lost"
-        assert result["operation_state"] == "reconciling"
+        # A broker restart loses the page. The operation had not submitted, so
+        # the honest outcome is a failed attempt, not manufactured uncertainty.
+        assert result["operation_state"] == "failed"
         assert call(command) == completed
     finally:
         proc.terminate()

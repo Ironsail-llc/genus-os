@@ -105,6 +105,11 @@ class WorkflowManager:
         """
         for workflow_id, live in list(self._live.items()):
             if live.lock.locked():
+                # A held lock means a command is running right now. It is not
+                # waited on: a 30-second browser step would stall the whole
+                # sweep. The command itself crosses the same gate, so it
+                # cannot complete anything without authority, and the next
+                # sweep closes the browser once the lock is released.
                 continue
             async with live.lock:
                 if self._live.get(workflow_id) is not live:

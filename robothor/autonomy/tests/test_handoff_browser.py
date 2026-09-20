@@ -20,7 +20,8 @@ async def test_external_approval_reconciles_with_no_second_post_or_script_mutati
         if route.request.method == "POST":
             submitted.append(route.request.url)
             await route.fulfill(body="Approve on your device")
-        elif "/status" in route.request.url:
+        elif submitted:
+            # After the commitment, the same checkout page reports its outcome.
             status_reads.append(route.request.url)
             await route.fulfill(
                 content_type="text/html",
@@ -55,7 +56,18 @@ async def test_external_approval_reconciles_with_no_second_post_or_script_mutati
             assert result["state"] == "reconciling" and len(submitted) == 1
         finally:
             await browser.close()
-        handoff = HandoffStore(store).create(identity, op["id"], "main", request())
+        handoff = HandoffStore(store).create(
+            identity,
+            op["id"],
+            "main",
+            request(
+                confirmation={
+                    "url": "https://shop.example/checkout",
+                    "selector": "#done",
+                    "text": "Order confirmed",
+                }
+            ),
+        )
         private = HandoffStore(store).acknowledge(identity, handoff["id"])
         confirmation = private["confirmation"]
         plan = ExecutionPlan(
@@ -124,12 +136,18 @@ async def test_automatic_handoff_confirmation_uses_affirmative_observation_not_g
             idempotency_key="automatic-handoff-account",
         ),
     )
+    store.bind_plan(
+        identity,
+        op["id"],
+        "main",
+        {"url": "https://account.example/register", "submit_selector": "#submit"},
+    )
     store.begin_submit(identity, op["id"], "main")
     asked = HandoffStore(store).create(
         identity,
         op["id"],
         "main",
-        request(confirmation={"url": "https://account.example/status"}),
+        request(confirmation={"url": "https://account.example/register"}),
     )
     posts = []
     async with async_playwright() as pw:

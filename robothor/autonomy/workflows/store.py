@@ -215,8 +215,18 @@ class WorkflowStore:
                 (state, workflow_id),
             )
             if state == "lost":
-                cur.execute(
-                    "UPDATE autonomy_operations SET state='reconciling',updated_at=now() WHERE id=%s AND state IN ('reserved','submitting','awaiting_input')",
-                    (row["operation_id"],),
-                )
+                # Losing the browser is not evidence of an external effect.
+                # This used to be a raw UPDATE straight to 'reconciling' --
+                # the one move the transition table forbids from 'reserved',
+                # journalled with no operation event. Since expire_unauthorized
+                # closes contexts as 'lost', revoking a grant manufactured
+                # uncertainty for an operation that had never submitted.
+                operation = self.store._operation(cur, scope, row["operation_id"])
+                after = {
+                    "reserved": "failed",
+                    "submitting": "reconciling",
+                    "awaiting_input": "reconciling",
+                }.get(operation["state"])
+                if after:
+                    self.store._finish(cur, scope, row["operation_id"], after)
             self.store._event(cur, scope, workflow_id, "workflow_" + state)

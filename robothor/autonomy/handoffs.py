@@ -10,7 +10,7 @@ from uuid import UUID, uuid4  # noqa: TC003 -- Pydantic field type
 
 from pydantic import Field, field_validator, model_validator
 
-from robothor.autonomy.broker import url_origin
+from robothor.autonomy.broker import same_page, url_origin
 from robothor.autonomy.crypto import open_resource, seal_resource
 from robothor.autonomy.models import StrictModel, WebOperation
 
@@ -119,39 +119,20 @@ def release_expired_handoff(
     return True
 
 
-def registered_confirmation_urls(store: AutonomyStore, scope: Scope, operation_id: str) -> set[str]:
-    """The confirmation pages this operation actually has on record.
+def observed_submission_page(operation: dict[str, Any]) -> str | None:
+    """The one page the BROKER recorded, never a page the agent named.
 
-    Two sources, both written before any check runs: the bound execution plan
-    -- the page the broker was on when it submitted -- and the confirmation
-    URL of each durable handoff, which is what the owner was shown and what
-    survives a restart. ``reconcile_on_page`` used to accept whatever URL its
-    caller handed it as long as the origin matched, so a help article on the
-    same site could stand in for a checkout.
+    Only the bound execution plan qualifies. It is written by the broker
+    immediately before the click, so it is evidence of where the commitment
+    was made. An earlier version also accepted each handoff's own
+    ``confirmation.url``, which made the pin circular: the agent registered
+    the page it wanted to be judged against and then satisfied the pin with
+    its own declaration -- and completed a purchase against
+    "Order confirmed? You have 30 days to return it." on a refund-policy
+    article.
     """
-    with store.transaction() as cur:
-        operation = store._operation(cur, scope, operation_id)
-        cur.execute(
-            "SELECT id::text,operation_id,encrypted_value FROM autonomy_handoffs "
-            "WHERE tenant_id=%s AND owner_id=%s AND operation_id=%s",
-            (scope.tenant_id, scope.owner_id, operation_id),
-        )
-        rows = list(cur.fetchall())
-    urls = set()
-    submitted = (operation.get("execution_plan") or {}).get("url")
-    if isinstance(submitted, str):
-        urls.add(submitted)
-    for row in rows:
-        spec = HandoffRequest.model_validate_json(
-            open_resource(
-                bytes(row["encrypted_value"]),
-                store.keys,
-                scope,
-                "handoff:" + str(row["operation_id"]) + ":" + row["id"],
-            )
-        )
-        urls.add(spec.confirmation.url)
-    return urls
+    url = (operation.get("execution_plan") or {}).get("url")
+    return url if isinstance(url, str) else None
 
 
 class HandoffStore:
@@ -194,6 +175,12 @@ class HandoffStore:
                 raise PermissionError("operation_not_pending")
             if url_origin(spec.confirmation.url) != proposal.origin:
                 raise PermissionError("destination_mismatch")
+            submitted = observed_submission_page(op)
+            if not submitted or not same_page(spec.confirmation.url, submitted):
+                # The agent does not get to name the page it will be judged
+                # against. The only page on record is the one the broker
+                # itself was on when it submitted.
+                raise PermissionError("confirmation_page_not_observed")
             decision = self.store._budget_decision(
                 cur, scope, policy, proposal, agent_id, operation_id
             )

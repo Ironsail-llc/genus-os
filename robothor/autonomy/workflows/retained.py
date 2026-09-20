@@ -104,9 +104,16 @@ async def reconcile(
     # recorded as an attempt and does not cost the retained page. Completing
     # here writes durable completion, a payment fact and a receipt: revoking
     # the grant or switching the feature off must stop it.
-    await asyncio.to_thread(
-        manager.store.check_reconcile_authority, scope, row["operation_id"], agent_id
-    )
+    #
+    # An operation that already completed is the one exception: there is
+    # nothing left to advance, and an identical replay must still be able to
+    # read back the result it was given the first time.
+    if (await asyncio.to_thread(manager.store.operation, scope, row["operation_id"]))[
+        "state"
+    ] != "completed":
+        await asyncio.to_thread(
+            manager.store.check_reconcile_authority, scope, row["operation_id"], agent_id
+        )
     live = manager._live.get(workflow_id)
     lock = live.lock if live else asyncio.Lock()
     async with lock:
