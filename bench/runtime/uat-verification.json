@@ -36,9 +36,11 @@
       "failed": 0
     },
     "browser_goals": {
-      "passed": 4,
+      "passed": 5,
       "failed": 0,
-      "managed_disposable_database": true
+      "managed_disposable_database": true,
+      "seconds": 5.9,
+      "includes": "unfinished requested work, linked task status, waiting reason, missing evidence, descendant controls, revisions, milestones and review"
     },
     "mixed_native_goal_workload": {
       "passed": 3,
@@ -155,6 +157,15 @@
       "failed": 0,
       "seconds": 4.81,
       "scope": "Comparator, native benchmark producer and size checks; settings/resource mismatches rejected; legacy unknown configurations retain measurements without qualification."
+    },
+    "unfinished_work_goal_view": {
+      "passed": 6,
+      "failed": 0,
+      "typescript": "passed",
+      "eslint": "passed",
+      "python_ruff": "passed",
+      "preview": "uat-unfinished-work.png",
+      "manual_acceptance": false
     }
   },
   "calendar": {

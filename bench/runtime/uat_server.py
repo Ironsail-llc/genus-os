@@ -26,8 +26,47 @@ from robothor.goals.model import CreateGoal, GoalUpdate
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def seed_unfinished_work(tenant):
+    goal = store.create(
+        tenant,
+        CreateGoal(
+            objective="Finish the requested work",
+            success_criteria=["The requested work has been checked"],
+        ),
+        "uat-operator",
+    )
+    remaining = str(uuid4())
+    for task_id, title, status in [
+        (str(uuid4()), "Prepare the first item", "DONE"),
+        (remaining, "Check the remaining item", "TODO"),
+    ]:
+        with store.transaction() as cur:
+            cur.execute(
+                "INSERT INTO crm_tasks(id,tenant_id,title,status) VALUES (%s,%s,%s,%s)",
+                (task_id, tenant, title, status),
+            )
+        goal = store.update(
+            tenant,
+            goal["id"],
+            GoalUpdate(action="link_task", version=goal["version"], task_id=task_id),
+            "uat-operator",
+        )
+    store.update(
+        tenant,
+        goal["id"],
+        GoalUpdate(
+            action="wait",
+            version=goal["version"],
+            task_id=remaining,
+            note="One requested task still needs checking",
+        ),
+        "uat-agent",
+    )
+
+
 def seed(tenant):
     store.set_enabled(tenant, False, "uat-operator")
+    seed_unfinished_work(tenant)
     parent = store.create(
         tenant,
         CreateGoal(

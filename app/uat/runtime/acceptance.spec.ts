@@ -9,11 +9,26 @@ test.beforeEach(async ({ page, request }) => {
 test("parent pause and cancel propagate to child goals", async ({ page }) => {
   await page.getByRole("button", { name: /^Prepare customer follow-up/ }).click();
   const details = page.getByRole("region", { name: "Goal details" });
+  await expect(details.getByText("Waiting for a synthetic customer reply tomorrow", { exact: true })).toBeVisible();
   await details.getByRole("button", { name: "Pause", exact: true }).click();
   await expect(details.getByRole("button", { name: "Review tomorrow's customer reply · paused" })).toBeVisible();
   await expect(details.getByText(/Already dispatched external requests may finish/)).toBeVisible();
   await details.getByRole("button", { name: "Cancel goal" }).click();
   await expect(details.getByRole("button", { name: "Review tomorrow's customer reply · canceled" })).toBeVisible();
+});
+
+test("unfinished work shows the remaining task, waiting reason and missing evidence", async ({ page }) => {
+  await page.getByRole("button", { name: /^Finish the requested work/ }).click();
+  const details = page.getByRole("region", { name: "Goal details" });
+  await expect(details.getByText(/^waiting ·/)).toBeVisible();
+  await expect(details.getByText("Prepare the first item · DONE")).toBeVisible();
+  await expect(details.getByText("Check the remaining item · TODO")).toBeVisible();
+  await expect(details.getByText("1 of 2 linked tasks marked done.")).toBeVisible();
+  await expect(details.getByText("Start pursuing the objective", { exact: true })).toHaveCount(0);
+  await expect(details.getByText(/^Waiting: One requested task still needs checking/)).toBeVisible();
+  await expect(details.getByText("No evidence recorded.")).toBeVisible();
+  await expect(details.getByRole("button", { name: "Approve completion" })).toHaveCount(0);
+  await details.screenshot({ path: "test-results/runtime-uat/unfinished-work.png" });
 });
 
 test("milestones require explicit authorization and share the family", async ({ page }) => {
