@@ -16,6 +16,73 @@ def test_schemas_handlers_and_model_contract_agree():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_goal_reads_expose_current_tenant_execution_setting_without_resuming(db, enabled):  # noqa: F811
+    from uuid import uuid4
+
+    other = str(uuid4())
+    store.set_enabled(db, enabled, "operator")
+    store.set_enabled(other, not enabled, "operator")
+    spec = CreateGoal(objective="Finish requested work", success_criteria=["Checked"])
+    goal = store.create(db, spec, "operator")
+    store.create(other, spec, "other operator")
+    goal = store.update(
+        db, goal["id"], GoalUpdate(action="pause", version=goal["version"]), "operator"
+    )
+    ctx = ToolContext(agent_id="main", user_role="owner", tenant_id=db)
+    detail = await HANDLERS["get_pursuit_goal"]({"goal_id": goal["id"]}, ctx)
+    listing = await HANDLERS["list_pursuit_goals"]({}, ctx)
+    assert detail["execution_enabled"] is listing["execution_enabled"] is enabled
+    assert detail["goal"]["status"] == "paused"
+    assert detail["wake_conditions"] is None
+    assert [g["id"] for g in listing["goals"]] == [goal["id"]]
+    assert store.get(db, goal["id"])["version"] == goal["version"]
+    # An operator changing the tenant setting is visible on the very next read.
+    store.set_enabled(db, not enabled, "operator")
+    changed = await HANDLERS["get_pursuit_goal"]({"goal_id": goal["id"]}, ctx)
+    assert changed["execution_enabled"] is not enabled
+    assert changed["goal"]["status"] == "paused"
+
+
+@pytest.mark.asyncio
+async def test_goal_reads_report_disabled_when_tenant_has_no_setting(db):  # noqa: F811
+    from uuid import uuid4
+
+    tenant = str(uuid4())
+    ctx = ToolContext(agent_id="main", user_role="owner", tenant_id=tenant)
+    assert await HANDLERS["list_pursuit_goals"]({}, ctx) == {
+        "goals": [],
+        "execution_enabled": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_reported_task_wake_works_without_named_event_and_obeys_execution_setting(db):  # noqa: F811
+    from uuid import uuid4
+
+    from bench.runtime.uat_server import seed_unfinished_work
+
+    store.set_enabled(db, False, "operator")
+    seed_unfinished_work(db)
+    (goal,) = store.list_goals(db)
+    ctx = ToolContext(agent_id="main", user_role="owner", tenant_id=db)
+    result = await HANDLERS["get_pursuit_goal"]({"goal_id": goal["id"]}, ctx)
+    wakes = result["wake_conditions"]
+    assert wakes["matching_event"] is None
+    assert wakes["scheduled_review_at"] == goal["ready_at"]
+    assert len(wakes["linked_task_changes"]) == 2
+    remaining = next(task for task in result["goal"]["tasks"] if task["status"] == "TODO")
+    assert str(remaining["id"]) in wakes["linked_task_changes"]
+    store.ingest_event(db, str(uuid4()), "task.changed", {"task_id": str(remaining["id"])})
+    assert store.claim(db) is None  # an event cannot enable pursuit
+    assert store.get(db, goal["id"])["status"] == "waiting"
+    store.set_enabled(db, True, "operator")
+    claimed, _attempt = store.claim(db)
+    assert claimed["id"] == goal["id"] and claimed["status"] == "running"
+    assert "task.changed" in claimed["next_action"]
+
+
+@pytest.mark.asyncio
 async def test_unbound_implicit_goal_and_workers_are_refused():
     result = await HANDLERS["get_pursuit_goal"]({}, ToolContext(agent_id="main", user_role="owner"))
     assert "goal_id is required" in result["error"]

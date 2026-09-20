@@ -31,11 +31,18 @@ def schemas() -> dict[str, Any]:
         ),
         "get_pursuit_goal": (
             "Read goal criteria, current version, evidence, tasks and execution history. "
+            "execution_enabled reports whether automatic pursuit is enabled for this tenant; "
+            "do not promise automatic progress when false. A waiting goal may wake on its "
+            "scheduled review or a matching event/linked-task change; paused goals do not wake. "
+            "wake_conditions explicitly lists those alternatives, conditional on execution_enabled. "
+            "Waking is not permission to run: parent controls, budgets and recovery still apply. "
             "Omit goal_id only within that goal's execution.",
             {"type": "object", "properties": {"goal_id": {"type": "string"}}},
         ),
         "list_pursuit_goals": (
-            "List the current tenant's operator goals, including paused and waiting goals.",
+            "List the current tenant's operator goals, including paused and waiting goals. "
+            "execution_enabled reports whether automatic pursuit is enabled; goal status "
+            "and wake conditions still govern each goal.",
             {"type": "object", "properties": {}},
         ),
         "update_pursuit_goal": (
@@ -84,12 +91,30 @@ async def get_goal(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     goal_id = args.get("goal_id") or (current.goal_id if current else None)
     if not goal_id:
         raise ValueError("goal_id is required outside goal execution")
-    return {"goal": await asyncio.to_thread(store.get, ctx.tenant_id, goal_id)}
+    goal = await asyncio.to_thread(store.get, ctx.tenant_id, goal_id)
+    wait = goal.get("wait") or {}
+    conditions = None
+    if goal["status"] == "waiting":
+        conditions = {
+            "scheduled_review_at": goal["ready_at"],
+            "linked_task_changes": [str(task["id"]) for task in goal["tasks"]],
+            "matching_event": {"type": wait["event_type"], "match": wait.get("event_match", {})}
+            if wait.get("event_type")
+            else None,
+        }
+    return {
+        "goal": goal,
+        "execution_enabled": await asyncio.to_thread(store.enabled, ctx.tenant_id),
+        "wake_conditions": conditions,
+    }
 
 
 async def list_goals(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     check_context(ctx)
-    return {"goals": await asyncio.to_thread(store.list_goals, ctx.tenant_id)}
+    return {
+        "goals": await asyncio.to_thread(store.list_goals, ctx.tenant_id),
+        "execution_enabled": await asyncio.to_thread(store.enabled, ctx.tenant_id),
+    }
 
 
 async def update_goal(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:

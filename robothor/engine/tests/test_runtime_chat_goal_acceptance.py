@@ -46,6 +46,11 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
     tmp_path,  # noqa: F811
 ):
     engine = request.getfixturevalue("runner")
+    # Private run rows are test activity, not the running installation's health.
+    monkeypatch.setattr(
+        "robothor.engine.host_state.host_state_section",
+        lambda *args, **kwargs: "Engine health: unavailable in this isolated test.",
+    )
     live = json.loads(os.environ.get("ROBOTHOR_RUNTIME_CHAT_LIVE", "null"))
     live_output = None
     if live:
@@ -131,6 +136,7 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
             text = "Paused the goal. The unfinished task is still open; I haven't marked the goal complete."
         else:
             snapshot = results[-1]["goal"]
+            assert results[-1]["execution_enabled"] is False
             assert snapshot["status"] == "waiting"
             assert snapshot["evidence"] == []
             assert sorted(task["status"] for task in snapshot["tasks"]) == ["DONE", "TODO"]
@@ -199,7 +205,10 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
-        for message in ("What's finished, and what's still left?", "Pause that work."):
+        status_question = (live or {}).get(
+            "status_question", "What's finished, and what's still left?"
+        )
+        for message in (status_question, "Pause that work."):
             active_message = message
             token = active_context.set(
                 ExecutionContext(
@@ -241,6 +250,7 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
                             "tool_calls": calls,
                             "provider_attempts": outbound.call_count,
                             "goal_status": snapshot["status"],
+                            "execution_enabled": store.enabled(db),
                             "task_statuses": sorted(t["status"] for t in snapshot["tasks"]),
                         },
                         indent=2,

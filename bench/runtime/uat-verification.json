@@ -390,6 +390,47 @@
         "seconds": 30.23
       },
       "remaining": "Read tools should expose execution_enabled; complete wake-condition explanation and representative live performance remain unproven."
+    },
+    "goal_execution_and_wake_visibility": {
+      "goal_chat_size": {
+        "passed": 73,
+        "seconds": 14.95
+      },
+      "tool_admission_regression": {
+        "passed": 144,
+        "seconds": 5.07
+      },
+      "live_execution_setting": {
+        "artifact": "uat-chat-goal-live-execution-setting.json",
+        "duration_ms": [
+          47779,
+          41582
+        ],
+        "provider_attempts": 7,
+        "language_limitation": "Missed linked-task wakes"
+      },
+      "live_wake_conditions": {
+        "artifact": "uat-chat-goal-live-wake-conditions.json",
+        "duration_ms": [
+          45112,
+          33642
+        ],
+        "provider_attempts": 7,
+        "state_verified": true,
+        "language_accepted": false,
+        "limitations": [
+          "Future wake described as satisfied",
+          "Private run history misinterpreted as installation health; fixture corrected afterward without another live sample",
+          "Not a latency cohort; both turns exceed 30-second reference"
+        ]
+      },
+      "production_settings_changed": false,
+      "final_fixture_checks": {
+        "passed": 14,
+        "seconds": 4.83,
+        "ruff": "passed",
+        "format": "passed"
+      }
     }
   },
   "calendar": {

@@ -1,0 +1,49 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What is unfinished, and what would make it run again automatically?",
+      "robothor": "Here's the picture, operator.\n\n**What's unfinished**\n\nOne goal, `85721e37` \u2014 objective *\"Finish the requested work\"* (owner `main`, finite mode, created by `uat-operator`). It's in **`waiting`** status, and it's waiting on exactly one thing:\n\n- **Task `51497527` \u2014 \"Check the remaining item\" \u2014 still `TODO`.** This is the open item you see in the task list.\n- The other linked task, `950b96a1` \u2014 \"Prepare the first item\" \u2014 is already `DONE`.\n\nThe goal's single success criterion is *\"The requested work has been checked\"*, and it has **no evidence recorded yet** (`evidence: []`), so nothing has been closed out. It has never run: `attempts: 0`, `runs: []`, `tokens_used: 0`.\n\n**What would make it run again automatically**\n\nTwo things have to line up \u2014 and right now only one of them does:\n\n1. **A wake condition** (this part is satisfied). The goal is registered to wake on either:\n   - its **scheduled review at 2026-09-21 19:51 UTC** (tomorrow, ~24h from now), or\n   - a **change to either linked task** \u2014 i.e. if `51497527` moves off `TODO` (or `950b96a1` changes again).\n   Either of those would flip the goal out of `waiting`.\n\n2. **Execution enabled \u2014 and this is the blocker.** `execution_enabled` is **`false`** for this tenant. Automatic pursuit is switched off, so even when the wake condition fires, the goal will *not* run on its own. Waking is not permission to run; with execution disabled, it will just sit there.\n\nSo: **the unfinished work is task `51497527` under goal `85721e37`, and the thing that would make it run again automatically is turning on execution for this tenant** \u2014 the scheduled review / task-change wake alone won't do it.\n\nOne more thing worth flagging, since it bears on whether a run would actually succeed: the live engine state shows **no run reached a model in the last 24h \u2014 12 runs reached no model at all**. If that's still true when execution is enabled, the goal may wake and then fail to make progress for an unrelated reason. I'd want to confirm model reach is restored before promising automatic progress.\n\nWant me to enable execution, or nudge task `51497527` directly? I'll hold off on either until you say so.",
+      "run": {
+        "text": "Here's the picture, operator.\n\n**What's unfinished**\n\nOne goal, `85721e37` \u2014 objective *\"Finish the requested work\"* (owner `main`, finite mode, created by `uat-operator`). It's in **`waiting`** status, and it's waiting on exactly one thing:\n\n- **Task `51497527` \u2014 \"Check the remaining item\" \u2014 still `TODO`.** This is the open item you see in the task list.\n- The other linked task, `950b96a1` \u2014 \"Prepare the first item\" \u2014 is already `DONE`.\n\nThe goal's single success criterion is *\"The requested work has been checked\"*, and it has **no evidence recorded yet** (`evidence: []`), so nothing has been closed out. It has never run: `attempts: 0`, `runs: []`, `tokens_used: 0`.\n\n**What would make it run again automatically**\n\nTwo things have to line up \u2014 and right now only one of them does:\n\n1. **A wake condition** (this part is satisfied). The goal is registered to wake on either:\n   - its **scheduled review at 2026-09-21 19:51 UTC** (tomorrow, ~24h from now), or\n   - a **change to either linked task** \u2014 i.e. if `51497527` moves off `TODO` (or `950b96a1` changes again).\n   Either of those would flip the goal out of `waiting`.\n\n2. **Execution enabled \u2014 and this is the blocker.** `execution_enabled` is **`false`** for this tenant. Automatic pursuit is switched off, so even when the wake condition fires, the goal will *not* run on its own. Waking is not permission to run; with execution disabled, it will just sit there.\n\nSo: **the unfinished work is task `51497527` under goal `85721e37`, and the thing that would make it run again automatically is turning on execution for this tenant** \u2014 the scheduled review / task-change wake alone won't do it.\n\nOne more thing worth flagging, since it bears on whether a run would actually succeed: the live engine state shows **no run reached a model in the last 24h \u2014 12 runs reached no model at all**. If that's still true when execution is enabled, the goal may wake and then fail to make progress for an unrelated reason. I'd want to confirm model reach is restored before promising automatic progress.\n\nWant me to enable execution, or nudge task `51497527` directly? I'll hold off on either until you say so.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14354,
+        "output_tokens": 989,
+        "duration_ms": 45112,
+        "total_cost_usd": 0.0015,
+        "run_id": "0650b16b-77df-49fa-b96a-60c526ac4962"
+      }
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the work is paused.\n\n**Goal `85721e37-6330-44d5-8702-530d1b0a8024`** (\"Finish the requested work\") is now **`paused`** (version 5, up from 4). Nothing else changed: no criteria touched, no evidence recorded, no tasks modified.\n\nWhat this means going forward:\n\n- **It will not run again automatically.** A paused goal does not wake \u2014 the scheduled review at 2026-09-21 19:51 UTC and the linked-task-change wake are both now inert. That's the point of the pause, but it's worth being explicit: the wake conditions are still *registered*, they just won't fire while paused.\n- **The open item is untouched.** Task `51497527` (\"Check the remaining item\") is still `TODO`, and `950b96a1` remains `DONE`. Pausing the goal doesn't change task state.\n- **To restart it, just say so** \u2014 resuming is an operator action, and I'll flip it back to `waiting` (or straight into pursuit) on your word.\n\nTwo things still standing from before, unchanged by the pause: `execution_enabled` is `false` for this tenant, and the live engine state shows no run reached a model in the last 24h (12 runs reached none). So even on resume, automatic progress would need execution turned on *and* model reach restored \u2014 I'd confirm both before promising it'll move on its own.\n\nAnything else you want paused or checked while I'm here?",
+      "run": {
+        "text": "Done, operator \u2014 the work is paused.\n\n**Goal `85721e37-6330-44d5-8702-530d1b0a8024`** (\"Finish the requested work\") is now **`paused`** (version 5, up from 4). Nothing else changed: no criteria touched, no evidence recorded, no tasks modified.\n\nWhat this means going forward:\n\n- **It will not run again automatically.** A paused goal does not wake \u2014 the scheduled review at 2026-09-21 19:51 UTC and the linked-task-change wake are both now inert. That's the point of the pause, but it's worth being explicit: the wake conditions are still *registered*, they just won't fire while paused.\n- **The open item is untouched.** Task `51497527` (\"Check the remaining item\") is still `TODO`, and `950b96a1` remains `DONE`. Pausing the goal doesn't change task state.\n- **To restart it, just say so** \u2014 resuming is an operator action, and I'll flip it back to `waiting` (or straight into pursuit) on your word.\n\nTwo things still standing from before, unchanged by the pause: `execution_enabled` is `false` for this tenant, and the live engine state shows no run reached a model in the last 24h (12 runs reached none). So even on resume, automatic progress would need execution turned on *and* model reach restored \u2014 I'd confirm both before promising it'll move on its own.\n\nAnything else you want paused or checked while I'm here?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 22536,
+        "output_tokens": 723,
+        "duration_ms": 33642,
+        "total_cost_usd": 0.0015,
+        "run_id": "7070cf9d-953c-4ea5-8ff5-43f2ddd32c30"
+      }
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 7,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

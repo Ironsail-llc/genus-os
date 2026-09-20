@@ -254,4 +254,15 @@ The initial live diagnostic also reported a discrepancy because goal tools read 
 
 Twenty-one deadline/control/chat checks pass (6.29s); 43 native HTTP/chat/runtime/size regression checks pass (30.23s), including the existing 30 acknowledgement/stop repetitions. The scripted default still forbids external model calls. Live mode is explicit, reads the selected chain from the supplied manifest, caps provider attempts at twelve, retains each completed turn before assertions, and restricts mutation to pausing the one isolated goal after the explicit pause request.
 
-The live language review is not exhaustive: the model's scheduling explanation does not establish that every event-based wake or disabled-coordinator condition is represented correctly. The goal read tools currently omit the tenant's execution-enabled setting, which should be addressed before claiming a complete conversational explanation of future goal progress.
+The live language review is not exhaustive: the model's scheduling explanation does not establish that every event-based wake or disabled-coordinator condition is represented correctly. At that revision, the goal read tools omitted the tenant's execution-enabled setting; the follow-up below addresses this omission.
+
+
+## Execution settings and explicit wake conditions
+
+Goal reads now report the tenant's execution-enabled setting. A waiting goal also exposes its scheduled review, linked-task changes and optional matching event as explicit alternatives; paused goals expose no active wake conditions. The descriptions distinguish waking from permission to execute. Reads do not enable pursuit or resume work.
+
+Private-database tests cover tenant isolation, absent settings, changed settings on subsequent reads, unchanged paused state, and a real linked-task event that cannot be claimed with execution disabled but can be claimed after enabling the private fixture. The goal/chat/size suite passed 73 tests (14.95s); tool registry/admission/plan checks passed 144 tests (5.07s).
+
+Two further configured-primary diagnostics are preserved. `uat-chat-goal-live-execution-setting.json` completed in 47.779s and 41.582s, correctly identifying disabled execution but incorrectly implying only a scheduled review could wake the goal. After explicit wake metadata, `uat-chat-goal-live-wake-conditions.json` completed in 45.112s and 33.642s and described both scheduled and linked-task wakes. Both paused only the private goal and retained DONE/TODO tasks. Each used seven provider attempts. These observations exceed the 30-second simple-action reference and do not establish a p95 or performance qualification.
+
+The latter transcript still calls a future wake condition “satisfied” and speculates about engine health based on private test run rows. It is not accepted as fully correct conversational behavior. The fixture now explicitly supplies unavailable engine-health context instead of presenting synthetic run history as installation health. No additional live sample was taken after that fixture correction. State assertions alone do not establish prose accuracy; the earlier failed explanations remain in the artifacts. The user's accepted scripted status/pause case remains accepted, while broader acceptance stays incomplete.

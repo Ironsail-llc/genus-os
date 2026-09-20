@@ -72,3 +72,5 @@ action, with zero writes and no false completion; it is not edited out of the co
 
 Deployment review remains a separate, explicitly excluded action. Lack of deployment
 does not authorize deploying as a way to obtain acceptance evidence.
+
+Goal read tools now expose tenant execution enablement and explicit waiting-goal wake alternatives. Private tests cover disabled execution and linked-task wakes. Further live diagnostics preserve correct pause/task state, but exceed the 30-second reference and include imprecise wake language and a fixture-health inference. These are unresolved conversational/performance acceptance limits, not proof of full acceptance. The chat fixture now marks installation health unavailable rather than treating private run rows as production health.

@@ -1,0 +1,49 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's the state, operator \u2014 you have one active goal:\n\n**Goal: \"Finish the requested work\"** (`864dafa9`) \u2014 status: **waiting**, version 4\n- Success criterion: *\"The requested work has been checked\"*\n- Waiting on: the linked task \"Check the remaining item\", with a scheduled wake at **2026-09-21 19:47 UTC** (about 24h out). No event trigger \u2014 it wakes on that review time.\n\n**Linked tasks:**\n| Task | Status |\n|---|---|\n| Prepare the first item (`18215662`) | \u2705 **DONE** |\n| Check the remaining item (`0a9eedd6`) | \u2b1c **TODO** |\n\n**So:**\n- **Finished:** \"Prepare the first item\" \u2014 done.\n- **Still left:** \"Check the remaining item\" \u2014 still TODO, and it's the one thing holding the goal open. Until it's checked, the goal's success criterion isn't met.\n\nTwo things worth flagging:\n1. **Automatic pursuit is disabled** for this tenant (`execution_enabled: false`), so nothing will advance on its own \u2014 the goal won't progress just because the wake time passes. It needs a manual nudge (or execution turned on).\n2. The goal has **no evidence recorded yet** and requires independent evidence, so completing it will need a citable check of that remaining item, not just marking the task done.\n\nWant me to take the remaining item now and check it, rather than waiting for tomorrow's wake?",
+      "run": {
+        "text": "Here's the state, operator \u2014 you have one active goal:\n\n**Goal: \"Finish the requested work\"** (`864dafa9`) \u2014 status: **waiting**, version 4\n- Success criterion: *\"The requested work has been checked\"*\n- Waiting on: the linked task \"Check the remaining item\", with a scheduled wake at **2026-09-21 19:47 UTC** (about 24h out). No event trigger \u2014 it wakes on that review time.\n\n**Linked tasks:**\n| Task | Status |\n|---|---|\n| Prepare the first item (`18215662`) | \u2705 **DONE** |\n| Check the remaining item (`0a9eedd6`) | \u2b1c **TODO** |\n\n**So:**\n- **Finished:** \"Prepare the first item\" \u2014 done.\n- **Still left:** \"Check the remaining item\" \u2014 still TODO, and it's the one thing holding the goal open. Until it's checked, the goal's success criterion isn't met.\n\nTwo things worth flagging:\n1. **Automatic pursuit is disabled** for this tenant (`execution_enabled: false`), so nothing will advance on its own \u2014 the goal won't progress just because the wake time passes. It needs a manual nudge (or execution turned on).\n2. The goal has **no evidence recorded yet** and requires independent evidence, so completing it will need a citable check of that remaining item, not just marking the task done.\n\nWant me to take the remaining item now and check it, rather than waiting for tomorrow's wake?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14117,
+        "output_tokens": 562,
+        "duration_ms": 47779,
+        "total_cost_usd": 0.0013,
+        "run_id": "2beae064-c365-4323-b7a5-93669e31cdf8"
+      }
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 **\"Finish the requested work\"** (`864dafa9`) is now **paused** (version 5).\n\nWhat that means:\n- **No automatic pursuit** \u2014 and even before the pause, automatic pursuit was already disabled for this tenant (`execution_enabled: false`), so nothing was going to advance on its own anyway.\n- **The scheduled wake is suspended** \u2014 the 2026-09-21 19:47 UTC review will no longer fire while it's paused. Paused goals don't wake.\n- **State preserved** \u2014 the linked task \"Check the remaining item\" (`0a9eedd6`) is still TODO, and the goal's success criterion (\"The requested work has been checked\") is still unmet. Pausing freezes it exactly where it is; nothing is lost.\n\nTo pick it back up later, just say so and I'll resume it (that requires your go-ahead as the operator). Want me to leave it here for now?",
+      "run": {
+        "text": "Done, operator \u2014 **\"Finish the requested work\"** (`864dafa9`) is now **paused** (version 5).\n\nWhat that means:\n- **No automatic pursuit** \u2014 and even before the pause, automatic pursuit was already disabled for this tenant (`execution_enabled: false`), so nothing was going to advance on its own anyway.\n- **The scheduled wake is suspended** \u2014 the 2026-09-21 19:47 UTC review will no longer fire while it's paused. Paused goals don't wake.\n- **State preserved** \u2014 the linked task \"Check the remaining item\" (`0a9eedd6`) is still TODO, and the goal's success criterion (\"The requested work has been checked\") is still unmet. Pausing freezes it exactly where it is; nothing is lost.\n\nTo pick it back up later, just say so and I'll resume it (that requires your go-ahead as the operator). Want me to leave it here for now?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 20542,
+        "output_tokens": 554,
+        "duration_ms": 41582,
+        "total_cost_usd": 0.0013,
+        "run_id": "267e4d78-be8f-4191-8275-a30dbc395e1c"
+      }
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 7,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}
