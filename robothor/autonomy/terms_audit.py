@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal
+from urllib.parse import urlsplit
 from uuid import uuid4
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from robothor.autonomy.crypto import open_resource, seal_resource
 from robothor.autonomy.models import Scope, StrictModel
@@ -19,10 +20,25 @@ class TermsDocument(StrictModel):
     origin: str
     text: str = Field(max_length=200_000)
     links: list[str] = Field(default_factory=list, max_length=100)
+    source: Literal["rendered", "linked_document"] = "rendered"
+    source_url: str | None = Field(default=None, max_length=2000)
+    requested_url: str | None = Field(default=None, max_length=2000)
     text_truncated: bool = False
     links_truncated: bool = False
 
     _origin = field_validator("origin")(validate_origin)
+
+    @model_validator(mode="after")
+    def source_bound(self) -> TermsDocument:
+        if self.source == "linked_document":
+            parsed = urlsplit(self.source_url or "")
+            if validate_origin(f"{parsed.scheme}://{parsed.netloc}") != self.origin:
+                raise ValueError("document_origin_mismatch")
+            requested = urlsplit(self.requested_url or "")
+            validate_origin(f"{requested.scheme}://{requested.netloc}")
+        elif self.source_url is not None or self.requested_url is not None:
+            raise ValueError("unexpected_source_url")
+        return self
 
     @field_validator("links")
     @classmethod
@@ -35,8 +51,10 @@ class TermsDocument(StrictModel):
 class TermsSnapshot(StrictModel):
     origin: str
     phase: Literal["before_input", "before_submit"]
-    documents: list[TermsDocument] = Field(min_length=1, max_length=21)
-    coverage: Literal["visible_text_only"] = "visible_text_only"
+    documents: list[TermsDocument] = Field(min_length=1, max_length=26)
+    coverage: Literal["visible_text_only", "visible_text_and_selected_documents"] = (
+        "visible_text_only"
+    )
     omitted_frames: int = Field(default=0, ge=0)
 
     _origin = field_validator("origin")(validate_origin)
@@ -55,7 +73,7 @@ class TermsAudit:
         # Revalidate constructed/copied models too. No caller-supplied metadata.
         snapshot = TermsSnapshot.model_validate(snapshot.model_dump())
         payload = snapshot.model_dump_json()
-        if len(payload.encode()) > 1_000_000:
+        if len(payload.encode()) > 5_000_000:
             raise ValueError("terms_snapshot_too_large")
         record_id = str(uuid4())
         key_id, keys = self.store.resource_keyring()
@@ -69,7 +87,11 @@ class TermsAudit:
             if version != op["grant_version"] or snapshot.origin != op["proposal"]["origin"]:
                 raise PermissionError("audit_not_authorized")
             if any(
-                doc.origin not in policy.frame_origins | {snapshot.origin}
+                (doc.origin not in policy.frame_origins | {snapshot.origin})
+                and not (
+                    doc.source == "linked_document"
+                    and (policy.allow_any_website or doc.origin in policy.origins)
+                )
                 for doc in snapshot.documents
             ):
                 raise PermissionError("audit_not_authorized")

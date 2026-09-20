@@ -23,12 +23,15 @@ from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlsplit
 from uuid import UUID  # noqa: TC003 - Pydantic resolves this annotation at runtime
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_serializer, model_validator
 
+from robothor.autonomy.material_documents import MaterialTermsUnavailableError, MaterialTermTarget
 from robothor.autonomy.models import ResourceInput, Scope, StrictModel, WebOperation, origin
 from robothor.autonomy.terms import interval_months, renewal_date
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from playwright.async_api import Frame, Locator, Page, Route
 
     from robothor.autonomy.store import AutonomyStore
@@ -62,6 +65,7 @@ class ExecutionPlan(StrictModel):
     url: str = Field(max_length=2000)
     fields: list[FieldBinding] = Field(default_factory=list, max_length=80)
     check_selectors: list[str] = Field(default_factory=list, max_length=20)
+    material_terms: list[MaterialTermTarget] = Field(default_factory=list, max_length=5)
     submit_selector: str = Field(min_length=1, max_length=500)
     success_selector: str | None = Field(default=None, min_length=1, max_length=500)
     success_text: str | None = Field(default=None, min_length=3, max_length=300)
@@ -80,6 +84,13 @@ class ExecutionPlan(StrictModel):
     _terms_origin = field_validator("terms_frame_origin")(
         lambda value: origin(value) if value else None
     )
+
+    @model_serializer(mode="wrap")
+    def compatible_plan(self, handler: Any) -> dict[str, Any]:
+        data: dict[str, Any] = handler(self)
+        if not self.material_terms:
+            data.pop("material_terms", None)
+        return data
 
     @model_validator(mode="after")
     def confirmation_pair(self) -> ExecutionPlan:
@@ -132,7 +143,13 @@ def price_minor(text: str, currency: str) -> int:
 
 
 class BrowserBroker:
-    def __init__(self, store: AutonomyStore) -> None:
+    def __init__(
+        self,
+        store: AutonomyStore,
+        *,
+        public_document_router: Callable[[Route], Awaitable[None]] | None = None,
+    ) -> None:
+        self.public_document_router = public_document_router
         from robothor.autonomy.privacy import ProtectedValues
 
         self.store = store
@@ -520,6 +537,19 @@ class BrowserBroker:
                     "reason": "validation_required",
                     "fields": invalid,
                 }
+            from robothor.autonomy.terms_capture import capture_terms
+
+            await capture_terms(
+                self,
+                scope,
+                operation_id,
+                agent_id,
+                page,
+                proposal.origin,
+                allowed_frames,
+                phase="before_input",
+                material_terms=plan.material_terms,
+            )
             await asyncio.to_thread(
                 self.store.bind_plan, scope, operation_id, agent_id, plan.model_dump(mode="json")
             )
@@ -557,18 +587,6 @@ class BrowserBroker:
                     raise ValueError("invalid_verification_code")
             # Keep the actual document origin fixed across decryption and fill.
             await self._guard_origin(page, page.main_frame, proposal.origin)
-            from robothor.autonomy.terms_capture import capture_terms
-
-            await capture_terms(
-                self,
-                scope,
-                operation_id,
-                agent_id,
-                page,
-                proposal.origin,
-                allowed_frames,
-                phase="before_input",
-            )
             # Claim once, before any credential fill can trigger site scripts.
             await asyncio.to_thread(
                 self.store.begin_submit, scope, operation_id, agent_id, workflow_id=workflow_id
@@ -599,6 +617,7 @@ class BrowserBroker:
                 proposal.origin,
                 allowed_frames,
                 phase="before_submit",
+                material_terms=plan.material_terms,
             )
             # Revalidate revocation immediately before the irreversible click.
             await asyncio.to_thread(self.store.check_authority, scope, operation_id, agent_id)
@@ -701,7 +720,7 @@ class BrowserBroker:
                 "evidence": evidence,
                 "session_resource_id": session_ref,
             }
-        except Exception:
+        except Exception as error:
             # Playwright exceptions often quote field contents. Never propagate
             # their text, stack locals, URL queries, or HTML to the parent.
             state = "reconciling" if started else "reserved"
@@ -712,5 +731,11 @@ class BrowserBroker:
             return {
                 "operation_id": operation_id,
                 "state": state,
-                "reason": "external_result_uncertain" if started else "preflight_failed",
+                "reason": "external_result_uncertain"
+                if started
+                else (
+                    "material_terms_unavailable"
+                    if isinstance(error, MaterialTermsUnavailableError)
+                    else "preflight_failed"
+                ),
             }

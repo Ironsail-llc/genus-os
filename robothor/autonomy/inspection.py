@@ -56,7 +56,10 @@ _INSPECT = (
             return {selector:selector(e),text:(e.innerText || '').trim().slice(0,101),
                 labels:names.filter(name => context.includes(name))};
         }).filter(e => e.text && e.text.length <= 100).slice(0,400);
-    return {fields, candidates};
+    const terms_links = Array.from(document.querySelectorAll('a[href]')).filter(visible)
+        .filter(e => /terms|conditions|membership agreement|subscription agreement|cancellation|privacy/i.test(e.innerText || ''))
+        .slice(0,20).map(e => ({selector:selector(e),label:bounded(e.innerText || '').slice(0,100)}));
+    return {fields, candidates, terms_links};
 }"""
 )
 
@@ -118,6 +121,7 @@ async def inspect_page(
     inspect_script = _INSPECT.replace(_SELECTOR, selector_script)
     fields: list[dict[str, Any]] = []
     terms: list[dict[str, Any]] = []
+    terms_links: list[dict[str, Any]] = []
     frames: list[dict[str, Any]] = []
     roots: list[tuple[Page | Frame, dict[str, Any]]] = [(page, {})]
     for frame in page.frames[:21]:
@@ -163,6 +167,10 @@ async def inspect_page(
                 for value in field["options"]
             ]
             fields.append({**field, **binding})
+        for link in data.get("terms_links", []):
+            if len(link["selector"]) <= 500:
+                label = protected_values.text(link["label"]) if protected_values else link["label"]
+                terms_links.append({"selector": link["selector"], "label": label, **binding})
         for candidate in data["candidates"]:
             if len(candidate["selector"]) > 500:
                 continue
@@ -173,5 +181,12 @@ async def inspect_page(
                 terms.append({**term, **binding})
     return cast(
         "dict[str, Any]",
-        _scrub({"fields": fields[:160], "terms": terms[:80], "frames": frames[:20]}),
+        _scrub(
+            {
+                "fields": fields[:160],
+                "terms": terms[:80],
+                "frames": frames[:20],
+                "terms_links": terms_links[:80],
+            }
+        ),
     )

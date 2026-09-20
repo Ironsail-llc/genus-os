@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from playwright.async_api import Page
 
     from robothor.autonomy.broker import BrowserBroker
+    from robothor.autonomy.material_documents import MaterialTermTarget
     from robothor.autonomy.models import Scope
 
 # Bound extraction in the renderer, before transferring page text to Python.
@@ -32,12 +33,17 @@ async def capture_terms(
     allowed_frames: frozenset[str],
     *,
     phase: Literal["before_input", "before_submit"],
+    material_terms: list[MaterialTermTarget] | None = None,
 ) -> dict[str, Any] | None:
     from robothor.autonomy.broker import url_origin
 
     # A merchant can reflect a code using arbitrary transformations. Encryption
     # and string masking do not justify retaining that page after code entry.
     if broker._used_transient_code:
+        if material_terms and phase == "before_input":
+            from robothor.autonomy.material_documents import MaterialTermsUnavailableError
+
+            raise MaterialTermsUnavailableError("material_terms_unavailable")
         return None
     if url_origin(page.url) != destination:
         raise PermissionError("audit_origin_changed")
@@ -75,11 +81,24 @@ async def capture_terms(
                 links_truncated=len(links) < len(value["links"]),
             )
         )
+    omitted_frames = max(0, len(page.frames) - len(documents))
+    if material_terms:
+        from robothor.autonomy.material_documents import collect_material_documents
+
+        policy = await asyncio.to_thread(
+            broker.store.check_authority, scope, operation_id, agent_id
+        )
+        documents.extend(
+            await collect_material_documents(
+                broker, page, material_terms, policy, destination, allowed_frames
+            )
+        )
     snapshot = TermsSnapshot(
         origin=destination,
         phase=phase,
         documents=documents,
-        omitted_frames=max(0, len(page.frames) - len(documents)),
+        omitted_frames=omitted_frames,
+        coverage="visible_text_and_selected_documents" if material_terms else "visible_text_only",
     )
     return await asyncio.to_thread(
         TermsAudit(broker.store).record, scope, operation_id, agent_id, snapshot

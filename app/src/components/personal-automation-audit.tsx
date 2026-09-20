@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 type Entry = { id: string; version: number; grant_version: number; phase: string; created_at: string };
-type Snapshot = { omitted_frames: number; documents: { origin: string; text: string; links: string[]; text_truncated: boolean; links_truncated: boolean }[] };
+type Snapshot = { omitted_frames: number; documents: { origin: string; text: string; links: string[]; source?: string; source_url?: string; requested_url?: string; text_truncated: boolean; links_truncated: boolean }[] };
 
 export function PersonalAutomationAudit({ operationId }: { operationId: string }) {
   const [open, setOpen] = useState(false);
@@ -34,6 +34,7 @@ export function PersonalAutomationAudit({ operationId }: { operationId: string }
   function close() {
     pending.current?.abort(); setOpen(false); setRows([]); setSnapshot(null); setMessage(""); setBusy(false);
   }
+  const capturedUrls = new Set(snapshot?.documents.flatMap(document => [document.source_url, document.requested_url]).filter(Boolean));
   if (!open) return <button className="text-sm underline" onClick={() => void load()}>Submission record</button>;
   return <div className="space-y-3 rounded border p-3">
     <button className="text-sm underline" onClick={close}>Close submission record</button>
@@ -46,14 +47,17 @@ export function PersonalAutomationAudit({ operationId }: { operationId: string }
     </div>)}
     {snapshot && <div className="space-y-3">
       {snapshot.omitted_frames > 0 && <p className="text-sm">Some embedded pages were not captured.</p>}
-      {snapshot.documents.map((document, index) => <section key={index} className="space-y-2">
+      {snapshot.documents.map((document, index) => {
+        const uncapturedLinks = document.links.filter(link => !capturedUrls.has(link));
+        return <section key={index} className="space-y-2">
         <p className="font-medium">{document.origin}</p>
+        {document.source === "linked_document" && <p className="break-all text-sm">Captured linked document · {document.source_url}</p>}
         {document.text_truncated && <p className="text-sm">Text was shortened to fit the record limit.</p>}
         <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded bg-muted p-3 text-sm">{document.text}</pre>
-        {document.links.length > 0 && <><p className="text-sm">Contents of these links were not captured:</p>
-          <ul className="space-y-1 text-xs">{document.links.map((link, i) => <li key={i} className="break-all">{link}</li>)}</ul></>}
+        {uncapturedLinks.length > 0 && <><p className="text-sm">Contents of these links were not captured:</p>
+          <ul className="space-y-1 text-xs">{uncapturedLinks.map((link, i) => <li key={i} className="break-all">{link}</li>)}</ul></>}
         {document.links_truncated && <p className="text-sm">Some link references were omitted.</p>}
-      </section>)}
+      </section>; })}
     </div>}
   </div>;
 }
