@@ -6,6 +6,81 @@ from email.utils import getaddresses, parsedate_to_datetime
 from typing import Any
 from urllib.parse import urlsplit
 
+#: Mail domains that unrelated senders share. DMARC alignment proves only that
+#: a message really came from the domain in its From header, so authorising a
+#: shared one authorises everybody who has an account there: with gmail.com
+#: allowed for a website, any Gmail user is that website's verification. A
+#: merchant that sends through an email service still signs as its own
+#: single-tenant domain (mail.acme-shop.example), and that is what belongs
+#: here. Subdomains are covered too: an address handed out by the provider is
+#: still the provider's namespace, not the website's.
+SHARED_MAIL_DOMAINS = frozenset(
+    {
+        # Consumer mailboxes.
+        "aol.com",
+        "gmail.com",
+        "gmx.com",
+        "gmx.net",
+        "googlemail.com",
+        "hotmail.com",
+        "hushmail.com",
+        "icloud.com",
+        "live.com",
+        "mac.com",
+        "mail.com",
+        "mail.ru",
+        "me.com",
+        "msn.com",
+        "naver.com",
+        "outlook.com",
+        "pm.me",
+        "proton.me",
+        "protonmail.ch",
+        "protonmail.com",
+        "qq.com",
+        "rocketmail.com",
+        "tuta.com",
+        "tutanota.com",
+        "web.de",
+        "yahoo.com",
+        "yandex.com",
+        "yandex.ru",
+        "ymail.com",
+        "zoho.com",
+        "zohomail.com",
+        # Bulk and transactional senders whose own domains carry many customers.
+        "amazonses.com",
+        "brevo.com",
+        "ccsend.com",
+        "constantcontact.com",
+        "createsend.com",
+        "elasticemail.com",
+        "klaviyomail.com",
+        "mailchimp.com",
+        "mailerlite.com",
+        "mailgun.net",
+        "mailgun.org",
+        "mailjet.com",
+        "mandrillapp.com",
+        "mcsv.net",
+        "mtasv.net",
+        "postmarkapp.com",
+        "rsgsv.net",
+        "sendgrid.net",
+        "sendinblue.com",
+        "sendpulse.com",
+        "smtp2go.com",
+        "sparkpostmail.com",
+        "sparkpostmail1.com",
+    }
+)
+
+
+def shared_mail_domain(domain: str) -> bool:
+    """A shared provider's own namespace, apex or subdomain."""
+    domain = domain.strip().strip(".").lower()
+    return any(domain == shared or domain.endswith("." + shared) for shared in SHARED_MAIL_DOMAINS)
+
 
 def extract_verification(
     message: dict[str, Any],
@@ -28,7 +103,13 @@ def extract_verification(
     if len(sender) != 1 or recipient.lower() not in recipients:
         return None
     domain = sender[0][1].rsplit("@", 1)[-1].lower()
-    if domain != host and not domain.endswith("." + host) and domain not in sender_domains:
+    # Authority written before shared providers were refused, or restored from
+    # an older grant, is not a reason to accept one now.
+    if (
+        domain != host
+        and not domain.endswith("." + host)
+        and (domain not in sender_domains or shared_mail_domain(domain))
+    ):
         return None
     authentication = headers.get("authentication-results", "").lower()
     # This adapter reads Gmail, whose receiving MTA adds this header. A

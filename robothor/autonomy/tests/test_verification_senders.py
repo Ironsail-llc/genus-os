@@ -1,6 +1,8 @@
 """Additional mail senders are explicit, destination-bound owner authority."""
 
+import base64
 from datetime import UTC, datetime
+from email.utils import format_datetime
 
 import pytest
 from pydantic import ValidationError
@@ -193,3 +195,133 @@ async def test_mailbox_handler_uses_grant_not_agent_claims_and_rechecks_revocati
     else:
         assert "id" not in result
         assert len(store.resources(identity)) == 1
+
+
+@pytest.mark.parametrize(
+    "domain",
+    [
+        "gmail.com",
+        "googlemail.com",
+        "outlook.com",
+        "hotmail.com",
+        "live.com",
+        "yahoo.com",
+        "icloud.com",
+        "proton.me",
+        "sendgrid.net",
+        "amazonses.com",
+        "mailgun.org",
+        "postmarkapp.com",
+        "mcsv.net",
+        "brevo.com",
+        "em1234.sendgrid.net",
+        "us-east-1.amazonses.com",
+    ],
+)
+def test_a_shared_mail_domain_cannot_be_authorized_as_a_verification_sender(domain):
+    """DMARC passes for every user of a shared domain, so it proves nothing."""
+    with pytest.raises(ValidationError):
+        Delegation.model_validate(
+            {
+                **policy().model_dump(),
+                "verification_senders": {"https://shop.example": [domain]},
+            }
+        )
+
+
+def test_a_single_tenant_subdomain_of_a_shop_is_still_authorizable():
+    grant = Delegation.model_validate(
+        {
+            **policy().model_dump(),
+            "verification_senders": {"https://shop.example": ["mail.acme-shop.example"]},
+        }
+    )
+    assert grant.verification_senders == {
+        "https://shop.example": frozenset({"mail.acme-shop.example"})
+    }
+
+
+@pytest.mark.parametrize("domain", ["gmail.com", "sendgrid.net"])
+def test_a_shared_mail_domain_stored_before_this_rule_is_still_refused_at_match_time(domain):
+    """Authority written by an earlier release is not a reason to accept it."""
+    assert extract(external_message(domain), frozenset({domain})) is None
+
+
+async def test_the_oldest_matching_message_wins_over_a_later_authorized_sender(
+    store, identity, monkeypatch
+):
+    """Gmail answers newest first; a sender who replies after the site must not win."""
+    import json
+    from datetime import timedelta
+
+    from robothor import constants
+    from robothor.autonomy.models import ResourceInput
+    from robothor.autonomy.tests.test_store import proposal
+    from robothor.crm import dal
+    from robothor.engine.tools import dispatch
+    from robothor.engine.tools.handlers import autonomy, gws
+
+    settings = store.settings(identity)
+    identity = identity.model_copy(update={"owner_id": "person:alice"})
+    store.configure(identity, settings)
+    monkeypatch.setattr(autonomy, "AutonomyStore", lambda: store)
+    monkeypatch.setattr(autonomy, "scope_for_actor", lambda *args: identity)
+    monkeypatch.setattr(constants, "DEFAULT_TENANT", identity.tenant_id)
+    monkeypatch.setattr(dal, "get_owner_person", lambda *args: {"id": "alice"})
+    monkeypatch.setattr(
+        dispatch, "get_agent_toolset", lambda: {"gws_gmail_search", "gws_gmail_get"}
+    )
+    grant = store.create_grant(
+        identity,
+        Delegation.model_validate(
+            {
+                **policy().model_dump(),
+                "verification_senders": {"https://shop.example": ["mail.provider.example"]},
+            }
+        ),
+    )
+    op = store.reserve(identity, grant["id"], "main", proposal())
+    profile = store.put_resource(
+        identity,
+        ResourceInput(
+            kind="profile", label="Contact", payload=json.dumps({"email": "alice@example.com"})
+        ),
+    )
+
+    def stamped(message, code, offset):
+        when = datetime.now(UTC) + timedelta(seconds=offset)
+        message["internalDate"] = str(int(when.timestamp() * 1000))
+        for item in message["payload"]["headers"]:
+            if item["name"] == "Date":
+                item["value"] = format_datetime(when)
+        message["payload"]["body"]["data"] = base64.urlsafe_b64encode(
+            f"Your verification code is {code}".encode()
+        ).decode()
+        return message
+
+    messages = {
+        "later": stamped(external_message(), "999999", 20),
+        "earlier": stamped(email(), "123456", 1),
+    }
+
+    async def search(args, ctx):
+        # Newest first, exactly as the mailbox returns them.
+        return {"messages": [{"id": "later"}, {"id": "earlier"}]}
+
+    monkeypatch.setitem(gws.HANDLERS, "gws_gmail_search", search)
+    monkeypatch.setattr(gws, "_fetch_message", lambda message_id, *args: messages[message_id])
+    result = await autonomy.handle(
+        {
+            "kind": "email_verification",
+            "operation_id": op["id"],
+            "profile_id": profile["id"],
+        },
+        dispatch.ToolContext(
+            agent_id="main", user_id="actor", user_role="owner", tenant_id=identity.tenant_id
+        ),
+    )
+    assert "id" in result, result
+    assert (
+        store.consume_resource(identity, result["id"], "https://shop.example")["password"]
+        == "123456"
+    )

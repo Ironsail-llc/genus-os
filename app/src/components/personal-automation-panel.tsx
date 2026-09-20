@@ -239,10 +239,12 @@ export function PersonalAutomationPanel() {
           onChange={event => setAnyWebsite(event.target.checked)} />Allow any public HTTPS website</label>
         <label className="block">Websites, one per line<textarea name="origins" className={inputClass}
           placeholder="https://example.com" required={!anyWebsite} disabled={anyWebsite} /></label>
+        <p className="text-sm text-muted-foreground">Contract documents linked from a page are read only from the website the task is on, the websites listed here and the payment providers below. Allowing any website does not change that.</p>
         <label className="block">Embedded payment providers, if needed<textarea name="frames" className={inputClass} placeholder="https://payments.example.com" /></label>
         <label className="block">Additional verification senders<textarea name="verification_senders" className={inputClass}
-          maxLength={24080} placeholder="https://shop.example = mail.provider.example" /></label>
+          maxLength={24080} placeholder="https://shop.example = mail.shop-notices.example" /></label>
         <p className="text-sm text-muted-foreground">Optional: authorize an external email sender for a specific website. Enter website = sender domain, one website per line; separate multiple sender domains with commas. The website’s own domain is already supported.</p>
+        <p className="text-sm text-muted-foreground">The sender domain must belong to that website alone. A shared mail provider (gmail.com, outlook.com, sendgrid.net, amazonses.com and the like) is refused: anyone with an account there would then count as this website’s verification.</p>
         <label className="block">Allowed purposes, one per line<textarea name="purposes" className={inputClass}
           maxLength={24080} placeholder="Personal memberships" /></label>
         <p className="text-sm text-muted-foreground">Leave empty for any task covered by this grant.</p>

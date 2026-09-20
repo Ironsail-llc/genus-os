@@ -196,6 +196,10 @@ class Delegation(StrictModel):
                     )
                 ):
                     raise ValueError("expected an exact mail sender domain")
+                from robothor.autonomy.verification import shared_mail_domain
+
+                if shared_mail_domain(domain):
+                    raise ValueError("mail sender must belong to that website alone")
                 try:
                     ipaddress.ip_address(domain)
                 except ValueError:

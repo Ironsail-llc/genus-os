@@ -30,9 +30,16 @@ class MaterialTermsUnavailableError(ValueError):
 
 
 def permitted(destination: str, policy: Delegation, operation_origin: str) -> bool:
-    return policy.allow_any_website or destination in policy.origins | policy.frame_origins | {
-        operation_origin
-    }
+    """Where a contract document may be read from, whatever the browsing grant.
+
+    allow_any_website is authority to visit a website the owner picked at the
+    time. It is not authority for that website's markup to name a third party
+    whose text then enters the owner's own terms record: a merchant page linked
+    an unrelated origin and it was fetched. The pre-check, the route allow-list
+    and the re-check after redirects all ask this, so a destination outside the
+    grant is refused before a request is made and again after one lands.
+    """
+    return destination in policy.origins | policy.frame_origins | {operation_origin}
 
 
 async def _target_url(
@@ -74,7 +81,7 @@ async def _read(
     broker: BrowserBroker, page: Page, url: str, policy: Delegation, destination: str
 ) -> TermsDocument:
     from robothor.autonomy.broker import url_origin
-    from robothor.autonomy.worker import public_request
+    from robothor.autonomy.worker import public_document_request
 
     if not permitted(url_origin(url), policy, destination):
         raise MaterialTermsUnavailableError("material_terms_unavailable")
@@ -97,7 +104,7 @@ async def _read(
                 and permitted(url_origin(request.url), policy, destination)
             )
             if allowed:
-                await (broker.public_document_router or public_request)(route)
+                await (broker.public_document_router or public_document_request)(route)
             else:
                 await route.abort()
         except Exception:

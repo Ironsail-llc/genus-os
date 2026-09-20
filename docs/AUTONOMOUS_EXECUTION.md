@@ -101,6 +101,16 @@ standing grant or use **Additional verification senders** on the Personal
 automation page: each HTTPS website maps to exact additional mail sender domains.
 These domains are bound to that destination, do not include their subdomains,
 and still require authenticated mail addressed to the enrolled recipient.
+A shared mail domain cannot be authorized: DMARC passes for `gmail.com` on every
+Gmail message, so authorizing a consumer mailbox or a bulk-sender apex such as
+`sendgrid.net` or `amazonses.com` would make any account there proof of that
+website's verification. Consumer and shared-ESP domains (and anything under
+them) are refused when the grant is created and again when a message is read, so
+authority written by an earlier release cannot be used either. A sender domain
+must belong to that website alone, for example `mail.acme-shop.example`.
+When several messages match, the earliest one is read: the mailbox answers
+newest first, and an authorized sender must not be able to win by replying after
+the website's own message.
 Agent arguments and page content cannot add trusted senders. Additional senders
 do not authorize off-origin verification links. Authority is checked again after
 mailbox I/O; revoked grants cannot enroll the retrieved factor. Existing grants
@@ -492,11 +502,16 @@ containing a `selector` and optional `frame_selector`/`frame_origin`. Inspection
 returns candidate `terms_links` as labels and selectors, without exposing private
 URLs. For each selected link, the broker creates a fresh browser context with no
 applicant cookies or storage, scripts disabled, and only document GET requests
-allowed. The selected origin and every redirect must be covered by the standing
-grant (including broad website authority where granted); private network checks
-still apply. Public HTML and plain text are supported, up to 200,000 characters
-per document and 30 seconds total per capture phase. Selected content is never
-silently shortened.
+allowed. The selected origin must be one of the grant's listed websites, its
+authorized payment-provider frames, or the operation's own website. Broad
+website authority ("allow any public HTTPS website") does not widen this: it is
+authority to visit a website the owner chose, not authority for that website's
+markup to name a third party whose text then enters the owner's terms record.
+Private network checks still apply, and a redirect is followed only within the
+same origin. Responses are bounded before they are parsed: a document declaring
+or streaming more than 2 MiB is refused. Public HTML and plain text are
+supported, up to 200,000 characters per document and 30 seconds total per
+capture phase. Selected content is never silently shortened.
 
 Successful captures use `visible_text_and_selected_documents` and preserve both
 the requested and final document URLs inside encryption. The viewer identifies

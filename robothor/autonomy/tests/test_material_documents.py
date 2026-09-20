@@ -1,6 +1,9 @@
 """Selected material documents are isolated reads, not authority from page links."""
 
+import asyncio
+import contextlib
 import json
+from types import SimpleNamespace
 
 import pytest
 from playwright.async_api import async_playwright
@@ -10,13 +13,19 @@ from robothor.autonomy.terms_audit import TermsAudit
 from robothor.autonomy.tests.test_terms_audit import operation
 
 
-@pytest.mark.parametrize("external_document", [False, True])
+@pytest.mark.parametrize(
+    "target,origins",
+    [
+        ("https://club.example/terms", ("https://club.example",)),
+        ("https://legal.example/terms", ("https://club.example", "https://legal.example")),
+    ],
+    ids=["operation_origin", "authorized_other_origin"],
+)
 @pytest.mark.timeout(60)
 async def test_selected_html_terms_are_captured_without_parent_cookies_or_scripts(
-    store, identity, external_document
+    store, identity, target, origins
 ):
-    op = operation(store, identity, allow_any_website=external_document)
-    target = "https://legal.example/terms" if external_document else "https://club.example/terms"
+    op = operation(store, identity, origins=origins)
     requests = []
 
     async def website(route):
@@ -262,3 +271,227 @@ async def test_failed_selection_can_be_corrected_on_the_same_operation(store, id
         final = await broker.execute_on_page(identity, op["id"], "main", plan("#terms"), page)
         await browser.close()
     assert final["state"] == "completed"
+
+
+@pytest.mark.timeout(60)
+async def test_allow_any_website_does_not_widen_material_document_destinations(store, identity):
+    """Browsing authority is not document authority: a link off the grant is refused."""
+    op = operation(store, identity, allow_any_website=True)
+    requests = []
+
+    async def website(route):
+        requests.append(route.request.url)
+        if route.request.url.endswith("/terms"):
+            await route.fulfill(
+                body="<body>Annual membership renews on the agreed date.</body>",
+                content_type="text/html",
+            )
+        else:
+            await route.fulfill(
+                body='<body><a id="terms" href="https://legal.example/terms">Terms</a><button id="submit" onclick="document.querySelector(\'#done\').hidden=false">Apply</button><p id="done" hidden>Application received</p></body>',
+                content_type="text/html",
+            )
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        page = await browser.new_page()
+        await page.route("**/*", website)
+        result = await BrowserBroker(store, public_document_router=website).execute_on_page(
+            identity,
+            op["id"],
+            "main",
+            ExecutionPlan(
+                url="https://club.example/apply",
+                submit_selector="#submit",
+                success_selector="#done",
+                success_text="Application received",
+                material_terms=[{"selector": "#terms"}],
+            ),
+            page,
+        )
+        await browser.close()
+    assert result["state"] == "reserved" and result["reason"] == "material_terms_unavailable"
+    assert requests == ["https://club.example/apply"]
+    assert store.operation(identity, op["id"])["state"] == "reserved"
+
+
+@pytest.mark.timeout(60)
+async def test_allow_any_website_does_not_widen_a_document_redirect(store, identity):
+    """The re-check after a redirect is bound by the same authority as the request."""
+    op = operation(store, identity, allow_any_website=True)
+    requests = []
+
+    async def website(route):
+        requests.append(route.request.url)
+        if route.request.url.endswith("/redirect"):
+            await route.fulfill(status=302, headers={"location": "https://foreign.example/terms"})
+        elif route.request.url.endswith("/terms"):
+            await route.fulfill(body="<body>Terms</body>", content_type="text/html")
+        else:
+            await route.fulfill(
+                body='<body><a id="terms" href="/redirect">Terms</a><button id="submit">Apply</button><p id="done" hidden>Application received</p></body>',
+                content_type="text/html",
+            )
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        page = await browser.new_page()
+        await page.route("**/*", website)
+        result = await BrowserBroker(store, public_document_router=website).execute_on_page(
+            identity,
+            op["id"],
+            "main",
+            ExecutionPlan(
+                url="https://club.example/apply",
+                submit_selector="#submit",
+                success_selector="#done",
+                success_text="Application received",
+                material_terms=[{"selector": "#terms"}],
+            ),
+            page,
+        )
+        await browser.close()
+    assert result["state"] == "reserved" and result["reason"] == "material_terms_unavailable"
+    assert not any(url.startswith("https://foreign.example") for url in requests)
+
+
+@pytest.mark.timeout(60)
+async def test_a_document_on_a_private_address_is_refused_by_the_real_router(store, identity):
+    """No stub router: the request crosses robothor.autonomy.worker.public_request."""
+    op = operation(store, identity, origins=("https://club.example", "https://127.0.0.1:9"))
+
+    async def website(route):
+        await route.fulfill(
+            body='<body><a id="terms" href="https://127.0.0.1:9/terms">Terms</a><button id="submit">Apply</button><p id="done" hidden>Application received</p></body>',
+            content_type="text/html",
+        )
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        page = await browser.new_page()
+        await page.route("**/*", website)
+        result = await BrowserBroker(store).execute_on_page(
+            identity,
+            op["id"],
+            "main",
+            ExecutionPlan(
+                url="https://club.example/apply",
+                submit_selector="#submit",
+                success_selector="#done",
+                success_text="Application received",
+                material_terms=[{"selector": "#terms"}],
+            ),
+            page,
+        )
+        await browser.close()
+    assert result["state"] == "reserved" and result["reason"] == "material_terms_unavailable"
+    assert store.operation(identity, op["id"])["state"] == "reserved"
+
+
+class StubRoute:
+    """A route that records the decision instead of reaching a network."""
+
+    def __init__(self, url, method="GET", headers=None):
+        self.request = SimpleNamespace(
+            url=url, method=method, headers=headers or {}, resource_type="document"
+        )
+        self.calls = []
+        self.fulfilled = {}
+
+    async def abort(self, *args, **kwargs):
+        self.calls.append("abort")
+
+    async def continue_(self, *args, **kwargs):
+        self.calls.append("continue")
+
+    async def fulfill(self, **kwargs):
+        self.calls.append("fulfill")
+        self.fulfilled = kwargs
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://127.0.0.1/terms",
+        "https://localhost/terms",
+        "https://[::1]/terms",
+        "https://10.1.2.3/terms",
+        "https://192.168.1.10/terms",
+        "https://169.254.169.254/latest/meta-data",
+        "ftp://93.184.216.34/terms",
+        "https:///terms",
+    ],
+)
+async def test_public_request_refuses_every_destination_that_is_not_public(url):
+    from robothor.autonomy.worker import public_request
+
+    route = StubRoute(url)
+    await public_request(route)
+    assert route.calls == ["abort"]
+
+
+async def test_public_request_lets_a_public_destination_through():
+    from robothor.autonomy.worker import public_request
+
+    # A literal address: getaddrinfo answers it without a resolver, and the
+    # stub route means nothing is ever connected to.
+    route = StubRoute("https://93.184.216.34/terms")
+    await public_request(route)
+    assert route.calls == ["continue"]
+
+
+async def test_public_document_request_refuses_a_private_destination():
+    from robothor.autonomy.worker import public_document_request
+
+    route = StubRoute("https://127.0.0.1/terms")
+    await public_document_request(route)
+    assert route.calls == ["abort"]
+
+
+async def local_document_server(response):
+    """Serve one fixed HTTP response on the loopback interface."""
+
+    async def handle(reader, writer):
+        with contextlib.suppress(Exception):
+            await reader.readuntil(b"\r\n\r\n")
+            writer.write(response)
+            await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    return server, server.sockets[0].getsockname()[1]
+
+
+async def any_destination(url):
+    return True
+
+
+@pytest.mark.parametrize("case", ["ordinary", "declared_oversize", "undeclared_oversize"])
+@pytest.mark.timeout(60)
+async def test_public_document_request_bounds_the_bytes_it_accepts(monkeypatch, case):
+    from robothor.autonomy import worker
+
+    if case == "ordinary":
+        body = b"<body>Annual membership renews on the agreed date.</body>"
+        header = f"Content-Length: {len(body)}\r\n"
+    elif case == "declared_oversize":
+        # A declared 40 MB document is refused before a byte of it is read.
+        body = b"x" * 1000
+        header = "Content-Length: 41943040\r\n"
+    else:
+        body = b"x" * (worker.MAX_DOCUMENT_BYTES + 1024)
+        header = "Connection: close\r\n"
+    response = f"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n{header}\r\n".encode() + body
+    server, port = await local_document_server(response)
+    # The address check has tests of its own; this one bounds the transfer.
+    monkeypatch.setattr(worker, "public_destination", any_destination)
+    route = StubRoute(f"http://127.0.0.1:{port}/terms")
+    try:
+        await worker.public_document_request(route)
+    finally:
+        server.close()
+        await server.wait_closed()
+    assert route.calls == (["fulfill"] if case == "ordinary" else ["abort"])
+    if case == "ordinary":
+        assert route.fulfilled["body"] == body
+        assert route.fulfilled["headers"]["content-type"] == "text/html"
