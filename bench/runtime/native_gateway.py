@@ -4,6 +4,7 @@ Experimental: the host must bootstrap the manifest, identity, policies and
 session. This does not implement that bootstrap or checkpoint continuation.
 """
 
+import asyncio
 from copy import deepcopy
 
 from robothor.engine.runtime.contracts import RuntimeStoppedError
@@ -31,6 +32,8 @@ class NativeGateway:
             raise ValueError("candidate schemas exceed prepared direct-tool authority")
         self.turn, self._verify = turn, verify
         self._bound = False
+        self._uncertain = False
+        self._lock = asyncio.Lock()
         self._proxy = RunToolProxy(
             runner=runner,
             req=turn,
@@ -60,7 +63,7 @@ class NativeGateway:
     @property
     def verified(self):
         # A trusted independent state check, never a model's success string.
-        return self._bound and self._verify() is True
+        return self._bound and not self._uncertain and self._verify() is True
 
     def admit(self, tenant):
         require_time()
@@ -69,9 +72,28 @@ class NativeGateway:
             raise ValueError("native gateway tenant mismatch")
         if session._interrupt_requested or session.was_interrupted:
             raise RuntimeStoppedError("native session stopped")
+        if self._uncertain:
+            raise RuntimeError("native tool execution requires reconciliation")
 
     async def invoke(self, tenant, name, arguments):
-        self.admit(tenant)
-        if not self._bound:
-            raise ValueError("native gateway has no persisted run binding")
-        return await self._proxy.call(name, arguments)
+        from robothor.engine.tracking import create_steps_batch
+
+        async with self._lock:
+            self.admit(tenant)
+            if not self._bound:
+                raise ValueError("native gateway has no persisted run binding")
+            if self.verified:
+                return {"status": "already_verified", "message": "No further tool work required."}
+            try:
+                result = await self._proxy.call(name, arguments)
+                run = self.turn.session.run
+                pending = run.steps[run.persisted_step_count :]
+                # Persist before returning to the framework. A failed acknowledgement
+                # stops this execution; it must not turn into a repeated business call.
+                # Native batch insertion is idempotent on host-minted step IDs.
+                await asyncio.to_thread(create_steps_batch, pending)
+                run.persisted_step_count = len(run.steps)
+                return result
+            except BaseException:
+                self._uncertain = True
+                raise

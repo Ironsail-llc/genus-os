@@ -285,6 +285,46 @@
       "seconds": 14.54,
       "warnings": 1,
       "scope": "Pinned candidate environment; private databases and synthetic providers; native wire profile supplied. Warning: pytest-timeout is not installed in the isolated candidate environment."
+    },
+    "candidate_native_dispatch": {
+      "initial_duplicate_proposals": {
+        "failed": 2,
+        "frameworks": [
+          "pydantic-ai",
+          "deepagents"
+        ],
+        "observed_dispatch_effect_counts": [
+          1,
+          0
+        ],
+        "expected": [
+          1
+        ]
+      },
+      "final_combined_suite": {
+        "passed": 115,
+        "failed": 0,
+        "seconds": 17.06,
+        "environment": "Fresh venv: editable native dev/api requirements plus bench/runtime/candidates.lock"
+      },
+      "native_dispatch_cases": 16,
+      "native_gateway_proxy_size": {
+        "passed": 44,
+        "failed": 0,
+        "seconds": 3.67
+      },
+      "native_wire_capture": {
+        "passed": 1,
+        "failed": 0,
+        "seconds": 2.65,
+        "warnings": 1
+      },
+      "scope": "Synthetic provider/handler, real native admission/registry/dispatch, private PostgreSQL runs/steps/receipts. Permission decision and external audit sink intercepted. No production business calls.",
+      "fixes": [
+        "Publish native steps before returning to framework",
+        "Stop queued dispatch after verified completion",
+        "Uncertain tool/step execution denies further calls"
+      ]
     }
   },
   "calendar": {

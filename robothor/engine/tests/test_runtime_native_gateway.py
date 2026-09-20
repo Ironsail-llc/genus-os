@@ -14,7 +14,8 @@ from robothor.engine.tool_turn import ToolTurnRequest
 
 
 @pytest.fixture
-def prepared(tmp_path):
+def prepared(tmp_path, monkeypatch):
+    monkeypatch.setattr("robothor.engine.tracking.create_steps_batch", lambda steps: len(steps))
     runner = ToolAdmissionMixin()
     runner.registry = MagicMock()
     runner.registry.execute = AsyncMock(return_value={"ok": True})

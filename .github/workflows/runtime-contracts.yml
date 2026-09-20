@@ -55,6 +55,11 @@ jobs:
           ROBOTHOR_RUNTIME_NATIVE_WIRE_ARTIFACT=/tmp/runtime-native-request.json PYDANTIC_AI_NO_BANNER=1 /tmp/runtime-candidates/bin/python -m pytest -q bench/runtime/test_goal_lifecycle.py bench/runtime/test_native_profile.py bench/runtime/test_screening_configuration.py bench/runtime/test_store_host.py bench/runtime/test_adapter.py bench/runtime/test_candidate_boundaries.py bench/runtime/test_candidate_durable_budget.py
           PYDANTIC_AI_NO_BANNER=1 /tmp/runtime-candidates/bin/python -m bench.runtime.screen_candidates --output /tmp/screening.json
           python -c 'import json; r=json.load(open("/tmp/screening.json")); assert all(s["status"]=="completed" and s["verified"] and s["single_write"] for s in r["samples"])'
+      - name: Candidate frameworks through native business controls
+        run: |
+          python -m venv /tmp/runtime-native-candidates
+          /tmp/runtime-native-candidates/bin/pip install -e '.[dev,api]' -r bench/runtime/candidates.lock
+          PYDANTIC_AI_NO_BANNER=1 /tmp/runtime-native-candidates/bin/python -m pytest -q --no-cov bench/runtime/test_native_dispatch.py
 
   browser-contracts:
     runs-on: ubuntu-latest
