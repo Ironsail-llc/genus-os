@@ -240,3 +240,81 @@ async def test_capture_rechecks_confirmation_and_origin(store, identity, page_st
             assert store.operation(identity, op)["state"] == "completed"
         finally:
             await browser.close()
+
+
+async def test_cross_agent_receipt_reach_is_denied_not_reported_as_a_flaky_page(store, identity):
+    """A denial is not a torn page; it gets its own status and its own event."""
+    op = purchase(store, identity)
+    store.finish(
+        identity,
+        op,
+        "completed",
+        {"origin": "https://shop.example", "confirmation_sha256": "a" * 64},
+    )
+
+    class NoPageAccess:
+        def __getattr__(self, name):
+            pytest.fail("Denied receipt capture touched the page")
+
+    result = await capture_receipt(BrowserBroker(store), identity, op, "intruder", NoPageAccess())
+    assert result == {"capture_status": "denied"}
+    assert TermsAudit(store).list(identity, op) == []
+    with store.transaction() as cur:
+        cur.execute(
+            "SELECT event FROM autonomy_events WHERE tenant_id=%s AND owner_id=%s AND subject_id=%s",
+            (identity.tenant_id, identity.owner_id, op),
+        )
+        assert "receipt_capture_denied" in [row["event"] for row in cur.fetchall()]
+    assert store.operation(identity, op)["state"] == "completed"
+
+
+async def test_receipt_text_is_scrubbed_of_credential_shapes(store, identity):
+    op = purchase(store, identity)
+    phrase = "Order confirmed"
+    store.finish(
+        identity,
+        op,
+        "completed",
+        {
+            "origin": "https://shop.example",
+            "confirmation_sha256": hashlib.sha256(phrase.encode()).hexdigest(),
+        },
+    )
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        try:
+            page = await browser.new_page()
+            await page.route(
+                "**/*",
+                lambda r: r.fulfill(
+                    content_type="text/html",
+                    body="<h1 id='done'>Order confirmed</h1>"
+                    "<p>Support key AKIAIOSFODNN7EXAMPLE</p>"
+                    "<p>Card 4242424242424242 charged</p>"
+                    "<p>Item: one paperback book</p>",
+                ),
+            )
+            await page.goto("https://shop.example/receipt")
+            result = await capture_receipt(
+                BrowserBroker(store),
+                identity,
+                op,
+                "main",
+                page,
+                plan=ExecutionPlan(
+                    url=page.url,
+                    submit_selector="#unused",
+                    success_selector="#done",
+                    success_text=phrase,
+                ),
+            )
+            assert result["capture_status"] == "captured"
+            text = TermsAudit(store).read(identity, op, result["id"])["snapshot"]["documents"][0][
+                "text"
+            ]
+            assert "AKIAIOSFODNN7EXAMPLE" not in text
+            assert "4242424242424242" not in text
+            # A payment-shaped line goes; the rest of the receipt stays readable.
+            assert "one paperback book" in text and "Order confirmed" in text
+        finally:
+            await browser.close()

@@ -57,27 +57,33 @@ async def test_after_transient_code_no_page_text_is_persisted(store, identity):
     from robothor.autonomy.terms_capture import capture_terms
 
     op = operation(store, identity)
+    store.begin_submit(identity, op["id"], "main")
     broker = BrowserBroker(store)
     broker._used_transient_code = True
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True)
         page = await browser.new_page()
         await page.set_content("<body>Card verification code 123</body>")
-        assert (
-            await capture_terms(
-                broker,
-                identity,
-                op["id"],
-                "main",
-                page,
-                "https://club.example",
-                frozenset(),
-                phase="before_submit",
-            )
-            is None
+        ref = await capture_terms(
+            broker,
+            identity,
+            op["id"],
+            "main",
+            page,
+            "https://club.example",
+            frozenset(),
+            phase="before_submit",
         )
         await browser.close()
-    assert TermsAudit(store).list(identity, op["id"]) == []
+    # The suppression is recorded; the page text is not.
+    audit = TermsAudit(store)
+    rows = audit.list(identity, op["id"])
+    assert [(r["phase"], r["coverage"]) for r in rows] == [
+        ("before_submit", "suppressed_after_code")
+    ]
+    saved = audit.read(identity, op["id"], ref["id"])["snapshot"]
+    assert saved["documents"][0]["text"] == ""
+    assert "verification code" not in str(saved)
 
 
 @pytest.mark.timeout(60)
@@ -146,6 +152,12 @@ async def test_real_code_entry_keeps_only_the_pre_input_snapshot(store, identity
     assert result["state"] == "completed"
     audit = TermsAudit(store)
     rows = audit.list(identity, op["id"])
-    assert [row["phase"] for row in rows] == ["before_input"]
-    saved = json.dumps(audit.read(identity, op["id"], rows[0]["id"]))
+    # The pre-input snapshot is the only one with page text; the pre-submit
+    # observation is refused after code entry, and says so in its own row.
+    assert [(row["phase"], row["coverage"]) for row in rows] == [
+        ("before_input", "visible_text_only"),
+        ("before_submit", "suppressed_after_code"),
+    ]
+    saved = json.dumps([audit.read(identity, op["id"], row["id"]) for row in rows])
     assert "123456" not in saved and "MTIzNDU2" not in saved
+    assert audit.read(identity, op["id"], rows[1]["id"])["snapshot"]["documents"][0]["text"] == ""

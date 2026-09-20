@@ -34,7 +34,9 @@ async def capture_terms(
     *,
     phase: Literal["before_input", "before_submit"],
     material_terms: list[MaterialTermTarget] | None = None,
-) -> dict[str, Any] | None:
+    # Never ``None`` now: a refused observation is recorded rather than skipped,
+    # so "no row for this phase" no longer means "we did not look".
+) -> dict[str, Any]:
     from robothor.autonomy.broker import url_origin
 
     # A merchant can reflect a code using arbitrary transformations. Encryption
@@ -44,7 +46,20 @@ async def capture_terms(
             from robothor.autonomy.material_documents import MaterialTermsUnavailableError
 
             raise MaterialTermsUnavailableError("material_terms_unavailable")
-        return None
+        # Suppressing the CONTENT is correct; suppressing the RECORD is not.
+        # Card payments and emailed/TOTP sign-ups always reach this branch, so
+        # without a row every one of them would show an empty audit trail that
+        # reads exactly like the observation feature being switched off. Record
+        # a zero-text row instead: the page is still never read here.
+        suppressed = TermsSnapshot(
+            origin=destination,
+            phase=phase,
+            documents=[TermsDocument(origin=destination, text="")],
+            coverage="suppressed_after_code",
+        )
+        return await asyncio.to_thread(
+            TermsAudit(broker.store).record, scope, operation_id, agent_id, suppressed
+        )
     if url_origin(page.url) != destination:
         raise PermissionError("audit_origin_changed")
     documents = []

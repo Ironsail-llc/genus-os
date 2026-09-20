@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from contextlib import suppress
 from typing import TYPE_CHECKING, Any, Literal
 
 from robothor.autonomy.broker import url_origin
@@ -15,6 +16,23 @@ if TYPE_CHECKING:
 
     from robothor.autonomy.broker import BrowserBroker, ExecutionPlan
     from robothor.autonomy.models import Scope
+
+
+def _scrub_body(text: str) -> str:
+    """The generic inspection scrub, applied LINE BY LINE to a receipt body.
+
+    ``inspection._scrub`` is whole-value: its ``redact_for_audit`` half replaces
+    the ENTIRE string with ``[REDACTED]`` as soon as it finds one 12-19 digit
+    run anywhere in it. That is right for a short inspected field and wrong for
+    a receipt, where a single order, invoice or tracking number would delete the
+    whole observation the archive exists to keep. Bounding it to the line keeps
+    the same policy -- nothing payment-shaped or credential-shaped survives --
+    and costs one line instead of the page. This runs on top of, not instead of,
+    ``broker.protected_values.text``, which masks the values the broker filled.
+    """
+    from robothor.autonomy.inspection import _scrub
+
+    return "\n".join(str(_scrub(line)) for line in text.splitlines())
 
 
 async def _witness(
@@ -58,7 +76,7 @@ async def _page_document(
         broker, page, op, plan, retained_selector
     ):
         raise ValueError("receipt_confirmation_changed")
-    masked = broker.protected_values.text(raw).encode()
+    masked = _scrub_body(broker.protected_values.text(raw)).encode()
     text = masked[:100_000].decode(errors="ignore")
     return TermsDocument(
         origin=destination, text=text, text_truncated=len(raw) > 200_000 or len(masked) > 100_000
@@ -82,7 +100,25 @@ async def capture_receipt(
             op = await asyncio.to_thread(broker.store.operation, scope, operation_id)
             if op["proposal"]["action"] not in {"purchase", "subscription"}:
                 return None
-            if op["agent_id"] != agent_id or op["state"] != "completed":
+            if op["agent_id"] != agent_id:
+                # An agent reaching for ANOTHER agent's receipt is not a torn
+                # page. Reporting it as "unavailable" made a cross-agent probe
+                # look like a network blip, with no event and no row. Raising
+                # instead would satisfy the comment above less well -- two of
+                # the three callers wrap this in a broad ``except`` that would
+                # re-label a durably completed operation as "reconciling" --
+                # so the denial gets its own status and its own audit event.
+                # A failed write must not downgrade the denial to "unavailable":
+                # the status is the second, independent signal of the same fact.
+                with suppress(Exception):
+                    await asyncio.to_thread(
+                        broker.store.record_operation_event,
+                        scope,
+                        operation_id,
+                        "receipt_capture_denied",
+                    )
+                return {"capture_status": "denied"}
+            if op["state"] != "completed":
                 raise PermissionError("receipt_not_authorized")
             status: Literal["captured", "withheld_after_code", "unavailable"] = "captured"
             document = TermsDocument(origin=op["proposal"]["origin"], text="")

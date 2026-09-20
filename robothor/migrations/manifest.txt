@@ -140,3 +140,4 @@ crm/138_autonomy_payment_events.sql
 crm/139_autonomy_receipt_observations.sql
 crm/140_autonomy_external_handoffs.sql
 crm/141_autonomy_handoff_check_leases.sql
+crm/142_autonomy_suppressed_terms.sql

@@ -46,3 +46,14 @@ it("labels receipts and explains withheld text without rendering page contents",
   expect(await screen.findByText("Receipt text was not saved because a verification code was used.")).toBeTruthy();
   expect(screen.queryByText("Private field")).toBeNull();
 });
+
+it("explains a suppressed pre-submit observation instead of an empty record", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (url:string) => ({ok:true,json:async()=>url.endsWith("/terms")
+    ? {snapshots:[{id:"snapshot-2",version:2,grant_version:1,phase:"before_submit",created_at:"2030-01-01"}]}
+    : {snapshot:{phase:"before_submit",coverage:"suppressed_after_code",omitted_frames:0,documents:[{origin:"https://shop.example",text:"",links:[]}]}}})));
+  const {container} = render(<PersonalAutomationAudit operationId="operation-1"/>);
+  fireEvent.click(screen.getByRole("button",{name:"Submission record"}));
+  fireEvent.click(await screen.findByRole("button",{name:"View snapshot 2"}));
+  expect(await screen.findByText(/Page text was not saved for this step/)).toBeTruthy();
+  expect(container.querySelector("pre")).toBeNull();
+});

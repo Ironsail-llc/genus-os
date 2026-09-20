@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 type Entry = { id: string; version: number; grant_version: number; phase: string; created_at: string };
-type Snapshot = { phase?: string; capture_status?: "captured" | "withheld_after_code" | "unavailable"; omitted_frames: number; documents: { origin: string; text: string; links: string[]; source?: string; source_url?: string; requested_url?: string; text_truncated: boolean; links_truncated: boolean }[] };
+type Snapshot = { phase?: string; coverage?: "visible_text_only" | "visible_text_and_selected_documents" | "suppressed_after_code"; capture_status?: "captured" | "withheld_after_code" | "unavailable"; omitted_frames: number; documents: { origin: string; text: string; links: string[]; source?: string; source_url?: string; requested_url?: string; text_truncated: boolean; links_truncated: boolean }[] };
 
 export function PersonalAutomationAudit({ operationId, includeReceipts = false }: { operationId: string; includeReceipts?: boolean }) {
   const [open, setOpen] = useState(false);
@@ -49,8 +49,9 @@ export function PersonalAutomationAudit({ operationId, includeReceipts = false }
       {snapshot.phase === "after_confirmation" && snapshot.capture_status === "captured" && <p>Receipt record contains rendered page text only.</p>}
       {snapshot.capture_status === "withheld_after_code" && <p>Receipt text was not saved because a verification code was used.</p>}
       {snapshot.capture_status === "unavailable" && <p>Receipt text could not be captured. The recorded task outcome is unchanged.</p>}
+      {snapshot.coverage === "suppressed_after_code" && <p>Page text was not saved for this step because a verification code was entered first. This record exists so the omission is visible.</p>}
       {snapshot.omitted_frames > 0 && <p className="text-sm">Some embedded pages were not captured.</p>}
-      {(!snapshot.capture_status || snapshot.capture_status === "captured") && snapshot.documents.map((document, index) => {
+      {snapshot.coverage !== "suppressed_after_code" && (!snapshot.capture_status || snapshot.capture_status === "captured") && snapshot.documents.map((document, index) => {
         const uncapturedLinks = document.links.filter(link => !capturedUrls.has(link));
         return <section key={index} className="space-y-2">
         <p className="font-medium">{document.origin}</p>
