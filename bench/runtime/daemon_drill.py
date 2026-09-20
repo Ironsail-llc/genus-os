@@ -35,7 +35,7 @@ subprocess.Popen = PrivatePopen
 """
 
 
-def run(root, database_env, *, resume=False):
+def run(root, database_env, *, resume=False, goal_phase=None):
     root = root / "daemon-drill"
     root.mkdir()
     workspace = root / "workspace"
@@ -44,7 +44,13 @@ def run(root, database_env, *, resume=False):
     (root / "owner.yaml").write_text("{}\n")
     guard = root / "guard"
     guard.mkdir()
-    (guard / "sitecustomize.py").write_text(GUARD)
+    extra = ""
+    if goal_phase:
+        from bench.runtime.daemon_goal_crash import MANIFEST
+
+        (workspace / "docs/agents/main.yaml").write_text(MANIFEST)
+        extra = "\nfrom bench.runtime.daemon_goal_crash import install\ninstall()\n"
+    (guard / "sitecustomize.py").write_text(GUARD + extra)
     redis_socket = root / "redis.sock"
     redis = subprocess.Popen(
         [
@@ -86,6 +92,8 @@ def run(root, database_env, *, resume=False):
                 "REDIS_URL": f"unix://{redis_socket}?db=15",
             }
         )
+        if goal_phase:
+            env["RUNTIME_GOAL_PHASE"] = goal_phase
         if resume:
             env["ROBOTHOR_RESUME_IN_FLIGHT"] = "true"
         with (root / "daemon.log").open("w") as log:
@@ -110,10 +118,19 @@ def run(root, database_env, *, resume=False):
                 raise RuntimeError(
                     "Daemon did not become healthy: " + (root / "daemon.log").read_text()[-6000:]
                 )
+            if goal_phase:
+                from bench.runtime.daemon_goal_crash import await_state
+
+                await_state(root, daemon, database_env, goal_phase)
             started = time.monotonic()
-            daemon.send_signal(signal.SIGTERM)
+            if goal_phase == "crash":
+                os.killpg(daemon.pid, signal.SIGKILL)
+            else:
+                daemon.send_signal(signal.SIGTERM)
             code = daemon.wait(timeout=15)
-            assert code == 0, (root / "daemon.log").read_text()[-6000:]
+            assert code == (-signal.SIGKILL if goal_phase == "crash" else 0), (
+                root / "daemon.log"
+            ).read_text()[-6000:]
             log_text = (root / "daemon.log").read_text()
             assert "All subsystems started" in log_text, log_text[-6000:]
             if resume:
@@ -128,7 +145,18 @@ def run(root, database_env, *, resume=False):
             except ProcessLookupError:
                 pass
             else:
-                raise AssertionError("Daemon left a process in its owned group")
+                if goal_phase != "crash":
+                    raise AssertionError("Daemon left a process in its owned group")
+                # A killed subprocess may remain a zombie until the host reaps
+                # it, but no executable member of this owned group may survive.
+                for stat in Path("/proc").glob("[0-9]*/stat"):
+                    try:
+                        fields = stat.read_text().rsplit(")", 1)[1].split()
+                    except (FileNotFoundError, ProcessLookupError):
+                        continue
+                    assert int(fields[2]) != daemon.pid or fields[0] == "Z", (
+                        "Crash left a live owned process: " + str(stat)
+                    )
             assert spawns, "Recovery worker was not started"
             return {
                 "health_ready": True,

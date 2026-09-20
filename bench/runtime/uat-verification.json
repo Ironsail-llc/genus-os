@@ -1187,6 +1187,41 @@
       ],
       "initial_fixture_failure": "Asserted nonexistent runtime key instead of persisted runtime_id; corrected assertion.",
       "scope": "Real native admission and canonical database state preservation with scripted provider, seeded test permissions. No runtime routing switch, binary downgrade, deployment or full rollback drill. Accepted integration baseline is not a safe stopped-work rollback target because it predates durable stop enforcement."
+    },
+    "full_daemon_goal_crash": {
+      "cycles": [
+        {
+          "health_ready": true,
+          "shutdown_exit_code": -9,
+          "shutdown_seconds": 0.06385401399893453,
+          "recovery_worker_spawns": 1
+        },
+        {
+          "health_ready": true,
+          "shutdown_exit_code": 0,
+          "shutdown_seconds": 1.166885464999723,
+          "recovery_worker_spawns": 1
+        }
+      ],
+      "attempts": [
+        [
+          "interrupted",
+          42562
+        ],
+        [
+          "finished",
+          450
+        ]
+      ],
+      "tokens_used": 43012,
+      "progress_effects": 1,
+      "command": ".venv/bin/python -m bench.runtime.migrated_integration --daemon --restart --goal-crash",
+      "integration_passed": 17,
+      "integration_skipped": 1,
+      "integration_seconds": 7.39,
+      "warnings": 1,
+      "initial_fixture_failure": "Expected completed attempt status, but the goal store uses finished. Corrected assertion; first drill had reached the intended state.",
+      "scope": "Real daemon startup, scheduler, controller, native runner, dispatch, audit and goal stores with private PostgreSQL/Redis and scripted model transport. SIGKILL covers the owned daemon process group; no live owned process survives. Goal lease expiry is accelerated. No live external provider, saved-message checkpoint resumption or deployment rollback claim."
     }
   },
   "calendar": {

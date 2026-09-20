@@ -95,6 +95,10 @@ def main():
                         results.append(run(location, env, resume=True))
                         verify(dsn, identifiers)
                     print("STOPPED_RESTART " + json.dumps(results), flush=True)
+            if "--goal-crash" in sys.argv:
+                from bench.runtime.daemon_goal_crash import drill
+
+                print("DAEMON_GOAL_CRASH " + json.dumps(drill(root, env)), flush=True)
             return subprocess.run(
                 [
                     sys.executable,
