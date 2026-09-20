@@ -584,3 +584,22 @@ view “Receipt after confirmation” observations. Withheld or unavailable text
 explicitly identified. These are rendered page observations, not complete merchant
 PDF receipts or issuer settlement records; embedded pages are not captured. Receipt
 retrieval from other sources and issuer reconciliation remain separate work.
+
+### Task prerequisite preview
+
+The protected browser tool accepts `kind=readiness` with a `grant_id`, the same
+`proposal` used by `prepare`, and optional `requirements` entries containing a
+`resource_id`, `kind`, and required `fields`. It previews execution/payment flags,
+current scoped grant and budget, and active destination-compatible resource
+metadata. It returns missing field names and actionable blockers without
+reserving money, decrypting private values, or contacting a merchant.
+
+`ready_to_prepare` covers only these declared prerequisites. The response lists
+resource decryption, actual browser execution, merchant requirements, funding
+acceptance and verification challenges as unchecked. Missing requirements must
+be declared from the task and subsequent page inspection; an empty requirements
+list does not prove that a form needs no private data. A preview is not an
+execution authorization or a promise of completion. Preparation and submission
+continue to enforce current authority and concurrent spending limits. A matching
+already-prepared request returns its existing operation for status/reconciliation;
+it does not count the same reservation again or suggest another submission.
