@@ -800,6 +800,15 @@
       "seconds": 4.01,
       "runtime_warnings_are_errors": true,
       "note": "Post broad-run fixture-only correction; diagnostic plan-iteration test makes zero HTTP TCP connection attempts. All coroutine warning sources are not certified resolved."
+    },
+    "runtime_admission_deadline": {
+      "runtime_runner_checkpoint_passed": 114,
+      "runtime_runner_checkpoint_seconds": 6.16,
+      "native_gateway_chat_goal_recovery_passed": 60,
+      "native_gateway_chat_goal_recovery_seconds": 3.95,
+      "failed": 0,
+      "scope": "Explicit trusted deadlines include checkpoint loading and acceptance delivery; late dispatch denied even after suppressed cancellation. Existing native cancellation persistence verified.",
+      "remaining": "Automatic 60-second classification/assignment across all simple actions remains incomplete; prior broad run predates adapter change."
     }
   },
   "calendar": {

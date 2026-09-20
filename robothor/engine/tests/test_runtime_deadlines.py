@@ -256,3 +256,61 @@ async def test_native_manifest_cap_remains_separate_from_adapter_owned_deadline(
         assert 0 < bounded_timeout(30, SimpleNamespace()) <= 1
     finally:
         active_context.reset(token)
+
+
+async def test_resume_checkpoint_read_is_inside_total_deadline(monkeypatch):
+    from dataclasses import replace
+    from threading import Event
+
+    from robothor.engine.checkpoint import CheckpointManager
+    from robothor.engine.runtime.contracts import StateEnvelope
+
+    released = Event()
+    started = Event()
+
+    def read(*args, **kwargs):
+        started.set()
+        released.wait(1)
+        return {"messages": []}
+
+    monkeypatch.setattr(CheckpointManager, "load_latest", read)
+    execute = AsyncMock()
+    resumed = replace(request(0.02), resume_from="saved-run", checkpoint=StateEnvelope())
+    try:
+        with pytest.raises(RuntimeDeadlineError):
+            await asyncio.wait_for(CurrentRuntime(execute).run(resumed), timeout=0.3)
+    finally:
+        released.set()
+    assert started.is_set()
+    execute.assert_not_awaited()
+    assert active_context.get() is None
+
+
+async def test_acceptance_callback_cannot_extend_request_deadline():
+    event_started = asyncio.Event()
+
+    async def stalled_status(event):
+        event_started.set()
+        await asyncio.Event().wait()
+
+    execute = AsyncMock()
+    with pytest.raises(RuntimeDeadlineError):
+        await asyncio.wait_for(
+            CurrentRuntime(execute).run(request(0.02), on_event=stalled_status), timeout=0.3
+        )
+    assert event_started.is_set()
+    execute.assert_not_awaited()
+    assert active_context.get() is None
+
+
+async def test_suppressed_acceptance_cancellation_cannot_admit_execution():
+    async def stubborn_status(event):
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            return
+
+    execute = AsyncMock(return_value=AgentRun(status=RunStatus.COMPLETED))
+    with pytest.raises(RuntimeDeadlineError):
+        await CurrentRuntime(execute).run(request(0.02), on_event=stubborn_status)
+    execute.assert_not_awaited()

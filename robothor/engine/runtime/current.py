@@ -32,6 +32,15 @@ class CurrentRuntime:
         self._execute = execute
 
     async def run(self, request: RunRequest, on_event=None) -> RuntimeResult:
+        from robothor.engine.runtime.deadlines import constrain_context, execute_before_deadline
+
+        # Admission reads and progress delivery consume the same deadline as
+        # execution; a stalled checkpoint must not defer the start of the clock.
+        return await execute_before_deadline(
+            constrain_context(request.context), lambda: self._run(request, on_event)
+        )
+
+    async def _run(self, request: RunRequest, on_event=None) -> RuntimeResult:
         from robothor.engine.models import StepType
         from robothor.engine.runtime.deadlines import constrain_context
 
@@ -114,15 +123,11 @@ class CurrentRuntime:
         )
         activity_token = current.set(activity)
         token = active_context.set(context)
-        from robothor.engine.runtime.deadlines import execute_before_deadline
+        from robothor.engine.runtime.deadlines import require_time
 
         try:
-            run = await execute_before_deadline(
-                context,
-                lambda: self._execute(
-                    agent_id=request.agent_id, message=request.message, **options
-                ),
-            )
+            require_time(context)
+            run = await self._execute(agent_id=request.agent_id, message=request.message, **options)
         finally:
             remove(activity)
             current.reset(activity_token)
