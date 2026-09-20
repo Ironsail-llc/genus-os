@@ -747,3 +747,12 @@ All 37 focused resume/control/size checks pass (3.86s), 105 tool/admission/reque
 At `7c5f5c64b21`, the broad engine selection passed 11,040 tests and failed one: runner.execute grew to 990 lines against its pinned 986-line cap. It skipped 29, deselected 178, emitted 393 warnings and took 357.83s. One unawaited connect_tcp coroutine warning remains. The complete goal suite passed 85 tests in 10.83s with two dependency warnings. Logs are `/tmp/runtime-engine-regression-7c5f5c64b21.log` and `/tmp/runtime-goals-regression-7c5f5c64b21.log`.
 
 The checkpoint restore/audit block now lives in an async lifecycle helper, retaining the same persistence seam and failure behavior. The cap was not increased. The first extraction missed a local asyncio import; that correction preceded the passing reruns. All 92 function/module-size, runner and recovery checks pass (10.53s), and 26 canonical integrations pass (4.98s, one worker-only skip and one warning). Ruff and diff checks pass. The original broad failure is preserved, and no post-extraction broad pass is claimed. The acceptance summary now distinguishes completed synthetic daemon/checkpoint recovery from remaining live/provider, candidate and rollback work. Nothing was deployed.
+
+
+## Post-extraction broad engine pass
+
+At `aa0312e8cf3`, the full non-slow/non-integration/non-live engine selection passes 11,041 tests with zero failures, 29 skips and 178 deselections in 355.39s. This includes the unchanged function-size cap and the recent checkpoint, chat continuation, Stop and claim-loss changes. The prior failure remains preserved in uat-verification.json.
+
+The diagnostic command sets `sys.set_coroutine_origin_tracking_depth(8)` before pytest. Of 393 warnings, one remains an unawaited connect_tcp try_connect coroutine. Its creation stack traverses HTTPCore connection handling and AnyIO connect_tcp, task-group start_soon and call_for_coroutine. The trace does not reach the initiating application caller, so root cause and remediation are still unresolved; the collecting test is not blamed. This run is correctness evidence, not a comparative performance cohort. Log: `/tmp/runtime-engine-regression-aa0312e8cf3.log`.
+
+Current broad engine checks now pass; the latest full goal run remains 85 passed and the frontend remains 1,648 passed at its recorded revision. Live-provider operating limits, candidate qualification, application rollback and remaining manual acceptance stay open. No deployment occurred.

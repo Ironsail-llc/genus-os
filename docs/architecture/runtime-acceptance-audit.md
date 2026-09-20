@@ -30,7 +30,7 @@ The user need not identify whether an ordinary request became a task or a goal.
 | Tenant isolation / delegated controls / memory | Native engine and goal suites, including RLS and tenant/control tests | Native behavior tested; no equivalent candidate evidence |
 | Provider fallback | Native injected-primary-failure verified-outcome test | One verified write after fallback and no post-success calls; real configured-chain outage/load behavior remains unqualified |
 | Everyday requests competing with goals | `uat-mixed-runtime-final.jsonl` | 1,560 verified synthetic actions across 1/5/20 tenants; local resource limits published, not production capacity |
-| No introduced regressions | Broad native run at `7c5f5c64b21`: 11,040 passed, one function-size failure subsequently fixed and verified in focused checks; goals: 85 passed. Frontend at `da202e576fb`: 1,648 passed; scopes and warnings in `uat-verification.json` | The broad run exposed a size regression, now corrected without changing its cap. A full broad rerun after that extraction is pending; this is not manual acceptance |
+| No introduced regressions | Broad native run at `aa0312e8cf3`: 11,041 passed, zero failures; goals at `7c5f5c64b21`: 85 passed. Frontend at `da202e576fb`: 1,648 passed; scopes and warnings in `uat-verification.json` | The post-fix broad suite passes without raising the size cap. One network coroutine warning remains; tested scopes do not establish full acceptance |
 
 ## Alternative runtimes and rollout
 

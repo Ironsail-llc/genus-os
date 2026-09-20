@@ -9,17 +9,17 @@
   "replacement_selected": false,
   "checks": {
     "engine": {
-      "revision": "7c5f5c64b21",
-      "passed": 11040,
-      "failed": 1,
+      "revision": "aa0312e8cf3",
+      "passed": 11041,
+      "failed": 0,
       "skipped": 29,
       "deselected": 178,
-      "seconds": 357.83,
+      "seconds": 355.39,
       "warnings": 393,
       "selection": "not slow and not integration and not llm and not e2e and not smoke",
-      "log": "/tmp/runtime-engine-regression-7c5f5c64b21.log",
-      "failure": "Function-size ratchet: runner.py::execute 990 lines exceeds pinned cap 986. Fixed afterward by lifecycle helper extraction; full suite not rerun after extraction.",
-      "note": "One connect_tcp unawaited coroutine warning persists. No full acceptance claim."
+      "coroutine_origin_tracking_depth": 8,
+      "log": "/tmp/runtime-engine-regression-aa0312e8cf3.log",
+      "note": "Post-extraction broad pass. One connect_tcp coroutine warning remains; origin trace ends in HTTPX/HTTPCore -> AnyIO socket connect -> task-group call_for_coroutine. Application initiating caller not established. Diagnostic tracing run is not a performance cohort."
     },
     "frontend": {
       "revision": "da202e576fb",
@@ -1372,6 +1372,19 @@
       "integration_seconds": 4.98,
       "integration_skipped": 1,
       "integration_warnings": 1
+    },
+    "engine_previous_7c5f5c64b21": {
+      "revision": "7c5f5c64b21",
+      "passed": 11040,
+      "failed": 1,
+      "skipped": 29,
+      "deselected": 178,
+      "seconds": 357.83,
+      "warnings": 393,
+      "selection": "not slow and not integration and not llm and not e2e and not smoke",
+      "log": "/tmp/runtime-engine-regression-7c5f5c64b21.log",
+      "failure": "Function-size ratchet: runner.py::execute 990 lines exceeds pinned cap 986. Fixed afterward by lifecycle helper extraction; full suite not rerun after extraction.",
+      "note": "One connect_tcp unawaited coroutine warning persists. No full acceptance claim."
     }
   },
   "calendar": {
