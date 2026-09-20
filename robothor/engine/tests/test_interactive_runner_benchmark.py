@@ -41,6 +41,12 @@ async def test_runner_measurements(request, sample_agent_config, monkeypatch, fa
     engine.registry.get_tool_names.return_value = [TOOL]
     sample_agent_config.tools_allowed = [TOOL]
     monkeypatch.setattr(get_settings().engine, "calendar_operations_enabled", fast)
+    # The draft belongs to the requester who will confirm it: a confirmation
+    # binds only to its own creator, so the benchmark has to run as that
+    # requester rather than replaying a stranger's operation.
+    context.tenant_id = "bench-tenant"
+    context.user_id = "bench-operator"
+    context.agent_id = sample_agent_config.id
     original = deepcopy(api.event)
     records = []
     repetitions = int(os.environ.get("ROBOTHOR_INTERACTIVE_BENCH_SAMPLES", "1"))
@@ -112,6 +118,8 @@ async def test_runner_measurements(request, sample_agent_config, monkeypatch, fa
                 "test-agent",
                 "Go",
                 agent_config=sample_agent_config,
+                tenant_id=context.tenant_id,
+                user_id=context.user_id,
                 conversation_history=[
                     {
                         "role": "assistant",
