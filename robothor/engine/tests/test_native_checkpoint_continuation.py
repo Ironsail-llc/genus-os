@@ -11,8 +11,11 @@ import psycopg2
 import pytest
 from psycopg2.extras import Json
 
+from robothor.auth.deps import AuthContext
+from robothor.engine.chat_recovery import read_outcome
 from robothor.engine.models import RunStatus, TriggerType
 from robothor.engine.runner import AgentRunner
+from robothor.engine.runtime.chat_control import request_key
 from robothor.engine.task_context import install_context, make_context, read_context
 from robothor.engine.task_registry import get_task_registry
 
@@ -25,6 +28,10 @@ async def test_native_checkpoint_continues_saved_conversation(engine_config, sam
     if "host=/tmp/runtime-migrated-" not in dsn:
         pytest.skip("requires disposable canonical migration harness")
     tenant, original = "continuation-" + uuid4().hex, str(uuid4())
+    client = str(uuid4())
+    auth = AuthContext(
+        tenant_id=tenant, user_id="service:" + sample_agent_config.id, role="owner", typ="user"
+    )
     messages = [
         {"role": "system", "content": "Synthetic task instructions"},
         {"role": "user", "content": "Summarize the saved task status"},
@@ -49,8 +56,14 @@ async def test_native_checkpoint_continues_saved_conversation(engine_config, sam
     with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("INSERT INTO crm_tenants(id,display_name) VALUES (%s,%s)", (tenant, tenant))
         cur.execute(
-            "INSERT INTO agent_runs(id,tenant_id,agent_id,trigger_type,status,error_message) VALUES (%s,%s,%s,'event','cancelled','daemon_restart')",
-            (original, tenant, sample_agent_config.id),
+            "INSERT INTO agent_runs(id,tenant_id,agent_id,user_id,correlation_id,trigger_type,status,error_message) VALUES (%s,%s,%s,%s,%s,'event','cancelled','daemon_restart')",
+            (
+                original,
+                tenant,
+                sample_agent_config.id,
+                auth.user_id,
+                request_key(auth, "web:main", client),
+            ),
         )
         cur.execute(
             "INSERT INTO agent_run_checkpoints(run_id,step_number,messages,schema_version) VALUES (%s,2,%s,1)",
@@ -122,3 +135,7 @@ async def test_native_checkpoint_continues_saved_conversation(engine_config, sam
         assert runtime["tenant_id"] == tenant and runtime["runtime_id"] == "current"
 
         assert runtime["resume_from_run_id"] == original
+
+    outcome = read_outcome(auth, "web:main", client)
+    assert outcome["run_id"] == resumed.id and outcome["state"] == "completed"
+    assert outcome["text"] == "The saved task is done."

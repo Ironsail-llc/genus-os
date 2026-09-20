@@ -1,0 +1,16 @@
+{
+  "initial_failures": [
+    "Chat returned the cancelled original instead of its completed continuation.",
+    "Forked and cyclic continuation records were not marked ambiguous."
+  ],
+  "fix": "Follow a single same-tenant, same-user continuation chain. Preserve receipts across original, continued and delegated work; return ambiguous for forks/cycles.",
+  "focused_passed": 45,
+  "regression_passed": 110,
+  "regression_seconds": 5.55,
+  "integration_passed": 20,
+  "integration_seconds": 7.67,
+  "integration_skipped": 1,
+  "integration_warnings": 1,
+  "native_end_to_end": "The actual native checkpoint continuation is recovered using the original request key and persisted resume origin.",
+  "limits": "Requires explicit recorded continuation metadata and matching principal ownership. Historical missing links are not inferred. Multiple initial admissions remain ambiguous. Full runtime qualification and remaining acceptance gates are still open."
+}

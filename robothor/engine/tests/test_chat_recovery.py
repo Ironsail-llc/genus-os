@@ -513,3 +513,75 @@ def test_family_receipts_preserve_conflicting_evidence(records, conflict_first):
     assert len(outcome["effects"]) == 1
     assert outcome["effects"][0]["status"] == "unmatched"
     assert not outcome["verified"]
+
+
+def test_chat_recovery_follows_native_resume_chain(records):
+    auth, client = identity(), str(uuid4())
+    original = insert(records, auth, client, "cancelled", verified_status=None)
+    middle = insert(
+        records,
+        auth,
+        str(uuid4()),
+        "cancelled",
+        runtime_context=Json({"resume_from_run_id": original}),
+        verified_status=None,
+    )
+    latest = insert(
+        records,
+        auth,
+        str(uuid4()),
+        runtime_context=Json({"resume_from_run_id": middle}),
+        output_text="Saved work continued successfully.",
+    )
+    result = chat_recovery.read_outcome(auth, "web:main", client)
+    assert result["run_id"] == latest and result["state"] == "completed"
+    assert result["text"] == "Saved work continued successfully."
+
+
+def test_resume_chain_never_crosses_identity_scope(records):
+    auth, client = identity(), str(uuid4())
+    original = insert(records, auth, client, "cancelled", verified_status=None)
+    for changes in ({"tenant_id": str(uuid4())}, {"user_id": "other"}):
+        insert(
+            records,
+            auth,
+            str(uuid4()),
+            runtime_context=Json({"resume_from_run_id": original}),
+            **changes,
+        )
+    assert chat_recovery.read_outcome(auth, "web:main", client)["run_id"] == original
+
+
+@pytest.mark.parametrize("cycle", [False, True])
+def test_resume_forks_and_cycles_do_not_select_a_success(records, cycle):
+    auth, client = identity(), str(uuid4())
+    original = insert(records, auth, client, "cancelled", verified_status=None)
+    child = insert(
+        records, auth, str(uuid4()), runtime_context=Json({"resume_from_run_id": original})
+    )
+    if cycle:
+        with records() as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE agent_runs SET runtime_context=runtime_context || %s WHERE id=%s",
+                (Json({"resume_from_run_id": child}), original),
+            )
+    else:
+        insert(records, auth, str(uuid4()), runtime_context=Json({"resume_from_run_id": original}))
+    result = chat_recovery.read_outcome(auth, "web:main", client)
+    assert result == {"state": "ambiguous", "terminal": False}
+
+
+def test_resumed_success_keeps_uncertain_prior_and_delegated_receipts(records):
+    auth, client = identity(), str(uuid4())
+    original = insert(records, auth, client, "cancelled", verified_status=None)
+    operation = record_calendar_receipt(records, auth, original, status="executing")
+    latest = insert(
+        records, auth, str(uuid4()), runtime_context=Json({"resume_from_run_id": original})
+    )
+    child = insert(records, auth, str(uuid4()), parent_run_id=latest)
+    child_operation = record_calendar_receipt(records, auth, child)
+    result = chat_recovery.read_outcome(auth, "web:main", client)
+    assert result["run_id"] == latest and result["terminal"]
+    assert result["reconciliation_pending"] and not result["verified"]
+    assert {item["operation_id"] for item in result["effects"]} == {operation, child_operation}
+    assert "not fully verified" in result["text"]

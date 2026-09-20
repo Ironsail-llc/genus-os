@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from psycopg2.extras import RealDictCursor
 
 from robothor.db.connection import get_connection
+from robothor.engine.chat_continuation import continuation
 from robothor.engine.chat_receipts import family_calendar_receipts, receipt_summary
 from robothor.engine.chat_result import result_text
 from robothor.engine.models import RunStatus
@@ -22,7 +23,14 @@ def read_outcome(auth, session_key: str, client_id: str) -> dict:
             (auth.tenant_id, auth.user_id, identifier, identifier),
         )
         rows = cur.fetchall()
-        receipts = family_calendar_receipts(cur, rows[0], auth) if len(rows) == 1 else []
+        receipts = []
+        if len(rows) == 1:
+            root = rows[0]
+            latest = continuation(cur, root, auth)
+            if latest is None:
+                return {"state": "ambiguous", "terminal": False}
+            rows = [latest]
+            receipts = family_calendar_receipts(cur, root, auth)
     if not rows:
         return {"state": "not_found", "terminal": False}
     if len(rows) != 1:

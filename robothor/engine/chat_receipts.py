@@ -122,7 +122,8 @@ def family_calendar_receipts(cur, run, auth):
             WHERE id=%s AND tenant_id=%s AND user_id=%s
             UNION
             SELECT child.id,child.agent_id FROM agent_runs child
-            JOIN family parent ON child.parent_run_id=parent.id
+            JOIN family parent ON (child.parent_run_id=parent.id
+                OR child.runtime_context->>'resume_from_run_id'=parent.id::text)
             WHERE child.tenant_id=%s AND child.user_id=%s
         ) SELECT id,agent_id FROM family ORDER BY id""",
         (run["id"], auth.tenant_id, auth.user_id, auth.tenant_id, auth.user_id),
