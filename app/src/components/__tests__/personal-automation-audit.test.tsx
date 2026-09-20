@@ -19,3 +19,18 @@ it("fetches private text only on request and distinguishes unfetched links", asy
   fireEvent.click(screen.getByRole("button", {name: "Close submission record"}));
   expect(screen.queryByText("<script>private text</script>")).toBeNull();
 });
+
+it("identifies captured linked documents without calling their references uncaptured", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => ({ok:true,json:async()=>url.endsWith("/terms")
+    ? {snapshots:[{id:"snapshot-1",version:1,grant_version:1,phase:"before_input",created_at:"2030-01-01"}]}
+    : {snapshot:{omitted_frames:0,documents:[
+      {origin:"https://club.example",text:"Application",links:["https://club.example/terms"],source:"rendered"},
+      {origin:"https://club.example",text:"Annual conditions",links:[],source:"linked_document",source_url:"https://club.example/terms-v2",requested_url:"https://club.example/terms"}
+    ]}}})));
+  render(<PersonalAutomationAudit operationId="operation-1"/>);
+  fireEvent.click(screen.getByRole("button",{name:"Submission record"}));
+  fireEvent.click(await screen.findByRole("button",{name:/View snapshot 1/}));
+  expect(await screen.findByText("Annual conditions")).toBeTruthy();
+  expect(screen.getByText(/Captured linked document/)).toBeTruthy();
+  expect(screen.queryByText(/Contents of these links were not captured/)).toBeNull();
+});

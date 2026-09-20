@@ -935,3 +935,12 @@ for inspecting linked legal documents. Agent results remain reference-only;
 private snapshot retrieval rejects service identities. Capture stops after
 transient verification-code entry. See
 [Private submission observations](AUTONOMOUS_EXECUTION.md#private-submission-observations).
+
+Protected inspection exposes `terms_links` with selectors and labels. Include
+relevant public conditions in `plan.material_terms` (selector plus optional frame
+binding). The broker captures selected HTML/plain-text documents without applicant
+cookies or scripts, under existing destination authority, and keeps their contents
+encrypted for the owner. A required selection that cannot be captured returns
+`material_terms_unavailable` before filling; correct that selection on the same
+operation rather than inventing consent or claiming to have read it. Unselected
+links, authenticated documents and PDFs are not implicitly captured.

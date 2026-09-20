@@ -167,7 +167,7 @@ class WorkflowManager:
                             row["origin"],
                             kind="browser_session",
                         )
-                    broker = BrowserBroker(self.store)
+                    broker = BrowserBroker(self.store, public_document_router=self.request_router)
                     broker.protected_values.session(storage)
                     browser = await self.browser_factory()
                     context = await browser.new_context(

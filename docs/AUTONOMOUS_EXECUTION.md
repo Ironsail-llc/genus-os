@@ -440,12 +440,32 @@ private text; agent service tokens cannot. Listing metadata and ordinary agent
 responses contain no snapshot text or link values. The page renders text without
 executing markup, clears it when closed, and uses uncached authenticated requests.
 
-Coverage is explicitly `visible_text_only`: the top-level page and authorized
-direct child frames. Hidden text, nested or unauthorized frames, images, PDFs,
-and linked documents are not captured by this mechanism. Link references remain
-encrypted and their contents are labeled as uncaptured. Bounded text or link
-extraction reports truncation, and omitted frames are counted. This does not yet
-complete material-contract collection for websites whose terms live elsewhere.
+Rendered-page coverage is `visible_text_only`: the top-level page and authorized
+direct child frames. Hidden text, nested or unauthorized frames, images and PDFs
+are outside that coverage. Bounded text/link extraction reports truncation and
+omitted frames. Unselected link references remain encrypted and their contents
+are labeled as uncaptured.
+
+Plans may select up to five linked material documents with `material_terms`, each
+containing a `selector` and optional `frame_selector`/`frame_origin`. Inspection
+returns candidate `terms_links` as labels and selectors, without exposing private
+URLs. For each selected link, the broker creates a fresh browser context with no
+applicant cookies or storage, scripts disabled, and only document GET requests
+allowed. The selected origin and every redirect must be covered by the standing
+grant (including broad website authority where granted); private network checks
+still apply. Public HTML and plain text are supported, up to 200,000 characters
+per document and 30 seconds total per capture phase. Selected content is never
+silently shortened.
+
+Successful captures use `visible_text_and_selected_documents` and preserve both
+the requested and final document URLs inside encryption. The viewer identifies
+these documents and does not mislabel their links as uncaptured. This is a record
+of selected content, not a claim that every relevant contract has been discovered
+or understood. Login-required documents, PDFs, missing/oversized responses and
+known code/credential-bearing URLs return `material_terms_unavailable` before
+filling. Correct a failed selection on the same operation; no execution plan is
+bound until the initial capture succeeds. Existing plans without selections keep
+their original serialized shape and retry fingerprints.
 
 Known protected values are masked before storage. No page snapshot is taken after
 any transient verification code or TOTP entry in that browser, including a code
@@ -458,3 +478,9 @@ Apply migration 133 through the canonical migrator before deploying the broker
 and bridge changes. The new table applies tenant row-level security inline and
 uses the native versioned encryption keyring; retained historical keys can still
 read existing snapshots. Ordinary credential exports do not include this table.
+
+Selected material-document support requires migration 134 after migration 133.
+It extends metadata constraints without rewriting existing encrypted records.
+If an earlier workflow step has already entered a transient code, new material
+selections cannot be collected from that page; use a supported fresh source.
+The normal post-code submit phase retains its earlier pre-input observations.

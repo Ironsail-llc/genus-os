@@ -9,13 +9,14 @@ import pytest
 from robothor.autonomy.models import Delegation, Scope, WebOperation
 
 
-def operation(store, identity):
+def operation(store, identity, *, allow_any_website=False):
     grant = store.create_grant(
         identity,
         Delegation(
             agent_ids={"main"},
             origins={"https://club.example"},
             actions={"application"},
+            allow_any_website=allow_any_website,
             expires_at=datetime.now(UTC) + timedelta(days=1),
         ),
     )
