@@ -2,6 +2,8 @@
 
 Research date: September 19, 2026 (America/New_York). Documentation was fetched during this session. This is an architectural recommendation, not a migration decision or a performance result. No candidate runtime was installed, no benchmark against one was run, and no live configuration was changed for this research.
 
+Follow-up: [capability parity and gap assessment](AGENT_CAPABILITY_PARITY_2026-09-19.md) inventories the newer deployed goal system. It promotes Deep Agents to a peer first-round Python candidate and identifies goal-budget and verification contracts that require explicit testing.
+
 **Recommendation**
 
 Adopt a maintained agent runtime through a small, explicit integration boundary, while keeping Robothor's product services independent of it. Start by comparing Pydantic AI with selected Harness capabilities against OpenCode and the improved current engine. Keep Deep Agents as the strongest alternative if its packaged workflow capabilities remove more custom work. This ordering is my assessment of fit, not an externally measured ranking.
