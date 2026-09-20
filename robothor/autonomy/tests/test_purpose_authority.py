@@ -75,3 +75,43 @@ def test_purpose_is_checked_again_before_execution(store, identity, method):
 def test_invalid_purpose_sets_are_rejected(purposes):
     with pytest.raises(ValueError):
         grant(allowed_purposes=purposes)
+
+
+class TestAGrantStaysReadableByThePreviousRelease:
+    """`Delegation` is a StrictModel (``extra="forbid"``) whose policy is
+    persisted whole as JSONB, so every key it serialises is a key the code
+    reading that row must already know. A field that ALWAYS serialises is a
+    one-way upgrade: revert the deployment and ``model_validate`` raises on
+    every grant created since, which fails every autonomy operation rather
+    than only the new feature. ``ExecutionPlan.compatible_plan`` already
+    solves exactly this for ``material_terms``.
+    """
+
+    @staticmethod
+    def _bare(**changes):
+        return Delegation.model_validate(
+            {
+                "agent_ids": ["main"],
+                "origins": ["https://shop.example"],
+                "actions": ["purchase"],
+                "expires_at": datetime.now(UTC) + timedelta(days=2),
+                **changes,
+            }
+        )
+
+    def test_an_unused_new_field_is_not_written_into_the_row(self):
+        data = self._bare().model_dump(mode="json")
+        assert "allowed_purposes" not in data, "the previous release cannot parse this grant"
+        assert "verification_senders" not in data, "the previous release cannot parse this grant"
+
+    def test_a_used_new_field_is_still_written(self):
+        data = self._bare(
+            allowed_purposes=["Personal memberships"],
+            verification_senders={"https://shop.example": ["mail.shop.example"]},
+        ).model_dump(mode="json")
+        assert data["allowed_purposes"] == ["Personal memberships"]
+        assert data["verification_senders"] == {"https://shop.example": ["mail.shop.example"]}
+
+    def test_a_row_written_without_the_field_still_loads(self):
+        data = self._bare().model_dump(mode="json")
+        assert Delegation.model_validate(data).allowed_purposes == frozenset()

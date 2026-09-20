@@ -899,9 +899,23 @@ class TelegramHandlersMixin:
             return
         chat_id = str(message.chat.id)
         user_text = message.text.strip()
-        from robothor.autonomy.intake import protect_payment_text
+        from robothor.autonomy.intake import marker_truncated, protect_payment_text
 
+        # The backstop's marker matches at any LINE start, while `intercept`
+        # above consumes only a message that STARTS with /secure. So an
+        # ordinary multi-line message whose second line happens to begin
+        # "/secure the loading bay doors" reaches the model with everything
+        # from that line on removed. Keeping the cut is right; making it
+        # silent was not — the advisory sentence it leaves behind is addressed
+        # to the model, and the person who typed the message saw nothing.
+        docked = marker_truncated(user_text)
         user_text = protect_payment_text(user_text)
+        if docked:
+            await message.answer(
+                "I stopped reading that message at the line starting with /secure and "
+                "dropped the rest, in case it was private. Send the remainder in a new "
+                "message, or use /secure on its own line to enroll something."
+            )
 
         # ── Skill bundles: "/bundle-name" composes a multi-skill prompt ──
         if user_text.startswith("/"):

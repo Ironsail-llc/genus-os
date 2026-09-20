@@ -141,7 +141,21 @@ def _sanitize_preview(text: str, max_len: int = 100) -> str:
     character confines the preview to a single line no matter what the
     sender sent, so it can never spawn a second line that impersonates the
     notification's own structure.
+
+    It also drops everything from a ``/secure`` marker onwards, the same cut
+    ``robothor.secrets.redaction.redact`` makes for a log line. The preview is
+    the sender's raw text rendered into a Telegram message in the OPERATOR's
+    chat, which is the one place the private-input boundary exists to keep a
+    payload out of — and an unregistered sender's ``/secure credential …
+    {"password": …}`` now reaches this function, because that boundary routes
+    a stranger through the ordinary unregistered-sender path so the operator
+    is actually told about them.
     """
+    from robothor.secrets.redaction import SECURE_MARKER
+
+    marker = SECURE_MARKER.search(text)
+    if marker:
+        text = text[: marker.start()] + "[private input withheld]"
     collapsed = re.sub(r"[\r\n\t\x00-\x1f\x7f]+", " ", text)
     return collapsed.strip()[:max_len]
 

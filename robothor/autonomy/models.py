@@ -3,11 +3,19 @@
 import ipaddress
 import re
 from datetime import UTC, date, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from robothor.entity.payments import Identifier
 from robothor.entity.spend_limits import DecisionOutcome, DecisionReason, decide_limits
@@ -144,6 +152,27 @@ class Delegation(StrictModel):
     frame_origins: frozenset[str] = frozenset()
     allowed_purposes: frozenset[str] = Field(default=frozenset(), max_length=80)
     verification_senders: dict[str, frozenset[str]] = Field(default_factory=dict, max_length=80)
+
+    @model_serializer(mode="wrap")
+    def compatible_policy(self, handler: Any) -> dict[str, Any]:
+        """Omit a field nobody used, so the row stays readable after a revert.
+
+        The whole policy is persisted as JSONB and read back through this
+        StrictModel (``extra="forbid"``). A field that always serialises is a
+        one-way upgrade: revert the deployment and every grant created since
+        fails ``model_validate`` — not just its new feature, but every
+        autonomy operation that has to load the grant first. Same treatment,
+        same reason, as ``ExecutionPlan.compatible_plan``.
+
+        A grant that actually USES one of these still writes it, and is
+        correctly unreadable by a release that would silently ignore it.
+        """
+        data: dict[str, Any] = handler(self)
+        if not self.allowed_purposes:
+            data.pop("allowed_purposes", None)
+        if not self.verification_senders:
+            data.pop("verification_senders", None)
+        return data
 
     @field_validator("verification_senders")
     @classmethod

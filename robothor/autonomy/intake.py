@@ -33,6 +33,26 @@ def _luhn(value: str) -> bool:
     return sum(number - 9 if number > 9 else number for number in numbers) % 10 == 0
 
 
+def marker_truncated(text: str) -> bool:
+    """Would :func:`protect_payment_text` discard this message's tail?
+
+    ``SECURE_MARKER`` is ``(?im)^\\s*/secure…`` — any LINE start. ``intercept``
+    only consumes a message that starts with ``/secure``, so an ordinary
+    multi-line message whose second line happens to begin ``/secure the
+    loading bay doors`` falls through to this backstop and loses everything
+    from that line on. The cut is deliberate (a mid-message ``/secure card
+    4242…`` must not reach the model) but it was also silent: the advisory
+    sentence it leaves behind is addressed to the MODEL, and the person who
+    typed the message was never told a tail had been removed.
+
+    The caller uses this to say so. It is not itself a guard.
+    """
+    if not text:
+        return False
+    marker = SECURE_MARKER.search(text)
+    return bool(marker) and text[marker.start() :] != text.lstrip()
+
+
 def protect_payment_text(text: str) -> str:
     """Keep incidental IDs readable; remove plausible PANs and named CVCs.
 

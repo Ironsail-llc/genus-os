@@ -746,3 +746,32 @@ class TestPersistence:
         assert len(rows) == 1
         assert rows[0]["name"] == "a.txt"
         assert bot._attachment_buffers.get("100200300") in (None, [])
+
+
+class TestEnrichmentCannotLoseTheFile:
+    """`_enrich_attachment` is best-effort by contract — the CALL was not.
+
+    The row is written before enrichment runs, so a failure there must cost the
+    description and nothing else. But the call sat outside both guarded blocks
+    in `_keep_attachment`, and the `describe_image_bytes` import inside it sits
+    outside its own `try`: a missing local-vision dependency raised straight out
+    of `handle_file`. For one photo that is a saved file the agent is never told
+    about and an operator who gets no reply; inside an album's re-dispatch loop
+    it took every member after it down with it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_photo_whose_description_explodes_still_reaches_the_agent(
+        self, bot, monkeypatch
+    ) -> None:
+        async def boom(*_a, **_kw):
+            raise ImportError("no module named 'ultralytics'")
+
+        monkeypatch.setattr(bot, "_enrich_attachment", boom)
+        arm_download(bot, b"\xff\xd8\xff")
+
+        await bot.handle_file(message(caption="what is this?", photo=photo(uid="AgACnoenrich")))
+
+        text, rows = enqueued(bot)
+        assert len(rows) == 1, "the saved file never reached the agent"
+        assert "what is this?" in text

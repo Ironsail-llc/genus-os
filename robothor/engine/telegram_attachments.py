@@ -309,7 +309,17 @@ class TelegramAttachmentsMixin:
             logger.warning("Could not save the attachment %s: %s", media.name, exc)
             return None
         noted = attachments.NotedAttachment(row=row)
-        await self._enrich_attachment(noted, raw, media, chat_id)
+        try:
+            await self._enrich_attachment(noted, raw, media, chat_id)
+        except Exception as exc:  # noqa: BLE001 - the file is already on disk
+            # Enrichment is best-effort by contract, but the CALL was not
+            # guarded: the `describe_image_bytes` import inside it sits outside
+            # its own `try`, so a missing local-vision dependency raised
+            # ImportError straight out of `handle_file`. For a single photo
+            # that lost the operator a reply; inside an album's re-dispatch
+            # loop it used to lose every member after it. The row is already
+            # written, so the answer is the un-enriched attachment, never None.
+            logger.warning("Could not enrich the attachment %s: %s", media.name, exc)
         return noted
 
     async def _enrich_attachment(
