@@ -28,6 +28,16 @@ import time
 from typing import Any
 
 _installed: bool | None = None
+_probed_at = 0.0
+
+# How long a NEGATIVE answer is trusted. `genus migrate` runs in its own
+# process, so nothing it does can clear a cache inside a long-running engine —
+# and the engine is allowed to boot with 126 pending on purpose. Cached
+# permanently, that False meant the engine went on reporting pursuit off after
+# the operator migrated, with the bridge showing goals and `enabled: true` and
+# no error anywhere. A True cannot go stale without another migration, so only
+# the False expires: the hot path still pays nothing once 126 is there.
+NEGATIVE_TTL_SECONDS = 60
 
 _PROBE = "SELECT to_regprocedure('pursuit_task_runnable(uuid,text)') IS NOT NULL AS present"
 
@@ -47,9 +57,11 @@ def pursuit_installed(cur: Any) -> bool:
     cache untouched and keeps the predicate, which is the behaviour from
     before this probe existed.
     """
-    global _installed
-    if _installed is not None:
-        return _installed
+    global _installed, _probed_at
+    if _installed is True:
+        return True
+    if _installed is False and time.monotonic() - _probed_at < NEGATIVE_TTL_SECONDS:
+        return False
     cur.execute(_PROBE)
     row = cur.fetchone()
     try:
@@ -60,6 +72,7 @@ def pursuit_installed(cur: Any) -> bool:
     if not isinstance(present, bool):
         return True
     _installed = present
+    _probed_at = time.monotonic()
     return _installed
 
 
@@ -117,6 +130,7 @@ def note_task_linked(tenant: str) -> None:
 def reset_probe() -> None:
     """Forget the cached answers. For tests, and for a process that has just
     applied migrations in-band."""
-    global _installed
+    global _installed, _probed_at
     _installed = None
+    _probed_at = 0.0
     _linked.clear()

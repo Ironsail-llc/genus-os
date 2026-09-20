@@ -150,6 +150,36 @@ def test_a_cursor_that_cannot_answer_is_not_remembered():
         compat.reset_probe()
 
 
+def test_a_negative_probe_is_re_probed_so_a_later_migration_is_seen():
+    """`genus migrate` runs in its OWN process, so nothing it does can clear a
+    cache inside the engine.
+
+    The engine is allowed to boot with 126 pending (daemon.py says so on
+    purpose). It probed once, cached False, and after the operator migrated it
+    went on reporting pursuit off for ever — the bridge showing goals and
+    `enabled: true` while the engine never claimed anything, with no error
+    anywhere. A True cannot go stale without another migration; a False can,
+    so only the False ages out.
+    """
+    from unittest.mock import MagicMock, patch
+
+    absent = MagicMock()
+    absent.fetchone.return_value = {"present": False}
+    present = MagicMock()
+    present.fetchone.return_value = {"present": True}
+
+    compat.reset_probe()
+    try:
+        assert compat.pursuit_installed(absent) is False
+        assert compat.pursuit_installed(present) is False, "within the TTL, the answer is cached"
+        with patch.object(compat, "NEGATIVE_TTL_SECONDS", 0):
+            assert compat.pursuit_installed(present) is True
+        # ...and a True never re-probes, so it costs nothing on the hot path.
+        assert compat.pursuit_installed(absent) is True
+    finally:
+        compat.reset_probe()
+
+
 def test_the_probe_reports_the_predicate_missing(pre_126):
     with psycopg2.connect(pre_126) as conn, conn.cursor() as cur:
         assert compat.pursuit_installed(cur) is False
