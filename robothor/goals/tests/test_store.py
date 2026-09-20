@@ -66,6 +66,9 @@ def private_database(tmp_path_factory):
             migration = Path(__file__).resolve().parents[3] / "crm/migrations/126_goal_pursuit.sql"
             cur.execute(migration.read_text())
             cur.execute(migration.read_text())  # migration is re-entrant
+            reservation = migration.with_name("138_goal_provider_reservations.sql")
+            cur.execute(reservation.read_text())
+            cur.execute(reservation.read_text())
         yield dsn
     finally:
         command("pg_ctl", "-D", data, "-m", "immediate", "-w", "stop")

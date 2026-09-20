@@ -7,6 +7,7 @@ Unknown usage and interrupted calls keep their reservation until reconciled.
 
 from __future__ import annotations
 
+import asyncio
 from uuid import uuid4
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -22,12 +23,12 @@ class RequestBudget:
         self.ledger = ledger
         self.maximum_tokens = maximum_tokens
 
-    def reserve(self):
+    async def reserve(self):
         identity = str(uuid4())
-        self.ledger.reserve(identity, self.maximum_tokens)
+        await asyncio.to_thread(self.ledger.reserve, identity, self.maximum_tokens)
         return identity
 
-    def settle(self, identity, input_tokens, output_tokens):
+    async def settle(self, identity, input_tokens, output_tokens):
         # Zero-default SDK counters cannot establish that usage was reported.
         actual = None
         if (
@@ -37,7 +38,7 @@ class RequestBudget:
             and output_tokens > 0
         ):
             actual = input_tokens + output_tokens
-        self.ledger.settle(identity, actual)
+        await asyncio.to_thread(self.ledger.settle, identity, actual)
 
 
 class BudgetedPydanticModel(WrapperModel):
@@ -46,9 +47,11 @@ class BudgetedPydanticModel(WrapperModel):
         self.budget = budget
 
     async def request(self, messages, model_settings, model_request_parameters):
-        identity = self.budget.reserve()
+        identity = await self.budget.reserve()
         response = await self.wrapped.request(messages, model_settings, model_request_parameters)
-        self.budget.settle(identity, response.usage.input_tokens, response.usage.output_tokens)
+        await self.budget.settle(
+            identity, response.usage.input_tokens, response.usage.output_tokens
+        )
         return response
 
     def request_stream(self, *args, **kwargs):
@@ -73,8 +76,8 @@ class BudgetedDeepModel(BaseChatModel):
         raise NotImplementedError("budgeted candidates require async execution")
 
     async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
-        identity = self.budget.reserve()
+        identity = await self.budget.reserve()
         response = await self.wrapped.ainvoke(messages, stop=stop, **kwargs)
         usage = response.usage_metadata or {}
-        self.budget.settle(identity, usage.get("input_tokens"), usage.get("output_tokens"))
+        await self.budget.settle(identity, usage.get("input_tokens"), usage.get("output_tokens"))
         return ChatResult(generations=[ChatGeneration(message=response)])

@@ -195,6 +195,16 @@
       "native_runtime_contracts_passed": 9,
       "native_runtime_contracts_seconds": 0.17,
       "scope": "Candidate boundary suite including concurrent shared request reservations, cancellation, provider failure, overrun and unknown usage; in-memory ledger with host-supplied bound. Durable family binding incomplete."
+    },
+    "candidate_durable_goal_ledger": {
+      "candidate_passed": 31,
+      "candidate_failed": 0,
+      "candidate_seconds": 6.55,
+      "clean_pinned_environment": true,
+      "goal_suite_passed": 62,
+      "goal_suite_failed": 0,
+      "goal_suite_seconds": 8.92,
+      "scope": "Private PostgreSQL reservation identities, concurrent ledgers, recovery, parent limits, tenant isolation, and both frameworks with durable pause/usage settlement. Full candidate runtime binding incomplete."
     }
   },
   "calendar": {
