@@ -9,12 +9,13 @@
   "replacement_selected": false,
   "checks": {
     "engine": {
-      "passed": 10850,
+      "passed": 10862,
       "failed": 0,
       "skipped": 29,
       "deselected": 173,
-      "seconds": 330.06,
-      "selection": "not slow and not integration and not llm and not e2e and not smoke"
+      "seconds": 333.54,
+      "selection": "not slow and not integration and not llm and not e2e and not smoke",
+      "note": "Broad run plus subsequent focused checks for chat failure reporting and verified outcome contracts."
     },
     "frontend": {
       "files": 146,
@@ -88,6 +89,35 @@
     "runtime_deadline_controls_and_ratchets": {
       "passed": 46,
       "failed": 0
+    },
+    "chat_failure_reporting_and_size_limits": {
+      "passed": 30,
+      "failed": 0
+    },
+    "verified_outcomes_and_deadlines": {
+      "passed": 27,
+      "failed": 0,
+      "seconds": 7.08,
+      "scope": "Native verified outcomes, deadlines, runtime contracts and function-size checks after malformed-argument fixture repair."
+    },
+    "authorized_fixture_mixed_workload": {
+      "passed": 3,
+      "failed": 0,
+      "seconds": 57.6
+    },
+    "configured_models_with_host_contracts": {
+      "artifacts": [
+        "uat-host-contract-summary.json",
+        "uat-validated-contract-summary.json",
+        "uat-authorized-mimo-summary.json",
+        "uat-validated-gateway-mimo-summary.json"
+      ],
+      "primary_verified": 30,
+      "primary_samples": 30,
+      "corrected_mimo_verified": 29,
+      "corrected_mimo_samples": 30,
+      "full_acceptance_passed": false,
+      "note": "One unresolved attempt hit the host deadline at 60.009 seconds with zero writes. No false completion or post-success calls. Incomplete actions remain failures; the interval includes the deadline sample."
     }
   },
   "calendar": {

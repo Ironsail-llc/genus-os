@@ -1,0 +1,45 @@
+{
+  "source": "bench/runtime/uat-validated-gateway-mimo-screen.jsonl",
+  "scope": "Configured MiMo tested alone with provider fallback disabled, exact authorized fixture arguments, explicit runtime deadline, trusted completion and bounded outcome validation. Not a full configured fallback-chain test.",
+  "samples": 30,
+  "verified_single_write_completed": 29,
+  "duration_ms": {
+    "samples": 30,
+    "p50": 8234.110780991614,
+    "p95": 21269.2061260459,
+    "p95_ci95": [
+      16631.4013270312,
+      60008.726789965294
+    ]
+  },
+  "provider_attempts": {
+    "samples": 30,
+    "p50": 1,
+    "p95": 2,
+    "p95_ci95": [
+      2,
+      3
+    ]
+  },
+  "post_success_provider_calls": 0,
+  "post_success_tool_calls": 0,
+  "failures": [
+    {
+      "model": "openrouter/xiaomi/mimo-v2.5",
+      "repetition": 5,
+      "status": "failed",
+      "error_type": "RuntimeDeadlineError",
+      "duration_ms": 60008.726789965294,
+      "mode": "host_verified",
+      "require_outcome": true,
+      "verified": false,
+      "writes": 0,
+      "dispatches": 2,
+      "provider_attempts": 3,
+      "post_success_provider_calls": 0,
+      "post_success_tool_calls": 0
+    }
+  ],
+  "acceptance_passed": false,
+  "note": "One unresolved attempt hit the host deadline at 60.009 seconds with zero writes. No false completion or post-success calls. Incomplete actions remain failures; the interval includes the deadline sample."
+}

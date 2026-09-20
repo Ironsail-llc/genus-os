@@ -1,0 +1,37 @@
+{
+  "scope": "Exact fixture write authorization plus host outcome validation; before malformed-argument handling repair. This failed cohort remains preserved.",
+  "samples": 30,
+  "verified_single_write_completed": 29,
+  "duration_ms": {
+    "samples": 30,
+    "p50": 9000.843262008857,
+    "p95": 19114.413072005846,
+    "p95_ci95": [
+      14015.063435013872,
+      50551.49777204497
+    ]
+  },
+  "post_success_provider_calls": 0,
+  "post_success_tool_calls": 0,
+  "failures": [
+    {
+      "model": "openrouter/xiaomi/mimo-v2.5",
+      "repetition": 15,
+      "status": "failed",
+      "duration_ms": 1992.3135860008188,
+      "verified": false,
+      "writes": 0,
+      "model_calls": 1,
+      "input_tokens": 2743,
+      "output_tokens": 38,
+      "engine_cost_usd": 0.00011367440000000001,
+      "mode": "host_verified",
+      "require_outcome": true,
+      "dispatches": 0,
+      "provider_attempts": 1,
+      "post_success_provider_calls": 0,
+      "post_success_tool_calls": 0
+    }
+  ],
+  "acceptance_passed": false
+}

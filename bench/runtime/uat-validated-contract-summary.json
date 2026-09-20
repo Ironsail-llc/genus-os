@@ -1,0 +1,148 @@
+{
+  "scope": "Native configured models with explicit runtime deadline, trusted completion and bounded output validation. Synthetic gateway version 1 allowed unrequested keys; this run exposed an extra-key write. Failed samples retained.",
+  "source": "bench/runtime/uat-validated-contract-screen.jsonl",
+  "acceptance_passed": false,
+  "cohorts": {
+    "ollama_chat/qwen3.8:27b": {
+      "samples": 30,
+      "verified_single_write_completed": 30,
+      "duration_ms": {
+        "samples": 30,
+        "p50": 6079.774139972869,
+        "p95": 8310.899180010892,
+        "p95_ci95": [
+          6576.7044830136,
+          19424.627714033704
+        ]
+      },
+      "post_success_provider_calls": 0,
+      "post_success_tool_calls": 0,
+      "provider_attempts": {
+        "samples": 30,
+        "p50": 1,
+        "p95": 1,
+        "p95_ci95": [
+          1,
+          1
+        ]
+      },
+      "over_deadline": 0,
+      "failures": []
+    },
+    "openrouter/deepseek/deepseek-v4-flash": {
+      "samples": 30,
+      "verified_single_write_completed": 30,
+      "duration_ms": {
+        "samples": 30,
+        "p50": 2506.6125649609603,
+        "p95": 14564.851567032747,
+        "p95_ci95": [
+          3423.0990309733897,
+          15086.979201994836
+        ]
+      },
+      "post_success_provider_calls": 0,
+      "post_success_tool_calls": 0,
+      "provider_attempts": {
+        "samples": 30,
+        "p50": 1,
+        "p95": 1,
+        "p95_ci95": [
+          1,
+          1
+        ]
+      },
+      "over_deadline": 0,
+      "failures": []
+    },
+    "openrouter/deepseek/deepseek-v4.1-flash": {
+      "samples": 30,
+      "verified_single_write_completed": 30,
+      "duration_ms": {
+        "samples": 30,
+        "p50": 3843.294041987974,
+        "p95": 11524.508722999599,
+        "p95_ci95": [
+          9532.588858972304,
+          16243.308326986153
+        ]
+      },
+      "post_success_provider_calls": 0,
+      "post_success_tool_calls": 0,
+      "provider_attempts": {
+        "samples": 30,
+        "p50": 1,
+        "p95": 1,
+        "p95_ci95": [
+          1,
+          1
+        ]
+      },
+      "over_deadline": 0,
+      "failures": []
+    },
+    "openrouter/xiaomi/mimo-v2.5": {
+      "samples": 30,
+      "verified_single_write_completed": 28,
+      "duration_ms": {
+        "samples": 30,
+        "p50": 6103.977583989035,
+        "p95": 28197.588657960296,
+        "p95_ci95": [
+          14628.92077100696,
+          35582.52860500943
+        ]
+      },
+      "post_success_provider_calls": 3,
+      "post_success_tool_calls": 1,
+      "provider_attempts": {
+        "samples": 30,
+        "p50": 1,
+        "p95": 3,
+        "p95_ci95": [
+          2,
+          6
+        ]
+      },
+      "over_deadline": 0,
+      "failures": [
+        {
+          "model": "openrouter/xiaomi/mimo-v2.5",
+          "repetition": 10,
+          "status": "failed",
+          "duration_ms": 28197.588657960296,
+          "verified": true,
+          "writes": 2,
+          "model_calls": 6,
+          "input_tokens": 19575,
+          "output_tokens": 721,
+          "engine_cost_usd": 0.0005188792,
+          "mode": "host_verified",
+          "require_outcome": true,
+          "dispatches": 3,
+          "provider_attempts": 6,
+          "post_success_provider_calls": 3,
+          "post_success_tool_calls": 1
+        },
+        {
+          "model": "openrouter/xiaomi/mimo-v2.5",
+          "repetition": 28,
+          "status": "failed",
+          "duration_ms": 4141.103366971947,
+          "verified": false,
+          "writes": 0,
+          "model_calls": 1,
+          "input_tokens": 2746,
+          "output_tokens": 96,
+          "engine_cost_usd": 0.0001303344,
+          "mode": "host_verified",
+          "require_outcome": true,
+          "dispatches": 0,
+          "provider_attempts": 1,
+          "post_success_provider_calls": 0,
+          "post_success_tool_calls": 0
+        }
+      ]
+    }
+  }
+}
