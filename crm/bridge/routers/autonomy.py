@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from pydantic import SecretStr
 
 from robothor.autonomy.broker import ExecutionPlan
+from robothor.autonomy.enrollment import EnrollmentRequest, EnrollmentStore
 from robothor.autonomy.identity import scope_for_actor
 from robothor.autonomy.models import Delegation, ResourceInput, RuntimeSettings, StrictModel
 from robothor.autonomy.onboarding import import_contact_profile
@@ -21,6 +22,14 @@ _resumes: set[asyncio.Task] = set()
 
 class VerificationInput(StrictModel):
     verification_code: SecretStr
+
+
+class EnrollmentToken(StrictModel):
+    token: SecretStr
+
+
+class EnrollmentCompletion(EnrollmentToken):
+    resource: ResourceInput
 
 
 async def require_personal_owner(request: Request):
@@ -94,6 +103,53 @@ async def profile_from_contact(request: Request):
         raise HTTPException(409, "Your linked contact has no information to import") from None
     except Exception:
         raise HTTPException(503, "Contact import is unavailable") from None
+
+
+@router.post("/enrollments")
+async def enrollment_create(request: Request):
+    scope = await require_personal_owner(request)
+    body = await _body(request, EnrollmentRequest)
+    try:
+        return _safe(await asyncio.to_thread(EnrollmentStore(AutonomyStore()).create, scope, body))
+    except Exception:
+        raise HTTPException(503, "Secure enrollment is unavailable") from None
+
+
+@router.post("/enrollments/inspect")
+async def enrollment_inspect(request: Request):
+    scope = await require_personal_owner(request)
+    body = await _body(request, EnrollmentToken)
+    try:
+        return _safe(
+            await asyncio.to_thread(
+                EnrollmentStore(AutonomyStore()).inspect, scope, body.token.get_secret_value()
+            )
+        )
+    except PermissionError:
+        raise HTTPException(404, "Enrollment expired or unavailable for this account") from None
+    except Exception:
+        raise HTTPException(503, "Secure enrollment is unavailable") from None
+
+
+@router.post("/enrollments/complete")
+async def enrollment_complete(request: Request):
+    scope = await require_personal_owner(request)
+    body = await _body(request, EnrollmentCompletion)
+    try:
+        return _safe(
+            await asyncio.to_thread(
+                EnrollmentStore(AutonomyStore()).complete,
+                scope,
+                body.token.get_secret_value(),
+                body.resource,
+            )
+        )
+    except PermissionError:
+        raise HTTPException(404, "Enrollment expired or unavailable for this account") from None
+    except ValueError:
+        raise HTTPException(422, "Invalid resource; no values were stored") from None
+    except Exception:
+        raise HTTPException(503, "Secure enrollment is unavailable") from None
 
 
 @router.post("/resources/refresh-descriptions")

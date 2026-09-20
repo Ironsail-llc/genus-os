@@ -24,6 +24,12 @@ def protect_payment_text(text: str) -> str:
     """
     if not text:
         return text
+    marked = re.search(r"(?im)^\s*/secure(?:@[a-zA-Z0-9_]+)?(?:\s|$)", text)
+    if marked:
+        return (
+            text[: marked.start()]
+            + "[Private input withheld from chat; use /account/autonomy for secure enrollment.]"
+        )
     protected = _PAN.sub(
         lambda match: "[payment number withheld]" if _luhn(match[0]) else match[0], text
     )

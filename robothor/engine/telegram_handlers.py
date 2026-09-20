@@ -893,6 +893,10 @@ class TelegramHandlersMixin:
         if not message.text or not message.from_user:
             return
 
+        from robothor.engine.secure_intake import intercept
+
+        if await intercept(self, message):
+            return
         chat_id = str(message.chat.id)
         user_text = message.text.strip()
         from robothor.autonomy.intake import protect_payment_text
