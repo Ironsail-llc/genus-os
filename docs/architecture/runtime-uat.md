@@ -621,3 +621,10 @@ Two real daemon restart cycles now clean local stale records while preserving fo
 ## Cleanup preserves locks for skipped work
 
 Two regression tests reproduced cleanup releasing an agent lock despite skipping its healthy run, and releasing/counting a run whose conditional update affected zero rows. Cleanup now collects only successfully updated rows and releases their locks after commit; counts and logs reflect those rows. All 56 focused reaper/workflow/resume/size tests pass (4.93s), and the isolated canonical migration/two-restart drill passes with 13 integration tests (0.28s). The initial two failing tests are recorded in `bench/runtime/uat-reaper-lock-preservation.json`. Ruff and diff checks pass. This does not establish replacement-run lock ownership or full HA concurrency correctness; full acceptance remains incomplete.
+
+
+## Broad regression verification after admission and restart fixes
+
+At `5f5b6e62179`, `.venv/bin/python -m pytest -q robothor/engine/tests -m "not slow and not integration and not llm and not e2e and not smoke"` passed 11,031 tests, skipped 29 and deselected 173 in 356.20s. The run emitted 393 warnings, including one unawaited `connect_tcp.<locals>.try_connect` coroutine attributed at collection to `test_tool_admission.py::TestGuardrailGate::test_a_block_writes_an_audit_row`; the allocation origin is not established. The prior broad run also had this warning class. It remains unresolved, not silently excluded. Log: `/tmp/runtime-engine-regression-5f5b6e62179.log`.
+
+The complete goal suite passed 84 tests in 9.94s with two dependency deprecation warnings (`/tmp/runtime-goals-regression-5f5b6e62179.log`). This updates current-code evidence after the focused fixes; no failures were observed in these scopes. Excluded integration/live/slow scenarios, matched candidate qualification, active-goal continuation, rollback and remaining manual acceptance are not established by this run. Earlier broad results remain preserved in `uat-verification.json`. No deployment occurred.

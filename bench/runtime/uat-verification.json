@@ -9,16 +9,16 @@
   "replacement_selected": false,
   "checks": {
     "engine": {
-      "revision": "da202e576fb",
-      "passed": 10995,
+      "revision": "5f5b6e62179",
+      "passed": 11031,
       "failed": 0,
       "skipped": 29,
       "deselected": 173,
-      "seconds": 348.1,
-      "warnings": 394,
+      "seconds": 356.2,
+      "warnings": 393,
       "selection": "not slow and not integration and not llm and not e2e and not smoke",
-      "log": "/tmp/runtime-engine-regression-da202e.log",
-      "note": "Broad run includes delegated receipt and goal changes, before chat fixture embedding isolation. Two connect_tcp unawaited coroutine warnings remain in this run; no full acceptance or warning-free claim."
+      "log": "/tmp/runtime-engine-regression-5f5b6e62179.log",
+      "note": "Current broad engine run includes admission deadline/audit, canonical migration, resume and reaper fixes. One connect_tcp unawaited coroutine warning persists; no warning-free or full acceptance claim."
     },
     "frontend": {
       "revision": "da202e576fb",
@@ -1037,6 +1037,26 @@
         }
       ],
       "limits": "Regression tests cover skipped and concurrently transitioned rows. Lock ownership across replacement runs and all HA concurrency behavior are not certified by these tests."
+    },
+    "engine_previous_da202e576fb": {
+      "revision": "da202e576fb",
+      "passed": 10995,
+      "failed": 0,
+      "skipped": 29,
+      "deselected": 173,
+      "seconds": 348.1,
+      "warnings": 394,
+      "selection": "not slow and not integration and not llm and not e2e and not smoke",
+      "log": "/tmp/runtime-engine-regression-da202e.log",
+      "note": "Broad run includes delegated receipt and goal changes, before chat fixture embedding isolation. Two connect_tcp unawaited coroutine warnings remain in this run; no full acceptance or warning-free claim."
+    },
+    "goals_current": {
+      "revision": "5f5b6e62179",
+      "passed": 84,
+      "failed": 0,
+      "warnings": 2,
+      "seconds": 9.94,
+      "log": "/tmp/runtime-goals-regression-5f5b6e62179.log"
     }
   },
   "calendar": {
