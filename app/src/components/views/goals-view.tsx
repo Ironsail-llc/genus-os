@@ -9,6 +9,7 @@ interface Goal {
   status: GoalStatus; version: number; success_criteria: string[]; parent_goal_id: string | null;
   checkpoint: string; next_action: string; blocker: string; ready_at: string;
   tokens_used: number; token_budget: number | null; cost_usd: number;
+  cost_budget_usd: number | null; attempts: number; max_attempts: number | null; deadline_at: string | null;
   evidence: Evidence[]; wait: { reason: string; event_type?: string; task_id?: string } | null;
   assessment: { status: string; note: string; at: string } | null;
   children?: Goal[];
@@ -42,7 +43,13 @@ export function GoalsView({ visible }: { visible: boolean }) {
   const [ongoing, setOngoing] = useState(false);
   const [humanReview, setHumanReview] = useState(false);
   const [budget, setBudget] = useState("");
+  const [costBudget, setCostBudget] = useState("");
+  const [maxAttempts, setMaxAttempts] = useState("");
+  const [deadlineDays, setDeadlineDays] = useState("");
   const [resumeBudget, setResumeBudget] = useState("");
+  const [resumeCost, setResumeCost] = useState("");
+  const [resumeAttempts, setResumeAttempts] = useState("");
+  const [resumeDays, setResumeDays] = useState("");
   const [cadence, setCadence] = useState("24");
   const [steer, setSteer] = useState("");
 
@@ -86,7 +93,11 @@ export function GoalsView({ visible }: { visible: boolean }) {
     await perform(async () => {
       const data = await api(`/${selected.id}`, { method: "PATCH", body: JSON.stringify({
         action, version: selected.version, ...(action === "steer" ? { note: steer } : {}),
+        // A goal blocked on a ceiling only restarts once that ceiling rises.
         ...(action === "resume" && resumeBudget ? { token_budget: Number(resumeBudget) } : {}),
+        ...(action === "resume" && resumeCost ? { cost_budget_usd: Number(resumeCost) } : {}),
+        ...(action === "resume" && resumeAttempts ? { max_attempts: Number(resumeAttempts) } : {}),
+        ...(action === "resume" && resumeDays ? { deadline_seconds: Math.round(Number(resumeDays) * 86400) } : {}),
       }) });
       setSelected((await api(`/${data.goal.id}`)).goal); setSteer("");
     });
@@ -109,6 +120,11 @@ export function GoalsView({ visible }: { visible: boolean }) {
             objective, success_criteria: criteria.split("\n").map(s => s.trim()).filter(Boolean),
             kind, mode: kind === "long" && ongoing ? "ongoing" : "finite", human_review: humanReview,
             token_budget: budget ? Number(budget) : null, review_seconds: Math.round(Number(cadence) * 3600),
+            // Left blank, each ceiling takes the platform default; none of
+            // them can be set to unlimited.
+            cost_budget_usd: costBudget ? Number(costBudget) : null,
+            max_attempts: maxAttempts ? Number(maxAttempts) : null,
+            deadline_seconds: deadlineDays ? Math.round(Number(deadlineDays) * 86400) : null,
           }) });
           setSelected(data.goal); setObjective(""); setCriteria("");
         });
@@ -118,7 +134,10 @@ export function GoalsView({ visible }: { visible: boolean }) {
         <div className="flex flex-wrap gap-4 items-center">
           <label>Goal type <select value={kind} onChange={e => setKind(e.target.value as "short" | "long")} className="border rounded p-2 bg-background"><option value="short">Short-term</option><option value="long">Long-term</option></select></label>
           {kind === "long" && <><label><input type="checkbox" checked={ongoing} onChange={e => setOngoing(e.target.checked)} /> Ongoing target</label><label>Review every (hours) <input type="number" min="1" required value={cadence} onChange={e => setCadence(e.target.value)} className="w-20 border rounded p-2 bg-background" /></label></>}
-          <label>Optional token budget <input type="number" min="1" value={budget} onChange={e => setBudget(e.target.value)} className="w-28 border rounded p-2 bg-background" /></label>
+          <label>Token budget <input type="number" min="1" placeholder="default" value={budget} onChange={e => setBudget(e.target.value)} className="w-28 border rounded p-2 bg-background" /></label>
+          <label>Cost ceiling (USD) <input type="number" min="0.01" step="0.01" placeholder="default" value={costBudget} onChange={e => setCostBudget(e.target.value)} className="w-28 border rounded p-2 bg-background" /></label>
+          <label>Max runs <input type="number" min="1" placeholder="default" value={maxAttempts} onChange={e => setMaxAttempts(e.target.value)} className="w-24 border rounded p-2 bg-background" /></label>
+          <label>Deadline (days) <input type="number" min="1" placeholder="default" value={deadlineDays} onChange={e => setDeadlineDays(e.target.value)} className="w-24 border rounded p-2 bg-background" /></label>
           <label><input type="checkbox" checked={humanReview} onChange={e => setHumanReview(e.target.checked)} /> Review completion myself</label>
           <button disabled={busy} type="submit" className="border rounded px-3 py-2">Set goal</button>
         </div>
@@ -136,7 +155,7 @@ export function GoalsView({ visible }: { visible: boolean }) {
         </div>
         {selected && <section className="border rounded p-4 space-y-3" aria-label="Goal details">
           <h2 className="font-semibold">{selected.objective}</h2>
-          <p>{selected.status} · {selected.tokens_used.toLocaleString()} tokens{selected.token_budget ? ` / ${selected.token_budget.toLocaleString()}` : ""} · ${selected.cost_usd.toFixed(4)}</p>
+          <p>{selected.status} · {selected.tokens_used.toLocaleString()} tokens{selected.token_budget ? ` / ${selected.token_budget.toLocaleString()}` : ""} · ${selected.cost_usd.toFixed(4)}{selected.cost_budget_usd ? ` / $${selected.cost_budget_usd.toFixed(2)}` : ""} · run {selected.attempts}{selected.max_attempts ? ` / ${selected.max_attempts}` : ""}{selected.deadline_at ? ` · deadline ${new Date(selected.deadline_at).toLocaleDateString()}` : ""}</p>
           {selected.parent_goal_id && <button className="underline" onClick={() => void select(selected.parent_goal_id!)}>Open parent goal</button>}
           <p>{selected.checkpoint}</p><p>{selected.next_action}</p>
           {selected.wait && <p>Waiting: {selected.wait.reason}. Next review: {new Date(selected.ready_at).toLocaleString()}</p>}
@@ -145,7 +164,12 @@ export function GoalsView({ visible }: { visible: boolean }) {
           <ol className="list-decimal pl-5 space-y-2">{selected.success_criteria.map((criterion, i) => <li key={i}>{criterion}
             {selected.evidence.filter(e => e.criterion === i).map((e, j) => <p key={j} className="text-sm">{e.satisfied ? "Verified" : "Unmet"}: {e.summary} ({e.reference})</p>)}
           </li>)}</ol>
-          {selected.status === "blocked" && <label>Updated token budget (optional)<input type="number" min="1" value={resumeBudget} onChange={e => setResumeBudget(e.target.value)} className="block border rounded p-2 bg-background" /></label>}
+          {selected.status === "blocked" && <div className="flex flex-wrap gap-3 items-end">
+            <label>Raise token budget<input type="number" min="1" value={resumeBudget} onChange={e => setResumeBudget(e.target.value)} className="block w-32 border rounded p-2 bg-background" /></label>
+            <label>Raise cost ceiling (USD)<input type="number" min="0.01" step="0.01" value={resumeCost} onChange={e => setResumeCost(e.target.value)} className="block w-32 border rounded p-2 bg-background" /></label>
+            <label>Raise max runs<input type="number" min="1" value={resumeAttempts} onChange={e => setResumeAttempts(e.target.value)} className="block w-28 border rounded p-2 bg-background" /></label>
+            <label>Extend deadline (days)<input type="number" min="1" value={resumeDays} onChange={e => setResumeDays(e.target.value)} className="block w-28 border rounded p-2 bg-background" /></label>
+          </div>}
           <div className="flex flex-wrap gap-2">
             <button disabled={busy} className="border rounded px-2 py-1" onClick={() => void select(selected.id)}>Refresh details</button>
             {!["complete", "canceled"].includes(selected.status) && <>

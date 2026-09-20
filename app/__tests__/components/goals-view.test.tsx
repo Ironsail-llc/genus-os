@@ -6,7 +6,8 @@ const goal = {
   id: "g1", objective: "Deliver report", success_criteria: ["Receipt verified"],
   kind: "long", mode: "finite", status: "waiting", version: 4, parent_goal_id: null,
   checkpoint: "Report sent", next_action: "Verify receipt", blocker: "",
-  ready_at: "2030-01-01T00:00:00Z", tokens_used: 42, token_budget: null, cost_usd: 0.02,
+  ready_at: "2030-01-01T00:00:00Z", tokens_used: 42, token_budget: 1000000, cost_usd: 0.02,
+  cost_budget_usd: 5, attempts: 3, max_attempts: 50, deadline_at: "2030-02-01T00:00:00Z",
   evidence: [], wait: { reason: "Waiting for reply" }, assessment: null,
   tasks: [{ id: "t1", title: "Send report", status: "DONE" }], runs: [], history: [],
 };

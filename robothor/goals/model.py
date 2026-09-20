@@ -12,6 +12,33 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 TERMINAL = {"complete", "canceled"}
 INACTIVE = TERMINAL | {"paused", "blocked", "review"}
 
+# Default ceilings, applied at creation so a caller that asks for none still
+# gets all four. They are sized against the fleet's real constraint — one
+# OpenRouter key with a $100/week cap that a benchmark sweep has already
+# exhausted once — and against what the pursuit prompt actually does: it
+# orders a progress note every run, which resets the no-progress guard, so
+# the no-progress guard is not a ceiling at all.
+#
+#   tokens   1M is roughly two to four dozen coordination runs at this
+#            prompt's size. Enough for a goal to genuinely work a problem,
+#            small enough that one runaway cannot eat a week.
+#   cost     $5 is 5% of the weekly cap. Ten simultaneous runaways still
+#            leave half the week's spend intact. Tokens alone are not a
+#            cost ceiling: model prices differ by two orders of magnitude.
+#   attempts 50 runs bounds the goal that loops while spending almost
+#            nothing per run — the shape the probe actually found.
+#   deadline 30 days is a backstop for the forgotten goal, not a work
+#            limit; a long-term goal legitimately spans weeks, and the
+#            other three ceilings bite long before this one.
+#
+# Every one is overridable per goal at creation, and raisable on resume.
+# None of them means the goal failed: blocking on a ceiling is a request
+# for an operator decision, and says which ceiling it was.
+DEFAULT_TOKEN_BUDGET = 1_000_000
+DEFAULT_COST_BUDGET_USD = 5.0
+DEFAULT_MAX_ATTEMPTS = 50
+DEFAULT_DEADLINE_SECONDS = 30 * 86400
+
 
 def now_iso() -> str:
     return datetime.now(UTC).isoformat()
@@ -19,6 +46,36 @@ def now_iso() -> str:
 
 def future(seconds: int) -> str:
     return (datetime.now(UTC) + timedelta(seconds=seconds)).isoformat()
+
+
+def deadline_of(goal: dict[str, Any]) -> datetime:
+    """A goal's wall-clock deadline, derived for rows written before it existed."""
+    stamp = goal.get("deadline_at")
+    if stamp:
+        return datetime.fromisoformat(stamp)
+    created = datetime.fromisoformat(goal["created_at"])
+    return created + timedelta(seconds=DEFAULT_DEADLINE_SECONDS)
+
+
+def exceeded(goal: dict[str, Any]) -> str:
+    """The first ceiling this goal has reached, or ``""``.
+
+    The defaults are resolved here rather than at the call site so that a goal
+    written by an older build — or by any caller that left a limit unset — is
+    still bounded. ``None`` means "unset, use the default", never "unlimited".
+    """
+    tokens = goal.get("token_budget") or DEFAULT_TOKEN_BUDGET
+    if goal.get("tokens_used", 0) >= tokens:
+        return f"token budget exhausted ({goal.get('tokens_used', 0)}/{tokens})"
+    cost = goal.get("cost_budget_usd") or DEFAULT_COST_BUDGET_USD
+    if goal.get("cost_usd", 0) >= cost:
+        return f"cost ceiling reached (${goal.get('cost_usd', 0):.2f}/${cost:.2f})"
+    attempts = goal.get("max_attempts") or DEFAULT_MAX_ATTEMPTS
+    if goal.get("attempts", 0) >= attempts:
+        return f"attempt ceiling reached ({goal.get('attempts', 0)}/{attempts} runs)"
+    if datetime.now(UTC) >= deadline_of(goal):
+        return f"deadline reached ({deadline_of(goal).isoformat()})"
+    return ""
 
 
 class CreateGoal(BaseModel):
@@ -29,7 +86,13 @@ class CreateGoal(BaseModel):
     mode: Literal["finite", "ongoing"] = "finite"
     parent_goal_id: str | None = None
     request_key: str | None = Field(default=None, max_length=200)
+    # Each ceiling defaults to None meaning "apply the platform default", not
+    # "unlimited"; new_goal() resolves them. There is deliberately no way to
+    # ask for an unbounded goal.
     token_budget: int | None = Field(default=None, gt=0)
+    cost_budget_usd: float | None = Field(default=None, gt=0)
+    max_attempts: int | None = Field(default=None, gt=0)
+    deadline_seconds: int | None = Field(default=None, ge=60)
     review_seconds: int = Field(default=86400, ge=60)
     human_review: bool = False
     priority: int = Field(default=0, ge=0, le=10)
@@ -81,7 +144,12 @@ class GoalUpdate(BaseModel):
     event_match: dict[str, str] = Field(default_factory=dict)
     task_id: str | None = None
     assessment: Literal["meeting", "missing", "insufficient"] | None = None
+    # Raised ceilings, accepted on resume: blocking on one is resumable only
+    # by lifting the ceiling that stopped it.
     token_budget: int | None = Field(default=None, gt=0)
+    cost_budget_usd: float | None = Field(default=None, gt=0)
+    max_attempts: int | None = Field(default=None, gt=0)
+    deadline_seconds: int | None = Field(default=None, ge=60)
 
     @field_validator("task_id")
     @classmethod
@@ -96,8 +164,14 @@ class GoalUpdate(BaseModel):
 
 
 def new_goal(spec: CreateGoal, actor: str) -> dict[str, Any]:
+    fields = spec.model_dump()
+    deadline = fields.pop("deadline_seconds") or DEFAULT_DEADLINE_SECONDS
     return {
-        **spec.model_dump(),
+        **fields,
+        "token_budget": spec.token_budget or DEFAULT_TOKEN_BUDGET,
+        "cost_budget_usd": spec.cost_budget_usd or DEFAULT_COST_BUDGET_USD,
+        "max_attempts": spec.max_attempts or DEFAULT_MAX_ATTEMPTS,
+        "deadline_at": future(deadline),
         "id": str(uuid4()),
         "owner": "main",
         "created_by": actor,
@@ -232,10 +306,15 @@ def transition(
     elif action in {"pause", "cancel"}:
         g["status"] = "paused" if action == "pause" else "canceled"
     elif action == "resume":
-        if change.token_budget is not None:
-            g["token_budget"] = change.token_budget
-        if g["token_budget"] and g["tokens_used"] >= g["token_budget"]:
-            raise ValueError("increase the exhausted token budget before resuming")
+        for ceiling in ("token_budget", "cost_budget_usd", "max_attempts"):
+            raised = getattr(change, ceiling)
+            if raised is not None:
+                g[ceiling] = raised
+        if change.deadline_seconds is not None:
+            g["deadline_at"] = future(change.deadline_seconds)
+        reached = exceeded(g)
+        if reached:
+            raise ValueError(f"increase the ceiling that stopped this goal: {reached}")
         g.update(
             status="queued",
             ready_at=now_iso(),

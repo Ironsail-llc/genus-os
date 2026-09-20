@@ -28,6 +28,7 @@ genus goals --tenant example create "Keep reports current" --kind long --mode on
 genus goals --tenant example list
 genus goals --tenant example get GOAL_ID
 genus goals --tenant example pause GOAL_ID
+genus goals --tenant example create "Prepare the report" --criterion "Report delivered" --token-budget 200000 --cost-budget-usd 2 --max-attempts 20 --deadline-seconds 604800
 genus goals --tenant example resume GOAL_ID --token-budget 200000
 genus goals --tenant example update GOAL_ID --file update.json
 ```
@@ -86,11 +87,36 @@ preserves a reconciliation requirement. Token budgets cover coordinator runs,
 spawned runs, and execution children; separately scheduled CRM tasks keep their
 existing task budgets. Token limits are checked at iteration/tool boundaries;
 already in-flight model calls can overshoot. System hard caps also stop pursuit.
-No explicit goal cap is imposed when the operator leaves it unset.
+
+### Ceilings
+
+Every goal is created with four ceilings, whether or not the caller asks for
+them. Leaving one unset means the platform default, never "unlimited":
+
+| Ceiling | Default | Why |
+|---------|---------|-----|
+| Token budget | 1,000,000 tokens | Two to four dozen coordination runs — room to work a problem, not a week's spend. |
+| Cost ceiling | $5.00 | Tokens are not cost: model prices differ by two orders of magnitude. |
+| Maximum runs | 50 | Bounds the goal that loops while spending almost nothing per run. |
+| Deadline | 30 days | A backstop for the forgotten goal, not a work limit. |
+
+Each is overridable per goal at creation (`--token-budget`, `--cost-budget-usd`,
+`--max-attempts`, `--deadline-seconds`, the matching `CreateGoal` fields, and the
+Goals form), and raisable on `resume`. Reaching one blocks the goal with a
+blocker naming the ceiling and the numbers; `resume` refuses until the ceiling
+that stopped it is raised. Blocking on a ceiling is a request for an operator
+decision, never a claim that the goal succeeded or failed.
+
+Coordination runs are paced: at most one run every 30 seconds per tenant. A
+single ready goal can no longer hold the controller loop, and a parent cannot
+spin turns while its execution child waits for the lease.
 
 Three consecutive repeated blocker reports stop automatic pursuit. Three runs
-without a new progress checkpoint or evidence also block. Technical failures retry
-with bounded backoff and block after three failed runs. Limits never imply success.
+without a new progress checkpoint or evidence also block — but note that the
+pursuit prompt asks for a progress note every run, so that guard resets on the
+behaviour it asks for and is not a substitute for the ceilings above. Technical
+failures retry with bounded backoff and block after three failed runs. Limits
+never imply success.
 A finite goal cannot complete with unfinished execution children. Ongoing
 assessments require fresh evidence for each period and have a default daily review.
 

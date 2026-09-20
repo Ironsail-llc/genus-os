@@ -7,7 +7,7 @@ import pytest
 from robothor.engine.models import AgentRun, RunStatus
 from robothor.goals import store
 from robothor.goals.controller import GoalController
-from robothor.goals.model import CreateGoal, GoalUpdate
+from robothor.goals.model import DEFAULT_MAX_ATTEMPTS, CreateGoal, GoalUpdate
 from robothor.goals.runtime import attach_run, binding, budget_hit, stop_at_budget
 from robothor.goals.tests.test_store import db, private_database  # noqa: F401
 
@@ -73,6 +73,9 @@ async def test_actual_controller_continues_then_verifies_completion(db):  # noqa
     with (
         patch("robothor.engine.config.load_agent_config_or_broken", return_value=SimpleNamespace()),
         patch("robothor.goals.events.capture"),
+        # Continuation, not pacing, is what this test is about: without the
+        # gap the drain loop is the pre-ceiling one.
+        patch("robothor.goals.controller.MIN_RUN_INTERVAL_SECONDS", 0),
     ):
         await controller.tick()
     result = store.get(db, g["id"])
@@ -149,10 +152,83 @@ async def test_missing_progress_stops_after_three_runs(db):  # noqa: F811
     with (
         patch("robothor.engine.config.load_agent_config_or_broken", return_value=SimpleNamespace()),
         patch("robothor.goals.events.capture"),
+        patch("robothor.goals.controller.MIN_RUN_INTERVAL_SECONDS", 0),
     ):
         await controller.tick()
     assert runner.execute.call_count == 3
     assert store.get(db, g["id"])["status"] == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_a_goal_that_records_progress_every_run_still_stops(db):  # noqa: F811
+    """PURSUIT_INSTRUCTIONS orders a progress note every run, and a differing
+    note resets ``no_progress_runs``. Before the ceilings that was the whole
+    guard: a probe drove 201 agent runs and 6.4M tokens out of a single tick.
+    """
+    g = store.create(
+        db, CreateGoal(objective="Deliver report", success_criteria=["Delivered"]), "operator"
+    )
+    runs = 0
+
+    async def execute(**kwargs):
+        nonlocal runs
+        runs += 1
+        assert runs <= 200, "the controller never stopped a goal that reports progress"
+        current = store.control(db, g["id"])
+        store.update(
+            db,
+            g["id"],
+            GoalUpdate(
+                action="progress",
+                version=current["version"],
+                note=f"Draft revision {runs}",
+                next_action="Keep going",
+            ),
+            "main",
+        )
+        run = AgentRun(
+            id=str(uuid4()),
+            agent_id="main",
+            tenant_id=db,
+            trigger_detail=kwargs["trigger_detail"],
+            status=RunStatus.COMPLETED,
+            input_tokens=1,
+            output_tokens=1,
+        )
+        attach_run(run)
+        return run
+
+    controller = GoalController(
+        SimpleNamespace(execute=execute), SimpleNamespace(tenant_id=db, manifest_dir="unused")
+    )
+    with (
+        patch("robothor.engine.config.load_agent_config_or_broken", return_value=SimpleNamespace()),
+        patch("robothor.goals.events.capture"),
+        patch("robothor.goals.controller.MIN_RUN_INTERVAL_SECONDS", 0),
+    ):
+        await controller.tick()
+    result = store.get(db, g["id"])
+    assert result["status"] == "blocked"
+    assert "attempt" in result["blocker"], result["blocker"]
+    assert runs <= DEFAULT_MAX_ATTEMPTS
+
+
+@pytest.mark.asyncio
+async def test_one_ready_goal_cannot_occupy_the_loop(db):  # noqa: F811
+    """``tick`` used to drain while a goal stayed ready, so ``serve``'s sleep
+    was never reached. One tick is now one run."""
+    store.create(
+        db, CreateGoal(objective="Deliver report", success_criteria=["Delivered"]), "operator"
+    )
+    runner = SimpleNamespace(execute=AsyncMock(return_value=AgentRun(status=RunStatus.COMPLETED)))
+    controller = GoalController(runner, SimpleNamespace(tenant_id=db, manifest_dir="unused"))
+    with (
+        patch("robothor.engine.config.load_agent_config_or_broken", return_value=SimpleNamespace()),
+        patch("robothor.goals.events.capture"),
+    ):
+        await controller.tick()
+        await controller.tick()
+    assert runner.execute.call_count == 1
 
 
 @pytest.mark.asyncio

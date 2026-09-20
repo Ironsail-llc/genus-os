@@ -2,7 +2,16 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from robothor.goals.model import CreateGoal, GoalUpdate, new_goal, transition
+from robothor.goals.model import (
+    DEFAULT_COST_BUDGET_USD,
+    DEFAULT_MAX_ATTEMPTS,
+    DEFAULT_TOKEN_BUDGET,
+    CreateGoal,
+    GoalUpdate,
+    exceeded,
+    new_goal,
+    transition,
+)
 
 
 def goal(**kwargs):
@@ -132,3 +141,53 @@ def test_invalid_contracts(kwargs):
     data.update(kwargs)
     with pytest.raises(ValueError):
         CreateGoal(**data)
+
+
+def test_every_goal_is_born_with_a_ceiling():
+    """The caller may omit every limit; the goal must still be bounded."""
+    g = goal()
+    assert g["token_budget"] == DEFAULT_TOKEN_BUDGET
+    assert g["cost_budget_usd"] == DEFAULT_COST_BUDGET_USD
+    assert g["max_attempts"] == DEFAULT_MAX_ATTEMPTS
+    assert datetime.fromisoformat(g["deadline_at"]) > datetime.now(UTC)
+    assert not exceeded(g)
+
+
+@pytest.mark.parametrize(
+    "field,hit,raised",
+    [
+        ("tokens_used", DEFAULT_TOKEN_BUDGET, {"token_budget": DEFAULT_TOKEN_BUDGET * 2}),
+        ("cost_usd", DEFAULT_COST_BUDGET_USD, {"cost_budget_usd": DEFAULT_COST_BUDGET_USD * 2}),
+        ("attempts", DEFAULT_MAX_ATTEMPTS, {"max_attempts": DEFAULT_MAX_ATTEMPTS * 2}),
+    ],
+)
+def test_each_ceiling_blocks_and_only_raising_it_resumes(field, hit, raised):
+    g = goal()
+    g[field] = hit
+    assert exceeded(g)
+    g["status"] = "blocked"
+    with pytest.raises(ValueError, match="increase"):
+        update(g, "resume")
+    assert update(g, "resume", **raised)["status"] == "queued"
+
+
+def test_deadline_blocks_and_is_extended_not_ignored():
+    g = goal(deadline_seconds=3600)
+    assert datetime.fromisoformat(g["deadline_at"]) < datetime.now(UTC) + timedelta(hours=2)
+    g["deadline_at"] = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+    assert "deadline" in exceeded(g)
+    g["status"] = "blocked"
+    with pytest.raises(ValueError, match="increase"):
+        update(g, "resume")
+    assert update(g, "resume", deadline_seconds=3600)["status"] == "queued"
+
+
+def test_a_goal_stored_before_ceilings_existed_is_still_bounded():
+    """Rows written by the pre-ceiling build carry none of these keys."""
+    legacy = {
+        k: v
+        for k, v in goal().items()
+        if k not in {"token_budget", "cost_budget_usd", "max_attempts", "deadline_at"}
+    }
+    legacy["attempts"] = DEFAULT_MAX_ATTEMPTS
+    assert "attempt" in exceeded(legacy)

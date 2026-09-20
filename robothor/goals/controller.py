@@ -18,6 +18,21 @@ from robothor.goals.runtime import Binding, binding
 
 logger = logging.getLogger(__name__)
 
+# Minimum wall-clock gap between two coordination runs. `tick` used to drain
+# while any goal stayed ready — claim, execute, `sleep(0)`, claim again — so
+# `serve`'s one-second sleep was unreachable for as long as one goal kept
+# re-queueing itself, and a probe drove 201 runs out of a single tick. Thirty
+# seconds caps pursuit at two runs a minute: fast enough that a goal still
+# makes visible progress, slow enough that an operator watching the Goals view
+# can pause a misbehaving one before it has spent much, and it is what stops a
+# parent from spinning turns while its execution child waits its turn.
+MIN_RUN_INTERVAL_SECONDS = 30
+
+# How long `serve` waits between ticks while pursuit is switched off for this
+# tenant. At one second the disabled feature still opened ~86,400 connections
+# a day to read a flag that cannot have changed more than a handful of times.
+DISABLED_POLL_SECONDS = 60
+
 PURSUIT_INSTRUCTIONS = """You are pursuing an explicitly authorized operator goal.
 Use get_pursuit_goal and update_pursuit_goal for this goal. Read the current version
 before updates. Keep working until the criteria are verified; a final response does
@@ -48,6 +63,8 @@ class GoalController:
         self.config = config
         self._lock = asyncio.Lock()
         self._last_capture = 0.0
+        self._last_run = 0.0
+        self._enabled = True
 
     async def serve(self) -> None:
         while True:
@@ -57,15 +74,21 @@ class GoalController:
                 logger.exception("Goal pursuit reconciliation failed")
                 await asyncio.sleep(60)
             else:
-                await asyncio.sleep(1)
+                await asyncio.sleep(1 if self._enabled else DISABLED_POLL_SECONDS)
+
+    def _paced(self) -> bool:
+        """True while the minimum inter-run delay has not elapsed."""
+        return time.monotonic() - self._last_run < MIN_RUN_INTERVAL_SECONDS
 
     async def tick(self) -> None:
-        if self._lock.locked():
+        if self._lock.locked() or self._paced():
             return
         async with self._lock:
-            if not await asyncio.to_thread(store.enabled, self.config.tenant_id):
+            self._enabled = await asyncio.to_thread(store.enabled, self.config.tenant_id)
+            if not self._enabled:
                 return
-            # Drain ready goals, yielding and collecting events between turns.
+            # Drain ready goals, yielding and collecting events between turns,
+            # until the pacing gap is due. One tick is at most one run.
             while True:
                 if time.monotonic() - self._last_capture >= 60:
                     from robothor.goals.events import capture
@@ -82,7 +105,12 @@ class GoalController:
                 if not claimed:
                     return
                 goal, attempt = claimed
-                await self.execute(goal, attempt)
+                try:
+                    await self.execute(goal, attempt)
+                finally:
+                    self._last_run = time.monotonic()
+                if self._paced():
+                    return
                 await asyncio.sleep(0)
 
     async def execute(self, goal: dict[str, Any], attempt: str) -> None:

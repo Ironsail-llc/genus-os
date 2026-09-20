@@ -18,6 +18,7 @@ from robothor.goals.model import (
     INACTIVE,
     CreateGoal,
     GoalUpdate,
+    exceeded,
     future,
     new_goal,
     now_iso,
@@ -387,10 +388,16 @@ def claim(tenant: str) -> tuple[dict[str, Any], str] | None:
         if not row:
             return None
         g = row["data"]
-        if g["token_budget"] and g["tokens_used"] >= g["token_budget"]:
-            g.update(status="blocked", blocker="token budget exhausted", version=g["version"] + 1)
+        # Every ceiling is checked here, before the attempt is counted, so a
+        # goal that has reached one never starts another run. Blocking is not
+        # failure: the blocker names the ceiling and `resume` with a raised
+        # one restarts it.
+        reached = exceeded(g)
+        if reached:
+            g.update(status="blocked", blocker=reached, version=g["version"] + 1)
             save(cur, tenant, g)
-            journal(cur, tenant, g, "budget_exhausted", "engine", {})
+            journal(cur, tenant, g, "ceiling_reached", "engine", {"ceiling": reached})
+            notify(cur, tenant, g, "blocked", reached)
             return None
         attempt = str(uuid4())
         g.update(status="running", version=g["version"] + 1, attempts=g["attempts"] + 1)
@@ -484,8 +491,9 @@ def finish(
                     g.update(
                         status="blocked", blocker="No progress checkpoint or evidence in three runs"
                     )
-            if budget_exhausted or (g["token_budget"] and g["tokens_used"] >= g["token_budget"]):
-                g.update(status="blocked", blocker="execution budget exhausted")
+            reached = "execution budget exhausted" if budget_exhausted else exceeded(g)
+            if reached:
+                g.update(status="blocked", blocker=reached)
         g.update(version=g["version"] + 1, updated_at=now_iso())
         if previous_status != "blocked" and g["status"] == "blocked":
             notify(cur, tenant, g, "blocked", g["blocker"])

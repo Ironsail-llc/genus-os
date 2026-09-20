@@ -457,7 +457,7 @@ Usage: `genus goals disable`
 
 ### `genus goals create`
 
-Usage: `genus goals create <objective> [--criterion CRITERION] [--kind KIND] [--mode MODE] [--parent-goal-id PARENT_GOAL_ID] [--token-budget TOKEN_BUDGET] [--review-seconds REVIEW_SECONDS] [--human-review]`
+Usage: `genus goals create <objective> [--criterion CRITERION] [--kind KIND] [--mode MODE] [--parent-goal-id PARENT_GOAL_ID] [--token-budget TOKEN_BUDGET] [--cost-budget-usd COST_BUDGET_USD] [--max-attempts MAX_ATTEMPTS] [--deadline-seconds DEADLINE_SECONDS] [--review-seconds REVIEW_SECONDS] [--human-review]`
 
 | Argument | Required | Description |
 | --- | --- | --- |
@@ -470,6 +470,9 @@ Usage: `genus goals create <objective> [--criterion CRITERION] [--kind KIND] [--
 | `--mode` | `finite` \| `ongoing` | `finite` |  |
 | `--parent-goal-id` | `PARENT_GOAL_ID` | — |  |
 | `--token-budget` | `TOKEN_BUDGET` | — |  |
+| `--cost-budget-usd` | `COST_BUDGET_USD` | — |  |
+| `--max-attempts` | `MAX_ATTEMPTS` | — |  |
+| `--deadline-seconds` | `DEADLINE_SECONDS` | — |  |
 | `--review-seconds` | `REVIEW_SECONDS` | `86400` |  |
 | `--human-review` | — | off |  |
 
@@ -499,7 +502,7 @@ Usage: `genus goals pause <goal_id>`
 
 ### `genus goals resume`
 
-Usage: `genus goals resume <goal_id> [--token-budget TOKEN_BUDGET]`
+Usage: `genus goals resume <goal_id> [--token-budget TOKEN_BUDGET] [--cost-budget-usd COST_BUDGET_USD] [--max-attempts MAX_ATTEMPTS] [--deadline-seconds DEADLINE_SECONDS]`
 
 | Argument | Required | Description |
 | --- | --- | --- |
@@ -508,6 +511,9 @@ Usage: `genus goals resume <goal_id> [--token-budget TOKEN_BUDGET]`
 | Flag | Takes | Default | Description |
 | --- | --- | --- | --- |
 | `--token-budget` | `TOKEN_BUDGET` | — |  |
+| `--cost-budget-usd` | `COST_BUDGET_USD` | — |  |
+| `--max-attempts` | `MAX_ATTEMPTS` | — |  |
+| `--deadline-seconds` | `DEADLINE_SECONDS` | — |  |
 
 ### `genus goals cancel`
 

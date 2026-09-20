@@ -213,6 +213,32 @@ def test_budget_blocks_and_ready_goals_rotate(db):
     assert store.claim(db)[0]["id"] == second["id"]
 
 
+def test_cost_attempt_and_deadline_ceilings_block_at_claim(db):
+    from robothor.goals.model import DEFAULT_MAX_ATTEMPTS
+
+    cost = create(db, request_key="cost", cost_budget_usd=0.5)
+    g, attempt = store.claim(db)
+    store.finish(db, g["id"], attempt, cost=0.5)
+    assert "cost" in store.get(db, cost["id"])["blocker"]
+
+    attempts = create(db, request_key="attempts", max_attempts=2)
+    for _ in range(2):
+        g, attempt = store.claim(db)
+        assert g["id"] == attempts["id"]
+        store.finish(db, g["id"], attempt)
+    assert store.claim(db) is None
+    stopped = store.get(db, attempts["id"])
+    assert stopped["status"] == "blocked" and "attempt" in stopped["blocker"]
+    assert stopped["attempts"] <= DEFAULT_MAX_ATTEMPTS
+
+    overdue = create(db, request_key="deadline")
+    with store.transaction() as cur:
+        overdue["deadline_at"] = "2000-01-01T00:00:00+00:00"
+        store.save(cur, db, overdue)
+    assert store.claim(db) is None
+    assert "deadline" in store.get(db, overdue["id"])["blocker"]
+
+
 def test_stale_update_and_tenant_reads(db):
     g = create(db)
     change(db, g, "pause")
