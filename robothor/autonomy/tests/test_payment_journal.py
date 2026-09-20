@@ -153,3 +153,43 @@ def test_refund_record_does_not_release_spending_reservation(store, identity):
     journal.append(identity, op, charge(key="refund", kind="refunded"))
     assert journal.read(identity, op)["position"]["state"] == "refunded"
     assert store.spending_projection(identity) == before
+
+
+def test_recurring_membership_records_initial_submission(store, identity):
+    from datetime import UTC, datetime, timedelta
+
+    from robothor.autonomy.models import WebOperation
+
+    grant = store.create_grant(
+        identity,
+        policy().model_copy(
+            update={
+                "actions": frozenset({"subscription"}),
+                "recurring_minor": 600,
+                "annual_minor": 10000,
+                "monthly_minor": 2000,
+            }
+        ),
+    )
+    op = store.reserve(
+        identity,
+        grant["id"],
+        "main",
+        WebOperation(
+            origin="https://shop.example",
+            action="subscription",
+            purpose="Requested membership",
+            idempotency_key="membership-journal",
+            amount_minor=600,
+            recurring_minor=600,
+            annual_commitment_minor=7800,
+            recurrence={
+                "interval_months": 1,
+                "next_charge_on": (datetime.now(UTC) + timedelta(days=40)).date(),
+            },
+        ),
+    )
+    store.begin_submit(identity, op["id"], "main")
+    store.finish(identity, op["id"], "completed", {"origin": "https://shop.example"})
+    result = PaymentJournal(store).read(identity, op["id"])
+    assert result["event_count"] == 1 and result["position"]["state"] == "submitted"

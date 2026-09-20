@@ -21,3 +21,12 @@ it("shows unresolved evidence without inventing a balance", async () => {
   expect(await screen.findByText(/Payment evidence needs reconciliation/)).toBeTruthy();
   expect(screen.queryByText(/Charged:/)).toBeNull();
 });
+
+it("offers payment status for recurring subscription operations", async () => {
+  const { PersonalAutomationPanel } = await import("../personal-automation-panel");
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => ({ok: true, json: async () => url.endsWith("/status")
+    ? {resources: [], grants: [], settings: {enabled:true, managed_browser:false, payment_processing:false}}
+    : {operations:[{id:"membership-1",state:"completed",proposal:{action:"subscription",purpose:"Requested membership",origin:"https://club.example",currency:"USD"}}]}})));
+  render(<PersonalAutomationPanel />);
+  expect(await screen.findByRole("button", {name: "Payment status"})).toBeTruthy();
+});
