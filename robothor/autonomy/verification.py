@@ -8,7 +8,13 @@ from urllib.parse import urlsplit
 
 
 def extract_verification(
-    message: dict[str, Any], *, recipient: str, destination: str, after: int, mode: str
+    message: dict[str, Any],
+    *,
+    recipient: str,
+    destination: str,
+    after: int,
+    mode: str,
+    sender_domains: frozenset[str] = frozenset(),
 ) -> str | None:
     host = urlsplit(destination).hostname or ""
     headers = {}
@@ -22,7 +28,7 @@ def extract_verification(
     if len(sender) != 1 or recipient.lower() not in recipients:
         return None
     domain = sender[0][1].rsplit("@", 1)[-1].lower()
-    if domain != host and not domain.endswith("." + host):
+    if domain != host and not domain.endswith("." + host) and domain not in sender_domains:
         return None
     authentication = headers.get("authentication-results", "").lower()
     # This adapter reads Gmail, whose receiving MTA adds this header. A

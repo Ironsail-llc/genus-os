@@ -6,6 +6,7 @@ import { PersonalAutomationAudit } from "./personal-automation-audit";
 type Resource = { id: string; kind: string; label: string; origin?: string;
   descriptor?: { version?: number; fields?: string[]; source?: string } };
 type Grant = { id: string; revoked: boolean; policy: { origins: string[]; allow_any_website?: boolean; allowed_purposes?: string[];
+  verification_senders?: Record<string, string[]>;
   currency: string; per_purchase_minor: number; monthly_minor: number; recurring_minor: number; annual_minor: number } };
 type Settings = { enabled: boolean; managed_browser: boolean; payment_processing: boolean;
   payment_assessment_reference: string };
@@ -20,6 +21,16 @@ const sources: Record<string, string> = {
   mailbox_verification: "From a verified email", legacy_enrollment: "Previously saved; original source not recorded",
 };
 const inputClass = "w-full rounded border bg-background p-2";
+
+function verificationSenders(value: FormDataEntryValue | null): Record<string, string[]> {
+  const entries = String(value || "").split(/\n/).map(line => line.trim()).filter(Boolean).map(line => {
+    const parts = line.split("=").map(part => part.trim());
+    if (parts.length !== 2 || !parts[0] || !parts[1]) throw new Error("Enter each verification sender as website = sender domain.");
+    return [parts[0], parts[1].split(",").map(domain => domain.trim())] as const;
+  });
+  if (new Set(entries.map(([website]) => website)).size !== entries.length) throw new Error("Combine sender domains for the same website on one line.");
+  return Object.fromEntries(entries);
+}
 
 async function api(path: string, method = "GET", data?: unknown) {
   const response = await fetch(`/api/bridge/api/autonomy/${path}`, {
@@ -212,6 +223,7 @@ export function PersonalAutomationPanel() {
           allow_any_website: anyWebsite,
           allowed_purposes: String(data.get("purposes") || "").split(/\n/).map(s => s.trim()).filter(Boolean),
           frame_origins: String(data.get("frames") || "").split(/[,\n]/).map(s => s.trim()).filter(Boolean),
+          verification_senders: verificationSenders(data.get("verification_senders")),
           actions: ["account", "login", "application", "purchase", "subscription"], currency: "USD",
           expires_at: new Date(String(data.get("expires")) + "T23:59:59Z").toISOString(),
           per_purchase_minor: money("purchase"), monthly_minor: money("monthly"),
@@ -223,6 +235,9 @@ export function PersonalAutomationPanel() {
         <label className="block">Websites, one per line<textarea name="origins" className={inputClass}
           placeholder="https://example.com" required={!anyWebsite} disabled={anyWebsite} /></label>
         <label className="block">Embedded payment providers, if needed<textarea name="frames" className={inputClass} placeholder="https://payments.example.com" /></label>
+        <label className="block">Additional verification senders<textarea name="verification_senders" className={inputClass}
+          maxLength={24080} placeholder="https://shop.example = mail.provider.example" /></label>
+        <p className="text-sm text-muted-foreground">Optional: authorize an external email sender for a specific website. Enter website = sender domain, one website per line; separate multiple sender domains with commas. The website’s own domain is already supported.</p>
         <label className="block">Allowed purposes, one per line<textarea name="purposes" className={inputClass}
           maxLength={24080} placeholder="Personal memberships" /></label>
         <p className="text-sm text-muted-foreground">Leave empty for any task covered by this grant.</p>
@@ -234,6 +249,8 @@ export function PersonalAutomationPanel() {
       {status?.grants.filter(grant => !grant.revoked).map(grant => <div className="flex justify-between rounded border p-3" key={grant.id}>
         <div><p>{grant.policy.allow_any_website ? "Any public HTTPS website" : grant.policy.origins.join(", ")}</p>
           <p className="text-sm">Purposes: {grant.policy.allowed_purposes?.length ? grant.policy.allowed_purposes.join(" · ") : "Any task covered by this grant"}</p>
+          {Object.entries(grant.policy.verification_senders || {}).map(([website, domains]) =>
+            <p className="text-sm" key={website}>Verification for {website}: {domains.join(", ")}</p>)}
           <p className="text-sm">Per purchase: {moneyDisplay(grant.policy.per_purchase_minor, grant.policy.currency)} · Monthly total: {moneyDisplay(grant.policy.monthly_minor, grant.policy.currency)}</p>
           <p className="text-sm">Per recurring charge: {moneyDisplay(grant.policy.recurring_minor, grant.policy.currency)} · Annual commitment: {moneyDisplay(grant.policy.annual_minor, grant.policy.currency)}</p>
         </div><button disabled={busy} onClick={() => void act(() => api(`grants/${grant.id}`, "DELETE"))}>Revoke</button>
