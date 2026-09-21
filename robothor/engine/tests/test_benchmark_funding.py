@@ -1,5 +1,6 @@
 """A funded benchmark invocation must include agent and semantic judge requests."""
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -137,7 +138,14 @@ async def test_task_loop_accounts_for_judge_and_refuses_unfunded_next_request(en
     async def execute(**kwargs):
         await bounded_completion(provider, model="example/agent")
         return SimpleNamespace(
-            output_text="yes", total_cost_usd=0.000040, steps=[], status=RunStatus.COMPLETED
+            output_text="yes",
+            total_cost_usd=0.000040,
+            steps=[],
+            status=RunStatus.COMPLETED,
+            # A real AgentRun always has one, and `run_measurements` reads it.
+            # Without it the measurement raises and is (now) only logged, so
+            # this stand-in would quietly stop exercising the measured path.
+            started_at=datetime.now(UTC),
         )
 
     monkeypatch.setattr(benchmark, "_execute_task_run", execute)

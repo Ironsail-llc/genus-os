@@ -2086,6 +2086,55 @@ def _error_result(task: dict[str, Any], error: str) -> dict[str, Any]:
     }
 
 
+def _scored_task_result(
+    task: dict[str, Any],
+    run: Any,
+    output: str,
+    score: float,
+    score_detail: dict[str, Any],
+    judge_error: Any,
+    seeded: SeededFixtures | None,
+    state_results: list[StateCheckResult],
+) -> dict[str, Any]:
+    """Turn one finished run into the row the suite reports for it.
+
+    Extracted from :func:`_execute_suite_tasks` when two merged branches put
+    it one line past the 200-line function ratchet. Every line here answers
+    the same question — what does this suite record about a task that ran to
+    completion — so it is a step, not a slice. The caller still appends the
+    row before measuring performance, because that order decides whether a
+    failure inside the measurement leaves the scored row in place.
+    """
+    task_result: dict[str, Any] = {
+        "task_id": task["id"],
+        "category": task.get("category", "correctness"),
+        "weight": task.get("weight", 1.0),
+        "score": round(score, 3),
+        "outcome": _OUTCOME_SCORED,
+        "cost_usd": round(run.total_cost_usd, 4),
+        "steps": len(run.steps),
+        "status": run.status.value,
+        "output_preview": output[:200] if output else "",
+    }
+    if seeded is not None or state_results:
+        task_result["state_checks"] = [r.as_dict() for r in state_results]
+        task_result["state_checks_scored"] = state_checks_scored()
+        if seeded is not None:
+            task_result["fixtures"] = seeded.summary()
+    # The honesty verdict, when the case carries one.
+    task_result.update(score_detail)
+    if judge_error:
+        # Not a grade: the grader did not run. Surfaced per-task and
+        # counted as a failure below.
+        task_result["judge_error"] = judge_error
+        logger.warning(
+            "Benchmark task %s: judge could not be evaluated — %s",
+            task["id"],
+            judge_error,
+        )
+    return task_result
+
+
 async def _execute_suite_tasks(
     *,
     runner: Any,
@@ -2231,37 +2280,33 @@ async def _execute_suite_tasks(
             judge_error = score_detail.pop("judge_error", None)
             total_cost += run.total_cost_usd
 
-            task_result: dict[str, Any] = {
-                "task_id": task["id"],
-                "category": task.get("category", "correctness"),
-                "weight": task.get("weight", 1.0),
-                "score": round(score, 3),
-                "outcome": _OUTCOME_SCORED,
-                "cost_usd": round(run.total_cost_usd, 4),
-                "steps": len(run.steps),
-                "status": run.status.value,
-                "output_preview": output[:200] if output else "",
-            }
-            if seeded is not None or state_results:
-                task_result["state_checks"] = [r.as_dict() for r in state_results]
-                task_result["state_checks_scored"] = state_checks_scored()
-                if seeded is not None:
-                    task_result["fixtures"] = seeded.summary()
-            # The honesty verdict, when the case carries one.
-            task_result.update(score_detail)
-            if judge_error:
-                # Not a grade: the grader did not run. Surfaced per-task and
-                # counted as a failure below.
-                task_result["judge_error"] = judge_error
-                logger.warning(
-                    "Benchmark task %s: judge could not be evaluated — %s",
-                    task["id"],
-                    judge_error,
-                )
+            task_result = _scored_task_result(
+                task,
+                run,
+                output,
+                score,
+                score_detail,
+                judge_error,
+                seeded,
+                state_results,
+            )
             results.append(task_result)
+            # Measurement is bookkeeping, not grading. It runs after the row
+            # is recorded and it may not change what the row says: raising
+            # here used to be caught by this task's `except Exception`, which
+            # appended a SECOND row for a task already counted — two tasks
+            # reporting three outcomes. A run whose shape the measurement
+            # cannot read is a gap in the measurement, never a failed case.
             from robothor.engine.performance import run_measurements
 
-            task_result["performance"] = run_measurements(run)
+            try:
+                task_result["performance"] = run_measurements(run)
+            except Exception as measurement_error:  # noqa: BLE001
+                logger.warning(
+                    "Benchmark task %s: performance not measured — %s",
+                    task["id"],
+                    measurement_error,
+                )
 
         except Exception as e:
             logger.warning("Benchmark task %s failed: %s", task["id"], e)
