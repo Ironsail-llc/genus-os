@@ -97,7 +97,9 @@ async def _compact(
         return
     if est_tokens <= fit.threshold:
         return
-    await _compact_and_enforce(session, agent_config, iteration, models, fit, hook_registry)
+    await _compact_and_enforce(
+        session, agent_config, iteration, models, fit, hook_registry, broken_models
+    )
 
 
 async def _compact_and_enforce(
@@ -107,6 +109,7 @@ async def _compact_and_enforce(
     models: list[str],
     fit: Any,
     hook_registry: Any,
+    broken_models: set[str] | None = None,
 ) -> None:
     """Summarise if a model can, then enforce the ceiling whether it could or not.
 
@@ -131,7 +134,9 @@ async def _compact_and_enforce(
             {"est_tokens": est_tokens, "threshold": threshold, "message_count": pre_len},
         )
 
-        session.messages[:] = await maybe_compress(session.messages, models, threshold=threshold)
+        session.messages[:] = await maybe_compress(
+            session.messages, models, threshold=threshold, broken_models=broken_models
+        )
         logger.info(
             "Proactive compaction at iter %d: %d→%d messages (est %d tokens, threshold %d)",
             iteration,

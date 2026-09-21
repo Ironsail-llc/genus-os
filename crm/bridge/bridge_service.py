@@ -25,6 +25,9 @@ import logging
 import httpx
 from fastapi import FastAPI
 
+from robothor.sales.api import router as sales_router
+from robothor.sales.ingestion import router as sales_ingestion_router
+
 logger = logging.getLogger(__name__)
 
 
@@ -59,6 +62,7 @@ from routers.notifications import router as notifications_router
 from routers.people import router as people_router
 from routers.plugins import router as plugins_router
 from routers.providers import router as providers_router
+from routers.pursuit_goals import router as pursuit_goals_router
 from routers.routines import router as routines_router
 from routers.runs import router as runs_router
 from routers.settings import router as settings_router
@@ -160,12 +164,15 @@ app.add_middleware(CorrelationMiddleware)
 
 # Routers
 app.include_router(health_router)
+app.include_router(sales_router)
+app.include_router(sales_ingestion_router)
 app.include_router(auth_router)
 app.include_router(agents_router)
 app.include_router(people_router)
 app.include_router(providers_router)
 app.include_router(conversations_router)
 app.include_router(notes_tasks_router)
+app.include_router(pursuit_goals_router)
 app.include_router(memory_router)
 # The operator's view of the memory_facts TABLE (list / forget preview /
 # forget). Its own router because its gate is not memory_router's: every route

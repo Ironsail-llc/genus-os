@@ -7,6 +7,29 @@ from pathlib import Path
 
 DEFAULT_TENANT = os.environ.get("ROBOTHOR_DEFAULT_TENANT", "default")
 
+#: The platform's fallback IANA timezone, and the one `ROBOTHOR_TIMEZONE`
+#: overrides. Declared here so a subsystem cannot invent its own: the sales
+#: package shipped `America/Chicago` — the first operator's locale, which is
+#: instance data in platform code (root CLAUDE.md rule 1) and silently
+#: disagreed with the scheduler, whose default comes from `settings/model.py`.
+#: Read it through `platform_timezone()`, never as a literal.
+DEFAULT_TIMEZONE = "America/New_York"
+
+
+def platform_timezone() -> str:
+    """The instance's configured timezone, or the platform default.
+
+    Through the settings registry, not `os.environ`: `ROBOTHOR_TIMEZONE` is a
+    declared setting, and `tests/test_settings_registry.py` ratchets the number
+    of raw env reads downwards. Imported inside the function so this module
+    stays import-light for `robothor/crm/dal.py`, which must not pull the
+    settings model in at import time.
+    """
+    from robothor.settings import get_settings
+
+    return get_settings().engine.timezone or DEFAULT_TIMEZONE
+
+
 #: Prefix every benchmark-sandbox write refusal starts with (crm.py,
 #: memory.py handler gates; robothor/crm/dal.py's create_session_goal guard).
 #: Lives here rather than in robothor.engine.benchmark_sandbox because

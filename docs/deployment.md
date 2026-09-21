@@ -903,6 +903,200 @@ plugin that was turned off is loading again. See
 | Dashboard | `GET /api/health` on :3004 | 200; `/api/ready` is what the compose healthcheck polls |
 | Vision | `GET /health` on :8600 | `{"status": "ok", "mode": "..."}` |
 
+## Verified fleet artifacts
+
+`robothor.templates.fleet_release.build_release(source, destination, specification)`
+compiles an explicit inventory of native agents, workflows, Markdown knowledge,
+plugin wheels and optional sales settings into a new artifact directory. It
+validates native contracts and references, inspects wheels without importing them,
+rejects credential literals in text members, and hashes every member. Source and
+platform Git revisions are required metadata; the caller must establish their
+provenance. Build into a trusted output directory with a unique destination.
+
+The returned `release_id` fingerprints the complete canonical metadata and member
+hashes. Retain it outside the artifact. Call
+`verify_release(artifact, expected_digest=release_id)` to detect changed, missing,
+additional or symlinked members. Reading the expected digest from the artifact
+itself would not establish the externally reviewed version.
+
+The artifact records `activation: not_installed`. Sales integration switches must
+be disabled in its settings. Artifact publication does not install plugins, change
+the workspace, reconcile schedules, migrate a database or enable integrations.
+Coordinated runtime cutover, rollback, plugin installation checks and readiness
+remain separate deployment requirements. Existing individual-agent installation
+must not be described as an atomic fleet cutover.
+
+`robothor.templates.fleet_snapshot.load_snapshot(artifact, expected_digest=...)`
+captures verified bytes in memory and checks member hashes again during capture.
+Its `agent(agent_id)` method returns a fresh native `AgentConfig` with immutable
+knowledge tuples. `build_system_prompt` and declared warmup-context loading use
+those captured files, bypassing workspace reads and the legacy prompt cache.
+They refuse references outside the snapshot. Changing or removing the artifact
+after admission cannot substitute knowledge in that admitted run; subsequent
+admissions reverify it. The [sales runtime](SALES_INTELLIGENCE.md#native-workflow-execution)
+supports selecting such a release explicitly. Other manifest-loading callers
+retain their existing behavior until a coordinated installer integrates them.
+
+`robothor.templates.fleet_store.stage_release(source, workspace,
+expected_digest=...)` privately stages the complete verified artifact at
+`.robothor/fleet-releases/<fingerprint>`. Concurrent staging is serialized;
+repeated staging reverifies the existing destination. Drift is refused rather
+than repaired in place. Files and directory entries are flushed before the
+completed directory is published. Interrupted staging can be retried against the
+same reviewed fingerprint. A crash after publication is recovered by reverifying
+the destination. Hidden staging directories are never runtime lookup targets.
+
+Staging does not change the active release setting, install wheel code, copy
+manifests into the loose fleet directories or register schedules. Artifact
+metadata remains unchanged. The native sales runner and stager share the same
+validated lookup-path function.
+
+Native sales queue ticks hold a shared `sales-fleet` maintenance gate for their
+tenant. A controller can acquire an exclusive
+`robothor.operations.gates.gate(operations, "sales-fleet")` before its settings
+transaction; busy gates refuse immediately. Acquire this gate before settings
+or work-row locks. Shared gates allow stop, inbox and research work to proceed
+concurrently. Cancelling a caller waits for its bounded worker and gate cleanup,
+so a workflow timeout does not falsely report an idle worker boundary.
+
+The gate uses a pooled PostgreSQL transaction for the duration of a queue tick.
+A future cutover controller must also inspect durable job/action leases and
+unresolved provider effects: an available advisory gate alone cannot prove
+quiescence after a process or database failure. Schedule generation, deployed
+platform/plugin identity, rollback and activation acknowledgements remain
+coordinator requirements.
+
+### Durable sales deployment transitions
+
+Migration 130 adds monotonic sales-settings revisions and tenant-scoped
+`sales_deployments` records. `robothor.sales.deployment.DeploymentCoordinator`
+prepares a transition against an exact settings revision and staged artifact.
+It takes the exclusive maintenance gate, checks running sales jobs (including
+expired leases), executing/unknown sales actions and unresolved sales/Pipedrive/
+Instantly effects, then records the previous and proposed configurations. Only
+one transition may prepare per tenant. The durable pending record blocks native
+queue admission across controller/process restarts.
+
+`commit` requires a runtime verifier dependency and rechecks the artifact,
+settings revision and unfinished-work conditions. It writes the selected release,
+agent/workflow bindings, transition status and audit event in one transaction.
+All five integration switches are off after deployment. Current operational
+settings, including budgets and policy references, are preserved. A settings edit
+after preparation invalidates commit, even if later edits restore the same values.
+The normal settings API cannot bypass the coordinator to change managed bindings.
+
+`robothor.engine.source_identity.SourceIdentity` supplies a source-checkout
+identity primitive. Capture it once when establishing a runtime generation and
+retain it: verification requires the expected clean Git revision and unchanged
+tracked-file inventory, including filesystem modification history. Untracked
+files in the engine and bridge package trees also refuse verification. A source
+edit followed by restoration still requires a fresh generation. The native sales
+runtime captures this identity before subsystem construction. Wheel/container installations without a Git
+checkout require separate build provenance; a version label is insufficient.
+Installed plugin payload verification is described in [Plugins](PLUGINS.md#installed-payload-verification).
+Neither primitive by itself establishes loaded-code or schedule readiness.
+
+`prepare_rollback` creates another guarded transition from the latest committed
+deployment to its previous structural configuration. It preserves current
+operational settings and also leaves integration switches off. `abort` requires
+verification that the previous runtime has been restored before it clears the
+pending record; it preserves newer operator settings. Failed verification or a
+transaction failure leaves the pending transition recoverable and admission closed.
+
+`robothor.engine.sales_runtime.NativeSalesRuntime` supplies the native verifier
+for source-checkout engines and service-only fleet plugins. Its async `prepare`,
+`commit` and `abort` methods serialize control on the engine loop. Commit/abort
+reconcile the selected snapshot, then run the database coordinator off-loop; the
+coordinator's synchronous verification bridges back to the owning loop. Evidence
+is bound to the exact durable transition, restoration direction and schedule
+generation. Callers cannot submit proof dictionaries. Cancellation drains the
+actual control transaction before releasing the control lock.
+
+The daemon captures source and plugin startup identity before subsystem
+construction, attaches the runtime to its native scheduler, and bootstraps it
+after APScheduler starts. A committed selection is reverified and reconciled.
+A pending transition loads no managed jobs and remains pending until explicit
+commit or abort; restart never chooses between them. `/ready` includes a native
+sales check. Failed sales bootstrap preserves core engine/operator access while
+managed admission stays closed. Every managed queue admission also verifies
+artifact bytes, source identity, installed plugin payload and schedule state;
+file work runs off-loop and completes before a worker starts.
+
+Plugin checks pin the boot governance record, installed file history and native
+plugin generation. Replacement, edit/restoration or reload requires restart.
+Service factories must resolve through the native registry from declared files
+inside the governed installed distribution. Runtime inspection uses captured
+wheel bytes. Other plugin extension groups and non-Git build provenance need
+explicit support. Native preparation refuses an unsupported nonempty unmanaged
+sales baseline before creating a transition. Production cutover remains separate
+from these implemented controls and their isolated validation.
+
+### Helm sales deployment controls
+
+Open **Sales → Manage sales deployment**. A new workspace can be initialized with
+all five integrations explicitly paused through the existing sales settings API.
+Inspect a separately retained staged-release fingerprint, review its source and
+platform revisions and agent/workflow/adapter inventory, and enter a change reason.
+Preparation uses the displayed settings revision. It closes queue admission but
+does not install or select the release. The pending panel shows the immutable
+target and the restoration target before commit or cancellation.
+
+The engine mounts human-only routes under `/api/admin/sales-deployment`:
+
+| Method | Suffix | Behavior |
+| --- | --- | --- |
+| GET | root | Selected release, settings revision, pending transition, readiness, control activity and up to 20 recent transitions |
+| GET | `/releases/{fingerprint}` | Verify and describe a staged artifact without selecting it or returning filesystem paths |
+| POST | `/prepare` | Prepare the exact release using `release_id`, `expected_revision` and `reason` |
+| POST | `/transitions/{id}/commit` | Reconcile and commit the exact pending transition; body is `{}` |
+| POST | `/transitions/{id}/abort` | Verify restoration before cancellation; requires `reason` |
+| POST | `/transitions/{id}/rollback` | Prepare rollback of the latest committed transition using `expected_revision` and `reason`; does not commit it |
+
+Every route requires a verified human owner/admin identity, `engine:control` and
+the engine's tenant. Service tokens and insecure development identities are
+refused. Request contracts reject caller-supplied tenants, actors, readiness proof
+and activation switches. Preparation attribution is shown as **Prepared by**;
+the actual committing/restoring human is independently recorded in the operation
+audit. Readiness responses report observed engine state, not client assertions.
+
+The narrow Next.js `/api/sales/deployment/[[...path]]` proxy forwards the verified
+human session token directly to the engine. It accepts only the listed operation
+shapes and typed identifiers, ignores caller authorization headers, refuses
+redirects and does not cache responses. It never substitutes a bridge service
+identity. UI initialization uses the existing human-scoped bridge settings API.
+
+The UI invalidates inspection when the fingerprint changes and disables mutations
+while another control operation runs. An uncertain response never causes an
+automatic retry: refresh authoritative status before another change. Successful
+commit and rollback leave integrations paused. A staged artifact or an installed
+fleet is not proof that provider connectivity or the customer pilot has succeeded.
+
+### Managed workflow schedule generations
+
+`robothor.engine.fleet_schedules.FleetSchedules` reconciles a verified snapshot's
+cron workflows through the native workflow engine and APScheduler. It owns only
+the definitions and jobs it introduces, refuses collisions with loose workflows,
+removes retired jobs and preserves unrelated schedules. Call it on its owning
+engine event loop while the deployment's durable pending record blocks queue
+admission. Interrupted reconciliation invalidates the generation until retried.
+The initial supported baseline is an empty managed fleet; existing loose sales
+workflows require a separately verified migration rather than silent adoption.
+
+Verification checks the exact workflow definitions, callback identity and
+arguments, cron fields/timezone, running scheduler, non-paused jobs and execution
+limits. Every reconciliation creates a fresh generation, even when restoring the
+same release. An old callback or an in-flight workflow reaching the queue after
+reconciliation is refused. A managed queue tick requires an in-process native
+invocation matching its tenant, selected release and workflow; it rechecks the
+generation inside shared admission before invoking a worker. Unmanaged fleets
+retain their existing behavior. HTTP arguments cannot supply this context.
+
+This component is tested through native scheduled execution, tool registry,
+service identity and queue admission against the isolated database. Additional
+native deployment tests exercise actual source verification, coordinator commit,
+restart, rollback, restoration and cancellation recovery. These establish the
+integrated deployment path in isolation; they do not prove a live customer pilot.
+
 ## Directory Structure (systemd install)
 
 The unit templates spell the workspace `/opt/robothor` and

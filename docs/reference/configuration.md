@@ -41,7 +41,7 @@ Column meanings:
 
 Run `genus config schema` for the same information as JSON Schema.
 
-410 settings in 13 groups.
+417 settings in 13 groups.
 
 ## paths
 
@@ -180,6 +180,7 @@ The agent execution layer: bind address, concurrency, pacing, sandbox.
 | `ROBOTHOR_ALLOW_EMPTY_FLEET` | bool | `true` | `robothor-engine` | no | legacy | Let the engine start with no agent manifests at all. True suits a fresh install; false makes an emptied manifest directory fatal. |
 | `ROBOTHOR_AUTODREAM_UNLOAD_BELOW_GB` | float | `24.0` | `robothor-engine` | no | legacy | Free VRAM (GiB) below which the autodream pass unloads local models rather than competing with live agent work. |
 | `ROBOTHOR_BUDDY_GRADER_DRYRUN` | bool | `false` | `robothor-engine` | no | legacy | Run the verification grader without writing its verdicts, for checking a grading change against live runs. |
+| `ROBOTHOR_CALENDAR_OPERATIONS_ENABLED` | bool | `false` | `robothor-engine` | no | legacy | Enable durable native attendee updates after migrations 126/127 and test-calendar canaries. |
 | `ROBOTHOR_DAEMON_START_TS` | str | _(empty)_ | `robothor-engine` | no | legacy | ISO timestamp the daemon sets on itself at boot and child processes read to report uptime. Set by the engine, not by an operator. |
 | `ROBOTHOR_DEFAULT_CHAT_AGENT` | str | `main` | `robothor-engine` | no | legacy | Agent an inbound chat is routed to when nothing names one. |
 | `ROBOTHOR_ENGINE_HOST` | str | `127.0.0.1` | `robothor-engine` | no | legacy | Address the engine's HTTP surface binds to. Loopback by default; the auth guard refuses the insecure dev mode on any other address. |
@@ -218,6 +219,8 @@ The agent execution layer: bind address, concurrency, pacing, sandbox.
 | `ROBOTHOR_RUN_BUDGET_GRACE_SECONDS` | int | `20` | no | no | unreleased | How long a model call already in flight when the budget expires may still take before it is cancelled. A grace, not an extension: at the end of it the call is cancelled and the run finishes with whatever is on disk. Keep it well under the margin whatever kills the run from outside allows. |
 | `ROBOTHOR_RUN_BUDGET_SECONDS` | int | `0` | no | no | unreleased | Wall-clock seconds one run gets, imposed from outside the engine -- by a harness, an orchestrator or a queue that will itself act when the clock runs out. Taken EXACTLY: unlike an agent's own `timeout_seconds` it is never scaled by the model's tempo, because whoever set it is counting the same seconds. It also caps the stall watchdog, so the engine and the imposer cannot disagree about when the run is over. 0 means nobody imposed one and each agent's manifest decides. |
 | `ROBOTHOR_RUN_WRAPUP_FRACTION` | float | `0.9` | no | no | unreleased | How far into its wall-clock budget a run switches from working to SAVING. Past this point the agent keeps only the tools that write the deliverable and read it back, is told how many seconds remain, and is asked to write its best current answer to the path the task named. Clamped to 0.5-1.0; only acts under `ROBOTHOR_STEP_EFFICIENCY_MODE=enforce`. |
+| `ROBOTHOR_SALES_GMAIL_MAILBOX` | str | _(empty)_ | `robothor-engine` | no | legacy | The single mailbox address that bound connection sends as. Every approved sender is checked against it, and Gmail would silently rewrite a From header that disagreed. |
+| `ROBOTHOR_SALES_GMAIL_TENANT_ID` | str | _(empty)_ | `robothor-engine` | no | legacy | The one tenant the host's Google Workspace connection is bound to for native sales delivery. There is no default and no cross-tenant use: an unset value, or one that disagrees with the calling tenant, refuses the Gmail provider outright. |
 | `ROBOTHOR_SANDBOX_BINARY` | str | _(empty)_ | `robothor-engine` | no | legacy | Container runtime used for sandboxed exec. Empty prefers rootless podman, then docker. |
 | `ROBOTHOR_SANDBOX_DEFAULT_MODE` | str | _(empty)_ | `robothor-engine` | no | legacy | **governed.** Fleet default sandbox mode for agents whose manifest names none. Empty leaves exec unrouted, which is sandboxing in name only. |
 | `ROBOTHOR_SANDBOX_IMAGE` | str | `robothor-sandbox:latest` | `robothor-engine` | no | legacy | Image sandboxed exec runs agent commands inside. |
@@ -227,6 +230,7 @@ The agent execution layer: bind address, concurrency, pacing, sandbox.
 | `ROBOTHOR_TIMEZONE` | str | `America/New_York` | `robothor-engine` | no | legacy | IANA timezone schedules and human-facing timestamps are rendered in. |
 | `ROBOTHOR_TRAJECTORY_SAMPLE` | float | `0.0` | no | no | legacy | Fraction of runs (0.0-1.0) whose full trajectory is recorded for later analysis. Clamped into range. |
 | `ROBOTHOR_WEB_FETCH_USER_AGENT` | str | _(empty)_ | no | no | legacy | User-Agent web_fetch sends. Empty uses the built-in string; set it when a site blocks the default. |
+| `ROBOTHOR_WEB_RENDER_SANDBOX_HELPER` | str | _(empty)_ | `robothor-engine` | no | legacy | Optional trusted Chromium setuid sandbox helper for web_render on hosts that restrict unprivileged user namespaces. Empty uses Chromium's default sandbox setup; rendering never disables the sandbox. |
 | `ROBOTHOR_WORKFLOW_STREAK_WINDOW_DAYS` | int | `14` | `robothor-engine` | no | legacy | Window the workflow detector counts repeated action streaks over when proposing a new workflow. |
 
 ## channels
@@ -235,6 +239,9 @@ How the instance reaches people, and who it says it is.
 
 | Variable | Type | Default | Restart | Secret | Since | Description |
 | --- | --- | --- | --- | --- | --- | --- |
+| `GOOGLE_WORKSPACE_CLI_CONFIG_DIR` | str | _(empty)_ | `robothor-engine` | no | legacy | Workspace CLI credential directory; defaults to ~/.config/gws. |
+| `GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE` | str | _(empty)_ | `robothor-engine` | no | legacy | Authorized-user credentials used by the Workspace CLI. |
+| `GOOGLE_WORKSPACE_CLI_TOKEN` | str | _(unset)_ | `robothor-engine` | yes | legacy | Workspace access token for native conditional calendar requests. |
 | `ROBOTHOR_AI_DOMAIN` | str | _(empty)_ | `robothor-engine` | no | legacy | Domain the per-dashboard hostnames are derived from. |
 | `ROBOTHOR_AI_EMAIL` | str | _(empty)_ | `robothor-engine` | no | legacy | The bot's own sending address. Distinct from the operator's address: mail tools use this as the sender, never the operator identity. |
 | `ROBOTHOR_AI_NAME` | str | `Genus` | `robothor-engine` | no | legacy | Name the assistant introduces itself with in channels and on the dashboard. |

@@ -236,6 +236,11 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
 
     def _parse_step(s: dict[str, Any], *, inside_parallel: bool = False) -> WorkflowStepDef:
         step_type = WorkflowStepType(s.get("type", "noop"))
+        tool_timeout = s.get("tool_timeout_seconds", 120)
+        if type(tool_timeout) is not int or not 1 <= tool_timeout <= 3600:
+            raise ValueError(
+                f"step {s.get('id')!r}: tool_timeout_seconds must be an integer from 1 to 3600"
+            )
 
         if inside_parallel and step_type == WorkflowStepType.PARALLEL:
             raise ValueError(f"step {s.get('id')!r}: nested parallel steps are not supported")
@@ -278,6 +283,7 @@ def parse_workflow(data: dict[str, Any]) -> WorkflowDef:
             message=s.get("message", ""),
             tool_name=s.get("tool_name", ""),
             tool_args=s.get("tool_args", {}),
+            tool_timeout_seconds=tool_timeout,
             input_expr=s.get("input", ""),
             branches=branches,
             transform_expr=s.get("expression", ""),
@@ -1173,6 +1179,7 @@ class WorkflowEngine:
             workspace=str(self.config.workspace),
             user_id=run.user_id,
             user_role=run.user_role,
+            timeout=step.tool_timeout_seconds,
         )
 
         # ── [GUARDRAILS] Post-execution check (secrets in output, etc.) ──

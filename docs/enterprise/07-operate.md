@@ -157,6 +157,19 @@ tell you everything is fine.
 
 ## Where to look when something is wrong
 
+For governed prospect research and outreach, open **Sales** and follow
+[Sales intelligence](../SALES_INTELLIGENCE.md). Its deployment gates distinguish
+automated contract tests from a verified live sales pilot.
+
+In Sales, **Review imported practices** confirms customer identity matches;
+**Inspect provider reads** shows failed imports and message reads, with a reason
+required before retrying a repaired read. Each outbound message still has its
+own approval.
+
+Use **Repair customer match** for incorrect practice ownership. It requires a
+separate review and holds both affected conversations while their corrected
+context is reviewed.
+
 | Symptom | Start here |
 |---|---|
 | Anything at all, first response | `genus doctor` |
@@ -172,3 +185,7 @@ The repository's own [Reading Guide](../READING_GUIDE.md) is the wider map, for
 when the answer is in code rather than in a page.
 
 You have now done the whole guide. Back to [the overview](00-overview.md).
+
+Sales also accepts bounded research requests and provides **Review integration setup**
+for credential-name readiness and reviewed mailbox/source configuration. Measured
+reports keep incomplete or immature customer retention windows explicitly unknown.

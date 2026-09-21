@@ -137,6 +137,34 @@ and report `kind: "own"` — they degrade honestly rather than pretending.
 
 ## The catalogue
 
+### Sales intelligence (`sales_*`)
+
+| Tool | Purpose |
+|---|---|
+| `sales_discover` | Deduplicate a candidate business in the CRM and queue research. |
+| `sales_get_prospect` | Read the tenant's current dossier and qualification. |
+| `sales_get_context` | Read contacts, conversation and active sales knowledge for drafting. |
+| `sales_research_parallel` | In a bounded native research stage, run three fixed topics through the selected release's worker and merge validated evidence. The only argument is an active approved buying case. |
+| `sales_propose_email` | Create an immutable draft for human review; never approves or sends. |
+| `sales_process_queue` | Advance one durable stage from an explicitly bound native service workflow. Refused for agent, interactive and benchmark callers. |
+
+Use these for the governed prospect workflow. Generic CRM edits do not substitute
+for evidence, qualification or sales review. Sales agents should not receive
+general mail-send tools. Writes are refused in benchmarks; tenant identity comes
+from the authenticated tool context. See [Sales intelligence](SALES_INTELLIGENCE.md)
+for deployment gates and provider ownership.
+
+The queue's `business` stage reads one page through an explicitly configured
+plugin source. It requires the outcome switch and a source account, and imports
+orders only for reviewed practice bindings. It grants no customer-matching or
+outbound-message authority to an agent.
+
+Keep the queue tool out of sales agent manifests. Its trusted caller must carry
+the matching `workflow:<id>` / `service:workflow:<id>` identity and `service` role,
+and the tenant's `workflow_bindings` must authorize that workflow for the requested
+stage. It does not create approvals. Stop requests run on a separate workflow and
+continue while delivery and research switches are off.
+
 ### Google Workspace (`gws_*`)
 
 Eleven tools, all shelling out to the `gws` CLI with the instance's Workspace
@@ -546,6 +574,7 @@ code, or the channel to the engine is gone.
 | Interpreter | Isolated (`-I`: no `PYTHONPATH`, no user site) with an import guard that refuses `robothor`, `crm`, `psycopg2`, `litellm` and `redis`. The guard is defence in depth, not the boundary — the boundary is that the environment holds nothing worth importing the engine for. |
 | Lifetime | Its own process group **and a census of its descendants**, killed when the call returns — whether it finished, timed out, or was cancelled. Two kills, because neither alone is enough: the snippet reaps its own children on the way out (where the parent chain is intact, so a `setsid` child or a double-forked daemon is still reachable), and the engine kills the group plus everything its census saw (which is what catches a timeout, a cancellation, or a snippet that skipped its own cleanup). **A snippet can defeat both deliberately**, and this is reproducible rather than a race: start a child with `start_new_session=True` (outside the process group) and then call `os._exit` (skipping the snippet's own reaper), and it survives every time. So treat this as a budget for honest work, not a containment boundary for hostile code — which is the same footing `exec` is on, and why `execute_code` requires it. The closure is a cgroup the engine can kill as a unit, which needs `Delegate=yes` on the engine's unit: an operator change. |
 | Iterations | One. A snippet that makes two hundred proxied calls still costs the run a single turn — while each proxied call is still seen by the repeat guard and still earns its own step row. |
+| Result fields | `stdout`, `stderr`, `returncode`, `timed_out`, `tool_call_count`, `stdout_truncated`/`stderr_truncated` (+ `stdout_file`, `note` when cut), `error` (timeout), `tool_call_limit_reached`; the HTTP evidence fields `http_calls` (each `{method, url, status, count}`, plus `via`, `returncode`, `refused`, `outcome`, `unobserved` for a spawned CLI), `http_recorder`, `spawn_recorder`, `spawned`, `egress_unobserved`, `unread_responses` / `unread_response_tools` / `unread_response_note`, `lost_responses` / `lost_responses_note` — see [Calling an API from code](#calling-an-api-from-code-genus_tools-not-curl). |
 
 **Bounds.** `ROBOTHOR_EXECUTE_CODE_MAX_CALLS` (default 200) caps proxied calls
 per snippet; past it `genus_tools` raises and the result says
@@ -637,7 +666,7 @@ Both work. They differ in what survives the call.
 | | What the run keeps |
 |---|---|
 | `genus_tools.call("x", …)` inside `execute_code` | The **whole response**, on this run's step ledger, whatever the snippet printed — plus the audit row, the guardrail pass and the post-condition check a turn's call gets. |
-| `urllib` / `requests` / `curl` inside `exec` or a snippet | **Only what you printed.** Everything else is gone the moment the process exits. |
+| `urllib` / `requests` / `curl` inside `exec` or a snippet | **Only what you printed.** Everything else is gone the moment the process exits — except that a snippet which *fails* after its writes gets the response bodies back under `lost_responses` (below). |
 
 **The step ledger is not your context.** A proxied call earns a durable row
 that the run viewer, the verification pass and an operator can read afterwards
@@ -671,6 +700,47 @@ is the request line always and the body only for an uncompressed
 never counted as unread. `httpx` is not seen. `http_recorder: "absent"` in a
 result means the recorder did not run, not that you made no requests.
 
+**A `curl` you spawn is held to the same rule.** The task was lost a third
+time by `subprocess.run(["curl", "-s", "-X", "POST", url, "-d", body],
+capture_output=True)` in a loop: nothing inside the interpreter's HTTP stack
+sees a child process. The sandbox now records what your snippet spawns
+(`subprocess.Popen` and everything built on it — `run`, `check_output`,
+`asyncio.create_subprocess_*` — and `os.system`, looking through `sh -c`,
+`env`, `timeout`, `nice`, `nohup`, `sudo`) and reads a `curl`/`wget`/`http`/
+`xh` command line for its method and URL, so those calls appear in
+`http_calls` with `via: "curl"` (and the exit code as `returncode`; `status`
+stays `null` unless the exit code proved a refusal, e.g. `curl -f` exiting
+22 → `400`). A curl that exited 0 and handed you a JSON body with a
+top-level `"error"`, or an HTML 5xx page, is marked `refused: true` and is
+not a change. One whose exit was never seen (a `Popen` you never waited
+for) is `outcome: "unknown"`; one whose body never reached you (`-o file`,
+a non-zero exit, an empty pipe) is `unobserved: true` — and a GET like that
+does **not** count as having read the source. The response body is captured
+only through `communicate()` (`run`, `check_output`, `capture_output=True`);
+read `p.stdout` by hand and the exit code is known but the body is not. One
+request per curl invocation is read (`--next` and a second URL are not).
+Other children are summarised as `spawned: {count, programs}` (with
+`truncated: true, dropped: N` past 200 spawns); when one of them is a tool
+the recorder cannot see through (`ssh`, `scp`, `rsync`, `git`, `nc`,
+`openssl`, a child `python3`, `xargs curl`, …) the result adds
+`egress_unobserved: [names]` — the honest statement that the run may have
+changed something nothing witnessed. `spawn_recorder: "absent"` /
+`"unreadable"` mean what they mean for `http_recorder`. **Invisible to this
+control**: `os.exec*` (replaces the interpreter), `os.posix_spawn`,
+`os.fork` — a child started that way appears nowhere in the result.
+
+**A crash after your writes does not undo them.** If the snippet ends with
+a non-zero exit or a timeout AFTER a write took effect, and the response to
+that write is not in your stdout, the result carries `lost_responses` — a
+list of `{method, url, status, via?, body}` with the recorded body head
+(2,000 characters, newest last, at most 20) — and `lost_responses_note`.
+A write whose body was never captured is still named in the note ("No
+response body was captured for N of them"), with `lost_responses: []` if
+nothing else was kept. Read them before re-sending: a re-send is a
+duplicate, and anything one-shot in those replies (a follow-up message, an
+approval token) will not come back. On a clean exit the same calls are
+reported through `unread_responses` instead; never both for one call.
+
 ### After you change something, look again
 
 A call that changed remote state invalidates what you knew about that source.
@@ -686,6 +756,48 @@ the world as it was *before* you acted. A write your snippet made itself is
 answered by any later read of the same host — list the inbox, not the send
 endpoint.
 
+### Reading JavaScript pages
+
+`web_render(url="https://example.com/")` returns a public page's visible text,
+title and links when `web_fetch` sees only an HTML shell. Its sole argument is the
+URL. It creates a fresh sandboxed Chromium process and temporary profile; there
+are no login, click, form, file, or arbitrary-script arguments. It does not reuse
+an operator's browser session. Every permitted resource is fetched through the
+native vetted-IP transport, including redirect hops, using GET without page-supplied
+cookies or authorization headers. Non-GET requests, WebSockets, service workers,
+popups and frame navigation are blocked. Browser connections outside this route
+go to a temporary rejecting proxy.
+
+Each call has a 35-second deadline, 40 request attempts, four simultaneous fetches,
+a 4 MiB resource limit and a 12 MiB decoded-body limit. It returns at most 8,000
+characters and 50 links. `blocked_resources` indicates incomplete resource
+coverage; the resulting text is evidence of the visible page, not a guarantee of
+complete site coverage. Missing content remains unknown.
+
+Install the `browser` Python extra and the Playwright Chromium binary in the engine
+environment (`python -m playwright install chromium`). The OS must support Chromium
+sandboxing. On hosts that restrict unprivileged user namespaces, an operator can
+configure a trusted installed setuid sandbox helper with
+`ROBOTHOR_WEB_RENDER_SANDBOX_HELPER` before starting the engine. A sandbox launch
+failure returns an error; the tool never retries with sandboxing disabled.
+
+Add `web_render` explicitly to an agent's tools and role permissions; both halves
+are required, and neither is a default. It is an opt-in tool
+(`OPT_IN_TOOLS` in `robothor/engine/tools/constants.py`), so an agent that
+declares no `tools_allowed` is not offered it and must name it. Migration 134
+grants it to `sales_research_agent`, and migration 138 denies it to the
+`__default__` `service`, `user` and `member` roles, which previously reached it
+through their catch-all allow. Neither grants the interactive `browser` tool.
+Native sales research checks citations against its returned text and records the
+retrieval time, just as it does for `web_fetch`.
+
+The ten `sales_*` tools are opt-in on both halves for the same reasons: name one
+in `tools_allowed` to be offered it, and give the agent a role that allows it.
+`sales_process_queue` is the exception RBAC still allows for `service`, because
+the native workflow runner IS that role; its gate is the handler's
+service-workflow identity check. See
+[Native sales intelligence](SALES_INTELLIGENCE.md).
+
 ### Everything else
 
 The full registry is large and changes with the release; `tool_search` over the
@@ -694,7 +806,7 @@ agent's own allow-set is the authoritative answer. The families:
 | Family | Examples |
 |---|---|
 | Files and shell | `read_file`, `write_file`, `list_directory`, `exec`, [`execute_code`](#execute_code-calling-tools-from-inside-python) |
-| Web | `web_fetch`, `web_search`, `browser` |
+| Web | `web_fetch`, `web_render`, `web_search`, `browser` |
 | Memory | `search_memory`, `memory_block_read`, `memory_block_write`, `store_memory` |
 | CRM | `search_records`, `get_person`, `create_task`, `list_my_tasks`, `resolve_task` |
 | Notifications | `get_inbox`, `ack_notification`, `send_notification` |

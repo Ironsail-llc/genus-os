@@ -5,7 +5,8 @@ test walks the *assembled* FastAPI app instead, so a new POST/PUT/PATCH/DELETE
 fails the suite the moment it is added unless it either
 
   * calls ``require_operator(request)`` in its handler body, or
-  * appears in ``JUSTIFIED_WITHOUT_OPERATOR_GATE`` below with a reason.
+  * appears in ``JUSTIFIED_WITHOUT_OPERATOR_GATE`` or the exact-method/path
+    exception table below with a reason.
 
 The allowlist is deliberately narrow and every entry names the *middleware*
 check that already constrains the route (``crm/bridge/middleware.py``,
@@ -29,12 +30,56 @@ from bridge_service import app
 
 MUTATION_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
+# Provider ingress has its own authentication rather than a human session.
+# Exact method/path pairs are intentional: a prefix would exempt neighboring
+# routes that AuthMiddleware's is_instantly_webhook() matcher does not exempt.
+EXACT_JUSTIFIED_WITHOUT_OPERATOR_GATE = {
+    ("POST", "/api/integrations/instantly/{tenant_id}/webhook"): (
+        "AuthMiddleware delegates this exact POST to ingestion.webhook(), which "
+        "compares the Authorization bearer header with the selected tenant's vault "
+        "secret before reading the body. Workspace identity and owned campaign "
+        "checks precede effects. robothor/sales/tests/test_ingestion.py covers "
+        "missing/wrong secrets, tenant selection, payload bounds and ownership."
+    ),
+}
+
+
+def _has_exact_justification(route) -> bool:
+    methods = route.methods & MUTATION_METHODS
+    return bool(methods) and all(
+        (method, route.path) in EXACT_JUSTIFIED_WITHOUT_OPERATOR_GATE for method in methods
+    )
+
+
+def test_provider_ingress_justification_does_not_cover_neighbors_or_other_methods():
+    from types import SimpleNamespace
+
+    path = "/api/integrations/instantly/{tenant_id}/webhook"
+    assert _has_exact_justification(SimpleNamespace(path=path, methods={"POST"}))
+    assert not _has_exact_justification(SimpleNamespace(path=path + "/repair", methods={"POST"}))
+    assert not _has_exact_justification(SimpleNamespace(path=path, methods={"DELETE"}))
+    assert not _has_exact_justification(SimpleNamespace(path=path, methods={"POST", "DELETE"}))
+
+
 # Route-path prefix → the one-line reason it needs no operator gate.
 #
 # A prefix matches a route when the path equals it or continues with "/".
 # Each reason cites the middleware clause that actually constrains the route;
 # without such a clause the route must be gated instead of listed here.
 JUSTIFIED_WITHOUT_OPERATOR_GATE: dict[str, str] = {
+    "/api/sales": (
+        "Tenant-scoped human sales console: _authorization_denial() rejects services "
+        "and non-owner/admin callers; require_sales_operator() repeats the human "
+        "gate and derives every actor and tenant from verified auth. The platform-global "
+        "require_operator() would incorrectly forbid another tenant's own sales team. "
+        "Covered by robothor/sales/tests/test_api.py."
+    ),
+    "/api/goals": (
+        "Tenant-owned goals: goal_operator dependency rejects service tokens and "
+        "non-owner/admin roles; TenantMiddleware pins the verified tenant. "
+        "Platform-only require_operator would exclude other tenants' own operators. "
+        "Dependency enforcement is exercised in robothor/goals/tests/test_api.py."
+    ),
     "/api/auth": (
         "Public session bootstrap/rotation — AuthMiddleware._PUBLIC_PATHS lists "
         "/api/auth/sso|refresh|logout and _authorization_denial() returns None for "
@@ -254,6 +299,7 @@ def test_every_mutation_route_is_operator_gated_or_justified() -> None:
         for route in _mutation_routes()
         if "require_operator(" not in inspect.getsource(route.endpoint)
         and _justification(route.path) is None
+        and not _has_exact_justification(route)
     ]
     assert not ungated, (
         "Mutation routes with neither require_operator(request) nor a justified "

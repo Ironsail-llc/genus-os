@@ -197,6 +197,20 @@ TOOL_HINTS: dict[str, ToolHint] = {
             "id with gws_calendar_list."
         ),
     ),
+    "gws_calendar_add_attendees": ToolHint(
+        keywords=(
+            "calendar",
+            "meeting",
+            "event",
+            "add",
+            "update",
+            "attendee",
+            "invite",
+            "guest",
+            "existing",
+        ),
+        when_to_use="Use this to add attendees to an EXISTING meeting while preserving existing guests and RSVPs.",
+    ),
     # ── Google Chat ───────────────────────────────────────────────────
     "gws_chat_send": ToolHint(
         keywords=(*_CHAT, "send", "post", "message", "notify"),
@@ -248,6 +262,28 @@ TOOL_HINTS: dict[str, ToolHint] = {
     # from contradicting the ranking printed beside it.
     "list_my_tasks": ToolHint(
         keywords=("task", "todo", "queue", "assigned", "work", "backlog"),
+        rank_bias=1.0,
+    ),
+    # ── Companies: a family of six, on a noun the sales tools now share ──
+    #
+    # "look up a company by name" returned `view_image`, `list_companies` and
+    # `look`: the first and third both claim the verb "look", and `company`
+    # stopped discriminating between them and the CRM family once ten sales_*
+    # schemas started mentioning companies too. IDF is doing its job — the term
+    # really did become common — so the family needs vocabulary of its own, and
+    # the entry point an agent holding no id must call first needs the same
+    # tie-break the task family uses.
+    "get_company": ToolHint(
+        keywords=(
+            "company",
+            "organisation",
+            "organization",
+            "business",
+            "account",
+            "employer",
+            "firm",
+            "crm",
+        ),
         rank_bias=1.0,
     ),
     "get_inbox": ToolHint(

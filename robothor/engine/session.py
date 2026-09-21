@@ -175,6 +175,7 @@ ENGINE_CONTEXT_ROLE = "developer"
 EXTERNAL_DATA_TOOLS: frozenset[str] = frozenset(
     {
         "web_fetch",
+        "web_render",
         "web_search",
         "search_memory",
         "get_entity",
@@ -206,6 +207,8 @@ class AgentSession:
             status=RunStatus.PENDING,
         )
         self.messages: list[dict[str, Any]] = []
+        self.response_format: str = "text"
+        self.provider_order: dict[str, list[str]] = {}
         # Unified identity context (robothor.identity) for the human on the
         # other end of this run — set by AgentRunner.execute() after
         # precedence resolution (explicit kwarg / webchat resolve / legacy

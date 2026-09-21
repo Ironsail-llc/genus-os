@@ -642,13 +642,13 @@ class TestAmbientUntrackedParent:
         assert built is not None
         assert built.parent_run_id == PARENT_RUN_ID
 
-    def test_nesting_depth_is_not_incremented_twice(self) -> None:
-        """``runner.py:659`` adds one of its own."""
+    def test_context_describes_the_child_depth(self) -> None:
+        """The runner persists the executing context's depth verbatim."""
         from robothor.engine.tools.handlers.benchmark import _benchmark_spawn_context
 
         built = _benchmark_spawn_context(CTX)
         assert built is not None
-        assert built.nesting_depth == 0
+        assert built.nesting_depth == 1
 
 
 # ─── I2: the tenant is resolved before anything is seeded ────────────────────

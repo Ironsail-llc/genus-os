@@ -83,7 +83,9 @@ exclude_docs: |
   !/enterprise/07-operate.md
   !/reference/cli.md
   !/reference/configuration.md
+  !/features/goal-pursuit.md
   !/TOOLS.md
+  !/SALES_INTELLIGENCE.md
   !/PLUGINS.md
   !/channels/telegram.md
   !/CONNECTORS.md
@@ -101,6 +103,7 @@ exclude_docs: |
   !/channels/webchat.md
   !/runbooks/BENCHMARK_SANDBOX.md
   !/runbooks/LOCAL_FALLBACK.md
+  !/runbooks/INTERACTIVE_REQUEST_PERFORMANCE.md
   !/architecture.md
   !/memory-system.md
   !/event-bus.md
@@ -135,7 +138,9 @@ nav:
       - CLI: reference/cli.md
       - Settings: reference/configuration.md
   - Operating:
+      - Goals: features/goal-pursuit.md
       - Tools: TOOLS.md
+      - Sales intelligence: SALES_INTELLIGENCE.md
       - Plugins: PLUGINS.md
       - Telegram channel: channels/telegram.md
       - Connectors: CONNECTORS.md
@@ -148,6 +153,7 @@ nav:
       - Snapshot and restore: runbooks/SNAPSHOT_RESTORE.md
       - Benchmark sandbox: runbooks/BENCHMARK_SANDBOX.md
       - Local fallback: runbooks/LOCAL_FALLBACK.md
+      - Interactive request performance: runbooks/INTERACTIVE_REQUEST_PERFORMANCE.md
   - Compliance:
       - Security controls: compliance/SECURITY_CONTROLS.md
       - SOC 2 mapping: compliance/SOC2_MAPPING.md

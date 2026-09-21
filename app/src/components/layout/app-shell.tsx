@@ -8,7 +8,9 @@ import { isComingSoonView, viewGroupLabel, viewTitles } from "./nav-config";
 import { ChatPanel } from "@/components/chat-panel";
 import { DashboardView } from "@/components/views/dashboard-view";
 import { InboxView } from "@/components/views/inbox-view";
+import { GoalsView } from "@/components/views/goals-view";
 import { TasksView } from "@/components/views/tasks-view";
+import { SalesView } from "@/components/views/sales-view";
 import { AgentsView } from "@/components/views/agents-view";
 import { MarketplaceView } from "@/components/views/marketplace-view";
 import { FleetView } from "@/components/views/fleet-view";
@@ -191,6 +193,7 @@ export function AppShell() {
               data-testid="views-container"
             >
               <DashboardView visible={view === "dashboard"} />
+              <SalesView visible={view === "sales"} role={role} />
               <InboxView
                 visible={view === "inbox"}
                 items={inbox.items}
@@ -204,6 +207,7 @@ export function AppShell() {
                 role={role}
                 roleLoading={roleLoading}
               />
+              <GoalsView visible={view === "goals"} />
               <TasksView
                 visible={view === "tasks"}
                 tasks={tasks}

@@ -275,6 +275,52 @@ def _apply_ann_scan_mode(conn: object) -> None:
         logger.debug("could not set hnsw.iterative_scan: %s", exc)
 
 
+def _warn_once_about_a_superuser_connection(conn: psycopg2.extensions.connection) -> None:
+    """Say so when this connection has no tenant isolation at all.
+
+    A Postgres superuser bypasses row-level security **unconditionally**:
+    ``ENABLE`` and ``FORCE`` are both ignored. So a superuser connection with
+    ``ROBOTHOR_RLS_ENABLED`` set is not "RLS on", it is RLS off with a flag
+    that says on — strictly worse than off, because the operator believes they
+    have isolation.
+
+    And with the flag UNSET it is no better. ``FORCE ROW LEVEL SECURITY`` is a
+    property of the TABLE; the migrations apply it whatever the app flag says,
+    and a superuser walks through it either way. That is why this probe runs
+    before ``_apply_tenant_scope``'s ``if not _rls_enabled()`` early return
+    rather than after it: the flag is off by default, so gating the detector on
+    it meant the single-box install it was written for — where ``config.py``
+    resolves ``ROBOTHOR_DB_USER`` and then falls back to ``$USER``, usually an
+    admin — was exactly the one install that never ran it.
+
+    Once per process, and never fatal: it must not be able to take the instance
+    down, only to stop it lying about its isolation.
+    """
+    global _warned_superuser
+    if _warned_superuser:
+        return
+    _warned_superuser = True
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT rolsuper FROM pg_roles WHERE rolname = current_user")
+            row = cur.fetchone()
+    except Exception as exc:  # noqa: BLE001 -- a probe must never break the pool
+        logger.debug("could not determine whether this connection is a superuser: %s", exc)
+        return
+    if not (row and row[0]):
+        return
+    logger.error(
+        "NO TENANT ISOLATION: this connection is a SUPERUSER, which bypasses "
+        "row-level security unconditionally — FORCE ROW LEVEL SECURITY included, "
+        "because that is a property of the table and not of ROBOTHOR_RLS_ENABLED "
+        "(currently %s). Set ROBOTHOR_DB_USER=robothor_app (migration 082) "
+        "— see docs/runbooks/TENANT_RLS.md.",
+        "set, which does not help on its own"
+        if _rls_enabled()
+        else "unset, which does not help either",
+    )
+
+
 def _apply_tenant_scope(conn: psycopg2.extensions.connection) -> None:
     """Bind this connection to the current tenant for RLS.
 
@@ -293,39 +339,17 @@ def _apply_tenant_scope(conn: psycopg2.extensions.connection) -> None:
     unconditionally. Migration 082 creates the non-superuser ``robothor_app``
     role the engine should connect as. See docs/runbooks/TENANT_RLS.md.
     """
+    # BEFORE the early return, not after it. This probe used to sit inside the
+    # `_rls_enabled()` branch, which put the one detector built to catch a
+    # bypass behind the very flag that is off by default — so the single-box
+    # install it exists for never ran it.
+    _warn_once_about_a_superuser_connection(conn)
     if not _rls_enabled():
         return
     tenant = effective_tenant()
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT set_config('app.tenant_id', %s, false)", (tenant,))
-
-            # RLS enabled + a SUPERUSER connection is not "RLS on". It is RLS OFF
-            # with a flag that says on — Postgres ignores the policy entirely for
-            # superusers — which is strictly worse than off, because the operator
-            # believes they have isolation.
-            #
-            # The default is the trap: config.py resolves the DB user from
-            # ROBOTHOR_DB_USER, falling back to $USER — whoever runs the process,
-            # which on a single-box instance is usually an admin. That is exactly
-            # how robothor-orchestrator and robothor-vision bypassed RLS for their
-            # entire existence while the instance reported it "enabled".
-            #
-            # Once per process, and never fatal: this must not be able to take the
-            # instance down, only to stop it lying about its isolation.
-            global _warned_superuser
-            if not _warned_superuser:
-                _warned_superuser = True
-                cur.execute("SELECT rolsuper FROM pg_roles WHERE rolname = current_user")
-                row = cur.fetchone()
-                if row and row[0]:
-                    logger.error(
-                        "RLS IS INERT: ROBOTHOR_RLS_ENABLED is set but this connection "
-                        "is a SUPERUSER, which bypasses row-level security "
-                        "unconditionally. There is NO tenant isolation on this "
-                        "connection. Set ROBOTHOR_DB_USER=robothor_app (migration 082) "
-                        "— see docs/runbooks/TENANT_RLS.md."
-                    )
     except Exception as exc:
         # Fail loudly: a connection that silently forgets its tenant scope has
         # no isolation at all.

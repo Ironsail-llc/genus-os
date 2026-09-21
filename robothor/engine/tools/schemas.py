@@ -6,6 +6,82 @@ from typing import Any
 
 from robothor.engine.prompts import EVIDENCE_OUTRANKS_NAMES
 from robothor.engine.vision_fallback import PROVENANCE_NOTE
+from robothor.goals.legacy_schemas import legacy_goal_schemas
+from robothor.sales.tool_schemas import SALES_SCHEMAS
+
+# `robothor.sales` is imported at module scope deliberately. It is not an
+# optional extra: the wheel ships `packages = ["robothor"]` (pyproject.toml), so
+# the sales package is in every build that contains the engine, and
+# `handlers/sales.py` already imports it. Wrapping the import in a
+# try/except ImportError would invent a packaging split that does not exist and
+# would turn a broken install into ten silently missing tools rather than an
+# import error naming the cause.
+#
+# What sales must NOT be is a DEFAULT capability, which is a different question
+# and is answered in two other places: `OPT_IN_TOOLS` keeps these schemas out of
+# the set an agent with no `tools_allowed` is offered, and migration 138 denies
+# them to the broad `__default__` roles.
+
+_WEB_READ_SCHEMAS = {
+    "web_fetch": {
+        "type": "function",
+        "function": {
+            "name": "web_fetch",
+            "description": "Fetch a web page and return its content as markdown text.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "URL to fetch",
+                    },
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    "web_render": {
+        "type": "function",
+        "function": {
+            "name": "web_render",
+            "description": "Read a public JavaScript-rendered page when web_fetch returns an empty shell. Returns visible text, title, links and retrieval limits. Uses an isolated browser with vetted GET-only resource requests; no logins, clicks, forms, or arbitrary scripts.",
+            "parameters": {
+                "type": "object",
+                "properties": {"url": {"type": "string", "description": "Public HTTP(S) page URL"}},
+                "required": ["url"],
+                "additionalProperties": False,
+            },
+        },
+    },
+}
+
+_CALENDAR_ATTENDEE_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "gws_calendar_add_attendees",
+        "description": (
+            "Use this to add attendees to an EXISTING meeting while preserving existing guests and RSVPs. "
+            "For a draft pass draft=true; confirm with operation_id only. "
+            "Verifies once and stops. Notifications requested is not delivery proof. "
+            "On error report partial state; never remove/re-add guests, resend, or upgrade tools."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string"},
+                "operation_id": {
+                    "type": "string",
+                    "description": "Execute a previously drafted operation with its original arguments",
+                },
+                "draft": {"type": "boolean", "default": False},
+                "attendees": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+                "calendar": {"type": "string", "enum": ["operator", "own"], "default": "operator"},
+                "calendar_id": {"type": "string", "description": "Explicit calendar override"},
+            },
+            "required": [],
+        },
+    },
+}
 
 # Long descriptions live out here: get_engine_schemas is already one of the
 # engine's largest functions and the size ratchet only lets it shrink.
@@ -782,23 +858,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             },
         },
     }
-    schemas["web_fetch"] = {
-        "type": "function",
-        "function": {
-            "name": "web_fetch",
-            "description": "Fetch a web page and return its content as markdown text.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "URL to fetch",
-                    },
-                },
-                "required": ["url"],
-            },
-        },
-    }
+    schemas.update(_WEB_READ_SCHEMAS)
     schemas["web_search"] = {
         "type": "function",
         "function": {
@@ -1749,6 +1809,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             },
         },
     }
+    schemas["gws_calendar_add_attendees"] = _CALENDAR_ATTENDEE_SCHEMA
     schemas["gws_calendar_delete"] = {
         "type": "function",
         "function": {
@@ -1864,7 +1925,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                     "tools_override": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Optional: replace child's tools_allowed",
+                        "description": "Optional: narrow the child's tools_allowed; cannot add tools outside its declared allowlist. An empty list keeps the manifest unchanged.",
                     },
                     "max_iterations": {
                         "type": "integer",
@@ -1913,7 +1974,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                                 "tools_override": {
                                     "type": "array",
                                     "items": {"type": "string"},
-                                    "description": "Optional tools override",
+                                    "description": "Optional: narrow the child's declared tools_allowed; an empty list keeps the manifest unchanged.",
                                 },
                                 "parent_task_id": {
                                     "type": "string",
@@ -2873,147 +2934,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
 
     # ── Long-running goal tracking ──
 
-    schemas["create_goal"] = {
-        "type": "function",
-        "function": {
-            "name": "create_goal",
-            "description": (
-                "Create an active long-running session goal. Refuses to overwrite an "
-                "existing active goal in the same scope. Workspace goals (no agent_id) "
-                "auto-inject only into the main agent; agent-scoped goals inject only "
-                "into the named agent."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "objective": {
-                        "type": "string",
-                        "description": "Concrete objective the agent should keep pursuing.",
-                    },
-                    "success_criteria": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional explicit completion contract.",
-                    },
-                    "agent_id": {
-                        "type": "string",
-                        "description": "Optional target agent. Defaults to the current agent.",
-                    },
-                },
-                "required": ["objective"],
-            },
-        },
-    }
-    schemas["get_goal"] = {
-        "type": "function",
-        "function": {
-            "name": "get_goal",
-            "description": (
-                "Return the active long-running session goal for the current scope, "
-                "including objective, evidence count, and remaining completion "
-                "requirements."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "agent_id": {
-                        "type": "string",
-                        "description": "Optional target agent. Defaults to the current agent.",
-                    },
-                },
-            },
-        },
-    }
-    schemas["update_goal"] = {
-        "type": "function",
-        "function": {
-            "name": "update_goal",
-            "description": (
-                "Record typed evidence on a long-running session goal or mark it "
-                "complete. Completion requires at least one validated 'test_run' AND "
-                "one validated 'commit' evidence item. The reference field is verified "
-                "per kind: pytest summary or UUID for test_run; git SHA validated via "
-                "git cat-file for commit; https URL for ci_run."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "status": {
-                        "type": "string",
-                        "enum": ["active", "complete"],
-                        "description": "Set to complete only when the goal is truly finished.",
-                    },
-                    "edit_op": {
-                        "type": "string",
-                        "enum": ["objective", "criterion", "metric_target"],
-                        "description": (
-                            "Edit operation: 'objective' (with objective=<text>), "
-                            "'criterion' (with text=<text>), or 'metric_target' "
-                            "(with metric, target, optional weight/window_days/category)."
-                        ),
-                    },
-                    "objective": {
-                        "type": "string",
-                        "description": "New objective text when edit_op='objective'.",
-                    },
-                    "text": {
-                        "type": "string",
-                        "description": "Criterion text when edit_op='criterion'.",
-                    },
-                    "metric": {
-                        "type": "string",
-                        "description": (
-                            "Metric name when edit_op='metric_target' (e.g. "
-                            "benchmark_pass_rate, error_rate)."
-                        ),
-                    },
-                    "target": {
-                        "type": "string",
-                        "description": (
-                            "Target comparator when edit_op='metric_target' (e.g. '>=0.85')."
-                        ),
-                    },
-                    "weight": {
-                        "type": "number",
-                        "description": "Goal weight (default 1.0).",
-                    },
-                    "window_days": {
-                        "type": "integer",
-                        "description": "Rolling window in days (default 7).",
-                    },
-                    "category": {
-                        "type": "string",
-                        "enum": ["reach", "quality", "efficiency", "correctness"],
-                        "description": "Category for metric_target (default 'correctness').",
-                    },
-                    "kind": {
-                        "type": "string",
-                        "enum": ["test_run", "commit", "ci_run", "note"],
-                        "description": "Evidence kind. Only test_run + commit satisfy completion.",
-                    },
-                    "summary": {
-                        "type": "string",
-                        "description": "Short evidence summary.",
-                    },
-                    "reference": {
-                        "type": "string",
-                        "description": (
-                            "Verifiable reference: pytest:passed:N or run UUID for "
-                            "test_run; 7+ hex SHA for commit; https URL for ci_run."
-                        ),
-                    },
-                    "completion_note": {
-                        "type": "string",
-                        "description": "Required when status is complete.",
-                    },
-                    "agent_id": {
-                        "type": "string",
-                        "description": "Optional target agent. Defaults to the current agent.",
-                    },
-                },
-            },
-        },
-    }
+    schemas.update(legacy_goal_schemas())
 
     # ── Identity mapping tools ──
 
@@ -3959,4 +3880,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
-    return schemas
+    from robothor.goals.tools import schemas as pursuit_schemas
+
+    schemas.update(pursuit_schemas())
+    return schemas | SALES_SCHEMAS

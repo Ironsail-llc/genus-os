@@ -56,6 +56,9 @@ def classify(
     Deferring work because a manifest failed to load would turn a config
     problem into an outage.
     """
+    if agent_config is not None and getattr(agent_config, "is_benchmark", False) is True:
+        return Priority.BACKGROUND
+
     if trigger_type in _INTERACTIVE_TRIGGERS:
         return Priority.INTERACTIVE
 

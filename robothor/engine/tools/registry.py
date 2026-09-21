@@ -12,6 +12,7 @@ from robothor.engine.spawn_cancel import tool_deadline
 from robothor.engine.tools.constants import (
     CORE_TOOLS,
     GOAL_TOOLS,
+    OPT_IN_TOOLS,
     SPAWN_TOOLS,
     TODO_TOOLS,
     TOOLSEARCH_TOOLS,
@@ -986,7 +987,15 @@ class ToolRegistry:
                 self._escalate_unresolved(config.id, sorted(unresolved))
             names.extend(n for n in GOAL_TOOLS if n in self._schemas and n not in names)
         else:
-            names = list(self._schemas.keys())
+            # "Everything" excludes the opt-in families. A sales subsystem the
+            # instance never deployed, and a headless browser, are not what an
+            # agent that declared no tool list was asking for. See OPT_IN_TOOLS.
+            names = [n for n in self._schemas if n not in OPT_IN_TOOLS]
+
+        if config.id == "main":
+            from robothor.goals.tools import TOOL_NAMES
+
+            names.extend(n for n in sorted(TOOL_NAMES) if n in self._schemas and n not in names)
 
         if config.tools_denied:
             # Support glob patterns (e.g. "mcp_*", "gws_*") in tools_denied

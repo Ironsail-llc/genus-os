@@ -63,3 +63,9 @@ def test_a_manifest_override_wins():
 def test_a_fresh_instance_with_no_engine_config_still_works():
     assert classify("main", TriggerType.CRON, _Cfg(), None) is Priority.BACKGROUND
     assert classify("main", TriggerType.TELEGRAM, _Cfg(), None) is Priority.INTERACTIVE
+
+
+def test_manual_benchmark_does_not_take_interactive_priority():
+    cfg = _Cfg(department="core")
+    cfg.is_benchmark = True
+    assert classify("main", TriggerType.MANUAL, cfg, _Engine()) is Priority.BACKGROUND

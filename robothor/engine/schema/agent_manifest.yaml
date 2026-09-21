@@ -49,6 +49,15 @@ recommended:
     temperature:
       type: number
       default: 0.3
+    provider_order:
+      type: object
+      default: {}
+      description: Map exact OpenRouter model paths to ordered provider allowlists; no unlisted backend fallback. Other models retain their routing.
+    response_format:
+      type: string
+      enum: [text, json_object]
+      default: text
+      description: Request one JSON object for final content; business schema validation remains required.
     reasoning_effort:
       type: string
       default: medium
@@ -316,6 +325,14 @@ optional:
   # ── Worker (a second cron lane with its own instruction + budget) ─
   # Same shape as heartbeat. Inherits model + tools from the parent agent.
   worker:
+    auto_task:
+      type: boolean
+      default: false
+      description: >
+        File this override's own operator-facing CRM task per run. NOT
+        inherited from the agent's top-level `auto_task`: that flag costs one
+        operator-visible row per run, and an agent whose interactive work is
+        worth tracking usually has a heartbeat and a drain that are not.
     cron:
       type: string
     timezone:
@@ -383,6 +400,14 @@ optional:
   # different instruction file, delivery mode, warmup, and budget.
   # Inherits model + tools from the parent agent.
   heartbeat:
+    auto_task:
+      type: boolean
+      default: false
+      description: >
+        File this override's own operator-facing CRM task per run. NOT
+        inherited from the agent's top-level `auto_task`: that flag costs one
+        operator-visible row per run, and an agent whose interactive work is
+        worth tracking usually has a heartbeat and a drain that are not.
     cron:
       type: string
       description: APScheduler cron expression for heartbeat schedule
@@ -477,6 +502,14 @@ optional:
       type: boolean
       default: false
       description: Allow this agent to spawn other agents as sub-tasks mid-run
+    spawn_allowed_agents:
+      type: list[string]
+      default: []
+      description: Allowed target IDs for this spawn tree. Empty adds no restriction; ancestor restrictions always apply.
+    max_spawn_total:
+      type: integer
+      default: 0
+      description: Total admitted child attempts across all batches and descendants (0 adds no limit; maximum 100).
     max_nesting_depth:
       type: integer
       default: 2
