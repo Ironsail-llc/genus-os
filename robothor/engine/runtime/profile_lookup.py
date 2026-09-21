@@ -1,13 +1,21 @@
 """Bound pre-execution profile I/O without blocking the chat event loop."""
 
+from __future__ import annotations
+
 import asyncio
 from dataclasses import replace
 from datetime import timedelta
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from datetime import datetime
+
+    from robothor.engine.runtime.contracts import RunRequest
 
 LOOKUP_SECONDS = 60
 
 
-async def lookup(request, directory, admitted_at):
+async def lookup(request: RunRequest, directory: str, admitted_at: datetime) -> Any:
     from robothor.engine.runner import load_agent_config_or_reason
     from robothor.engine.runtime.admission_audit import record_interrupted, record_timeout
     from robothor.engine.runtime.deadlines import (
@@ -35,7 +43,11 @@ async def lookup(request, directory, admitted_at):
         await record_timeout(bounded)
         raise
     except asyncio.CancelledError:
-        if remaining(bounded.context) <= 0:
+        # `remaining` returns None when nothing bounds the request, and
+        # `None <= 0` raises TypeError -- which would replace the cancellation
+        # with an unrelated error from inside its own handler.
+        left = remaining(bounded.context)
+        if left is not None and left <= 0:
             await record_timeout(bounded)
         else:
             await record_interrupted(bounded)

@@ -1,19 +1,26 @@
 """Bind deep tool callbacks to their trusted owner across framework threads."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 from contextvars import ContextVar, copy_context
 from functools import wraps
 
 owner: ContextVar[tuple[str, str] | None] = ContextVar("deep_tool_owner", default=None)
 
 
-def bind_tools(definitions):
+def bind_tools(definitions: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     identity = owner.get()
     if identity is None:
         return definitions
     context = copy_context()
 
-    def bind(function):
-        def dispatch(args, kwargs):
+    def bind(function: Callable[..., Any]) -> Callable[..., Any]:
+        def dispatch(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
             from robothor.engine.runtime.controls import stopped
             from robothor.engine.runtime.provider_budget import DurableStopError
 
@@ -22,7 +29,7 @@ def bind_tools(definitions):
             return function(*args, **kwargs)
 
         @wraps(function)
-        def invoke(*args, **kwargs):
+        def invoke(*args: Any, **kwargs: Any) -> Any:
             # A context cannot be entered concurrently. Copy the captured owner
             # context per invocation, including when the framework uses threads.
             return context.copy().run(dispatch, args, kwargs)

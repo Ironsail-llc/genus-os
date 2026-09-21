@@ -1,5 +1,12 @@
 """Progress while waiting for read-only configuration, with one lookup owner."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from robothor.engine.runtime.contracts import RunRequest
+
 import asyncio
 import logging
 import time
@@ -8,7 +15,9 @@ from datetime import UTC, datetime
 INTERVAL_SECONDS = 5
 
 
-async def read_with_progress(request, admitted_at, loader, directory):
+async def read_with_progress(
+    request: RunRequest, admitted_at: datetime, loader: Any, directory: str
+) -> Any:
     from robothor.engine.runtime.profile_pool import read_profile
 
     callback = request.options.get("on_status")

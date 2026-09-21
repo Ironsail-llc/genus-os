@@ -1,13 +1,25 @@
 """Resolve interactive profiles once while retaining the native failure path."""
 
+from __future__ import annotations
+
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import replace
+from typing import TYPE_CHECKING, Any
 
-_resolution = ContextVar("native_profile_resolution", default=None)
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from datetime import datetime
+
+    from robothor.engine.runtime.contracts import RunRequest
+
+#: (agent_id, manifest_dir, config, refusal_reason) from a completed lookup.
+_Resolution = tuple[str, str, Any, Any]
+
+_resolution: ContextVar[_Resolution | None] = ContextVar("native_profile_resolution", default=None)
 
 
-def needs_lookup(request):
+def needs_lookup(request: RunRequest) -> bool:
     from robothor.engine.run_context import in_benchmark_run
 
     options = request.options
@@ -24,7 +36,9 @@ def needs_lookup(request):
     )
 
 
-async def prepare(runner, request, admitted_at):
+async def prepare(
+    runner: Any, request: RunRequest, admitted_at: datetime
+) -> tuple[RunRequest, _Resolution | None]:
     from robothor.engine.runtime.action_policy import apply_action_deadline
 
     options = request.options
@@ -41,7 +55,7 @@ async def prepare(runner, request, admitted_at):
 
 
 @contextmanager
-def resolved_profile(resolution):
+def resolved_profile(resolution: _Resolution | None) -> Iterator[None]:
     token = _resolution.set(resolution)
     try:
         yield
@@ -49,7 +63,7 @@ def resolved_profile(resolution):
         _resolution.reset(token)
 
 
-def load_for_run(agent_id, directory):
+def load_for_run(agent_id: str, directory: str) -> tuple[Any, ...]:
     resolution = _resolution.get()
     if resolution is not None and resolution[:2] == (agent_id, directory):
         return resolution[2:]

@@ -1,5 +1,12 @@
 """Retain a deep thread's result when its delivery task is cancelled."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 import asyncio
 import contextlib
 import logging
@@ -9,7 +16,7 @@ from robothor.engine.models import RunStep, StepType
 from robothor.engine.task_registry import get_task_registry
 
 
-def _record_late(worker, session, finish):
+def _record_late(worker: asyncio.Task[Any], session: Any, finish: Callable[[Any], Any]) -> None:
     if worker.cancelled():
         # Loop shutdown does not prove the OS thread ended. Leave the audit open.
         return
@@ -38,12 +45,19 @@ def _record_late(worker, session, finish):
         )
 
 
-async def _wait(worker):
+async def _wait(worker: asyncio.Task[Any]) -> None:
     with contextlib.suppress(Exception):
         await asyncio.shield(worker)
 
 
-async def owned_deep_call(session, finish, progress_stop, progress_task, function, **kwargs):
+async def owned_deep_call(
+    session: Any,
+    finish: Callable[[Any], Any],
+    progress_stop: asyncio.Event,
+    progress_task: asyncio.Task[Any],
+    function: Callable[..., Any],
+    **kwargs: Any,
+) -> Any:
     worker = asyncio.create_task(asyncio.to_thread(function, **kwargs))
     try:
         return await asyncio.shield(worker)

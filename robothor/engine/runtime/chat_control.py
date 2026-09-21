@@ -1,5 +1,12 @@
 """Bind browser requests and stops to authenticated session ownership."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine
+
 import asyncio
 import json
 from contextvars import copy_context
@@ -11,7 +18,7 @@ from robothor.engine.runtime.contracts import ExecutionContext
 from robothor.engine.runtime.current import active_context
 
 
-def request_key(auth, session_key, client_id):
+def request_key(auth: Any, session_key: str, client_id: Any) -> str:
     try:
         identifier = str(UUID(str(client_id))) if client_id else str(uuid4())
     except ValueError as exc:
@@ -21,13 +28,19 @@ def request_key(auth, session_key, client_id):
     )
 
 
-def recovery_scope(auth, session_key):
+def recovery_scope(auth: Any, session_key: str) -> str:
     """Opaque browser storage namespace, never an authorization credential."""
     identity = json.dumps(["webchat-recovery", auth.tenant_id, auth.user_id, session_key])
     return str(uuid5(NAMESPACE_URL, identity))
 
 
-def start(session, factory, auth, session_key, client_id=None):
+def start(
+    session: Any,
+    factory: Callable[[], Coroutine[Any, Any, Any]],
+    auth: Any,
+    session_key: str,
+    client_id: Any = None,
+) -> asyncio.Task[Any]:
     identifier = request_key(auth, session_key, client_id)
     context = copy_context()
     inherited = active_context.get()
@@ -47,7 +60,7 @@ def start(session, factory, auth, session_key, client_id=None):
     return task
 
 
-async def stop(session, auth, session_key, client_id=None):
+async def stop(session: Any, auth: Any, session_key: str, client_id: Any = None) -> dict[str, Any]:
     from robothor.engine.runtime.controls import issue_request
 
     identifier = (
