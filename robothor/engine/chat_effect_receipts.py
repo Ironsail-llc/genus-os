@@ -43,6 +43,7 @@ def family_effect_receipts(cur, run, auth):
                 "tool_name": row["tool_name"],
                 "status": row["state"],
                 "verified": verified,
+                "deduplicated": verified and result.get("deduplicated") is True,
                 "reconciliation_pending": row["state"] in {"prepared", "dispatching", "uncertain"},
             }
         )
@@ -53,6 +54,13 @@ def effect_summary(receipt):
     if receipt["verified"]:
         if receipt["tool_name"] == "create_note":
             text = "The CRM note was created. Robothor checked the stored note and recovered its result without creating another note."
+        elif receipt["tool_name"] == "create_task":
+            text = (
+                "The existing task was found."
+                if receipt.get("deduplicated")
+                else "The task was created."
+            )
+            text += " Robothor checked the stored task and recovered its result without creating another task."
         else:
             text = "The recorded action is confirmed by its saved verification evidence."
     elif receipt["status"] == "prepared":

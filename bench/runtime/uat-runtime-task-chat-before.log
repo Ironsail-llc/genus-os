@@ -1,0 +1,58 @@
+.....FF                                                                  [100%]
+=================================== FAILURES ===================================
+______ test_task_receipt_distinguishes_creation_from_existing_task[False] ______
+
+records = <function records.<locals>.connect at 0xee3fbcd633d0>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0xee3fbcef3350>
+deduplicated = False
+
+    @pytest.mark.parametrize("deduplicated", [False, True])
+    def test_task_receipt_distinguishes_creation_from_existing_task(records, monkeypatch, deduplicated):  # noqa: F811
+        auth, client = identity(), str(uuid4())
+        run = insert(records, auth, client, status="failed", verified_status=None)
+        ctx, row = effect(records, monkeypatch, auth, run, tool="create_task")
+        effects.resolve(
+            ctx, row["id"],
+            lambda _: effects.Verification(
+                "applied", True, "synthetic-task",
+                {"id": str(uuid4()), "deduplicated": deduplicated},
+            ),
+        )
+        result = chat_recovery.read_outcome(auth, "web:main", client)
+        assert result["state"] == "failed" and not result["verified"]
+        assert not result["reconciliation_pending"]
+        assert result["effects"][0]["verified"]
+>       assert "without creating another task" in result["text"]
+E       AssertionError: assert 'without creating another task' in '[Run failed: Completion was not verified.]\n\nThe recorded action is confirmed by its saved verification evidence. (Operation d4c83956-9edd-40d7-b236-6369020ef69b)'
+
+robothor/engine/tests/test_chat_effect_receipts.py:93: AssertionError
+______ test_task_receipt_distinguishes_creation_from_existing_task[True] _______
+
+records = <function records.<locals>.connect at 0xee3fbcd95900>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0xee3fbcef3d50>
+deduplicated = True
+
+    @pytest.mark.parametrize("deduplicated", [False, True])
+    def test_task_receipt_distinguishes_creation_from_existing_task(records, monkeypatch, deduplicated):  # noqa: F811
+        auth, client = identity(), str(uuid4())
+        run = insert(records, auth, client, status="failed", verified_status=None)
+        ctx, row = effect(records, monkeypatch, auth, run, tool="create_task")
+        effects.resolve(
+            ctx, row["id"],
+            lambda _: effects.Verification(
+                "applied", True, "synthetic-task",
+                {"id": str(uuid4()), "deduplicated": deduplicated},
+            ),
+        )
+        result = chat_recovery.read_outcome(auth, "web:main", client)
+        assert result["state"] == "failed" and not result["verified"]
+        assert not result["reconciliation_pending"]
+        assert result["effects"][0]["verified"]
+>       assert "without creating another task" in result["text"]
+E       AssertionError: assert 'without creating another task' in '[Run failed: Completion was not verified.]\n\nThe recorded action is confirmed by its saved verification evidence. (Operation 6f83ec5a-c81f-4add-b303-9732fa61dbb8)'
+
+robothor/engine/tests/test_chat_effect_receipts.py:93: AssertionError
+=========================== short test summary info ============================
+FAILED robothor/engine/tests/test_chat_effect_receipts.py::test_task_receipt_distinguishes_creation_from_existing_task[False]
+FAILED robothor/engine/tests/test_chat_effect_receipts.py::test_task_receipt_distinguishes_creation_from_existing_task[True]
+2 failed, 5 passed in 1.01s

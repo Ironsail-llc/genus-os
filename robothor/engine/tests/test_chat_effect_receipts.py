@@ -16,10 +16,10 @@ from robothor.engine.tests.test_chat_recovery import (  # noqa: F401
 )
 
 
-def effect(records, monkeypatch, auth, run, *, principal=None):  # noqa: F811
+def effect(records, monkeypatch, auth, run, *, principal=None, tool="create_note"):  # noqa: F811
     monkeypatch.setattr(effects, "get_connection", records)
     ctx = ExecutionContext(auth.tenant_id, principal or auth.user_id, str(uuid4()))
-    row = effects.begin(ctx, run, "main", "create_note", {"body": "synthetic"})
+    row = effects.begin(ctx, run, "main", tool, {"body": "synthetic"})
     effects.mark_dispatched(ctx, row["id"], run)
     effects.finish(ctx, row["id"], run, uncertain=True)
     return ctx, row
@@ -72,3 +72,31 @@ def test_delegated_uncertainty_overrides_parent_success_claim(records, monkeypat
     assert not result["verified"] and result["reconciliation_pending"]
     assert "Everything is done" not in result["text"]
     assert len(result["effects"]) == 1
+
+
+@pytest.mark.parametrize("deduplicated", [False, True])
+def test_task_receipt_distinguishes_creation_from_existing_task(records, monkeypatch, deduplicated):  # noqa: F811
+    auth, client = identity(), str(uuid4())
+    run = insert(records, auth, client, status="failed", verified_status=None)
+    ctx, row = effect(records, monkeypatch, auth, run, tool="create_task")
+    effects.resolve(
+        ctx,
+        row["id"],
+        lambda _: effects.Verification(
+            "applied",
+            True,
+            "synthetic-task",
+            {"id": str(uuid4()), "deduplicated": deduplicated},
+        ),
+    )
+    result = chat_recovery.read_outcome(auth, "web:main", client)
+    assert result["state"] == "failed" and not result["verified"]
+    assert not result["reconciliation_pending"]
+    assert result["effects"][0]["verified"]
+    assert "without creating another task" in result["text"]
+    if deduplicated:
+        assert "The existing task was found" in result["text"]
+        assert "task was created" not in result["text"]
+    else:
+        assert "The task was created" in result["text"]
+    assert "task is complete" not in result["text"]

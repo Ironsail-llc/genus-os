@@ -3588,6 +3588,29 @@
       "seconds": 14.18,
       "selection": "not slow and not integration and not llm and not e2e and not smoke",
       "log": "bench/runtime/uat-runtime-crm-goals-receipts-regression.log"
+    },
+    "task_chat_receipts": {
+      "base_revision": "f9b4e684ac4",
+      "before": {
+        "failed": 2,
+        "passed": 5,
+        "seconds": 1.01,
+        "log": "bench/runtime/uat-runtime-task-chat-before.log"
+      },
+      "focused": {
+        "passed": 68,
+        "seconds": 5.15,
+        "log": "bench/runtime/uat-runtime-task-chat-focused.log"
+      },
+      "canonical": {
+        "passed": 44,
+        "skipped": 2,
+        "warnings": 1,
+        "seconds": 21.02,
+        "log": "bench/runtime/uat-runtime-task-chat-canonical.log"
+      },
+      "scope": "Chat recovery distinguishes verified creation from an existing deduplicated task. Actual isolated CRM acknowledgement-loss cases project their confirmed receipt into chat twice, preserving failed overall run status and one task creation. Dedup wording uses trusted saved result metadata.",
+      "limitations": "Latest broad engine run predates this presentation change. No new browser or manual acceptance claimed."
     }
   },
   "calendar": {

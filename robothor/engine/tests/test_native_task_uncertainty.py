@@ -82,3 +82,28 @@ async def test_task_commit_acknowledgement_loss_cannot_duplicate_task(monkeypatc
     assert recovered["recovered"] and recovered["title"] == "Synthetic task"
     assert len(commits) == 1
     assert effects.read(ctx, recovered["effect_id"])["state"] == "confirmed"
+
+    # Reconnect must project the actual readback into normal chat without
+    # declaring the failed overall run, or the newly created task, complete.
+    from types import SimpleNamespace
+
+    from robothor.engine.chat_recovery import read_outcome
+    from robothor.engine.runtime.chat_control import request_key
+
+    auth = SimpleNamespace(tenant_id=tenant, user_id=ctx.principal_id)
+    client = str(uuid4())
+    with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO agent_runs(id,tenant_id,agent_id,trigger_type,status,user_id,correlation_id) VALUES (%s,%s,'main','manual','failed',%s,%s)",
+            (run, tenant, auth.user_id, request_key(auth, "web:main", client)),
+        )
+    for _ in range(2):
+        outcome = read_outcome(auth, "web:main", client)
+        assert outcome["state"] == "failed" and not outcome["verified"]
+        assert outcome["effects"][0]["verified"]
+        assert not outcome["effects"][0]["deduplicated"]
+        assert not outcome["reconciliation_pending"]
+        assert "The task was created" in outcome["text"]
+        assert "without creating another task" in outcome["text"]
+        assert "task is complete" not in outcome["text"]
+    assert len(commits) == 1
