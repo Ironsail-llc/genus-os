@@ -6,6 +6,7 @@ transcript, not live language understanding or provider reliability.
 
 import json
 import os
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -240,6 +241,7 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
             "status_question", "What's finished, and what's still left?"
         )
         for message in (status_question, *controls):
+            turn_started = time.perf_counter()
             active_message = message
             token = active_context.set(
                 ExecutionContext(
@@ -268,7 +270,14 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
                     ),
                 },
             )
-            transcript.append({"user": message, "robothor": done["text"], "run": done})
+            transcript.append(
+                {
+                    "user": message,
+                    "robothor": done["text"],
+                    "run": done,
+                    "elapsed_ms": (time.perf_counter() - turn_started) * 1000,
+                }
+            )
             snapshot = store.get(db, goal["id"])
             if live_output:
                 live_output.write_text(
