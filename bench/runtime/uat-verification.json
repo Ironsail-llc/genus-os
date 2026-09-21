@@ -5050,6 +5050,72 @@
       "canonical_summary": "1 failed, 72 passed, 2 skipped, 1 warning in 1031.26s (0:17:11)",
       "token_trace": "bench/runtime/uat-runtime-task-compound-tokens.json",
       "token_trace_scope": "Read-only snapshot of all 61 stored execution model steps for the 30 requests before private database teardown. Planning usage not included. Cancelled calls with zero recorded tokens have unknown actual provider usage; this is not a billing measurement."
+    },
+    "deferred_tools_compound_diagnostic": {
+      "configuration": {
+        "primary": "openrouter/deepseek/deepseek-v4.1-flash",
+        "fallbacks": [
+          "openrouter/xiaomi/mimo-v2.5",
+          "openrouter/deepseek/deepseek-v4-flash",
+          "ollama_chat/qwen3.8:27b"
+        ],
+        "temperature": 0.5,
+        "tools_allowed": 104,
+        "tools_advertised": 24,
+        "schema_characters": 17546,
+        "deferred_tools": true,
+        "task_protocol": true,
+        "samples": 3,
+        "scenario": "task_and_calculation",
+        "synthetic_tenant_prefix": "runtime-live-",
+        "scope": "Native runner, installation profile settings, isolated workspace and private CRM. Only requested task tools execute. No production instructions/memory staged; 65-second harness cutoff and 12-call diagnostic limit. Provider counts include planning. Native cost estimates are not billing. Not ASGI/browser latency or a matched baseline comparison."
+      },
+      "counts": {
+        "verified": 3,
+        "failed": 0,
+        "unfinished": 0,
+        "not_started": 0
+      },
+      "elapsed_ms": {
+        "samples": 3,
+        "p50": 35477.93504600122,
+        "p95": 53016.04816300096,
+        "p95_ci95": [
+          14314.328106003813,
+          53016.04816300096
+        ]
+      },
+      "over_30_seconds": 2,
+      "over_60_seconds": 0,
+      "provider_invocations": {
+        "openrouter/deepseek/deepseek-v4.1-flash": 9
+      },
+      "native_estimated_cost_usd": 0.004822,
+      "post_return_model_calls": 0,
+      "duplicate_task_samples": 0,
+      "stored_task_matches": 3,
+      "confirmed_action_samples": 3,
+      "interrupted_after_confirmed_action": 0,
+      "latency_passed": false,
+      "screening_passed": false,
+      "manual_acceptance": false,
+      "note": "All finished attempts contribute timing, including failed/cutoff attempts; missing attempts cannot qualify. Provider invocations count LiteLLM calls, not independently observed HTTP retries. Cost is native recorded estimate, not billing. Direct native admission, not chat ingress/queue timing; no matched baseline or framework-selection claim.",
+      "product_revision": "f5be69acf44",
+      "harness_base_revision": "f503c70a818",
+      "harness_changes": "Explicit test-local deferred_tools switch; record advertised schemas and per-step token usage.",
+      "diagnostic": true,
+      "promoted": false,
+      "contract_tests": {
+        "passed": 160,
+        "seconds": 3.15
+      },
+      "canonical": {
+        "passed": 73,
+        "skipped": 2,
+        "warnings": 1,
+        "seconds": 145.89
+      },
+      "scope_note": "Three examples only. Product remains unchanged and the installation flag remains off. Smaller context reduced measured input size but did not establish latency qualification. Sequential unmatched cohorts cannot isolate causal effect."
     }
   },
   "calendar": {
@@ -5288,7 +5354,7 @@
     ]
   },
   "remaining": [
-    "Current ceb9d85f68d 30-request selected-model native task screen PASSED: 30 verified single tasks and replies, 30 persisted deadlines, no duplicates or post-return model calls; p95 21.046 seconds (bootstrap interval 15.417\u201322.969), none over 30 or 60 seconds. All used the host task report. Prior failed populations are retained. Compound-intent selection, matched accepted-baseline comparison, full production prompt/memory parity and fleet operating limits remain unqualified. Three task-plus-calculation diagnostics preserved both obligations without the task-only finalizer; this is not broad compound-intent qualification. Durations 50.003, 29.834 and 26.225 seconds show remaining response latency outside the standalone path. Direct accepted-baseline/current native scripted checks now pass 30 warm standalone and compound task requests per revision: same two model calls, one TODO task, no post-return calls. p95 123.673\u219244.970 ms and 127.607\u219248.704 ms. This is minimal-profile engine behavior/overhead evidence, not the outstanding representative live workload comparison. The full 30-request compound task/calculation screen on f5be69acf44 FAILED: 27 complete replies, three deadlines after verified creation, p95 60.014 seconds, 17 over 30 seconds. All 30 tasks correct with confirmed receipts; no duplicates or post-return work. Full failure population retained. Evaluate smaller tool context without changing model selection or production settings.",
+    "Current ceb9d85f68d 30-request selected-model native task screen PASSED: 30 verified single tasks and replies, 30 persisted deadlines, no duplicates or post-return model calls; p95 21.046 seconds (bootstrap interval 15.417\u201322.969), none over 30 or 60 seconds. All used the host task report. Prior failed populations are retained. Compound-intent selection, matched accepted-baseline comparison, full production prompt/memory parity and fleet operating limits remain unqualified. Three task-plus-calculation diagnostics preserved both obligations without the task-only finalizer; this is not broad compound-intent qualification. Durations 50.003, 29.834 and 26.225 seconds show remaining response latency outside the standalone path. Direct accepted-baseline/current native scripted checks now pass 30 warm standalone and compound task requests per revision: same two model calls, one TODO task, no post-return calls. p95 123.673\u219244.970 ms and 127.607\u219248.704 ms. This is minimal-profile engine behavior/overhead evidence, not the outstanding representative live workload comparison. The full 30-request compound task/calculation screen on f5be69acf44 FAILED: 27 complete replies, three deadlines after verified creation, p95 60.014 seconds, 17 over 30 seconds. All 30 tasks correct with confirmed receipts; no duplicates or post-return work. Full failure population retained. Evaluate smaller tool context without changing model selection or production settings. Existing deferred-tool mode was evaluated only in an isolated three-example diagnostic: all correct, durations 53.016/14.314/35.478 seconds, 73 canonical tests and 160 discovery/permission checks pass. Input size fell to about 7,400 tokens, but latency remains unqualified; flag not enabled or promoted.",
     "The local 60-second policy now covers unclassified interactive setup/planning and unknown classification, then retains the same admission clock for simple execution. Explicit valid non-simple classifications retain their existing limits; exclusions protect goals and delegated/resumed work. Native compressed-clock tests and 31 main-profile synthetic task runs pass. Real-provider classification accuracy, workload-wide deadline behavior and production ingress timing remain unqualified; do not infer those from scripted responses.",
     "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded. Production ingress, selected-provider p95 across the representative workload, and mixed-load fallback operating limits are not certified. Dispatch-only improvements do not qualify complete request latency.",
     "Retain the current runtime: the tested bounded candidates failed required behavior and are not finalists. Any future replacement still needs behavior parity, matched configurations, 100-repetition finalist measurements and compatible checkpoint upgrades. No replacement is selected.",

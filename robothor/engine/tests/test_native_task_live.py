@@ -35,6 +35,9 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
     assert 1 <= samples <= 30 and (samples == 30 or settings.get("diagnostic"))
     scenario = settings.get("scenario", "standalone_task")
     assert scenario in {"standalone_task", "task_and_calculation"}
+    if "deferred_tools" in settings:
+        assert type(settings["deferred_tools"]) is bool
+        monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "1" if settings["deferred_tools"] else "0")
     workspace = Path(settings["installation"])
     agent = load_agent_config(
         "main", workspace / "docs/agents", workspace=workspace, trigger_type="webchat"
@@ -91,6 +94,9 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
     with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("INSERT INTO crm_tenants(id,display_name) VALUES (%s,%s)", (tenant, tenant))
     runner = AgentRunner(replace(engine_config, tenant_id=tenant))
+    advertised = runner.registry.build_for_agent(agent)
+    from robothor.engine.feature_flags import deferred_tools_enabled
+
     original_dispatch = runner.registry.execute
     private_tools = {"create_task", "list_tasks", "get_task", "search_records", "todo_write"}
     metadata_tools = {"tool_search", "tool_describe"}
@@ -130,6 +136,9 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
                         "fallbacks": agent.model_fallbacks,
                         "temperature": agent.temperature,
                         "tools_allowed": len(agent.tools_allowed),
+                        "tools_advertised": len(advertised),
+                        "schema_characters": len(json.dumps(advertised, ensure_ascii=False)),
+                        "deferred_tools": deferred_tools_enabled(),
                         "task_protocol": agent.task_protocol,
                         "samples": samples,
                         "scenario": scenario,
@@ -209,7 +218,8 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
                 row["effects"] = dict(cur.fetchall())
                 cur.execute(
                     """SELECT s.step_type,s.tool_name,s.duration_ms,
-                       s.tool_output->>'recovered',s.tool_output->>'verification_scope'
+                       s.tool_output->>'recovered',s.tool_output->>'verification_scope',
+                       s.input_tokens,s.output_tokens,s.model
                        FROM agent_run_steps s JOIN agent_runs r ON r.id=s.run_id
                        WHERE r.tenant_id=%s AND r.correlation_id=%s
                        ORDER BY s.step_number""",
@@ -218,7 +228,16 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
                 row["steps"] = [
                     dict(
                         zip(
-                            ("type", "tool", "duration_ms", "recovered", "verification_scope"),
+                            (
+                                "type",
+                                "tool",
+                                "duration_ms",
+                                "recovered",
+                                "verification_scope",
+                                "input_tokens",
+                                "output_tokens",
+                                "model",
+                            ),
                             step,
                             strict=True,
                         )
