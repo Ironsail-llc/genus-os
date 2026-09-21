@@ -84,6 +84,10 @@ def main():
                 "ROBOTHOR_TEST_DB_DSN": dsn,
                 "ROBOTHOR_DEFAULT_TENANT": "default",
             }
+            if "--crm-dispatch-screening" in sys.argv:
+                from bench.runtime.crm_dispatch_screening import drill
+
+                print("CRM_DISPATCH_SCREENING " + json.dumps(drill(root, env)), flush=True)
             if "--application-rollback" in sys.argv:
                 from bench.runtime.application_rollback import drill
 

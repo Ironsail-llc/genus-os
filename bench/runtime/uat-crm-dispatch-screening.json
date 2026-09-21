@@ -1,0 +1,400 @@
+{
+  "measurements": {
+    "baseline": {
+      "samples": [
+        {
+          "index": 0,
+          "warmup": true,
+          "duration_ms": 182.99107100028777,
+          "verified": true
+        },
+        {
+          "index": 1,
+          "warmup": false,
+          "duration_ms": 3.300438998849131,
+          "verified": true
+        },
+        {
+          "index": 2,
+          "warmup": false,
+          "duration_ms": 3.7737730017397553,
+          "verified": true
+        },
+        {
+          "index": 3,
+          "warmup": false,
+          "duration_ms": 3.888446000928525,
+          "verified": true
+        },
+        {
+          "index": 4,
+          "warmup": false,
+          "duration_ms": 3.1939249965944327,
+          "verified": true
+        },
+        {
+          "index": 5,
+          "warmup": false,
+          "duration_ms": 2.2986359981587157,
+          "verified": true
+        },
+        {
+          "index": 6,
+          "warmup": false,
+          "duration_ms": 2.5155179973808117,
+          "verified": true
+        },
+        {
+          "index": 7,
+          "warmup": false,
+          "duration_ms": 1.6898440007935278,
+          "verified": true
+        },
+        {
+          "index": 8,
+          "warmup": false,
+          "duration_ms": 1.3086239996482618,
+          "verified": true
+        },
+        {
+          "index": 9,
+          "warmup": false,
+          "duration_ms": 1.3546560003305785,
+          "verified": true
+        },
+        {
+          "index": 10,
+          "warmup": false,
+          "duration_ms": 1.1200770022696815,
+          "verified": true
+        },
+        {
+          "index": 11,
+          "warmup": false,
+          "duration_ms": 1.494160998845473,
+          "verified": true
+        },
+        {
+          "index": 12,
+          "warmup": false,
+          "duration_ms": 1.8203729996457696,
+          "verified": true
+        },
+        {
+          "index": 13,
+          "warmup": false,
+          "duration_ms": 1.8384849972790107,
+          "verified": true
+        },
+        {
+          "index": 14,
+          "warmup": false,
+          "duration_ms": 1.8393489954178222,
+          "verified": true
+        },
+        {
+          "index": 15,
+          "warmup": false,
+          "duration_ms": 1.6961479996098205,
+          "verified": true
+        },
+        {
+          "index": 16,
+          "warmup": false,
+          "duration_ms": 1.4135210003587417,
+          "verified": true
+        },
+        {
+          "index": 17,
+          "warmup": false,
+          "duration_ms": 2.9525950012612157,
+          "verified": true
+        },
+        {
+          "index": 18,
+          "warmup": false,
+          "duration_ms": 1.8633180006872863,
+          "verified": true
+        },
+        {
+          "index": 19,
+          "warmup": false,
+          "duration_ms": 2.1630490009556524,
+          "verified": true
+        },
+        {
+          "index": 20,
+          "warmup": false,
+          "duration_ms": 1.830804998462554,
+          "verified": true
+        },
+        {
+          "index": 21,
+          "warmup": false,
+          "duration_ms": 3.7394999962998554,
+          "verified": true
+        },
+        {
+          "index": 22,
+          "warmup": false,
+          "duration_ms": 3.037540001969319,
+          "verified": true
+        },
+        {
+          "index": 23,
+          "warmup": false,
+          "duration_ms": 4.085471999133006,
+          "verified": true
+        },
+        {
+          "index": 24,
+          "warmup": false,
+          "duration_ms": 2.035527999396436,
+          "verified": true
+        },
+        {
+          "index": 25,
+          "warmup": false,
+          "duration_ms": 1.883318996988237,
+          "verified": true
+        },
+        {
+          "index": 26,
+          "warmup": false,
+          "duration_ms": 2.28218700067373,
+          "verified": true
+        },
+        {
+          "index": 27,
+          "warmup": false,
+          "duration_ms": 1.6170750022865832,
+          "verified": true
+        },
+        {
+          "index": 28,
+          "warmup": false,
+          "duration_ms": 1.955943000211846,
+          "verified": true
+        },
+        {
+          "index": 29,
+          "warmup": false,
+          "duration_ms": 1.8667100011953153,
+          "verified": true
+        },
+        {
+          "index": 30,
+          "warmup": false,
+          "duration_ms": 1.8754310003714636,
+          "verified": true
+        }
+      ],
+      "p50_ms": 1.8793749986798503,
+      "p95_ms": 3.8368431512935786,
+      "p95_ci95_ms": [
+        3.1821344502532156,
+        4.085471999133006
+      ]
+    },
+    "current": {
+      "samples": [
+        {
+          "index": 0,
+          "warmup": true,
+          "duration_ms": 68.68039399705594,
+          "verified": true
+        },
+        {
+          "index": 1,
+          "warmup": false,
+          "duration_ms": 10.056102997623384,
+          "verified": true
+        },
+        {
+          "index": 2,
+          "warmup": false,
+          "duration_ms": 7.357702997978777,
+          "verified": true
+        },
+        {
+          "index": 3,
+          "warmup": false,
+          "duration_ms": 5.825780994200613,
+          "verified": true
+        },
+        {
+          "index": 4,
+          "warmup": false,
+          "duration_ms": 7.755147998977918,
+          "verified": true
+        },
+        {
+          "index": 5,
+          "warmup": false,
+          "duration_ms": 14.347066004120279,
+          "verified": true
+        },
+        {
+          "index": 6,
+          "warmup": false,
+          "duration_ms": 14.284344004408922,
+          "verified": true
+        },
+        {
+          "index": 7,
+          "warmup": false,
+          "duration_ms": 14.098005995037965,
+          "verified": true
+        },
+        {
+          "index": 8,
+          "warmup": false,
+          "duration_ms": 7.165045004512649,
+          "verified": true
+        },
+        {
+          "index": 9,
+          "warmup": false,
+          "duration_ms": 8.781447999353986,
+          "verified": true
+        },
+        {
+          "index": 10,
+          "warmup": false,
+          "duration_ms": 16.487217995745596,
+          "verified": true
+        },
+        {
+          "index": 11,
+          "warmup": false,
+          "duration_ms": 14.258408002206124,
+          "verified": true
+        },
+        {
+          "index": 12,
+          "warmup": false,
+          "duration_ms": 14.696317004563753,
+          "verified": true
+        },
+        {
+          "index": 13,
+          "warmup": false,
+          "duration_ms": 10.259657996357419,
+          "verified": true
+        },
+        {
+          "index": 14,
+          "warmup": false,
+          "duration_ms": 9.888933003821876,
+          "verified": true
+        },
+        {
+          "index": 15,
+          "warmup": false,
+          "duration_ms": 10.629229000187479,
+          "verified": true
+        },
+        {
+          "index": 16,
+          "warmup": false,
+          "duration_ms": 13.300445003551431,
+          "verified": true
+        },
+        {
+          "index": 17,
+          "warmup": false,
+          "duration_ms": 13.974549001432024,
+          "verified": true
+        },
+        {
+          "index": 18,
+          "warmup": false,
+          "duration_ms": 17.569150993949734,
+          "verified": true
+        },
+        {
+          "index": 19,
+          "warmup": false,
+          "duration_ms": 12.398610000673216,
+          "verified": true
+        },
+        {
+          "index": 20,
+          "warmup": false,
+          "duration_ms": 15.93719600350596,
+          "verified": true
+        },
+        {
+          "index": 21,
+          "warmup": false,
+          "duration_ms": 12.175678995845374,
+          "verified": true
+        },
+        {
+          "index": 22,
+          "warmup": false,
+          "duration_ms": 11.220467997191008,
+          "verified": true
+        },
+        {
+          "index": 23,
+          "warmup": false,
+          "duration_ms": 11.452279002696741,
+          "verified": true
+        },
+        {
+          "index": 24,
+          "warmup": false,
+          "duration_ms": 15.898347999609541,
+          "verified": true
+        },
+        {
+          "index": 25,
+          "warmup": false,
+          "duration_ms": 8.036286002607085,
+          "verified": true
+        },
+        {
+          "index": 26,
+          "warmup": false,
+          "duration_ms": 12.854022999817971,
+          "verified": true
+        },
+        {
+          "index": 27,
+          "warmup": false,
+          "duration_ms": 7.509401002607774,
+          "verified": true
+        },
+        {
+          "index": 28,
+          "warmup": false,
+          "duration_ms": 13.954276997537818,
+          "verified": true
+        },
+        {
+          "index": 29,
+          "warmup": false,
+          "duration_ms": 10.063558002002537,
+          "verified": true
+        },
+        {
+          "index": 30,
+          "warmup": false,
+          "duration_ms": 7.184580994362477,
+          "verified": true
+        }
+      ],
+      "p50_ms": 11.813978999271058,
+      "p95_ms": 16.23970809923776,
+      "p95_ci95_ms": [
+        14.347066004120279,
+        17.569150993949734
+      ]
+    }
+  },
+  "scope": "30 warm native create_task dispatch samples per revision plus one retained warmup; sequential baseline/current blocks in one private canonical database. Model, audit publishing and event delivery excluded; permission fixture identical. Includes handler and database overhead, with runtime receipt readback in current. Not complete agent harness overhead, live-provider latency, framework qualification or a causal speed comparison.",
+  "baseline_revision": "eea3252b1577e3f51e6d6a6216d6f242fd7ac4a1",
+  "current_revision": "76c623c1e6e",
+  "p95_delta_ms": 12.402864947944181
+}

@@ -3680,6 +3680,21 @@
       "simultaneous_verifiers_per_tool": 20,
       "concurrent_cached_dispatches_per_tool": 20,
       "scope": "Real private CRM creation and readback; barrier forces all verifiers to observe unresolved state before any verdict can commit. One resolution version increment, one effect row and one CRM row per case. Subsequent concurrent same-request dispatches must return the cached result before reaching the write handler. Not a tenant-load latency cohort or browser-tab concurrency test."
+    },
+    "crm_dispatch_overhead_screening": {
+      "revision": "76c623c1e6e",
+      "report": "bench/runtime/uat-crm-dispatch-screening.json",
+      "log": "bench/runtime/uat-crm-dispatch-screening.log",
+      "repetitions_per_revision": 30,
+      "warmups_per_revision": 1,
+      "all_samples_verified": true,
+      "baseline_p95_ms": 3.8368431512935786,
+      "current_p95_ms": 16.23970809923776,
+      "canonical_passed": 46,
+      "canonical_skipped": 2,
+      "canonical_warnings": 1,
+      "canonical_seconds": 20.42,
+      "scope": "30 warm native create_task dispatch samples per revision plus one retained warmup; sequential baseline/current blocks in one private canonical database. Model, audit publishing and event delivery excluded; permission fixture identical. Includes handler and database overhead, with runtime receipt readback in current. Not complete agent harness overhead, live-provider latency, framework qualification or a causal speed comparison."
     }
   },
   "calendar": {
