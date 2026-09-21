@@ -9,16 +9,16 @@
   "replacement_selected": false,
   "checks": {
     "engine": {
-      "revision": "9b2ae888de3",
-      "passed": 11257,
+      "revision": "5ccfb199dcb",
+      "passed": 11262,
       "failed": 0,
       "skipped": 29,
-      "deselected": 203,
+      "deselected": 206,
       "warnings": 393,
-      "seconds": 386.87,
+      "seconds": 394.96,
       "selection": "not slow and not integration and not llm and not e2e and not smoke",
-      "log": "bench/runtime/uat-runtime-engine-crm-receipts-regression.log",
-      "note": "Product source and collected tests unchanged throughout run. Includes task creation and dedup recovery plus successful CRM receipt persistence. No detected regression in this selection; excludes canonical integrations, tested separately. Existing warnings retained."
+      "log": "bench/runtime/uat-runtime-engine-classification-regression.log",
+      "note": "Product source and collected tests unchanged throughout run. Includes current task chat receipts and authoritative core-write classification. Existing warnings retained; selected canonical/browser integrations verified separately. No full acceptance claim."
     },
     "frontend": {
       "base_revision": "56aa76e6aa0",
@@ -3716,6 +3716,27 @@
       "reference_p95_ms": 24.003903401171556,
       "current_p95_ms": 18.956117253401317,
       "note": "Retain authoritative core classification before extension lookup. Profiling and separate timing runs are retained, including noisy unprofiled results. Randomized same-worker comparison supports a narrower dispatch improvement; no complete harness/provider or replacement qualification."
+    },
+    "browser_after_core_classification": {
+      "revision": "5ccfb199dcb",
+      "passed": 53,
+      "skipped": 2,
+      "warnings": 1,
+      "seconds": 40.56,
+      "log": "bench/runtime/uat-runtime-classification-browser-regression.log",
+      "note": "Existing successful production frontend build reused after confirming app source/package/Next configuration unchanged. Current native engine and seven real-browser cases; private canonical storage and synthetic provider."
+    },
+    "engine_before_core_classification": {
+      "revision": "9b2ae888de3",
+      "passed": 11257,
+      "failed": 0,
+      "skipped": 29,
+      "deselected": 203,
+      "warnings": 393,
+      "seconds": 386.87,
+      "selection": "not slow and not integration and not llm and not e2e and not smoke",
+      "log": "bench/runtime/uat-runtime-engine-crm-receipts-regression.log",
+      "note": "Product source and collected tests unchanged throughout run. Includes task creation and dedup recovery plus successful CRM receipt persistence. No detected regression in this selection; excludes canonical integrations, tested separately. Existing warnings retained."
     }
   },
   "calendar": {
@@ -3914,13 +3935,13 @@
     "deadline_calendar": "uat-deadline-calendar.json"
   },
   "remaining": [
-    "Live representative-workload reliability and latency remain unqualified. Later configured-model contracts verified primary 30/30 and MiMo 29/30; retain the single 60.009-second unresolved failure with zero writes and the earlier diagnostic failures.",
-    "Runtime deadlines are enforced when supplied; classification and enforcement of the 60-second policy across all simple conversational actions remain unproven.",
-    "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded; production ingress, selected-provider p95 and mixed-load fallback operating limits are not certified.",
-    "Candidate full-runtime parity, matched configuration workloads and 100-repetition finalist comparison remain incomplete; retain the current runtime.",
-    "Calendar audit recovery, unattended readback and same-tab browser reload are locally tested. General external-provider coverage, recovery without browser storage, cross-device restoration and loaded-fleet performance remain incomplete. Synthetic full-daemon active-goal crash recovery, native checkpoint continuation, chat lineage and continuation stop now pass.",
-    "The normal-chat unfinished-work/pause case is accepted. Manual acceptance of the newer recovery behavior and remaining goal controls is pending.",
-    "Production deployment is not authorized. Concrete rollout/rollback review and end-to-end finalist upgrade compatibility remain unfinished."
+    "Full representative native-workload reliability and provider latency remain unqualified. Existing configured-model screening uses reduced profiles; 97-field installation parsing parity does not establish full prompt/tool/memory execution parity. Preserve all observed failures and timeouts.",
+    "Eligible simple profiles and deterministic calendar confirmation have bounded deadlines. Classification and enforcement of the 60-second policy across all simple conversational actions remain unproven.",
+    "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded. Production ingress, selected-provider p95 across the representative workload, and mixed-load fallback operating limits are not certified. Dispatch-only improvements do not qualify complete request latency.",
+    "Retain the current runtime: the tested bounded candidates failed required behavior and are not finalists. Any future replacement still needs behavior parity, matched configurations, 100-repetition finalist measurements and compatible checkpoint upgrades. No replacement is selected.",
+    "Calendar and CRM note/task audit recovery, actual task browser reconnection, concurrent native readback, full-daemon goal crash recovery and saved checkpoint continuation are locally verified. Other external-provider readbacks, recovery without browser storage, cross-device restoration and loaded-fleet performance remain incomplete.",
+    "The normal-chat unfinished-work/pause case is accepted. Manual acceptance of verified recovery and remaining goal controls is pending; automatic goal continuations do not count as acceptance.",
+    "Local compatible code rollback preserves stopped/paused/unresolved state and new native admissions. HTTP admission in the booted rollback daemon, container/dependency rollback and hosted CI remain unverified. No production deployment is authorized or required to claim these local results; production expansion requires its own concrete review."
   ],
   "local_model_screening": {
     "artifact": "uat-local-native-summary.json",
@@ -4150,5 +4171,14 @@
     "Candidate full-runtime contract parity and matched finalist comparison incomplete; keep current runtime.",
     "Deployment/rollback drill unperformed; no production deployment authorized.",
     "Manual user acceptance pending."
+  ],
+  "remaining_before_classification_audit": [
+    "Live representative-workload reliability and latency remain unqualified. Later configured-model contracts verified primary 30/30 and MiMo 29/30; retain the single 60.009-second unresolved failure with zero writes and the earlier diagnostic failures.",
+    "Runtime deadlines are enforced when supplied; classification and enforcement of the 60-second policy across all simple conversational actions remain unproven.",
+    "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded; production ingress, selected-provider p95 and mixed-load fallback operating limits are not certified.",
+    "Candidate full-runtime parity, matched configuration workloads and 100-repetition finalist comparison remain incomplete; retain the current runtime.",
+    "Calendar audit recovery, unattended readback and same-tab browser reload are locally tested. General external-provider coverage, recovery without browser storage, cross-device restoration and loaded-fleet performance remain incomplete. Synthetic full-daemon active-goal crash recovery, native checkpoint continuation, chat lineage and continuation stop now pass.",
+    "The normal-chat unfinished-work/pause case is accepted. Manual acceptance of the newer recovery behavior and remaining goal controls is pending.",
+    "Production deployment is not authorized. Concrete rollout/rollback review and end-to-end finalist upgrade compatibility remain unfinished."
   ]
 }
