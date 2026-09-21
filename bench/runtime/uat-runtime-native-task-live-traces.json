@@ -1,0 +1,2336 @@
+{
+  "scope": "Read-only observation of private cohort run steps; no payloads or provider headers retained.",
+  "steps": [
+    {
+      "request_id": "57ae5910-d435-4990-901e-69644a0850c4",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 1,
+      "recovered": null
+    },
+    {
+      "request_id": "57ae5910-d435-4990-901e-69644a0850c4",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 2,
+      "recovered": null
+    },
+    {
+      "request_id": "57ae5910-d435-4990-901e-69644a0850c4",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 14,
+      "recovered": null
+    },
+    {
+      "request_id": "57ae5910-d435-4990-901e-69644a0850c4",
+      "run_status": "completed",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 3278,
+      "recovered": null
+    },
+    {
+      "request_id": "57ae5910-d435-4990-901e-69644a0850c4",
+      "run_status": "completed",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "list_tasks",
+      "duration_ms": 9,
+      "recovered": null
+    },
+    {
+      "request_id": "57ae5910-d435-4990-901e-69644a0850c4",
+      "run_status": "completed",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 2430,
+      "recovered": null
+    },
+    {
+      "request_id": "57ae5910-d435-4990-901e-69644a0850c4",
+      "run_status": "completed",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 13,
+      "recovered": "true"
+    },
+    {
+      "request_id": "57ae5910-d435-4990-901e-69644a0850c4",
+      "run_status": "completed",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 2324,
+      "recovered": null
+    },
+    {
+      "request_id": "57ae5910-d435-4990-901e-69644a0850c4",
+      "run_status": "completed",
+      "step": 6,
+      "type": "tool_call",
+      "tool": "list_tasks",
+      "duration_ms": 10,
+      "recovered": null
+    },
+    {
+      "request_id": "57ae5910-d435-4990-901e-69644a0850c4",
+      "run_status": "completed",
+      "step": 7,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 18056,
+      "recovered": null
+    },
+    {
+      "request_id": "589315aa-56ba-4e8f-b5b4-7153bc66c076",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 0,
+      "recovered": null
+    },
+    {
+      "request_id": "589315aa-56ba-4e8f-b5b4-7153bc66c076",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 6,
+      "recovered": null
+    },
+    {
+      "request_id": "589315aa-56ba-4e8f-b5b4-7153bc66c076",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 13,
+      "recovered": null
+    },
+    {
+      "request_id": "589315aa-56ba-4e8f-b5b4-7153bc66c076",
+      "run_status": "completed",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 2554,
+      "recovered": null
+    },
+    {
+      "request_id": "589315aa-56ba-4e8f-b5b4-7153bc66c076",
+      "run_status": "completed",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 21,
+      "recovered": "true"
+    },
+    {
+      "request_id": "589315aa-56ba-4e8f-b5b4-7153bc66c076",
+      "run_status": "completed",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 2207,
+      "recovered": null
+    },
+    {
+      "request_id": "589315aa-56ba-4e8f-b5b4-7153bc66c076",
+      "run_status": "completed",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "get_task",
+      "duration_ms": 5,
+      "recovered": null
+    },
+    {
+      "request_id": "589315aa-56ba-4e8f-b5b4-7153bc66c076",
+      "run_status": "completed",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 19006,
+      "recovered": null
+    },
+    {
+      "request_id": "d12eb887-0103-4717-b29f-614464c16cfc",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 0,
+      "recovered": null
+    },
+    {
+      "request_id": "d12eb887-0103-4717-b29f-614464c16cfc",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 10,
+      "recovered": null
+    },
+    {
+      "request_id": "d12eb887-0103-4717-b29f-614464c16cfc",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 16,
+      "recovered": null
+    },
+    {
+      "request_id": "d12eb887-0103-4717-b29f-614464c16cfc",
+      "run_status": "completed",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 14271,
+      "recovered": null
+    },
+    {
+      "request_id": "d12eb887-0103-4717-b29f-614464c16cfc",
+      "run_status": "completed",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 12,
+      "recovered": "true"
+    },
+    {
+      "request_id": "d12eb887-0103-4717-b29f-614464c16cfc",
+      "run_status": "completed",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 1700,
+      "recovered": null
+    },
+    {
+      "request_id": "d12eb887-0103-4717-b29f-614464c16cfc",
+      "run_status": "completed",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "get_task",
+      "duration_ms": 3,
+      "recovered": null
+    },
+    {
+      "request_id": "d12eb887-0103-4717-b29f-614464c16cfc",
+      "run_status": "completed",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 7537,
+      "recovered": null
+    },
+    {
+      "request_id": "38af21bb-6390-4f48-853d-7fe2578c4ed0",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 0,
+      "recovered": null
+    },
+    {
+      "request_id": "38af21bb-6390-4f48-853d-7fe2578c4ed0",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 11,
+      "recovered": null
+    },
+    {
+      "request_id": "38af21bb-6390-4f48-853d-7fe2578c4ed0",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 18,
+      "recovered": null
+    },
+    {
+      "request_id": "38af21bb-6390-4f48-853d-7fe2578c4ed0",
+      "run_status": "completed",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 6730,
+      "recovered": null
+    },
+    {
+      "request_id": "38af21bb-6390-4f48-853d-7fe2578c4ed0",
+      "run_status": "completed",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "list_tasks",
+      "duration_ms": 9,
+      "recovered": null
+    },
+    {
+      "request_id": "38af21bb-6390-4f48-853d-7fe2578c4ed0",
+      "run_status": "completed",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 17668,
+      "recovered": null
+    },
+    {
+      "request_id": "38af21bb-6390-4f48-853d-7fe2578c4ed0",
+      "run_status": "completed",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 19,
+      "recovered": "true"
+    },
+    {
+      "request_id": "38af21bb-6390-4f48-853d-7fe2578c4ed0",
+      "run_status": "completed",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 5132,
+      "recovered": null
+    },
+    {
+      "request_id": "38af21bb-6390-4f48-853d-7fe2578c4ed0",
+      "run_status": "completed",
+      "step": 6,
+      "type": "tool_call",
+      "tool": "get_task",
+      "duration_ms": 9,
+      "recovered": null
+    },
+    {
+      "request_id": "38af21bb-6390-4f48-853d-7fe2578c4ed0",
+      "run_status": "completed",
+      "step": 7,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 7426,
+      "recovered": null
+    },
+    {
+      "request_id": "08f930d0-9e10-43d7-939a-d06d2aaf1b45",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 0,
+      "recovered": null
+    },
+    {
+      "request_id": "08f930d0-9e10-43d7-939a-d06d2aaf1b45",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 3,
+      "recovered": null
+    },
+    {
+      "request_id": "08f930d0-9e10-43d7-939a-d06d2aaf1b45",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 14,
+      "recovered": null
+    },
+    {
+      "request_id": "08f930d0-9e10-43d7-939a-d06d2aaf1b45",
+      "run_status": "completed",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 4693,
+      "recovered": null
+    },
+    {
+      "request_id": "08f930d0-9e10-43d7-939a-d06d2aaf1b45",
+      "run_status": "completed",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 24,
+      "recovered": "true"
+    },
+    {
+      "request_id": "08f930d0-9e10-43d7-939a-d06d2aaf1b45",
+      "run_status": "completed",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 3589,
+      "recovered": null
+    },
+    {
+      "request_id": "08f930d0-9e10-43d7-939a-d06d2aaf1b45",
+      "run_status": "completed",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "get_task",
+      "duration_ms": 8,
+      "recovered": null
+    },
+    {
+      "request_id": "08f930d0-9e10-43d7-939a-d06d2aaf1b45",
+      "run_status": "completed",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 11836,
+      "recovered": null
+    },
+    {
+      "request_id": "2aa7e691-02e4-47ec-96df-d57236e1dfe1",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 0,
+      "recovered": null
+    },
+    {
+      "request_id": "2aa7e691-02e4-47ec-96df-d57236e1dfe1",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 12,
+      "recovered": null
+    },
+    {
+      "request_id": "2aa7e691-02e4-47ec-96df-d57236e1dfe1",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 23,
+      "recovered": null
+    },
+    {
+      "request_id": "2aa7e691-02e4-47ec-96df-d57236e1dfe1",
+      "run_status": "completed",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 4773,
+      "recovered": null
+    },
+    {
+      "request_id": "2aa7e691-02e4-47ec-96df-d57236e1dfe1",
+      "run_status": "completed",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 29,
+      "recovered": "true"
+    },
+    {
+      "request_id": "2aa7e691-02e4-47ec-96df-d57236e1dfe1",
+      "run_status": "completed",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 3157,
+      "recovered": null
+    },
+    {
+      "request_id": "2aa7e691-02e4-47ec-96df-d57236e1dfe1",
+      "run_status": "completed",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "get_task",
+      "duration_ms": 10,
+      "recovered": null
+    },
+    {
+      "request_id": "2aa7e691-02e4-47ec-96df-d57236e1dfe1",
+      "run_status": "completed",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 10613,
+      "recovered": null
+    },
+    {
+      "request_id": "6a68f08f-36d6-418d-bdc7-e9980952846a",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 1,
+      "recovered": null
+    },
+    {
+      "request_id": "6a68f08f-36d6-418d-bdc7-e9980952846a",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 4,
+      "recovered": null
+    },
+    {
+      "request_id": "6a68f08f-36d6-418d-bdc7-e9980952846a",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 16,
+      "recovered": null
+    },
+    {
+      "request_id": "6a68f08f-36d6-418d-bdc7-e9980952846a",
+      "run_status": "completed",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 8301,
+      "recovered": null
+    },
+    {
+      "request_id": "6a68f08f-36d6-418d-bdc7-e9980952846a",
+      "run_status": "completed",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 18,
+      "recovered": "true"
+    },
+    {
+      "request_id": "6a68f08f-36d6-418d-bdc7-e9980952846a",
+      "run_status": "completed",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 3257,
+      "recovered": null
+    },
+    {
+      "request_id": "6a68f08f-36d6-418d-bdc7-e9980952846a",
+      "run_status": "completed",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "list_tasks",
+      "duration_ms": 8,
+      "recovered": null
+    },
+    {
+      "request_id": "6a68f08f-36d6-418d-bdc7-e9980952846a",
+      "run_status": "completed",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 3488,
+      "recovered": null
+    },
+    {
+      "request_id": "6a68f08f-36d6-418d-bdc7-e9980952846a",
+      "run_status": "completed",
+      "step": 6,
+      "type": "tool_call",
+      "tool": "list_tasks",
+      "duration_ms": 9,
+      "recovered": null
+    },
+    {
+      "request_id": "6a68f08f-36d6-418d-bdc7-e9980952846a",
+      "run_status": "completed",
+      "step": 7,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 18298,
+      "recovered": null
+    },
+    {
+      "request_id": "cb39ec13-7d8d-4fcf-9cd8-c316b39cd594",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 0,
+      "recovered": null
+    },
+    {
+      "request_id": "cb39ec13-7d8d-4fcf-9cd8-c316b39cd594",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 3,
+      "recovered": null
+    },
+    {
+      "request_id": "cb39ec13-7d8d-4fcf-9cd8-c316b39cd594",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 14,
+      "recovered": null
+    },
+    {
+      "request_id": "cb39ec13-7d8d-4fcf-9cd8-c316b39cd594",
+      "run_status": "completed",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 3016,
+      "recovered": null
+    },
+    {
+      "request_id": "cb39ec13-7d8d-4fcf-9cd8-c316b39cd594",
+      "run_status": "completed",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 12,
+      "recovered": "true"
+    },
+    {
+      "request_id": "cb39ec13-7d8d-4fcf-9cd8-c316b39cd594",
+      "run_status": "completed",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 1916,
+      "recovered": null
+    },
+    {
+      "request_id": "cb39ec13-7d8d-4fcf-9cd8-c316b39cd594",
+      "run_status": "completed",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "list_tasks",
+      "duration_ms": 6,
+      "recovered": null
+    },
+    {
+      "request_id": "cb39ec13-7d8d-4fcf-9cd8-c316b39cd594",
+      "run_status": "completed",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 2186,
+      "recovered": null
+    },
+    {
+      "request_id": "cb39ec13-7d8d-4fcf-9cd8-c316b39cd594",
+      "run_status": "completed",
+      "step": 6,
+      "type": "tool_call",
+      "tool": "get_task",
+      "duration_ms": 8,
+      "recovered": null
+    },
+    {
+      "request_id": "cb39ec13-7d8d-4fcf-9cd8-c316b39cd594",
+      "run_status": "completed",
+      "step": 7,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 10876,
+      "recovered": null
+    },
+    {
+      "request_id": "666bdc9d-0ab2-4b5e-a900-6bf27ee76f6a",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 0,
+      "recovered": null
+    },
+    {
+      "request_id": "666bdc9d-0ab2-4b5e-a900-6bf27ee76f6a",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 3,
+      "recovered": null
+    },
+    {
+      "request_id": "666bdc9d-0ab2-4b5e-a900-6bf27ee76f6a",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 13,
+      "recovered": null
+    },
+    {
+      "request_id": "666bdc9d-0ab2-4b5e-a900-6bf27ee76f6a",
+      "run_status": "completed",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 4556,
+      "recovered": null
+    },
+    {
+      "request_id": "666bdc9d-0ab2-4b5e-a900-6bf27ee76f6a",
+      "run_status": "completed",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 14,
+      "recovered": "true"
+    },
+    {
+      "request_id": "666bdc9d-0ab2-4b5e-a900-6bf27ee76f6a",
+      "run_status": "completed",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 2629,
+      "recovered": null
+    },
+    {
+      "request_id": "666bdc9d-0ab2-4b5e-a900-6bf27ee76f6a",
+      "run_status": "completed",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "get_task",
+      "duration_ms": 4,
+      "recovered": null
+    },
+    {
+      "request_id": "666bdc9d-0ab2-4b5e-a900-6bf27ee76f6a",
+      "run_status": "completed",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 41086,
+      "recovered": null
+    },
+    {
+      "request_id": "2eb81966-aab1-455b-8442-98718ab63d82",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 0,
+      "recovered": null
+    },
+    {
+      "request_id": "2eb81966-aab1-455b-8442-98718ab63d82",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 4,
+      "recovered": null
+    },
+    {
+      "request_id": "2eb81966-aab1-455b-8442-98718ab63d82",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 15,
+      "recovered": null
+    },
+    {
+      "request_id": "2eb81966-aab1-455b-8442-98718ab63d82",
+      "run_status": "completed",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 11666,
+      "recovered": null
+    },
+    {
+      "request_id": "2eb81966-aab1-455b-8442-98718ab63d82",
+      "run_status": "completed",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 15,
+      "recovered": "true"
+    },
+    {
+      "request_id": "2eb81966-aab1-455b-8442-98718ab63d82",
+      "run_status": "completed",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 2684,
+      "recovered": null
+    },
+    {
+      "request_id": "2eb81966-aab1-455b-8442-98718ab63d82",
+      "run_status": "completed",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "get_task",
+      "duration_ms": 2,
+      "recovered": null
+    },
+    {
+      "request_id": "2eb81966-aab1-455b-8442-98718ab63d82",
+      "run_status": "completed",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 18445,
+      "recovered": null
+    },
+    {
+      "request_id": "c1fb73dc-cad8-4fdc-be92-af6a1c05fa69",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 0,
+      "recovered": null
+    },
+    {
+      "request_id": "c1fb73dc-cad8-4fdc-be92-af6a1c05fa69",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 8,
+      "recovered": null
+    },
+    {
+      "request_id": "c1fb73dc-cad8-4fdc-be92-af6a1c05fa69",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 18,
+      "recovered": null
+    },
+    {
+      "request_id": "c1fb73dc-cad8-4fdc-be92-af6a1c05fa69",
+      "run_status": "completed",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 10299,
+      "recovered": null
+    },
+    {
+      "request_id": "c1fb73dc-cad8-4fdc-be92-af6a1c05fa69",
+      "run_status": "completed",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 22,
+      "recovered": "true"
+    },
+    {
+      "request_id": "c1fb73dc-cad8-4fdc-be92-af6a1c05fa69",
+      "run_status": "completed",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 2022,
+      "recovered": null
+    },
+    {
+      "request_id": "c1fb73dc-cad8-4fdc-be92-af6a1c05fa69",
+      "run_status": "completed",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "get_task",
+      "duration_ms": 4,
+      "recovered": null
+    },
+    {
+      "request_id": "c1fb73dc-cad8-4fdc-be92-af6a1c05fa69",
+      "run_status": "completed",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 10612,
+      "recovered": null
+    },
+    {
+      "request_id": "ecebc5ba-a59f-44ee-9593-b188de2d6f45",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 0,
+      "recovered": null
+    },
+    {
+      "request_id": "ecebc5ba-a59f-44ee-9593-b188de2d6f45",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 4,
+      "recovered": null
+    },
+    {
+      "request_id": "ecebc5ba-a59f-44ee-9593-b188de2d6f45",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 15,
+      "recovered": null
+    },
+    {
+      "request_id": "ecebc5ba-a59f-44ee-9593-b188de2d6f45",
+      "run_status": "completed",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 3112,
+      "recovered": null
+    },
+    {
+      "request_id": "ecebc5ba-a59f-44ee-9593-b188de2d6f45",
+      "run_status": "completed",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 12,
+      "recovered": "true"
+    },
+    {
+      "request_id": "ecebc5ba-a59f-44ee-9593-b188de2d6f45",
+      "run_status": "completed",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 2495,
+      "recovered": null
+    },
+    {
+      "request_id": "ecebc5ba-a59f-44ee-9593-b188de2d6f45",
+      "run_status": "completed",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "get_task",
+      "duration_ms": 7,
+      "recovered": null
+    },
+    {
+      "request_id": "ecebc5ba-a59f-44ee-9593-b188de2d6f45",
+      "run_status": "completed",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 4780,
+      "recovered": null
+    },
+    {
+      "request_id": "e06c04aa-fe5f-40d1-bfa3-3d47c771ee39",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 0,
+      "recovered": null
+    },
+    {
+      "request_id": "e06c04aa-fe5f-40d1-bfa3-3d47c771ee39",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 3,
+      "recovered": null
+    },
+    {
+      "request_id": "e06c04aa-fe5f-40d1-bfa3-3d47c771ee39",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 12,
+      "recovered": null
+    },
+    {
+      "request_id": "e06c04aa-fe5f-40d1-bfa3-3d47c771ee39",
+      "run_status": "completed",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 6760,
+      "recovered": null
+    },
+    {
+      "request_id": "e06c04aa-fe5f-40d1-bfa3-3d47c771ee39",
+      "run_status": "completed",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 13,
+      "recovered": "true"
+    },
+    {
+      "request_id": "e06c04aa-fe5f-40d1-bfa3-3d47c771ee39",
+      "run_status": "completed",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 3540,
+      "recovered": null
+    },
+    {
+      "request_id": "e06c04aa-fe5f-40d1-bfa3-3d47c771ee39",
+      "run_status": "completed",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "list_tasks",
+      "duration_ms": 8,
+      "recovered": null
+    },
+    {
+      "request_id": "e06c04aa-fe5f-40d1-bfa3-3d47c771ee39",
+      "run_status": "completed",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 6058,
+      "recovered": null
+    },
+    {
+      "request_id": "a67584fb-1c13-4c6d-a0f2-63989271ee0c",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 0,
+      "recovered": null
+    },
+    {
+      "request_id": "a67584fb-1c13-4c6d-a0f2-63989271ee0c",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 6,
+      "recovered": null
+    },
+    {
+      "request_id": "a67584fb-1c13-4c6d-a0f2-63989271ee0c",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 16,
+      "recovered": null
+    },
+    {
+      "request_id": "a67584fb-1c13-4c6d-a0f2-63989271ee0c",
+      "run_status": "completed",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 4797,
+      "recovered": null
+    },
+    {
+      "request_id": "a67584fb-1c13-4c6d-a0f2-63989271ee0c",
+      "run_status": "completed",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "list_tasks",
+      "duration_ms": 9,
+      "recovered": null
+    },
+    {
+      "request_id": "a67584fb-1c13-4c6d-a0f2-63989271ee0c",
+      "run_status": "completed",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 11132,
+      "recovered": null
+    },
+    {
+      "request_id": "a67584fb-1c13-4c6d-a0f2-63989271ee0c",
+      "run_status": "completed",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 17,
+      "recovered": "true"
+    },
+    {
+      "request_id": "a67584fb-1c13-4c6d-a0f2-63989271ee0c",
+      "run_status": "completed",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 3801,
+      "recovered": null
+    },
+    {
+      "request_id": "a67584fb-1c13-4c6d-a0f2-63989271ee0c",
+      "run_status": "completed",
+      "step": 6,
+      "type": "tool_call",
+      "tool": "list_tasks",
+      "duration_ms": 9,
+      "recovered": null
+    },
+    {
+      "request_id": "a67584fb-1c13-4c6d-a0f2-63989271ee0c",
+      "run_status": "completed",
+      "step": 7,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 11182,
+      "recovered": null
+    },
+    {
+      "request_id": "fbe3e263-bdd4-4ce4-8a2b-e880839ac58b",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 0,
+      "recovered": null
+    },
+    {
+      "request_id": "fbe3e263-bdd4-4ce4-8a2b-e880839ac58b",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 2,
+      "recovered": null
+    },
+    {
+      "request_id": "fbe3e263-bdd4-4ce4-8a2b-e880839ac58b",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 13,
+      "recovered": null
+    },
+    {
+      "request_id": "fbe3e263-bdd4-4ce4-8a2b-e880839ac58b",
+      "run_status": "completed",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 5628,
+      "recovered": null
+    },
+    {
+      "request_id": "fbe3e263-bdd4-4ce4-8a2b-e880839ac58b",
+      "run_status": "completed",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "list_tasks",
+      "duration_ms": 8,
+      "recovered": null
+    },
+    {
+      "request_id": "fbe3e263-bdd4-4ce4-8a2b-e880839ac58b",
+      "run_status": "completed",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 10059,
+      "recovered": null
+    },
+    {
+      "request_id": "fbe3e263-bdd4-4ce4-8a2b-e880839ac58b",
+      "run_status": "completed",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 19,
+      "recovered": "true"
+    },
+    {
+      "request_id": "fbe3e263-bdd4-4ce4-8a2b-e880839ac58b",
+      "run_status": "completed",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 3520,
+      "recovered": null
+    },
+    {
+      "request_id": "fbe3e263-bdd4-4ce4-8a2b-e880839ac58b",
+      "run_status": "completed",
+      "step": 6,
+      "type": "tool_call",
+      "tool": "list_tasks",
+      "duration_ms": 8,
+      "recovered": null
+    },
+    {
+      "request_id": "fbe3e263-bdd4-4ce4-8a2b-e880839ac58b",
+      "run_status": "completed",
+      "step": 7,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 9706,
+      "recovered": null
+    },
+    {
+      "request_id": "33178ac0-491c-48f9-b182-3cbda6e7dabc",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 0,
+      "recovered": null
+    },
+    {
+      "request_id": "33178ac0-491c-48f9-b182-3cbda6e7dabc",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 6,
+      "recovered": null
+    },
+    {
+      "request_id": "33178ac0-491c-48f9-b182-3cbda6e7dabc",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 14,
+      "recovered": null
+    },
+    {
+      "request_id": "33178ac0-491c-48f9-b182-3cbda6e7dabc",
+      "run_status": "completed",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 9829,
+      "recovered": null
+    },
+    {
+      "request_id": "33178ac0-491c-48f9-b182-3cbda6e7dabc",
+      "run_status": "completed",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 18,
+      "recovered": "true"
+    },
+    {
+      "request_id": "33178ac0-491c-48f9-b182-3cbda6e7dabc",
+      "run_status": "completed",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 11414,
+      "recovered": null
+    },
+    {
+      "request_id": "33178ac0-491c-48f9-b182-3cbda6e7dabc",
+      "run_status": "completed",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "get_task",
+      "duration_ms": 9,
+      "recovered": null
+    },
+    {
+      "request_id": "33178ac0-491c-48f9-b182-3cbda6e7dabc",
+      "run_status": "completed",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 16320,
+      "recovered": null
+    },
+    {
+      "request_id": "a0004348-92ea-401d-acbb-73838ce2e88c",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 0,
+      "recovered": null
+    },
+    {
+      "request_id": "a0004348-92ea-401d-acbb-73838ce2e88c",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 4,
+      "recovered": null
+    },
+    {
+      "request_id": "a0004348-92ea-401d-acbb-73838ce2e88c",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 13,
+      "recovered": null
+    },
+    {
+      "request_id": "a0004348-92ea-401d-acbb-73838ce2e88c",
+      "run_status": "completed",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 6491,
+      "recovered": null
+    },
+    {
+      "request_id": "a0004348-92ea-401d-acbb-73838ce2e88c",
+      "run_status": "completed",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 17,
+      "recovered": "true"
+    },
+    {
+      "request_id": "a0004348-92ea-401d-acbb-73838ce2e88c",
+      "run_status": "completed",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 8124,
+      "recovered": null
+    },
+    {
+      "request_id": "a0004348-92ea-401d-acbb-73838ce2e88c",
+      "run_status": "completed",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "list_tasks",
+      "duration_ms": 7,
+      "recovered": null
+    },
+    {
+      "request_id": "a0004348-92ea-401d-acbb-73838ce2e88c",
+      "run_status": "completed",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 38726,
+      "recovered": null
+    },
+    {
+      "request_id": "1e66c9d9-2edc-48c8-bc35-e443328a9ab2",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 1,
+      "recovered": null
+    },
+    {
+      "request_id": "1e66c9d9-2edc-48c8-bc35-e443328a9ab2",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 2,
+      "recovered": null
+    },
+    {
+      "request_id": "1e66c9d9-2edc-48c8-bc35-e443328a9ab2",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 8,
+      "recovered": null
+    },
+    {
+      "request_id": "1e66c9d9-2edc-48c8-bc35-e443328a9ab2",
+      "run_status": "completed",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 4269,
+      "recovered": null
+    },
+    {
+      "request_id": "1e66c9d9-2edc-48c8-bc35-e443328a9ab2",
+      "run_status": "completed",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 17,
+      "recovered": "true"
+    },
+    {
+      "request_id": "1e66c9d9-2edc-48c8-bc35-e443328a9ab2",
+      "run_status": "completed",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 5408,
+      "recovered": null
+    },
+    {
+      "request_id": "1e66c9d9-2edc-48c8-bc35-e443328a9ab2",
+      "run_status": "completed",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "list_tasks",
+      "duration_ms": 9,
+      "recovered": null
+    },
+    {
+      "request_id": "1e66c9d9-2edc-48c8-bc35-e443328a9ab2",
+      "run_status": "completed",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 21127,
+      "recovered": null
+    },
+    {
+      "request_id": "d28a7023-053d-4674-8ef3-56be6ce18ec2",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 0,
+      "recovered": null
+    },
+    {
+      "request_id": "d28a7023-053d-4674-8ef3-56be6ce18ec2",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 4,
+      "recovered": null
+    },
+    {
+      "request_id": "d28a7023-053d-4674-8ef3-56be6ce18ec2",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 9,
+      "recovered": null
+    },
+    {
+      "request_id": "d28a7023-053d-4674-8ef3-56be6ce18ec2",
+      "run_status": "completed",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 3981,
+      "recovered": null
+    },
+    {
+      "request_id": "d28a7023-053d-4674-8ef3-56be6ce18ec2",
+      "run_status": "completed",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 17,
+      "recovered": "true"
+    },
+    {
+      "request_id": "d28a7023-053d-4674-8ef3-56be6ce18ec2",
+      "run_status": "completed",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 2168,
+      "recovered": null
+    },
+    {
+      "request_id": "d28a7023-053d-4674-8ef3-56be6ce18ec2",
+      "run_status": "completed",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "list_tasks",
+      "duration_ms": 4,
+      "recovered": null
+    },
+    {
+      "request_id": "d28a7023-053d-4674-8ef3-56be6ce18ec2",
+      "run_status": "completed",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 29010,
+      "recovered": null
+    },
+    {
+      "request_id": "f0b5ebc1-2d55-42b3-b9c6-f90e93d9da4e",
+      "run_status": "cancelled",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 0,
+      "recovered": null
+    },
+    {
+      "request_id": "f0b5ebc1-2d55-42b3-b9c6-f90e93d9da4e",
+      "run_status": "cancelled",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 1,
+      "recovered": null
+    },
+    {
+      "request_id": "f0b5ebc1-2d55-42b3-b9c6-f90e93d9da4e",
+      "run_status": "cancelled",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 13,
+      "recovered": null
+    },
+    {
+      "request_id": "f0b5ebc1-2d55-42b3-b9c6-f90e93d9da4e",
+      "run_status": "cancelled",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 8452,
+      "recovered": null
+    },
+    {
+      "request_id": "f0b5ebc1-2d55-42b3-b9c6-f90e93d9da4e",
+      "run_status": "cancelled",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 16,
+      "recovered": "true"
+    },
+    {
+      "request_id": "f0b5ebc1-2d55-42b3-b9c6-f90e93d9da4e",
+      "run_status": "cancelled",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 1677,
+      "recovered": null
+    },
+    {
+      "request_id": "f0b5ebc1-2d55-42b3-b9c6-f90e93d9da4e",
+      "run_status": "cancelled",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "get_task",
+      "duration_ms": 4,
+      "recovered": null
+    },
+    {
+      "request_id": "f0b5ebc1-2d55-42b3-b9c6-f90e93d9da4e",
+      "run_status": "cancelled",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 46748,
+      "recovered": null
+    },
+    {
+      "request_id": "f0b5ebc1-2d55-42b3-b9c6-f90e93d9da4e",
+      "run_status": "cancelled",
+      "step": 6,
+      "type": "error",
+      "tool": null,
+      "duration_ms": null,
+      "recovered": null
+    },
+    {
+      "request_id": "61a69317-aff2-45a7-b0bf-716f506a5d58",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 0,
+      "recovered": null
+    },
+    {
+      "request_id": "61a69317-aff2-45a7-b0bf-716f506a5d58",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 2,
+      "recovered": null
+    },
+    {
+      "request_id": "61a69317-aff2-45a7-b0bf-716f506a5d58",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 8,
+      "recovered": null
+    },
+    {
+      "request_id": "61a69317-aff2-45a7-b0bf-716f506a5d58",
+      "run_status": "completed",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 2663,
+      "recovered": null
+    },
+    {
+      "request_id": "61a69317-aff2-45a7-b0bf-716f506a5d58",
+      "run_status": "completed",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 11,
+      "recovered": "true"
+    },
+    {
+      "request_id": "61a69317-aff2-45a7-b0bf-716f506a5d58",
+      "run_status": "completed",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 2701,
+      "recovered": null
+    },
+    {
+      "request_id": "61a69317-aff2-45a7-b0bf-716f506a5d58",
+      "run_status": "completed",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "list_tasks",
+      "duration_ms": 4,
+      "recovered": null
+    },
+    {
+      "request_id": "61a69317-aff2-45a7-b0bf-716f506a5d58",
+      "run_status": "completed",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 11151,
+      "recovered": null
+    },
+    {
+      "request_id": "f3decf3e-9d42-456d-941f-c061f1d709d2",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 0,
+      "recovered": null
+    },
+    {
+      "request_id": "f3decf3e-9d42-456d-941f-c061f1d709d2",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 4,
+      "recovered": null
+    },
+    {
+      "request_id": "f3decf3e-9d42-456d-941f-c061f1d709d2",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 9,
+      "recovered": null
+    },
+    {
+      "request_id": "f3decf3e-9d42-456d-941f-c061f1d709d2",
+      "run_status": "completed",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 11692,
+      "recovered": null
+    },
+    {
+      "request_id": "f3decf3e-9d42-456d-941f-c061f1d709d2",
+      "run_status": "completed",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 12,
+      "recovered": "true"
+    },
+    {
+      "request_id": "f3decf3e-9d42-456d-941f-c061f1d709d2",
+      "run_status": "completed",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 2927,
+      "recovered": null
+    },
+    {
+      "request_id": "f3decf3e-9d42-456d-941f-c061f1d709d2",
+      "run_status": "completed",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "list_tasks",
+      "duration_ms": 3,
+      "recovered": null
+    },
+    {
+      "request_id": "f3decf3e-9d42-456d-941f-c061f1d709d2",
+      "run_status": "completed",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 8161,
+      "recovered": null
+    },
+    {
+      "request_id": "f31dbea4-b38f-463e-be92-332ac6de1021",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 0,
+      "recovered": null
+    },
+    {
+      "request_id": "f31dbea4-b38f-463e-be92-332ac6de1021",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 11,
+      "recovered": null
+    },
+    {
+      "request_id": "f31dbea4-b38f-463e-be92-332ac6de1021",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 17,
+      "recovered": null
+    },
+    {
+      "request_id": "f31dbea4-b38f-463e-be92-332ac6de1021",
+      "run_status": "completed",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 8669,
+      "recovered": null
+    },
+    {
+      "request_id": "f31dbea4-b38f-463e-be92-332ac6de1021",
+      "run_status": "completed",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 38,
+      "recovered": "true"
+    },
+    {
+      "request_id": "f31dbea4-b38f-463e-be92-332ac6de1021",
+      "run_status": "completed",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 4388,
+      "recovered": null
+    },
+    {
+      "request_id": "f31dbea4-b38f-463e-be92-332ac6de1021",
+      "run_status": "completed",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "get_task",
+      "duration_ms": 10,
+      "recovered": null
+    },
+    {
+      "request_id": "f31dbea4-b38f-463e-be92-332ac6de1021",
+      "run_status": "completed",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 11639,
+      "recovered": null
+    },
+    {
+      "request_id": "808ef08a-e333-4b5d-81fb-60948904bd2b",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 0,
+      "recovered": null
+    },
+    {
+      "request_id": "808ef08a-e333-4b5d-81fb-60948904bd2b",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 3,
+      "recovered": null
+    },
+    {
+      "request_id": "808ef08a-e333-4b5d-81fb-60948904bd2b",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 8,
+      "recovered": null
+    },
+    {
+      "request_id": "808ef08a-e333-4b5d-81fb-60948904bd2b",
+      "run_status": "completed",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 9388,
+      "recovered": null
+    },
+    {
+      "request_id": "808ef08a-e333-4b5d-81fb-60948904bd2b",
+      "run_status": "completed",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 16,
+      "recovered": "true"
+    },
+    {
+      "request_id": "808ef08a-e333-4b5d-81fb-60948904bd2b",
+      "run_status": "completed",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 2347,
+      "recovered": null
+    },
+    {
+      "request_id": "808ef08a-e333-4b5d-81fb-60948904bd2b",
+      "run_status": "completed",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "list_tasks",
+      "duration_ms": 5,
+      "recovered": null
+    },
+    {
+      "request_id": "808ef08a-e333-4b5d-81fb-60948904bd2b",
+      "run_status": "completed",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 28436,
+      "recovered": null
+    },
+    {
+      "request_id": "e7da2b3e-a9c6-4ec5-b9dd-b71f0f9138e3",
+      "run_status": "cancelled",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 0,
+      "recovered": null
+    },
+    {
+      "request_id": "e7da2b3e-a9c6-4ec5-b9dd-b71f0f9138e3",
+      "run_status": "cancelled",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 5,
+      "recovered": null
+    },
+    {
+      "request_id": "e7da2b3e-a9c6-4ec5-b9dd-b71f0f9138e3",
+      "run_status": "cancelled",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 11,
+      "recovered": null
+    },
+    {
+      "request_id": "e7da2b3e-a9c6-4ec5-b9dd-b71f0f9138e3",
+      "run_status": "cancelled",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 5272,
+      "recovered": null
+    },
+    {
+      "request_id": "e7da2b3e-a9c6-4ec5-b9dd-b71f0f9138e3",
+      "run_status": "cancelled",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 17,
+      "recovered": "true"
+    },
+    {
+      "request_id": "e7da2b3e-a9c6-4ec5-b9dd-b71f0f9138e3",
+      "run_status": "cancelled",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 2280,
+      "recovered": null
+    },
+    {
+      "request_id": "e7da2b3e-a9c6-4ec5-b9dd-b71f0f9138e3",
+      "run_status": "cancelled",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "get_task",
+      "duration_ms": 5,
+      "recovered": null
+    },
+    {
+      "request_id": "e7da2b3e-a9c6-4ec5-b9dd-b71f0f9138e3",
+      "run_status": "cancelled",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 18342,
+      "recovered": null
+    },
+    {
+      "request_id": "e7da2b3e-a9c6-4ec5-b9dd-b71f0f9138e3",
+      "run_status": "cancelled",
+      "step": 6,
+      "type": "error",
+      "tool": null,
+      "duration_ms": null,
+      "recovered": null
+    },
+    {
+      "request_id": "5c2b2940-011a-4a3e-923a-6922451760b4",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 0,
+      "recovered": null
+    },
+    {
+      "request_id": "5c2b2940-011a-4a3e-923a-6922451760b4",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 8,
+      "recovered": null
+    },
+    {
+      "request_id": "5c2b2940-011a-4a3e-923a-6922451760b4",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 19,
+      "recovered": null
+    },
+    {
+      "request_id": "5c2b2940-011a-4a3e-923a-6922451760b4",
+      "run_status": "completed",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 4825,
+      "recovered": null
+    },
+    {
+      "request_id": "5c2b2940-011a-4a3e-923a-6922451760b4",
+      "run_status": "completed",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 18,
+      "recovered": "true"
+    },
+    {
+      "request_id": "5c2b2940-011a-4a3e-923a-6922451760b4",
+      "run_status": "completed",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 13055,
+      "recovered": null
+    },
+    {
+      "request_id": "5c2b2940-011a-4a3e-923a-6922451760b4",
+      "run_status": "completed",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "list_tasks",
+      "duration_ms": 8,
+      "recovered": null
+    },
+    {
+      "request_id": "5c2b2940-011a-4a3e-923a-6922451760b4",
+      "run_status": "completed",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 1992,
+      "recovered": null
+    },
+    {
+      "request_id": "5c2b2940-011a-4a3e-923a-6922451760b4",
+      "run_status": "completed",
+      "step": 6,
+      "type": "tool_call",
+      "tool": "search_records",
+      "duration_ms": 5,
+      "recovered": null
+    },
+    {
+      "request_id": "5c2b2940-011a-4a3e-923a-6922451760b4",
+      "run_status": "completed",
+      "step": 7,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 13845,
+      "recovered": null
+    },
+    {
+      "request_id": "f898b695-c0bc-488e-a85f-e5e9d98273f1",
+      "run_status": "cancelled",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 0,
+      "recovered": null
+    },
+    {
+      "request_id": "f898b695-c0bc-488e-a85f-e5e9d98273f1",
+      "run_status": "cancelled",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 2,
+      "recovered": null
+    },
+    {
+      "request_id": "f898b695-c0bc-488e-a85f-e5e9d98273f1",
+      "run_status": "cancelled",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 13,
+      "recovered": null
+    },
+    {
+      "request_id": "f898b695-c0bc-488e-a85f-e5e9d98273f1",
+      "run_status": "cancelled",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 14427,
+      "recovered": null
+    },
+    {
+      "request_id": "f898b695-c0bc-488e-a85f-e5e9d98273f1",
+      "run_status": "cancelled",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "list_tasks",
+      "duration_ms": 9,
+      "recovered": null
+    },
+    {
+      "request_id": "f898b695-c0bc-488e-a85f-e5e9d98273f1",
+      "run_status": "cancelled",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 35976,
+      "recovered": null
+    },
+    {
+      "request_id": "f898b695-c0bc-488e-a85f-e5e9d98273f1",
+      "run_status": "cancelled",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 16,
+      "recovered": "true"
+    },
+    {
+      "request_id": "f898b695-c0bc-488e-a85f-e5e9d98273f1",
+      "run_status": "cancelled",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 4483,
+      "recovered": null
+    },
+    {
+      "request_id": "f898b695-c0bc-488e-a85f-e5e9d98273f1",
+      "run_status": "cancelled",
+      "step": 6,
+      "type": "error",
+      "tool": null,
+      "duration_ms": null,
+      "recovered": null
+    },
+    {
+      "request_id": "a1edb8e6-4508-48c9-837a-0ae2998a02a4",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 0,
+      "recovered": null
+    },
+    {
+      "request_id": "a1edb8e6-4508-48c9-837a-0ae2998a02a4",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 2,
+      "recovered": null
+    },
+    {
+      "request_id": "a1edb8e6-4508-48c9-837a-0ae2998a02a4",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 9,
+      "recovered": null
+    },
+    {
+      "request_id": "a1edb8e6-4508-48c9-837a-0ae2998a02a4",
+      "run_status": "completed",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 8171,
+      "recovered": null
+    },
+    {
+      "request_id": "a1edb8e6-4508-48c9-837a-0ae2998a02a4",
+      "run_status": "completed",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "list_tasks",
+      "duration_ms": 9,
+      "recovered": null
+    },
+    {
+      "request_id": "a1edb8e6-4508-48c9-837a-0ae2998a02a4",
+      "run_status": "completed",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 13528,
+      "recovered": null
+    },
+    {
+      "request_id": "a1edb8e6-4508-48c9-837a-0ae2998a02a4",
+      "run_status": "completed",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 15,
+      "recovered": "true"
+    },
+    {
+      "request_id": "a1edb8e6-4508-48c9-837a-0ae2998a02a4",
+      "run_status": "completed",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 2660,
+      "recovered": null
+    },
+    {
+      "request_id": "a1edb8e6-4508-48c9-837a-0ae2998a02a4",
+      "run_status": "completed",
+      "step": 6,
+      "type": "tool_call",
+      "tool": "search_records",
+      "duration_ms": 5,
+      "recovered": null
+    },
+    {
+      "request_id": "a1edb8e6-4508-48c9-837a-0ae2998a02a4",
+      "run_status": "completed",
+      "step": 7,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 3464,
+      "recovered": null
+    },
+    {
+      "request_id": "a1ba395e-ac2f-4aac-a39a-7ba9faa409c1",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 0,
+      "recovered": null
+    },
+    {
+      "request_id": "a1ba395e-ac2f-4aac-a39a-7ba9faa409c1",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 5,
+      "recovered": null
+    },
+    {
+      "request_id": "a1ba395e-ac2f-4aac-a39a-7ba9faa409c1",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 14,
+      "recovered": null
+    },
+    {
+      "request_id": "a1ba395e-ac2f-4aac-a39a-7ba9faa409c1",
+      "run_status": "completed",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 3973,
+      "recovered": null
+    },
+    {
+      "request_id": "a1ba395e-ac2f-4aac-a39a-7ba9faa409c1",
+      "run_status": "completed",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 21,
+      "recovered": "true"
+    },
+    {
+      "request_id": "a1ba395e-ac2f-4aac-a39a-7ba9faa409c1",
+      "run_status": "completed",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 3637,
+      "recovered": null
+    },
+    {
+      "request_id": "a1ba395e-ac2f-4aac-a39a-7ba9faa409c1",
+      "run_status": "completed",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "get_task",
+      "duration_ms": 7,
+      "recovered": null
+    },
+    {
+      "request_id": "a1ba395e-ac2f-4aac-a39a-7ba9faa409c1",
+      "run_status": "completed",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 14975,
+      "recovered": null
+    },
+    {
+      "request_id": "8b39ac83-0989-4b50-8fe8-5d18305f4e0f",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "system_prompt_build",
+      "duration_ms": 0,
+      "recovered": null
+    },
+    {
+      "request_id": "8b39ac83-0989-4b50-8fe8-5d18305f4e0f",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "warmup_preamble_build",
+      "duration_ms": 13,
+      "recovered": null
+    },
+    {
+      "request_id": "8b39ac83-0989-4b50-8fe8-5d18305f4e0f",
+      "run_status": "completed",
+      "step": 0,
+      "type": "warmup_phase",
+      "tool": "tools_built",
+      "duration_ms": 19,
+      "recovered": null
+    },
+    {
+      "request_id": "8b39ac83-0989-4b50-8fe8-5d18305f4e0f",
+      "run_status": "completed",
+      "step": 1,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 2826,
+      "recovered": null
+    },
+    {
+      "request_id": "8b39ac83-0989-4b50-8fe8-5d18305f4e0f",
+      "run_status": "completed",
+      "step": 2,
+      "type": "tool_call",
+      "tool": "create_task",
+      "duration_ms": 22,
+      "recovered": "true"
+    },
+    {
+      "request_id": "8b39ac83-0989-4b50-8fe8-5d18305f4e0f",
+      "run_status": "completed",
+      "step": 3,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 4010,
+      "recovered": null
+    },
+    {
+      "request_id": "8b39ac83-0989-4b50-8fe8-5d18305f4e0f",
+      "run_status": "completed",
+      "step": 4,
+      "type": "tool_call",
+      "tool": "get_task",
+      "duration_ms": 7,
+      "recovered": null
+    },
+    {
+      "request_id": "8b39ac83-0989-4b50-8fe8-5d18305f4e0f",
+      "run_status": "completed",
+      "step": 5,
+      "type": "llm_call",
+      "tool": null,
+      "duration_ms": 13266,
+      "recovered": null
+    }
+  ]
+}

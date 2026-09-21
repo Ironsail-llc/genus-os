@@ -1,0 +1,47 @@
+{
+  "configuration": {
+    "primary": "openrouter/deepseek/deepseek-v4.1-flash",
+    "fallbacks": [
+      "openrouter/xiaomi/mimo-v2.5",
+      "openrouter/deepseek/deepseek-v4-flash",
+      "ollama_chat/qwen3.8:27b"
+    ],
+    "temperature": 0.5,
+    "tools_allowed": 104,
+    "task_protocol": true,
+    "samples": 30,
+    "scope": "Native runner, installation profile settings, isolated workspace and private CRM. Only requested task tools execute. No production instructions/memory staged; 65-second harness cutoff and 12-call diagnostic limit. Provider counts include planning. Native cost estimates are not billing. Not ASGI/browser latency or a matched baseline comparison."
+  },
+  "counts": {
+    "verified": 27,
+    "failed": 3,
+    "unfinished": 0,
+    "not_started": 0
+  },
+  "elapsed_ms": {
+    "samples": 30,
+    "p50": 35362.72140700021,
+    "p95": 60010.15114800248,
+    "p95_ci95": [
+      52079.05779800058,
+      60010.846765995666
+    ]
+  },
+  "over_30_seconds": 21,
+  "over_60_seconds": 3,
+  "provider_invocations": {
+    "openrouter/deepseek/deepseek-v4.1-flash": 128,
+    "openrouter/xiaomi/mimo-v2.5": 5,
+    "openrouter/deepseek/deepseek-v4-flash": 4
+  },
+  "native_estimated_cost_usd": 0.141206,
+  "post_return_model_calls": 0,
+  "duplicate_task_samples": 0,
+  "stored_task_matches": 30,
+  "confirmed_action_samples": 30,
+  "interrupted_after_confirmed_action": 3,
+  "latency_passed": false,
+  "screening_passed": false,
+  "manual_acceptance": false,
+  "note": "All finished attempts contribute timing, including failed/cutoff attempts; missing attempts cannot qualify. Provider invocations count LiteLLM calls, not independently observed HTTP retries. Cost is native recorded estimate, not billing. Direct native admission, not chat ingress/queue timing; no matched baseline or framework-selection claim."
+}

@@ -1,0 +1,89 @@
+{
+  "scope": "Read-only actual chat outcome projection over live native rows. Request-key mapping injected because the original invocation was direct native, not HTTP chat. No model calls or tool dispatch.",
+  "results": [
+    {
+      "sample_index": 19,
+      "request_id": "f0b5ebc1-2d55-42b3-b9c6-f90e93d9da4e",
+      "outcome": {
+        "state": "cancelled",
+        "stop_requested": false,
+        "terminal": true,
+        "run_id": "acfc105e-ff8e-4128-a600-2e9ee9bef0b8",
+        "agent_id": "main",
+        "text": "[Run cancelled: Runtime deadline expired; execution cancelled. Reconcile already dispatched effects.]\n\nThe task was created. Robothor checked the stored task and recovered its result without creating another task. (Operation 3f220061-3c33-406b-8268-508407f5503c)",
+        "effects": [
+          {
+            "operation_id": "3f220061-3c33-406b-8268-508407f5503c",
+            "agent_id": "main",
+            "kind": "runtime_effect",
+            "tool_name": "create_task",
+            "status": "confirmed",
+            "verified": true,
+            "deduplicated": false,
+            "reconciliation_pending": false
+          }
+        ],
+        "reconciliation_pending": false,
+        "verified": false,
+        "source": "run_record",
+        "plan_exploration": false
+      }
+    },
+    {
+      "sample_index": 24,
+      "request_id": "e7da2b3e-a9c6-4ec5-b9dd-b71f0f9138e3",
+      "outcome": {
+        "state": "cancelled",
+        "stop_requested": false,
+        "terminal": true,
+        "run_id": "8eff1406-40df-48e2-9e22-1c40eb36cd40",
+        "agent_id": "main",
+        "text": "[Run cancelled: Runtime deadline expired; execution cancelled. Reconcile already dispatched effects.]\n\nThe task was created. Robothor checked the stored task and recovered its result without creating another task. (Operation b8a2d079-1d89-4d3b-8126-79f9d962d70a)",
+        "effects": [
+          {
+            "operation_id": "b8a2d079-1d89-4d3b-8126-79f9d962d70a",
+            "agent_id": "main",
+            "kind": "runtime_effect",
+            "tool_name": "create_task",
+            "status": "confirmed",
+            "verified": true,
+            "deduplicated": false,
+            "reconciliation_pending": false
+          }
+        ],
+        "reconciliation_pending": false,
+        "verified": false,
+        "source": "run_record",
+        "plan_exploration": false
+      }
+    },
+    {
+      "sample_index": 26,
+      "request_id": "f898b695-c0bc-488e-a85f-e5e9d98273f1",
+      "outcome": {
+        "state": "cancelled",
+        "stop_requested": false,
+        "terminal": true,
+        "run_id": "d082119b-31ef-42f9-9505-266956f97685",
+        "agent_id": "main",
+        "text": "[Run cancelled: Runtime deadline expired; execution cancelled. Reconcile already dispatched effects.]\n\nThe task was created. Robothor checked the stored task and recovered its result without creating another task. (Operation 1e2c4cb0-8679-4b25-a60f-16a725bdf8d3)",
+        "effects": [
+          {
+            "operation_id": "1e2c4cb0-8679-4b25-a60f-16a725bdf8d3",
+            "agent_id": "main",
+            "kind": "runtime_effect",
+            "tool_name": "create_task",
+            "status": "confirmed",
+            "verified": true,
+            "deduplicated": false,
+            "reconciliation_pending": false
+          }
+        ],
+        "reconciliation_pending": false,
+        "verified": false,
+        "source": "run_record",
+        "plan_exploration": false
+      }
+    }
+  ]
+}
