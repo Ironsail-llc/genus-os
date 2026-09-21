@@ -943,3 +943,14 @@ The store now refuses complete, approve, assess and reconciled commands while ea
 Tests cover child-to-parent projection, positive resolution without automatic goal completion, tenant/unrelated-goal isolation, refusal of all four decision commands, and admission blocked by an in-progress goal decision transaction. The focused goals/runtime/size selection passed 142 tests in 21.50 seconds; canonical integration passed 36 with one skipped in 9.59 seconds. Seven new cases initially failed because their fixtures omitted mandatory attempt identity; that setup failure is retained alongside the corrected result. Local reduced-schema goal fixtures and the isolated UAT server now apply migration 141. No shared database was migrated.
 
 This exposes evidence in full goal reads and factual chat reports. It does not add list-summary counts or a dedicated frontend display, qualify further provider readbacks, or constitute live conversational UAT. The latest broad engine pass predates this change. Overall acceptance and deployment remain false.
+
+
+## Goal detail view shows action evidence
+
+Following `d28cf89572a`, the goal workspace detail panel displays pending and confirmed action counts across the goal family. Verified actions do not imply goal completion. Pending evidence disables completion approval and qualifies an existing recorded complete status. Recovery text allows safe progress/waiting and no longer directs the operator to retry an uncertain action. Existing five-second detail polling accepts updated receipts at the same goal version.
+
+The full frontend selection passed **150 files / 1,665 tests in 9.03 seconds**. A final test-fixture lint cleanup was followed by eight passing goal-view tests (0.787 seconds) and strict eslint with zero warnings. Product source was unchanged between the full and final focused runs. Existing jsdom navigation notices remain; this is not a new real-browser run.
+
+A first command invoked pnpm from the wrong directory and failed its version check without running tests. The corrected app-directory invocation used the configured version. One new assertion incorrectly assumed reads passed no options; GET calls include headers. The corrected test checks the method and rejects writes during polling. The initial full run's one failing assertion and all corrected results are retained in the evidence index.
+
+This completes the detail-panel presentation for the existing action-count API. List-summary projection, additional provider readback and normal-chat manual acceptance remain open. No deployment or overall acceptance is claimed.

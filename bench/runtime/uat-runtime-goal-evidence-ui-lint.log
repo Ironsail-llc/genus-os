@@ -1,0 +1,6 @@
+
+/home/philip/robothor-runtime-modernization/app/__tests__/components/goals-view.test.tsx
+  120:38  warning  '_options' is defined but never used  @typescript-eslint/no-unused-vars
+
+✖ 1 problem (0 errors, 1 warning)
+

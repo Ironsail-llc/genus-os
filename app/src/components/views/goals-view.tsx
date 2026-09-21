@@ -12,6 +12,7 @@ interface Goal {
   evidence: Evidence[]; wait: { reason: string; event_type?: string; task_id?: string } | null;
   assessment: { status: string; note: string; at: string } | null;
   recovery_required?: boolean;
+  action_evidence?: { pending: number; confirmed: number };
   children?: Goal[];
   tasks?: { id: string; title: string; status: string }[];
   runs?: { id: string; run_id: string | null; status: string; tokens: number }[];
@@ -142,15 +143,21 @@ export function GoalsView({ visible }: { visible: boolean }) {
         </div>
         {selected && <section className="border rounded p-4 space-y-3" aria-label="Goal details">
           <h2 className="font-semibold">{selected.objective}</h2>
-          <p>{selected.status} · {selected.tokens_used.toLocaleString()} tokens{selected.token_budget ? ` / ${selected.token_budget.toLocaleString()}` : ""} · ${selected.cost_usd.toFixed(4)}</p>
+          <p>{selected.status === "complete" && (selected.action_evidence?.pending ?? 0) > 0 ? "Marked complete; action verification pending" : selected.status} · {selected.tokens_used.toLocaleString()} tokens{selected.token_budget ? ` / ${selected.token_budget.toLocaleString()}` : ""} · ${selected.cost_usd.toFixed(4)}</p>
           {selected.parent_goal_id && <button className="underline" onClick={() => void select(selected.parent_goal_id!)}>Open parent goal</button>}
           <p>{selected.checkpoint}</p>
           {!!selected.tasks?.length && <p>{selected.tasks.filter(task => task.status === "DONE").length} of {selected.tasks.length} linked tasks marked done.</p>}
           {!["complete", "canceled"].includes(selected.status) && selected.next_action && selected.next_action !== "Start pursuing the objective" && <p>Planned next action: {selected.next_action}</p>}
-          {selected.recovery_required && <p role="status">External effects need reconciliation before more actions or completion.</p>}
+          {(selected.action_evidence?.pending ?? 0) > 0 && <p role="status">
+            {selected.action_evidence!.pending} recorded {selected.action_evidence!.pending === 1 ? "action" : "actions"} in this goal or its children still need verification. Completion cannot be approved yet.
+          </p>}
+          {(selected.action_evidence?.confirmed ?? 0) > 0 && <p>
+            {selected.action_evidence!.confirmed} recorded {selected.action_evidence!.confirmed === 1 ? "action has" : "actions have"} been verified. This alone does not complete the goal.
+          </p>}
+          {selected.recovery_required && <p role="status">Earlier work still needs reconciliation. Progress can be recorded and the goal can wait while action outcomes are checked.</p>}
           {selected.blocker && <p>Blocker: {selected.blocker}</p>}
           {selected.token_budget !== null && <p>Remaining family budget: {Math.max(0, selected.token_budget - selected.tokens_used).toLocaleString()} tokens</p>}
-          {["paused", "canceled"].includes(selected.status) && <p>New work has stopped for this goal and relevant children. Already dispatched external requests may finish; check receipts before retrying.</p>}
+          {["paused", "canceled"].includes(selected.status) && <p>New work has stopped for this goal and relevant children. Already dispatched external requests may finish. Stopping does not establish their outcome.</p>}
           {!["complete", "canceled", "paused"].includes(selected.status) && new Date(selected.ready_at).getTime() <= Date.now() && <p>Review due</p>}
           {selected.wait && <p>Waiting: {selected.wait.reason}. Next review: {new Date(selected.ready_at).toLocaleString()}</p>}
           {selected.assessment && <p>Assessment: {selected.assessment.status} — {selected.assessment.note}</p>}
@@ -165,7 +172,7 @@ export function GoalsView({ visible }: { visible: boolean }) {
             {!["complete", "canceled"].includes(selected.status) && <>
               <button disabled={busy} className="border rounded px-2 py-1" onClick={() => void change("pause")}>Pause</button>
               {["paused", "blocked", "waiting"].includes(selected.status) && <button disabled={busy} className="border rounded px-2 py-1" onClick={() => void change("resume")}>Resume</button>}
-              {selected.status === "review" && <button disabled={busy} className="border rounded px-2 py-1" onClick={() => void change("approve")}>Approve completion</button>}
+              {selected.status === "review" && <button disabled={busy || (selected.action_evidence?.pending ?? 0) > 0 || selected.recovery_required} className="border rounded px-2 py-1" onClick={() => void change("approve")}>Approve completion</button>}
               <button disabled={busy} className="border rounded px-2 py-1" onClick={() => void change("cancel")}>Cancel goal</button>
             </>}
           </div>

@@ -21,12 +21,13 @@
       "note": "Source and collected tests unchanged during run. Includes journal, terminal-owner sweep, CRM note automatic readback and chat receipt projection. Predates the subsequent goal bookkeeping fix. Warnings include deprecations and unawaited network coroutines; not a warning-free or performance result."
     },
     "frontend": {
-      "revision": "2d5b4c2985d",
+      "base_revision": "d28cf89572a",
       "files": 150,
-      "passed": 1661,
+      "passed": 1665,
       "failed": 0,
-      "seconds": 9.55,
-      "log": "/tmp/runtime-delayed-approval-frontend.log"
+      "seconds": 9.03,
+      "log": "bench/runtime/uat-runtime-goal-evidence-frontend-final.log",
+      "note": "Final product source. Followed only by a test-fixture lint cleanup; affected file then passed eight tests and strict eslint passed. Existing jsdom navigation warning remains."
     },
     "goals_private_database": {
       "passed": 58,
@@ -3304,6 +3305,31 @@
         "Action counts are in full goal snapshots and factual chat reports; list summaries and dedicated frontend presentation are not expanded in this change.",
         "Provider readback remains limited to supported operations.",
         "The broad engine pass predates this change. No live conversational UAT or overall acceptance is claimed."
+      ]
+    },
+    "frontend_before_goal_action_evidence": {
+      "revision": "2d5b4c2985d",
+      "files": 150,
+      "passed": 1661,
+      "failed": 0,
+      "seconds": 9.55,
+      "log": "/tmp/runtime-delayed-approval-frontend.log"
+    },
+    "goal_action_evidence_ui": {
+      "focused": {
+        "passed": 8,
+        "seconds": 0.787,
+        "log": "bench/runtime/uat-runtime-goal-evidence-ui-last.log"
+      },
+      "lint": {
+        "passed": true,
+        "log": "bench/runtime/uat-runtime-goal-evidence-ui-lint-final.log"
+      },
+      "behavior": "Detail view shows pending/confirmed family action counts, qualifies complete when unresolved, and disables approval while pending. Polling refreshes receipts even at the same goal version and does not issue a write.",
+      "intermediate": "Root-directory pnpm invocation selected the wrong pinned version and ran no tests. Running from app used its configured version. One test incorrectly assumed GET calls had no options; corrected to inspect the HTTP method. A subsequent unused fixture variable warning was fixed. Logs retained.",
+      "limitations": [
+        "No new browser end-to-end run or user acceptance is claimed.",
+        "List summary evidence and other provider readback remain open."
       ]
     }
   },

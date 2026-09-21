@@ -1,0 +1,14 @@
+
+> app@1.100.2 test /home/philip/robothor-runtime-modernization/app
+> vitest run
+
+
+ RUN  v4.1.11 /home/philip/robothor-runtime-modernization/app
+
+Not implemented: navigation to another Document
+
+ Test Files  150 passed (150)
+      Tests  1665 passed (1665)
+   Start at  03:28:29
+   Duration  9.03s (transform 9.91s, setup 7.84s, import 27.23s, tests 40.62s, environment 68.45s)
+

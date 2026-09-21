@@ -1,0 +1,38 @@
+
+> app@1.100.2 test /home/philip/robothor-runtime-modernization/app
+> vitest run __tests__/components/goals-view.test.tsx
+
+
+ RUN  v4.1.11 /home/philip/robothor-runtime-modernization/app
+
+ ❯ __tests__/components/goals-view.test.tsx (8 tests | 1 failed) 312ms
+   × keeps approval unavailable until action readback settles, even without a goal version change 33ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  __tests__/components/goals-view.test.tsx > keeps approval unavailable until action readback settles, even without a goal version change
+AssertionError: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ __tests__/components/goals-view.test.tsx:132:61
+    130|   expect(screen.queryByText(/Completion cannot be approved yet/)).not.…
+    131|   expect(screen.getByRole("button", { name: "Approve completion" })).t…
+    132|   expect(fetch.mock.calls.every(call => call.length === 1)).toBe(true);
+       |                                                             ^
+    133| });
+    134|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 7 passed (8)
+   Start at  03:27:22
+   Duration  834ms (transform 80ms, setup 97ms, import 79ms, tests 312ms, environment 275ms)
+
+ ELIFECYCLE  Test failed. See above for more details.
