@@ -1,0 +1,105 @@
+{
+  "revision": "3014f6006e3",
+  "product_revision": "3581b1a9db5",
+  "passed": 3,
+  "seconds": 16.4,
+  "log": "/tmp/runtime-profile-load-batch-ci.log",
+  "cohorts": [
+    {
+      "tenants": 1,
+      "repetitions": 30,
+      "requests": 30,
+      "ack_ms": {
+        "samples": 30,
+        "p50": 42.604512000252726,
+        "p95": 43.67668199847685,
+        "p95_ci95": [
+          43.18752499966649,
+          44.742308997228974
+        ],
+        "uncertainty": "1000 bootstrap resamples of whole concurrent rounds"
+      },
+      "stop_ack_ms": {
+        "samples": 30,
+        "p50": 6.06580499879783,
+        "p95": 7.110631999239558,
+        "p95_ci95": [
+          6.683794999844395,
+          7.715757998084882
+        ],
+        "uncertainty": "1000 bootstrap resamples of whole concurrent rounds"
+      },
+      "profile_reads": 30,
+      "artifact": "bench/runtime/uat-profile-load-1.json"
+    },
+    {
+      "tenants": 5,
+      "repetitions": 30,
+      "requests": 150,
+      "ack_ms": {
+        "samples": 150,
+        "p50": 7.615629001520574,
+        "p95": 10.542378997342894,
+        "p95_ci95": [
+          9.867699998721946,
+          63.160639998386614
+        ],
+        "uncertainty": "1000 bootstrap resamples of whole concurrent rounds"
+      },
+      "stop_ack_ms": {
+        "samples": 150,
+        "p50": 10.850046000996372,
+        "p95": 14.268048002122669,
+        "p95_ci95": [
+          13.814330999593949,
+          14.902791001077276
+        ],
+        "uncertainty": "1000 bootstrap resamples of whole concurrent rounds"
+      },
+      "profile_reads": 120,
+      "artifact": "bench/runtime/uat-profile-load-5.json"
+    },
+    {
+      "tenants": 20,
+      "repetitions": 30,
+      "requests": 600,
+      "ack_ms": {
+        "samples": 600,
+        "p50": 16.062466998846503,
+        "p95": 40.52057099761441,
+        "p95_ci95": [
+          37.65298900179914,
+          47.606145999452565
+        ],
+        "uncertainty": "1000 bootstrap resamples of whole concurrent rounds"
+      },
+      "stop_ack_ms": {
+        "samples": 600,
+        "p50": 29.51714699884178,
+        "p95": 46.82617100115749,
+        "p95_ci95": [
+          40.23226299977978,
+          64.6496469998965
+        ],
+        "uncertainty": "1000 bootstrap resamples of whole concurrent rounds"
+      },
+      "profile_reads": 120,
+      "artifact": "bench/runtime/uat-profile-load-20.json"
+    }
+  ],
+  "initial_fixture_failure": {
+    "errors": 3,
+    "seconds": 3.8,
+    "log": "/tmp/runtime-profile-load-initial.log",
+    "reason": "Bench test did not import the engine configuration fixtures. No request executed."
+  },
+  "earlier_pass": {
+    "passed": 3,
+    "seconds": 16.57,
+    "log": "/tmp/runtime-profile-load-final.log",
+    "note": "Same request/control checks; final version resamples entire concurrent rounds for confidence intervals rather than treating correlated requests as independent."
+  },
+  "scope": "780 requests across 30 rounds each at 1/5/20 authenticated synthetic tenants. Real loopback chat, private audit/control stores, blocked configuration reads. Every request receives acknowledgement and durably stops, then reads its own terminal cancelled admission record while readers remain blocked. Queued lookups never execute after cancellation. Zero model and business calls.",
+  "checks": "Ruff lint/format and diff checks pass. CI includes the load test; no hosted run claimed.",
+  "limits": "Synthetic preparation workload only, without live models, business writes or competing goals. Uses private minimal audit/control tables rather than a complete tenant deployment. Measures up to 20 concurrent HTTP tenants in this local configuration; not a general fleet capacity limit. Stuck filesystem threads are released by fixtures, so permanent-failure shutdown is unqualified. No production deployment or overall manual acceptance."
+}

@@ -9,16 +9,16 @@
   "replacement_selected": false,
   "checks": {
     "engine": {
-      "revision": "90617b97d52",
-      "passed": 11126,
+      "revision": "3581b1a9db5",
+      "passed": 11156,
       "failed": 0,
       "skipped": 29,
       "deselected": 185,
       "warnings": 393,
-      "seconds": 359.83,
+      "seconds": 365.12,
       "selection": "not slow and not integration and not llm and not e2e and not smoke",
-      "log": "/tmp/runtime-engine-regression-approval-recovery.log",
-      "note": "Single clean invocation after independent approval receipts, delayed evidence reporting and normal-chat confirmation acceptance test. Product source and selected tests were unchanged during the run. Later changes were documentation, bench adapter tests, and the separately tested integration-marked native admission preservation test, which this invocation deselects. Existing connect_tcp unawaited-coroutine warning remains; its collection site does not establish the initiating path."
+      "log": "/tmp/runtime-engine-profile-pool-regression.log",
+      "note": "Single clean invocation after bounded native profile admission, early acknowledgement, preparation progress and isolated profile-reader pool. Product source and collected engine tests remained unchanged during the run. Concurrent HTTP benchmark tests and documentation were added outside the collected engine scope; independent local load checks ran concurrently, so elapsed time is not a matched baseline performance comparison. Existing connect_tcp unawaited-coroutine warning remains; its collection site does not identify its initiating path."
     },
     "frontend": {
       "revision": "2d5b4c2985d",
@@ -2160,6 +2160,123 @@
       "concurrency_scope": "Component tests use 1, 2, 5 and 20 synthetic tenant contexts, verifying default-executor availability and context isolation. A cancelled running reader retains its slot; cancelling a queued reader prevents its loader from running. The HTTP cohort is 30 sequential requests with real private control/audit stores; it does not prove concurrent HTTP tenant limits.",
       "checks": "Ruff lint, format and diff checks pass; no size cap increased. Pool tests added to runtime-contract CI; no hosted run claimed.",
       "limits": "Blocking filesystem threads cannot be forcibly killed. Four permanently stuck reads can exhaust this dedicated pool, so subsequent profile waits remain bounded by admission deadlines, but process shutdown may still wait for those threads. These tests do not qualify permanent-failure process shutdown, deployed ingress, live-provider latency or full acceptance. No production deployment."
+    },
+    "concurrent_profile_http": {
+      "revision": "3014f6006e3",
+      "product_revision": "3581b1a9db5",
+      "passed": 3,
+      "seconds": 16.4,
+      "log": "/tmp/runtime-profile-load-batch-ci.log",
+      "cohorts": [
+        {
+          "tenants": 1,
+          "repetitions": 30,
+          "requests": 30,
+          "ack_ms": {
+            "samples": 30,
+            "p50": 42.604512000252726,
+            "p95": 43.67668199847685,
+            "p95_ci95": [
+              43.18752499966649,
+              44.742308997228974
+            ],
+            "uncertainty": "1000 bootstrap resamples of whole concurrent rounds"
+          },
+          "stop_ack_ms": {
+            "samples": 30,
+            "p50": 6.06580499879783,
+            "p95": 7.110631999239558,
+            "p95_ci95": [
+              6.683794999844395,
+              7.715757998084882
+            ],
+            "uncertainty": "1000 bootstrap resamples of whole concurrent rounds"
+          },
+          "profile_reads": 30,
+          "artifact": "bench/runtime/uat-profile-load-1.json"
+        },
+        {
+          "tenants": 5,
+          "repetitions": 30,
+          "requests": 150,
+          "ack_ms": {
+            "samples": 150,
+            "p50": 7.615629001520574,
+            "p95": 10.542378997342894,
+            "p95_ci95": [
+              9.867699998721946,
+              63.160639998386614
+            ],
+            "uncertainty": "1000 bootstrap resamples of whole concurrent rounds"
+          },
+          "stop_ack_ms": {
+            "samples": 150,
+            "p50": 10.850046000996372,
+            "p95": 14.268048002122669,
+            "p95_ci95": [
+              13.814330999593949,
+              14.902791001077276
+            ],
+            "uncertainty": "1000 bootstrap resamples of whole concurrent rounds"
+          },
+          "profile_reads": 120,
+          "artifact": "bench/runtime/uat-profile-load-5.json"
+        },
+        {
+          "tenants": 20,
+          "repetitions": 30,
+          "requests": 600,
+          "ack_ms": {
+            "samples": 600,
+            "p50": 16.062466998846503,
+            "p95": 40.52057099761441,
+            "p95_ci95": [
+              37.65298900179914,
+              47.606145999452565
+            ],
+            "uncertainty": "1000 bootstrap resamples of whole concurrent rounds"
+          },
+          "stop_ack_ms": {
+            "samples": 600,
+            "p50": 29.51714699884178,
+            "p95": 46.82617100115749,
+            "p95_ci95": [
+              40.23226299977978,
+              64.6496469998965
+            ],
+            "uncertainty": "1000 bootstrap resamples of whole concurrent rounds"
+          },
+          "profile_reads": 120,
+          "artifact": "bench/runtime/uat-profile-load-20.json"
+        }
+      ],
+      "initial_fixture_failure": {
+        "errors": 3,
+        "seconds": 3.8,
+        "log": "/tmp/runtime-profile-load-initial.log",
+        "reason": "Bench test did not import the engine configuration fixtures. No request executed."
+      },
+      "earlier_pass": {
+        "passed": 3,
+        "seconds": 16.57,
+        "log": "/tmp/runtime-profile-load-final.log",
+        "note": "Same request/control checks; final version resamples entire concurrent rounds for confidence intervals rather than treating correlated requests as independent."
+      },
+      "scope": "780 requests across 30 rounds each at 1/5/20 authenticated synthetic tenants. Real loopback chat, private audit/control stores, blocked configuration reads. Every request receives acknowledgement and durably stops, then reads its own terminal cancelled admission record while readers remain blocked. Queued lookups never execute after cancellation. Zero model and business calls.",
+      "checks": "Ruff lint/format and diff checks pass. CI includes the load test; no hosted run claimed.",
+      "limits": "Synthetic preparation workload only, without live models, business writes or competing goals. Uses private minimal audit/control tables rather than a complete tenant deployment. Measures up to 20 concurrent HTTP tenants in this local configuration; not a general fleet capacity limit. Stuck filesystem threads are released by fixtures, so permanent-failure shutdown is unqualified. No production deployment or overall manual acceptance."
+    },
+    "engine_before_profile_admission": {
+      "revision": "90617b97d52",
+      "passed": 11126,
+      "failed": 0,
+      "skipped": 29,
+      "deselected": 185,
+      "warnings": 393,
+      "seconds": 359.83,
+      "selection": "not slow and not integration and not llm and not e2e and not smoke",
+      "log": "/tmp/runtime-engine-regression-approval-recovery.log",
+      "note": "Single clean invocation after independent approval receipts, delayed evidence reporting and normal-chat confirmation acceptance test. Product source and selected tests were unchanged during the run. Later changes were documentation, bench adapter tests, and the separately tested integration-marked native admission preservation test, which this invocation deselects. Existing connect_tcp unawaited-coroutine warning remains; its collection site does not establish the initiating path."
     }
   },
   "calendar": {

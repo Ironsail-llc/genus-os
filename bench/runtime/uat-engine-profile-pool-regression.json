@@ -1,0 +1,12 @@
+{
+  "revision": "3581b1a9db5",
+  "passed": 11156,
+  "failed": 0,
+  "skipped": 29,
+  "deselected": 185,
+  "warnings": 393,
+  "seconds": 365.12,
+  "selection": "not slow and not integration and not llm and not e2e and not smoke",
+  "log": "/tmp/runtime-engine-profile-pool-regression.log",
+  "note": "Single clean invocation after bounded native profile admission, early acknowledgement, preparation progress and isolated profile-reader pool. Product source and collected engine tests remained unchanged during the run. Concurrent HTTP benchmark tests and documentation were added outside the collected engine scope; independent local load checks ran concurrently, so elapsed time is not a matched baseline performance comparison. Existing connect_tcp unawaited-coroutine warning remains; its collection site does not identify its initiating path."
+}

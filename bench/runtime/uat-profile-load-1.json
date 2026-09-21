@@ -1,0 +1,210 @@
+{
+  "tenants": 1,
+  "repetitions": 30,
+  "samples": [
+    {
+      "repetition": 0,
+      "tenant": 0,
+      "ack_ms": 17.56404999832739,
+      "stop_ack_ms": 7.715757998084882
+    },
+    {
+      "repetition": 1,
+      "tenant": 0,
+      "ack_ms": 42.89341000185232,
+      "stop_ack_ms": 6.06580499879783
+    },
+    {
+      "repetition": 2,
+      "tenant": 0,
+      "ack_ms": 43.072675998701015,
+      "stop_ack_ms": 6.4047210034914315
+    },
+    {
+      "repetition": 3,
+      "tenant": 0,
+      "ack_ms": 42.15327500060084,
+      "stop_ack_ms": 6.683794999844395
+    },
+    {
+      "repetition": 4,
+      "tenant": 0,
+      "ack_ms": 43.15645400129142,
+      "stop_ack_ms": 5.814826999994693
+    },
+    {
+      "repetition": 5,
+      "tenant": 0,
+      "ack_ms": 43.19963799935067,
+      "stop_ack_ms": 6.254975000047125
+    },
+    {
+      "repetition": 6,
+      "tenant": 0,
+      "ack_ms": 42.408477998833405,
+      "stop_ack_ms": 6.579314998816699
+    },
+    {
+      "repetition": 7,
+      "tenant": 0,
+      "ack_ms": 43.003588001738535,
+      "stop_ack_ms": 6.083133001084207
+    },
+    {
+      "repetition": 8,
+      "tenant": 0,
+      "ack_ms": 42.02906600039569,
+      "stop_ack_ms": 6.486913000117056
+    },
+    {
+      "repetition": 9,
+      "tenant": 0,
+      "ack_ms": 42.21596400020644,
+      "stop_ack_ms": 6.2565110019932035
+    },
+    {
+      "repetition": 10,
+      "tenant": 0,
+      "ack_ms": 42.143643000599695,
+      "stop_ack_ms": 5.86284400196746
+    },
+    {
+      "repetition": 11,
+      "tenant": 0,
+      "ack_ms": 42.48855799960438,
+      "stop_ack_ms": 6.893589998071548
+    },
+    {
+      "repetition": 12,
+      "tenant": 0,
+      "ack_ms": 42.604512000252726,
+      "stop_ack_ms": 7.110631999239558
+    },
+    {
+      "repetition": 13,
+      "tenant": 0,
+      "ack_ms": 42.09417099991697,
+      "stop_ack_ms": 5.418870998255443
+    },
+    {
+      "repetition": 14,
+      "tenant": 0,
+      "ack_ms": 42.39158100244822,
+      "stop_ack_ms": 4.6715360003872775
+    },
+    {
+      "repetition": 15,
+      "tenant": 0,
+      "ack_ms": 41.536308999639004,
+      "stop_ack_ms": 4.984498998965137
+    },
+    {
+      "repetition": 16,
+      "tenant": 0,
+      "ack_ms": 42.52961499878438,
+      "stop_ack_ms": 5.5697999996482395
+    },
+    {
+      "repetition": 17,
+      "tenant": 0,
+      "ack_ms": 43.375543998990906,
+      "stop_ack_ms": 5.180516000109492
+    },
+    {
+      "repetition": 18,
+      "tenant": 0,
+      "ack_ms": 41.50358900005813,
+      "stop_ack_ms": 5.722633999539539
+    },
+    {
+      "repetition": 19,
+      "tenant": 0,
+      "ack_ms": 43.18752499966649,
+      "stop_ack_ms": 4.893601999356179
+    },
+    {
+      "repetition": 20,
+      "tenant": 0,
+      "ack_ms": 44.742308997228974,
+      "stop_ack_ms": 5.665354001394007
+    },
+    {
+      "repetition": 21,
+      "tenant": 0,
+      "ack_ms": 43.06909200022346,
+      "stop_ack_ms": 6.614483001612825
+    },
+    {
+      "repetition": 22,
+      "tenant": 0,
+      "ack_ms": 43.07131699897582,
+      "stop_ack_ms": 6.23271899894462
+    },
+    {
+      "repetition": 23,
+      "tenant": 0,
+      "ack_ms": 42.75315399718238,
+      "stop_ack_ms": 5.931260002398631
+    },
+    {
+      "repetition": 24,
+      "tenant": 0,
+      "ack_ms": 43.21019800045178,
+      "stop_ack_ms": 7.059192001179326
+    },
+    {
+      "repetition": 25,
+      "tenant": 0,
+      "ack_ms": 43.13792500033742,
+      "stop_ack_ms": 6.550177997269202
+    },
+    {
+      "repetition": 26,
+      "tenant": 0,
+      "ack_ms": 43.67668199847685,
+      "stop_ack_ms": 6.713875998684671
+    },
+    {
+      "repetition": 27,
+      "tenant": 0,
+      "ack_ms": 43.00560399860842,
+      "stop_ack_ms": 5.9016760023951065
+    },
+    {
+      "repetition": 28,
+      "tenant": 0,
+      "ack_ms": 41.64133400263381,
+      "stop_ack_ms": 6.011213001329452
+    },
+    {
+      "repetition": 29,
+      "tenant": 0,
+      "ack_ms": 42.07725800006301,
+      "stop_ack_ms": 5.9455650007294025
+    }
+  ],
+  "ack_ms": {
+    "samples": 30,
+    "p50": 42.604512000252726,
+    "p95": 43.67668199847685,
+    "p95_ci95": [
+      43.18752499966649,
+      44.742308997228974
+    ],
+    "uncertainty": "1000 bootstrap resamples of whole concurrent rounds"
+  },
+  "stop_ack_ms": {
+    "samples": 30,
+    "p50": 6.06580499879783,
+    "p95": 7.110631999239558,
+    "p95_ci95": [
+      6.683794999844395,
+      7.715757998084882
+    ],
+    "uncertainty": "1000 bootstrap resamples of whole concurrent rounds"
+  },
+  "profile_reads": 30,
+  "model_calls": 0,
+  "business_calls": 0,
+  "scope": "Loopback HTTP, synthetic blocked profile reads, private audit/control tables. All requests stop and recover their own cancelled audit before releasing readers; queued lookups never execute."
+}
