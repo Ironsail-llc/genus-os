@@ -1,0 +1,26 @@
+# Current local acceptance status
+
+As of 2026-09-21. Current runtime retained; no production deployment or real stopped-goal resumption. The accepted integration baseline is `eea3252b1577e3f51e6d6a6216d6f242fd7ac4a1`. This page summarizes current evidence; the chronological [audit](runtime-acceptance-audit.md) and [machine-readable record](../../bench/runtime/uat-verification.json) preserve earlier failures and scope limits.
+
+| Requirement | Current evidence | Remaining qualification |
+|---|---|---|
+| Preserve ordinary task behavior | [Baseline/current comparison](../../bench/runtime/uat-runtime-native-task-comparison-report.json): 124 verified requests including warmups, one matching TODO task each, two scripted model calls, additional calculation preserved. Warm p95 124–128 ms baseline versus 45–49 ms current. | Minimal profile and synthetic provider; not representative live workload or full production prompt/memory parity. |
+| Prompt, bounded simple actions | [Selected-model task screen](../../bench/runtime/uat-runtime-task-final-cohort-report.json): 30/30 verified, p95 21.046 seconds, 95% bootstrap interval 15.417–22.969; no request over 30 seconds. Saved deadlines present; no duplicates or post-return calls. | Direct native admission, isolated workspace. A separate three-example compound diagnostic had one 50-second response; broader response latency remains open. |
+| Preserve additional obligations | [Compound diagnostic](../../bench/runtime/uat-runtime-task-compound-report.json): all three task-plus-calculation requests completed both obligations without task-only finalization. | Three examples do not qualify general intent handling or latency. |
+| Stop and visible acceptance under contention | [HTTP load results](../../bench/runtime/uat-profile-load.json): 30 rounds at 1/5/20 tenants; durable stop and audit recovery while profile readers are occupied. | Synthetic local capacity, not live-provider/fleet capacity. |
+| Multi-day goals and responsive ordinary work | [Native multi-day demonstration](../../bench/runtime/uat-runtime-native-multiday-final.json): persisted waiting state, fresh instances, duplicate wakes, family accounting, independent evidence and ordinary tasks during goal work. | Simulated next day, scripted providers, private storage. |
+| Broad regression coverage | Latest product report: 11,394 engine tests passed, 29 skipped; separate final wording checks passed. Latest canonical integration recheck: 72 passed, two skipped. | Evidence applies to tested behavior; it cannot prove absence of every regression. Product source has not changed during subsequent benchmark/harness work. |
+| Compatible rollback without replay | [Rollback report](../../bench/runtime/uat-runtime-rollback-deadline-report.json): prior unsafe target rejected; `53f588cb6bc` preserves saved receipts, task identity and checkpoint deadlines. Actual private current/rollback/current daemon sequence and separate native admission pass. | HTTP admission inside that running daemon and dependency/container rollback remain unverified. |
+| Runtime replacement | [Decision](../../bench/runtime/qualification-decision.json): bounded candidates failed required behavior, no finalists; retain improved current runtime. | No claim of comparative framework superiority. Future finalists require unchanged parity, matched 100-repetition performance and upgrade gates. |
+
+## Normal-chat user acceptance
+
+Accepted by the user: unfinished-work reporting with the task left open; duplicate confirmation without another calendar write; automatic audit-based recovery without repeating an action; parent/child pause leaving unfinished tasks open and neither goal complete.
+
+Pending: selective resume. The current scripted native-chat check confirms that explicitly pausing a child separately, then resuming its parent, leaves that child paused. The parent becomes queued and the task remains TODO. Execution is disabled in the private fixture, and the reply says background work has not started. The user has been asked to review that behavior. See the [current transcript](../../bench/runtime/uat-chat-goal-selective-resume-current.json).
+
+## Completion boundary
+
+Overall local acceptance remains open. Prior failed populations remain part of the record. Next work should address representative live response latency and remaining goal-control UAT, using the existing selected models. Repeating a narrow passing test does not close those gaps.
+
+Production rollout, hosted CI execution and actual upstream operational review have not occurred. They are separate from the authorized local implementation/UAT work; this status page does not authorize them or treat their absence as a reason to deploy.

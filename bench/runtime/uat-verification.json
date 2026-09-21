@@ -4987,6 +4987,17 @@
           "exit_code": 0
         }
       }
+    },
+    "selective_goal_resume_current": {
+      "revision": "32cfb4d3f7a",
+      "passed": 1,
+      "deselected": 1,
+      "warnings": 1,
+      "seconds": 2.43,
+      "artifact": "bench/runtime/uat-chat-goal-selective-resume-current.json",
+      "manual_acceptance": false,
+      "review_pending": true,
+      "scope": "Native chat route/runner and goal handlers; scripted model, private PostgreSQL, no business connectors or scheduler."
     }
   },
   "calendar": {

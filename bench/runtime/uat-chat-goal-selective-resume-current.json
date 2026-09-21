@@ -1,0 +1,370 @@
+{
+  "scope": "Native chat route/runner and goal handlers; scripted model, private PostgreSQL, no business connectors or scheduler.",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "One of the two tasks is done. \u2018Check the remaining item\u2019 is still open, so the goal isn't complete. It's waiting for that check, and no completion evidence has been recorded.",
+      "run": {
+        "text": "One of the two tasks is done. \u2018Check the remaining item\u2019 is still open, so the goal isn't complete. It's waiting for that check, and no completion evidence has been recorded.",
+        "status": "completed",
+        "model": "openrouter/test/model",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "duration_ms": 46,
+        "total_cost_usd": 0.0,
+        "run_id": "2bbe039e-8956-4c30-8b96-9e6935f760a7"
+      },
+      "elapsed_ms": 97.45217699673958,
+      "measurements": {
+        "run_id": "2bbe039e-8956-4c30-8b96-9e6935f760a7",
+        "duration_ms": 46,
+        "model_calls": 2,
+        "tool_calls": 1,
+        "provider_ms": 2,
+        "tool_wall_ms": 10,
+        "compaction_ms": 0,
+        "compactions": 0,
+        "input_tokens": 0,
+        "time_to_first_action_ms": 15,
+        "time_to_verified_completion_ms": null,
+        "post_completion_tool_calls": null,
+        "factual_goal_report": false,
+        "steps": [
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "openrouter/test/model",
+            "duration_ms": 2,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "get_pursuit_goal",
+            "model": null,
+            "duration_ms": 10,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "openrouter/test/model",
+            "duration_ms": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "failed": false
+          }
+        ]
+      }
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Paused the goal and its unfinished child goal. The remaining task is still open; neither goal is complete.",
+      "run": {
+        "text": "Paused the goal and its unfinished child goal. The remaining task is still open; neither goal is complete.",
+        "status": "completed",
+        "model": "openrouter/test/model",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "duration_ms": 43,
+        "total_cost_usd": 0.0,
+        "run_id": "07c63d6e-56a3-4a50-8b69-f17da817b65b"
+      },
+      "elapsed_ms": 64.50661399867386,
+      "measurements": {
+        "run_id": "07c63d6e-56a3-4a50-8b69-f17da817b65b",
+        "duration_ms": 43,
+        "model_calls": 4,
+        "tool_calls": 3,
+        "provider_ms": 0,
+        "tool_wall_ms": 18,
+        "compaction_ms": 0,
+        "compactions": 0,
+        "input_tokens": 0,
+        "time_to_first_action_ms": 4,
+        "time_to_verified_completion_ms": null,
+        "post_completion_tool_calls": null,
+        "factual_goal_report": false,
+        "steps": [
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "openrouter/test/model",
+            "duration_ms": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "get_pursuit_goal",
+            "model": null,
+            "duration_ms": 9,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "openrouter/test/model",
+            "duration_ms": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "update_pursuit_goal",
+            "model": null,
+            "duration_ms": 3,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "openrouter/test/model",
+            "duration_ms": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "get_pursuit_goal",
+            "model": null,
+            "duration_ms": 6,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "openrouter/test/model",
+            "duration_ms": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "failed": false
+          }
+        ]
+      }
+    },
+    {
+      "user": "Keep the child paused separately.",
+      "robothor": "Kept the child goal paused separately. Resuming its parent will not resume this child.",
+      "run": {
+        "text": "Kept the child goal paused separately. Resuming its parent will not resume this child.",
+        "status": "completed",
+        "model": "openrouter/test/model",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "duration_ms": 51,
+        "total_cost_usd": 0.0,
+        "run_id": "29fefc67-dcf4-40f2-8271-ff690e49a892"
+      },
+      "elapsed_ms": 73.77454800007399,
+      "measurements": {
+        "run_id": "29fefc67-dcf4-40f2-8271-ff690e49a892",
+        "duration_ms": 51,
+        "model_calls": 4,
+        "tool_calls": 3,
+        "provider_ms": 0,
+        "tool_wall_ms": 19,
+        "compaction_ms": 0,
+        "compactions": 0,
+        "input_tokens": 0,
+        "time_to_first_action_ms": 5,
+        "time_to_verified_completion_ms": null,
+        "post_completion_tool_calls": null,
+        "factual_goal_report": false,
+        "steps": [
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "openrouter/test/model",
+            "duration_ms": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "get_pursuit_goal",
+            "model": null,
+            "duration_ms": 7,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "openrouter/test/model",
+            "duration_ms": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "update_pursuit_goal",
+            "model": null,
+            "duration_ms": 3,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "openrouter/test/model",
+            "duration_ms": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "get_pursuit_goal",
+            "model": null,
+            "duration_ms": 9,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "openrouter/test/model",
+            "duration_ms": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "failed": false
+          }
+        ]
+      }
+    },
+    {
+      "user": "Resume the parent, keeping that child paused.",
+      "robothor": "The parent is queued to continue, and the child remains paused as requested. Goal execution is disabled, so no background work has started.",
+      "run": {
+        "text": "The parent is queued to continue, and the child remains paused as requested. Goal execution is disabled, so no background work has started.",
+        "status": "completed",
+        "model": "openrouter/test/model",
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "duration_ms": 45,
+        "total_cost_usd": 0.0,
+        "run_id": "1a43653b-3fc2-421f-a1b4-c005eca14862"
+      },
+      "elapsed_ms": 69.01165899762418,
+      "measurements": {
+        "run_id": "1a43653b-3fc2-421f-a1b4-c005eca14862",
+        "duration_ms": 45,
+        "model_calls": 4,
+        "tool_calls": 3,
+        "provider_ms": 0,
+        "tool_wall_ms": 19,
+        "compaction_ms": 0,
+        "compactions": 0,
+        "input_tokens": 0,
+        "time_to_first_action_ms": 5,
+        "time_to_verified_completion_ms": null,
+        "post_completion_tool_calls": null,
+        "factual_goal_report": false,
+        "steps": [
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "openrouter/test/model",
+            "duration_ms": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "get_pursuit_goal",
+            "model": null,
+            "duration_ms": 8,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "openrouter/test/model",
+            "duration_ms": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "update_pursuit_goal",
+            "model": null,
+            "duration_ms": 3,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "openrouter/test/model",
+            "duration_ms": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "get_pursuit_goal",
+            "model": null,
+            "duration_ms": 8,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "openrouter/test/model",
+            "duration_ms": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "failed": false
+          }
+        ]
+      }
+    }
+  ],
+  "tool_calls": [
+    "get_pursuit_goal",
+    "get_pursuit_goal",
+    "update_pursuit_goal",
+    "get_pursuit_goal",
+    "get_pursuit_goal",
+    "update_pursuit_goal",
+    "get_pursuit_goal",
+    "get_pursuit_goal",
+    "update_pursuit_goal",
+    "get_pursuit_goal"
+  ],
+  "final_goal_status": "queued",
+  "final_task_statuses": [
+    "DONE",
+    "TODO"
+  ],
+  "final_child_status": "paused",
+  "verified_revision": "32cfb4d3f7a",
+  "manual_review_status": "Awaiting user response to selective-resume case; prior parent-child pause acceptance remains accepted."
+}
