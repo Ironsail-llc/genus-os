@@ -9,16 +9,16 @@
   "replacement_selected": false,
   "checks": {
     "engine": {
-      "revision": "e69866dfe64",
-      "passed": 11298,
+      "base_revision": "cb4835b797e",
+      "passed": 11302,
       "failed": 0,
       "skipped": 29,
-      "deselected": 214,
+      "deselected": 218,
       "warnings": 393,
-      "seconds": 396.54,
+      "seconds": 389.55,
       "selection": "not slow and not integration and not llm and not e2e and not smoke",
-      "log": "bench/runtime/uat-runtime-chat-recovery-engine-regression.log",
-      "note": "Product source and collected tests unchanged for the full invocation. Includes unfinished-task completion, chat-triggered CRM readback, retained nonapplication evidence and verified retry projection. Existing warnings retained; canonical/browser checks reported separately. No full acceptance claim."
+      "log": "bench/runtime/uat-runtime-reported-result-engine.log",
+      "note": "Includes saved successful response recovery and chat projection. Product source and collected tests unchanged throughout this invocation. Canonical integrations reported separately; no overall acceptance claim."
     },
     "frontend": {
       "base_revision": "56aa76e6aa0",
@@ -3916,6 +3916,50 @@
       "behavior": "After real native CRM task commit, browser response is dropped and its entire context closed. A private test-only endpoint waits for persisted conversation text, clears engine session cache and restores it from the private DB with a new runner. A fresh browser context with no request-journal entries displays the saved response. No request identifier is passed to that context, and no new audit polling or send occurs after restore.",
       "verified_counts": "One send, one actual task, one confirmed effect, one native run, two original scripted model calls and no additional execution for each same-context/fresh-context scenario. The artifact may count an audit GET in the old context before closure; the final script separately asserts zero new audit reads after fresh-context creation.",
       "limits": "Persisted completed response only. Does not discover stranded runs when both reply persistence and browser request identity are absent. Cache reinitialization is in-process, not an OS restart; browser contexts simulate a different device with the same authenticated fixture identity. No live provider/calendar, production change or deployment. Prior frontend build reused because app source/package/lock/Next configuration unchanged."
+    },
+    "saved_handler_response_recovery": {
+      "base_revision": "cb4835b797e",
+      "production_deployed": false,
+      "regression_before": {
+        "failed": 2,
+        "log": "bench/runtime/uat-runtime-reported-result-red.log"
+      },
+      "focused": {
+        "passed": 69,
+        "seconds": 11.75,
+        "log": "bench/runtime/uat-runtime-reported-result-expanded.log"
+      },
+      "canonical": {
+        "passed": 56,
+        "skipped": 2,
+        "warnings": 1,
+        "seconds": 29.19,
+        "log": "bench/runtime/uat-runtime-reported-result-canonical.log"
+      },
+      "final_chat_and_dispatch": {
+        "passed": 30,
+        "skipped": 9,
+        "seconds": 5.33,
+        "log": "bench/runtime/uat-runtime-reported-result-final.log"
+      },
+      "scope": "Successful mapping responses persist with owner CAS and same-request replay, 20 concurrent replacement calls, real process exit, persistence-failure fencing and honest chat receipt projection. Native integration requires the canonical harness; skipped in standalone targeted invocation. No external models or business actions.",
+      "limitations": [
+        "Historical finished rows lacking results remain unchanged.",
+        "Reported acknowledgement is not independent outcome verification.",
+        "Error/nonmapping results and unsupported provider readback are not newly covered."
+      ]
+    },
+    "engine_before_saved_response_recovery": {
+      "revision": "e69866dfe64",
+      "passed": 11298,
+      "failed": 0,
+      "skipped": 29,
+      "deselected": 214,
+      "warnings": 393,
+      "seconds": 396.54,
+      "selection": "not slow and not integration and not llm and not e2e and not smoke",
+      "log": "bench/runtime/uat-runtime-chat-recovery-engine-regression.log",
+      "note": "Product source and collected tests unchanged for the full invocation. Includes unfinished-task completion, chat-triggered CRM readback, retained nonapplication evidence and verified retry projection. Existing warnings retained; canonical/browser checks reported separately. No full acceptance claim."
     }
   },
   "calendar": {

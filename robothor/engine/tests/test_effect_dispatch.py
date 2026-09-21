@@ -76,6 +76,53 @@ async def test_uncertain_dispatch_cannot_be_repeated_by_replacement_worker(gatew
     assert len(writes) == 2
 
 
+@pytest.mark.parametrize("tool", ["create_note", "send_email"])
+async def test_reported_success_survives_replacement_without_claiming_independent_proof(
+    gateway, monkeypatch, tool
+):
+    ctx, writes, call = gateway
+
+    async def handler(args, tool_context):
+        writes.append(args)
+        return {"id": "synthetic-provider-id", "status": "accepted"}
+
+    monkeypatch.setattr(dispatch, "_get_handlers", lambda: {tool: handler})
+    first = await call(tool)
+    copies = await asyncio.gather(*(call(tool, run=f"replacement-{i}") for i in range(20)))
+    repeated = copies[0]
+    assert all(copy == repeated for copy in copies)
+    assert len(writes) == 1, "Replacement worker repeated an acknowledged business action"
+    assert repeated["id"] == first["id"]
+    assert repeated["recovered"] and repeated["verification"] == "reported"
+    row = effects.read(ctx, repeated["effect_id"])
+    assert row["state"] == "finished"
+    assert row["resolution"]["source"] == "tool_response"
+    assert not row["resolution"].get("reference"), "Tool acknowledgement is not independent proof"
+    await call(tool, caller=replace(ctx, request_id="separate-authorized-request"))
+    assert len(writes) == 2
+
+
+async def test_reported_response_persistence_failure_keeps_replay_fence(gateway, monkeypatch):
+    from robothor.engine.runtime import effect_results
+
+    ctx, writes, call = gateway
+
+    async def handler(args, tool_context):
+        writes.append(args)
+        return {"id": "synthetic"}
+
+    def unavailable(*args):
+        raise OSError("Synthetic receipt persistence outage")
+
+    monkeypatch.setattr(dispatch, "_get_handlers", lambda: {"create_note": handler})
+    monkeypatch.setattr(effect_results, "record", unavailable)
+    first = await call("create_note")
+    assert first["outcome_unknown"] and not first["retryable"]
+    repeated = await call("create_note", run="replacement")
+    assert repeated["effect_id"] == first["effect_id"] and len(writes) == 1
+    assert effects.read(ctx, first["effect_id"])["state"] == "dispatching"
+
+
 async def test_cancelled_dispatched_write_stays_uncertain(gateway, monkeypatch):
     ctx, writes, call = gateway
     dispatched = asyncio.Event()

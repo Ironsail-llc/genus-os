@@ -14,7 +14,8 @@ def family_effect_receipts(cur, run, auth):
                  e.request_id,e.fingerprint,e.created_at
           FROM agent_runtime_effects e JOIN family f ON e.run_id=f.id::text
           WHERE e.tenant_id=%s AND e.principal_id=%s
-            AND e.state IN ('prepared','dispatching','uncertain','confirmed','not_applied')
+            AND (e.state IN ('prepared','dispatching','uncertain','confirmed','not_applied')
+                 OR e.state='finished' AND e.resolution->>'source'='tool_response')
           ORDER BY e.created_at,e.id""",
         (
             run["id"],
@@ -86,6 +87,8 @@ def effect_summary(receipt):
             if receipt.get("superseded_by")
             else "The audit confirms that this action was not applied."
         )
+    elif receipt["status"] == "finished":
+        text = "The action returned a response, which is saved in the audit log. Its outcome has not been independently verified."
     else:
         text = "The audit records an action whose outcome is still unresolved."
     return f"{text} (Operation {receipt['operation_id']})"

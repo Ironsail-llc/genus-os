@@ -1,0 +1,56 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_ test_reported_success_survives_replacement_without_claiming_independent_proof[create_note] _
+
+gateway = (ExecutionContext(tenant_id='43fc77de-d218-4cc9-9613-42c0fd3daf72', principal_id='operator', request_id='request', par...e=None, parent_goal_id=None), [{'body': 'once'}, {'body': 'once'}], <function gateway.<locals>.call at 0xf5cbf992e2a0>)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0xf5cbf9b728b0>
+tool = 'create_note'
+
+    @pytest.mark.parametrize("tool", ["create_note", "send_email"])
+    async def test_reported_success_survives_replacement_without_claiming_independent_proof(
+        gateway, monkeypatch, tool
+    ):
+        ctx, writes, call = gateway
+    
+        async def handler(args, tool_context):
+            writes.append(args)
+            return {"id": "synthetic-provider-id", "status": "accepted"}
+    
+        monkeypatch.setattr(dispatch, "_get_handlers", lambda: {tool: handler})
+        first = await call(tool)
+        repeated = await call(tool, run="replacement")
+>       assert len(writes) == 1, "Replacement worker repeated an acknowledged business action"
+E       AssertionError: Replacement worker repeated an acknowledged business action
+E       assert 2 == 1
+E        +  where 2 = len([{'body': 'once'}, {'body': 'once'}])
+
+robothor/engine/tests/test_effect_dispatch.py:92: AssertionError
+_ test_reported_success_survives_replacement_without_claiming_independent_proof[send_email] _
+
+gateway = (ExecutionContext(tenant_id='deaef989-1527-442b-b8d6-1338c41dcd12', principal_id='operator', request_id='request', par...e=None, parent_goal_id=None), [{'body': 'once'}, {'body': 'once'}], <function gateway.<locals>.call at 0xf5cbf8f01fe0>)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0xf5cbf90d6330>
+tool = 'send_email'
+
+    @pytest.mark.parametrize("tool", ["create_note", "send_email"])
+    async def test_reported_success_survives_replacement_without_claiming_independent_proof(
+        gateway, monkeypatch, tool
+    ):
+        ctx, writes, call = gateway
+    
+        async def handler(args, tool_context):
+            writes.append(args)
+            return {"id": "synthetic-provider-id", "status": "accepted"}
+    
+        monkeypatch.setattr(dispatch, "_get_handlers", lambda: {tool: handler})
+        first = await call(tool)
+        repeated = await call(tool, run="replacement")
+>       assert len(writes) == 1, "Replacement worker repeated an acknowledged business action"
+E       AssertionError: Replacement worker repeated an acknowledged business action
+E       assert 2 == 1
+E        +  where 2 = len([{'body': 'once'}, {'body': 'once'}])
+
+robothor/engine/tests/test_effect_dispatch.py:92: AssertionError
+=========================== short test summary info ============================
+FAILED robothor/engine/tests/test_effect_dispatch.py::test_reported_success_survives_replacement_without_claiming_independent_proof[create_note]
+FAILED robothor/engine/tests/test_effect_dispatch.py::test_reported_success_survives_replacement_without_claiming_independent_proof[send_email]
+2 failed, 14 deselected in 1.17s

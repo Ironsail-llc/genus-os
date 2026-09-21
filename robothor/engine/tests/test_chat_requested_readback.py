@@ -141,6 +141,23 @@ def test_unsupported_effect_remains_unresolved(crm_records):
     assert effects.read(ctx, row["id"])["state"] == "uncertain"
 
 
+def test_saved_response_is_visible_without_claiming_independent_verification(crm_records):
+    from robothor.engine import chat_recovery
+    from robothor.engine.runtime import effect_results
+
+    auth, client = identity(), str(uuid4())
+    run = insert(crm_records, auth, client, output_text="Everything was completed.")
+    ctx, row = record(crm_records, auth, run, "send_email", "dispatching", stored=False)
+    assert effect_results.record(ctx, row["id"], run, {"id": "synthetic", "status": "accepted"})
+    result = chat_recovery.read_outcome(auth, "web:main", client)
+    assert not result["reconciliation_pending"] and not result["verified"]
+    assert result["effects"][0]["status"] == "finished"
+    assert not result["effects"][0]["verified"]
+    assert "Everything was completed" not in result["text"]
+    assert "saved in the audit log" in result["text"]
+    assert "not been independently verified" in result["text"]
+
+
 def test_calendar_outage_does_not_prevent_independent_crm_readback(crm_records, monkeypatch):
     from robothor.engine import calendar_reconciliation, chat_recovery
 

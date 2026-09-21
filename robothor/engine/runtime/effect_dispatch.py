@@ -66,6 +66,13 @@ async def invoke(name, args, ctx, dispatch):
         }
     if record["state"] == "confirmed":
         return {**record["resolution"]["result"], "effect_id": str(record["id"]), "recovered": True}
+    if record["state"] == "finished":
+        return {
+            **record["resolution"]["result"],
+            "effect_id": str(record["id"]),
+            "recovered": True,
+            "verification": "reported",
+        }
     return await _dispatch_reserved(context, record, name, args, ctx, dispatch)
 
 
@@ -148,9 +155,20 @@ async def _dispatch_reserved(context, record, name, args, ctx, dispatch):
         and not result.get("error")
     )
     try:
-        recorded = await asyncio.to_thread(
-            effects.finish, context, record["id"], ctx.run_id, uncertain=uncertain or verify_success
-        )
+        from robothor.engine.runtime import effect_results
+
+        if not uncertain and not verify_success and effect_results.cacheable(result):
+            recorded = await asyncio.to_thread(
+                effect_results.record, context, record["id"], ctx.run_id, result
+            )
+        else:
+            recorded = await asyncio.to_thread(
+                effects.finish,
+                context,
+                record["id"],
+                ctx.run_id,
+                uncertain=uncertain or verify_success,
+            )
         if not recorded:
             return _unknown(
                 record["id"],

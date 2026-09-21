@@ -58,7 +58,8 @@ def begin(context, run_id, agent_id, tool_name, arguments):
         _lock(cur, context)
         cur.execute(
             """SELECT * FROM agent_runtime_effects WHERE tenant_id=%s AND principal_id=%s
-               AND request_id=%s AND fingerprint=%s AND state='confirmed'
+               AND request_id=%s AND fingerprint=%s AND (state='confirmed'
+                 OR state='finished' AND resolution->>'source'='tool_response')
                ORDER BY created_at DESC LIMIT 1""",
             (context.tenant_id, context.principal_id, context.request_id, digest),
         )
