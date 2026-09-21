@@ -1,0 +1,56 @@
+{
+  "configuration": {
+    "primary": "openrouter/deepseek/deepseek-v4.1-flash",
+    "fallbacks": [
+      "openrouter/xiaomi/mimo-v2.5",
+      "openrouter/deepseek/deepseek-v4-flash",
+      "ollama_chat/qwen3.8:27b"
+    ],
+    "temperature": 0.5,
+    "tools_allowed": 104,
+    "tools_advertised": 112,
+    "schema_characters": 74661,
+    "deferred_tools": false,
+    "experimental_model_slice_seconds": 15,
+    "task_protocol": true,
+    "samples": 30,
+    "scenario": "task_and_calculation",
+    "synthetic_tenant_prefix": "runtime-live-",
+    "scope": "Native runner, installation profile settings, isolated workspace and private CRM. Only requested task tools execute. No production instructions/memory staged; 65-second harness cutoff and 12-call diagnostic limit. Provider counts include planning. Native cost estimates are not billing. Not ASGI/browser latency or a matched baseline comparison."
+  },
+  "counts": {
+    "verified": 1,
+    "failed": 3,
+    "unfinished": 1,
+    "not_started": 25
+  },
+  "elapsed_ms": {
+    "samples": 4,
+    "p50": 24892.50157600327,
+    "p95": 29441.198226995766,
+    "p95_ci95": [
+      24892.50157600327,
+      29441.198226995766
+    ]
+  },
+  "over_30_seconds": 0,
+  "over_60_seconds": 0,
+  "provider_invocations": {
+    "openrouter/deepseek/deepseek-v4.1-flash": 9,
+    "openrouter/xiaomi/mimo-v2.5": 4
+  },
+  "native_estimated_cost_usd": 0.013606,
+  "post_return_model_calls": 0,
+  "duplicate_task_samples": 0,
+  "stored_task_matches": 4,
+  "confirmed_action_samples": 4,
+  "interrupted_after_confirmed_action": 0,
+  "latency_passed": false,
+  "screening_passed": false,
+  "manual_acceptance": false,
+  "note": "All finished attempts contribute timing, including failed/cutoff attempts; missing attempts cannot qualify. Provider invocations count LiteLLM calls, not independently observed HTTP retries. Cost is native recorded estimate, not billing. Direct native admission, not chat ingress/queue timing; no matched baseline or framework-selection claim.",
+  "measured_revision": "244a3978782",
+  "stopped_early": true,
+  "stop_reason": "Critical incomplete response: primary timed out, configured fallback selected finalReport for a compound request, host ended after task creation and omitted calculation. Rejected experiment; not a completed screening cohort.",
+  "promoted": false
+}

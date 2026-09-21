@@ -24,9 +24,10 @@ from robothor.engine.task_registry import get_task_registry
 pytestmark = pytest.mark.integration
 
 
+@pytest.mark.parametrize("compound", [False, True])
 @pytest.mark.parametrize("final_report", [False, True])
 async def test_native_task_report_delivers_and_recovers_without_extra_model(
-    engine_config, sample_agent_config, monkeypatch, final_report
+    engine_config, sample_agent_config, monkeypatch, final_report, compound
 ):
     dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
     if "host=/tmp/runtime-migrated-" not in dsn:
@@ -54,13 +55,14 @@ async def test_native_task_report_delivers_and_recovers_without_extra_model(
         "robothor.llm.ollama.get_embeddings_batch_async", AsyncMock(return_value=[])
     )
     calls = []
+    expected_calls = 1 if final_report and not compound else 2
 
     async def provider(self, messages, models, tools, on_content=None, **kwargs):
         calls.append(True)
-        assert len(calls) <= (1 if final_report else 2), (
-            "Unnecessary model after verified final report"
-        )
+        assert len(calls) <= expected_calls, "Unnecessary model after verified final report"
         message = {"role": "assistant", "content": "Created task: One. Status: TODO."}
+        if compound:
+            message["content"] += " Separately, 17 times 19 is 323."
         if len(calls) == 1:
             message = {
                 "role": "assistant",
@@ -104,7 +106,10 @@ async def test_native_task_report_delivers_and_recovers_without_extra_model(
         response = await client.post(
             "/chat/send",
             json={
-                "message": "Create one task titled One with description Synthetic only",
+                "message": (
+                    'Create one task titled "One" with description "Synthetic only".'
+                    + (" Also calculate 17 times 19 separately in your reply." if compound else "")
+                ),
                 "session_key": session,
                 "request_id": client_id,
             },
@@ -117,6 +122,8 @@ async def test_native_task_report_delivers_and_recovers_without_extra_model(
         ]
         assert len(done) == 1 and done[0]["status"] == "completed"
         assert "Created task:" in done[0]["text"] and "Status: TODO" in done[0]["text"]
+        if compound:
+            assert "323" in done[0]["text"], "Task-only report dropped the additional obligation"
         # Terminal delivery can precede the asynchronous run-record write. The
         # reconnect client polls that original identity, never re-executes it.
         async with asyncio.timeout(2):
@@ -133,7 +140,7 @@ async def test_native_task_report_delivers_and_recovers_without_extra_model(
         assert "without creating another task" in recovered["text"]
         assert chat._get_session(session).history[-1]["content"] == done[0]["text"]
     await get_task_registry().drain(timeout=5)
-    assert len(calls) == (1 if final_report else 2)
+    assert len(calls) == expected_calls
     with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("SELECT title,body,status FROM crm_tasks WHERE tenant_id=%s", (tenant,))
         assert cur.fetchall() == [("One", "Synthetic only", "TODO")]
@@ -147,6 +154,6 @@ async def test_native_task_report_delivers_and_recovers_without_extra_model(
             (recovered["run_id"],),
         )
         evidence = cur.fetchall()
-        assert len(evidence) == int(final_report)
-        if final_report:
+        assert len(evidence) == int(final_report and not compound)
+        if final_report and not compound:
             assert evidence[0][0]["origin"] == "trusted_task_report"

@@ -21,6 +21,6 @@ Pending: selective resume. The current scripted native-chat check confirms that 
 
 ## Completion boundary
 
-Overall local acceptance remains open. Prior failed populations remain part of the record. Next work should address representative live response latency and remaining goal-control UAT, using the existing selected models. Repeating a narrow passing test does not close those gaps.
+Overall local acceptance remains open. A later fallback experiment exposed premature task-only finalization of a compound request. A host request-boundary fix now passes 74 focused and 74 canonical tests; its broad regression and live requalification are pending. Earlier passing populations do not qualify this changed source. Prior failed populations remain part of the record. Next work should address representative live response latency and remaining goal-control UAT, using the existing selected models. Repeating a narrow passing test does not close those gaps.
 
 Production rollout, hosted CI execution and actual upstream operational review have not occurred. They are separate from the authorized local implementation/UAT work; this status page does not authorize them or treat their absence as a reason to deploy.

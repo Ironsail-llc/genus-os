@@ -547,6 +547,8 @@ def get_tool_definitions() -> list[dict[str, Any]]:
                 "For a chat request that ONLY creates one task using title/body/status and reports "
                 "its saved details, prefer finalReport=true and call this tool alone. After durable "
                 "verification the host sends the factual final reply without another model turn. "
+                "The host only finalizes a complete quoted title/body creation command; "
+                "other wording continues through normal execution. "
                 "Leave finalReport off when any other work, fields, explanation or comparison remains. "
                 "Use assignedToAgent for agent-to-agent coordination. "
                 "If the response has verification='verified' and "

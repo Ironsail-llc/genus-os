@@ -15,6 +15,7 @@ def requested(req, names):
     todos = getattr(req.session, "todo_list", None)
     if (
         names != ["create_task"]
+        or any(str(step.step_type) == "tool_call" for step in run.steps)
         or getattr(run, "resume_from_run_id", None)
         or str(run.trigger_detail or "").startswith("plan")
         or todos is not None
@@ -23,7 +24,14 @@ def requested(req, names):
         return False
     try:
         args = json.loads(req.assistant_msg.tool_calls[0].function.arguments)
-        return isinstance(args, dict) and args.get("finalReport") is True and set(args) <= _FIELDS
+        from robothor.engine.runtime.task_intent import permits
+
+        return (
+            isinstance(args, dict)
+            and args.get("finalReport") is True
+            and set(args) <= _FIELDS
+            and permits(req.session, args)
+        )
     except (AttributeError, IndexError, TypeError, ValueError):
         return False
 

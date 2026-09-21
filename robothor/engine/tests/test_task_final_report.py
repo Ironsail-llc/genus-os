@@ -18,6 +18,7 @@ from robothor.goals.report_channel import publish_report
 
 def prepare(args=None):
     session, req, ctx = setup_turn()
+    session.run.task_text = 'Create one task titled "One" with description "Synthetic".'
     args = args if args is not None else {"title": "One", "body": "Synthetic", "finalReport": True}
     req.assistant_msg = SimpleNamespace(
         tool_calls=[SimpleNamespace(function=SimpleNamespace(arguments=json.dumps(args)))]
@@ -56,6 +57,7 @@ def record():
         "todo",
         "resumed",
         "approved",
+        "prior_tool",
     ],
 )
 async def test_no_report_or_audit_lookup_outside_admitted_single_task(monkeypatch, change):
@@ -79,6 +81,8 @@ async def test_no_report_or_audit_lookup_outside_admitted_single_task(monkeypatc
         session.run.is_benchmark = True
     elif change == "todo":
         session.todo_list = SimpleNamespace(items=[SimpleNamespace(status="pending")])
+    elif change == "prior_tool":
+        session.run.steps.append(SimpleNamespace(step_type="tool_call"))
     elif change == "resumed":
         session.run.resume_from_run_id = "prior"
     elif change == "approved":
