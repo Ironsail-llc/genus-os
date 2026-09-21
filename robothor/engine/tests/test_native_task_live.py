@@ -38,6 +38,17 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
     if "deferred_tools" in settings:
         assert type(settings["deferred_tools"]) is bool
         monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "1" if settings["deferred_tools"] else "0")
+    model_slice = settings.get("model_slice_seconds")
+    if model_slice is not None:
+        assert type(model_slice) in {int, float} and 1 <= model_slice <= 30
+        from robothor.engine import llm_client
+
+        original_timeout = llm_client._per_call_timeout
+        monkeypatch.setattr(
+            llm_client,
+            "_per_call_timeout",
+            lambda model, override: min(model_slice, original_timeout(model, override)),
+        )
     workspace = Path(settings["installation"])
     agent = load_agent_config(
         "main", workspace / "docs/agents", workspace=workspace, trigger_type="webchat"
@@ -65,6 +76,9 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
             "model": kwargs["model"],
             "stream": bool(kwargs.get("stream")),
             "phase": "planning" if planning else "execution",
+            "timeout_seconds": kwargs.get("timeout")
+            if isinstance(kwargs.get("timeout"), int | float)
+            else None,
         }
         calls.append(call)
         started = time.perf_counter()
@@ -139,6 +153,7 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
                         "tools_advertised": len(advertised),
                         "schema_characters": len(json.dumps(advertised, ensure_ascii=False)),
                         "deferred_tools": deferred_tools_enabled(),
+                        "experimental_model_slice_seconds": model_slice,
                         "task_protocol": agent.task_protocol,
                         "samples": samples,
                         "scenario": scenario,

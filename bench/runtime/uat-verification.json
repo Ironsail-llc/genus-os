@@ -5116,6 +5116,70 @@
         "seconds": 145.89
       },
       "scope_note": "Three examples only. Product remains unchanged and the installation flag remains off. Smaller context reduced measured input size but did not establish latency qualification. Sequential unmatched cohorts cannot isolate causal effect."
+    },
+    "interactive_model_allowance_diagnostic": {
+      "configuration": {
+        "primary": "openrouter/deepseek/deepseek-v4.1-flash",
+        "fallbacks": [
+          "openrouter/xiaomi/mimo-v2.5",
+          "openrouter/deepseek/deepseek-v4-flash",
+          "ollama_chat/qwen3.8:27b"
+        ],
+        "temperature": 0.5,
+        "tools_allowed": 104,
+        "tools_advertised": 112,
+        "schema_characters": 74661,
+        "deferred_tools": false,
+        "experimental_model_slice_seconds": 15,
+        "task_protocol": true,
+        "samples": 3,
+        "scenario": "task_and_calculation",
+        "synthetic_tenant_prefix": "runtime-live-",
+        "scope": "Native runner, installation profile settings, isolated workspace and private CRM. Only requested task tools execute. No production instructions/memory staged; 65-second harness cutoff and 12-call diagnostic limit. Provider counts include planning. Native cost estimates are not billing. Not ASGI/browser latency or a matched baseline comparison."
+      },
+      "counts": {
+        "verified": 3,
+        "failed": 0,
+        "unfinished": 0,
+        "not_started": 0
+      },
+      "elapsed_ms": {
+        "samples": 3,
+        "p50": 19511.50171800691,
+        "p95": 21348.975834989687,
+        "p95_ci95": [
+          15000.39762799861,
+          21348.975834989687
+        ]
+      },
+      "over_30_seconds": 0,
+      "over_60_seconds": 0,
+      "provider_invocations": {
+        "openrouter/deepseek/deepseek-v4.1-flash": 9,
+        "openrouter/xiaomi/mimo-v2.5": 1
+      },
+      "native_estimated_cost_usd": 0.009912,
+      "post_return_model_calls": 0,
+      "duplicate_task_samples": 0,
+      "stored_task_matches": 3,
+      "confirmed_action_samples": 3,
+      "interrupted_after_confirmed_action": 0,
+      "latency_passed": true,
+      "screening_passed": false,
+      "manual_acceptance": false,
+      "note": "All finished attempts contribute timing, including failed/cutoff attempts; missing attempts cannot qualify. Provider invocations count LiteLLM calls, not independently observed HTTP retries. Cost is native recorded estimate, not billing. Direct native admission, not chat ingress/queue timing; no matched baseline or framework-selection claim.",
+      "product_revision": "0c34fb56640",
+      "harness_changes": "Test-local per-model timeout override; unchanged existing fallback order and shared retry allowance. Record actual timeout sent to LiteLLM.",
+      "diagnostic": true,
+      "promoted": false,
+      "execution_timeout_exercised": false,
+      "canonical": {
+        "passed": 73,
+        "skipped": 2,
+        "warnings": 1,
+        "seconds": 95.17
+      },
+      "scope_note": "Three examples, none reached the experimental execution timeout. Faster times do not establish that the cap helped. Planning cancellations retain their pre-existing five-second bound. No product or installed settings changed."
     }
   },
   "calendar": {
