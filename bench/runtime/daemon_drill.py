@@ -35,7 +35,7 @@ subprocess.Popen = PrivatePopen
 """
 
 
-def run(root, database_env, *, resume=False, goal_phase=None, code_root=None):
+def run(root, database_env, *, resume=False, goal_phase=None, code_root=None, chat_admission=False):
     code_root = Path(code_root or Path.cwd()).resolve()
     root = root / "daemon-drill"
     root.mkdir()
@@ -51,6 +51,15 @@ def run(root, database_env, *, resume=False, goal_phase=None, code_root=None):
 
         (workspace / "docs/agents/main.yaml").write_text(MANIFEST)
         extra = "\nfrom bench.runtime.daemon_goal_crash import install\ninstall()\n"
+    if chat_admission:
+        assert not goal_phase
+        from bench.runtime import daemon_chat_admission
+
+        (workspace / "docs/agents/main.yaml").write_text(daemon_chat_admission.MANIFEST)
+        # Load the fixture from the driving checkout without replacing the
+        # rollback daemon's import path or its native product implementation.
+        fixture = str(Path(daemon_chat_admission.__file__).resolve())
+        extra = "\nimport runpy\n" + f"runpy.run_path({fixture!r})['install']()\n"
     (guard / "sitecustomize.py").write_text(
         GUARD
         + "\nimport robothor.engine.daemon as drill_daemon\n"
@@ -130,6 +139,11 @@ def run(root, database_env, *, resume=False, goal_phase=None, code_root=None):
                 from bench.runtime.daemon_goal_crash import await_state
 
                 await_state(root, daemon, database_env, goal_phase)
+            admission = None
+            if chat_admission:
+                from bench.runtime.daemon_chat_admission import exercise
+
+                admission = exercise(port, root)
             started = time.monotonic()
             if goal_phase == "crash":
                 os.killpg(daemon.pid, signal.SIGKILL)
@@ -174,6 +188,7 @@ def run(root, database_env, *, resume=False, goal_phase=None, code_root=None):
                 "shutdown_exit_code": code,
                 "shutdown_seconds": time.monotonic() - started,
                 "recovery_worker_spawns": len(spawns),
+                **({"http_admission": admission} if admission else {}),
             }
     finally:
         if daemon is not None:

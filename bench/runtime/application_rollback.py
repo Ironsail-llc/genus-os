@@ -109,7 +109,7 @@ def drill(root, env, dsn):
     for phase, code in (("current", current), ("rollback", checkout), ("restore", current)):
         location = root / ("application-" + phase)
         location.mkdir()
-        result = run(location, env, resume=True, code_root=code)
+        result = run(location, env, resume=True, code_root=code, chat_admission=True)
         # Run the real native admission contract from that source revision in
         # a fresh process, using the same private schema and no provider secrets.
         probe_env = {key: value for key, value in env.items() if key.startswith("ROBOTHOR_DB_")}
@@ -163,5 +163,5 @@ def drill(root, env, dsn):
         ).strip(),
         "dependency_pins_equal": True,
         "phases": results,
-        "scope": "Actual daemon boot, resume scan and shutdown across current/prior/current source checkouts, private database and Redis, no provider access. Each revision also passes its real native new-admission contract in a separate process with a scripted provider. Does not exercise HTTP admission in the booted daemon or container/dependency rollback.",
+        "scope": "Actual daemon boot, resume scan, HTTP chat admission/audit recovery and shutdown across current/prior/current source checkouts, private database and Redis, scripted provider only. Each revision also passes its native new-admission contract in a separate process. Does not qualify container/dependency rollback or live-provider latency.",
     }

@@ -1,0 +1,133 @@
+{
+  "target_revision": "43b4af630738cae68850f49192e3082715407202",
+  "target_base_revision": "b1671409892e389684d9267b50c985143f1b9031",
+  "receipt_compatibility": {
+    "current": {
+      "reuses_saved_response": true,
+      "state": "finished",
+      "report_boundaries_compatible": true,
+      "report_boundary_probe": {
+        "compatible": true,
+        "finalized": {
+          "standalone": true,
+          "compound": false
+        }
+      },
+      "saved_deadlines_compatible": true,
+      "deadline_probe": {
+        "compatible": true,
+        "cases": {
+          "expired": {
+            "outcome": "expired",
+            "deadline": null
+          },
+          "future": {
+            "outcome": "entered",
+            "deadline": "2026-09-21T15:25:28.454101+00:00"
+          },
+          "malformed": {
+            "outcome": "rejected",
+            "deadline": null
+          }
+        }
+      },
+      "task_report_identity_compatible": true,
+      "task_report_probe": {
+        "reuses_saved_response": true,
+        "state": "confirmed"
+      }
+    },
+    "rollback": {
+      "reuses_saved_response": true,
+      "state": "finished",
+      "report_boundaries_compatible": true,
+      "report_boundary_probe": {
+        "compatible": true,
+        "finalized": {
+          "standalone": true,
+          "compound": false
+        }
+      },
+      "saved_deadlines_compatible": true,
+      "deadline_probe": {
+        "compatible": true,
+        "cases": {
+          "expired": {
+            "outcome": "expired",
+            "deadline": null
+          },
+          "future": {
+            "outcome": "entered",
+            "deadline": "2026-09-21T15:25:28.997453+00:00"
+          },
+          "malformed": {
+            "outcome": "rejected",
+            "deadline": null
+          }
+        }
+      },
+      "task_report_identity_compatible": true,
+      "task_report_probe": {
+        "reuses_saved_response": true,
+        "state": "confirmed"
+      }
+    }
+  },
+  "rollback_qualified": true,
+  "current_revision": "162bc075b9b7a722be2e7f9903ca5a63a3c2fa21",
+  "dependency_pins_equal": true,
+  "phases": [
+    {
+      "phase": "current",
+      "health_ready": true,
+      "code_origin": "robothor/engine/daemon.py",
+      "shutdown_exit_code": 0,
+      "shutdown_seconds": 1.41702080599498,
+      "recovery_worker_spawns": 1,
+      "http_admission": {
+        "completed": true,
+        "audit_recovered": true,
+        "provider_calls": 1
+      },
+      "stopped_state_preserved": true,
+      "unresolved_effect_preserved": true,
+      "reported_response_preserved": true,
+      "new_native_admission_passed": true
+    },
+    {
+      "phase": "rollback",
+      "health_ready": true,
+      "code_origin": "robothor/engine/daemon.py",
+      "shutdown_exit_code": 0,
+      "shutdown_seconds": 1.1179514789982932,
+      "recovery_worker_spawns": 1,
+      "http_admission": {
+        "completed": true,
+        "audit_recovered": true,
+        "provider_calls": 1
+      },
+      "stopped_state_preserved": true,
+      "unresolved_effect_preserved": true,
+      "reported_response_preserved": true,
+      "new_native_admission_passed": true
+    },
+    {
+      "phase": "restore",
+      "health_ready": true,
+      "code_origin": "robothor/engine/daemon.py",
+      "shutdown_exit_code": 0,
+      "shutdown_seconds": 1.2685251249931753,
+      "recovery_worker_spawns": 1,
+      "http_admission": {
+        "completed": true,
+        "audit_recovered": true,
+        "provider_calls": 1
+      },
+      "stopped_state_preserved": true,
+      "unresolved_effect_preserved": true,
+      "reported_response_preserved": true,
+      "new_native_admission_passed": true
+    }
+  ],
+  "scope": "Actual daemon boot, resume scan, HTTP chat admission/audit recovery and shutdown across current/prior/current source checkouts, private database and Redis, scripted provider only. Each revision also passes its native new-admission contract in a separate process. Does not qualify container/dependency rollback or live-provider latency."
+}
