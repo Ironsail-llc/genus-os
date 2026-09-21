@@ -85,6 +85,7 @@ exclude_docs: |
   !/reference/configuration.md
   !/features/goal-pursuit.md
   !/TOOLS.md
+  !/SALES_INTELLIGENCE.md
   !/PLUGINS.md
   !/channels/telegram.md
   !/CONNECTORS.md
@@ -139,6 +140,7 @@ nav:
   - Operating:
       - Goals: features/goal-pursuit.md
       - Tools: TOOLS.md
+      - Sales intelligence: SALES_INTELLIGENCE.md
       - Plugins: PLUGINS.md
       - Telegram channel: channels/telegram.md
       - Connectors: CONNECTORS.md

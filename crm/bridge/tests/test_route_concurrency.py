@@ -153,6 +153,26 @@ def test_only_genuinely_async_routes_run_on_the_event_loop():
         # asyncio.to_thread inside the handler. The read-only listing beside it
         # stays `def` and is correctly absent from this set.
         ("POST", "/api/approvals/{kind}/{approval_id}"),
+        # The five sales identity/recovery routes exist to ask a REMOTE
+        # provider something — Pipedrive for the organizations, people and
+        # leads an operator is about to adopt, Gmail for the sent copy that
+        # proves what an uncertain send actually did. Awaiting that provider is
+        # the whole of what they do; each one's psycopg2 half (loading the
+        # prospect state, the adoption packet, the action row) goes through
+        # asyncio.to_thread inside IdentityReview/GmailRecovery rather than
+        # making the route synchronous. Written `def` they would hold a worker
+        # thread for the whole provider round trip.
+        ("GET", "/api/sales/prospects/{prospect_id}/pipedrive/matches"),
+        ("POST", "/api/sales/prospects/{prospect_id}/pipedrive/inspect"),
+        ("POST", "/api/sales/prospects/{prospect_id}/pipedrive/adopt"),
+        ("POST", "/api/sales/actions/{action_id}/gmail/inspect"),
+        ("POST", "/api/sales/actions/{action_id}/gmail/reconcile"),
+        # The Instantly webhook streams an untrusted request body under
+        # `asyncio.timeout`, which a `def` handler cannot do at all: the body
+        # is read incrementally so an oversized one is refused before it is
+        # buffered. Both vault reads it needs to authenticate go through
+        # asyncio.to_thread ahead of that stream.
+        ("POST", "/api/integrations/instantly/{tenant_id}/webhook"),
     }
 
 

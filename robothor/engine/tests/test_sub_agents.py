@@ -91,10 +91,173 @@ def _make_completed_run(agent_id: str = "email-classifier", **kwargs) -> AgentRu
     return AgentRun(**defaults)  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize(
+    "declared,override,expected",
+    [([], ["read_file"], ["read_file"]), (["read_file"], [], ["read_file"])],
+)
+def test_narrowing_unrestricted_child_and_empty_override_are_unambiguous(
+    spawn_context, child_agent_config, declared, override, expected
+):
+    from robothor.engine.tools.handlers.spawn import _narrow_child_config
+
+    child_agent_config.tools_allowed = declared
+    child_agent_config.tools_denied = ["exec"]
+    _narrow_child_config(child_agent_config, {"tools_override": override}, spawn_context, 1)
+    assert child_agent_config.tools_allowed == expected
+    assert child_agent_config.tools_denied == ["exec"]
+
+
+@pytest.mark.parametrize("granted", ["web_render", "sales_discover", "sales_propose_email"])
+def test_an_override_cannot_grant_an_opt_in_tool_to_an_undeclared_child(
+    spawn_context, child_agent_config, granted
+):
+    """The subset check was skipped entirely for the common case.
+
+    `if child_config.tools_allowed and not set(tools_override) <= ...` is
+    vacuous when the child declares no allowlist — which most children do not.
+    That is fine for an ordinary tool, because a child with no allowlist would
+    have been offered it anyway, so naming it is a narrowing. It is NOT fine
+    for the opt-in families: `OPT_IN_TOOLS` is precisely the set an undeclared
+    child is not offered, so an override naming one is a grant.
+    """
+    from robothor.engine.tools.handlers.spawn import _narrow_child_config
+
+    child_agent_config.tools_allowed = []
+
+    with pytest.raises(ValueError, match="cannot grant"):
+        _narrow_child_config(
+            child_agent_config,
+            {"tools_override": ["read_file", granted]},
+            spawn_context,
+            1,
+        )
+
+
+def test_an_undeclared_child_can_still_be_narrowed_to_ordinary_tools(
+    spawn_context, child_agent_config
+):
+    """The complement: narrowing is the whole point of the argument."""
+    from robothor.engine.tools.handlers.spawn import _narrow_child_config
+
+    child_agent_config.tools_allowed = []
+    _narrow_child_config(
+        child_agent_config, {"tools_override": ["read_file", "web_fetch"]}, spawn_context, 1
+    )
+
+    assert child_agent_config.tools_allowed == ["read_file", "web_fetch"]
+
+
+def test_a_child_that_declares_an_opt_in_tool_may_still_be_narrowed_to_it(
+    spawn_context, child_agent_config
+):
+    """A manifest that asked for it is the grant; the override only narrows."""
+    from robothor.engine.tools.handlers.spawn import _narrow_child_config
+
+    child_agent_config.tools_allowed = ["web_fetch", "web_render", "sales_get_prospect"]
+    _narrow_child_config(child_agent_config, {"tools_override": ["web_render"]}, spawn_context, 1)
+
+    assert child_agent_config.tools_allowed == ["web_render"]
+
+
 # ─── Tool Handler Tests (mock runner.execute, no DB) ──────────────────
 
 
 class TestSpawnAgentTool:
+    @pytest.mark.asyncio
+    async def test_total_limit_survives_repeated_parallel_batches(
+        self, spawn_context, child_agent_config
+    ):
+        import asyncio
+
+        from robothor.engine.spawn_limits import extend_limits
+        from robothor.engine.tools import _current_spawn_context, _handle_spawn_agent, set_runner
+
+        runner = MagicMock()
+        runner.execute = AsyncMock(return_value=_make_completed_run())
+        set_runner(runner)
+        spawn_context.spawn_limits = extend_limits((), 2)
+        token = _current_spawn_context.set(spawn_context)
+        try:
+            with (
+                patch("robothor.engine.config.load_agent_config", return_value=child_agent_config),
+                patch("robothor.engine.dedup.try_acquire", return_value=True),
+                patch("robothor.engine.dedup.release"),
+            ):
+
+                async def call(n):
+                    return await _handle_spawn_agent(
+                        {"agent_id": "email-classifier", "message": f"topic {n}"}, agent_id="parent"
+                    )
+
+                results = await asyncio.gather(*(call(n) for n in range(4)))
+                assert sum("error" not in result for result in results) == 2
+                assert "error" in await call(5)
+            assert runner.execute.await_count == 2
+            assert all(
+                call.kwargs["spawn_context"].spawn_limits == spawn_context.spawn_limits
+                for call in runner.execute.await_args_list
+            )
+        finally:
+            set_runner(None)
+            _current_spawn_context.reset(token)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("allowed", [frozenset({"research-worker"}), frozenset()])
+    async def test_spawn_target_denied_before_loading_manifest(self, spawn_context, allowed):
+        from robothor.engine.tools import _current_spawn_context, _handle_spawn_agent, set_runner
+
+        runner = MagicMock()
+        runner.execute = AsyncMock(return_value=_make_completed_run())
+        set_runner(runner)
+        spawn_context.allowed_agents = allowed
+        token = _current_spawn_context.set(spawn_context)
+        try:
+            with patch("robothor.engine.config.load_agent_config_or_reason") as loader:
+                result = await _handle_spawn_agent(
+                    {"agent_id": "unrelated-agent", "message": "task"}, agent_id="parent"
+                )
+            assert "error" in result
+            loader.assert_not_called()
+            runner.execute.assert_not_awaited()
+        finally:
+            set_runner(None)
+            _current_spawn_context.reset(token)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "child_targets,expected",
+        [
+            ([], frozenset({"email-classifier", "safe-leaf"})),
+            (["safe-leaf", "unrelated-agent"], frozenset({"safe-leaf"})),
+            (["unrelated-agent"], frozenset()),
+        ],
+    )
+    async def test_descendants_cannot_expand_ancestor_spawn_targets(
+        self, spawn_context, child_agent_config, child_targets, expected
+    ):
+        from robothor.engine.tools import _current_spawn_context, _handle_spawn_agent, set_runner
+
+        runner = MagicMock()
+        runner.execute = AsyncMock(return_value=_make_completed_run())
+        set_runner(runner)
+        spawn_context.allowed_agents = frozenset({"email-classifier", "safe-leaf"})
+        child_agent_config.spawn_allowed_agents = child_targets
+        token = _current_spawn_context.set(spawn_context)
+        try:
+            with (
+                patch("robothor.engine.config.load_agent_config", return_value=child_agent_config),
+                patch("robothor.engine.dedup.try_acquire", return_value=True),
+                patch("robothor.engine.dedup.release"),
+            ):
+                result = await _handle_spawn_agent(
+                    {"agent_id": "email-classifier", "message": "task"}, agent_id="parent"
+                )
+            assert "error" not in result
+            assert runner.execute.call_args.kwargs["spawn_context"].allowed_agents == expected
+        finally:
+            set_runner(None)
+            _current_spawn_context.reset(token)
+
     @pytest.mark.asyncio
     async def test_spawn_agent_basic(self, spawn_context, child_agent_config):
         """Completed run returns structured result."""
@@ -307,7 +470,7 @@ class TestSpawnAgentTool:
 
     @pytest.mark.asyncio
     async def test_tool_scoping_override(self, spawn_context, child_agent_config):
-        """tools_override replaces child's tools_allowed."""
+        """tools_override narrows the child's declared allowlist."""
         from robothor.engine.tools import (
             _current_spawn_context,
             _handle_spawn_agent,
@@ -331,16 +494,53 @@ class TestSpawnAgentTool:
                             {
                                 "agent_id": "email-classifier",
                                 "message": "test",
-                                "tools_override": ["exec", "web_search"],
+                                "tools_override": ["read_file"],
                             },
                             agent_id="main",
                         )
 
             passed_config = mock_runner.execute.call_args.kwargs.get("agent_config")
-            assert passed_config.tools_allowed == ["exec", "web_search"]
+            assert passed_config.tools_allowed == ["read_file"]
         finally:
             set_runner(None)  # type: ignore[arg-type]
             _current_spawn_context.set(None)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("override", [["exec"], ["read_file", "exec"], ["*"], "exec"])
+    async def test_tool_override_cannot_widen_child_manifest(
+        self, spawn_context, child_agent_config, override
+    ):
+        from robothor.engine.tools import (
+            _current_spawn_context,
+            _handle_spawn_agent,
+            set_runner,
+        )
+
+        runner = MagicMock()
+        runner.execute = AsyncMock(return_value=_make_completed_run())
+        set_runner(runner)
+        token = _current_spawn_context.set(spawn_context)
+        original = child_agent_config.tools_allowed.copy()
+        try:
+            with (
+                patch("robothor.engine.config.load_agent_config", return_value=child_agent_config),
+                patch("robothor.engine.dedup.try_acquire", return_value=True),
+                patch("robothor.engine.dedup.release"),
+            ):
+                result = await _handle_spawn_agent(
+                    {
+                        "agent_id": child_agent_config.id,
+                        "message": "research",
+                        "tools_override": override,
+                    },
+                    agent_id="main",
+                )
+            assert "error" in result
+            runner.execute.assert_not_awaited()
+            assert child_agent_config.tools_allowed == original
+        finally:
+            set_runner(None)
+            _current_spawn_context.reset(token)
 
     @pytest.mark.asyncio
     async def test_spawn_context_correlation_id(self, spawn_context, child_agent_config):

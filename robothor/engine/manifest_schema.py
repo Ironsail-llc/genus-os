@@ -384,6 +384,8 @@ def _v2_keys_read_by_config() -> frozenset[str]:
     static = frozenset(
         {
             "can_spawn_agents",
+            "spawn_allowed_agents",
+            "max_spawn_total",
             "max_nesting_depth",
             "guardrails",
             "sandbox",
@@ -727,6 +729,14 @@ def _check_semantics(issues: list[ManifestIssue], data: dict[str, Any]) -> None:
     # Model blocks — top-level, heartbeat, and worker all carry one, and the
     # 2026-08-23 incident's broken entry was in the HEARTBEAT block.
     _check_model_block(issues, "model", data.get("model"))
+    model = data.get("model")
+    if isinstance(model, dict) and "provider_order" in model:
+        from robothor.engine.provider_routing import parse_provider_order
+
+        try:
+            parse_provider_order(model["provider_order"])
+        except ValueError as exc:
+            issues.append(ManifestIssue("model.provider_order", "wrong_type", str(exc), "error"))
     _check_last_resort_model(issues)
     _check_stall_budget_vs_llm_timeout(issues, "schedule", data.get("model"), data.get("schedule"))
     for section in ("heartbeat", "worker"):
@@ -814,6 +824,7 @@ def _check_semantics(issues: list[ManifestIssue], data: dict[str, Any]) -> None:
 
         # Numeric ranges
         _check_range(issues, "v2", v2, "max_nesting_depth", 0, 3)
+        _check_range(issues, "v2", v2, "max_spawn_total", 0, 100)
         _check_range(issues, "v2", v2, "sub_agent_max_iterations", 1, 100)
         _check_range(issues, "v2", v2, "sub_agent_timeout_seconds", 1, 3600)
         _check_range(issues, "v2", v2, "safety_cap", 1, 10000)

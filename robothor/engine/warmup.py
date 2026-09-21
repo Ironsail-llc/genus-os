@@ -196,7 +196,9 @@ def build_warmth_preamble(
     )
     _run_section(
         "context_files",
-        lambda: _build_context_files_section(config.warmup_context_files, workspace),
+        lambda: _build_context_files_section(
+            config.warmup_context_files, workspace, snapshot=config.knowledge_snapshot
+        ),
     )
     _run_section("peers", lambda: _build_peer_section(config.warmup_peer_agents))
     _run_section("context_hooks", _run_context_hooks)
@@ -419,10 +421,26 @@ def _count_operator_blocks_with_content(
     return count
 
 
-def _build_context_files_section(file_paths: list[str], workspace: Path) -> str:
+def _build_context_files_section(
+    file_paths: list[str], workspace: Path, *, snapshot: tuple[tuple[str, str], ...] | None = None
+) -> str:
     """Read context files (status files etc.) and format them."""
     if not file_paths:
         return ""
+
+    if snapshot is not None:
+        files = dict(snapshot)
+        if any(path not in files for path in file_paths):
+            raise ValueError("Warmup context is outside its verified fleet snapshot")
+        lines = ["--- CONTEXT FILES ---"]
+        for path in file_paths:
+            content = files[path]
+            if content.strip():
+                truncated = content[:MAX_FILE_CHARS] + (
+                    "..." if len(content) > MAX_FILE_CHARS else ""
+                )
+                lines.append(f"[{path}] (release snapshot)\n{truncated}")
+        return "\n".join(lines) if len(lines) > 1 else ""
 
     lines = ["--- CONTEXT FILES ---"]
     for rel_path in file_paths:

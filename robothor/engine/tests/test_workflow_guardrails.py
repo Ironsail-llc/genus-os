@@ -78,3 +78,47 @@ async def test_benign_tool_runs():
     assert registry.execute.await_args.kwargs["tenant_id"] == "tenant-1"
     assert registry.execute.await_args.kwargs["user_id"] == "human-1"
     assert registry.execute.await_args.kwargs["user_role"] == "member"
+
+
+@pytest.mark.asyncio
+async def test_tool_step_uses_its_declared_timeout():
+    from robothor.engine.workflow import parse_workflow
+
+    wf = parse_workflow(
+        {
+            "id": "bounded-worker",
+            "timeout_seconds": 400,
+            "steps": [
+                {
+                    "id": "pump",
+                    "type": "tool",
+                    "tool_name": "sales_process_queue",
+                    "tool_args": {"stage": "research"},
+                    "tool_timeout_seconds": 330,
+                },
+            ],
+        }
+    )
+    engine, registry = _engine_with_spy_registry()
+    await engine._run_tool_step(wf.steps[0], WorkflowRun(workflow_id=wf.id), _result())
+    assert registry.execute.await_args.kwargs["timeout"] == 330
+
+
+@pytest.mark.parametrize("timeout", [0, -1, True, "330", 5000])
+def test_invalid_tool_step_timeout_is_refused(timeout):
+    from robothor.engine.workflow import parse_workflow
+
+    with pytest.raises(ValueError):
+        parse_workflow(
+            {
+                "id": "invalid",
+                "steps": [
+                    {
+                        "id": "pump",
+                        "type": "tool",
+                        "tool_name": "sales_process_queue",
+                        "tool_timeout_seconds": timeout,
+                    },
+                ],
+            }
+        )

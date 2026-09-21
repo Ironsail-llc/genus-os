@@ -1457,8 +1457,12 @@ def _retry_after_seconds(resp: Any) -> float:
     return min(max(value, 0.0), _BRAVE_MAX_BACKOFF_S)
 
 
-async def _brave_search(query: str, limit: int) -> list[dict[str, str]] | None:
+async def _brave_search(
+    query: str, limit: int, *, accounting: Any = None
+) -> list[dict[str, str]] | None:
     """Brave Search API, if the operator configured a key. None = not available."""
+    from robothor.engine.brave_budget import BraveSearchBudget
+    from robothor.engine.request_budget import RequestBudgetError, active_budget
     from robothor.engine.search_config import brave_search_key
 
     key = brave_search_key()
@@ -1468,9 +1472,13 @@ async def _brave_search(query: str, limit: int) -> list[dict[str, str]] | None:
         # The month is spent (Brave told us so on the last 429). Dialling again
         # buys three backoffs and the same answer; the fallbacks are the answer.
         return None
+    budget = active_budget()
+    if budget is not None and (accounting is None or accounting.budget is not budget):
+        accounting = BraveSearchBudget(budget)
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             for attempt in range(1, _BRAVE_MAX_ATTEMPTS + 1):
+                funded = await accounting.reserve() if accounting is not None else None
                 resp = await client.get(
                     BRAVE_API_URL,
                     params={"q": query, "count": max(1, min(limit, 20))},
@@ -1480,6 +1488,8 @@ async def _brave_search(query: str, limit: int) -> list[dict[str, str]] | None:
                         "User-Agent": _USER_AGENT,
                     },
                 )
+                if funded is not None:
+                    funded["response_status"] = resp.status_code
                 QUOTA.record(getattr(resp, "headers", None) or {}, resp.status_code)
                 if resp.status_code == 429 and QUOTA.monthly_exhausted():
                     # Not a one-second limit: the monthly budget is gone until
@@ -1502,6 +1512,8 @@ async def _brave_search(query: str, limit: int) -> list[dict[str, str]] | None:
                 resp.raise_for_status()
                 data = resp.json()
                 break
+    except RequestBudgetError:
+        raise
     except Exception as e:
         logger.warning("Brave search failed, falling through: %s", e)
         return None
@@ -1743,7 +1755,15 @@ async def _search_with_fallback(
     query: str, limit: int, provider: str, ctx: ToolContext
 ) -> dict[str, Any]:
     """Pick a provider, grade what it returned, and fall back when it is empty."""
+    from robothor.engine.brave_budget import BraveSearchBudget
+    from robothor.engine.request_budget import RequestBudgetError, active_budget
+    from robothor.engine.search_config import brave_search_key
+
+    budget = active_budget()
+    bounded = budget is not None
     if provider == "perplexity":
+        if bounded:
+            return {"error": "Search provider has no bounded spending contract"}
         try:
             from robothor.rag.web_search import search_perplexity
 
@@ -1759,15 +1779,28 @@ async def _search_with_fallback(
     # only when the caller left the choice open or asked for it. An explicit
     # provider="searxng" means SearXNG, not "whatever we think is best".
     brave_skipped: str | None = None
+    accounting = None
     if provider in ("auto", "brave"):
-        brave_rows = await _brave_search(query, limit)
+        brave_rows = None
+        try:
+            if budget is not None and brave_search_key() and not QUOTA.skip_reason():
+                accounting = BraveSearchBudget(budget)
+                await accounting.prepare()
+                brave_rows = await _brave_search(query, limit, accounting=accounting)
+            elif not bounded:
+                brave_rows = await _brave_search(query, limit)
+        except RequestBudgetError as exc:
+            brave_skipped = f"Brave budget admission failed: {exc}"
         if brave_rows:
-            return _with_quota(
-                {"results": brave_rows, "count": len(brave_rows), "provider": "brave"}
-            )
-        brave_skipped = QUOTA.skip_reason()
+            result = {"results": brave_rows, "count": len(brave_rows), "provider": "brave"}
+            if accounting is not None:
+                result["brave_budget"] = accounting.receipt()
+            return _with_quota(result)
+        brave_skipped = brave_skipped or QUOTA.skip_reason()
 
     out = await _scraped_search_with_fallback(query, limit, ctx)
+    if accounting is not None:
+        out["brave_budget"] = accounting.receipt()
     if brave_skipped:
         # The operator's rule: a dead rung is named, never silently walked past.
         out["brave_skipped"] = brave_skipped

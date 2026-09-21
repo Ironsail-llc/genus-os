@@ -35,6 +35,12 @@ import logging
 import os
 from typing import Any
 
+from robothor.engine.interactive_recency import (  # noqa: F401
+    INTERACTIVE_WARMUP_MAX_AGE_S,
+    _seconds_since_last_interactive_run,
+    should_warm_interactive,
+)
+
 # LLM dispatch/cost/streaming + the request-timeout constants now live in
 # llm_client.LLMClient (Phase A / Slice 1). AgentRunner delegates to an
 # instance of it; the historical method surface is preserved via thin
@@ -60,62 +66,6 @@ from robothor.engine.thin_announce import (
     is_thin_announce_output,
 )
 from robothor.engine.tracking import create_step, create_steps_batch, update_run
-
-#: How stale an interactive preamble may be before the next turn re-warms.
-#: The old gate was "history is empty", which never fires on a persistent
-#: session: main.yaml sets session_target: persistent and that session holds
-#: 5,560 messages. Measured over 30 days, cron runs executed 11.0 warmup
-#: sections each while telegram runs executed 0.0 — the operator's own
-#: conversations loaded no memory blocks, preferences or breadcrumbs at all.
-INTERACTIVE_WARMUP_MAX_AGE_S = 900
-
-
-def _seconds_since_last_interactive_run(agent_id: str, tenant_id: str) -> float | None:
-    """Seconds since this agent's previous interactive run, or None if there is none.
-
-    Best-effort: on any error the caller warms, which is the safe direction —
-    a redundant preamble costs latency, a missing one costs the operator their
-    memory context.
-    """
-    try:
-        from robothor.db.connection import get_connection
-
-        with get_connection() as conn, conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT EXTRACT(EPOCH FROM (NOW() - MAX(created_at)))
-                FROM agent_runs
-                WHERE agent_id = %s AND tenant_id = %s
-                  AND trigger_type IN ('telegram', 'webchat')
-                """,
-                (agent_id, tenant_id),
-            )
-            row = cur.fetchone()
-            return float(row[0]) if row and row[0] is not None else None
-    except Exception as exc:  # noqa: BLE001 — never block a turn on this
-        logger.debug("interactive warmup recency lookup failed: %s", _sanitize(exc))
-        return None
-
-
-def should_warm_interactive(*, history_len: int, seconds_since_warmup: float | None) -> bool:
-    """Whether an interactive turn should build the warmup preamble.
-
-    First turn of a session always warms. After that, warm again once the last
-    preamble is older than ``INTERACTIVE_WARMUP_MAX_AGE_S`` — a conversation
-    resumed hours later gets fresh memory, a rapid back-and-forth does not pay
-    for it on every turn.
-
-    The old comment claimed follow-ups inherit memory blocks from conversation
-    history. They do not: the preamble is prepended to a local variable and
-    never persisted to the session, so there is nothing for a follow-up to
-    inherit.
-    """
-    if history_len <= 0:
-        return True
-    if seconds_since_warmup is None:
-        return True
-    return seconds_since_warmup > INTERACTIVE_WARMUP_MAX_AGE_S
-
 
 # Init timeout: max seconds for agent setup before first LLM call.
 # Agents that hang during warmup, adapter loading, or tool registration
@@ -841,6 +791,13 @@ class RunFinalizationMixin:
 
     def _persist_run_sync(self, run: AgentRun) -> None:
         """Synchronous DB persistence — update run + batch-insert steps + CRM task."""
+        from robothor.engine.request_budget import active_budget
+
+        budget = active_budget()
+        if budget is not None:
+            # Context propagates into the persistence task and its worker thread.
+            # Keep auxiliary/uncertain attempts visible in the stored run too.
+            run.total_cost_usd = max(run.total_cost_usd, budget.charged_units / 1e6)
         # Assess outcome for interactive runs before persisting
         self._assess_outcome(run)
 

@@ -470,6 +470,20 @@ def _tool_policy(manifest: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _spawn_options(v2: dict[str, Any]) -> dict[str, Any]:
+    """Parse the manifest's delegation limits and target scope."""
+    return {
+        "can_spawn_agents": v2.get("can_spawn_agents", False),
+        "spawn_allowed_agents": list(v2.get("spawn_allowed_agents", [])),
+        "max_spawn_total": int(v2.get("max_spawn_total", 0)),
+        "max_nesting_depth": min(int(v2.get("max_nesting_depth", 2)), 3),
+        "sub_agent_max_iterations": int(v2.get("sub_agent_max_iterations", 10)),
+        "sub_agent_timeout_seconds": int(v2.get("sub_agent_timeout_seconds", 0)),
+        "max_concurrent_spawns": int(v2.get("max_concurrent_spawns", 0)),
+        "max_spawn_batch": int(v2.get("max_spawn_batch", 0)),
+    }
+
+
 def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
     """Convert a YAML manifest dict to an AgentConfig."""
     model = manifest.get("model", {})
@@ -544,6 +558,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
             persistent_history_limit=int(raw_heartbeat.get("persistent_history_limit", 20)),
             tools_allowed=raw_heartbeat.get("heartbeat_tools_allowed", []),
             task_authorship_agent=raw_heartbeat.get("task_authorship_agent", ""),
+            auto_task=bool(raw_heartbeat.get("auto_task", False)),
             # token_budget is auto-derived at runtime from model registry × max_iterations
         )
 
@@ -577,6 +592,7 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
             cost_budget_usd=float(raw_worker.get("cost_budget_usd", 0.0)),
             persistent_history_limit=int(raw_worker.get("persistent_history_limit", 20)),
             tools_allowed=raw_worker.get("worker_tools_allowed", []),
+            auto_task=bool(raw_worker.get("auto_task", False)),
         )
 
     # Channel-bus config — main only. Parsed here so the scheduler can read
@@ -598,12 +614,16 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
     # v2 enhancement fields
     v2 = manifest.get("v2", {})
 
+    from robothor.engine.provider_routing import parse_provider_order
+
     config = AgentConfig(
         id=manifest["id"],
         name=manifest.get("name", manifest["id"]),
         description=manifest.get("description", ""),
         model_primary=model.get("primary", ""),
         model_fallbacks=_with_last_resort(model.get("primary", ""), model.get("fallbacks", [])),
+        response_format=model.get("response_format", "text"),
+        provider_order=parse_provider_order(model.get("provider_order", {})),
         cron_expr=schedule.get("cron", ""),
         schedule_enabled=bool(schedule.get("enabled", True)),
         timezone=schedule.get("timezone", "America/New_York"),
@@ -653,14 +673,8 @@ def manifest_to_agent_config(manifest: dict[str, Any]) -> AgentConfig:
         channel_bus=channel_bus_config,
         # Safety cap — absolute max iterations (infinite-loop protection only)
         safety_cap=int(schedule.get("safety_cap", v2.get("safety_cap", 200))),
-        # v2 enhancements — sub-agent spawning
-        can_spawn_agents=v2.get("can_spawn_agents", False),
+        **_spawn_options(v2),
         workspace_inventory=bool(v2.get("workspace_inventory", False)),
-        max_nesting_depth=min(int(v2.get("max_nesting_depth", 2)), 3),  # cap at 3
-        sub_agent_max_iterations=int(v2.get("sub_agent_max_iterations", 10)),
-        sub_agent_timeout_seconds=int(v2.get("sub_agent_timeout_seconds", 0)),
-        max_concurrent_spawns=int(v2.get("max_concurrent_spawns", 0)),
-        max_spawn_batch=int(v2.get("max_spawn_batch", 0)),
         mcp_servers=v2.get("mcp_servers", []),
         # v2 enhancements
         error_feedback=v2.get("error_feedback", True),
@@ -1378,6 +1392,8 @@ def build_system_prompt(config: AgentConfig, workspace: Path) -> SystemPromptPar
     Returns a SystemPromptParts with static (file-based, cached) and dynamic
     (time context, always fresh) portions separated for API-level caching.
     """
+    if config.knowledge_snapshot is not None:
+        return _prompt_with_time(_snapshot_prompt_body(config), config.timezone)
     # Collect all source file paths for mtime checking
     source_files: list[Path] = []
     workspace_resolved = workspace.resolve()
@@ -1465,8 +1481,36 @@ def build_system_prompt(config: AgentConfig, workspace: Path) -> SystemPromptPar
         body = "\n\n---\n\n".join(parts)
         _prompt_cache[cache_key] = (max_mtime, body)
 
-    # Always append fresh time context (dynamic tail)
-    tz = ZoneInfo(config.timezone or "America/New_York")
+    return _prompt_with_time(body, config.timezone)
+
+
+def _snapshot_prompt_body(config: AgentConfig) -> str:
+    """Use captured release knowledge without filesystem or legacy cache reads."""
+    from robothor.engine.prompts import behavioral_rules
+    from robothor.engine.skills import build_skill_catalog
+
+    files = dict(config.knowledge_snapshot or ())
+    references = [config.instruction_file, *config.bootstrap_files]
+    if not config.fleet_release_id or any(
+        path and path not in files for path in [*references, *config.warmup_context_files]
+    ):
+        raise ValueError("Prompt references content outside its verified fleet snapshot")
+    parts = [SECURITY_PREAMBLE, behavioral_rules()]
+    parts.extend(files[path] for path in references if path)
+    if sum(map(len, parts)) > BOOTSTRAP_TOTAL_MAX_CHARS:
+        raise ValueError("Fleet snapshot system prompt exceeds the bootstrap character limit")
+    try:
+        catalog = build_skill_catalog()
+        if catalog:
+            parts.append(catalog)
+    except Exception as exc:
+        logger.debug("Skill catalog failed: %s", type(exc).__name__)
+    return "\n\n---\n\n".join(parts)
+
+
+def _prompt_with_time(body: str, timezone: str) -> SystemPromptParts:
+    # Always append fresh time context (dynamic tail).
+    tz = ZoneInfo(timezone or "America/New_York")
     now = datetime.now(tz)
     time_context = (
         f"Current time: {now.strftime('%A, %B %d, %Y %I:%M %p %Z')} "
