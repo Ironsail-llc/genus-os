@@ -49,6 +49,32 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
     tmp_path,  # noqa: F811
 ):
     engine = request.getfixturevalue("runner")
+    from robothor.engine.performance import run_measurements
+
+    measured_runs = {}
+    finish_run = engine._finish_run
+
+    def measured_finish(run, *args, **kwargs):
+        result = finish_run(run, *args, **kwargs)
+        measured_runs[result.id] = {
+            **run_measurements(result),
+            "steps": [
+                {
+                    "type": str(step.step_type),
+                    "tool": step.tool_name,
+                    "model": step.model,
+                    "duration_ms": step.duration_ms,
+                    "input_tokens": step.input_tokens,
+                    "output_tokens": step.output_tokens,
+                    "failed": bool(step.error_message),
+                }
+                for step in result.steps
+                if str(step.step_type) in {"llm_call", "tool_call"}
+            ],
+        }
+        return result
+
+    monkeypatch.setattr(engine, "_finish_run", measured_finish)
     # Private run rows are test activity, not the running installation's health.
     monkeypatch.setattr(
         "robothor.engine.host_state.host_state_section",
@@ -276,6 +302,7 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
                     "robothor": done["text"],
                     "run": done,
                     "elapsed_ms": (time.perf_counter() - turn_started) * 1000,
+                    "measurements": measured_runs.get(done.get("run_id")),
                 }
             )
             snapshot = store.get(db, goal["id"])
@@ -298,6 +325,8 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
                     + "\n"
                 )
             assert done["status"] == "completed", done
+            measured = transcript[-1]["measurements"]
+            assert measured is not None and measured["run_id"] == done["run_id"]
             assert done["duration_ms"] <= 60_000, "completed response exceeded the host deadline"
             expected_parent = (
                 "waiting"
@@ -312,7 +341,14 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
                     "queued" if message == status_question else "paused"
                 )
                 assert child_state["evidence"] == []
+    assert (
+        sum(turn["measurements"]["tool_calls"] for turn in transcript)
+        == engine.registry.execute.await_count
+    )
     if live:
+        assert (
+            sum(turn["measurements"]["model_calls"] for turn in transcript) == outbound.call_count
+        )
         assert "get_pursuit_goal" in calls and calls.count("update_pursuit_goal") == 1
         assert outbound.call_count > 0
     else:
