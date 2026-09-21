@@ -9,16 +9,16 @@
   "replacement_selected": false,
   "checks": {
     "engine": {
-      "revision": "d249494d752",
-      "passed": 11272,
+      "revision": "e69866dfe64",
+      "passed": 11298,
       "failed": 0,
       "skipped": 29,
-      "deselected": 211,
+      "deselected": 214,
       "warnings": 393,
-      "seconds": 392.39,
+      "seconds": 396.54,
       "selection": "not slow and not integration and not llm and not e2e and not smoke",
-      "log": "bench/runtime/uat-runtime-unfinished-task-engine-regression.log",
-      "note": "Product source and collected tests unchanged throughout invocation; new uncollected readback tests were added separately while it ran. Verifies unfinished-task finalization. Predates subsequent chat-triggered CRM recovery and nonapplication receipt changes, which have their own focused and canonical evidence. Existing warning/skip counts retained."
+      "log": "bench/runtime/uat-runtime-chat-recovery-engine-regression.log",
+      "note": "Product source and collected tests unchanged for the full invocation. Includes unfinished-task completion, chat-triggered CRM readback, retained nonapplication evidence and verified retry projection. Existing warnings retained; canonical/browser checks reported separately. No full acceptance claim."
     },
     "frontend": {
       "base_revision": "56aa76e6aa0",
@@ -3820,7 +3820,7 @@
         "Independent outage test: calendar exception skipped valid CRM readback; one failed, ten passed.",
         "Nonapplication test: dropping not_applied audit entry restored a stale verified success claim; one failed, eleven passed."
       ],
-      "limits": "Private local SQL/ASGI tests; canonical cases use actual native CRM creation, injected acknowledgement/readback loss and no live model/provider. No loaded recovery polling performance claim or universal external-provider verifier. Broad engine result predates this change; overall/manual acceptance remain open.",
+      "limits": "Private local SQL/ASGI tests; canonical cases use actual native CRM creation, injected acknowledgement/readback loss and no live model/provider. Broad engine/browser regression at e69866dfe64 now includes these changes. No loaded recovery polling performance claim or universal external-provider verifier; overall/manual acceptance remain open.",
       "frontend": {
         "passed": 20,
         "files": 2,
@@ -3856,7 +3856,28 @@
         "log": "bench/runtime/uat-runtime-chat-retry-receipts-canonical.log"
       },
       "native_case": "An undispatched failed worker intent is proven not applied. A separate permitted native create_task attempt stores exactly one task, then repeated audit reads preserve both effects and identify the verified retry without invoking a tool/model.",
-      "limits": "Private local tests with synthetic business records. Does not authorize automatic retry or resume stopped work. Broad regression pending for this source; manual/overall acceptance remain open."
+      "limits": "Private local tests with synthetic business records. Does not authorize automatic retry or resume stopped work. Broad engine and browser/native checks now pass at e69866dfe64; manual/overall acceptance remain open."
+    },
+    "engine_before_chat_recovery": {
+      "revision": "d249494d752",
+      "passed": 11272,
+      "failed": 0,
+      "skipped": 29,
+      "deselected": 211,
+      "warnings": 393,
+      "seconds": 392.39,
+      "selection": "not slow and not integration and not llm and not e2e and not smoke",
+      "log": "bench/runtime/uat-runtime-unfinished-task-engine-regression.log",
+      "note": "Product source and collected tests unchanged throughout invocation; new uncollected readback tests were added separately while it ran. Verifies unfinished-task finalization. Predates subsequent chat-triggered CRM recovery and nonapplication receipt changes, which have their own focused and canonical evidence. Existing warning/skip counts retained."
+    },
+    "browser_after_chat_recovery": {
+      "revision": "e69866dfe64",
+      "passed": 60,
+      "skipped": 2,
+      "warnings": 1,
+      "seconds": 44.96,
+      "log": "bench/runtime/uat-runtime-chat-recovery-browser-regression.log",
+      "note": "Private canonical migration/native suite and seven browser cases. Reused the previous successful app build only after verifying app/src, package, lock and Next config unchanged from 170bdd3140e. Source unchanged throughout invocation; synthetic provider only."
     }
   },
   "calendar": {
@@ -4056,6 +4077,7 @@
   },
   "remaining": [
     "Full representative native-workload reliability and provider latency remain unqualified. Existing configured-model screening uses reduced profiles; 97-field installation parsing parity does not establish full prompt/tool/memory execution parity. Preserve all observed failures and timeouts.",
+    "Combined native multi-day parent/child completion alongside everyday requests remains unverified: the existing restored-day-old test uses a simulated executor, while native mixed workload and full-daemon crash/idle tests cover separate parts. Extend the combined scenario through the actual native runner on private storage.",
     "Eligible simple profiles and deterministic calendar confirmation have bounded deadlines. Classification and enforcement of the 60-second policy across all simple conversational actions remain unproven.",
     "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded. Production ingress, selected-provider p95 across the representative workload, and mixed-load fallback operating limits are not certified. Dispatch-only improvements do not qualify complete request latency.",
     "Retain the current runtime: the tested bounded candidates failed required behavior and are not finalists. Any future replacement still needs behavior parity, matched configurations, 100-repetition finalist measurements and compatible checkpoint upgrades. No replacement is selected.",
