@@ -250,3 +250,39 @@ def test_ordinary_run_creation_preserves_identity_and_empty_terminal_fields(
     assert str(stored["person_id"]) == run.person_id
     assert stored["status"] == "pending"
     assert stored["completed_at"] is None and stored["error_message"] is None
+
+
+async def test_simple_interactive_profile_expiry_has_recoverable_audit(
+    records,  # noqa: F811
+    audit_store,
+    monkeypatch,  # noqa: F811
+):
+    from types import SimpleNamespace
+
+    from robothor.engine.runtime import action_policy
+
+    monkeypatch.setattr(action_policy, "SIMPLE_ACTION_SECONDS", 0.02)
+    auth, client = identity(), str(uuid4())
+    request = RunRequest(
+        ExecutionContext(auth.tenant_id, auth.user_id, request_key(auth, "web:main", client)),
+        "main",
+        "Create the requested task",
+        {"trigger_type": "webchat", "agent_config": SimpleNamespace(difficulty_class="simple")},
+    )
+    execute = AsyncMock()
+
+    async def stalled(event):
+        await asyncio.Event().wait()
+
+    with pytest.raises(RuntimeDeadlineError):
+        await CurrentRuntime(execute, audit_admission=True).run(request, stalled)
+    execute.assert_not_awaited()
+    outcome = read_outcome(auth, "web:main", client)
+    assert outcome["terminal"] and outcome["state"] == "timeout"
+    assert "expired before execution began" in outcome["text"]
+    assert not outcome["verified"] and not outcome["effects"]
+    with records() as conn, conn.cursor() as cur:
+        cur.execute("SELECT runtime_context FROM agent_runs WHERE id=%s", (outcome["run_id"],))
+        recorded = cur.fetchone()[0]
+    assert recorded["deadline"] is not None
+    assert recorded["request_id"] == request.context.request_id

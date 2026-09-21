@@ -17,23 +17,33 @@ def apply_action_deadline(request):
         or getattr(options.get("agent_config"), "is_benchmark", False)
     ):
         return request
-    history = options.get("conversation_history") or []
-    if not isinstance(request.message, str) or not isinstance(history, list):
-        return request
-    if not history or not isinstance(history[-1], dict):
-        return request
-    from robothor.engine.calendar_operations import confirmation_id
-
-    if not confirmation_id(request.message, history):
-        return request
     from robothor.engine.run_context import in_benchmark_run
-    from robothor.settings import get_settings
 
-    if in_benchmark_run() or not get_settings().engine.calendar_operations_enabled:
+    simple_profile = (
+        request.context.parent_id is None
+        and options.get("trigger_type") in {"webchat", "telegram"}
+        and getattr(options.get("agent_config"), "difficulty_class", "") == "simple"
+    )
+    if in_benchmark_run() or not (simple_profile or _confirmed_operation(request)):
         return request
     deadline = datetime.now(UTC) + timedelta(seconds=SIMPLE_ACTION_SECONDS)
     if request.context.deadline is not None:
         deadline = min(deadline, request.context.deadline)
-    # The operation's arguments, scope and confirmation are still checked by
-    # native tool admission. Recognition here only restricts available time.
+    # This policy only restricts time. Native tool admission still checks
+    # identity, permissions, arguments and any required confirmation.
     return replace(request, context=replace(request.context, deadline=deadline))
+
+
+def _confirmed_operation(request):
+    from robothor.engine.calendar_operations import confirmation_id
+    from robothor.settings import get_settings
+
+    history = request.options.get("conversation_history") or []
+    if not isinstance(request.message, str) or not isinstance(history, list):
+        return False
+    if not history or not isinstance(history[-1], dict):
+        return False
+    return bool(
+        confirmation_id(request.message, history)
+        and get_settings().engine.calendar_operations_enabled
+    )

@@ -100,3 +100,88 @@ def test_background_goal_and_resume_keep_existing_policy(confirmed):
     assert action_policy.apply_action_deadline(goal) is goal
     resumed = replace(confirmed, resume_from="existing-run")
     assert action_policy.apply_action_deadline(resumed) is resumed
+
+
+@pytest.mark.parametrize("trigger", ["webchat", "telegram"])
+def test_explicit_simple_interactive_profile_is_bounded_without_calendar_feature(
+    confirmed, monkeypatch, trigger
+):
+    monkeypatch.setattr(
+        "robothor.settings.get_settings",
+        lambda: SimpleNamespace(engine=SimpleNamespace(calendar_operations_enabled=False)),
+    )
+    request = replace(
+        confirmed,
+        message="Create the requested task",
+        options={
+            "trigger_type": trigger,
+            "agent_config": SimpleNamespace(difficulty_class="simple", is_benchmark=False),
+        },
+    )
+    bounded = action_policy.apply_action_deadline(request)
+    assert bounded.context.deadline is not None
+    assert 59 < (bounded.context.deadline - datetime.now(UTC)).total_seconds() <= 60
+    assert bounded.options == request.options
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"trigger_type": "event"},
+        {"trigger_type": "manual"},
+        {"agent_config": SimpleNamespace(difficulty_class="complex")},
+        {"agent_config": SimpleNamespace(difficulty_class="")},
+        {"readonly_mode": True},
+        {"deep_plan": True},
+        {"spawn_context": SimpleNamespace(parent_run_id="parent")},
+    ],
+)
+def test_simple_profile_deadline_does_not_change_other_modes(confirmed, changes):
+    request = replace(
+        confirmed,
+        message="Do the work",
+        options={
+            "trigger_type": "webchat",
+            "agent_config": SimpleNamespace(difficulty_class="simple"),
+            **changes,
+        },
+    )
+    assert action_policy.apply_action_deadline(request) is request
+
+
+async def test_simple_profile_deadline_covers_admission_and_preserves_shorter_limit(
+    confirmed, monkeypatch
+):
+    monkeypatch.setattr(action_policy, "SIMPLE_ACTION_SECONDS", 0.02)
+    request = replace(
+        confirmed,
+        message="Create the requested task",
+        options={
+            "trigger_type": "webchat",
+            "agent_config": SimpleNamespace(difficulty_class="simple"),
+        },
+    )
+    execute = AsyncMock()
+
+    async def stalled(event):
+        await asyncio.Event().wait()
+
+    with pytest.raises(RuntimeDeadlineError):
+        await asyncio.wait_for(CurrentRuntime(execute).run(request, stalled), 0.3)
+    execute.assert_not_awaited()
+    deadline = datetime.now(UTC) - timedelta(seconds=1)
+    shorter = replace(request, context=replace(request.context, deadline=deadline))
+    assert action_policy.apply_action_deadline(shorter).context.deadline == deadline
+
+
+def test_delegated_simple_profile_retains_parent_policy(confirmed):
+    request = replace(
+        confirmed,
+        context=replace(confirmed.context, parent_id="parent"),
+        message="Do the work",
+        options={
+            "trigger_type": "webchat",
+            "agent_config": SimpleNamespace(difficulty_class="simple"),
+        },
+    )
+    assert action_policy.apply_action_deadline(request) is request
