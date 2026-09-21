@@ -1692,3 +1692,12 @@ The brief focused run overlapped the already latency-failing streaming cohort; r
 ### Selective parent resume accepted by the user — 2026-09-21
 
 The user explicitly answered “Yes, that matches” to the normal-chat case: separately pause a child, then resume the parent while keeping that child paused. Accepted outcome: parent queued, child paused, unfinished task still open. The current transcript and verification index now record that acceptance; prior test evidence/revision is preserved. This does not approve other unreviewed goal controls, declare overall acceptance, or authorize resuming any real goal.
+
+
+### Deferred streaming failed latency; cancellation recovery passed — 2026-09-21
+
+The full tool-discovery streaming cohort completed30/30 correctly with exactly one matching task and additional calculation per request. p95 37.116 seconds (95% bootstrap interval31.084–51.913), six over30 seconds, none over60, zero duplicates/post-return calls. All sixty primary streams completed; recorded native cost$0.048626 is not a billing reconciliation. Two brief focused goal-control checks overlapped after p95 had already failed. This unpaired cohort does not establish causal speedup or qualify promotion; raw data and report are retained. Pytest81passed,2skipped,2warnings,644.71seconds.
+
+Expanded native control-recovery coverage passed four cases: pause/cancel with narrow tools or real broad-tool deferral. Parent/child state, TODO preservation, failed-reply audit recovery, tenant/principal isolation, stale controls and model-call counts are checked. Cancellation is not newly user-accepted by these tests.
+
+Next: three normal-settings streaming diagnostics with first-reasoning/answer timing and reported usage. This is a measurement run, not another policy selection. No production changes.

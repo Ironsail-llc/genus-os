@@ -1,4 +1,4 @@
-"""A saved goal pause remains visible when the next model turn cannot answer."""
+"""Saved goal controls remain visible when the next model turn cannot answer."""
 
 import json
 import os
@@ -23,12 +23,15 @@ from robothor.goals.model import CreateGoal, GoalUpdate
 pytestmark = pytest.mark.integration
 
 
+@pytest.mark.parametrize("action,status", [("pause", "paused"), ("cancel", "canceled")])
 @pytest.mark.parametrize("deferred", [False, True])
-async def test_saved_family_pause_is_reported_after_model_exhaustion(
+async def test_saved_family_control_is_reported_after_model_exhaustion(
     engine_config,
     sample_agent_config,
     monkeypatch,
     deferred,
+    action,
+    status,
 ):
     dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
     if "host=/tmp/runtime-migrated-" not in dsn:
@@ -89,7 +92,7 @@ async def test_saved_family_pause_is_reported_after_model_exhaustion(
                                         {
                                             "goal_id": goal["id"],
                                             "version": goal["version"],
-                                            "action": "pause",
+                                            "action": action,
                                         }
                                     ),
                                 },
@@ -114,7 +117,7 @@ async def test_saved_family_pause_is_reported_after_model_exhaustion(
     client_id = str(uuid4())
     run = await engine.execute(
         "main",
-        f"Pause goal {goal['id']}.",
+        f"{action.capitalize()} goal {goal['id']}.",
         agent_config=config,
         correlation_id=request_key(auth, "synthetic-control", client_id),
         trigger_type=TriggerType.WEBCHAT,
@@ -125,12 +128,12 @@ async def test_saved_family_pause_is_reported_after_model_exhaustion(
     await get_task_registry().drain(timeout=5)
     assert str(run.status) == "failed" and len(calls) == 2
     paused = store.get(tenant, goal["id"])
-    assert paused["status"] == store.get(tenant, child["id"])["status"] == "paused"
+    assert paused["status"] == store.get(tenant, child["id"])["status"] == status
     assert sorted(task["status"] for task in paused["tasks"]) == ["DONE", "TODO"]
     result = await final_result(
         run, AuthContext(tenant_id=tenant, user_id="operator", role="owner", typ="user")
     )
-    assert "paused" in result["text"].lower(), result
+    assert status in result["text"].lower(), result
     assert result.get("audit_outcome") is True
     assert len(calls) == 2
 
@@ -147,7 +150,7 @@ async def test_saved_family_pause_is_reported_after_model_exhaustion(
 
     saved = receipts()
     assert {r["goal_id"] for r in saved} == {goal["id"], child["id"]}
-    assert all(r["status"] == "paused" and r["action"] == "pause" for r in saved)
+    assert all(r["status"] == status and r["action"] == action for r in saved)
     assert (
         receipts(AuthContext(tenant_id=tenant, user_id="another", role="owner", typ="user")) == []
     )
@@ -156,14 +159,15 @@ async def test_saved_family_pause_is_reported_after_model_exhaustion(
         == []
     )
     assert store.control_origin.get() is None
-    store.update(
-        tenant,
-        goal["id"],
-        GoalUpdate(action="resume", version=paused["version"]),
-        "operator",
-        operator=True,
-    )
-    assert store.get(tenant, goal["id"])["status"] == "queued"
+    if action == "pause":
+        store.update(
+            tenant,
+            goal["id"],
+            GoalUpdate(action="resume", version=paused["version"]),
+            "operator",
+            operator=True,
+        )
+        assert store.get(tenant, goal["id"])["status"] == "queued"
     assert receipts() == saved  # A later control cannot rewrite this request's evidence.
     repeated = await final_result(run, auth)
     assert repeated["text"] == result["text"]
@@ -179,7 +183,7 @@ async def test_saved_family_pause_is_reported_after_model_exhaustion(
     assert recovered["verified"] is False  # The interrupted request is not upgraded.
     with pytest.raises(ValueError):
         await update_goal(
-            {"goal_id": goal["id"], "action": "pause", "version": goal["version"]},
+            {"goal_id": goal["id"], "action": action, "version": goal["version"]},
             ToolContext(
                 tenant_id=tenant,
                 agent_id="main",

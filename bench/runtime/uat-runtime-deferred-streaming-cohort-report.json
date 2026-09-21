@@ -1,0 +1,60 @@
+{
+  "configuration": {
+    "primary": "openrouter/deepseek/deepseek-v4.1-flash",
+    "fallbacks": [
+      "openrouter/xiaomi/mimo-v2.5",
+      "openrouter/deepseek/deepseek-v4-flash",
+      "ollama_chat/qwen3.8:27b"
+    ],
+    "temperature": 0.5,
+    "tools_allowed": 104,
+    "tools_advertised": 24,
+    "schema_characters": 17810,
+    "deferred_tools": true,
+    "experimental_model_slice_seconds": null,
+    "experimental_isolate_short_timeout_health": false,
+    "experimental_model_slice_cloud_only": false,
+    "task_protocol": true,
+    "streaming": true,
+    "experimental_bound_stream_consumption": false,
+    "provider_call_duration_scope": "stream creation only when streaming; full request duration includes consumption",
+    "samples": 30,
+    "scenario": "task_and_calculation",
+    "synthetic_tenant_prefix": "runtime-live-",
+    "scope": "Native runner, installation profile settings, isolated workspace and private CRM. Only requested task tools execute. No production instructions/memory staged; 65-second harness cutoff and 12-call diagnostic limit. Provider counts include planning. Native cost estimates are not billing. Not ASGI/browser latency or a matched baseline comparison."
+  },
+  "counts": {
+    "verified": 30,
+    "failed": 0,
+    "unfinished": 0,
+    "not_started": 0
+  },
+  "elapsed_ms": {
+    "samples": 30,
+    "p50": 17416.79458200815,
+    "p95": 37116.13011099689,
+    "p95_ci95": [
+      31084.317254004418,
+      51913.138711010106
+    ]
+  },
+  "over_30_seconds": 6,
+  "over_60_seconds": 0,
+  "provider_invocations": {
+    "openrouter/deepseek/deepseek-v4.1-flash": 60
+  },
+  "native_estimated_cost_usd": 0.048626,
+  "provider_calls_without_result": 0,
+  "interrupted_streams": 0,
+  "streams_without_completion_telemetry": 0,
+  "cost_estimate_excludes_unknown_provider_usage": false,
+  "post_return_model_calls": 0,
+  "duplicate_task_samples": 0,
+  "stored_task_matches": 30,
+  "confirmed_action_samples": 30,
+  "interrupted_after_confirmed_action": 0,
+  "latency_passed": false,
+  "screening_passed": false,
+  "manual_acceptance": false,
+  "note": "All finished attempts contribute timing, including failed/cutoff attempts; missing attempts cannot qualify. Provider invocations count LiteLLM calls, not independently observed HTTP retries. Cost is native recorded estimate, not billing; interrupted calls may incur charges absent from this estimate. Direct native admission, not chat ingress/queue timing; no matched baseline or framework-selection claim."
+}
