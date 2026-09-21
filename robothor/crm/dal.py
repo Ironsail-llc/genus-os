@@ -858,9 +858,11 @@ def create_note(
     person_id: str | None = None,
     company_id: str | None = None,
     tenant_id: str = DEFAULT_TENANT,
+    *,
+    note_id: str | None = None,
 ) -> str | None:
     """Create a note. Returns note UUID."""
-    note_id = str(uuid.uuid4())
+    note_id = note_id or str(uuid.uuid4())
     with get_connection() as conn:
         cur = conn.cursor()
         try:

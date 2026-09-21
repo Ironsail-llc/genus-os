@@ -1227,3 +1227,14 @@ Following `21b085ed031`, daemon startup and periodic stale-run cleanup now invok
 The targeted recovery/dispatch/reaper/watchdog/size selection passed 95 tests in 12.57 seconds. Final-source canonical integration passed 32 with one skipped in 10.71 seconds, including a test against the real migrated run schema. An initial command referenced a nonexistent daemon test file and collected no tests; that log is retained alongside the corrected result. Evidence is in `bench/runtime/uat-verification.json`. The earlier broad engine run predates this change.
 
 This supersedes the prior limitation that abandoned-record recovery had no daemon caller. It does not resolve service-specific effects automatically; trusted provider readback, goal bookkeeping during uncertainty, and user-facing recovery reporting remain open. No deployment or overall acceptance is claimed.
+
+
+## Automatic CRM note readback
+
+Following `483c11e3729`, runtime-bound native `create_note` uses the host-reserved effect UUID as its CRM note ID. The handler accepts this identity only from the active dispatch context after matching the tenant, owning run, tool name and argument fingerprint. Existing DAL callers retain randomly generated IDs; no model-facing ID parameter was added. A failed creation response is classified as uncertain.
+
+The dispatcher now attempts trusted positive readback for uncertain note creation. The daemon recovery sweep performs the same readback later. Both query the exact tenant and reserved note ID and exclude deleted notes. Positive readback stores a confirmed receipt; repeating the same request returns that receipt without another create. Absence, deletion, foreign ownership, or storage errors never establish nonapplication. Unresolved background checks rotate so an old missing note does not indefinitely exclude later records from the bounded batch.
+
+Canonical tests invoke the real native dispatcher, CRM handler, DAL insertion and readback on a disposable migrated database, inject response loss after commit, and verify immediate and deferred recovery each leave exactly one note. No model or live business provider is used. This does not exercise a full chat conversation. The canonical selection passed 34 with one skipped in 10.37 seconds. The focused engine/CRM/recovery/verification/size selection passed 300 in 12.23 seconds. Logs are indexed in `bench/runtime/uat-verification.json`.
+
+This closes automatic readback for CRM note creation through this path. It does not qualify other providers, expose generic recovery in the chat outcome endpoint, fix goal bookkeeping during uncertainty, or establish overall user acceptance. The prior broad engine result predates these changes. Nothing was deployed.

@@ -3188,6 +3188,28 @@
         "Broad engine result predates this change; targeted regression selection and canonical integration were run."
       ],
       "intermediate": "Initial targeted command referenced nonexistent test_daemon.py and collected no tests. Corrected command and original log retained."
+    },
+    "crm_note_automatic_recovery": {
+      "base_revision": "483c11e3729",
+      "focused": {
+        "passed": 300,
+        "seconds": 12.23,
+        "log": "bench/runtime/uat-runtime-note-recovery-focused.log"
+      },
+      "canonical": {
+        "passed": 34,
+        "skipped": 1,
+        "warnings": 1,
+        "seconds": 10.37,
+        "log": "bench/runtime/uat-runtime-note-recovery-canonical.log"
+      },
+      "behavior": "Native CRM note handler uses the host-reserved effect UUID. Immediate and daemon-sweep readback confirm the tenant-matched existing note, then return its receipt without another write.",
+      "limitations": [
+        "Only create_note has this new generic-ledger provider verifier. Calendar retains its separate existing reconciliation.",
+        "A missing or deleted note remains uncertain; absence is not proof of nonapplication.",
+        "Other providers, goal bookkeeping during uncertainty, and chat outcome endpoint projection remain open.",
+        "No new full engine run, production deployment or overall manual acceptance is claimed."
+      ]
     }
   },
   "calendar": {

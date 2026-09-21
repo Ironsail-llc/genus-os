@@ -118,7 +118,11 @@ async def _dispatch_reserved(context, record, name, args, ctx, dispatch):
                 "retryable": False,
             }
         started = True
-        result = await dispatch()
+        token = effects.active_effect.set(record)
+        try:
+            result = await dispatch()
+        finally:
+            effects.active_effect.reset(token)
     except BaseException:
         # Before invoking the handler we can prove no effect was dispatched.
         # Afterwards cancellation does not prove the provider cancelled its work.
@@ -149,6 +153,11 @@ async def _dispatch_reserved(context, record, name, args, ctx, dispatch):
             record["id"], "The action was dispatched, but its outcome could not be recorded"
         )
     if uncertain:
+        from robothor.engine.runtime.note_recovery import recover
+
+        recovered = await asyncio.to_thread(recover, context, record["id"])
+        if recovered is not None:
+            return recovered
         return {
             **result,
             **_unknown(record["id"], result.get("error") or "Action outcome is unknown"),

@@ -322,6 +322,9 @@ async def _delete_company(args: dict[str, Any], ctx: ToolContext) -> dict[str, A
 @_handler("create_note")
 async def _create_note(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import create_note
+    from robothor.engine.runtime.note_recovery import note_options
+
+    options = note_options(ctx, args)
 
     note_id = await asyncio.to_thread(
         create_note,
@@ -330,11 +333,12 @@ async def _create_note(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
         person_id=args.get("personId"),
         company_id=args.get("companyId"),
         tenant_id=ctx.tenant_id,
+        **options,
     )
     return (
         {"id": note_id, "title": args.get("title", "")}
         if note_id
-        else {"error": "Failed to create note"}
+        else {"error": "Failed to create note", "outcome_unknown": True, "retryable": False}
     )
 
 

@@ -1,7 +1,7 @@
-"""Recover effect admission after the persisted owning run has ended.
+"""Recover terminal-run admission and read back supported uncertain effects.
 
-This step never retries a business action or declares a dispatched action done.
-A provider verifier must still settle any uncertain external effect.
+This step never retries a business action. Only a trusted provider verifier
+can settle a dispatched effect; unsupported effects remain uncertain.
 """
 
 import logging
@@ -29,7 +29,11 @@ def sweep_terminal(tenant_id: str) -> int:
                     FROM abandoned a WHERE e.id=a.id""",
                 (tenant_id,),
             )
-            return cur.rowcount
+            count = cur.rowcount
+        from robothor.engine.runtime.note_recovery import sweep
+
+        sweep(tenant_id)
+        return count
     except Exception:
         logger.warning("Terminal effect recovery deferred", exc_info=True)
         return 0

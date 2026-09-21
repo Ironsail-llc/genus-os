@@ -8,12 +8,15 @@ Arguments are fingerprinted, not copied into this store (they may hold secrets).
 
 import hashlib
 import json
+from contextvars import ContextVar
 from dataclasses import dataclass
 from uuid import uuid4
 
 from psycopg2.extras import Json, RealDictCursor
 
 from robothor.db.connection import get_connection
+
+active_effect: ContextVar[dict | None] = ContextVar("active_effect", default=None)
 
 
 class EffectPendingError(ValueError):
