@@ -169,3 +169,83 @@ async def test_success_crash_worker(monkeypatch):
         print("SAVED_RECEIPT " + json.dumps(result), flush=True)
     finally:
         active_context.reset(token)
+
+
+@pytest.mark.parametrize("tool,table", [("create_note", "crm_notes"), ("create_task", "crm_tasks")])
+async def test_concurrent_readback_and_replay_share_one_verified_receipt(monkeypatch, tool, table):
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from robothor.crm import dal
+    from robothor.engine.runtime import note_recovery, task_recovery
+
+    dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
+    if "host=/tmp/runtime-migrated-" not in dsn:
+        pytest.skip("requires disposable canonical migration harness")
+    tenant = "receipt-race-" + uuid4().hex
+    with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute("INSERT INTO crm_tenants(id,display_name) VALUES (%s,%s)", (tenant, tenant))
+    monkeypatch.setattr(dal, "get_connection", effects.get_connection)
+    monkeypatch.setattr(dal, "_safe_audit", lambda *a, **k: None)
+    monkeypatch.setattr("robothor.events.bus.publish", lambda *a, **k: None)
+    adapter = task_recovery if tool == "create_task" else note_recovery
+    real_verify = adapter.verify
+    monkeypatch.setattr(adapter, "verify", lambda record: effects.Verification("unknown"))
+    ctx = ExecutionContext(tenant, "service:main", str(uuid4()))
+
+    async def call():
+        token = active_context.set(ctx)
+        try:
+            return await dispatch._execute_tool(
+                tool,
+                {"title": "Concurrent recovery", "body": "Synthetic"},
+                agent_id="main",
+                run_id=str(uuid4()),
+                tenant_id=tenant,
+                user_id=ctx.principal_id,
+                user_role="service",
+            )
+        finally:
+            active_context.reset(token)
+
+    first = await call()
+    assert first["outcome_unknown"] and first["retryable"] is False
+    before = effects.read(ctx, first["effect_id"])
+    assert before["state"] == "uncertain"
+    readers = 20
+    barrier = Barrier(readers, timeout=10)
+
+    def simultaneous_verdict(record):
+        verdict = real_verify(record)
+        assert verdict.outcome == "applied"
+        # Every verifier reads the same unresolved version before any can commit.
+        # No DB connection is held while waiting at this synchronization barrier.
+        barrier.wait()
+        return verdict
+
+    monkeypatch.setattr(adapter, "verify", simultaneous_verdict)
+
+    def recover_together():
+        with ThreadPoolExecutor(max_workers=readers) as pool:
+            return list(
+                pool.map(lambda _: adapter.recover(ctx, first["effect_id"]), range(readers))
+            )
+
+    receipts = await asyncio.to_thread(recover_together)
+    assert all(receipt and receipt["recovered"] for receipt in receipts)
+    assert len({receipt["id"] for receipt in receipts}) == 1
+    after = effects.read(ctx, first["effect_id"])
+    assert after["state"] == "confirmed" and after["version"] == before["version"] + 1
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("A recovered request dispatched another business write")
+
+    monkeypatch.setattr(dispatch, "_dispatch_admitted", forbidden)
+    repeated = await asyncio.gather(*(call() for _ in range(readers)))
+    assert all(receipt["id"] == receipts[0]["id"] and receipt["recovered"] for receipt in repeated)
+    with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT count(*) FROM {table} WHERE tenant_id=%s", (tenant,))
+        assert cur.fetchone() == (1,)
+        cur.execute("SELECT count(*) FROM agent_runtime_effects WHERE tenant_id=%s", (tenant,))
+        assert cur.fetchone() == (1,)

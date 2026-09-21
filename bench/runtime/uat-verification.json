@@ -3665,6 +3665,21 @@
       ],
       "fields_per_trigger": 97,
       "note": "Read-only actual installation main/default manifests, parsed in separate baseline/current processes with equal scrubbed environments. No full native prompt/tool execution or process-environment parity claim."
+    },
+    "concurrent_crm_receipt_recovery": {
+      "product_revision": "24ebf661813",
+      "passed": 46,
+      "skipped": 2,
+      "warnings": 1,
+      "seconds": 23.82,
+      "log": "bench/runtime/uat-runtime-concurrent-receipt-recovery.log",
+      "tools": [
+        "create_note",
+        "create_task"
+      ],
+      "simultaneous_verifiers_per_tool": 20,
+      "concurrent_cached_dispatches_per_tool": 20,
+      "scope": "Real private CRM creation and readback; barrier forces all verifiers to observe unresolved state before any verdict can commit. One resolution version increment, one effect row and one CRM row per case. Subsequent concurrent same-request dispatches must return the cached result before reaching the write handler. Not a tenant-load latency cohort or browser-tab concurrency test."
     }
   },
   "calendar": {
