@@ -16,6 +16,7 @@ import pytest
 
 from robothor.crm import dal
 from robothor.engine.config import load_agent_config
+from robothor.engine.model_breaker import get_model_breaker
 from robothor.engine.models import TriggerType
 from robothor.engine.runner import AgentRunner
 from robothor.engine.runtime import effects
@@ -39,16 +40,14 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
         assert type(settings["deferred_tools"]) is bool
         monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "1" if settings["deferred_tools"] else "0")
     model_slice = settings.get("model_slice_seconds")
+    isolate_timeout_health = settings.get("isolate_short_timeout_health", False)
+    assert type(isolate_timeout_health) is bool
+    assert not isolate_timeout_health or model_slice is not None
     if model_slice is not None:
         assert type(model_slice) in {int, float} and 1 <= model_slice <= 30
-        from robothor.engine import llm_client
+        from bench.runtime.model_allowance_experiment import install
 
-        original_timeout = llm_client._per_call_timeout
-        monkeypatch.setattr(
-            llm_client,
-            "_per_call_timeout",
-            lambda model, override: min(model_slice, original_timeout(model, override)),
-        )
+        install(monkeypatch, model_slice, isolate_short_timeout_health=isolate_timeout_health)
     workspace = Path(settings["installation"])
     agent = load_agent_config(
         "main", workspace / "docs/agents", workspace=workspace, trigger_type="webchat"
@@ -154,6 +153,7 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
                         "schema_characters": len(json.dumps(advertised, ensure_ascii=False)),
                         "deferred_tools": deferred_tools_enabled(),
                         "experimental_model_slice_seconds": model_slice,
+                        "experimental_isolate_short_timeout_health": isolate_timeout_health,
                         "task_protocol": agent.task_protocol,
                         "samples": samples,
                         "scenario": scenario,
@@ -171,6 +171,9 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
             calls.clear()
             denied.clear()
             row = {"index": index, "verified": False, "request_id": request_id}
+            row["breaker_open_before"] = sorted(
+                model for model in allowed_models if get_model_breaker().is_open(model)
+            )
             stream.write(json.dumps({"started": row}) + "\n")
             stream.flush()
             message = (
@@ -201,6 +204,9 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
             returned_calls = len(calls)
             await get_task_registry().drain(timeout=5)
             row["post_return_model_calls"] = len(calls) - returned_calls
+            row["breaker_open_after"] = sorted(
+                model for model in allowed_models if get_model_breaker().is_open(model)
+            )
             row["provider_calls"] = list(calls)
             row["denied_tools"] = list(denied)
             with psycopg2.connect(dsn) as conn, conn.cursor() as cur:

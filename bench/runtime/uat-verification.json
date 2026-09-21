@@ -5608,6 +5608,24 @@
       "model_selection_changed": false,
       "installed_configuration_changed": false,
       "performance_qualified": false
+    },
+    "short_timeout_health_experiment": {
+      "product_revision": "c342a50cd74",
+      "product_changed": false,
+      "new_tests": {
+        "passed": 2,
+        "seconds": 2.43
+      },
+      "existing_breaker_retry": {
+        "passed": 49,
+        "seconds": 1.42
+      },
+      "scope": "Test-only shorter model allowance can optionally avoid feeding caller-induced TimeoutError into shared model health. Other provider errors keep native breaker behavior, explicit lower timeouts remain lower, and monkeypatch restoration is verified. Future live rows record breaker state before and after each request.",
+      "promotion_limit": "Existing 8/10-second screens retain shared-breaker behavior; they cannot alone qualify a product policy that preserves long-goal model selection. Isolated-health live evaluation has not run.",
+      "logs": [
+        "bench/runtime/uat-runtime-isolated-timeout-health-contract.log",
+        "bench/runtime/uat-runtime-short-timeout-breaker-contracts.log"
+      ]
     }
   },
   "calendar": {
@@ -5846,7 +5864,7 @@
     ]
   },
   "remaining": [
-    "Current product c342a50cd74 passes focused, canonical and full engine checks (11,443 engine tests). Full-tool and deferred-tool compound screens verified all 30 requests but failed latency (p95 33.872 and 39.362 seconds). A test-only 10-second model allowance also verified all 30 but failed at p95 30.046 seconds; eight interrupted provider calls make cost estimates incomplete. An 8-second allowance screen is running. No timeout or deferred-tool default has been promoted; prior failures remain retained.",
+    "Current product c342a50cd74 passes focused, canonical and full engine checks (11,443 engine tests). Full-tool and deferred-tool compound screens verified all 30 requests but failed latency (p95 33.872 and 39.362 seconds). A test-only 10-second model allowance also verified all 30 but failed at p95 30.046 seconds; eight interrupted provider calls make cost estimates incomplete. An 8-second allowance screen is running. No timeout or deferred-tool default has been promoted; prior failures remain retained. Short model allowances can open the shared breaker and affect later goal model selection; test-only health isolation is implemented and unit-verified but not live-qualified. A passing short-timeout population alone is insufficient for promotion.",
     "Complete representative workload comparison against accepted integration baseline eea3252b1577e3f51e6d6a6216d6f242fd7ac4a1. Matched scripted standalone/compound task checks now pass with both minimal and selected main/full-catalogue profiles; current selected-profile p95 overhead is 54\u201356 ms versus baseline 134\u2013135 ms, with one fewer planning call. These remain two task scenarios with synthetic providers and isolated instructions/memory, not a representative live comparison.",
     "Qualify workload-wide selected-provider deadlines and latency, including requests competing with background goals. Local scripted HTTP acknowledgement/stop/progress and synthetic 1/5/20-tenant limits are measured; live-provider mixed-load limits remain unqualified. Preserve failures, unfinished attempts and uncertainty.",
     "Recheck the supported outcome-recovery inventory and remaining ingress/failure cases against action contracts. Calendar and CRM note/task readbacks, task browser reconnect, saved responses, native checkpoints and daemon goal recovery have evidence; these do not establish arbitrary external-provider recovery.",
