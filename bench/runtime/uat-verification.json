@@ -3827,6 +3827,36 @@
         "seconds": 1.36,
         "log": "bench/runtime/uat-runtime-chat-readback-frontend.log"
       }
+    },
+    "chat_retry_receipts": {
+      "base_revision": "d5019ab6b33",
+      "finding": "Retaining not_applied attempts initially made a subsequently verified retry of the same intent look incomplete. Linking such receipts also exposed a stale verified_status tag causing a failed run to be presented as verified.",
+      "behavior": "Preserve old nonapplication; link only later valid confirmed proof with the same request/fingerprint in the authenticated run family. Do not excuse uncertainty, unrelated intent, different principal/tenant, unrelated lineage or invalid evidence. Whole-run verified additionally requires completed status. Read-only projection performs no retries.",
+      "red": {
+        "failed": 2,
+        "passed": 12,
+        "seconds": 1.86
+      },
+      "intermediate": {
+        "failed": 1,
+        "passed": 103,
+        "seconds": 11.19,
+        "reason": "Failed run retained stale verified_status after its action retry was confirmed; fixed whole-run status gate."
+      },
+      "focused": {
+        "passed": 104,
+        "seconds": 13.5,
+        "log": "bench/runtime/uat-runtime-chat-retry-receipts-focused-final.log"
+      },
+      "canonical": {
+        "passed": 53,
+        "skipped": 2,
+        "warnings": 1,
+        "seconds": 23.17,
+        "log": "bench/runtime/uat-runtime-chat-retry-receipts-canonical.log"
+      },
+      "native_case": "An undispatched failed worker intent is proven not applied. A separate permitted native create_task attempt stores exactly one task, then repeated audit reads preserve both effects and identify the verified retry without invoking a tool/model.",
+      "limits": "Private local tests with synthetic business records. Does not authorize automatic retry or resume stopped work. Broad regression pending for this source; manual/overall acceptance remain open."
     }
   },
   "calendar": {

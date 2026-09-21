@@ -56,7 +56,10 @@ def read_outcome(auth, session_key: str, client_id: str) -> dict:
     text = result_text(SimpleNamespace(**{**row, "status": status})) if terminal else ""
     if stop_requested:
         text = "Stop is recorded. Waiting for the original worker's final evidence."
-    incomplete = any(not item["verified"] and item["status"] != "draft" for item in receipts)
+    incomplete = any(
+        not item["verified"] and item["status"] != "draft" and not item.get("superseded_by")
+        for item in receipts
+    )
     if terminal and receipts:
         if status == RunStatus.COMPLETED and incomplete:
             text = "The run ended, but a recorded action is not fully verified."
@@ -73,7 +76,9 @@ def read_outcome(auth, session_key: str, client_id: str) -> dict:
             item["status"] == "executing" or item.get("reconciliation_pending", False)
             for item in receipts
         ),
-        "verified": row["verified_status"] == "verified" and not incomplete,
+        "verified": status == RunStatus.COMPLETED
+        and row["verified_status"] == "verified"
+        and not incomplete,
         "source": "run_record",
         "plan_exploration": str(row.get("trigger_detail") or "").startswith(
             ("plan:", "plan-revise:")

@@ -1490,3 +1490,14 @@ Final affected backend tests passed **115 in 15.15 seconds**. The private canoni
 All stages are retained under `bench/runtime/uat-runtime-chat-readback-*`: initial probe source/log, initial HTTP failures, canonical fixture failure, corrected canonical red result, intermediate passing runs, independent-provider and nonapplication failures, final focused/canonical results and frontend log. The broad engine artifact is `uat-runtime-unfinished-task-engine-regression.log`. Exact findings and counts are in `uat-verification.json`.
 
 This establishes local chat-triggered reconciliation for supported CRM operations, not universal external-provider readback or loaded recovery-polling performance. The broad engine run predates these latest changes. No live model calls or deployment occurred. Manual and overall acceptance remain open; automatic continuation is not user acceptance.
+
+
+## Verified retries preserve audit history without false incompletion
+
+Following `d5019ab6b33`, a new private-database case found that retaining a definitive `not_applied` entry made a later verified retry of the same intent appear incomplete. The first run produced **two failures and 12 passes**: the completed request stayed unverified, and neither completed nor failed requests linked the earlier attempt to the positive evidence.
+
+Chat projection now links an earlier non-applied attempt to a later valid confirmed receipt only when request identity and tool/argument fingerprint match inside the already authenticated tenant/principal/run family. It preserves both audit entries and their actual states. Different requests, arguments, lineage, principals, tenants and invalid evidence cannot satisfy the old intent. Matching runs never clear uncertain outcomes. Projection remains read-only; it does not initiate or authorize retries.
+
+The intermediate focused run exposed another issue: a failed run with a stale `verified_status` tag could be returned as verified after all its action receipts were satisfied. Whole-run verification now additionally requires completed status. The intermediate **one failure/103 passes** is retained. Final focused audit/recovery/journal/size checks passed **104 tests in 13.50 seconds**. Canonical private migrations/native integrations passed **53 tests, two skipped, one warning in 23.17 seconds**.
+
+A new native integration case proves definitive nonapplication for an undispatched failed worker, performs a separate permitted create_task attempt through the native dispatcher, verifies exactly one stored task, and checks that repeated chat audit reads retain both attempts while reporting the positive evidence. No model call, replay or production write occurs during those reads. Ruff and diff checks passed. Raw red/intermediate/final logs are `bench/runtime/uat-runtime-chat-retry-receipts-{red,focused,focused-final,canonical}.log`. Broad regression for this source is pending; manual and overall acceptance remain open.
