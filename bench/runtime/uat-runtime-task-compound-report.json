@@ -1,0 +1,57 @@
+{
+  "configuration": {
+    "primary": "openrouter/deepseek/deepseek-v4.1-flash",
+    "fallbacks": [
+      "openrouter/xiaomi/mimo-v2.5",
+      "openrouter/deepseek/deepseek-v4-flash",
+      "ollama_chat/qwen3.8:27b"
+    ],
+    "temperature": 0.5,
+    "tools_allowed": 104,
+    "task_protocol": true,
+    "samples": 3,
+    "scenario": "task_and_calculation",
+    "synthetic_tenant_prefix": "runtime-live-",
+    "scope": "Native runner, installation profile settings, isolated workspace and private CRM. Only requested task tools execute. No production instructions/memory staged; 65-second harness cutoff and 12-call diagnostic limit. Provider counts include planning. Native cost estimates are not billing. Not ASGI/browser latency or a matched baseline comparison."
+  },
+  "counts": {
+    "verified": 3,
+    "failed": 0,
+    "unfinished": 0,
+    "not_started": 0
+  },
+  "elapsed_ms": {
+    "samples": 3,
+    "p50": 29834.27340799244,
+    "p95": 50003.390539000975,
+    "p95_ci95": [
+      26225.14702900662,
+      50003.390539000975
+    ]
+  },
+  "over_30_seconds": 1,
+  "over_60_seconds": 0,
+  "provider_invocations": {
+    "openrouter/deepseek/deepseek-v4.1-flash": 9
+  },
+  "native_estimated_cost_usd": 0.009746,
+  "post_return_model_calls": 0,
+  "duplicate_task_samples": 0,
+  "stored_task_matches": 3,
+  "confirmed_action_samples": 3,
+  "interrupted_after_confirmed_action": 0,
+  "latency_passed": false,
+  "screening_passed": false,
+  "manual_acceptance": false,
+  "note": "All finished attempts contribute timing, including failed/cutoff attempts; missing attempts cannot qualify. Provider invocations count LiteLLM calls, not independently observed HTTP retries. Cost is native recorded estimate, not billing. Direct native admission, not chat ingress/queue timing; no matched baseline or framework-selection claim.",
+  "product_revision": "5728c35430e",
+  "harness_base_revision": "423b3090bc3",
+  "harness_change": "Opt-in task_and_calculation scenario in test_native_task_live.py. Tightened answer check from substring to numeric word boundary after the run; all three saved replies revalidated offline.",
+  "canonical": {
+    "passed": 73,
+    "skipped": 2,
+    "warnings": 1,
+    "seconds": 140.52
+  },
+  "scope": "Three diagnostic examples preserve a separately requested calculation, correct task body and ordinary model reply. Not representative intent coverage or 30-repetition screening. One response exceeded 30 seconds; none exceeded 60. No product change."
+}

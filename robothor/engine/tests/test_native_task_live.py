@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import re
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -32,6 +33,8 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
     assert "host=/tmp/runtime-migrated-" in dsn, "Disposable canonical storage required"
     samples = settings.get("samples", 30)
     assert 1 <= samples <= 30 and (samples == 30 or settings.get("diagnostic"))
+    scenario = settings.get("scenario", "standalone_task")
+    assert scenario in {"standalone_task", "task_and_calculation"}
     workspace = Path(settings["installation"])
     agent = load_agent_config(
         "main", workspace / "docs/agents", workspace=workspace, trigger_type="webchat"
@@ -129,6 +132,7 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
                         "tools_allowed": len(agent.tools_allowed),
                         "task_protocol": agent.task_protocol,
                         "samples": samples,
+                        "scenario": scenario,
                         "synthetic_tenant_prefix": "runtime-live-",
                         "scope": "Native runner, installation profile settings, isolated workspace and private CRM. Only requested task tools execute. No production instructions/memory staged; 65-second harness cutoff and 12-call diagnostic limit. Provider counts include planning. Native cost estimates are not billing. Not ASGI/browser latency or a matched baseline comparison.",
                     }
@@ -145,12 +149,21 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
             row = {"index": index, "verified": False, "request_id": request_id}
             stream.write(json.dumps({"started": row}) + "\n")
             stream.flush()
+            message = (
+                f'Create exactly one task with title "{title}" and body "Synthetic only". '
+                "Use the task tool; do not contact anyone."
+            )
+            if scenario == "task_and_calculation":
+                message += (
+                    " Also calculate 17 times 19 and tell me the result in your reply, "
+                    "separately from the task. Keep the task body exactly as requested."
+                )
             started = time.perf_counter()
             try:
                 async with asyncio.timeout(65):
                     await runner.execute(
                         agent.id,
-                        f'Create exactly one task with title "{title}" and body "Synthetic only". Use the task tool; do not contact anyone.',
+                        message,
                         agent_config=agent,
                         trigger_type=TriggerType.WEBCHAT,
                         tenant_id=tenant,
@@ -212,8 +225,17 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
                     )
                     for step in cur.fetchall()
                 ]
+            row["additional_answer_verified"] = scenario == "standalone_task" or (
+                len(records) == 1
+                and re.search(r"\b323\b", records[0][1] or "") is not None
+                and not any(
+                    step["type"] == "checkpoint" and step["tool"] == "create_task"
+                    for step in row["steps"]
+                )
+            )
             row["verified"] = (
-                not row.get("error_type")
+                row["additional_answer_verified"]
+                and not row.get("error_type")
                 and row["task_count"] == 1
                 and row["task_fields_match"]
                 and len(records) == 1
