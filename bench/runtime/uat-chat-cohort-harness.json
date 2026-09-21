@@ -1,0 +1,29 @@
+{
+  "revision": "cd9c7ce68a3",
+  "change": "Measure each status/pause chat turn by elapsed request time, then repeat the existing native live acceptance case in 30 isolated pytest processes with the already configured model chain. Preserve each diagnostic transcript/log and durable sample start/finish, including nonzero exits and partial turns. Refuse an existing cohort directory.",
+  "checks": {
+    "scripted_chat": {
+      "passed": 2,
+      "warnings": 1,
+      "seconds": 4.76,
+      "log": "/tmp/runtime-chat-cohort-scripted.log"
+    },
+    "journal_and_cohort": {
+      "passed": 4,
+      "seconds": 4.34,
+      "log": "/tmp/runtime-chat-cohort-harness.log"
+    }
+  },
+  "failure_contract": "An injected first-conversation failure preserves its partial timeout transcript and nonzero exit while all 29 remaining samples are still recorded. Reusing its output directory refuses before another execution. Subprocess native-journal interruption checks also pass.",
+  "live_run": {
+    "state": "started; outcome not yet known",
+    "directory": "/tmp/runtime-chat-cohort-current",
+    "planned_conversations": 30,
+    "turns_per_conversation": 2,
+    "selected_models_source": "/home/philip/robothor/docs/agents/main.yaml",
+    "per_conversation_provider_attempt_bound": 12,
+    "per_turn_host_deadline_seconds": 60,
+    "business_resources": "Fresh private PostgreSQL goal/task data and synthetic business dispatch; no scheduler or production goal changes."
+  },
+  "limits": "The live conversations use an isolated minimal agent configuration and selected model chain. State assertions do not substitute for human review of language, and the prior accepted scripted status/pause case remains the only accepted manual result. Full acceptance and broader fallback/representative-workload comparison remain open. No production deployment."
+}
