@@ -79,7 +79,9 @@ async def test_failed_profile_lookup_keeps_native_refusal_without_second_read(
     assert active_context.get() is None
 
 
-def test_profile_lookup_time_is_not_added_to_simple_deadline(sample_agent_config, monkeypatch):
+async def test_profile_lookup_time_is_not_added_to_simple_deadline(
+    sample_agent_config, monkeypatch
+):
     from types import SimpleNamespace
 
     from robothor.engine.runtime.contracts import ExecutionContext, RunRequest
@@ -94,7 +96,7 @@ def test_profile_lookup_time_is_not_added_to_simple_deadline(sample_agent_config
         "Do the work",
         {"trigger_type": "webchat"},
     )
-    bounded, _ = prepare(
+    bounded, _ = await prepare(
         SimpleNamespace(config=SimpleNamespace(manifest_dir="fixture")), request, admitted
     )
     assert bounded.context.deadline == admitted + timedelta(seconds=60)

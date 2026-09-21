@@ -8,7 +8,27 @@ logger = logging.getLogger(__name__)
 
 
 async def record_timeout(request):
-    from robothor.engine.models import AgentRun, RunStatus, TriggerType
+    from robothor.engine.models import RunStatus
+
+    await _record(
+        request,
+        RunStatus.TIMEOUT,
+        "This request expired before execution began. Earlier attempts retain their own recorded outcomes.",
+    )
+
+
+async def record_interrupted(request):
+    from robothor.engine.models import RunStatus
+
+    await _record(
+        request,
+        RunStatus.CANCELLED,
+        "This attempt was interrupted before execution began. Earlier attempts retain their own recorded outcomes.",
+    )
+
+
+async def _record(request, status, explanation):
+    from robothor.engine.models import AgentRun, TriggerType
     from robothor.engine.runtime.current import active_context
     from robothor.engine.tracking import create_run
 
@@ -21,10 +41,10 @@ async def record_timeout(request):
         correlation_id=request.context.request_id,
         parent_run_id=request.context.parent_id,
         trigger_type=request.options.get("trigger_type", TriggerType.MANUAL),
-        status=RunStatus.TIMEOUT,
+        status=status,
         started_at=now,
         completed_at=now,
-        error_message="This request expired before execution began. Earlier attempts retain their own recorded outcomes.",
+        error_message=explanation,
     )
 
     token = active_context.set(request.context)
@@ -33,6 +53,6 @@ async def record_timeout(request):
         # A dispatched database write may finish after this wait expires.
         await asyncio.wait_for(asyncio.to_thread(create_run, run), timeout=1)
     except Exception as exc:
-        logger.warning("Admission timeout audit unavailable (%s)", type(exc).__name__)
+        logger.warning("Admission outcome audit unavailable (%s)", type(exc).__name__)
     finally:
         active_context.reset(token)

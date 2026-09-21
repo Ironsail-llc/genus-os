@@ -236,7 +236,7 @@ def runtime_entrypoint(execute):
             context, agent_id, message, values, resume, StateEnvelope() if resume else None
         )
 
-        request, resolution = prepare(self, request, admitted_at)
+        request, resolution = await prepare(self, request, admitted_at)
 
         async def native(**options):
             with resolved_profile(resolution):

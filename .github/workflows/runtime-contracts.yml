@@ -45,6 +45,7 @@ jobs:
           robothor/engine/tests/test_runtime_action_policy.py
           robothor/engine/tests/test_runtime_admission_audit.py
           robothor/engine/tests/test_runtime_profile_admission.py
+          robothor/engine/tests/test_runtime_profile_lookup.py
           robothor/engine/tests/test_runtime_verified_outcomes.py
           robothor/engine/tests/test_runtime_http_acceptance.py
           robothor/engine/tests/test_runtime_mixed.py

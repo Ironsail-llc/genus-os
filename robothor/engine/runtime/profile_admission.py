@@ -7,7 +7,7 @@ from dataclasses import replace
 _resolution = ContextVar("native_profile_resolution", default=None)
 
 
-def prepare(runner, request, admitted_at):
+async def prepare(runner, request, admitted_at):
     from robothor.engine.run_context import in_benchmark_run
     from robothor.engine.runtime.action_policy import apply_action_deadline
 
@@ -24,10 +24,10 @@ def prepare(runner, request, admitted_at):
         or in_benchmark_run()
     ):
         return apply_action_deadline(request, admitted_at=admitted_at), None
-    from robothor.engine.runner import load_agent_config_or_reason
+    from robothor.engine.runtime.profile_lookup import lookup
 
     directory = runner.config.manifest_dir
-    config, reason = load_agent_config_or_reason(request.agent_id, directory)
+    config, reason = await lookup(request, directory, admitted_at)
     resolution = (request.agent_id, directory, config, reason)
     if config is not None:
         request = replace(request, options={**options, "agent_config": config})
