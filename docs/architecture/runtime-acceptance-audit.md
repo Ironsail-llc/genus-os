@@ -1640,3 +1640,10 @@ The harness now explicitly supports `streaming: true` through the native runner 
 ### Current goal-history engine regression completed — 2026-09-21
 
 Product `9163df1d1e6` stayed unchanged while the full engine selection completed: 11,440 passed, 29 skipped, 243 deselected, 393 warnings in 395.46 seconds. Exact selection: `not slow and not integration and not llm and not e2e and not smoke`. Retain the marker expression when comparing historical counts. Separate native integration and goal/chat coverage remain indexed. After this process exited successfully, a thirty-request normal-streaming compound-task screen started with existing selected models, private tasks, and no experimental model allowance. Output is `/tmp/runtime-default-streaming-cohort.jsonl`; no result is claimed until it finishes.
+
+
+### Normal streaming shows consumption latency — 2026-09-21
+
+The ongoing default streaming cohort reached seven verified requests, including two over 30 seconds (38.015 and 36.623 seconds). Both had one task, the requested calculation and completed run state. The first slow request spent 34.992 seconds in its first native model step even though opening that stream took 2.816 seconds; the other spent 13.773 and 22.796 seconds across its two model steps. Connection-creation allowance alone cannot address this observed delay. The full thirty-request population remains running and will be retained; two requests already over 30 seconds preclude its nearest-rank p95 gate. No final distribution or cost is claimed yet.
+
+A source-audited supported-outcome inventory now distinguishes stored tasks/notes, calendar attendee evidence, historical goal controls, handler acknowledgements and known pre-dispatch nonapplication. It links executable coverage and explicitly does not qualify arbitrary provider readbacks.

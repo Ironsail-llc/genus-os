@@ -5795,6 +5795,20 @@
       "selection": "not slow and not integration and not llm and not e2e and not smoke",
       "log": "bench/runtime/uat-runtime-goal-history-engine.log",
       "note": "Product source stayed fixed. Integration and live harness edits were excluded from this run. This invocation also excludes smoke; retain exact selection when comparing counts with earlier runs."
+    },
+    "supported_outcome_inventory": {
+      "product_revision": "9163df1d1e6",
+      "artifact": "docs/architecture/runtime-outcome-recovery.md",
+      "method": "Read dispatch, note/task verifier, calendar reconciliation, effect projection and committed goal-history source; link corresponding executable tests. No broader provider claim or new test result inferred.",
+      "covered": [
+        "CRM task snapshots and trusted dedup identity",
+        "CRM note existence/readback",
+        "calendar attendee state versus notification/delivery",
+        "goal controls at committed version",
+        "saved handler acknowledgement versus independent verification",
+        "terminal prepared versus dispatched effects"
+      ],
+      "unqualified": "arbitrary external-provider reconciliation"
     }
   },
   "calendar": {
@@ -6036,7 +6050,7 @@
     "Product 9163df1d1e6 adds durable goal-control recovery; focused and canonical checks pass and the full engine selection passed 11,440 tests (29 skipped, 243 deselected). A test-only cloud allowance/health-isolation non-streaming cohort passed 30/30, p95 22.049 seconds, but is not a production policy. Streaming diagnostics passed 3/3; a 30-request normal-streaming screen is now running before policy decisions. Earlier failed cohorts remain retained; installed models/defaults unchanged.",
     "Complete representative workload comparison against accepted integration baseline eea3252b1577e3f51e6d6a6216d6f242fd7ac4a1. Matched scripted standalone/compound task checks now pass with both minimal and selected main/full-catalogue profiles; current selected-profile p95 overhead is 54\u201356 ms versus baseline 134\u2013135 ms, with one fewer planning call. These remain two task scenarios with synthetic providers and isolated instructions/memory, not a representative live comparison.",
     "Qualify workload-wide selected-provider deadlines and latency, including requests competing with background goals. Local scripted HTTP acknowledgement/stop/progress and synthetic 1/5/20-tenant limits are measured; live-provider mixed-load limits remain unqualified. Preserve failures, unfinished attempts and uncertainty.",
-    "Recheck the supported outcome-recovery inventory and remaining ingress/failure cases against action contracts. Calendar and CRM note/task readbacks, task browser reconnect, saved responses, native checkpoints and daemon goal recovery have evidence; these do not establish arbitrary external-provider recovery.",
+    "Supported recovery source audit is documented in docs/architecture/runtime-outcome-recovery.md with executable coverage links. CRM task/note readbacks, calendar attendee evidence, saved acknowledgements and committed goal controls have distinct claim boundaries. Continue ingress/failure coverage review; arbitrary external-provider recovery remains unqualified.",
     "Normal-chat manual acceptance is recorded for unfinished-work status, duplicate calendar confirmation, audit recovery and parent/child pause. Selective resume remains pending user review; no response has been received. Other required goal-control UAT and overall acceptance remain open.",
     "Retain the current runtime: tested candidates failed mandatory behavior and are not finalists. Any future replacement needs full parity, matched 100-repetition finalist measurements and upgrade qualification. No replacement is selected.",
     "Rollback 3dc1167c3e7 passes saved response, task identity, checkpoint deadline, complete-request reporting, initial receipt delivery and goal-history reconnect gates. Current/rollback/current daemon HTTP admission preserves stopped/effect state; previous target 7324c4d0313 is rejected for omitting goal receipts. Container/dependency rollback and hosted CI remain unverified; production deployment is outside authorized local work."
