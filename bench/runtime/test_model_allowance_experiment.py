@@ -23,3 +23,16 @@ def test_timeout_health_is_separate_but_real_failures_still_open_breaker(monkeyp
         assert breaker.is_open("failed")
     assert llm_client._per_call_timeout is original_timeout
     assert llm_client._blame_model is original_blame
+
+
+def test_cloud_allowance_preserves_local_timeout_and_local_failure_policy(monkeypatch):
+    model = "ollama_chat/qwen3.8:27b"
+    original = llm_client._per_call_timeout(model, None)
+    breaker = ModelBreaker(threshold=1)
+    install(monkeypatch, 10, isolate_short_timeout_health=True, cloud_only=True)
+    assert llm_client._per_call_timeout(model, None) == original
+    assert llm_client._per_call_timeout("openrouter/test/model", None) == 10
+    llm_client._blame_model(breaker, TimeoutError(), model, original)
+    assert breaker.is_open(model)
+    llm_client._blame_model(breaker, TimeoutError(), "openrouter/test/model", 10)
+    assert not breaker.is_open("openrouter/test/model")

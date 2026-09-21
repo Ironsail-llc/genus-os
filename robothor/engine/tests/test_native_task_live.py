@@ -41,13 +41,21 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
         monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "1" if settings["deferred_tools"] else "0")
     model_slice = settings.get("model_slice_seconds")
     isolate_timeout_health = settings.get("isolate_short_timeout_health", False)
+    cloud_only = settings.get("model_slice_cloud_only", False)
     assert type(isolate_timeout_health) is bool
+    assert type(cloud_only) is bool
     assert not isolate_timeout_health or model_slice is not None
+    assert not cloud_only or model_slice is not None
     if model_slice is not None:
         assert type(model_slice) in {int, float} and 1 <= model_slice <= 30
         from bench.runtime.model_allowance_experiment import install
 
-        install(monkeypatch, model_slice, isolate_short_timeout_health=isolate_timeout_health)
+        install(
+            monkeypatch,
+            model_slice,
+            isolate_short_timeout_health=isolate_timeout_health,
+            cloud_only=cloud_only,
+        )
     workspace = Path(settings["installation"])
     agent = load_agent_config(
         "main", workspace / "docs/agents", workspace=workspace, trigger_type="webchat"
@@ -154,6 +162,7 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
                         "deferred_tools": deferred_tools_enabled(),
                         "experimental_model_slice_seconds": model_slice,
                         "experimental_isolate_short_timeout_health": isolate_timeout_health,
+                        "experimental_model_slice_cloud_only": cloud_only,
                         "task_protocol": agent.task_protocol,
                         "samples": samples,
                         "scenario": scenario,
