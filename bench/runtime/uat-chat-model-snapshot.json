@@ -1,0 +1,23 @@
+{
+  "change": "The chat collector snapshots primary, fallback chain and temperature into its exclusive output directory before invoking any child. Each child reads that snapshot; edits to the source manifest do not alter later samples.",
+  "initial": {
+    "failed": 1,
+    "log": "/tmp/runtime-chat-model-snapshot-before.log",
+    "finding": "After the injected manifest edit, 29 later child invocations read a different primary."
+  },
+  "verified": {
+    "passed": 8,
+    "seconds": 0.42,
+    "log": "/tmp/runtime-chat-model-snapshot-after.log"
+  },
+  "running_cohort": {
+    "directory": "/tmp/runtime-chat-cohort-task-summary-utf8",
+    "session_id": 30452,
+    "runtime_revision": "2488b5322db",
+    "harness_revision": "fc5b658fdec",
+    "model_snapshot": "/tmp/runtime-chat-task-summary-models.yaml",
+    "note": "This already-running cohort uses the manually created snapshot; the collector change applies to future invocations only."
+  },
+  "full_acceptance_passed": false,
+  "production_deployed": false
+}

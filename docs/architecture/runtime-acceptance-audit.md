@@ -850,3 +850,10 @@ The task-summary cohort at product `2488b5322db` exposed a test-database defect:
 The cohort was deliberately interrupted after identifying this defect. Retained evidence contains four passed conversations, one failed conversation, one unresolved started conversation and 24 not started. The wrapper exited 130; its owned child exited and its orphaned private database was stopped. All transcripts/logs/events and the selected-model snapshot are retained under `bench/runtime/uat-chat-cohort-task-summary-ascii/`. This incomplete population does not qualify as screening evidence and must not be merged with a corrected run.
 
 Separately, four failing command tests showed that collection returned success without evaluating outcomes. The command now writes `summary.json` and exits nonzero for failed/missing conversations, p95 above 30s, or a single turn above 60s even when p95 passes. The report keeps confidence intervals and manual acceptance false; passing this screen is not full acceptance. Seven focused reporting tests pass (0.41s). After the UTF8 repair, all 96 goal, scripted-chat and reporting tests pass (13.11s, three dependency warnings). Ruff and formatting pass. Evidence: `bench/runtime/uat-chat-screening-exit-unicode.json`. No deployment.
+
+
+## Freeze model settings within each chat cohort
+
+A deterministic collector test changed the source manifest after the first child. Before the fix, all 29 subsequent children read the changed primary despite the journal retaining the original model label. The collector now writes primary/fallback/temperature settings into the new output directory before any child runs and points every child at that snapshot. Eight cohort/reporting checks pass (0.42s), with Ruff and formatting passing. Evidence: `bench/runtime/uat-chat-model-snapshot.json`.
+
+The current UTF8 task-summary cohort was started at `fc5b658fdec` and already uses a manually frozen selected-model file. Its runtime remains `2488b5322db`; this collector-only edit does not modify those running conversations. Full acceptance remains open.

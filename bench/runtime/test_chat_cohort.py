@@ -4,9 +4,34 @@ import json
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from bench.runtime.chat_cohort import collect, main
 from bench.runtime.native_journal import NativeJournal
+
+
+def test_model_settings_are_frozen_before_first_conversation(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    manifest = tmp_path / "main.yaml"
+    selected = {
+        "primary": "openrouter/selected/model",
+        "fallbacks": ["openrouter/selected/fallback"],
+        "temperature": 0.5,
+    }
+    manifest.write_text(yaml.safe_dump({"model": selected}))
+    observed = []
+
+    def invoke(command, **kwargs):
+        settings = json.loads(kwargs["env"]["ROBOTHOR_RUNTIME_CHAT_LIVE"])
+        observed.append(yaml.safe_load(Path(settings["manifest"]).read_text())["model"])
+        manifest.write_text("model:\n  primary: openrouter/different/model\n")
+        return SimpleNamespace(returncode=1)
+
+    monkeypatch.setattr("bench.runtime.chat_cohort.subprocess.run", invoke)
+    directory = collect(manifest, tmp_path / "cohort")
+    assert len(observed) == 30 and all(model == selected for model in observed)
+    assert yaml.safe_load((directory / "model-settings.yaml").read_text()) == {"model": selected}
 
 
 def test_failed_conversation_does_not_disappear_or_stop_later_samples(tmp_path, monkeypatch):

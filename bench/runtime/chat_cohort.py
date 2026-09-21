@@ -21,14 +21,23 @@ from bench.runtime.native_journal import NativeJournal
 def collect(manifest, directory, samples=30):
     if samples < 30:
         raise ValueError("At least 30 repetitions are required for this cohort")
-    model = yaml.safe_load(manifest.read_text())["model"]["primary"]
+    configured = yaml.safe_load(manifest.read_text())["model"]
+    selected = {
+        "primary": configured["primary"],
+        "fallbacks": configured.get("fallbacks", []),
+        "temperature": configured.get("temperature", 0.5),
+    }
+    model = selected["primary"]
     directory.mkdir(parents=True, exist_ok=False)
+    snapshot = directory / "model-settings.yaml"
+    with snapshot.open("x") as stream:
+        yaml.safe_dump({"model": selected}, stream)
     journal = NativeJournal(directory / "cohort.jsonl")
     root = Path(__file__).resolve().parents[2]
     for index in range(samples):
         output = directory / f"sample-{index:03d}.json"
         log = directory / f"sample-{index:03d}.log"
-        settings = {"manifest": str(manifest.resolve()), "output": str(output.resolve())}
+        settings = {"manifest": str(snapshot.resolve()), "output": str(output.resolve())}
         journal.record("sample_started", model, index)
         with log.open("x") as stream:
             result = subprocess.run(
