@@ -1,0 +1,33 @@
+{
+  "revision": "9c20b3b4eee",
+  "change": "Pending configuration reads emit preparation progress every five seconds with elapsed time and the original request identity. Delivery is bounded to one second. There is one lookup, and progress ownership ends with the wait; failed delivery does not repeat the read. Runtime timeout and cancellation still interrupt stalled progress delivery.",
+  "initial_failure": {
+    "failed": 2,
+    "seconds": 3.24,
+    "log": "/tmp/runtime-profile-progress-before.log",
+    "finding": "Neither normal nor failing-delivery callback received preparation progress while lookup remained pending."
+  },
+  "focused": {
+    "passed": 164,
+    "warnings": 1,
+    "seconds": 16.39,
+    "log": "/tmp/runtime-profile-progress-regression.log"
+  },
+  "canonical_browser": {
+    "passed": 33,
+    "skipped": 1,
+    "warnings": 1,
+    "seconds": 22.32,
+    "log": "/tmp/runtime-profile-progress-native.log"
+  },
+  "blocked_lookup_http": {
+    "passed": 1,
+    "seconds": 15.1,
+    "samples": 30,
+    "artifact": "bench/runtime/uat-profile-preparation-http.json",
+    "log": "/tmp/runtime-profile-progress-http.log"
+  },
+  "http_evidence": "Real loopback native chat with private control/audit stores: acknowledge, receive preparation progress, commit Stop, read a cancelled original-request outcome while the fixture read is still blocked, then release that read. Thirty requests make zero model and business calls; each lookup runs once. The test releases all fixture threads and shuts down its server.",
+  "checks": "Ruff lint/format and diff checks pass; no size cap increased. Progress and blocked-lookup HTTP checks are included in runtime-contract CI; no hosted run is claimed.",
+  "limits": "The slow reads are synthetic. This establishes the local pre-execution delivery/control/audit path, not deployed ingress, permanent executor saturation, a complete model latency cohort or general conversational classification. Full acceptance and pending normal-chat confirmation review remain open. No production action or deployment."
+}

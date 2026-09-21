@@ -2123,6 +2123,10 @@
     "pre_lookup_acknowledgement": {
       "revision": "1635530c6c0",
       "artifact": "bench/runtime/uat-profile-acknowledgement.json"
+    },
+    "preparation_progress_http": {
+      "revision": "9c20b3b4eee",
+      "artifact": "bench/runtime/uat-profile-preparation-progress.json"
     }
   },
   "calendar": {
