@@ -439,25 +439,21 @@ def _audit_tool_call(
         pass
 
 
-async def _execute_tool(
+async def _refuse_before_handler(
     name: str,
-    args: dict[str, Any],
     *,
-    agent_id: str = "",
-    run_id: str = "",
-    tenant_id: str = "",
-    workspace: str = "",
-    user_id: str = "",
-    user_role: str = "",
-    accessible_tenant_ids: tuple[str, ...] = (),
-    task_author_override: str = "",
-    is_benchmark: bool = False,
-    identity: IdentityContext | None = None,
-) -> dict[str, Any]:
-    """Route tool call to the correct handler.
+    agent_id: str,
+    tenant_id: str,
+    user_id: str,
+    user_role: str,
+) -> dict[str, Any] | None:
+    """The two refusals that precede any handler: RBAC, then the fork whitelist.
 
-    Checks user permissions, then adapter-provided tools (dynamic MCP
-    servers), then falls through to hardcoded engine handlers.
+    Extracted from ``_execute_tool`` when two merged branches pushed it past
+    the 200-line function ratchet. Both gates answer the same question — may
+    this call happen at all — and both answer it before a ``ToolContext``
+    exists, so they belong together. Returns the structured refusal to hand
+    back, or ``None`` when the call may proceed.
     """
     # ── Permission check (single enforcement gate) ──
     from robothor.engine.permissions import check_tool_permission
@@ -482,6 +478,36 @@ async def _execute_tool(
         msg = f"Tool '{name}' denied by per-task whitelist"
         _audit_tool_call(name, agent_id, tenant_id, user_id=user_id, status="denied", error=msg)
         return {"error": msg, "denied_by_whitelist": True}
+
+    return None
+
+
+async def _execute_tool(
+    name: str,
+    args: dict[str, Any],
+    *,
+    agent_id: str = "",
+    run_id: str = "",
+    tenant_id: str = "",
+    workspace: str = "",
+    user_id: str = "",
+    user_role: str = "",
+    accessible_tenant_ids: tuple[str, ...] = (),
+    task_author_override: str = "",
+    is_benchmark: bool = False,
+    identity: IdentityContext | None = None,
+) -> dict[str, Any]:
+    """Route tool call to the correct handler.
+
+    Checks user permissions, then adapter-provided tools (dynamic MCP
+    servers), then falls through to hardcoded engine handlers.
+    """
+    # ── The two gates that can refuse before a handler context exists ──
+    refusal = await _refuse_before_handler(
+        name, agent_id=agent_id, tenant_id=tenant_id, user_id=user_id, user_role=user_role
+    )
+    if refusal is not None:
+        return refusal
 
     ctx = ToolContext(
         agent_id=agent_id,
