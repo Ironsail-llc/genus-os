@@ -1,0 +1,22 @@
+{
+  "scope": "Private canonical storage, actual native runner/coordinator/CRM dispatcher, scripted planning and execution provider. Simulated day-old waiting state, fresh synthetic calendar receipt, new runner/controller instances; not an OS restart or live calendar/model test.",
+  "parent_status": "complete",
+  "child_status": "complete",
+  "goal_tokens": 1500,
+  "planning_calls": 4,
+  "goal_execution_calls": 6,
+  "interactive_calls": 6,
+  "ordinary_request_ms": [
+    30.219369000406004,
+    35.87866999441758,
+    36.02033499919344
+  ],
+  "completed_native_runs": 7,
+  "created_tasks": 3,
+  "confirmed_task_receipts": 3,
+  "waiting_ticks_without_calls": 3,
+  "duplicate_wake_deliveries": 2,
+  "goal_attempts_each": 2,
+  "calls_after_completion": 0,
+  "manual_acceptance": false
+}

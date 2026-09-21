@@ -125,6 +125,7 @@ def main():
                     "robothor/engine/tests/test_runner_person_link.py",
                     "bench/runtime/test_resume_family.py",
                     "robothor/engine/tests/test_native_goal_recovery.py",
+                    "robothor/engine/tests/test_native_multiday_goal.py",
                     "robothor/engine/tests/test_native_admission_rollback.py",
                     "robothor/engine/tests/test_native_deadline_recovery.py",
                     "robothor/engine/tests/test_native_goal_report_audit.py",

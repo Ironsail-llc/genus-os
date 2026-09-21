@@ -3878,6 +3878,23 @@
       "seconds": 44.96,
       "log": "bench/runtime/uat-runtime-chat-recovery-browser-regression.log",
       "note": "Private canonical migration/native suite and seven browser cases. Reused the previous successful app build only after verifying app/src, package, lock and Next config unchanged from 170bdd3140e. Source unchanged throughout invocation; synthetic provider only."
+    },
+    "native_multiday_goal": {
+      "base_revision": "c9bc4019f26",
+      "product_revision": "e69866dfe64",
+      "product_changed": false,
+      "artifact": "bench/runtime/uat-runtime-native-multiday-final.json",
+      "canonical": {
+        "passed": 54,
+        "skipped": 2,
+        "warnings": 1,
+        "seconds": 18.95,
+        "log": "bench/runtime/uat-runtime-native-multiday-final.log"
+      },
+      "coverage": "Actual native runner and goal controller, task protocol and automatic planning enabled, private canonical database and real native CRM task writes. Everyday requests finish while the coordinator is awaiting a provider response, both before and after the simulated next day. Fresh runner/controller instances recover persisted waiting state. Duplicate reply event yields exactly two attempts each over both phases; independently checked fresh synthetic calendar receipt allows child then parent completion.",
+      "accounting": "Four planning calls and six goal execution calls charge exactly 1500 fixture tokens to the goal family. Six independent interactive calls create three tasks with confirmed receipts and do not enter that goal budget. Seven completed native runs, three idle ticks without provider calls, zero post-completion calls.",
+      "fixture_corrections": "Initial provider assumed parent never reviews a waiting child; that assertion raised inside the provider and correctly retained uncertain usage. Subsequent fixed-count assertions omitted native planning calls. Diagnostic trace identified planners, and final provider returns valid planning JSON with separately counted usage. Four failing logs and the intermediate passing run are preserved.",
+      "limits": "Simulated day-old wait and seeded fresh synthetic receipt; new in-process runner/controller instances, not a new OS process or real elapsed day. Scripted provider, direct WEBCHAT-triggered native admissions, no live model/calendar, no HTTP queue capacity qualification. Three latency observations are diagnostic, not a 30-repetition screening cohort. Manual acceptance remains open."
     }
   },
   "calendar": {
@@ -4077,7 +4094,6 @@
   },
   "remaining": [
     "Full representative native-workload reliability and provider latency remain unqualified. Existing configured-model screening uses reduced profiles; 97-field installation parsing parity does not establish full prompt/tool/memory execution parity. Preserve all observed failures and timeouts.",
-    "Combined native multi-day parent/child completion alongside everyday requests remains unverified: the existing restored-day-old test uses a simulated executor, while native mixed workload and full-daemon crash/idle tests cover separate parts. Extend the combined scenario through the actual native runner on private storage.",
     "Eligible simple profiles and deterministic calendar confirmation have bounded deadlines. Classification and enforcement of the 60-second policy across all simple conversational actions remain unproven.",
     "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded. Production ingress, selected-provider p95 across the representative workload, and mixed-load fallback operating limits are not certified. Dispatch-only improvements do not qualify complete request latency.",
     "Retain the current runtime: the tested bounded candidates failed required behavior and are not finalists. Any future replacement still needs behavior parity, matched configurations, 100-repetition finalist measurements and compatible checkpoint upgrades. No replacement is selected.",
@@ -4322,5 +4338,15 @@
     "Calendar audit recovery, unattended readback and same-tab browser reload are locally tested. General external-provider coverage, recovery without browser storage, cross-device restoration and loaded-fleet performance remain incomplete. Synthetic full-daemon active-goal crash recovery, native checkpoint continuation, chat lineage and continuation stop now pass.",
     "The normal-chat unfinished-work/pause case is accepted. Manual acceptance of the newer recovery behavior and remaining goal controls is pending.",
     "Production deployment is not authorized. Concrete rollout/rollback review and end-to-end finalist upgrade compatibility remain unfinished."
+  ],
+  "remaining_before_native_multiday": [
+    "Full representative native-workload reliability and provider latency remain unqualified. Existing configured-model screening uses reduced profiles; 97-field installation parsing parity does not establish full prompt/tool/memory execution parity. Preserve all observed failures and timeouts.",
+    "Combined native multi-day parent/child completion alongside everyday requests remains unverified: the existing restored-day-old test uses a simulated executor, while native mixed workload and full-daemon crash/idle tests cover separate parts. Extend the combined scenario through the actual native runner on private storage.",
+    "Eligible simple profiles and deterministic calendar confirmation have bounded deadlines. Classification and enforcement of the 60-second policy across all simple conversational actions remain unproven.",
+    "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded. Production ingress, selected-provider p95 across the representative workload, and mixed-load fallback operating limits are not certified. Dispatch-only improvements do not qualify complete request latency.",
+    "Retain the current runtime: the tested bounded candidates failed required behavior and are not finalists. Any future replacement still needs behavior parity, matched configurations, 100-repetition finalist measurements and compatible checkpoint upgrades. No replacement is selected.",
+    "Calendar and CRM note/task audit recovery, actual task browser reconnection, concurrent native readback, full-daemon goal crash recovery and saved checkpoint continuation are locally verified. Other external-provider readbacks, recovery without browser storage, cross-device restoration and loaded-fleet performance remain incomplete.",
+    "The normal-chat unfinished-work/pause case is accepted. Manual acceptance of verified recovery and remaining goal controls is pending; automatic goal continuations do not count as acceptance.",
+    "Local compatible code rollback preserves stopped/paused/unresolved state and new native admissions. HTTP admission in the booted rollback daemon, container/dependency rollback and hosted CI remain unverified. No production deployment is authorized or required to claim these local results; production expansion requires its own concrete review."
   ]
 }
