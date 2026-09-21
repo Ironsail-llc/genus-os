@@ -1,0 +1,52 @@
+{
+  "configuration": {
+    "primary": "openrouter/deepseek/deepseek-v4.1-flash",
+    "fallbacks": [
+      "openrouter/xiaomi/mimo-v2.5",
+      "openrouter/deepseek/deepseek-v4-flash",
+      "ollama_chat/qwen3.8:27b"
+    ],
+    "temperature": 0.5,
+    "tools_allowed": 104,
+    "task_protocol": true,
+    "samples": 30,
+    "scenario": "task_and_calculation",
+    "synthetic_tenant_prefix": "runtime-live-",
+    "scope": "Native runner, installation profile settings, isolated workspace and private CRM. Only requested task tools execute. No production instructions/memory staged; 65-second harness cutoff and 12-call diagnostic limit. Provider counts include planning. Native cost estimates are not billing. Not ASGI/browser latency or a matched baseline comparison."
+  },
+  "counts": {
+    "verified": 27,
+    "failed": 3,
+    "unfinished": 0,
+    "not_started": 0
+  },
+  "elapsed_ms": {
+    "samples": 30,
+    "p50": 31123.110849002842,
+    "p95": 60014.074303995585,
+    "p95_ci95": [
+      46517.27077800024,
+      60016.263030003756
+    ]
+  },
+  "over_30_seconds": 17,
+  "over_60_seconds": 3,
+  "provider_invocations": {
+    "openrouter/deepseek/deepseek-v4.1-flash": 91,
+    "openrouter/xiaomi/mimo-v2.5": 9
+  },
+  "native_estimated_cost_usd": 0.119536,
+  "post_return_model_calls": 0,
+  "duplicate_task_samples": 0,
+  "stored_task_matches": 30,
+  "confirmed_action_samples": 30,
+  "interrupted_after_confirmed_action": 3,
+  "latency_passed": false,
+  "screening_passed": false,
+  "manual_acceptance": false,
+  "note": "All finished attempts contribute timing, including failed/cutoff attempts; missing attempts cannot qualify. Provider invocations count LiteLLM calls, not independently observed HTTP retries. Cost is native recorded estimate, not billing. Direct native admission, not chat ingress/queue timing; no matched baseline or framework-selection claim.",
+  "measured_revision": "f5be69acf4486067960fedaa1082ddcae8301a8d",
+  "canonical_summary": "1 failed, 72 passed, 2 skipped, 1 warning in 1031.26s (0:17:11)",
+  "token_trace": "bench/runtime/uat-runtime-task-compound-tokens.json",
+  "token_trace_scope": "Read-only snapshot of all 61 stored execution model steps for the 30 requests before private database teardown. Planning usage not included. Cancelled calls with zero recorded tokens have unknown actual provider usage; this is not a billing measurement."
+}

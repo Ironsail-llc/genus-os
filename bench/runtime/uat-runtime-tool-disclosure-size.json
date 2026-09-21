@@ -1,0 +1,20 @@
+{
+  "measured_revision": "f5be69acf44",
+  "measurements": {
+    "False": {
+      "advertised_tools": 108,
+      "schema_characters": 73163,
+      "direct_task_creation": true,
+      "direct_goal_controls": true,
+      "searchable_allowed_count": 111
+    },
+    "True": {
+      "advertised_tools": 24,
+      "schema_characters": 17546,
+      "direct_task_creation": true,
+      "direct_goal_controls": true,
+      "searchable_allowed_count": 111
+    }
+  },
+  "scope": "Read-only tool-schema construction with existing main manifest. Process-local function override only; no flag/configuration changed in the running installation. Character counts are not provider token counts or latency measurements."
+}
