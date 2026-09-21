@@ -35,8 +35,17 @@ def install():
     import litellm
 
     from robothor.goals import store
+    from robothor.goals.controller import GoalController
     from robothor.goals.runtime import binding
 
+    original_tick = GoalController.tick
+
+    async def observed_tick(self):
+        await original_tick(self)
+        with Path(os.environ["RUNTIME_DRILL_ROOT"], "completed-ticks.log").open("a") as log:
+            log.write("tick\n")
+
+    GoalController.tick = observed_tick
     calls = 0
 
     async def provider(**kwargs):
@@ -46,6 +55,8 @@ def install():
             raise RuntimeError("Synthetic provider only supports the drill goal")
         calls += 1
         phase = os.environ["RUNTIME_GOAL_PHASE"]
+        with Path(os.environ["RUNTIME_DRILL_ROOT"], "provider-calls.jsonl").open("a") as log:
+            log.write(json.dumps({"phase": phase, "call": calls}) + "\n")
         state = store.control(current.tenant, current.goal_id)
         if phase == "crash" and calls == 2:
             assert state["checkpoint"] == "Saved before daemon crash"
@@ -53,14 +64,24 @@ def install():
                 json.dumps({"goal": current.goal_id, "attempt": current.attempt})
             )
             await asyncio.Future()
-        action = "progress" if phase == "crash" else ("reconciled" if calls == 2 else "wait")
+        action = (
+            "progress"
+            if phase == "crash"
+            else "wait"
+            if phase == "recover_wait" or calls == 3
+            else "reconciled"
+            if calls == 2
+            else "complete"
+        )
         args = {"goal_id": current.goal_id, "version": state["version"], "action": action}
         if action == "progress":
             args.update(note="Saved before daemon crash", next_action="Check saved progress")
         elif action == "reconciled":
             args.update(note="Synthetic prior progress checked")
-        else:
+        elif action == "wait":
             args.update(note="Await synthetic reply", event_type="fixture.reply")
+        else:
+            args.update(note="Premature completion must be denied")
         return litellm.ModelResponse(
             model="openrouter/test/model",
             choices=[
@@ -102,12 +123,40 @@ def await_state(root, daemon, env, phase):
                 )
                 row = cur.fetchone()
                 if row == ("waiting", None):
+                    verify_idle(root, daemon, deadline)
                     return
         time.sleep(0.1)
     raise AssertionError("Goal phase did not finish: " + (root / "daemon.log").read_text()[-8000:])
 
 
+def verify_idle(root, daemon, deadline):
+    """Observe completed coordinator ticks, rather than infer idleness from time."""
+    calls = (root / "provider-calls.jsonl").read_text()
+    ticks = root / "completed-ticks.log"
+    before = len(ticks.read_text().splitlines()) if ticks.exists() else 0
+    while time.monotonic() < deadline and daemon.poll() is None:
+        after = len(ticks.read_text().splitlines()) if ticks.exists() else 0
+        assert (root / "provider-calls.jsonl").read_text() == calls, "Waiting goal called the model"
+        if after >= before + 3:
+            (root / "idle-result.json").write_text(
+                json.dumps({"completed_ticks": after - before, "additional_model_calls": 0})
+            )
+            return
+        time.sleep(0.1)
+    raise AssertionError("Waiting coordinator did not complete three idle ticks")
+
+
 def drill(root, env):
+    outcomes = {}
+    for wait_early in (False, True):
+        scenario = "safe_wait" if wait_early else "explicit_reconciliation"
+        location = root / scenario
+        location.mkdir()
+        outcomes[scenario] = _scenario(location, env, wait_early=wait_early)
+    return outcomes
+
+
+def _scenario(root, env, *, wait_early):
     from bench.runtime.daemon_drill import run
     from robothor.goals import store
     from robothor.goals.model import CreateGoal
@@ -130,7 +179,7 @@ def drill(root, env):
         )
     env = {**env, "RUNTIME_GOAL_ID": goal["id"]}
     outcomes = []
-    for phase in ("crash", "recover"):
+    for phase in ("crash", "recover_wait" if wait_early else "recover"):
         location = root / ("goal-" + phase)
         location.mkdir()
         outcomes.append(run(location, env, resume=True, goal_phase=phase))
@@ -143,7 +192,7 @@ def drill(root, env):
     with connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT status,data FROM pursuit_goals WHERE id=%s", (goal["id"],))
         status, data = cur.fetchone()
-        assert status == "waiting" and not data["recovery_required"]
+        assert status == "waiting" and data["recovery_required"] is wait_early
         cur.execute(
             "SELECT status,tokens FROM pursuit_goal_attempts WHERE goal_id=%s ORDER BY started_at",
             (goal["id"],),
@@ -152,13 +201,16 @@ def drill(root, env):
         assert (
             len(attempts) == 2 and attempts[0][0] == "interrupted" and attempts[1][0] == "finished"
         ), attempts
-        assert attempts[0][1] > 150 and attempts[1][1] == 450
+        assert attempts[0][1] > 150 and attempts[1][1] == (150 if wait_early else 450)
         assert data["tokens_used"] == sum(a[1] for a in attempts)
         cur.execute(
             "SELECT s.tool_input->>'action' FROM agent_run_steps s JOIN agent_runs r ON r.id=s.run_id WHERE r.runtime_context->>'goal_id'=%s AND s.tool_name='update_pursuit_goal' ORDER BY r.started_at,s.step_number",
             (goal["id"],),
         )
-        assert [r[0] for r in cur.fetchall()] == ["progress", "wait", "reconciled", "wait"]
+        actions = [r[0] for r in cur.fetchall()]
+        assert actions == (
+            ["progress", "wait"] if wait_early else ["progress", "complete", "reconciled", "wait"]
+        )
         cur.execute(
             "SELECT COALESCE(resume_attempts,0) FROM agent_runs WHERE runtime_context->>'goal_id'=%s",
             (goal["id"],),
@@ -169,4 +221,15 @@ def drill(root, env):
         "attempts": attempts,
         "tokens_used": data["tokens_used"],
         "progress_effects": 1,
+        "recovery_required": data["recovery_required"],
+        "actions": actions,
+        "recovery_model_calls": 1 if wait_early else 3,
+        "idle_observation": json.loads(
+            (
+                root
+                / ("goal-recover_wait" if wait_early else "goal-recover")
+                / "daemon-drill"
+                / "idle-result.json"
+            ).read_text()
+        ),
     }

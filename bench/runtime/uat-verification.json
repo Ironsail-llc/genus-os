@@ -3623,6 +3623,24 @@
       "canonical_warnings": 1,
       "canonical_seconds": 19.52,
       "scope": "Actual daemon boot, resume scan and shutdown across current/prior/current source checkouts, private database and Redis, no provider access. Each revision also passes its real native new-admission contract in a separate process with a scripted provider. Does not exercise HTTP admission in the booted daemon or container/dependency rollback."
+    },
+    "daemon_goal_recovery_and_idle": {
+      "product_revision": "8e63c53ed3e",
+      "report": "bench/runtime/uat-runtime-daemon-goal-idle.json",
+      "log": "bench/runtime/uat-runtime-daemon-goal-idle.log",
+      "initial_failure": "bench/runtime/uat-runtime-daemon-goal-before.log",
+      "intermediate": "bench/runtime/uat-runtime-daemon-goal-recovery.log",
+      "scenarios_passed": [
+        "safe_wait",
+        "explicit_reconciliation"
+      ],
+      "idle_ticks_per_scenario": 3,
+      "idle_model_calls": 0,
+      "canonical_passed": 44,
+      "canonical_skipped": 2,
+      "canonical_warnings": 1,
+      "canonical_seconds": 21.67,
+      "note": "Actual daemon SIGKILL and coordinator recovery on private storage with scripted provider. Corrected stale harness assumption that waiting clears recovery. No product change; import-only lint correction after the final run."
     }
   },
   "calendar": {

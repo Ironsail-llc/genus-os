@@ -1,0 +1,84 @@
+{
+  "explicit_reconciliation": {
+    "cycles": [
+      {
+        "health_ready": true,
+        "code_origin": "robothor/engine/daemon.py",
+        "shutdown_exit_code": -9,
+        "shutdown_seconds": 0.06404468799883034,
+        "recovery_worker_spawns": 1
+      },
+      {
+        "health_ready": true,
+        "code_origin": "robothor/engine/daemon.py",
+        "shutdown_exit_code": 0,
+        "shutdown_seconds": 1.067624513998453,
+        "recovery_worker_spawns": 1
+      }
+    ],
+    "attempts": [
+      [
+        "interrupted",
+        44161
+      ],
+      [
+        "finished",
+        450
+      ]
+    ],
+    "tokens_used": 44611,
+    "progress_effects": 1,
+    "recovery_required": false,
+    "actions": [
+      "progress",
+      "complete",
+      "reconciled",
+      "wait"
+    ],
+    "recovery_model_calls": 3,
+    "idle_observation": {
+      "completed_ticks": 3,
+      "additional_model_calls": 0
+    }
+  },
+  "safe_wait": {
+    "cycles": [
+      {
+        "health_ready": true,
+        "code_origin": "robothor/engine/daemon.py",
+        "shutdown_exit_code": -9,
+        "shutdown_seconds": 0.06386364300124114,
+        "recovery_worker_spawns": 1
+      },
+      {
+        "health_ready": true,
+        "code_origin": "robothor/engine/daemon.py",
+        "shutdown_exit_code": 0,
+        "shutdown_seconds": 1.0671418690035352,
+        "recovery_worker_spawns": 1
+      }
+    ],
+    "attempts": [
+      [
+        "interrupted",
+        44256
+      ],
+      [
+        "finished",
+        150
+      ]
+    ],
+    "tokens_used": 44406,
+    "progress_effects": 1,
+    "recovery_required": true,
+    "actions": [
+      "progress",
+      "wait"
+    ],
+    "recovery_model_calls": 1,
+    "idle_observation": {
+      "completed_ticks": 3,
+      "additional_model_calls": 0
+    }
+  }
+}
