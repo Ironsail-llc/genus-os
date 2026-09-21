@@ -1,0 +1,12 @@
+{
+  "change": "Prototype run-scoped channel for a trusted factual goal report. It is separate from returned tool data, rejects mismatched tenant/agent/run identities and unavailable/expired capabilities, clears reports on exceptional turn exit, and allows consumption only after a turn ends and only once.",
+  "tests": {
+    "passed": 22,
+    "seconds": 3.19,
+    "log": "/tmp/runtime-goal-report-channel.log"
+  },
+  "coverage": "Channel identity and lifecycle, 20 concurrent tenant/run contexts, stale inherited tasks, presentation and existing workflow-completion/size tests.",
+  "integration_status": "Not installed in tool turns or normal chat. Caller must enable only an admitted standalone interactive final-report tool; mixed requests and native delivery need integration tests.",
+  "full_acceptance_passed": false,
+  "production_deployed": false
+}
