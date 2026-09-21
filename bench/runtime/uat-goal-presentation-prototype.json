@@ -1,0 +1,28 @@
+{
+  "change": "Prototype deterministic goal-progress renderer consumes a complete trusted store.get snapshot. It does not select goals, authorize controls, or terminate/deliver agent runs.",
+  "tests": {
+    "behavior_and_size_passed": 12,
+    "seconds": 3.14,
+    "log": "/tmp/runtime-goal-presentation-final-2.log"
+  },
+  "covered": [
+    "unfinished task and pause with persisted task states",
+    "all tasks DONE without goal completion or evidence",
+    "ongoing goal distinct from finite completion",
+    "unfinished paused child and pending action verification",
+    "canceled and unrecognized task statuses",
+    "bounded title previews with explicit omitted count",
+    "missing task read raises rather than implying no work"
+  ],
+  "integration_status": "Not connected to normal chat; current cohort/runtime behavior unchanged.",
+  "next_required": "Integrate authorized explicit goal selection and trusted final delivery; verify mixed requests, controls, accounting and no post-report model work before claiming chat improvement.",
+  "running_cohort": {
+    "directory": "/tmp/runtime-chat-cohort-task-summary-utf8",
+    "session_id": 30452,
+    "runtime_revision": "2488b5322db",
+    "harness_revision": "fc5b658fdec"
+  },
+  "manual_acceptance": false,
+  "full_acceptance_passed": false,
+  "production_deployed": false
+}

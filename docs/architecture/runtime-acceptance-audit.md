@@ -857,3 +857,10 @@ Separately, four failing command tests showed that collection returned success w
 A deterministic collector test changed the source manifest after the first child. Before the fix, all 29 subsequent children read the changed primary despite the journal retaining the original model label. The collector now writes primary/fallback/temperature settings into the new output directory before any child runs and points every child at that snapshot. Eight cohort/reporting checks pass (0.42s), with Ruff and formatting passing. Evidence: `bench/runtime/uat-chat-model-snapshot.json`.
 
 The current UTF8 task-summary cohort was started at `fc5b658fdec` and already uses a manually frozen selected-model file. Its runtime remains `2488b5322db`; this collector-only edit does not modify those running conversations. Full acceptance remains open.
+
+
+## Prototype a factual goal-progress report
+
+The live task-summary experiment still permits contradictory prose about disabled reviews. `robothor/goals/presentation.py` now prototypes rendering a concise report directly from a complete trusted goal-store snapshot. It distinguishes task status from goal completion, preserves unfinished child work and pending verification, bounds previews without hiding omissions, and never presents a disabled or paused review as available. Missing task/child reads fail rather than being treated as empty.
+
+Six private-store behavior tests plus six size checks pass (3.14s); Ruff, formatting and diff checks pass. Evidence: `bench/runtime/uat-goal-presentation-prototype.json`. The renderer does not choose a goal, authorize work or finish/deliver an agent run. It is not connected to chat and is not an accepted replacement for the live reply. Integration must preserve explicit goal selection, mixed-request behavior, controls, accounting and terminal delivery before any chat or latency improvement is claimed. The current UTF8 cohort remains on product `2488b5322db`. Nothing was deployed.
