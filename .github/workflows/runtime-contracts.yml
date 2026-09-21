@@ -52,6 +52,7 @@ jobs:
           bench/runtime/test_profile_load.py
           bench/runtime/test_native_journal.py
           bench/runtime/test_chat_cohort.py
+          bench/runtime/test_chat_cohort_report.py
           robothor/engine/tests/test_runtime_verified_outcomes.py
           robothor/engine/tests/test_runtime_fallback_wire.py
           robothor/engine/tests/test_runtime_http_acceptance.py
