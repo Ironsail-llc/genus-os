@@ -23,10 +23,12 @@ from robothor.goals.model import CreateGoal, GoalUpdate
 pytestmark = pytest.mark.integration
 
 
+@pytest.mark.parametrize("deferred", [False, True])
 async def test_saved_family_pause_is_reported_after_model_exhaustion(
     engine_config,
     sample_agent_config,
     monkeypatch,
+    deferred,
 ):
     dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
     if "host=/tmp/runtime-migrated-" not in dsn:
@@ -47,6 +49,7 @@ async def test_saved_family_pause_is_reported_after_model_exhaustion(
         "operator",
     )
     goal = store.get(tenant, goal["id"])
+    monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "1" if deferred else "0")
     config = replace(
         sample_agent_config,
         id="main",
@@ -54,9 +57,14 @@ async def test_saved_family_pause_is_reported_after_model_exhaustion(
         planning_enabled=False,
         difficulty_class="simple",
         model_fallbacks=[],
-        tools_allowed=["update_pursuit_goal"],
+        tools_allowed=[] if deferred else ["update_pursuit_goal"],
     )
     engine = AgentRunner(replace(engine_config, tenant_id=tenant))
+    assert engine.registry.should_defer(config) is deferred
+    advertised = {tool["function"]["name"] for tool in engine.registry.build_for_agent(config)}
+    assert "update_pursuit_goal" in advertised
+    if deferred:
+        assert {"get_pursuit_goal", "report_pursuit_goal", "tool_call"} <= advertised
     calls = []
 
     async def provider(self, messages, models, tools, **kwargs):

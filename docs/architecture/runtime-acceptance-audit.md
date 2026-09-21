@@ -1680,3 +1680,10 @@ With existing tool discovery enabled only inside the private fixture, three stre
 The deferred-tool streaming cohort is still running; its first seven requests were correct but three exceeded thirty seconds, which already prevents its nearest-rank p95 gate. Keep the entire population. Tool deferral by itself is therefore not a qualified latency improvement.
 
 Future harness processes now record first reasoning and first answer/tool-argument timing separately, numeric provider-reported usage (including reasoning tokens when available), configured reasoning effort and requested thinking budget/output ceiling. Content is never copied into these telemetry fields. Nine focused observation/reporting checks pass. This adds measurement only; it neither changes model effort nor the running cohort's loaded instrumentation or installed defaults.
+
+
+### Goal-control recovery checked under actual deferral — 2026-09-21
+
+Extended the native saved-family-pause test to cover both a narrow tool set and a broad tool set with the real deferral flag enabled. It asserts `should_defer` and verifies goal controls remain directly advertised. Both cases passed against private canonical PostgreSQL: two passed, 81 deselected, one warning, 3.24 seconds. Parent and child pause, TODO preservation, initial/reconnect audit recovery, foreign identity denial, later resume and stale-control rejection remain intact with no extra model calls. This is additional automated coverage of accepted behavior, not a new user acceptance response.
+
+The brief focused run overlapped the already latency-failing streaming cohort; retain that local-load qualification when interpreting its final timing. Product source and the cohort's already-loaded test code were unchanged.

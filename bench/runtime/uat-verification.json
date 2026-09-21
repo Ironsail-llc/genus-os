@@ -5850,6 +5850,15 @@
       "screening_qualified": false,
       "report": "bench/runtime/uat-runtime-deferred-streaming-diagnostic-report.json",
       "note": "Existing tool-discovery flag enabled only inside private fixture; normal timeouts and selected models unchanged. One matching task and additional calculation per request; thirty-request screen now running. No installed/default change."
+    },
+    "deferred_goal_control_recovery": {
+      "product_revision": "9163df1d1e6",
+      "passed": 2,
+      "deselected": 81,
+      "warnings": 1,
+      "seconds": 3.24,
+      "log": "bench/runtime/uat-runtime-goal-deferred-control.log",
+      "scope": "Native private-database parent/child pause and interrupted initial/reconnect recovery with narrow tools and real broad-tool deferral, asserting actual deferral and directly available goal controls. Remaining task TODO, original-history evidence stable after resume, foreign principal/tenant denied, no extra model calls. Existing accepted behavior, not new manual UAT acceptance."
     }
   },
   "calendar": {
