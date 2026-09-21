@@ -762,3 +762,12 @@ At test revision `fd6c67f2b6c` (product `49627a99058`), two new canonical integr
 The canonical migration/native/browser command passes 35 checks, with one worker-only skip and one dependency warning, in 26.63s. Fresh/populated upgrade assertions and existing native/browser scenarios remain in that command. Initial fixture failures occurred after the database checks: the standalone chat router returned 503 because its engine/config fixture had not been initialized. Correcting the fixture produced the final pass; no additional product change was needed. Ruff lint/format and diff checks pass. Evidence: `bench/runtime/uat-native-deadline-recovery.json`. The canonical harness includes these checks in its existing CI path; no hosted run claimed.
 
 This closes real-database and chat recovery coverage for the deadline reason fixed in the preceding revision. It does not establish live-provider outage latency or remaining manual acceptance. A separate broad engine refresh is running; no result is assumed. No production deployment occurred, and full acceptance remains open.
+
+
+## Preserve interrupted native live benchmark samples
+
+At `45a41d171d5`, each native live sample durably records its model/repetition and start before execution. Terminal outcomes are flushed and fsynced before the corresponding finish event. Cancellation records an interrupted row before propagating; runtime deadline exceptions retain timeout classification and unknown usage/cost stays null. Exclusive journal creation prevents mixing a fresh run with earlier interrupted evidence. A killed process leaves an identifiable unresolved sample rather than silently reducing the measured population.
+
+Four offline tests pass in 3.12s. Subprocess cases drive the actual opt-in live harness with a nonexecuting fixture runner and no credentials: SIGKILL preserves the started sample, while task cancellation leaves a matching interrupted row and finish event. Additional checks cover timeout classification and the existing candidate journal. Ruff lint/format and diff checks pass. CI includes the offline journal tests; no hosted run claimed. Evidence: `bench/runtime/uat-native-live-journal.json`.
+
+This is process-interruption accounting, not automatic replay or recovery of provider usage. A separate 30-sample selected-primary live cohort is running with synthetic business tools; its result is not assumed. The broad engine refresh excludes the opt-in slow live harness. Full acceptance remains open and no production deployment occurred.

@@ -2355,6 +2355,18 @@
       "identity_scope": "API test supplies a trusted fixture AuthContext; JWT authentication and deployed ingress are not exercised. Deadline recovery uses actual storage and the real chat outcome handler through ASGI.",
       "checks": "Ruff lint/format and diff checks pass. New integration tests run in the canonical migration harness, including its existing CI invocation. No hosted run claimed.",
       "limits": "Synthetic model boundary and isolated configuration; no real provider outage or latency claim. Canonical harness also verifies existing native/browser scenarios and fresh/populated schema migrations. Broad engine refresh is running separately; no result assumed. Remaining provider performance, manual UAT and full acceptance remain open. No production deployment."
+    },
+    "native_live_journal": {
+      "revision": "45a41d171d5",
+      "change": "Native live benchmark writes and fsyncs sample_started before each sample, then sample_finished after its durable outcome. Cancellation records interrupted status before re-raising. Runtime deadline exceptions are classified as timeout; unavailable usage/cost remains null. Exclusive journal creation preserves earlier interrupted attempts.",
+      "verification": {
+        "passed": 4,
+        "seconds": 3.12,
+        "log": "/tmp/runtime-native-journal.log",
+        "scope": "Two subprocess cases drive the actual live harness with a nonexecuting fixture runner and no credentials: SIGKILL preserves the in-flight sample identity; task cancellation records an interrupted outcome matching its terminal row. Also checks runtime timeout classification and existing candidate kill-journal behavior."
+      },
+      "checks": "Ruff lint/format and diff checks pass. Offline journal tests included in runtime-contract CI; no hosted run claimed.",
+      "limits": "Process interruption evidence, not automatic retry or recovery of unknown provider usage. A live primary-model cohort is running separately; no performance result or full acceptance assumed. Broad engine run excludes this slow opt-in harness. No production deployment."
     }
   },
   "calendar": {

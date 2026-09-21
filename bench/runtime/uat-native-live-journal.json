@@ -1,0 +1,12 @@
+{
+  "revision": "45a41d171d5",
+  "change": "Native live benchmark writes and fsyncs sample_started before each sample, then sample_finished after its durable outcome. Cancellation records interrupted status before re-raising. Runtime deadline exceptions are classified as timeout; unavailable usage/cost remains null. Exclusive journal creation preserves earlier interrupted attempts.",
+  "verification": {
+    "passed": 4,
+    "seconds": 3.12,
+    "log": "/tmp/runtime-native-journal.log",
+    "scope": "Two subprocess cases drive the actual live harness with a nonexecuting fixture runner and no credentials: SIGKILL preserves the in-flight sample identity; task cancellation records an interrupted outcome matching its terminal row. Also checks runtime timeout classification and existing candidate kill-journal behavior."
+  },
+  "checks": "Ruff lint/format and diff checks pass. Offline journal tests included in runtime-contract CI; no hosted run claimed.",
+  "limits": "Process interruption evidence, not automatic retry or recovery of unknown provider usage. A live primary-model cohort is running separately; no performance result or full acceptance assumed. Broad engine run excludes this slow opt-in harness. No production deployment."
+}
