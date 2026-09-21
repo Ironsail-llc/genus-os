@@ -38,6 +38,7 @@ from typing import Any
 __all__ = [
     "PLACEHOLDER",
     "SECRET_TOOL_ARGUMENTS",
+    "cut_private_input",
     "redact",
     "redact_assistant_turn",
     "redact_message",
@@ -61,6 +62,26 @@ PLACEHOLDER = "<redacted>"
 #: does not run the other way, because a platform-wide redaction primitive
 #: must not pull a product module in on its hot path.
 SECURE_MARKER = re.compile(r"(?im)^\s*/secure(?:@[a-zA-Z0-9_]+)?(?:\s|$)")
+
+
+def cut_private_input(text: str, replacement: str = PLACEHOLDER) -> str:
+    """Everything from a ``/secure`` marker on, replaced by ``replacement``.
+
+    Three callers make this exact cut and each had written it out: ``redact``
+    for a log line, ``robothor.sanitize.sanitize_preview`` for the operator
+    notification an unregistered sender's text is embedded in, and
+    ``autonomy.intake.protect_payment_text`` for the chat intake itself. They
+    differ only in what they leave behind — a platform placeholder, a short
+    note, or a sentence pointing at secure enrollment — which is the argument,
+    not a reason to copy the search.
+
+    Three copies of a secret boundary is three places to forget when the
+    marker's shape changes, and the shape is a regex a chat sender controls
+    the input to.
+    """
+    marker = SECURE_MARKER.search(text)
+    return text[: marker.start()] + replacement if marker else text
+
 
 #: Credential shapes this platform issues, accepts or forwards.
 #:
@@ -331,10 +352,7 @@ def redact(text: str) -> str:
         # it goes — as a plain placeholder. Truncating a log at an attacker's
         # ``/secure`` and replacing the tail with an advisory sentence was the
         # same injection surface as the payment prose.
-        marker = SECURE_MARKER.search(text)
-        if marker:
-            text = text[: marker.start()] + PLACEHOLDER
-        named = _ASSIGNMENT.sub(_redact_assignment, text)
+        named = _ASSIGNMENT.sub(_redact_assignment, cut_private_input(text))
         return _CREDENTIAL_SHAPED.sub(PLACEHOLDER, named)
     except Exception:  # noqa: BLE001 - pragma: no cover - a regex that cannot fail
         # If this ever somehow raises, printing nothing beats printing a token.

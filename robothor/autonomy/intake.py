@@ -10,7 +10,7 @@ is a redaction primitive again; the product wording is here.
 
 import re
 
-from robothor.secrets.redaction import SECURE_MARKER
+from robothor.secrets.redaction import SECURE_MARKER, cut_private_input
 
 #: A plausible PAN: 12-19 digits, single space or dash between them.
 #:
@@ -50,7 +50,9 @@ def marker_truncated(text: str) -> bool:
     if not text:
         return False
     marker = SECURE_MARKER.search(text)
-    return bool(marker) and text[marker.start() :] != text.lstrip()
+    if marker is None:
+        return False
+    return text[marker.start() :] != text.lstrip()
 
 
 def protect_payment_text(text: str) -> str:
@@ -67,11 +69,10 @@ def protect_payment_text(text: str) -> str:
     """
     if not text:
         return text
-    marked = SECURE_MARKER.search(text)
-    if marked:
-        return (
-            text[: marked.start()]
-            + "[Private input withheld from chat; use /account/autonomy for secure enrollment.]"
+    if SECURE_MARKER.search(text):
+        return cut_private_input(
+            text,
+            "[Private input withheld from chat; use /account/autonomy for secure enrollment.]",
         )
     protected = _PAN.sub(
         lambda match: "[payment number withheld]" if _luhn(match[0]) else match[0], text

@@ -51,6 +51,7 @@ from robothor.engine.chunking import (
 from robothor.engine.delivery import set_telegram_sender
 from robothor.engine.models import TriggerType
 from robothor.engine.task_registry import get_task_registry
+from robothor.sanitize import sanitize_preview
 
 if TYPE_CHECKING:
     from robothor.engine.config import EngineConfig
@@ -126,38 +127,6 @@ def _format_checklist_html(todos: list[dict[str, str]]) -> str:
     from robothor.engine.todolist import TodoList
 
     return TodoList.format_for_telegram(todos)
-
-
-def _sanitize_preview(text: str, max_len: int = 100) -> str:
-    """Collapse newlines/control characters to spaces and cap length.
-
-    Used to embed untrusted, attacker-controlled message text (an
-    unregistered sender's raw message) inside an operator-facing
-    notification (review Finding 2). Without this, a crafted multi-line
-    message could plant its own fake "To register them:" line followed by a
-    bogus CLI command, made to look identical to the genuine registration
-    hint that follows — tricking the operator into copy-pasting an
-    attacker-supplied command. Stripping every line break and control
-    character confines the preview to a single line no matter what the
-    sender sent, so it can never spawn a second line that impersonates the
-    notification's own structure.
-
-    It also drops everything from a ``/secure`` marker onwards, the same cut
-    ``robothor.secrets.redaction.redact`` makes for a log line. The preview is
-    the sender's raw text rendered into a Telegram message in the OPERATOR's
-    chat, which is the one place the private-input boundary exists to keep a
-    payload out of — and an unregistered sender's ``/secure credential …
-    {"password": …}`` now reaches this function, because that boundary routes
-    a stranger through the ordinary unregistered-sender path so the operator
-    is actually told about them.
-    """
-    from robothor.secrets.redaction import SECURE_MARKER
-
-    marker = SECURE_MARKER.search(text)
-    if marker:
-        text = text[: marker.start()] + "[private input withheld]"
-    collapsed = re.sub(r"[\r\n\t\x00-\x1f\x7f]+", " ", text)
-    return collapsed.strip()[:max_len]
 
 
 def _md_to_html(text: str) -> str:
@@ -1131,7 +1100,7 @@ class TelegramBot(TelegramAttachmentsMixin, TelegramHandlersMixin, PlanModeMixin
 
         The sender's raw message text is untrusted and attacker-controlled
         (review Finding 2) — it is sanitized (newlines/control characters
-        collapsed to spaces via ``_sanitize_preview``) and rendered quoted on
+        collapsed to spaces via ``sanitize_preview``) and rendered quoted on
         a single line, clearly delimited from the "To register them:" hint
         that follows. Without this, a crafted multi-line message could
         embed its own fake hint line + bogus CLI command, formatted to look
@@ -1153,7 +1122,7 @@ class TelegramBot(TelegramAttachmentsMixin, TelegramHandlersMixin, PlanModeMixin
             sender = message.from_user
             username = getattr(sender, "username", None) if sender else None
             raw_preview = getattr(message, "text", None) or getattr(message, "caption", None) or ""
-            preview = _sanitize_preview(raw_preview)
+            preview = sanitize_preview(raw_preview)
             hint = (
                 f'robothor user add --tenant {self.config.tenant_id} --name "<name>" '
                 f"--role member --telegram-id {telegram_user_id}"
