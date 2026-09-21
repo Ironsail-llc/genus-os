@@ -1,0 +1,12 @@
+{
+  "revision": "2488b5322db",
+  "state": "started",
+  "directory": "/tmp/runtime-chat-cohort-task-summary",
+  "manifest": "/tmp/runtime-chat-task-summary-models.yaml",
+  "session_id": 26455,
+  "expected_conversations": 30,
+  "model_selection": "Snapshot of existing main manifest primary/fallbacks/temperature; no model changes.",
+  "terminal_report": null,
+  "full_acceptance_passed": false,
+  "production_deployed": false
+}
