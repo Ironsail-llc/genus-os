@@ -13,16 +13,24 @@ from robothor.engine.tests.test_runner import runner  # noqa: F401
 
 
 @pytest.mark.usefixtures("_mock_run_persistence")
+@pytest.mark.parametrize("delivery_fails", [False, True])
 async def test_native_interactive_loads_simple_profile_once_before_model(
     runner,  # noqa: F811
     sample_agent_config,
     monkeypatch,  # noqa: F811
+    delivery_fails,
 ):
     sample_agent_config.difficulty_class = "simple"
     sample_agent_config.task_protocol = False
     loader = Mock(return_value=(sample_agent_config, ""))
     monkeypatch.setattr("robothor.engine.runner.load_agent_config_or_reason", loader)
     admitted = datetime.now(UTC)
+    events = []
+
+    async def status(event):
+        events.append(event)
+        if delivery_fails and event.get("event") == "accepted":
+            raise OSError("synthetic delivery loss")
 
     async def reply(**kwargs):
         context = active_context.get()
@@ -46,10 +54,12 @@ async def test_native_interactive_loads_simple_profile_once_before_model(
         trigger_type=TriggerType.WEBCHAT,
         user_id="operator",
         user_role="owner",
+        on_status=status,
     )
     assert run.status == RunStatus.COMPLETED
     loader.assert_called_once_with(sample_agent_config.id, runner.config.manifest_dir)
     model.assert_awaited_once()
+    assert sum(event.get("event") == "accepted" for event in events) == 1
     assert active_context.get() is None
 
 

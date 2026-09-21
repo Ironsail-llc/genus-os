@@ -29,10 +29,15 @@ class CurrentRuntime:
     identity = StateEnvelope()
 
     def __init__(
-        self, execute: Callable[..., Awaitable[AgentRun]], *, audit_admission=False
+        self,
+        execute: Callable[..., Awaitable[AgentRun]],
+        *,
+        audit_admission=False,
+        acceptance_attempted=False,
     ) -> None:
         self._execute = execute
         self._audit_admission = audit_admission
+        self._acceptance_attempted = acceptance_attempted
 
     async def run(self, request: RunRequest, on_event=None) -> RuntimeResult:
         from robothor.engine.runtime.action_policy import apply_action_deadline
@@ -107,25 +112,10 @@ class CurrentRuntime:
             if callback:
                 await callback(event)
 
-        if callback or on_event:
-            import logging
+        if (callback or on_event) and not self._acceptance_attempted:
+            from robothor.engine.runtime.acceptance import emit
 
-            try:
-                await asyncio.wait_for(
-                    status(
-                        {
-                            "event": "accepted",
-                            "request_id": context.request_id,
-                            "phase": "accepted",
-                            "text": "Request accepted",
-                        }
-                    ),
-                    timeout=1,
-                )
-            except Exception:
-                logging.getLogger(__name__).debug(
-                    "Acceptance status delivery failed", exc_info=True
-                )
+            await emit(status, context)
         options.update(tenant_id=context.tenant_id, correlation_id=context.request_id)
         if callback or on_event:
             options["on_status"] = status
@@ -236,12 +226,18 @@ def runtime_entrypoint(execute):
             context, agent_id, message, values, resume, StateEnvelope() if resume else None
         )
 
+        from robothor.engine.runtime.acceptance import before_lookup
+
+        acceptance_attempted = await before_lookup(request)
         request, resolution = await prepare(self, request, admitted_at)
 
         async def native(**options):
             with resolved_profile(resolution):
                 return await execute(self, **options)
 
-        return (await CurrentRuntime(native, audit_admission=True).run(request)).run
+        runtime = CurrentRuntime(
+            native, audit_admission=True, acceptance_attempted=acceptance_attempted
+        )
+        return (await runtime.run(request)).run
 
     return wrapped
