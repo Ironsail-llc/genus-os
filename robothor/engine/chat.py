@@ -784,16 +784,17 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
             )
 
             # Extract plan from output
-            plan_text = _extract_plan_text(run.output_text or "")
+            output = result_text(run)
+            plan_text = _extract_plan_text(output) if run.status == RunStatus.COMPLETED else ""
 
             # Accumulate history so revisions have full context
-            append_turn(session, user_message=message, assistant_text=run.output_text)
-            if run.output_text and _config:
+            append_turn(session, user_message=message, assistant_text=output)
+            if output and _config:
                 asyncio.create_task(
                     save_exchange_async(
                         session_key,
                         message,
-                        run.output_text,
+                        output,
                         channel="webchat",
                         model_override=session.model_override,
                         tenant_id=auth.tenant_id,
@@ -839,7 +840,8 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
                 {
                     "event": "done",
                     "data": {
-                        "text": run.output_text or "",
+                        "text": output,
+                        "status": run.status.value,
                         "model": run.model_used,
                         "input_tokens": run.input_tokens,
                         "output_tokens": run.output_tokens,

@@ -765,3 +765,10 @@ Following the user's expectation that Robothor consult its audit trail automatic
 The tests require the original request identity, exactly one action submission, and recovered failure text alongside calendar evidence. Completed responses retain their direct delivery. The initial run had 3 failures and 8 passes; after the fix, 18 focused streaming/control/recovery tests passed (1.68s). The full frontend suite passes 1,651 tests across 149 files (9.41s), with the existing jsdom navigation notice. Changed-file ESLint, TypeScript and diff checks pass. Evidence: `bench/runtime/uat-terminal-error-recovery.json`.
 
 These are synthetic component responses; the backend chat/calendar recovery tests separately passed 64 checks (3.25s). General external-service reconciliation, plan drafting interruption recovery and remaining runtime acceptance stay open. No production deployment or manual acceptance is claimed.
+
+
+## Failed exploration cannot publish an approvable plan
+
+Inspection of draft interruption recovery reproduced a false-readiness issue: failed, timed-out and cancelled exploration runs could return partial text containing PLAN_READY and publish it as a pending plan. Three new backend cases failed before the fix. Only a completed exploration may now produce a plan; terminal response and chat history use the failure-aware result text, and the stream carries the run status.
+
+The 93 backend chat/session/plan/size checks pass (3.92s), as do all 11 plan-interface component tests (1.05s). The new cases assert no plan event, no active plan, no plan persistence, failure text in response and history, and exactly one exploration execution. Ruff lint/format and diff checks pass. Evidence: `bench/runtime/uat-plan-exploration-outcomes.json`. These use synthetic runner outcomes. Automatic completed-draft recovery after a lost connection, other external providers, and the remaining runtime acceptance gates remain open. Nothing was deployed.

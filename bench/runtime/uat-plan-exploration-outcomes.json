@@ -1,0 +1,30 @@
+{
+  "initial_failure": "Failed, timeout and cancelled exploration runs containing partial PLAN_READY output published an approvable plan.",
+  "before": {
+    "failed": 3,
+    "passed": 16,
+    "seconds": 1.13,
+    "log": "/tmp/runtime-plan-exploration-before.log"
+  },
+  "fix": "Only a completed exploration may publish a plan. Stream completion and persisted chat history use terminal-aware result text and include the run status.",
+  "backend": {
+    "passed": 93,
+    "seconds": 3.92,
+    "log": "/tmp/runtime-plan-exploration-after.log",
+    "scope": "Chat, per-user sessions, plan outcomes, module and function size ratchets"
+  },
+  "frontend": {
+    "passed": 11,
+    "seconds": 1.05,
+    "scope": "chat-panel-plan component suite"
+  },
+  "checks": [
+    "No plan SSE event after failed exploration",
+    "Plan status has no active plan",
+    "No plan persistence",
+    "Failure replaces partial text in terminal response and chat history",
+    "Exactly one exploration execution",
+    "Ruff lint and formatting pass"
+  ],
+  "limits": "Synthetic mocked runner outcomes; no provider or business effects. Automatic completed-draft recovery after disconnection remains open. No deployment or manual acceptance."
+}

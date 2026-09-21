@@ -69,3 +69,41 @@ async def test_approved_plan_reports_terminal_outcome_in_stream_history_and_stor
         assert "Everything is done" not in done["text"]
         assert "event: deep_result" not in response.text
     assert session.active_plan is None
+
+
+@pytest.mark.parametrize("status", [RunStatus.FAILED, RunStatus.TIMEOUT, RunStatus.CANCELLED])
+async def test_failed_exploration_cannot_publish_partial_plan(
+    client,  # noqa: F811
+    mock_runner,  # noqa: F811
+    monkeypatch,
+    status,
+):
+    monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "enforce")
+    run = AgentRun(
+        status=status,
+        output_text="Perform an unchecked action[PLAN_READY]",
+        error_message="Exploration stopped before verification",
+    )
+    mock_runner.execute = AsyncMock(return_value=run)
+    with (
+        patch("robothor.engine.chat._auth_context", return_value=_member_auth("bob")),
+        patch("robothor.engine.chat.save_exchange_async", new_callable=AsyncMock) as exchange,
+        patch("robothor.engine.chat.save_plan_state_async", new_callable=AsyncMock) as persist,
+    ):
+        response = await client.post(
+            "/chat/plan/start",
+            json={"message": "Prepare a plan", "session_key": "agent:main:primary"},
+        )
+        state = await client.get("/chat/plan/status?session_key=agent:main:primary")
+    done = [
+        json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")
+    ][-1]
+    assert "event: plan\n" not in response.text
+    assert state.json() == {"active": False, "plan": None}
+    assert done["status"] == status.value
+    assert run.error_message in done["text"]
+    assert "unchecked action" not in done["text"]
+    assert run.error_message in _sessions["agent:main:user:bob"].history[-1]["content"]
+    assert run.error_message in exchange.call_args.args[2]
+    persist.assert_not_called()
+    assert mock_runner.execute.await_count == 1
