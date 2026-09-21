@@ -35,6 +35,7 @@ import litellm
 
 from robothor.db.connection import current_tenant_scope
 from robothor.engine.cancel_outcome import _cancel_outcome, terminal_run
+from robothor.engine.chat_backstop import protect_if_human_chat
 from robothor.engine.checkpoint import save_iteration
 from robothor.engine.config import (
     EngineConfig,
@@ -471,6 +472,38 @@ class AgentRunner(
         # from this class (Phase A / Slice 1); stateless across runs.
         self._llm = LLMClient()
 
+    def _config_or_refusal(
+        self,
+        agent_id: str,
+        agent_config: Any,
+        message: str,
+        trigger_type: Any,
+        trigger_detail: str,
+        resolved_tenant: str,
+    ) -> tuple[Any, Any]:
+        """The manifest lookup, and the refused run it produces when there is none.
+
+        Extracted from ``execute`` when merging two independently-green branches
+        pushed it four lines past its pinned size. Both halves answer one
+        question — is there a manifest to run — and the refusal has to be a real
+        failed run rather than an exception, because callers record it.
+
+        Returns ``(config, None)`` when there is one, ``(None, failed_run)``
+        when there is not.
+        """
+        if agent_config is not None:
+            return agent_config, None
+        reason = f"Agent config not found: {agent_id}"
+        agent_config, loaded_reason = load_agent_config_or_reason(
+            agent_id, self.config.manifest_dir
+        )
+        if agent_config is not None:
+            return agent_config, None
+        logger.error("Agent run refused: %s", _sanitize(loaded_reason or reason))
+        session = AgentSession(agent_id, trigger_type, trigger_detail, resolved_tenant)
+        session.start("", message, [])
+        return None, session.fail(loaded_reason or reason)
+
     async def execute(
         self,
         agent_id: str,
@@ -513,8 +546,6 @@ class AgentRunner(
                 trigger_type is SUB_AGENT, not an interactive one).
         Returns the completed AgentRun with full metadata.
         """
-        from robothor.engine.chat_backstop import protect_if_human_chat
-
         message = protect_if_human_chat(message, trigger_type)
         # A run created inside a ``tenant_scope`` must record under that tenant.
         # Falling through to the config default writes a row the connection's RLS
@@ -522,14 +553,11 @@ class AgentRunner(
         # InsufficientPrivilege at INSERT time. See test_nested_run_tenant.py.
         resolved_tenant = tenant_id or current_tenant_scope() or self.config.tenant_id
 
-        reason = f"Agent config not found: {agent_id}"
-        if agent_config is None:
-            agent_config, reason = load_agent_config_or_reason(agent_id, self.config.manifest_dir)
-        if agent_config is None:
-            logger.error("Agent run refused: %s", _sanitize(reason))
-            session = AgentSession(agent_id, trigger_type, trigger_detail, resolved_tenant)
-            session.start("", message, [])
-            return session.fail(reason)
+        agent_config, refusal = self._config_or_refusal(
+            agent_id, agent_config, message, trigger_type, trigger_detail, resolved_tenant
+        )
+        if refusal is not None:
+            return refusal
 
         # Resolve a concrete execution identity before creating the run.  An
         # empty role used to mean "system" and silently bypass every per-user
