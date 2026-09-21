@@ -5658,7 +5658,16 @@
         "warnings": 1,
         "seconds": 34.76
       },
-      "broad_engine": "pending",
+      "broad_engine": {
+        "revision": "e988eb920b9",
+        "passed": 11448,
+        "skipped": 29,
+        "deselected": 234,
+        "warnings": 393,
+        "seconds": 468.95,
+        "product_unchanged_during_run": true,
+        "log": "bench/runtime/uat-runtime-provider-exhaustion-engine.log"
+      },
       "live_qualification": "pending",
       "rollback_backport": "7324c4d0313 passes new gate and actual daemon rollback sequence"
     },
@@ -5938,7 +5947,7 @@
     ]
   },
   "remaining": [
-    "Latest local product additionally fixes a confirmed-action delivery race and misleading no-work wording after model exhaustion. It passes 34 focused unit checks and 79 canonical tests; broad regression and changed-source live qualification remain pending. Eight-second shared-breaker screening was rejected/interrupted (12 verified, three failed, one unfinished, 14 not started). No short-timeout or deferred-tool default is promoted. Isolated-health timeout evaluation has not run.",
+    "Latest local product additionally fixes a confirmed-action delivery race and misleading no-work wording after model exhaustion. It passes 34 focused unit checks, 79 canonical tests and 11,448 full engine tests; changed-source live qualification remains pending. Eight-second shared-breaker screening was rejected/interrupted (12 verified, three failed, one unfinished, 14 not started). No short-timeout or deferred-tool default is promoted. Isolated-health timeout evaluation has not run.",
     "Complete representative workload comparison against accepted integration baseline eea3252b1577e3f51e6d6a6216d6f242fd7ac4a1. Matched scripted standalone/compound task checks now pass with both minimal and selected main/full-catalogue profiles; current selected-profile p95 overhead is 54\u201356 ms versus baseline 134\u2013135 ms, with one fewer planning call. These remain two task scenarios with synthetic providers and isolated instructions/memory, not a representative live comparison.",
     "Qualify workload-wide selected-provider deadlines and latency, including requests competing with background goals. Local scripted HTTP acknowledgement/stop/progress and synthetic 1/5/20-tenant limits are measured; live-provider mixed-load limits remain unqualified. Preserve failures, unfinished attempts and uncertainty.",
     "Recheck the supported outcome-recovery inventory and remaining ingress/failure cases against action contracts. Calendar and CRM note/task readbacks, task browser reconnect, saved responses, native checkpoints and daemon goal recovery have evidence; these do not establish arbitrary external-provider recovery.",
