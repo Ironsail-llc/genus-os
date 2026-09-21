@@ -6,6 +6,7 @@ from psycopg2.extras import RealDictCursor
 
 from robothor.db.connection import get_connection
 from robothor.engine.chat_continuation import continuation
+from robothor.engine.chat_effect_receipts import family_effect_receipts
 from robothor.engine.chat_receipts import family_calendar_receipts, receipt_summary
 from robothor.engine.chat_result import result_text
 from robothor.engine.models import RunStatus
@@ -35,6 +36,7 @@ def read_outcome(auth, session_key: str, client_id: str) -> dict:
                 return {"state": "ambiguous", "terminal": False}
             rows = [latest]
             receipts = family_calendar_receipts(cur, root, auth)
+            receipts += family_effect_receipts(cur, root, auth)
     if len(rows) != 1:
         return {"state": "ambiguous", "terminal": False}
     row = rows[0]
@@ -57,7 +59,7 @@ def read_outcome(auth, session_key: str, client_id: str) -> dict:
     incomplete = any(not item["verified"] and item["status"] != "draft" for item in receipts)
     if terminal and receipts:
         if status == RunStatus.COMPLETED and incomplete:
-            text = "The run ended, but its recorded calendar action is not fully verified."
+            text = "The run ended, but a recorded action is not fully verified."
         text = "\n\n".join(filter(None, [text, receipt_summary(receipts)]))
     return {
         "state": "stopping" if stop_requested else status.value,
@@ -67,7 +69,10 @@ def read_outcome(auth, session_key: str, client_id: str) -> dict:
         "agent_id": row["agent_id"],
         "text": text,
         "effects": receipts,
-        "reconciliation_pending": any(item["status"] == "executing" for item in receipts),
+        "reconciliation_pending": any(
+            item["status"] == "executing" or item.get("reconciliation_pending", False)
+            for item in receipts
+        ),
         "verified": row["verified_status"] == "verified" and not incomplete,
         "source": "run_record",
         "plan_exploration": str(row.get("trigger_detail") or "").startswith(

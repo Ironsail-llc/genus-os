@@ -3210,6 +3210,39 @@
         "Other providers, goal bookkeeping during uncertainty, and chat outcome endpoint projection remain open.",
         "No new full engine run, production deployment or overall manual acceptance is claimed."
       ]
+    },
+    "chat_effect_receipts": {
+      "base_revision": "507d7836620",
+      "focused": {
+        "passed": 84,
+        "seconds": 9.41,
+        "log": "bench/runtime/uat-runtime-chat-effects-focused.log"
+      },
+      "canonical": {
+        "passed": 34,
+        "skipped": 1,
+        "warnings": 1,
+        "seconds": 8.5,
+        "log": "bench/runtime/uat-runtime-chat-effects-canonical.log"
+      },
+      "frontend": {
+        "passed": 7,
+        "files": 1,
+        "seconds": 1.13,
+        "log": "bench/runtime/uat-runtime-chat-effects-frontend.log"
+      },
+      "behavior": "Chat reconnect reads scoped runtime-effect receipts across the run family. Verified note creation is reported separately from failed run status; unresolved effects prevent false whole-run verification.",
+      "broad_engine": {
+        "state": "running",
+        "session_id": 90842,
+        "log": "/tmp/runtime-engine-audited-recovery-regression.log",
+        "note": "Inspect this existing process/log before resuming; no result claimed yet."
+      },
+      "limitations": [
+        "Other provider readback and goal bookkeeping during uncertainty remain incomplete.",
+        "This is reconnect recovery, not yet a live conversational UAT case.",
+        "No overall acceptance or production deployment."
+      ]
     }
   },
   "calendar": {

@@ -910,3 +910,14 @@ The dispatcher now attempts trusted positive readback for uncertain note creatio
 Canonical tests invoke the real native dispatcher, CRM handler, DAL insertion and readback on a disposable migrated database, inject response loss after commit, and verify immediate and deferred recovery each leave exactly one note. No model or live business provider is used. This does not exercise a full chat conversation. The canonical selection passed 34 with one skipped in 10.37 seconds. The focused engine/CRM/recovery/verification/size selection passed 300 in 12.23 seconds. Logs are indexed in `bench/runtime/uat-verification.json`.
 
 This closes automatic readback for CRM note creation through this path. It does not qualify other providers, expose generic recovery in the chat outcome endpoint, fix goal bookkeeping during uncertainty, or establish overall user acceptance. The prior broad engine result predates these changes. Nothing was deployed.
+
+
+## Chat reconnect reads runtime-effect receipts
+
+Following `507d7836620`, `/chat/outcome` includes native effect receipts from the authenticated run, delegated children and continuations. Both the run family and each effect must match the tenant and principal. Unrelated, cross-tenant and different-principal effects are excluded. This endpoint reads stored evidence only; it dispatches no tools and makes no model calls.
+
+Confirmed note creation is presented as a verified action even when a later failure left the run failed. The run is not upgraded to completed or verified. Unresolved child actions suppress an otherwise misleading parent success message and keep reconciliation polling active. Existing calendar receipts remain supported.
+
+The focused chat/calendar/size selection passed 84 tests in 9.41 seconds. Canonical integration passed 34 with one skipped in 8.50 seconds, including real CRM creation, injected post-commit response loss, trusted recovery and a subsequent chat outcome read. Existing frontend recovery component tests passed seven tests. The broader engine selection was started as session 90842, logging to `/tmp/runtime-engine-audited-recovery-regression.log`; its result is pending and must be collected before claiming a new broad pass.
+
+This is reconnect behavior, not a live conversational user acceptance result. Other provider-specific recovery and goal bookkeeping while effects are unresolved remain open. No deployment or overall acceptance is claimed.

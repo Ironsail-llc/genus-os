@@ -49,6 +49,12 @@ def records(private_database, monkeypatch):  # noqa: F811
                 / "crm/migrations/140_chat_approval_receipts.sql"
             ).read_text()
         )
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            (
+                Path(__file__).resolve().parents[3] / "crm/migrations/141_runtime_effects.sql"
+            ).read_text()
+        )
     monkeypatch.setattr(chat_recovery, "get_connection", connect)
     return connect
 

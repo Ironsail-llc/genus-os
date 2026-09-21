@@ -1,0 +1,13 @@
+
+> app@1.100.2 test /home/philip/robothor-runtime-modernization/app
+> vitest run src/components/__tests__/chat-recovery.test.tsx
+
+
+ RUN  v4.1.11 /home/philip/robothor-runtime-modernization/app
+
+
+ Test Files  1 passed (1)
+      Tests  7 passed (7)
+   Start at  03:11:03
+   Duration  1.13s (transform 56ms, setup 69ms, import 210ms, tests 179ms, environment 555ms)
+

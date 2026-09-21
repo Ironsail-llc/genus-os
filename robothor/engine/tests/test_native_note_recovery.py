@@ -75,3 +75,24 @@ async def test_committed_note_response_loss_recovers_without_another_write(monke
     with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM crm_notes WHERE tenant_id=%s", (tenant,))
         assert cur.fetchone() == (1,)
+
+    # Reconnection reads the actual receipt even though the original run failed.
+    from types import SimpleNamespace
+
+    from robothor.engine.chat_recovery import read_outcome
+    from robothor.engine.runtime.chat_control import request_key
+
+    auth = SimpleNamespace(tenant_id=tenant, user_id="service:main")
+    client = str(uuid4())
+    key = request_key(auth, "web:main", client)
+    with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE agent_runs SET user_id=%s,correlation_id=%s WHERE id=%s",
+            (auth.user_id, key, run_id),
+        )
+    outcome = read_outcome(auth, "web:main", client)
+    assert outcome["state"] == "failed" and outcome["terminal"]
+    assert not outcome["reconciliation_pending"] and not outcome["verified"]
+    assert outcome["effects"][0]["verified"]
+    assert "The CRM note was created" in outcome["text"]
+    assert len(calls) == 1

@@ -92,6 +92,11 @@ def calendar_receipts(cur, run, auth):
 def receipt_summary(receipts):
     lines = []
     for receipt in receipts:
+        if receipt["kind"] == "runtime_effect":
+            from robothor.engine.chat_effect_receipts import effect_summary
+
+            lines.append(effect_summary(receipt))
+            continue
         if receipt["verified"]:
             finding = "The calendar change is recorded as complete and verified."
             if receipt["invitations_requested"] is True:
