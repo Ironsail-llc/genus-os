@@ -2127,6 +2127,39 @@
     "preparation_progress_http": {
       "revision": "9c20b3b4eee",
       "artifact": "bench/runtime/uat-profile-preparation-progress.json"
+    },
+    "profile_read_pool": {
+      "revision": "3581b1a9db5",
+      "change": "Run profile reads in a dedicated four-worker pool. Acquire capacity before submission, release it only when the underlying future finishes, preserve ContextVars, and reset pool ownership after fork. Pending readers remain cancellable without using the default executor needed for controls and audit writes.",
+      "initial_failure": {
+        "failed": 1,
+        "seconds": 1.17,
+        "log": "/tmp/runtime-profile-pool-before.log",
+        "finding": "Two blocked profile reads exhausted a two-worker default executor; a queued control stand-in timed out."
+      },
+      "focused": {
+        "passed": 86,
+        "warnings": 1,
+        "seconds": 10.62,
+        "log": "/tmp/runtime-profile-pool-final.log"
+      },
+      "canonical_browser": {
+        "passed": 33,
+        "skipped": 1,
+        "warnings": 1,
+        "seconds": 21.3,
+        "log": "/tmp/runtime-profile-pool-native.log"
+      },
+      "blocked_lookup_http": {
+        "passed": 1,
+        "seconds": 16.58,
+        "samples": 30,
+        "artifact": "bench/runtime/uat-profile-pool-http.json",
+        "log": "/tmp/runtime-profile-pool-http.log"
+      },
+      "concurrency_scope": "Component tests use 1, 2, 5 and 20 synthetic tenant contexts, verifying default-executor availability and context isolation. A cancelled running reader retains its slot; cancelling a queued reader prevents its loader from running. The HTTP cohort is 30 sequential requests with real private control/audit stores; it does not prove concurrent HTTP tenant limits.",
+      "checks": "Ruff lint, format and diff checks pass; no size cap increased. Pool tests added to runtime-contract CI; no hosted run claimed.",
+      "limits": "Blocking filesystem threads cannot be forcibly killed. Four permanently stuck reads can exhaust this dedicated pool, so subsequent profile waits remain bounded by admission deadlines, but process shutdown may still wait for those threads. These tests do not qualify permanent-failure process shutdown, deployed ingress, live-provider latency or full acceptance. No production deployment."
     }
   },
   "calendar": {
