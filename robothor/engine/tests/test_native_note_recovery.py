@@ -15,7 +15,10 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.mark.parametrize("deferred", [False, True])
-async def test_committed_note_response_loss_recovers_without_another_write(monkeypatch, deferred):
+@pytest.mark.parametrize("wrapped", [False, True])
+async def test_committed_note_response_loss_recovers_without_another_write(
+    monkeypatch, deferred, wrapped
+):
     from robothor.crm import dal
 
     dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
@@ -46,10 +49,12 @@ async def test_committed_note_response_loss_recovers_without_another_write(monke
 
     async def call():
         token = active_context.set(ctx)
+        allow_token = dispatch.set_deferred_allowed(frozenset({"create_note", "tool_call"}))
         try:
+            arguments = {"title": "Synthetic recovery", "body": "Once"}
             return await dispatch._execute_tool(
-                "create_note",
-                {"title": "Synthetic recovery", "body": "Once"},
+                "tool_call" if wrapped else "create_note",
+                {"name": "create_note", "arguments": arguments} if wrapped else arguments,
                 agent_id="main",
                 run_id=run_id,
                 tenant_id=tenant,
@@ -57,6 +62,7 @@ async def test_committed_note_response_loss_recovers_without_another_write(monke
                 user_role="service",
             )
         finally:
+            dispatch.clear_deferred_allowed(allow_token)
             active_context.reset(token)
 
     result = await call()
@@ -134,7 +140,10 @@ async def test_committed_note_response_loss_recovers_without_another_write(monke
     if artifact_dir:
         directory = Path(artifact_dir)
         directory.mkdir(parents=True, exist_ok=True)
-        with (directory / ("deferred.json" if deferred else "immediate.json")).open("x") as stream:
+        prefix = "wrapped-" if wrapped else ""
+        with (directory / (prefix + ("deferred.json" if deferred else "immediate.json"))).open(
+            "x"
+        ) as stream:
             json.dump(
                 {
                     "scope": "Synthetic response loss after real isolated CRM commit; native dispatcher and authenticated HTTP reconnect, no model calls",

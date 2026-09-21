@@ -5484,6 +5484,26 @@
       "model_selection_changed": false,
       "installed_configuration_changed": false,
       "performance_qualified": false
+    },
+    "deferred_wrapped_note_recovery": {
+      "product_revision": "c342a50cd74",
+      "scope": "Real private CRM commit with lost response through tool_call(create_note), immediate and terminal-sweep readback; repeated wrapper requests reuse confirmed receipt; authenticated chat outcome recovery makes no model call. Direct dispatch cases retained.",
+      "canonical": {
+        "passed": 78,
+        "skipped": 2,
+        "warnings": 1,
+        "seconds": 43.16
+      },
+      "discovery": {
+        "passed": 186,
+        "seconds": 1.7
+      },
+      "product_changed": false,
+      "experimental_flag_promoted": false,
+      "logs": [
+        "bench/runtime/uat-runtime-deferred-note-canonical.log",
+        "bench/runtime/uat-runtime-deferred-discovery-current.log"
+      ]
     }
   },
   "calendar": {

@@ -1825,3 +1825,10 @@ Product `c342a50cd74` completed all thirty native task-plus-calculation requests
 Slow samples were dominated by the primary model calls carrying about 21,000 input tokens. This is attribution, not proof that reducing input size will resolve latency. A separate thirty-request private deferred-tool screen was started with the same product and selected models, the existing flag enabled only inside that fixture. It is not promoted or configured in the running installation. No per-model timeout override is applied. Prior populations remain retained; the experiment is not a paired baseline comparison. Source stayed fixed; independent rollback harness work ran concurrently for part of the completed screen.
 
 Evidence: `bench/runtime/uat-runtime-catalogue-routing-cohort.{log,jsonl}` and `uat-runtime-catalogue-routing-cohort-report.json`. New in-progress events: `/tmp/runtime-catalogue-deferred-cohort.jsonl`.
+
+
+### Deferred dispatch recovery verified (2026-09-21)
+
+The reduced-tool-context experiment must preserve supported action recovery through the `tool_call` wrapper. Extended the existing real-CRM lost-note-response integration to use both direct `create_note` and wrapped `tool_call(create_note)`. Both immediate readback and delayed terminal-sweep recovery verify exactly one note, reuse the saved result on repeated calls, and expose the same outcome through authenticated chat recovery with no model calls. All writes use disposable canonical storage. This tests actual nested dispatch and its effect ledger, not just a mocked permission boundary.
+
+The canonical suite passed 78 tests, two skipped, one warning in 43.16 seconds. Discovery, search ranking/vocabulary and discovery-truth tests passed 186 tests in 1.70 seconds. Logs: `bench/runtime/uat-runtime-deferred-note-canonical.log` and `uat-runtime-deferred-discovery-current.log`. No product code or installed flag changed. The separate 30-request deferred live screen remains in progress, so these checks do not authorize or qualify its promotion.
