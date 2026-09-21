@@ -167,17 +167,22 @@ describe("ChatPanel streaming UX", () => {
 describe("ordinary chat terminal outcomes", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it.each(["eof", "transport", "aborted", "failed", "completed"])(
+  it.each(["eof", "transport", "aborted", "failed", "failed_with_text", "timeout", "cancelled", "completed"])(
     "does not mistake partial text for completion after %s",
     async (outcome) => {
       let sends = 0;
       let originalRequestId = "";
       let reads = 0;
+      const errorStatus = outcome === "failed_with_text" ? "failed" : outcome;
+      const failedRun = ["failed", "timeout", "cancelled"].includes(errorStatus);
+      const recoveredText = failedRun
+        ? `Run ${errorStatus}. Audit readback confirms the calendar change; notification delivery is unverified.`
+        : "Recovered recorded result";
       global.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
         if (url.startsWith("/api/chat/outcome?")) {
           reads += 1;
           expect(new URL(url, "http://test").searchParams.get("request_id")).toBe(originalRequestId);
-          return { ok: true, json: async () => ({ terminal: true, state: "completed", text: "Recovered recorded result" }) };
+          return { ok: true, json: async () => ({ terminal: true, state: failedRun ? errorStatus : "completed", text: recoveredText, reconciliation_pending: false }) };
         }
         if (url === "/api/chat/send") {
           sends += 1;
@@ -189,7 +194,9 @@ describe("ordinary chat terminal outcomes", () => {
               ? { text: "", aborted: true }
               : outcome === "failed"
                 ? { text: "", status: "failed" }
-                : { text: "Verified result", status: "completed" };
+                : ["failed_with_text", "timeout", "cancelled"].includes(outcome)
+                  ? { text: "Execution stopped after a provider error", status: outcome === "failed_with_text" ? "failed" : outcome }
+                  : { text: "Verified result", status: "completed" };
             return { ok: true, body: makeSSEStream([...events, { event: "done", data: terminal }]) };
           }
           return { ok: true, body: makeSSEStream(events) };
@@ -200,7 +207,7 @@ describe("ordinary chat terminal outcomes", () => {
       });
       render(<ChatPanel />);
       await typeAndSend(screen.getByTestId("chat-input") as HTMLTextAreaElement, "Do the work");
-      const expected = outcome === "completed" ? "Verified result" : "Recovered recorded result";
+      const expected = outcome === "completed" ? "Verified result" : recoveredText;
       await waitFor(() => expect(screen.getByTestId("message-assistant").textContent).toContain(expected));
       expect(screen.queryByText("Everything is done.")).toBeNull();
       expect(sends).toBe(1);

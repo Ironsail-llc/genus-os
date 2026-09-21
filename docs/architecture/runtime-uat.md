@@ -756,3 +756,12 @@ At `aa0312e8cf3`, the full non-slow/non-integration/non-live engine selection pa
 The diagnostic command sets `sys.set_coroutine_origin_tracking_depth(8)` before pytest. Of 393 warnings, one remains an unawaited connect_tcp try_connect coroutine. Its creation stack traverses HTTPCore connection handling and AnyIO connect_tcp, task-group start_soon and call_for_coroutine. The trace does not reach the initiating application caller, so root cause and remediation are still unresolved; the collecting test is not blamed. This run is correctness evidence, not a comparative performance cohort. Log: `/tmp/runtime-engine-regression-aa0312e8cf3.log`.
 
 Current broad engine checks now pass; the latest full goal run remains 85 passed and the frontend remains 1,648 passed at its recorded revision. Live-provider operating limits, candidate qualification, application rollback and remaining manual acceptance stay open. No deployment occurred.
+
+
+## Audit recovery after delivered execution errors
+
+Following the user's expectation that Robothor consult its audit trail automatically, three new chat component cases reproduced a gap: failed, timed-out and cancelled runs with nonempty terminal error text bypassed outcome recovery. The shared terminal handler now enters the existing original-request audit recovery path for those statuses regardless of error text. Durable stop wording now describes checking recorded results instead of handing that check to the user.
+
+The tests require the original request identity, exactly one action submission, and recovered failure text alongside calendar evidence. Completed responses retain their direct delivery. The initial run had 3 failures and 8 passes; after the fix, 18 focused streaming/control/recovery tests passed (1.68s). The full frontend suite passes 1,651 tests across 149 files (9.41s), with the existing jsdom navigation notice. Changed-file ESLint, TypeScript and diff checks pass. Evidence: `bench/runtime/uat-terminal-error-recovery.json`.
+
+These are synthetic component responses; the backend chat/calendar recovery tests separately passed 64 checks (3.25s). General external-service reconciliation, plan drafting interruption recovery and remaining runtime acceptance stay open. No production deployment or manual acceptance is claimed.

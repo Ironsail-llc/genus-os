@@ -8,7 +8,9 @@ export function terminalOutcome(
 ): string | undefined {
   if (data.aborted === true) return OUTCOME_UNKNOWN;
   if (["failed", "timeout", "cancelled"].includes(String(data.status))) {
-    return typeof data.text === "string" && data.text ? data.text : OUTCOME_UNKNOWN;
+    // A terminal execution error does not establish the outcome of dispatched
+    // actions. Recover the durable failure and its receipts using the same request.
+    return OUTCOME_UNKNOWN;
   }
   if (typeof data.text !== "string") return undefined;
   // Legacy streams use empty done text after an error event. Preserve that error.

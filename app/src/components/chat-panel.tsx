@@ -1089,7 +1089,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       const result = await response.json();
       if (!result.ok || !result.durable_stopped) throw new Error("stop unconfirmed");
       if (requestIdRef.current === stoppedRequest) {
-        setStopNotice("Stop acknowledged. Already dispatched requests may finish; check their results before retrying.");
+        setStopNotice("Stop acknowledged. Already dispatched requests may finish; checking their recorded results.");
       }
       stoppedController?.abort();
     } catch {

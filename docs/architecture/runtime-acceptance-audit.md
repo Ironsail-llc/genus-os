@@ -434,3 +434,12 @@ Each active startup resume holds a dedicated DB connection. Session loss while a
 A private PostgreSQL failure-injection test terminated the advisory-lock session while its startup worker remained alive. Provider admission initially still succeeded, reproducing the gap. The worker now carries its dedicated claim in task context, and resumed provider/tool admission verifies that connection before proceeding. Connection failure refuses admission with an explicit reconcile-before-continuing error. Worker exit resets the context and closes ownership; a subsequent unrelated provider admission remains usable.
 
 All 37 focused resume/control/size checks pass (3.86s), 105 tool/admission/request-budget checks pass (2.71s), and 26 canonical integrations pass (7.92s, one intentional worker-only skip and one warning). Ruff and diff checks pass. Evidence: `bench/runtime/uat-resume-claim-loss.json`. This covers detected PostgreSQL session loss before admission. In-flight effects, network-blackhole timing, database failover and general production fencing are not certified. Nothing was deployed.
+
+
+## Audit recovery after delivered execution errors
+
+Following the user's expectation that Robothor consult its audit trail automatically, three new chat component cases reproduced a gap: failed, timed-out and cancelled runs with nonempty terminal error text bypassed outcome recovery. The shared terminal handler now enters the existing original-request audit recovery path for those statuses regardless of error text. Durable stop wording now describes checking recorded results instead of handing that check to the user.
+
+The tests require the original request identity, exactly one action submission, and recovered failure text alongside calendar evidence. Completed responses retain their direct delivery. The initial run had 3 failures and 8 passes; after the fix, 18 focused streaming/control/recovery tests passed (1.68s). The full frontend suite passes 1,651 tests across 149 files (9.41s), with the existing jsdom navigation notice. Changed-file ESLint, TypeScript and diff checks pass. Evidence: `bench/runtime/uat-terminal-error-recovery.json`.
+
+These are synthetic component responses; the backend chat/calendar recovery tests separately passed 64 checks (3.25s). General external-service reconciliation, plan drafting interruption recovery and remaining runtime acceptance stay open. No production deployment or manual acceptance is claimed.

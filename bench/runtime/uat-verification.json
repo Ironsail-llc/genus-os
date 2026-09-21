@@ -1385,6 +1385,34 @@
       "log": "/tmp/runtime-engine-regression-7c5f5c64b21.log",
       "failure": "Function-size ratchet: runner.py::execute 990 lines exceeds pinned cap 986. Fixed afterward by lifecycle helper extraction; full suite not rerun after extraction.",
       "note": "One connect_tcp unawaited coroutine warning persists. No full acceptance claim."
+    },
+    "terminal_error_audit_recovery": {
+      "initial_failure": "Three chat component cases failed: nonempty failed, timeout and cancelled terminal messages bypassed audit recovery.",
+      "fix": "Terminal execution errors enter the existing original-request audit recovery path even when error text is present. Durable stop wording describes checking recorded results instead of asking the user to check.",
+      "before": {
+        "failed": 3,
+        "passed": 8,
+        "log": "/tmp/runtime-terminal-recovery-before.log"
+      },
+      "focused": {
+        "passed": 18,
+        "seconds": 1.68
+      },
+      "frontend": {
+        "files": 149,
+        "passed": 1651,
+        "failed": 0,
+        "seconds": 9.41,
+        "log": "/tmp/runtime-terminal-recovery-frontend.log"
+      },
+      "checks": [
+        "Original request identity retained",
+        "One action submission",
+        "Recovered text preserves terminal failure alongside action evidence",
+        "Completed response requires no additional outcome read",
+        "Changed-file ESLint and TypeScript passed"
+      ],
+      "limits": "Component tests use synthetic outcome responses. Backend chat/calendar recovery was separately rerun: 64 passed in 3.25s. This does not qualify other external providers, plan drafting recovery, full runtime replacement, or manual acceptance. No deployment."
     }
   },
   "calendar": {
