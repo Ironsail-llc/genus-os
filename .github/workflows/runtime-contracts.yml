@@ -4,6 +4,7 @@ on:
     paths:
       - 'app/**'
       - 'robothor/engine/**'
+      - 'robothor/crm/**'
       - 'robothor/goals/**'
       - 'crm/migrations/**'
       - 'crm/bridge/routers/pursuit_goals.py'
@@ -78,6 +79,10 @@ jobs:
           robothor/engine/tests/test_plan_mode.py
           robothor/engine/tests/test_plan_integrity.py
           robothor/engine/tests/test_interactive_benchmark_compare.py
+      - name: CRM regression checks
+        run: >-
+          python -m pytest -q --no-cov robothor/crm/tests
+          -m 'not slow and not integration and not llm and not e2e and not smoke'
       - name: Capture the native provider configuration without network access
         run: >-
           ROBOTHOR_RUNTIME_NATIVE_WIRE_ARTIFACT=/tmp/runtime-native-request.json

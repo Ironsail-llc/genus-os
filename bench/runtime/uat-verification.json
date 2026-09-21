@@ -9,16 +9,16 @@
   "replacement_selected": false,
   "checks": {
     "engine": {
-      "revision": "f8d9fdf9bca",
-      "passed": 11247,
+      "revision": "9b2ae888de3",
+      "passed": 11257,
       "failed": 0,
       "skipped": 29,
-      "deselected": 194,
+      "deselected": 203,
       "warnings": 393,
-      "seconds": 390.3,
+      "seconds": 386.87,
       "selection": "not slow and not integration and not llm and not e2e and not smoke",
-      "log": "bench/runtime/uat-runtime-engine-goal-evidence-regression.log",
-      "note": "Product source and collected tests unchanged during run. Includes goal bookkeeping, family evidence decisions and list aggregation/index. Existing warnings remain; not latency evidence or full acceptance."
+      "log": "bench/runtime/uat-runtime-engine-crm-receipts-regression.log",
+      "note": "Product source and collected tests unchanged throughout run. Includes task creation and dedup recovery plus successful CRM receipt persistence. No detected regression in this selection; excludes canonical integrations, tested separately. Existing warnings retained."
     },
     "frontend": {
       "base_revision": "56aa76e6aa0",
@@ -3566,6 +3566,28 @@
       "command": ".venv/bin/python -m bench.runtime.migrated_integration",
       "scope": "Canonical private integration suite, including separate OS processes for native create_note and create_task success receipt recovery. First worker exits with code 76 after durable success; replacement recovers same ID without invoking write handler. Exactly one CRM row and zero model calls in each case.",
       "limitations": "Dispatcher/CRM process recovery, not full AgentRunner or daemon process recovery. No additional provider, manual acceptance or deployment qualification."
+    },
+    "engine_before_crm_receipts": {
+      "revision": "f8d9fdf9bca",
+      "passed": 11247,
+      "failed": 0,
+      "skipped": 29,
+      "deselected": 194,
+      "warnings": 393,
+      "seconds": 390.3,
+      "selection": "not slow and not integration and not llm and not e2e and not smoke",
+      "log": "bench/runtime/uat-runtime-engine-goal-evidence-regression.log",
+      "note": "Product source and collected tests unchanged during run. Includes goal bookkeeping, family evidence decisions and list aggregation/index. Existing warnings remain; not latency evidence or full acceptance."
+    },
+    "crm_goals_after_receipts": {
+      "revision": "9b2ae888de3",
+      "passed": 238,
+      "failed": 0,
+      "deselected": 1,
+      "warnings": 2,
+      "seconds": 14.18,
+      "selection": "not slow and not integration and not llm and not e2e and not smoke",
+      "log": "bench/runtime/uat-runtime-crm-goals-receipts-regression.log"
     }
   },
   "calendar": {
