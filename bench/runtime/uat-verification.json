@@ -2064,6 +2064,10 @@
     "recovery_message_stop": {
       "artifact": "bench/runtime/uat-recovery-message-stop.json",
       "revision": "103e2dc7371"
+    },
+    "independent_approval_receipts": {
+      "revision": "7168c64a184",
+      "artifact": "bench/runtime/uat-approval-receipts.json"
     }
   },
   "calendar": {

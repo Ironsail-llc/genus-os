@@ -1,0 +1,54 @@
+{
+  "revision": "7168c64a184",
+  "finding": "An approved plan could lose its only admission record when the chat session was replaced or deleted before the worker created a run.",
+  "fix": "Migration 140 retains an independent scoped approval receipt. Claim and receipt commit in one transaction. Original-request recovery and duplicate checks consult that receipt. A duplicate receipt rolls back the attempted plan change; receipt-store failure also rolls back admission.",
+  "initial_failure": {
+    "log": "/tmp/runtime-approval-receipt-before.log",
+    "failed": 1,
+    "finding": "After a replacement plan was stored, already_admitted returned false for the original request."
+  },
+  "intermediate_results": [
+    {
+      "log": "/tmp/runtime-approval-receipt-focused.log",
+      "passed": 75,
+      "failed": 5,
+      "finding": "Parameterized tests reused request IDs in a module-scoped private DB; isolate their receipt table between test cases."
+    },
+    {
+      "log": "/tmp/runtime-approval-receipt-final.log",
+      "passed": 200,
+      "failed": 1,
+      "finding": "Packaging correctly rejected the new SQL file until it was git-tracked."
+    },
+    {
+      "log": "/tmp/runtime-approval-receipt-migrations.log",
+      "passed": 51,
+      "failed": 1,
+      "finding": "Two documentation paragraphs had fixed migration counts. Removed the count; preserved the historical test result."
+    }
+  ],
+  "focused_contracts": {
+    "passed": 201,
+    "seconds": 13.82,
+    "log": "/tmp/runtime-approval-receipt-final-tracked.log"
+  },
+  "chat_regression": {
+    "passed": 264,
+    "seconds": 8.88,
+    "log": "/tmp/runtime-approval-receipt-chat-regression.log"
+  },
+  "canonical_browser": {
+    "passed": 33,
+    "skipped": 1,
+    "warnings": 1,
+    "seconds": 24.72,
+    "log": "/tmp/runtime-approval-receipt-native-final.log"
+  },
+  "migration_checks": {
+    "passed": 52,
+    "log": "/tmp/runtime-approval-receipt-migrations-final.log"
+  },
+  "upgrade": "Fresh canonical migration and repeat apply pass. Populated upgrade preserves all prior snapshots including chat_sessions; the old approved plan is backfilled into exactly one receipt, without changing its session record. Receipt insertion failure and request reuse roll back the claim in private PostgreSQL.",
+  "checks": "Ruff lint/format and diff checks pass; size caps unchanged.",
+  "limits": "Migration 140 is required before admitting requests on this version. Only disposable databases were migrated. Preserved approval evidence is not execution/completion evidence and does not authorize automatic replay or prove orphaned-worker recovery. Full acceptance, live-provider performance, and application rollout/rollback remain open. No production deployment."
+}
