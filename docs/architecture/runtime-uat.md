@@ -1625,3 +1625,7 @@ Latency failed: p95 60.010 seconds (bootstrap interval 52.079–60.011), versus 
 Local chat now presents saved action evidence in the first interrupted reply, including when the runtime raises after recording its interruption. The tested reply begins “The task was created” and ends “Execution was interrupted. Any remaining work is not confirmed.” The task remains TODO; the run remains cancelled. Reconnecting gives the same result without another creation or model call. The browser displays host-audited settled results directly and continues recovery for unresolved outcomes.
 
 This addresses reporting, not the still-failed live latency target. Manual acceptance remains pending; nothing was deployed.
+
+## Clearer task receipts; speed still unproven
+
+The task tool now returns the stored body/status with its verified snapshot, and distinguishes fresh success from actual recovery. A corrected live diagnostic still made a redundant task read and took 30.785 seconds, so this is not a speed acceptance pass. An accidental credential-like pattern in synthetic tenant IDs was removed from the fixture; all earlier measurements remain retained. Multi-step work is not automatically ended by one verified task creation. Manual and overall acceptance remain open.

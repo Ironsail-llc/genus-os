@@ -50,7 +50,13 @@ async def test_successful_creation_returns_same_receipt_to_replacement_worker(
         cur.execute(f"SELECT count(*) FROM {table} WHERE tenant_id=%s", (tenant,))
         assert cur.fetchone() == (1,), "successful action was repeated by the replacement worker"
     assert results[0]["id"] == results[1]["id"]
+    assert results[0]["recovered"] is False
     assert results[1]["recovered"]
+    if tool == "create_task":
+        for result in results:
+            assert result["body"] == "Synthetic" and result["status"] == "TODO"
+            assert result["verification"] == "verified"
+            assert result["verification_scope"] == "stored_task_snapshot"
     assert effects.read(ctx, results[1]["effect_id"])["state"] == "confirmed"
 
     # An independently authorized new request may deliberately create the same content.

@@ -63,7 +63,9 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
         "robothor.engine.host_state.host_state_section",
         lambda *a, **k: "Engine health unavailable in this isolated test.",
     )
-    tenant = "live-task-" + uuid4().hex
+    # Avoid accidentally embedding the credential detector's "sk-" prefix in
+    # an ordinary tenant ID ("live-task-<uuid>" did so).
+    tenant = "runtime-live-" + uuid4().hex
     with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("INSERT INTO crm_tenants(id,display_name) VALUES (%s,%s)", (tenant, tenant))
     runner = AgentRunner(replace(engine_config, tenant_id=tenant))
@@ -108,6 +110,7 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
                         "tools_allowed": len(agent.tools_allowed),
                         "task_protocol": agent.task_protocol,
                         "samples": samples,
+                        "synthetic_tenant_prefix": "runtime-live-",
                         "scope": "Native runner, installation profile settings, isolated workspace and private CRM. Only requested task tools execute. No production instructions/memory staged; 65-second harness cutoff and 12-call diagnostic limit. Provider counts include planning. Native cost estimates are not billing. Not ASGI/browser latency or a matched baseline comparison.",
                     }
                 }
@@ -172,6 +175,24 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
                     (tenant, request_id),
                 )
                 row["effects"] = dict(cur.fetchall())
+                cur.execute(
+                    """SELECT s.step_type,s.tool_name,s.duration_ms,
+                       s.tool_output->>'recovered',s.tool_output->>'verification_scope'
+                       FROM agent_run_steps s JOIN agent_runs r ON r.id=s.run_id
+                       WHERE r.tenant_id=%s AND r.correlation_id=%s
+                       ORDER BY s.step_number""",
+                    (tenant, request_id),
+                )
+                row["steps"] = [
+                    dict(
+                        zip(
+                            ("type", "tool", "duration_ms", "recovered", "verification_scope"),
+                            step,
+                            strict=True,
+                        )
+                    )
+                    for step in cur.fetchall()
+                ]
             row["verified"] = (
                 not row.get("error_type")
                 and row["task_count"] == 1

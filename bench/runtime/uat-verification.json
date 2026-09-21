@@ -9,16 +9,16 @@
   "replacement_selected": false,
   "checks": {
     "engine": {
-      "base_revision": "a1fbf899941",
-      "passed": 11321,
+      "base_revision": "688856c6882",
+      "passed": 11327,
       "failed": 0,
       "skipped": 29,
-      "deselected": 226,
+      "deselected": 228,
       "warnings": 393,
-      "seconds": 392.75,
+      "seconds": 391.51,
       "selection": "not slow and not integration and not llm and not e2e and not smoke",
-      "log": "bench/runtime/uat-runtime-classification-window-engine-final.log",
-      "note": "Final implementation and selected tests unchanged for full invocation. Includes setup/classification bound, guarded release, early audit recovery and watchdog cleanup. Native integration separately passed 65 tests. No full acceptance or live provider performance claim."
+      "log": "bench/runtime/uat-runtime-task-snapshot-engine.log",
+      "note": "Final product source and selected tests frozen throughout; includes prior interrupted chat delivery and new task snapshots/fresh-recovery distinction. Excluded live integration fixture changed to remove a synthetic credential-pattern false positive; separately exercised by the corrected live diagnostic. No full acceptance or live performance qualification."
     },
     "frontend": {
       "base_revision": "56aa76e6aa0",
@@ -4367,6 +4367,48 @@
         "bench/runtime/uat-runtime-chat-delivery-size.log",
         "bench/runtime/uat-runtime-chat-delivery-types.log"
       ]
+    },
+    "task_snapshot": {
+      "base_revision": "688856c6882",
+      "focused": {
+        "passed": 68,
+        "seconds": 5.72
+      },
+      "canonical": {
+        "passed": 65,
+        "skipped": 2,
+        "warnings": 1,
+        "seconds": 37.3
+      },
+      "live_diagnostics": {
+        "original_fixture": {
+          "samples": 1,
+          "verified": 1,
+          "milliseconds": 37049.40588399768,
+          "provider_invocations": 5,
+          "canonical_passed": 66,
+          "canonical_seconds": 78.25
+        },
+        "corrected_fixture": {
+          "samples": 1,
+          "verified": 1,
+          "milliseconds": 30784.879801998613,
+          "provider_invocations": 5,
+          "canonical_passed": 66,
+          "canonical_seconds": 65.03
+        }
+      },
+      "artifacts": [
+        "bench/runtime/uat-runtime-task-snapshot-canonical.log",
+        "bench/runtime/uat-runtime-task-snapshot-clean-diagnostic.jsonl",
+        "bench/runtime/uat-runtime-task-snapshot-clean-diagnostic.log",
+        "bench/runtime/uat-runtime-task-snapshot-engine.log",
+        "bench/runtime/uat-runtime-task-snapshot-focused-final.log",
+        "bench/runtime/uat-runtime-task-snapshot-focused.log",
+        "bench/runtime/uat-runtime-task-snapshot-live-diagnostic.jsonl",
+        "bench/runtime/uat-runtime-task-snapshot-live-diagnostic.log"
+      ],
+      "note": "No qualifying speed improvement. Stored task body/status returned with snapshot scope; first successful native acknowledgement is not called recovered. Clean live trace still rereads task. Synthetic tenant prefix corrected without changing detector or dropping prior populations; broad regression overlapped both diagnostics."
     }
   },
   "calendar": {
@@ -4565,7 +4607,7 @@
     "deadline_calendar": "uat-deadline-calendar.json"
   },
   "remaining": [
-    "The 30-request live installation-main task screen FAILED acceptance: 30 exact task records and confirmed actions, but only 27 completed replies; three native deadline cancellations after creation. p95 60.010 seconds (bootstrap interval 52.079\u201360.011), 21 requests over 30 seconds. Improve timely verified-result delivery and remeasure, preserving failures. This used selected models/settings, isolated instructions/memory and private tools, not full production prompt parity or a matched baseline comparison.",
+    "The 30-request live installation-main task screen FAILED acceptance: 30 exact task records and confirmed actions, but only 27 completed replies; three native deadline cancellations after creation. p95 60.010 seconds (bootstrap interval 52.079\u201360.011), 21 requests over 30 seconds. Improve timely verified-result delivery and remeasure, preserving failures. This used selected models/settings, isolated instructions/memory and private tools, not full production prompt parity or a matched baseline comparison. Stored snapshot receipts and accurate fresh/recovered flags pass local regression checks, but the corrected one-request live diagnostic still used five model invocations and took 30.785 seconds. The old synthetic tenant prefix accidentally triggered credential warnings; use the corrected fixture for future screening, retain prior populations, and do not treat the unmatched diagnostics as a causal performance comparison.",
     "The local 60-second policy now covers unclassified interactive setup/planning and unknown classification, then retains the same admission clock for simple execution. Explicit valid non-simple classifications retain their existing limits; exclusions protect goals and delegated/resumed work. Native compressed-clock tests and 31 main-profile synthetic task runs pass. Real-provider classification accuracy, workload-wide deadline behavior and production ingress timing remain unqualified; do not infer those from scripted responses.",
     "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded. Production ingress, selected-provider p95 across the representative workload, and mixed-load fallback operating limits are not certified. Dispatch-only improvements do not qualify complete request latency.",
     "Retain the current runtime: the tested bounded candidates failed required behavior and are not finalists. Any future replacement still needs behavior parity, matched configurations, 100-repetition finalist measurements and compatible checkpoint upgrades. No replacement is selected.",
@@ -4890,6 +4932,15 @@
     "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded. Production ingress, selected-provider p95 across the representative workload, and mixed-load fallback operating limits are not certified. Dispatch-only improvements do not qualify complete request latency.",
     "Retain the current runtime: the tested bounded candidates failed required behavior and are not finalists. Any future replacement still needs behavior parity, matched configurations, 100-repetition finalist measurements and compatible checkpoint upgrades. No replacement is selected.",
     "Calendar and CRM note/task audit recovery, actual task browser reconnection, concurrent native readback, full-daemon goal crash recovery and saved checkpoint continuation are locally verified. Fresh-context recovery after a persisted response, including cleared engine cache, is also verified. Other external-provider readbacks, recovery when both reply persistence and browser request identity are absent, and loaded-fleet performance remain incomplete. Three actual live deadline interruptions recovered confirmed task receipts via the chat outcome projection, but the text still leads with a technical cancellation message. Normal chat final-result delivery must also use the receipts promptly; recovery-only evidence does not prove the initial reply does so.",
+    "The normal-chat unfinished-work/pause case is accepted. Manual acceptance of verified recovery and remaining goal controls is pending; automatic goal continuations do not count as acceptance.",
+    "The prior unmodified rollback target remains incompatible with saved handler responses. Backported target 15cd1835003 passes local current/backport/current daemon, state-preservation and separate native-admission checks. HTTP admission within the booted daemon, container/dependency rollback and hosted CI remain unverified. No production deployment is authorized."
+  ],
+  "remaining_before_task_snapshot": [
+    "The 30-request live installation-main task screen FAILED acceptance: 30 exact task records and confirmed actions, but only 27 completed replies; three native deadline cancellations after creation. p95 60.010 seconds (bootstrap interval 52.079\u201360.011), 21 requests over 30 seconds. Improve timely verified-result delivery and remeasure, preserving failures. This used selected models/settings, isolated instructions/memory and private tools, not full production prompt parity or a matched baseline comparison.",
+    "The local 60-second policy now covers unclassified interactive setup/planning and unknown classification, then retains the same admission clock for simple execution. Explicit valid non-simple classifications retain their existing limits; exclusions protect goals and delegated/resumed work. Native compressed-clock tests and 31 main-profile synthetic task runs pass. Real-provider classification accuracy, workload-wide deadline behavior and production ingress timing remain unqualified; do not infer those from scripted responses.",
+    "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded. Production ingress, selected-provider p95 across the representative workload, and mixed-load fallback operating limits are not certified. Dispatch-only improvements do not qualify complete request latency.",
+    "Retain the current runtime: the tested bounded candidates failed required behavior and are not finalists. Any future replacement still needs behavior parity, matched configurations, 100-repetition finalist measurements and compatible checkpoint upgrades. No replacement is selected.",
+    "Calendar and CRM note/task audit recovery, actual task browser reconnection, concurrent native readback, full-daemon goal crash recovery and saved checkpoint continuation are locally verified. Fresh-context recovery after a persisted response, including cleared engine cache, is also verified. Other external-provider readbacks, recovery when both reply persistence and browser request identity are absent, and loaded-fleet performance remain incomplete. Initial ordinary HTTP chat now delivers stored verified task evidence after an interruption in a compressed-clock native test, and frontend tests display settled audited outcomes directly. Returned plan interruptions share formatting; plan exception paths, other ingress and live timing still need appropriate qualification. Whole-run completion is not inferred from action receipts.",
     "The normal-chat unfinished-work/pause case is accepted. Manual acceptance of verified recovery and remaining goal controls is pending; automatic goal continuations do not count as acceptance.",
     "The prior unmodified rollback target remains incompatible with saved handler responses. Backported target 15cd1835003 passes local current/backport/current daemon, state-preservation and separate native-admission checks. HTTP admission within the booted daemon, container/dependency rollback and hosted CI remain unverified. No production deployment is authorized."
   ]

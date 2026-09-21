@@ -60,7 +60,7 @@ def private_database(tmp_path_factory):
         dsn = f"dbname=goal_pursuit_test user=goaltest host={socket}"
         with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
             cur.execute("""CREATE TABLE crm_tasks(id UUID PRIMARY KEY,tenant_id TEXT NOT NULL,title TEXT,
-                objective TEXT,status TEXT,resolution TEXT,deleted_at TIMESTAMPTZ,tags TEXT[],session_goal_meta JSONB)""")
+                body TEXT,objective TEXT,status TEXT,resolution TEXT,deleted_at TIMESTAMPTZ,tags TEXT[],session_goal_meta JSONB)""")
             cur.execute("""CREATE TABLE crm_agent_notifications(id UUID,tenant_id TEXT,from_agent TEXT,
                 to_agent TEXT,notification_type TEXT,subject TEXT,body TEXT,metadata JSONB)""")
             migration = Path(__file__).resolve().parents[3] / "crm/migrations/126_goal_pursuit.sql"

@@ -32,7 +32,7 @@ def verify(record):
     identifier = str(lookup.get("task_id") or record["id"])
     with effects.get_connection() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT title FROM crm_tasks WHERE tenant_id=%s AND id=%s AND deleted_at IS NULL",
+            "SELECT title,body,status FROM crm_tasks WHERE tenant_id=%s AND id=%s AND deleted_at IS NULL",
             (record["tenant_id"], identifier),
         )
         row = cur.fetchone()
@@ -42,7 +42,15 @@ def verify(record):
         "applied",
         True,
         "crm_tasks:" + identifier,
-        {"id": identifier, "title": row[0], **({"deduplicated": True} if lookup else {})},
+        {
+            "id": identifier,
+            "title": row[0],
+            "body": row[1],
+            "status": row[2],
+            "verification": "verified",
+            "verification_scope": "stored_task_snapshot",
+            **({"deduplicated": True} if lookup else {}),
+        },
     )
 
 

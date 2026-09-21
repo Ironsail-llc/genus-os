@@ -185,6 +185,10 @@ async def _dispatch_reserved(context, record, name, args, ctx, dispatch):
         adapter = task_recovery if name == "create_task" else note_recovery
         recovered = await asyncio.to_thread(adapter.recover, context, record["id"])
         if recovered is not None:
+            if verify_success and not uncertain:
+                # First-call acknowledgement plus host readback is verification,
+                # not recovery of an interrupted or previously recorded action.
+                return {**result, **recovered, "recovered": False}
             return {**result, **recovered} if verify_success else recovered
         return {
             **result,

@@ -70,7 +70,7 @@ def test_existing_task_receipt_is_scoped_immutable_and_read_back(effect_db, case
     with effect_db() as conn, conn.cursor() as cur:
         for identifier in [existing, replacement]:
             cur.execute(
-                "INSERT INTO crm_tasks(id,tenant_id,title) VALUES (%s,%s,'Existing')",
+                "INSERT INTO crm_tasks(id,tenant_id,title,body,status) VALUES (%s,%s,'Existing','Stored body','TODO')",
                 (identifier, str(uuid4()) if case == "foreign" else ctx.tenant_id),
             )
     row = effects.begin(ctx, "worker", "main", "create_task", {"title": "Existing"})
@@ -98,3 +98,5 @@ def test_existing_task_receipt_is_scoped_immutable_and_read_back(effect_db, case
     else:
         result = task_recovery.recover(ctx, row["id"])
         assert result["id"] == existing and result["deduplicated"] and result["recovered"]
+        assert result["body"] == "Stored body" and result["status"] == "TODO"
+        assert result["verification_scope"] == "stored_task_snapshot"

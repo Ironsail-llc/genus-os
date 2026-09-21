@@ -1,0 +1,71 @@
+......F...................                                               [100%]
+=================================== FAILURES ===================================
+_____ test_existing_task_receipt_is_scoped_immutable_and_read_back[valid] ______
+
+effect_db = <function effect_db.<locals>.connect at 0xecaf37e51b10>
+case = 'valid'
+
+    @pytest.mark.parametrize("case", ["valid", "deleted", "foreign"])
+    def test_existing_task_receipt_is_scoped_immutable_and_read_back(effect_db, case):  # noqa: F811
+        from robothor.engine.runtime.task_receipts import remember_existing
+    
+        ctx = context()
+        existing, replacement = str(uuid4()), str(uuid4())
+        with effect_db() as conn, conn.cursor() as cur:
+            for identifier in [existing, replacement]:
+                cur.execute(
+                    "INSERT INTO crm_tasks(id,tenant_id,title) VALUES (%s,%s,'Existing')",
+                    (identifier, str(uuid4()) if case == "foreign" else ctx.tenant_id),
+                )
+        row = effects.begin(ctx, "worker", "main", "create_task", {"title": "Existing"})
+        effects.mark_dispatched(ctx, row["id"], "worker")
+        token = effects.active_effect.set(row)
+        try:
+            if case == "foreign":
+                with pytest.raises(ValueError, match="could not be bound"):
+                    remember_existing(ctx.tenant_id, existing)
+                assert effects.read(ctx, row["id"])["resolution"] is None
+                return
+            remember_existing(ctx.tenant_id, existing)
+            with pytest.raises(ValueError, match="could not be bound"):
+                remember_existing(ctx.tenant_id, replacement)
+            effects.finish(ctx, row["id"], "worker", uncertain=True)
+            with pytest.raises(ValueError, match="could not be bound"):
+                remember_existing(ctx.tenant_id, existing)
+        finally:
+            effects.active_effect.reset(token)
+        if case == "deleted":
+            with effect_db() as conn, conn.cursor() as cur:
+                cur.execute("UPDATE crm_tasks SET deleted_at=now() WHERE id=%s", (existing,))
+            assert task_recovery.recover(ctx, row["id"]) is None
+            assert effects.read(ctx, row["id"])["state"] == "uncertain"
+        else:
+            result = task_recovery.recover(ctx, row["id"])
+>           assert result["id"] == existing and result["deduplicated"] and result["recovered"]
+                   ^^^^^^^^^^^^
+E           TypeError: 'NoneType' object is not subscriptable
+
+robothor/engine/tests/test_task_recovery.py:100: TypeError
+------------------------------ Captured log call -------------------------------
+WARNING  robothor.engine.runtime.task_recovery:task_recovery.py:72 CRM task readback deferred
+Traceback (most recent call last):
+  File "/home/philip/robothor-runtime-modernization/robothor/engine/runtime/task_recovery.py", line 63, in recover
+    effects.resolve(context, effect_id, verify)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/philip/robothor-runtime-modernization/robothor/engine/runtime/effects.py", line 171, in resolve
+    verdict = verifier(record)
+  File "/home/philip/robothor-runtime-modernization/robothor/engine/runtime/task_recovery.py", line 34, in verify
+    cur.execute(
+    ~~~~~~~~~~~^
+        "SELECT title,body,status FROM crm_tasks WHERE tenant_id=%s AND id=%s AND deleted_at IS NULL",
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        (record["tenant_id"], identifier),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+psycopg2.errors.UndefinedColumn: column "body" does not exist
+LINE 1: SELECT title,body,status FROM crm_tasks WHERE tenant_id='aa7...
+                     ^
+=========================== short test summary info ============================
+FAILED robothor/engine/tests/test_task_recovery.py::test_existing_task_receipt_is_scoped_immutable_and_read_back[valid]
+1 failed, 25 passed in 2.61s
