@@ -11,6 +11,7 @@ from dataclasses import replace
 from robothor.engine.runtime import effects
 from robothor.engine.runtime.current import active_context
 from robothor.engine.tools.constants import READONLY_TOOLS
+from robothor.goals.runtime import RECOVERY_BOOKKEEPING_ACTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ def _bypass(name, args, ctx):
         or name in READONLY_TOOLS
         or name in {"tool_call", "gws_calendar_add_attendees"}
         or name == "update_pursuit_goal"
-        and args.get("action") in {"pause", "cancel"}
+        and args.get("action") in RECOVERY_BOOKKEEPING_ACTIONS
     )
 
 

@@ -1249,3 +1249,14 @@ Confirmed note creation is presented as a verified action even when a later fail
 The focused chat/calendar/size selection passed 84 tests in 9.41 seconds. Canonical integration passed 34 with one skipped in 8.50 seconds, including real CRM creation, injected post-commit response loss, trusted recovery and a subsequent chat outcome read. Existing frontend recovery component tests passed seven tests. The broader engine selection was started as session 90842, logging to `/tmp/runtime-engine-audited-recovery-regression.log`; its result is pending and must be collected before claiming a new broad pass.
 
 This is reconnect behavior, not a live conversational user acceptance result. Other provider-specific recovery and goal bookkeeping while effects are unresolved remain open. No deployment or overall acceptance is claimed.
+
+
+## Audited recovery regression and safe goal bookkeeping
+
+At `0323716b21a`, the broad engine selection completed with **11,229 passed, 29 skipped, 192 deselected, 394 warnings in 384.02 seconds**. Product source and collected tests remained unchanged while it ran. This includes the effect journal, terminal-owner recovery, CRM note readback and chat receipt projection. It supersedes the pending-run entry above. Warnings include deprecations and unawaited network coroutines; this is not warning-free or performance evidence.
+
+Five new regression cases reproduced recovery admission denying goal bookkeeping. The subsequent change permits progress, wait, block, pause and cancel through the effect fence and goal recovery admission, while retaining existing role, lease, stop, version and goal-state checks. These actions do not clear `recovery_required`, settle an uncertain effect, authorize another business write or permit completion. Ten private-database cases cover both interrupted-run recovery and a live goal with an uncertain effect. Wait/block/pause/cancel yield the coordinator.
+
+The focused goal/tool/dispatch/size selection passed 54 in 6.75 seconds. Canonical integration passed 36 with one skipped in 13.64 seconds. The native restart/crash test now covers two supported paths: an immediate safe wait preserving recovery_required (one model call), and rejection of premature completion followed by explicit reconciliation and waiting (three calls). Neither path runs another model turn after yielding, and interrupted-attempt token accounting remains intact. Prior canonical assertions that an early wait must fail were updated; an intermediate fixture still expected the old action sequence and failed before being corrected. All intermediate logs remain indexed in `bench/runtime/uat-verification.json`.
+
+The broad pass predates this bookkeeping change, which has focused and canonical coverage. Generic uncertainty projection into the goal workspace, other provider verifiers and normal-chat UAT remain open. No production deployment or overall acceptance is claimed.

@@ -1,0 +1,234 @@
+FFFFF                                                                    [100%]
+=================================== FAILURES ===================================
+_ test_bookkeeping_preserves_uncertainty_and_denies_more_business_writes[progress] _
+
+effect_db = <function effect_db.<locals>.connect at 0xf145d4af3d70>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0xf145d4a7d480>
+action = 'progress'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("action", ["progress", "wait", "block", "pause", "cancel"])
+    async def test_bookkeeping_preserves_uncertainty_and_denies_more_business_writes(effect_db, monkeypatch, action):  # noqa: F811
+        ctx = context()
+        monkeypatch.setattr(store, "get_connection", effect_db)
+        store.set_enabled(ctx.tenant_id, True, ctx.principal_id)
+        goal = store.create(ctx.tenant_id, CreateGoal(objective="Finish requested work", success_criteria=["Verified"]), ctx.principal_id)
+        goal, attempt = store.claim(ctx.tenant_id)
+        ctx = replace(ctx, goal_id=goal["id"], attempt_id=attempt, budget_id=goal["id"])
+        pending = effects.begin(ctx, "old-worker", "main", "create_note", {"body": "once"})
+        effects.mark_dispatched(ctx, pending["id"], "old-worker")
+        effects.finish(ctx, pending["id"], "old-worker", uncertain=True)
+        with store.transaction() as cur:
+            goal["recovery_required"] = True
+            store.save(cur, ctx.tenant_id, goal)
+        current = Binding(ctx.tenant_id, goal["id"], attempt, run_id="coordinator")
+        runtime_token = active_context.set(ctx)
+        goal_token = binding.set(current)
+        writes = []
+    
+        async def write(args, tool_context):
+            writes.append(args)
+            return {"id": "should-never-dispatch"}
+    
+        monkeypatch.setattr(dispatch, "_get_handlers", lambda: {**HANDLERS, "create_note": write})
+    
+        async def call(name, args):
+            return await dispatch._execute_tool(name, args, agent_id="main", run_id="coordinator", tenant_id=ctx.tenant_id, user_id=ctx.principal_id, user_role="owner")
+    
+        try:
+            result = await call("update_pursuit_goal", {"goal_id": goal["id"], "version": goal["version"], "action": action, "note": "Earlier action awaits readback"})
+>           assert "error" not in result, result
+E           AssertionError: {'error': 'ValueError: inspect previous run results, then record reconciled before taking more actions', 'tool_crashed': True}
+E           assert 'error' not in {'error': 'ValueError: inspect previous run results, then record reconciled before taking more actions', 'tool_crashed': True}
+
+/tmp/goal_recovery_bookkeeping_test.py:48: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  robothor.audit.logger:logger.py:44 Audit: pool unavailable, using direct DSN: Refusing to open a database connection to 'robothor_memory' from inside pytest — tests must never touch a production database. Set ROBOTHOR_DB_NAME to a *_test database, or set ROBOTHOR_TEST_DB_ALLOW to this exact name to explicitly allow it.
+WARNING  robothor.audit.logger:logger.py:147 Audit log_event failed: Refusing to open a database connection to 'robothor_memory' from inside pytest — tests must never touch a production database. Set ROBOTHOR_DB_NAME to a *_test database, or set ROBOTHOR_TEST_DB_ALLOW to this exact name to explicitly allow it.
+_ test_bookkeeping_preserves_uncertainty_and_denies_more_business_writes[wait] _
+
+effect_db = <function effect_db.<locals>.connect at 0xf145d4122e50>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0xf145d4bd3770>
+action = 'wait'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("action", ["progress", "wait", "block", "pause", "cancel"])
+    async def test_bookkeeping_preserves_uncertainty_and_denies_more_business_writes(effect_db, monkeypatch, action):  # noqa: F811
+        ctx = context()
+        monkeypatch.setattr(store, "get_connection", effect_db)
+        store.set_enabled(ctx.tenant_id, True, ctx.principal_id)
+        goal = store.create(ctx.tenant_id, CreateGoal(objective="Finish requested work", success_criteria=["Verified"]), ctx.principal_id)
+        goal, attempt = store.claim(ctx.tenant_id)
+        ctx = replace(ctx, goal_id=goal["id"], attempt_id=attempt, budget_id=goal["id"])
+        pending = effects.begin(ctx, "old-worker", "main", "create_note", {"body": "once"})
+        effects.mark_dispatched(ctx, pending["id"], "old-worker")
+        effects.finish(ctx, pending["id"], "old-worker", uncertain=True)
+        with store.transaction() as cur:
+            goal["recovery_required"] = True
+            store.save(cur, ctx.tenant_id, goal)
+        current = Binding(ctx.tenant_id, goal["id"], attempt, run_id="coordinator")
+        runtime_token = active_context.set(ctx)
+        goal_token = binding.set(current)
+        writes = []
+    
+        async def write(args, tool_context):
+            writes.append(args)
+            return {"id": "should-never-dispatch"}
+    
+        monkeypatch.setattr(dispatch, "_get_handlers", lambda: {**HANDLERS, "create_note": write})
+    
+        async def call(name, args):
+            return await dispatch._execute_tool(name, args, agent_id="main", run_id="coordinator", tenant_id=ctx.tenant_id, user_id=ctx.principal_id, user_role="owner")
+    
+        try:
+            result = await call("update_pursuit_goal", {"goal_id": goal["id"], "version": goal["version"], "action": action, "note": "Earlier action awaits readback"})
+>           assert "error" not in result, result
+E           AssertionError: {'error': 'ValueError: inspect previous run results, then record reconciled before taking more actions', 'tool_crashed': True}
+E           assert 'error' not in {'error': 'ValueError: inspect previous run results, then record reconciled before taking more actions', 'tool_crashed': True}
+
+/tmp/goal_recovery_bookkeeping_test.py:48: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  robothor.audit.logger:logger.py:44 Audit: pool unavailable, using direct DSN: Refusing to open a database connection to 'robothor_memory' from inside pytest — tests must never touch a production database. Set ROBOTHOR_DB_NAME to a *_test database, or set ROBOTHOR_TEST_DB_ALLOW to this exact name to explicitly allow it.
+WARNING  robothor.audit.logger:logger.py:147 Audit log_event failed: Refusing to open a database connection to 'robothor_memory' from inside pytest — tests must never touch a production database. Set ROBOTHOR_DB_NAME to a *_test database, or set ROBOTHOR_TEST_DB_ALLOW to this exact name to explicitly allow it.
+_ test_bookkeeping_preserves_uncertainty_and_denies_more_business_writes[block] _
+
+effect_db = <function effect_db.<locals>.connect at 0xf145d4123530>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0xf145d4afd480>
+action = 'block'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("action", ["progress", "wait", "block", "pause", "cancel"])
+    async def test_bookkeeping_preserves_uncertainty_and_denies_more_business_writes(effect_db, monkeypatch, action):  # noqa: F811
+        ctx = context()
+        monkeypatch.setattr(store, "get_connection", effect_db)
+        store.set_enabled(ctx.tenant_id, True, ctx.principal_id)
+        goal = store.create(ctx.tenant_id, CreateGoal(objective="Finish requested work", success_criteria=["Verified"]), ctx.principal_id)
+        goal, attempt = store.claim(ctx.tenant_id)
+        ctx = replace(ctx, goal_id=goal["id"], attempt_id=attempt, budget_id=goal["id"])
+        pending = effects.begin(ctx, "old-worker", "main", "create_note", {"body": "once"})
+        effects.mark_dispatched(ctx, pending["id"], "old-worker")
+        effects.finish(ctx, pending["id"], "old-worker", uncertain=True)
+        with store.transaction() as cur:
+            goal["recovery_required"] = True
+            store.save(cur, ctx.tenant_id, goal)
+        current = Binding(ctx.tenant_id, goal["id"], attempt, run_id="coordinator")
+        runtime_token = active_context.set(ctx)
+        goal_token = binding.set(current)
+        writes = []
+    
+        async def write(args, tool_context):
+            writes.append(args)
+            return {"id": "should-never-dispatch"}
+    
+        monkeypatch.setattr(dispatch, "_get_handlers", lambda: {**HANDLERS, "create_note": write})
+    
+        async def call(name, args):
+            return await dispatch._execute_tool(name, args, agent_id="main", run_id="coordinator", tenant_id=ctx.tenant_id, user_id=ctx.principal_id, user_role="owner")
+    
+        try:
+            result = await call("update_pursuit_goal", {"goal_id": goal["id"], "version": goal["version"], "action": action, "note": "Earlier action awaits readback"})
+>           assert "error" not in result, result
+E           AssertionError: {'error': 'ValueError: inspect previous run results, then record reconciled before taking more actions', 'tool_crashed': True}
+E           assert 'error' not in {'error': 'ValueError: inspect previous run results, then record reconciled before taking more actions', 'tool_crashed': True}
+
+/tmp/goal_recovery_bookkeeping_test.py:48: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  robothor.audit.logger:logger.py:44 Audit: pool unavailable, using direct DSN: Refusing to open a database connection to 'robothor_memory' from inside pytest — tests must never touch a production database. Set ROBOTHOR_DB_NAME to a *_test database, or set ROBOTHOR_TEST_DB_ALLOW to this exact name to explicitly allow it.
+WARNING  robothor.audit.logger:logger.py:147 Audit log_event failed: Refusing to open a database connection to 'robothor_memory' from inside pytest — tests must never touch a production database. Set ROBOTHOR_DB_NAME to a *_test database, or set ROBOTHOR_TEST_DB_ALLOW to this exact name to explicitly allow it.
+_ test_bookkeeping_preserves_uncertainty_and_denies_more_business_writes[pause] _
+
+effect_db = <function effect_db.<locals>.connect at 0xf145d4188040>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0xf145d4b13250>
+action = 'pause'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("action", ["progress", "wait", "block", "pause", "cancel"])
+    async def test_bookkeeping_preserves_uncertainty_and_denies_more_business_writes(effect_db, monkeypatch, action):  # noqa: F811
+        ctx = context()
+        monkeypatch.setattr(store, "get_connection", effect_db)
+        store.set_enabled(ctx.tenant_id, True, ctx.principal_id)
+        goal = store.create(ctx.tenant_id, CreateGoal(objective="Finish requested work", success_criteria=["Verified"]), ctx.principal_id)
+        goal, attempt = store.claim(ctx.tenant_id)
+        ctx = replace(ctx, goal_id=goal["id"], attempt_id=attempt, budget_id=goal["id"])
+        pending = effects.begin(ctx, "old-worker", "main", "create_note", {"body": "once"})
+        effects.mark_dispatched(ctx, pending["id"], "old-worker")
+        effects.finish(ctx, pending["id"], "old-worker", uncertain=True)
+        with store.transaction() as cur:
+            goal["recovery_required"] = True
+            store.save(cur, ctx.tenant_id, goal)
+        current = Binding(ctx.tenant_id, goal["id"], attempt, run_id="coordinator")
+        runtime_token = active_context.set(ctx)
+        goal_token = binding.set(current)
+        writes = []
+    
+        async def write(args, tool_context):
+            writes.append(args)
+            return {"id": "should-never-dispatch"}
+    
+        monkeypatch.setattr(dispatch, "_get_handlers", lambda: {**HANDLERS, "create_note": write})
+    
+        async def call(name, args):
+            return await dispatch._execute_tool(name, args, agent_id="main", run_id="coordinator", tenant_id=ctx.tenant_id, user_id=ctx.principal_id, user_role="owner")
+    
+        try:
+            result = await call("update_pursuit_goal", {"goal_id": goal["id"], "version": goal["version"], "action": action, "note": "Earlier action awaits readback"})
+>           assert "error" not in result, result
+E           AssertionError: {'error': 'ValueError: inspect previous run results, then record reconciled before taking more actions', 'tool_crashed': True}
+E           assert 'error' not in {'error': 'ValueError: inspect previous run results, then record reconciled before taking more actions', 'tool_crashed': True}
+
+/tmp/goal_recovery_bookkeeping_test.py:48: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  robothor.audit.logger:logger.py:44 Audit: pool unavailable, using direct DSN: Refusing to open a database connection to 'robothor_memory' from inside pytest — tests must never touch a production database. Set ROBOTHOR_DB_NAME to a *_test database, or set ROBOTHOR_TEST_DB_ALLOW to this exact name to explicitly allow it.
+WARNING  robothor.audit.logger:logger.py:147 Audit log_event failed: Refusing to open a database connection to 'robothor_memory' from inside pytest — tests must never touch a production database. Set ROBOTHOR_DB_NAME to a *_test database, or set ROBOTHOR_TEST_DB_ALLOW to this exact name to explicitly allow it.
+_ test_bookkeeping_preserves_uncertainty_and_denies_more_business_writes[cancel] _
+
+effect_db = <function effect_db.<locals>.connect at 0xf145d4188720>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0xf145d4169b80>
+action = 'cancel'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("action", ["progress", "wait", "block", "pause", "cancel"])
+    async def test_bookkeeping_preserves_uncertainty_and_denies_more_business_writes(effect_db, monkeypatch, action):  # noqa: F811
+        ctx = context()
+        monkeypatch.setattr(store, "get_connection", effect_db)
+        store.set_enabled(ctx.tenant_id, True, ctx.principal_id)
+        goal = store.create(ctx.tenant_id, CreateGoal(objective="Finish requested work", success_criteria=["Verified"]), ctx.principal_id)
+        goal, attempt = store.claim(ctx.tenant_id)
+        ctx = replace(ctx, goal_id=goal["id"], attempt_id=attempt, budget_id=goal["id"])
+        pending = effects.begin(ctx, "old-worker", "main", "create_note", {"body": "once"})
+        effects.mark_dispatched(ctx, pending["id"], "old-worker")
+        effects.finish(ctx, pending["id"], "old-worker", uncertain=True)
+        with store.transaction() as cur:
+            goal["recovery_required"] = True
+            store.save(cur, ctx.tenant_id, goal)
+        current = Binding(ctx.tenant_id, goal["id"], attempt, run_id="coordinator")
+        runtime_token = active_context.set(ctx)
+        goal_token = binding.set(current)
+        writes = []
+    
+        async def write(args, tool_context):
+            writes.append(args)
+            return {"id": "should-never-dispatch"}
+    
+        monkeypatch.setattr(dispatch, "_get_handlers", lambda: {**HANDLERS, "create_note": write})
+    
+        async def call(name, args):
+            return await dispatch._execute_tool(name, args, agent_id="main", run_id="coordinator", tenant_id=ctx.tenant_id, user_id=ctx.principal_id, user_role="owner")
+    
+        try:
+            result = await call("update_pursuit_goal", {"goal_id": goal["id"], "version": goal["version"], "action": action, "note": "Earlier action awaits readback"})
+>           assert "error" not in result, result
+E           AssertionError: {'error': 'ValueError: inspect previous run results, then record reconciled before taking more actions', 'tool_crashed': True}
+E           assert 'error' not in {'error': 'ValueError: inspect previous run results, then record reconciled before taking more actions', 'tool_crashed': True}
+
+/tmp/goal_recovery_bookkeeping_test.py:48: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  robothor.audit.logger:logger.py:44 Audit: pool unavailable, using direct DSN: Refusing to open a database connection to 'robothor_memory' from inside pytest — tests must never touch a production database. Set ROBOTHOR_DB_NAME to a *_test database, or set ROBOTHOR_TEST_DB_ALLOW to this exact name to explicitly allow it.
+WARNING  robothor.audit.logger:logger.py:147 Audit log_event failed: Refusing to open a database connection to 'robothor_memory' from inside pytest — tests must never touch a production database. Set ROBOTHOR_DB_NAME to a *_test database, or set ROBOTHOR_TEST_DB_ALLOW to this exact name to explicitly allow it.
+=========================== short test summary info ============================
+FAILED ::test_bookkeeping_preserves_uncertainty_and_denies_more_business_writes[progress]
+FAILED ::test_bookkeeping_preserves_uncertainty_and_denies_more_business_writes[wait]
+FAILED ::test_bookkeeping_preserves_uncertainty_and_denies_more_business_writes[block]
+FAILED ::test_bookkeeping_preserves_uncertainty_and_denies_more_business_writes[pause]
+FAILED ::test_bookkeeping_preserves_uncertainty_and_denies_more_business_writes[cancel]
+5 failed in 1.52s

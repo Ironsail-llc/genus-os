@@ -24,8 +24,9 @@ pytestmark = pytest.mark.integration
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("crash", [False, True])
-async def test_native_goal_recovery_reconciles_before_waiting(
-    engine_config, sample_agent_config, crash
+@pytest.mark.parametrize("wait_early", [False, True])
+async def test_native_goal_recovery_waits_safely_or_reconciles_explicitly(
+    engine_config, sample_agent_config, crash, wait_early
 ):
     dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
     if "host=/tmp/runtime-migrated-" not in dsn:
@@ -85,7 +86,7 @@ async def test_native_goal_recovery_reconciles_before_waiting(
         index = len(calls)
         calls.append(kwargs)
         assert index < 3, "native runner continued after the goal yielded"
-        action = "reconciled" if index == 1 else "wait"
+        action = "wait" if wait_early or index == 2 else "reconciled" if index == 1 else "complete"
         if index < 2:
             assert state["recovery_required"]
         else:
@@ -136,12 +137,13 @@ async def test_native_goal_recovery_reconciles_before_waiting(
             await controller.tick()
         await get_task_registry().drain(timeout=5)
     result = store.get(tenant, goal["id"])
-    assert len(calls) == 3
+    expected_calls = 1 if wait_early else 3
+    assert len(calls) == expected_calls
     assert result["status"] == "waiting", result
-    assert not result["recovery_required"]
-    assert result["tokens_used"] == prior_tokens + 450
+    assert result["recovery_required"] is wait_early
+    assert result["tokens_used"] == prior_tokens + 150 * expected_calls
     store.finish(tenant, goal["id"], old_attempt, tokens=30)
-    assert store.get(tenant, goal["id"])["tokens_used"] == prior_tokens + 450
+    assert store.get(tenant, goal["id"])["tokens_used"] == prior_tokens + 150 * expected_calls
     with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT status,runtime_context FROM agent_runs WHERE tenant_id=%s AND runtime_context->>'attempt_id'=%s",
@@ -158,10 +160,13 @@ async def test_native_goal_recovery_reconciles_before_waiting(
             (tenant, attempt),
         )
         tools = cur.fetchall()
-        assert [args["action"] for args, _ in tools] == ["wait", "reconciled", "wait"]
-        assert "inspect previous run results" in json.dumps(tools[0][1])
-        assert tools[1][1]["goal"]["recovery_required"] is False
-        assert tools[2][1]["goal"]["status"] == "waiting"
+        expected_actions = ["wait"] if wait_early else ["complete", "reconciled", "wait"]
+        assert [args["action"] for args, _ in tools] == expected_actions
+        assert tools[-1][1]["goal"]["status"] == "waiting"
+        assert tools[-1][1]["goal"]["recovery_required"] is wait_early
+        if not wait_early:
+            assert "inspect previous run results" in json.dumps(tools[0][1])
+            assert tools[1][1]["goal"]["recovery_required"] is False
         if crash:
             cur.execute(
                 "SELECT count(*) FROM agent_run_steps s JOIN agent_runs r ON r.id=s.run_id WHERE r.tenant_id=%s AND s.tool_input->>'action'='progress'",

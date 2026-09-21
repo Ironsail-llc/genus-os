@@ -9,16 +9,16 @@
   "replacement_selected": false,
   "checks": {
     "engine": {
-      "revision": "30453348e10",
-      "passed": 11182,
+      "revision": "0323716b21a",
+      "passed": 11229,
       "failed": 0,
       "skipped": 29,
-      "deselected": 188,
-      "warnings": 393,
-      "seconds": 387.63,
+      "deselected": 192,
+      "warnings": 394,
+      "seconds": 384.02,
       "selection": "not slow and not integration and not llm and not e2e and not smoke",
-      "log": "bench/runtime/uat-engine-uncertain-write-regression.log",
-      "note": "Product source and collected tests unchanged during this run. Before subsequent uncertain-outcome recovery planner change; that change is checked separately. Existing warnings remain. Not a performance comparison."
+      "log": "bench/runtime/uat-runtime-engine-audited-recovery-regression.log",
+      "note": "Source and collected tests unchanged during run. Includes journal, terminal-owner sweep, CRM note automatic readback and chat receipt projection. Predates the subsequent goal bookkeeping fix. Warnings include deprecations and unawaited network coroutines; not a warning-free or performance result."
     },
     "frontend": {
       "revision": "2d5b4c2985d",
@@ -3233,15 +3233,54 @@
       },
       "behavior": "Chat reconnect reads scoped runtime-effect receipts across the run family. Verified note creation is reported separately from failed run status; unresolved effects prevent false whole-run verification.",
       "broad_engine": {
-        "state": "running",
-        "session_id": 90842,
-        "log": "/tmp/runtime-engine-audited-recovery-regression.log",
-        "note": "Inspect this existing process/log before resuming; no result claimed yet."
+        "state": "passed",
+        "revision": "0323716b21a",
+        "passed": 11229,
+        "log": "bench/runtime/uat-runtime-engine-audited-recovery-regression.log"
       },
       "limitations": [
         "Other provider readback and goal bookkeeping during uncertainty remain incomplete.",
         "This is reconnect recovery, not yet a live conversational UAT case.",
         "No overall acceptance or production deployment."
+      ]
+    },
+    "engine_before_audited_recovery": {
+      "revision": "30453348e10",
+      "passed": 11182,
+      "failed": 0,
+      "skipped": 29,
+      "deselected": 188,
+      "warnings": 393,
+      "seconds": 387.63,
+      "selection": "not slow and not integration and not llm and not e2e and not smoke",
+      "log": "bench/runtime/uat-engine-uncertain-write-regression.log",
+      "note": "Product source and collected tests unchanged during this run. Before subsequent uncertain-outcome recovery planner change; that change is checked separately. Existing warnings remain. Not a performance comparison."
+    },
+    "goal_effect_bookkeeping": {
+      "base_revision": "0323716b21a",
+      "focused": {
+        "passed": 54,
+        "seconds": 6.75,
+        "log": "bench/runtime/uat-runtime-goal-bookkeeping-focused.log"
+      },
+      "canonical": {
+        "passed": 36,
+        "skipped": 1,
+        "warnings": 1,
+        "seconds": 13.64,
+        "log": "bench/runtime/uat-runtime-goal-bookkeeping-canonical-verified.log"
+      },
+      "behavior": "Progress, wait, block, pause and cancel remain subject to authorization/lease checks but can pass the uncertainty fence. They neither settle pending effects nor clear recovery_required. Ordinary writes and completion remain denied. Native early wait uses one model call and yields immediately.",
+      "failures_retained": [
+        "Temporary external test first lacked an asyncio marker; no product result inferred.",
+        "Five marked temporary cases reproduced old recovery admission refusing bookkeeping.",
+        "Two old canonical tests required rejection of early wait; expanded into early-wait and premature-completion rejection cases.",
+        "Expanded fixture initially retained old action-list assertions; corrected and reran all canonical checks."
+      ],
+      "limitations": [
+        "Broad engine pass predates this small policy change.",
+        "Goal workspace projection of generic ledger uncertainty remains incomplete.",
+        "Other provider-specific recovery and live conversational UAT remain incomplete."
       ]
     }
   },

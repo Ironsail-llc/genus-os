@@ -1,0 +1,49 @@
+FFFFF                                                                    [100%]
+=================================== FAILURES ===================================
+_ test_bookkeeping_preserves_uncertainty_and_denies_more_business_writes[progress] _
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_ test_bookkeeping_preserves_uncertainty_and_denies_more_business_writes[wait] _
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_ test_bookkeeping_preserves_uncertainty_and_denies_more_business_writes[block] _
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_ test_bookkeeping_preserves_uncertainty_and_denies_more_business_writes[pause] _
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+_ test_bookkeeping_preserves_uncertainty_and_denies_more_business_writes[cancel] _
+async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted
+=========================== short test summary info ============================
+FAILED ::test_bookkeeping_preserves_uncertainty_and_denies_more_business_writes[progress]
+FAILED ::test_bookkeeping_preserves_uncertainty_and_denies_more_business_writes[wait]
+FAILED ::test_bookkeeping_preserves_uncertainty_and_denies_more_business_writes[block]
+FAILED ::test_bookkeeping_preserves_uncertainty_and_denies_more_business_writes[pause]
+FAILED ::test_bookkeeping_preserves_uncertainty_and_denies_more_business_writes[cancel]
+5 failed in 1.48s

@@ -12,6 +12,10 @@ if TYPE_CHECKING:
     from robothor.engine.tools.dispatch import ToolContext
 
 
+# These commands preserve uncertainty and do not dispatch a new business action.
+RECOVERY_BOOKKEEPING_ACTIONS = frozenset({"progress", "wait", "block", "pause", "cancel"})
+
+
 @dataclass
 class Binding:
     tenant: str
@@ -128,7 +132,10 @@ def admit_tool(name: str, args: dict[str, Any], ctx: ToolContext) -> None:
     if (
         row["data"]["recovery_required"]
         and name not in READONLY_TOOLS
-        and not (name == "update_pursuit_goal" and args.get("action") == "reconciled")
+        and not (
+            name == "update_pursuit_goal"
+            and args.get("action") in RECOVERY_BOOKKEEPING_ACTIONS | {"reconciled"}
+        )
     ):
         raise ValueError(
             "inspect previous run results, then record reconciled before taking more actions"
