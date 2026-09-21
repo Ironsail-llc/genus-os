@@ -92,6 +92,8 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
             "model": kwargs["model"],
             "stream": bool(kwargs.get("stream")),
             "phase": "planning" if planning else "execution",
+            "max_tokens": kwargs.get("max_tokens"),
+            "thinking_budget_tokens": (kwargs.get("thinking") or {}).get("budget_tokens"),
             "timeout_seconds": kwargs.get("timeout")
             if isinstance(kwargs.get("timeout"), int | float)
             else None,
@@ -170,6 +172,7 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
                         "primary": agent.model_primary,
                         "fallbacks": agent.model_fallbacks,
                         "temperature": agent.temperature,
+                        "reasoning_effort": agent.reasoning_effort,
                         "tools_allowed": len(agent.tools_allowed),
                         "tools_advertised": len(advertised),
                         "schema_characters": len(json.dumps(advertised, ensure_ascii=False)),

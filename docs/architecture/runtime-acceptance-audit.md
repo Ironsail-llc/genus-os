@@ -1673,3 +1673,10 @@ Next performance work should reduce unnecessary request context or otherwise add
 ### Deferred-tool streaming diagnostics passed — 2026-09-21
 
 With existing tool discovery enabled only inside the private fixture, three streaming compound-task diagnostics passed in 11.927, 22.161 and 7.514 seconds. Each created one matching task and answered the additional calculation; no duplicate or post-return calls. Normal timeouts and the selected model chain were preserved. Three samples do not qualify performance. Raw diagnostics and telemetry are retained under `uat-runtime-deferred-streaming-diagnostic*`. A new thirty-request population has started at `/tmp/runtime-deferred-streaming-cohort.jsonl`; installed/default deferral remains off.
+
+
+### Stream latency telemetry expanded — 2026-09-21
+
+The deferred-tool streaming cohort is still running; its first seven requests were correct but three exceeded thirty seconds, which already prevents its nearest-rank p95 gate. Keep the entire population. Tool deferral by itself is therefore not a qualified latency improvement.
+
+Future harness processes now record first reasoning and first answer/tool-argument timing separately, numeric provider-reported usage (including reasoning tokens when available), configured reasoning effort and requested thinking budget/output ceiling. Content is never copied into these telemetry fields. Nine focused observation/reporting checks pass. This adds measurement only; it neither changes model effort nor the running cohort's loaded instrumentation or installed defaults.
