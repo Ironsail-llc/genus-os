@@ -254,6 +254,87 @@ Main agent:
 
 Sub-agents inherit budget constraints from the parent. Delivery is forced to `none` on children.
 
+`tools_override` may narrow a child's declared `tools_allowed`, but it cannot add
+tools outside that list. The engine rejects such a request before starting the
+child. An empty override preserves the manifest; it does not mean unrestricted
+access or disable all tools. A child with no declared allowlist can be narrowed
+to an explicit list, and its `tools_denied` restrictions still apply. Change the
+child manifest deliberately when it needs an additional capability.
+
+A child with no declared allowlist is the case to understand. Naming an
+ordinary tool in the override is still a narrowing, because that child would
+have been offered it anyway. The opt-in families are the exception:
+`OPT_IN_TOOLS` — `web_render` and the ten `sales_*` tools — is precisely the
+set an undeclared child is NOT offered, so an override naming one would be a
+grant, and the engine refuses it by name. A child whose own manifest asks for
+an opt-in tool can still be narrowed to it.
+
+Set `v2.spawn_allowed_agents` to a list of agent IDs when delegation must stay
+inside an approved team. The engine checks the target before loading its manifest.
+This restriction follows the entire spawn tree: each child's own nonempty list
+can only narrow its ancestor's list. Disjoint lists permit no further targets.
+An omitted or empty list adds no restriction, preserving existing configurations;
+`can_spawn_agents: false` still disables spawning. Target permission does not grant
+additional tools or change the child's service role.
+
+If the parent runs from a managed fleet release, its children and further
+descendants inherit that exact release ID. Before each child starts, the engine
+verifies the staged artifact and loads the child's manifest and knowledge from
+it. Drift, a missing release, or a child outside that release refuses the spawn;
+there is no fallback to live workspace manifests. Unpinned runs retain their
+normal manifest-loading behavior. Spawned model requests also inherit any active
+funded request-budget scope; delegation does not create a new allowance.
+
+Use `v2.max_spawn_total` (an integer from 0 to 100) to limit admitted child
+attempts across repeated batches and the whole descendant tree. Each attempt
+consumes one slot from every applicable ancestor allowance. Children may add a
+stricter allowance; zero adds no limit and never removes an inherited one.
+Admission is atomic across concurrent spawns. Failed, deduplicated, and cancelled
+attempts keep their slots, so retrying cannot replenish the allowance. Invalid
+targets or configurations are rejected before admission. This complements the
+per-batch, nesting-depth, concurrency, and funded request-budget limits.
+Automatic error-recovery helpers use the same admission path: they cannot load
+an unapproved helper from the live workspace or bypass an exhausted allowance.
+`SpawnContext.nesting_depth` is the executing run's depth: roots use zero and
+first children use one. The runner persists that value without incrementing it
+again; benchmark child contexts use the same convention.
+
+`spawn_allowed_agents` and `max_spawn_total` — like every other security field
+on the manifest — are carried into a `heartbeat:` or `worker:` override run
+unchanged. The single field that is deliberately NOT inherited is `auto_task`:
+see below. The override blocks name what they CHANGE (schedule, instructions,
+delivery, warmup, budget, model, tools) and everything else is inherited, so a
+field nobody remembered to list cannot silently reset to its permissive default
+on the runs nobody is watching. That is not automatic: both builders once
+reconstructed the config field by field, and the fields they forgot took the
+dataclass default — which is how every drain run came to execute with no
+guardrails in a local sandbox, and how these two allowances came to be absent
+from every heartbeat and drain run.
+
+The one field an override does not inherit is `auto_task`, and it has its own
+`heartbeat.auto_task` / `worker.auto_task` key (both default `false`). That
+flag files one operator-facing CRM row per run, and an agent whose interactive
+work is worth tracking usually has a beat and a drain that are not: nine
+scheduled agents on the first instance declare `auto_task` and make about 138
+runs a day between them, so inheriting it would have put roughly 4,000 rows a
+month into the operator's queue. `should_create_auto_task` exists because
+6,887 junk rows reached that queue once already. Set the key on the block when
+you want the beat or the drain to file one too.
+
+Native integrations may attach an internal per-result callback to the parallel
+spawn handler to checkpoint completed children before siblings finish. It receives
+the input index and native result; it does not alter spawn admission, identities,
+funding or cancellation. This callback is not a model-callable tool argument.
+Callback failures are batch failures, and the remaining children are still awaited.
+
+Trusted workflow integrations can use `required_tool_scope` to require one
+already-granted tool while a workflow prerequisite is pending. LLM dispatch sends
+an exact function `tool_choice`; it refuses a missing capability rather than
+adding it. This scope is not model-controlled and closes for inherited async tasks
+when its owner exits. It does not validate tool outcomes or confer success: the
+owning workflow must retain its result checks. Tool-less auxiliary requests remain
+unchanged, and outside the scope the engine uses normal automatic tool selection.
+
 ### Pattern D: Cron Safety Net
 
 Python crons fetch data and publish events. Unit agents process the data. Crons are NOT the primary trigger — they catch anything the event hooks missed.
@@ -975,6 +1056,66 @@ install-from-a-path or a URL is CLI-only.
 
 ## 9. Complete Example: Email Pipeline
 
+Agents returning machine-consumed objects can declare `model.response_format:
+json_object`. The runner requests JSON mode for both streaming and non-streaming
+calls, including model fallbacks, and asks for one final object without Markdown
+or trailing commentary. The default is `text`; concurrent agents keep their own
+format. Choose primary and fallback models that support the provider's JSON mode.
+Tool calls remain available. JSON mode controls syntax, not business correctness:
+validate the result against the workflow's schema and evidence rules before
+accepting it. A truncated or unsupported response still fails validation.
+
+Native workflows can additionally apply a trusted `response_schema_scope` from
+`robothor.engine.response_schema`. Its JSON Schema overrides the session's generic
+JSON-object mode only while that scope is active and its readiness predicate is
+true. This is an internal workflow contract, not a model-supplied schema or a tool
+permission. Streaming and non-streaming request builders share it. Budgeted
+OpenRouter requests require endpoint `structured_outputs` support in addition to
+`response_format`; callers must still validate output and domain evidence locally.
+
+For domain checks beyond JSON shape, a workflow can apply
+`output_validation_scope` from `robothor.engine.output_validation`. Its trusted
+synchronous validator receives the run identity and proposed final text, returning
+`None` or a short, safe correction reason. Do not return raw untrusted page text or
+sensitive values in feedback. Native completion can request at most two repairs;
+these consume the existing run iterations, deadline and shared request budget.
+The validator also checks finalization output before marking a run complete.
+Validators must be deterministic and side-effect-free. The scope closes for
+inherited tasks when its owner exits and does not affect other concurrent runs.
+
+A workflow whose native tool already computes its final result can install a
+trusted `workflow_completion_scope` from `robothor.engine.workflow_completion`.
+After the complete tool turn, its owning tenant/agent can resolve to final text
+or a failure. A success records a `workflow_completion` checkpoint with
+`origin=trusted_workflow`; it does not fabricate an LLM call. Ordinary final
+output validation remains active. This is an internal callback, not a tool
+argument, and it cannot complete child runs or survive the scope's exit.
+
+For a model whose backends have different reliability or tool support, set
+`model.provider_order` to a mapping from its exact LiteLLM OpenRouter path to an
+ordered, nonempty list of provider slugs. Base slugs include endpoint variants;
+use an endpoint slug to pin a variant. These lists are also allowlists: unlisted
+backends are refused. Models absent from the mapping retain their usual routing,
+including fallback models. Existing engine compatibility requirements still apply.
+See [OpenRouter provider selection](https://openrouter.ai/docs/guides/routing/provider-selection)
+for provider slug syntax.
+
+```yaml
+model:
+  primary: openrouter/example/model
+  provider_order:
+    openrouter/example/model: [preferred/fp8, backup]
+```
+
+Within a bounded operation, Genus chooses the first eligible listed provider,
+then the least expensive endpoint within that preference. Tool/JSON support,
+price constraints, failed-route exclusions and full-context spending admission
+still apply. Each attempt pins one endpoint with SDK retries and unlisted
+provider fallback disabled. Provider preferences do not increase the job budget
+or guarantee a response within the agent deadline. They apply to the session's
+main streaming/non-streaming calls; independently invoked auxiliary model calls
+keep their own routing.
+
 A 3-unit pipeline: **classifier** → **analyst** → **responder**, connected via CRM tasks and event hooks.
 
 ### Unit 1: Email Classifier
@@ -1207,3 +1348,13 @@ Before deploying any unit agent:
 - [ ] Model tier matches the unit's complexity (don't use T2 for classification)
 - [ ] Version date is today's date
 - [ ] Department matches the agent's function
+
+### Required-tool provider compatibility
+
+For bounded OpenRouter requests, a named function can also use an endpoint that
+explicitly supports `tool_choice=required` plus tools, even if it lacks named
+function choice. Genus narrows that request's tool schemas to the single already
+available named function and sends `required`. It never substitutes `auto`, adds
+a tool, or grants permission. Missing or duplicate target schemas are refused.
+Subsequent ordinary requests retain their normal tool list. Native dispatch and
+domain result validation remain authoritative if a provider disobeys the request.

@@ -505,10 +505,46 @@ def _build_retained_context_message(
     return {"role": "user", "content": "\n".join(lines)}
 
 
+#: The engine's own pin. A message carries it only because engine code put it
+#: there — unlike a text prefix, which a model turn or a tool result can type
+#: for itself and so was never evidence of anything. Stripped from every
+#: provider payload by ``context_control.strip_engine_keys``.
+PIN_KEY = "_pin"
+ACTIVE_REQUEST_PIN = "active_request"
+
+
+def _is_pinned(msg: dict[str, Any]) -> bool:
+    """Did the ENGINE pin this message as the active request?"""
+    return msg.get(PIN_KEY) == ACTIVE_REQUEST_PIN
+
+
 def _is_retained_context(msg: dict[str, Any]) -> bool:
     """Check if a message is a retained context marker."""
     content = msg.get("content", "")
     return isinstance(content, str) and RETAINED_CONTEXT_MARKER in content
+
+
+def _in_tool_exchange(messages: list[dict[str, Any]]) -> list[bool]:
+    """Flag every message that sits inside an assistant-call → tool-result span.
+
+    A pin cannot be hoisted out of one of these: moving the assistant turn
+    leaves its results orphaned, and moving a result leaves the call dangling.
+    Providers reject both.
+    """
+    flags = [False] * len(messages)
+    pending: set[str] = set()
+    for i, msg in enumerate(messages):
+        if msg.get("role") == "tool":
+            pending.discard(str(msg.get("tool_call_id")))
+            flags[i] = True
+            continue
+        if pending:
+            flags[i] = True
+        calls = msg.get("tool_calls")
+        if calls:
+            flags[i] = True
+            pending = {str(c.get("id")) for c in calls}
+    return flags
 
 
 #: Fallback when the settings read fails. Compaction must never break on config.
@@ -527,10 +563,17 @@ def _split_for_summary(
     """
     head_len = protected_prefix_len(messages)
     tail = messages[head_len:]
+    # Hoist the engine's pinned request into the protected head — but never out
+    # of a tool exchange. A pin that sits inside one stays where it is; it is
+    # already protected by its own exchange staying whole.
+    inside = _in_tool_exchange(tail)
+    hoisted = {i for i, m in enumerate(tail) if _is_pinned(m) and not inside[i]}
+    active = [m for i, m in enumerate(tail) if i in hoisted]
+    rest = [m for i, m in enumerate(tail) if i not in hoisted]
     return (
-        messages[:head_len],
-        [m for m in tail if _is_retained_context(m)],
-        [m for m in tail if not _is_retained_context(m)],
+        [*messages[:head_len], *active],
+        [m for m in rest if _is_retained_context(m)],
+        [m for m in rest if not _is_retained_context(m)],
     )
 
 
@@ -583,13 +626,26 @@ def _find_safe_split_index(messages: list[dict[str, Any]], target_idx: int) -> i
         if msg.get("role") == "tool":
             idx -= 1
             continue
-        # assistant with tool_calls must stay with the tool results that follow
-        if msg.get("role") == "assistant" and msg.get("tool_calls"):
-            idx -= 1
-            continue
+        # The boundary BEFORE a call retains both the call and its results.
+        # Walking past it joins consecutive exchanges into one unbounded tail.
         break
 
     return idx
+
+
+def _recent_split(messages: list[dict[str, Any]], budget: int, keep_recent: int) -> int:
+    """Retain a token-bounded tail, cutting only before complete exchanges."""
+    from robothor.engine.context import estimate_tokens
+
+    start = max(0, len(messages) - keep_recent)
+    if start < len(messages) - 1:
+        # Incremental, for the same reason ``drain_history`` is: re-summing the
+        # whole surviving window each step is a pass over the content per step.
+        remaining = estimate_tokens(messages[start:])
+        while start < len(messages) - 1 and remaining > budget:
+            remaining -= estimate_tokens([messages[start]])
+            start += 1
+    return _find_safe_split_index(messages, start)
 
 
 def _dedup_tool_results(
@@ -845,7 +901,7 @@ async def compact(
     # Split into old and recent (from non-retained messages).
     # Use a safe split point that never orphans tool_call/tool_result pairs.
     if len(non_retained) > KEEP_RECENT:
-        split_idx = _find_safe_split_index(non_retained, len(non_retained) - KEEP_RECENT)
+        split_idx = _recent_split(non_retained, max(1024, drain_to // 3), KEEP_RECENT)
         old_messages = non_retained[:split_idx]
         recent_messages = non_retained[split_idx:]
     else:

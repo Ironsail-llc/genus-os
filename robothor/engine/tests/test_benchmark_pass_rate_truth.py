@@ -371,3 +371,38 @@ class TestJudgeErrors:
         assert row["failed"] == 1
         graded = result["task_results"][0]
         assert graded["judge_error"] == "429 rate limit"
+
+
+# ─── measurement is bookkeeping, not grading ────────────────────────
+
+
+class TestMeasurementCannotChangeTheCount:
+    """A post-hoc measurement must never rewrite what a task scored.
+
+    Found 2026-09-21 by merging two branches that were each green alone.
+    One added `run_measurements(run)` after the scored row is appended; the
+    other's suite fixtures are stand-ins that do not carry every attribute a
+    real `AgentRun` has. The measurement raised inside the task's `try`, the
+    `except Exception` appended a SECOND row for the same task, and a suite of
+    two tasks reported passed=1, failed=2 — three outcomes for two cases. A
+    measurement that can do that is not bookkeeping, it is a grader.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_failing_measurement_neither_fails_nor_duplicates_a_task(
+        self, captured_inserts
+    ):
+        def _explode(_run: Any) -> dict[str, Any]:
+            raise AttributeError("'types.SimpleNamespace' object has no attribute 'started_at'")
+
+        tasks = [_task("t1", ["alpha"]), _task("t2", ["beta"])]
+        with patch("robothor.engine.performance.run_measurements", side_effect=_explode):
+            result = await _run_suite(tasks, outputs=["alpha", "beta"])
+
+        row = _inserted_row(captured_inserts)
+        assert row["total_cases"] == 2
+        assert row["passed"] == 2
+        assert row["failed"] == 0
+        assert result["passed"] + result["failed"] == 2
+        outcomes = [r["task_id"] for r in result["task_results"]]
+        assert outcomes == ["t1", "t2"], f"one row per task, got {outcomes}"

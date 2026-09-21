@@ -407,6 +407,54 @@ Port 6379, 2 GB max. Shared by:
 
 ## Intelligence Pipeline
 
+### Native sales intelligence
+
+The opt-in sales workflow uses the durable operation queue and review actions
+from migration 126, tenant-scoped prospect and evidence records from migration
+127, and business observations, revision history and reviewed customer bindings
+from migration 128. Migration 129 versions binding reviews and preserves unknown
+attribution when a practice repair removes a customer's final match.
+Provider-specific adapters belong to the instance. Business
+pages commit evidence and cursor progress together under a valid worker lease;
+customer attribution requires an operator's exact-revision review. Current-page
+feeds do not establish complete retention history. See
+[Sales Intelligence](SALES_INTELLIGENCE.md) for controls, contracts and remaining
+activation requirements.
+
+Sales stages can select an explicit fleet release fingerprint. The native runner
+then captures the verified manifest and knowledge bytes for that run, retaining
+its instructions across later artifact changes. Runtime status files remain
+mutable in the workspace. This provides run-level configuration/knowledge
+consistency; coordinated fleet installation, schedule cutover and rollback remain
+separate deployment requirements.
+
+Verified artifacts can be staged at the native fingerprinted lookup path without
+changing runtime selection. Native queue ticks hold a tenant-scoped shared
+maintenance gate, allowing concurrent stages while excluding a maintenance
+transaction. Gate cleanup follows actual worker completion even when its caller
+is cancelled. The deployment coordinator must combine this with durable lease
+and provider-effect checks before a cutover.
+
+Migration 130 adds the durable sales deployment ledger and settings revision.
+Preparation excludes active/unresolved work and blocks native queue admission
+until commit or verified restoration. Structural settings selection, transition
+completion and audit commit together; rollback is another prepared transition.
+The native source-checkout runtime integrates platform/plugin/schedule verification
+with daemon bootstrap and readiness. Managed queue admission rechecks these assets
+off-loop before work. Pending transitions stay closed after restart, and control
+cancellation drains the database transaction. Human-only engine control routes
+and Helm forward the actual verified operator identity; they cannot accept
+client-supplied readiness evidence. Non-Git build provenance remains separate work.
+
+Migration 131 adds tenant-scoped qualification review cohorts, frozen dossier and
+policy snapshots, and append-only human assessment revisions. Enrollment includes
+all model decisions under the captured policies, with serialized size and duplicate
+checks. Reports preserve original agreement separately from corrections. Human
+assessment routes and the Helm review screen grant no prospect-promotion or message
+authority; measured qualification quality remains separate from customer outcomes.
+
+### General intelligence pipeline
+
 Three-tier architecture converts raw API data into structured knowledge:
 
 ```
@@ -991,6 +1039,12 @@ manifest writer calls it: `POST`/`PATCH`/`DELETE /api/agent-manifests`,
 `/api/installed-agents` install/update/remove, and `POST /api/setup/agent`.
 
 #### Workflow budgets and step visibility
+
+Deterministic tool steps may declare `tool_timeout_seconds` (integer 1–3600,
+default 120). The workflow passes this allowance to the native tool registry;
+the enclosing workflow deadline still bounds the entire execution. This allows
+longer durable workers to finish without silently inheriting a two-minute tool
+limit. Declare a workflow timeout that leaves room for the tool and persistence.
 
 A workflow's `timeout_seconds` is one wall-clock budget shared by all of its
 steps, and an agent step spends it walking that agent's model chain — primary,

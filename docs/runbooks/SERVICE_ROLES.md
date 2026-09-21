@@ -52,6 +52,21 @@ PY
 
 ## Moving the fleet
 
+Migration 127 also provides `sales_agent`: explicit grants for `web_search`,
+`web_fetch`, `write_file`, `sales_discover`, `sales_get_prospect`,
+`sales_get_context` and `sales_propose_email`, followed by deny-all. Each sales
+manifest must narrow that set and constrain status-file writes. The role grants
+no human approval or provider sending capability. See
+[Sales intelligence](../SALES_INTELLIGENCE.md) for its deployment gates.
+
+Migration 132 adds `sales_research_agent` for the bounded research parent and its
+native descendants. It permits `sales_research_parallel`, `web_search`,
+`web_fetch`, `write_file`, `sales_get_prospect`, and `sales_get_context`, then
+denies everything else. The parent manifest allows only the broker and optional
+constrained status writes; child manifests allow research reads. The broker
+requires an active matching stage scope and dispatches a fixed three-child bundle.
+Generic spawn tools, CRM mutation, approvals, and sending remain denied.
+
 Two levers. Prefer the second for anything you actually care about.
 
 **1. Fleet-wide default** — one env var, no manifest edits:

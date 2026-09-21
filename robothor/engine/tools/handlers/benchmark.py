@@ -19,8 +19,10 @@ import json
 import logging
 import re
 import statistics
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -72,6 +74,7 @@ JUDGE_RETRY_DELAY_S = 1.0
 #: fleet pass it cost 12 of 40 counted failures (30%) across 9 of 19 agents,
 #: every one of them recorded against the agent rather than the instrument.
 JUDGE_MAX_TOKENS = 2000
+JUDGE_REQUEST_TIMEOUT_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -84,6 +87,7 @@ class JudgeOutcome:
 
     score: float | None
     error: str | None = None
+    item_scores: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -259,6 +263,18 @@ def benchmark_readonly_tools() -> frozenset[str]:
 #: someone classifies it — which is how the previous list was allowed to rot.
 _BENCHMARK_EXCLUDED_TOOLS: frozenset[str] = _BENCHMARK_WITHHELD_READS | frozenset(
     {
+        # Sales fixtures are supplied in the offline task. Do not expose live
+        # prospect context or durable discovery/draft/queue work to the grader.
+        "sales_create_request",
+        "sales_discover",
+        "sales_get_context",
+        "sales_get_prospect",
+        "sales_get_report",
+        "sales_get_request",
+        "sales_get_workspace",
+        "sales_process_queue",
+        "sales_research_parallel",
+        "sales_propose_email",
         # Notifications / inbox state.
         "ack_notification",
         "send_notification",
@@ -580,11 +596,9 @@ def _benchmark_spawn_context(ctx: ToolContext | None) -> SpawnContext | None:
         parent_run_id=parent_run_id,
         parent_agent_id=ctx.agent_id if ctx else "",
         correlation_id=(ambient.correlation_id if ambient else "") or parent_run_id,
-        # NOT +1: ``runner.py`` adds one of its own when it applies the context
-        # (``session.run.nesting_depth = spawn_context.nesting_depth + 1``).
-        # Incrementing here too recorded a depth-0 parent's benchmark child at
-        # depth 2 — invisible while the context was flag-gated, visible now.
-        nesting_depth=ambient.nesting_depth if ambient else 0,
+        # Contexts describe the executing child. The runner records this depth
+        # verbatim, matching ordinary spawn admission rather than adding twice.
+        nesting_depth=(ambient.nesting_depth if ambient else 0) + 1,
         max_nesting_depth=ambient.max_nesting_depth if ambient else 2,
     )
 
@@ -861,6 +875,14 @@ def _validate_task(task: dict[str, Any]) -> str | None:
     expected = task.get("expected", {})
     if not expected:
         return f"task '{task['id']}' missing 'expected' criteria"
+    if "require_all" in expected and type(expected["require_all"]) is not bool:
+        return f"task '{task['id']}' require_all must be a boolean"
+    if "json_assertions" in expected:
+        from robothor.engine.benchmark_json import validate_assertions
+
+        error = validate_assertions(expected["json_assertions"])
+        if error:
+            return f"task '{task['id']}': {error}"
     for field in ("must_contain", "must_not_contain"):
         for pattern in expected.get(field, []):
             try:
@@ -1030,6 +1052,12 @@ def _score_task(output: str, expected: dict[str, Any], run_meta: dict[str, Any])
     keys are still tolerated in suite YAML so existing suites parse unchanged.
     """
     checks: list[bool] = []
+    if "json_assertions" in expected:
+        from robothor.engine.benchmark_json import grade_json
+
+        if not grade_json(output, expected["json_assertions"])["passed"]:
+            return 0.0
+        checks.append(True)
     for p in expected.get("must_contain", []):
         try:
             checks.append(bool(re.search(p, output, re.IGNORECASE)))
@@ -1044,7 +1072,7 @@ def _score_task(output: str, expected: dict[str, Any], run_meta: dict[str, Any])
     if not checks:
         return 0.0
 
-    return sum(checks) / len(checks)
+    return float(all(checks)) if expected.get("require_all") else sum(checks) / len(checks)
 
 
 #: How much of an agent's output the LLM judge is shown.
@@ -1127,16 +1155,21 @@ async def _judge_output(output: str, rubric: list[str], model: str) -> JudgeOutc
             # front-runner question. Rotation restores the run without
             # varying what is being measured.
             from robothor.engine.key_pool import api_key_for_model
+            from robothor.engine.request_budget import bounded_completion
 
             judge_key = api_key_for_model(model)
-            response = await litellm.acompletion(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=JUDGE_MAX_TOKENS,
-                response_format={"type": "json_object"},
-                timeout=30,
-                **({"api_key": judge_key} if judge_key else {}),
+            response = await asyncio.wait_for(
+                bounded_completion(
+                    litellm.acompletion,
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.1,
+                    max_tokens=JUDGE_MAX_TOKENS,
+                    response_format={"type": "json_object"},
+                    timeout=JUDGE_REQUEST_TIMEOUT_SECONDS,
+                    **({"api_key": judge_key} if judge_key else {}),
+                ),
+                timeout=JUDGE_REQUEST_TIMEOUT_SECONDS,
             )
             content = response.choices[0].message.content
             if not content:
@@ -1160,9 +1193,11 @@ async def _judge_output(output: str, rubric: list[str], model: str) -> JudgeOutc
                     score=None,
                     error=f"judge returned {len(scores)} scores for {len(rubric)} rubric items",
                 )
-            return JudgeOutcome(score=sum(1 for s in scores if s) / len(rubric))
+            if any(type(score) is not int or score not in (0, 1) for score in scores):
+                return JudgeOutcome(score=None, error="judge scores must be integer 0 or 1")
+            return JudgeOutcome(score=sum(scores) / len(rubric), item_scores=tuple(scores))
         except Exception as e:
-            detail = str(e).replace("\n", "\\n")
+            detail = (str(e) or type(e).__name__).replace("\n", "\\n")
             # Retire a rejected credential before the next attempt, or all
             # three attempts burn on the same dead key. Classified the way
             # the engine does, so a weekly cap is not retried in 15 minutes.
@@ -1278,6 +1313,13 @@ async def _score_task_detailed(
     """
     detail: dict[str, Any] = {}
     checks: list[bool] = []
+    if "json_assertions" in expected:
+        from robothor.engine.benchmark_json import grade_json
+
+        detail["json_assertions"] = grade_json(output, expected["json_assertions"])
+        if not detail["json_assertions"]["passed"]:
+            return 0.0, detail
+        checks.append(True)
 
     # Standard regex checks (same as _score_task)
     for p in expected.get("must_contain", []):
@@ -1311,7 +1353,11 @@ async def _score_task_detailed(
         )
         detail["honesty"] = grade.to_payload()
         if grade.score is not None:
-            return grade.score, detail
+            if not expected.get("require_all"):
+                return grade.score, detail
+            if grade.score != 1:
+                return 0.0, detail
+            checks.append(True)
 
     # Cost and iteration count are telemetry only, never graded (Phase 0b) —
     # see _score_task docstring.
@@ -1325,6 +1371,12 @@ async def _score_task_detailed(
         model = judge.get("model", "openrouter/xiaomi/mimo-v2.5-pro")
         outcome = await _judge_output(output, rubric, model)
         judge_error = outcome.error
+        detail["judge"] = {
+            "model": model,
+            "threshold": threshold,
+            "score": outcome.score,
+            "item_scores": list(outcome.item_scores),
+        }
         checks.append(outcome.score is not None and outcome.score >= threshold)
 
     # Environment read-backs (grade the environment, never the transcript).
@@ -1336,7 +1388,8 @@ async def _score_task_detailed(
     if not checks:
         return 0.0, detail
 
-    return sum(checks) / len(checks), detail
+    score = float(all(checks)) if expected.get("require_all") else sum(checks) / len(checks)
+    return score, detail
 
 
 # ---------------------------------------------------------------------------
@@ -1901,6 +1954,10 @@ async def _benchmark_define(args: dict[str, Any], ctx: ToolContext) -> dict[str,
     # Normalise
     suite_data["id"] = suite_id
     suite_data["agent_id"] = agent_id
+    try:
+        _suite_request_units(suite_data)
+    except ValueError as exc:
+        return {"error": str(exc)}
 
     # Validate tasks
     tasks = suite_data.get("tasks", [])
@@ -1994,6 +2051,30 @@ def _skipped_result(task: dict[str, Any], reason: str) -> dict[str, Any]:
     }
 
 
+def _suite_request_units(suite: dict[str, Any]) -> int | None:
+    """Opt-in exact micro-USD ceiling; reject malformed or oversized funding."""
+    flag = suite.get("hard_request_budget", False)
+    if type(flag) is not bool:
+        raise ValueError("hard_request_budget must be a boolean")
+    if not flag:
+        return None
+    value = suite.get("max_cost_usd")
+    if isinstance(value, bool):
+        raise ValueError("Funded max_cost_usd must be a finite monetary amount")
+    try:
+        amount = Decimal(str(value))
+        units = amount * 1_000_000
+        if (
+            not amount.is_finite()
+            or not 0 <= amount <= Decimal(str(_MAX_COST_PER_SUITE_USD))
+            or units != units.to_integral_value()
+        ):
+            raise ValueError("Funded max_cost_usd must fit the suite cap and micro-USD precision")
+        return int(units)
+    except InvalidOperation:
+        raise ValueError("Funded max_cost_usd must be a finite monetary amount") from None
+
+
 def _error_result(task: dict[str, Any], error: str) -> dict[str, Any]:
     """A case that could not run and is graded 0 with the reason attached."""
     return {
@@ -2003,6 +2084,55 @@ def _error_result(task: dict[str, Any], error: str) -> dict[str, Any]:
         "outcome": _OUTCOME_ERROR,
         "error": error,
     }
+
+
+def _scored_task_result(
+    task: dict[str, Any],
+    run: Any,
+    output: str,
+    score: float,
+    score_detail: dict[str, Any],
+    judge_error: Any,
+    seeded: SeededFixtures | None,
+    state_results: list[StateCheckResult],
+) -> dict[str, Any]:
+    """Turn one finished run into the row the suite reports for it.
+
+    Extracted from :func:`_execute_suite_tasks` when two merged branches put
+    it one line past the 200-line function ratchet. Every line here answers
+    the same question — what does this suite record about a task that ran to
+    completion — so it is a step, not a slice. The caller still appends the
+    row before measuring performance, because that order decides whether a
+    failure inside the measurement leaves the scored row in place.
+    """
+    task_result: dict[str, Any] = {
+        "task_id": task["id"],
+        "category": task.get("category", "correctness"),
+        "weight": task.get("weight", 1.0),
+        "score": round(score, 3),
+        "outcome": _OUTCOME_SCORED,
+        "cost_usd": round(run.total_cost_usd, 4),
+        "steps": len(run.steps),
+        "status": run.status.value,
+        "output_preview": output[:200] if output else "",
+    }
+    if seeded is not None or state_results:
+        task_result["state_checks"] = [r.as_dict() for r in state_results]
+        task_result["state_checks_scored"] = state_checks_scored()
+        if seeded is not None:
+            task_result["fixtures"] = seeded.summary()
+    # The honesty verdict, when the case carries one.
+    task_result.update(score_detail)
+    if judge_error:
+        # Not a grade: the grader did not run. Surfaced per-task and
+        # counted as a failure below.
+        task_result["judge_error"] = judge_error
+        logger.warning(
+            "Benchmark task %s: judge could not be evaluated — %s",
+            task["id"],
+            judge_error,
+        )
+    return task_result
 
 
 async def _execute_suite_tasks(
@@ -2015,6 +2145,7 @@ async def _execute_suite_tasks(
     suite_tenant: str | None,
     spawn_context: SpawnContext | None,
     suite_max_cost: float,
+    request_budget: Any = None,
 ) -> tuple[list[dict[str, Any]], float]:
     """Run every task of one suite and return its results and total spend.
 
@@ -2041,6 +2172,7 @@ async def _execute_suite_tasks(
     total_cost = 0.0
 
     for task in tasks:
+        charged_before = request_budget.charged_units if request_budget else 0
         # Cost guard. A skipped task keeps its weight and stays in every
         # denominator: it is a case the agent did not complete, not a case
         # that does not exist. Filtering these out let a suite that died
@@ -2148,34 +2280,33 @@ async def _execute_suite_tasks(
             judge_error = score_detail.pop("judge_error", None)
             total_cost += run.total_cost_usd
 
-            task_result: dict[str, Any] = {
-                "task_id": task["id"],
-                "category": task.get("category", "correctness"),
-                "weight": task.get("weight", 1.0),
-                "score": round(score, 3),
-                "outcome": _OUTCOME_SCORED,
-                "cost_usd": round(run.total_cost_usd, 4),
-                "steps": len(run.steps),
-                "status": run.status.value,
-                "output_preview": output[:200] if output else "",
-            }
-            if seeded is not None or state_results:
-                task_result["state_checks"] = [r.as_dict() for r in state_results]
-                task_result["state_checks_scored"] = state_checks_scored()
-                if seeded is not None:
-                    task_result["fixtures"] = seeded.summary()
-            # The honesty verdict, when the case carries one.
-            task_result.update(score_detail)
-            if judge_error:
-                # Not a grade: the grader did not run. Surfaced per-task and
-                # counted as a failure below.
-                task_result["judge_error"] = judge_error
-                logger.warning(
-                    "Benchmark task %s: judge could not be evaluated — %s",
-                    task["id"],
-                    judge_error,
-                )
+            task_result = _scored_task_result(
+                task,
+                run,
+                output,
+                score,
+                score_detail,
+                judge_error,
+                seeded,
+                state_results,
+            )
             results.append(task_result)
+            # Measurement is bookkeeping, not grading. It runs after the row
+            # is recorded and it may not change what the row says: raising
+            # here used to be caught by this task's `except Exception`, which
+            # appended a SECOND row for a task already counted — two tasks
+            # reporting three outcomes. A run whose shape the measurement
+            # cannot read is a gap in the measurement, never a failed case.
+            from robothor.engine.performance import run_measurements
+
+            try:
+                task_result["performance"] = run_measurements(run)
+            except Exception as measurement_error:  # noqa: BLE001
+                logger.warning(
+                    "Benchmark task %s: performance not measured — %s",
+                    task["id"],
+                    measurement_error,
+                )
 
         except Exception as e:
             logger.warning("Benchmark task %s failed: %s", task["id"], e)
@@ -2190,6 +2321,12 @@ async def _execute_suite_tasks(
                 }
             )
         finally:
+            if request_budget:
+                total_cost = request_budget.charged_units / 1_000_000
+                if results and results[-1]["task_id"] == task["id"]:
+                    charged = request_budget.charged_units - charged_before
+                    results[-1]["charged_units"] = charged
+                    results[-1]["cost_usd"] = charged / 1_000_000
             # Tear down unconditionally — including after a timeout or a crash.
             # Rows left behind become the next night's ambient state, and a
             # benchmark that grades yesterday's leftovers is worse than none.
@@ -2227,6 +2364,65 @@ def _sandbox_lock_refusal(status: str, tenant_id: str, suite_id: str) -> dict[st
 
 
 @_handler("benchmark_run")
+def _make_benchmark_budget(suite: dict[str, Any]) -> Any:
+    from robothor.engine.request_budget import RequestBudget, active_budget
+
+    units = _suite_request_units(suite)
+    if units is not None and active_budget() is not None:
+        raise ValueError("A funded request scope is already active; cannot reset its allowance")
+    return RequestBudget(units) if units is not None else None
+
+
+def _benchmark_budget_receipt(budget: Any) -> dict[str, Any]:
+    return {
+        "limit_units": budget.limit_units,
+        "charged_units": budget.charged_units,
+        "accounting": "actual_or_reserved_unknown",
+    }
+
+
+async def _execute_funded_benchmark(
+    runner: Any,
+    agent_id: str,
+    suite: dict[str, Any],
+    suite_id: str,
+    tasks: Any,
+    suite_tenant: str | None,
+    spawn_context: Any,
+    request_budget: Any,
+) -> Any:
+    """Keep suite funding and sandbox ownership around all task execution."""
+    from robothor.engine.request_budget import budget_scope
+
+    suite_max_cost = suite.get("max_cost_usd", _DEFAULT_SUITE_MAX_COST)
+    task_args: dict[str, Any] = {
+        "runner": runner,
+        "agent_id": agent_id,
+        "suite": suite,
+        "suite_id": suite_id,
+        "tasks": tasks,
+        "suite_tenant": suite_tenant,
+        "spawn_context": spawn_context,
+        "suite_max_cost": suite_max_cost,
+    }
+    if request_budget is not None:
+        task_args["request_budget"] = request_budget
+    with budget_scope(request_budget) if request_budget is not None else nullcontext():
+        if suite_tenant is None:
+            results, total_cost = await _execute_suite_tasks(**task_args)
+        else:
+            from robothor.engine import benchmark_sandbox as _bs
+
+            with _bs.sandbox_suite_lock(suite_tenant) as lock_status:
+                if lock_status != _bs.LOCK_ACQUIRED:
+                    return _sandbox_lock_refusal(lock_status, suite_tenant, suite_id)
+                results, total_cost = await _execute_suite_tasks(**task_args)
+    if request_budget is not None:
+        total_cost = request_budget.charged_units / 1_000_000
+
+    return results, total_cost
+
+
 async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Execute a benchmark suite against an agent and score the results.
 
@@ -2234,7 +2430,11 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     (pattern matching).  Returns per-task scores, per-category breakdown,
     and a weighted aggregate score (0.0-1.0).
     """
+    import time
+
     from robothor.engine.tools.handlers.spawn import get_runner
+
+    suite_started = time.monotonic()
 
     agent_id = args.get("agent_id", "").strip()
     suite_id = args.get("suite_id", "").strip()
@@ -2246,6 +2446,11 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     suite = _load_block(_suite_block(agent_id, suite_id))
     if suite is None:
         return {"error": f"Benchmark suite '{suite_id}' not found for agent '{agent_id}'"}
+
+    try:
+        request_budget = _make_benchmark_budget(suite)
+    except ValueError as exc:
+        return {"error": str(exc)}
 
     # Check for existing run with this tag
     existing_run = _load_block(_run_block(suite_id, tag))
@@ -2295,26 +2500,12 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         suite_tenant or "<the owning tenant, read-only>",
     )
 
-    suite_max_cost = suite.get("max_cost_usd", _DEFAULT_SUITE_MAX_COST)
-    task_args: dict[str, Any] = {
-        "runner": runner,
-        "agent_id": agent_id,
-        "suite": suite,
-        "suite_id": suite_id,
-        "tasks": tasks,
-        "suite_tenant": suite_tenant,
-        "spawn_context": benchmark_spawn_ctx,
-        "suite_max_cost": suite_max_cost,
-    }
-    if suite_tenant is None:
-        results, total_cost = await _execute_suite_tasks(**task_args)
-    else:
-        from robothor.engine import benchmark_sandbox as _bs
-
-        with _bs.sandbox_suite_lock(suite_tenant) as lock_status:
-            if lock_status != _bs.LOCK_ACQUIRED:
-                return _sandbox_lock_refusal(lock_status, suite_tenant, suite_id)
-            results, total_cost = await _execute_suite_tasks(**task_args)
+    execution = await _execute_funded_benchmark(
+        runner, agent_id, suite, suite_id, tasks, suite_tenant, benchmark_spawn_ctx, request_budget
+    )
+    if isinstance(execution, dict):
+        return execution
+    results, total_cost = execution
 
     # Every task in the suite is a case, whether or not it got to run. The
     # only thing `skipped` changes is telemetry — never the denominator.
@@ -2340,6 +2531,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
 
     # Build run record
     run_record: dict[str, Any] = {
+        "duration_ms": int((time.monotonic() - suite_started) * 1000),
         "suite_id": suite_id,
         "agent_id": agent_id,
         "tag": tag,
@@ -2360,6 +2552,9 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         "tasks_run": len(executed),
         "tasks_skipped": skipped_count,
     }
+    if request_budget is not None:
+        run_record["total_cost_usd"] = total_cost
+        run_record["request_budget"] = _benchmark_budget_receipt(request_budget)
 
     _save_block(_run_block(suite_id, tag), run_record)
 
@@ -2385,24 +2580,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
     # The counts describe the GRADED set so the row stays self-consistent with
     # pass_rate; every failing case is still listed in `failures`, each
     # labelled with whether it moved the grade.
-    graded_ids = {r.get("task_id") for r in graded}
-    failures_brief = [
-        {
-            "case_id": r.get("task_id"),
-            "category": r.get("category"),
-            "score": r.get("score"),
-            "reason": r.get("judge_error") or r.get("reason") or r.get("error"),
-            "output_preview": r.get("output_preview", ""),
-            "counted": r.get("task_id") in graded_ids,
-            **(
-                {"honesty_verdict": r["honesty"].get("verdict")}
-                if isinstance(r.get("honesty"), dict)
-                else {}
-            ),
-        }
-        for r in results
-        if r.get("score", 0) < PASS_THRESHOLD or r.get("judge_error") or r.get("skipped")
-    ]
+    failures_brief = _failure_summaries(results, graded)
     _write_benchmark_result_row(
         agent_id=agent_id,
         suite_id=suite_id,
@@ -2418,6 +2596,7 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         triggered_by=(args.get("triggered_by") or "").strip() or "manual",
         experiment_id=(args.get("experiment_id") or "").strip() or None,
         total_cost=total_cost,
+        duration_ms=run_record["duration_ms"],
     )
 
     return {
@@ -2437,7 +2616,35 @@ async def _benchmark_run(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
         "tasks_run": len(executed),
         "tasks_skipped": skipped_count,
         "task_results": results,
+        **(
+            {"request_budget": run_record["request_budget"], "total_cost_usd": total_cost}
+            if request_budget is not None
+            else {}
+        ),
     }
+
+
+def _failure_summaries(
+    results: list[dict[str, Any]], graded: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    graded_ids = {r.get("task_id") for r in graded}
+    return [
+        {
+            "case_id": r.get("task_id"),
+            "category": r.get("category"),
+            "score": r.get("score"),
+            "reason": r.get("judge_error") or r.get("reason") or r.get("error"),
+            "output_preview": r.get("output_preview", ""),
+            "counted": r.get("task_id") in graded_ids,
+            **(
+                {"honesty_verdict": r["honesty"].get("verdict")}
+                if isinstance(r.get("honesty"), dict)
+                else {}
+            ),
+        }
+        for r in results
+        if r.get("score", 0) < PASS_THRESHOLD or r.get("judge_error") or r.get("skipped")
+    ]
 
 
 def _summarise_honesty(scored: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2497,6 +2704,7 @@ def _write_benchmark_result_row(
     triggered_by: str,
     experiment_id: str | None,
     total_cost: float,
+    duration_ms: int | None = None,
 ) -> None:
     """Insert one ``benchmark_results`` row. Never fatal except on the DB guard."""
     try:
@@ -2518,9 +2726,9 @@ def _write_benchmark_result_row(
                 INSERT INTO benchmark_results
                   (agent_id, suite_id, suite_path, total_cases, passed, failed,
                    pass_rate, aggregate_score, judge_errors, category_scores,
-                   failures, triggered_by, experiment_id, cost_usd)
+                   failures, triggered_by, experiment_id, cost_usd, duration_ms)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb,
-                        %s, %s, %s)
+                        %s, %s, %s, %s)
                 """,
                 (
                     agent_id,
@@ -2537,6 +2745,7 @@ def _write_benchmark_result_row(
                     triggered_by,
                     experiment_id,
                     float(round(total_cost, 4)),
+                    duration_ms,
                 ),
             )
             conn.commit()
@@ -2722,6 +2931,11 @@ async def auto_define_suite_from_disk(agent_id: str, workspace: str) -> dict[str
     suite_id = suite_data.get("id") or suite_data.get("suite_id") or f"{agent_id}-default"
     suite_data["id"] = suite_id
     suite_data["agent_id"] = agent_id
+
+    try:
+        _suite_request_units(suite_data)
+    except ValueError as exc:
+        return {"error": str(exc)}
 
     tasks = suite_data.get("tasks", [])
     if not tasks:
@@ -2915,18 +3129,15 @@ async def _benchmark_run_for_agent(args: dict[str, Any], ctx: ToolContext) -> di
     suite_id = suite["id"]
     relative_path = f"docs/benchmarks/{agent_id}/suite.yaml"
 
-    return cast(
-        "dict[str, Any]",
-        await _benchmark_run(
-            {
-                "agent_id": agent_id,
-                "suite_id": suite_id,
-                "tag": tag,
-                "tasks": args.get("tasks"),
-                "triggered_by": args.get("triggered_by"),
-                "experiment_id": args.get("experiment_id"),
-                "config_file": relative_path,
-            },
-            ctx,
-        ),
+    return await _benchmark_run(
+        {
+            "agent_id": agent_id,
+            "suite_id": suite_id,
+            "tag": tag,
+            "tasks": args.get("tasks"),
+            "triggered_by": args.get("triggered_by"),
+            "experiment_id": args.get("experiment_id"),
+            "config_file": relative_path,
+        },
+        ctx,
     )

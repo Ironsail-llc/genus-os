@@ -61,6 +61,58 @@ def runner(engine_config):
 
 class TestAgentRunnerExecute:
     @pytest.mark.asyncio
+    async def test_manifest_spawn_targets_reach_run_context(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        from robothor.engine.tools import _current_spawn_context
+
+        sample_agent_config.can_spawn_agents = True
+        sample_agent_config.spawn_allowed_agents = ["research-worker"]
+        sample_agent_config.max_spawn_total = 2
+        sample_agent_config.fleet_release_id = "a" * 64
+        seen = []
+
+        async def provider(**kwargs):
+            context = _current_spawn_context.get()
+            assert len(getattr(context, "spawn_limits", ())) == 1
+            seen.append(
+                (
+                    getattr(context, "allowed_agents", None),
+                    getattr(context, "fleet_release_id", None),
+                )
+            )
+            return mock_litellm_response(content="Done.")
+
+        with (
+            patch("robothor.engine.runner.create_run"),
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.run_finalizer.create_step"),
+            patch("litellm.acompletion", side_effect=provider),
+        ):
+            run = await runner.execute("test-agent", "task", agent_config=sample_agent_config)
+        assert run.status == RunStatus.COMPLETED
+        assert seen == [(frozenset({"research-worker"}), "a" * 64)]
+
+    @pytest.mark.asyncio
+    async def test_declared_json_mode_reaches_provider(
+        self, runner, sample_agent_config, mock_litellm_response
+    ):
+        sample_agent_config.response_format = "json_object"
+        response = mock_litellm_response(content='{"items": []}')
+        with (
+            patch("robothor.engine.runner.create_run"),
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.run_finalizer.create_step"),
+            patch("litellm.acompletion", new_callable=AsyncMock, return_value=response) as call,
+        ):
+            run = await runner.execute(
+                "test-agent", "Return the result.", agent_config=sample_agent_config
+            )
+        assert run.status == RunStatus.COMPLETED
+        assert call.call_args.kwargs["response_format"] == {"type": "json_object"}
+        assert "JSON object" in call.call_args.kwargs["messages"][0]["content"]
+
+    @pytest.mark.asyncio
     async def test_missing_agent_config(self, runner):
         """Agent run fails gracefully when config not found."""
         # `load_agent_config_or_reason` since the schema ladder landed: the
@@ -2051,3 +2103,126 @@ class TestInterruptSteerWiring:
 
         assert seen["run_id"] is not None
         assert session_registry.lookup(seen["run_id"]) is None  # unregistered in finally
+
+
+OPERATION = "00000000-0000-0000-0000-000000000001"
+
+
+@pytest.fixture
+def confirmable(monkeypatch):
+    """A stored draft the real ``bind_confirmation`` can load and bind."""
+    from robothor.settings import reset_settings
+
+    stored = {"status": "draft"}
+    monkeypatch.setenv("ROBOTHOR_CALENDAR_OPERATIONS_ENABLED", "true")
+    reset_settings()
+    monkeypatch.setattr(
+        "robothor.engine.calendar_operations.load_operation",
+        lambda operation_id, tenant, user, agent: dict(stored, id=operation_id),
+    )
+    yield stored
+    reset_settings()
+
+
+def _confirming_history():
+    return [
+        {"role": "user", "content": "add sam to the sync"},
+        {"role": "assistant", "content": "Draft ready.\n\nCalendar operation: " + OPERATION},
+    ]
+
+
+def _arm(runner, sample_agent_config):
+    from robothor.engine.routine_request import TOOL
+    from robothor.engine.tools.schemas import get_engine_schemas
+
+    runner.registry.build_for_agent.return_value = [get_engine_schemas()[TOOL]]
+    runner.registry.get_tool_names.return_value = [TOOL]
+    runner.registry.execute = AsyncMock(
+        return_value={
+            "status": "updated",
+            "verification": "verified",
+            "added": ["sam@example.com"],
+            "invitations_requested": True,
+            "calendar": {"kind": "operator", "id": "alice@example.com"},
+        }
+    )
+    sample_agent_config.verification_enabled = True
+
+
+@pytest.mark.asyncio
+async def test_a_confirmed_draft_ends_without_a_model_call(
+    runner, sample_agent_config, confirmable
+):
+    """The whole point: the stored arguments supply the call, not the model."""
+    _arm(runner, sample_agent_config)
+    with (
+        patch("robothor.engine.runner.create_run"),
+        patch("robothor.engine.runner.update_run"),
+        patch("robothor.engine.run_finalizer.create_step"),
+        patch("litellm.acompletion", new_callable=AsyncMock) as model,
+        patch(
+            "robothor.engine.runner.keep_context_within_budget", new_callable=AsyncMock
+        ) as compress,
+    ):
+        run = await runner.execute(
+            "test-agent",
+            "Go",
+            agent_config=sample_agent_config,
+            conversation_history=_confirming_history(),
+        )
+    assert run.status == RunStatus.COMPLETED, run.error_message
+    model.assert_not_called()
+    compress.assert_not_called()
+    runner.registry.execute.assert_awaited_once()
+    assert "Added sam@example.com" in run.output_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["completed", "blocked", "executing"])
+async def test_a_finished_operation_is_never_replayed_by_a_bare_yes(
+    runner, sample_agent_config, confirmable, mock_litellm_response, status
+):
+    """Review probe C1: with the reply of an ALREADY COMPLETED operation in
+    ``history[-1]``, a bare "yes" reached the tool with no model call at all,
+    and the reply it produced carried the marker again — so it never cleared."""
+    confirmable["status"] = status
+    _arm(runner, sample_agent_config)
+    response = mock_litellm_response(content="That meeting is already updated.")
+    with (
+        patch("robothor.engine.runner.create_run"),
+        patch("robothor.engine.runner.update_run"),
+        patch("robothor.engine.run_finalizer.create_step"),
+        patch("litellm.acompletion", new_callable=AsyncMock, return_value=response) as model,
+    ):
+        run = await runner.execute(
+            "test-agent",
+            "yes",
+            agent_config=sample_agent_config,
+            conversation_history=_confirming_history(),
+        )
+    assert run.status == RunStatus.COMPLETED, run.error_message
+    model.assert_called()
+    runner.registry.execute.assert_not_called()
+    assert "Calendar operation:" not in (run.output_text or "")
+
+
+@pytest.mark.asyncio
+async def test_the_binding_is_told_the_agent_and_the_mode(
+    runner, sample_agent_config, mock_litellm_response, monkeypatch
+):
+    """Both scoping inputs have to reach the binding, or its checks are moot."""
+    seen = {}
+
+    async def spy(session, message, history, agent_config=None, readonly_mode=False):
+        seen.update({"agent_id": agent_config.id, "readonly_mode": readonly_mode})
+
+    monkeypatch.setattr("robothor.engine.routine_request.bind_confirmation", spy)
+    response = mock_litellm_response(content="done")
+    with (
+        patch("robothor.engine.runner.create_run"),
+        patch("robothor.engine.runner.update_run"),
+        patch("robothor.engine.run_finalizer.create_step"),
+        patch("litellm.acompletion", new_callable=AsyncMock, return_value=response),
+    ):
+        await runner.execute("test-agent", "Go", agent_config=sample_agent_config)
+    assert seen == {"agent_id": sample_agent_config.id, "readonly_mode": False}

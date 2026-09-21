@@ -17,6 +17,7 @@ from robothor.constants import DEFAULT_TENANT
 if TYPE_CHECKING:
     from datetime import datetime
 
+    from robothor.engine.spawn_limits import SpawnAllowance
     from robothor.identity import IdentityContext
 
 
@@ -193,6 +194,13 @@ class HeartbeatConfig:
     # beat-filed tasks to "scout" while the underlying run_id stays "main".
     task_authorship_agent: str = ""
 
+    #: Whether THIS override's runs file the agent's operator-facing
+    #: `auto_task` CRM row. Deliberately its own field rather than inherited
+    #: from the agent: `auto_task` costs one operator-visible task per run, and
+    #: an agent whose interactive work is worth tracking usually has a
+    #: heartbeat and a drain that are not. Off unless the block asks.
+    auto_task: bool = False
+
 
 @dataclass
 class WorkerConfig:
@@ -238,6 +246,13 @@ class WorkerConfig:
     # `tools_allowed` — drain should have full execution capability.
     tools_allowed: list[str] = field(default_factory=list)
 
+    #: Whether THIS override's runs file the agent's operator-facing
+    #: `auto_task` CRM row. Deliberately its own field rather than inherited
+    #: from the agent: `auto_task` costs one operator-visible task per run, and
+    #: an agent whose interactive work is worth tracking usually has a
+    #: heartbeat and a drain that are not. Off unless the block asks.
+    auto_task: bool = False
+
 
 @dataclass
 class ChannelBusConfig:
@@ -268,6 +283,8 @@ class AgentConfig:
     # Models
     model_primary: str = ""
     model_fallbacks: list[str] = field(default_factory=list)
+    response_format: str = "text"  # text | json_object; final content, not tool arguments
+    provider_order: dict[str, list[str]] = field(default_factory=dict)
 
     # Schedule
     cron_expr: str = ""
@@ -313,6 +330,17 @@ class AgentConfig:
     # Instructions
     instruction_file: str = ""
     bootstrap_files: list[str] = field(default_factory=list)
+    # Set only by the verified fleet snapshot loader, never parsed from YAML
+    # (no `fleet_release_id` key exists in schema/agent_manifest.yaml), so an
+    # ordinary agent carries None and delegates from live manifests.
+    #
+    # `None`, NOT `""`. This must stay identical to SpawnContext.fleet_release_id
+    # below, which make_spawn_context copies it into: the two defaults disagreed
+    # once, and because `""` is falsy but is not None, every root spawn on every
+    # instance took the fleet-snapshot branch and was refused. See
+    # tests/test_spawn_context_root.py, which pins both defaults together.
+    fleet_release_id: str | None = None
+    knowledge_snapshot: tuple[tuple[str, str], ...] | None = field(default=None, repr=False)
 
     # Metadata
     reports_to: str = ""
@@ -386,6 +414,8 @@ class AgentConfig:
     # ── v2 enhancements (all default off for backward compat) ──
     # Sub-agent spawning
     can_spawn_agents: bool = False
+    spawn_allowed_agents: list[str] = field(default_factory=list)
+    max_spawn_total: int = 0  # 0 = no additional total-attempt limit
     #: Tell the agent what files are in its workspace during warmup.
     #: Off by default — an operator's workspace listing is neither small
     #: nor useful, so this is opted into per agent.
@@ -644,11 +674,13 @@ class SpawnContext:
     parent_run_id: str
     parent_agent_id: str
     correlation_id: str
-    nesting_depth: int  # parent's depth (child = +1)
+    nesting_depth: int  # this run's depth; the next child adds one
     user_id: str = ""
     user_role: str = ""
     max_nesting_depth: int = 2  # absolute cap: 3
     max_spawn_batch: int = 0  # 0 = use engine default
+    # None is unrestricted; an empty set denies every descendant target.
+    allowed_agents: frozenset[str] | None = None
     remaining_token_budget: int = 0
     remaining_cost_budget_usd: float = 0.0
     # Contact 360 linkage — propagates from parent run to all spawned children.
@@ -665,6 +697,9 @@ class SpawnContext:
     # with parent_task_id. At run end, unfinished todo_write items are
     # lifted back to this task so the planner picks up next beat.
     parent_task_id: str | None = None
+    # Child manifests and knowledge must resolve from this same reviewed artifact.
+    fleet_release_id: str | None = None
+    spawn_limits: tuple[SpawnAllowance, ...] = field(default_factory=tuple, repr=False)
 
 
 @dataclass
@@ -803,6 +838,7 @@ class WorkflowStepDef:
     # Tool step
     tool_name: str = ""
     tool_args: dict[str, Any] = field(default_factory=dict)
+    tool_timeout_seconds: int = 120  # Still bounded by the enclosing workflow deadline.
 
     # Condition step
     input_expr: str = ""  # {{ steps.X.output_text }}

@@ -298,6 +298,50 @@ def _overflow_error() -> Exception:
     return error
 
 
+def _overflow_then_answer():
+    """The first ANSWERING attempt overflows; the shrunk retry is answered."""
+    attempts = {"n": 0}
+
+    async def answering(**kwargs):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise _overflow_error()
+        return object()
+
+    return answering
+
+
+def _provider(answering):
+    """A provider double that serves compaction's calls as well as the answer.
+
+    Pre-flight compaction shares ``litellm.acompletion`` with the call under
+    test, so an injection of "fail the first call" was being eaten by the
+    summariser. Stubbing ``maybe_compress`` out fixes the injection by
+    removing compaction from this path altogether — and this path is exactly
+    where its absence has to be survivable, so it stays real here.
+
+    The double answers as the real unreachable local model did in the
+    incident: compaction's own call fails too, it degrades, and what has to
+    work is the deterministic shrink and the single same-model retry. Those
+    summariser calls are not the injection, so they are not counted.
+    """
+    from unittest.mock import AsyncMock
+
+    answered: list[dict] = []
+
+    async def dispatch(**kwargs):
+        # Fact extraction and segment summary: a structured two-message prompt,
+        # never the conversation under test.
+        if kwargs.get("response_format") is not None or len(kwargs.get("messages", [])) <= 2:
+            raise _overflow_error()
+        answered.append(kwargs)
+        return await answering(**kwargs)
+
+    double = AsyncMock(side_effect=dispatch)
+    double.answered = answered
+    return double
+
+
 @pytest.fixture
 def no_backoff(monkeypatch):
     """Fail the test if anything sleeps: a deterministic failure must not wait."""
@@ -313,10 +357,21 @@ def no_backoff(monkeypatch):
 
 
 class TestAnOverflowShrinksAndRetriesOnce:
-    async def test_the_same_model_is_retried_with_smaller_messages(self, no_backoff):
-        from unittest.mock import AsyncMock, patch
+    async def test_the_same_model_is_retried_with_smaller_messages(self, no_backoff, monkeypatch):
+        from unittest.mock import patch
 
         from robothor.engine.llm_client import LLMClient
+
+        # Pre-flight compaction is left REAL in the two tests below. Here the
+        # scenario needs the FIRST attempt to carry the oversized conversation,
+        # and pre-flight has already brought it under the ceiling by then — so
+        # compaction is neutralised for this test only, with the same reason
+        # the other deterministic-shrink tests in this file give: it summarises
+        # WITH a model, and on this path no model is reachable.
+        async def _no_llm_compaction(messages, models=None, threshold=None, broken_models=None):
+            return messages
+
+        monkeypatch.setattr("robothor.engine.context.maybe_compress", _no_llm_compaction)
 
         messages = _long_conversation(30)
         answer = object()
@@ -333,7 +388,7 @@ class TestAnOverflowShrinksAndRetriesOnce:
                 raise _overflow_error()
             return answer
 
-        acompletion = AsyncMock(side_effect=_record)
+        acompletion = _provider(_record)
         with patch("robothor.engine.llm_client.litellm.acompletion", acompletion):
             result = await LLMClient()._call_llm(messages, [LOCAL], [], broken_models=set())
 
@@ -344,41 +399,63 @@ class TestAnOverflowShrinksAndRetriesOnce:
         no_backoff.assert_not_called()
 
     async def test_a_second_overflow_advances_instead_of_retrying_five_times(self, no_backoff):
-        """The incident: five attempts, five backoffs, one guaranteed failure."""
-        from unittest.mock import AsyncMock, patch
+        """The incident: five attempts, five backoffs, one guaranteed failure.
+
+        Pre-flight compaction runs for real here: it is part of what this path
+        has to survive, and stubbing it out is what hid its interaction with
+        the injected provider error.
+        """
+        from unittest.mock import patch
 
         from robothor.engine.llm_client import LLMClient
 
-        acompletion = AsyncMock(side_effect=_overflow_error())
+        async def _always_overflow(**kwargs):
+            raise _overflow_error()
+
+        acompletion = _provider(_always_overflow)
         with patch("robothor.engine.llm_client.litellm.acompletion", acompletion):
             result = await LLMClient()._call_llm(
                 _long_conversation(30), [LOCAL], [], broken_models=set()
             )
 
         assert result is None
-        assert acompletion.call_count <= 2, (
+        assert len(acompletion.answered) <= 2, (
             "an overflow gets ONE shrink-and-retry, not a backoff loop"
         )
 
     async def test_the_shrink_is_visible_to_the_run(self, no_backoff):
-        """The messages the session holds are the ones that fit — in place."""
-        from unittest.mock import AsyncMock, patch
+        """The messages the session holds are the ones that fit — in place.
+
+        With pre-flight compaction real, as it is in production.
+        """
+        from unittest.mock import patch
 
         from robothor.engine.llm_client import LLMClient
 
         messages = _long_conversation(30)
         before = estimate_tokens(messages)
-        acompletion = AsyncMock(side_effect=[_overflow_error(), object()])
+        acompletion = _provider(_overflow_then_answer())
         with patch("robothor.engine.llm_client.litellm.acompletion", acompletion):
             await LLMClient()._call_llm(messages, [LOCAL], [], broken_models=set())
 
         assert estimate_tokens(messages) < before
 
     async def test_it_is_counted_where_the_doctor_can_see_it(self, no_backoff, monkeypatch):
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import patch
 
         from robothor.engine import context_fit
         from robothor.engine.llm_client import LLMClient
+
+        # Pre-flight compaction is left REAL in the two tests below. Here the
+        # scenario needs the FIRST attempt to carry the oversized conversation,
+        # and pre-flight has already brought it under the ceiling by then — so
+        # compaction is neutralised for this test only, with the same reason
+        # the other deterministic-shrink tests in this file give: it summarises
+        # WITH a model, and on this path no model is reachable.
+        async def _no_llm_compaction(messages, models=None, threshold=None, broken_models=None):
+            return messages
+
+        monkeypatch.setattr("robothor.engine.context.maybe_compress", _no_llm_compaction)
 
         rows: list[tuple] = []
         monkeypatch.setattr(
@@ -387,7 +464,7 @@ class TestAnOverflowShrinksAndRetriesOnce:
             lambda run_id, guardrail_name, action, **kw: rows.append((guardrail_name, action)),
         )
         monkeypatch.setattr(context_fit, "_current_run_id", lambda: "run-1")
-        acompletion = AsyncMock(side_effect=[_overflow_error(), object()])
+        acompletion = _provider(_overflow_then_answer())
         with patch("robothor.engine.llm_client.litellm.acompletion", acompletion):
             await LLMClient()._call_llm(_long_conversation(30), [LOCAL], [], broken_models=set())
 

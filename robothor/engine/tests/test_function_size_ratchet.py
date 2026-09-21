@@ -66,7 +66,7 @@ KNOWN_LARGE: dict[str, int] = {
     # run_lifecycle.spawn_post_stall_autodream ("recovery helper spawns" is
     # that module's own contract), which is what paid for classifying a
     # workflow-budget kill and letting it propagate.
-    "runner.py::execute": 989,  # +7: task_id propagated onto the run at INSERT time
+    "runner.py::execute": 986,  # +7: task_id propagated onto the run at INSERT time
     # 775 -> 773 with the step-efficiency work: the guard's note drain, the
     # pace-note call site and the refusal branch cost less than the inlined
     # deadline and check-in blocks returned when they left for run_pacing.py.
@@ -82,7 +82,7 @@ KNOWN_LARGE: dict[str, int] = {
     # that suppresses it, and the checkpoint save to checkpoint.py beside the
     # loader that reads it. The cap follows the function DOWN rather than
     # banking the difference, which is the point of a ratchet.
-    "runner.py::_run_loop": 519,
+    "runner.py::_run_loop": 508,
     # 473 -> 346. The Gmail and Calendar branches left for functions of their
     # own (_gmail_search/_gmail_get, _calendar_list/_calendar_create/
     # _calendar_delete) when each of them grew a real body: decoding a MIME
@@ -103,16 +103,6 @@ KNOWN_LARGE: dict[str, int] = {
     # stop-signal task) rather than raising this number for it.
     "daemon.py::main": 354,
     "telegram.py::_run_interactive": 384,
-    # 370 -> 347: shaping the graded child (silent delivery, iteration cap,
-    # deny-list, is_benchmark) moved to _shape_child_config, which is what paid
-    # for resolving the child's execution tenant in here rather than raising
-    # this number for it.
-    # 347 -> 220: the whole per-task loop moved to _execute_suite_tasks, so the
-    # suite-level concerns that now wrap it (resolve the execution tenant once,
-    # hold the sandbox advisory lock for the suite) are visible in one place.
-    # 220 -> 210: pinned at the measured size, not the size it happened to be
-    # under. Ten lines of unearned headroom is where the next function regrows.
-    "tools/handlers/benchmark.py::_benchmark_run": 210,
     # 343 -> 325: the benchmark break-out moved to _benchmark_spend, which is
     # what paid for un-scoping it from the production tenant (the graded
     # children now run as benchmark-sandbox) rather than raising this number.

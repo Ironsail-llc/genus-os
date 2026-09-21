@@ -37,6 +37,7 @@ export default defineConfig({
         it; if a spec needs bridge data, it mocks it.
       */
       BRIDGE_URL: "http://127.0.0.1:59999",
+      ROBOTHOR_ENGINE_URL: "http://127.0.0.1:59998",
       GENUS_ENVIRONMENT: "test",
       GENUS_INSECURE_DEV_MODE: "true",
       PORT: port,

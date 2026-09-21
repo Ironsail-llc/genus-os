@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from robothor.engine.models import SpawnContext
 from robothor.engine.sanitize import sanitize_log
 from robothor.engine.spawn_cancel import ChildRunWatch, finalize_abandoned_child
+from robothor.engine.tools.constants import OPT_IN_TOOLS
 
 if TYPE_CHECKING:
     from robothor.engine.config import EngineConfig
@@ -151,7 +152,30 @@ def _narrow_child_config(
 
     # Apply tools_override if provided
     tools_override = args.get("tools_override")
-    if tools_override and isinstance(tools_override, list):
+    if tools_override is not None and (
+        not isinstance(tools_override, list)
+        or any(not isinstance(tool, str) or not tool for tool in tools_override)
+    ):
+        raise ValueError("tools_override must be a list of tool names")
+    if tools_override:
+        if child_config.tools_allowed:
+            if not set(tools_override) <= set(child_config.tools_allowed):
+                raise ValueError("tools_override cannot expand the child manifest's tools_allowed")
+        else:
+            # A child that declares no allowlist is NOT unbounded, and this
+            # branch used to skip the check entirely — which is the common
+            # case, so the guarantee only held for the minority of children.
+            # An undeclared child's effective set is the default one, and the
+            # default one excludes OPT_IN_TOOLS by construction. Naming an
+            # ordinary tool here is still a narrowing (the child would have
+            # been offered it anyway); naming an opt-in one is a grant, which
+            # is the one thing this argument may never be.
+            granted = sorted(set(tools_override) & OPT_IN_TOOLS)
+            if granted:
+                raise ValueError(
+                    "tools_override cannot grant a tool the child's manifest never asked "
+                    "for: " + ", ".join(granted)
+                )
         child_config.tools_allowed = tools_override
 
     # Apply max_iterations override (never increase beyond parent's sub_agent_max_iterations)
@@ -194,6 +218,7 @@ async def _handle_spawn_agent(
     ctx: ToolContext | None = None,
     *,
     agent_id: str = "",
+    _runner: AgentRunner | None = None,
 ) -> dict[str, Any]:
     """Spawn a single child agent and wait for its result.
 
@@ -204,14 +229,15 @@ async def _handle_spawn_agent(
     memory + skill CRUD only. The whitelist is async-safe — it
     applies only to the spawned task and any tasks it inherits from.
     """
-    from robothor.engine.config import load_agent_config_or_reason
     from robothor.engine.models import TriggerType
+    from robothor.engine.spawn_limits import extend_limits, try_claim
+    from robothor.engine.spawn_release import load_child_config
 
     # Support both ToolContext and direct agent_id kwarg
     if ctx and not agent_id:
         agent_id = ctx.agent_id
 
-    runner = get_runner()
+    runner = _runner or get_runner()
     if runner is None:
         return {"error": "Runner not available — spawn_agent requires a running engine"}
 
@@ -223,6 +249,8 @@ async def _handle_spawn_agent(
     message = args.get("message", "")
     if not child_agent_id or not message:
         return {"error": "agent_id and message are required"}
+    if spawn_ctx.allowed_agents is not None and child_agent_id not in spawn_ctx.allowed_agents:
+        return {"error": "Child agent is outside the inherited spawn_allowed_agents allowlist"}
 
     parent_task_id = args.get("parent_task_id")
     if parent_task_id:
@@ -244,13 +272,28 @@ async def _handle_spawn_agent(
     # Load child agent config. `_or_reason`: a child whose manifest the schema
     # refuses is an error the PARENT can read and act on, not a raise inside
     # the parent's tool dispatch.
-    child_config, reason = load_agent_config_or_reason(
-        child_agent_id, runner.config.manifest_dir, "spawn"
+    child_config, reason = await load_child_config(
+        child_agent_id, runner.config, spawn_ctx.fleet_release_id
     )
     if child_config is None:
         return {"error": reason}
 
-    _narrow_child_config(child_config, args, spawn_ctx, child_depth)
+    try:
+        _narrow_child_config(child_config, args, spawn_ctx, child_depth)
+        child_limits = extend_limits(spawn_ctx.spawn_limits, child_config.max_spawn_total)
+    except ValueError as exc:
+        return {"error": str(exc)}
+    if not try_claim(spawn_ctx.spawn_limits):
+        return {"error": "Total child-attempt allowance exhausted for this spawn tree"}
+
+    # Every generation may narrow the ancestor's target set, never expand it.
+    child_targets = frozenset(child_config.spawn_allowed_agents) or None
+    if spawn_ctx.allowed_agents is not None:
+        child_targets = (
+            spawn_ctx.allowed_agents
+            if child_targets is None
+            else spawn_ctx.allowed_agents & child_targets
+        )
 
     # Build child SpawnContext
     child_spawn_ctx = SpawnContext(
@@ -260,6 +303,9 @@ async def _handle_spawn_agent(
         nesting_depth=child_depth,
         max_nesting_depth=spawn_ctx.max_nesting_depth,
         max_spawn_batch=spawn_ctx.max_spawn_batch,
+        allowed_agents=child_targets,
+        fleet_release_id=spawn_ctx.fleet_release_id,
+        spawn_limits=child_limits,
         remaining_token_budget=spawn_ctx.remaining_token_budget,
         remaining_cost_budget_usd=spawn_ctx.remaining_cost_budget_usd,
         parent_trace_id=spawn_ctx.parent_trace_id,
@@ -371,6 +417,8 @@ async def _handle_spawn_agents(
     ctx: ToolContext | None = None,
     *,
     agent_id: str = "",
+    _on_result: Any = None,
+    _child_scope: Any = None,
 ) -> dict[str, Any]:
     """Spawn multiple agents in parallel and wait for all results."""
     if ctx and not agent_id:
@@ -392,8 +440,17 @@ async def _handle_spawn_agents(
     if len(agents_list) > max_batch:
         return {"error": f"Max {max_batch} parallel sub-agents allowed, got {len(agents_list)}"}
 
+    async def run_child(index: int, spawn_args: dict[str, Any]) -> Any:
+        from contextlib import nullcontext
+
+        with _child_scope(index) if _child_scope is not None else nullcontext():
+            result = await _handle_spawn_agent(spawn_args, ctx=ctx, agent_id=agent_id)
+        if _on_result is not None:
+            await _on_result(index, result)
+        return result
+
     coros = []
-    for spec in agents_list:
+    for index, spec in enumerate(agents_list):
         spawn_args = {
             "agent_id": spec.get("agent_id", ""),
             "message": spec.get("message", ""),
@@ -402,7 +459,7 @@ async def _handle_spawn_agents(
             spawn_args["tools_override"] = spec["tools_override"]
         if "parent_task_id" in spec:
             spawn_args["parent_task_id"] = spec["parent_task_id"]
-        coros.append(_handle_spawn_agent(spawn_args, agent_id=agent_id))
+        coros.append(run_child(index, spawn_args))
 
     raw_results = await asyncio.gather(*coros, return_exceptions=True)
 

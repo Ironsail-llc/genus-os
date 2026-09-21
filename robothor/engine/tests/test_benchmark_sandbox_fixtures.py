@@ -640,7 +640,12 @@ class TestTenantScopeOverride:
 
         with conn_mod.tenant_scope("benchmark-sandbox"):
             conn_mod._apply_tenant_scope(_Conn())  # type: ignore[arg-type]
-        assert executed[0][1] == ("benchmark-sandbox",)
+        # Find the binding rather than assume it is first: a once-per-process
+        # superuser probe runs ahead of it (db/connection.py), so a positional
+        # assertion passes or fails on whether an earlier test already
+        # triggered that probe.
+        bindings = [params for sql, params in executed if "app.tenant_id" in sql]
+        assert bindings == [("benchmark-sandbox",)]
 
     def test_a_pooled_connection_cannot_keep_a_stale_scope(self, monkeypatch: Any) -> None:
         """No override and no env tenant must actively CLEAR app.tenant_id.
@@ -673,7 +678,12 @@ class TestTenantScopeOverride:
                 return _Cur()
 
         conn_mod._apply_tenant_scope(_Conn())  # type: ignore[arg-type]
-        assert executed and executed[0][1] == ("",)
+        # Find the binding rather than assume it is first: a once-per-process
+        # superuser probe runs ahead of it (db/connection.py), so a positional
+        # assertion passes or fails on whether an earlier test already
+        # triggered that probe.
+        bindings = [params for sql, params in executed if "app.tenant_id" in sql]
+        assert bindings == [("",)]
 
 
 # ---------------------------------------------------------------------------

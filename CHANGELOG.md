@@ -1,3 +1,9 @@
+## [1.102.1](https://github.com/Ironsail-llc/genus-os/compare/v1.102.0...v1.102.1) (2026-09-21)
+
+### Bug Fixes
+
+* **engine:** bound confirmed attendee updates and reduce request overhead ([#610](https://github.com/Ironsail-llc/genus-os/issues/610)) ([568f8af](https://github.com/Ironsail-llc/genus-os/commit/568f8af48e32e31de8ec2c46600d8081a0118fae))
+
 ## [1.102.0](https://github.com/Ironsail-llc/genus-os/compare/v1.101.1...v1.102.0) (2026-09-21)
 
 ### Features
@@ -1935,6 +1941,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Fixed
+- Research schema corrections request strict final JSON, while citation corrections resume tool collection, within the existing repair and spending limits.
+- Native scouting and research defer provider final-answer formatting while tools remain available, permitting further page reads; final schema/source validation and ordinary agent behavior remain enforced.
+- Scouts explain empty batches when searches returned source URLs; durable discovery receipts retain the reason for operator review.
+- New research captures expose separate paragraph references so selecting a business heading does not also quote adjacent reviews; saved captures retain their original versioned boundaries during recovery.
+- Bounded native search can fund existing Brave API requests at the current published Search rate, with per-attempt reservations and auditable estimates; unavailable pricing or funding falls back without an unfunded API call.
+- Scouts refine degraded search results with bounded distinct queries before returning a candidate batch or empty result.
+- Native scouts must search before answering, return a validated candidate batch and retain observed source URLs; plain search arguments and invented domains cannot create leads.
+- Planning and verification honor per-agent provider routing before funded requests; qualification timeouts retain their cost-reconciliation diagnostic instead of being labeled invalid assessments.
+- Configured sales qualifier agents independently assess captured passages before code calculates scores. Version-bound checkpoints preserve original researcher claims, reject stale assessments and prevent legacy scores from bypassing the new review stage.
+- Native research selects engine-issued captured-passage references; Genus materializes exact CRM quotations and verifies selections again during recovery. Rendered pages receive the same untrusted-content boundary as fetched pages.
+- Research citation feedback identifies invalid evidence fields and distinguishes unread URLs from non-verbatim excerpts without replaying untrusted text as instructions.
+- Mandatory workflow tool turns omit final-answer JSON formatting until the required tool runs, avoiding competing tool-call and answer contracts. Final dossier schema and source validation remain enforced.
+- Funded model calls advance through the configured fallback chain when no eligible endpoint remains, including shared worker route exclusions. Streaming and auxiliary calls follow the same rule; exhausted funding and unpriced features remain fatal.
 
 ### Changed
 - **Behavior change** — Forward thread planner (`thread_planner.py`) is now **on by default**. Previously gated by `ROBOTHOR_PLANNER_ENABLED=1`; from the task-system stabilization, the variable defaults to `"1"` and only `ROBOTHOR_PLANNER_ENABLED=0` disables it. Operators who want the old off-by-default behavior must set the env explicitly.
