@@ -61,6 +61,7 @@ class RunStatus(StrEnum):
 
 
 class ErrorType(StrEnum):
+    UNCERTAIN_OUTCOME = "uncertain_outcome"
     AUTH = "auth"
     RATE_LIMIT = "rate_limit"
     NOT_FOUND = "not_found"
@@ -609,6 +610,9 @@ class AgentRun:
     cost_budget_usd: float = 0.0
     budget_exhausted: bool = False
 
+    # Checkpoint lineage is distinct from delegated parent/child work.
+    resume_from_run_id: str | None = None
+
     # Sub-agent tracking
     parent_run_id: str | None = None
     nesting_depth: int = 0
@@ -638,6 +642,11 @@ class AgentRun:
     # Verdict.to_payload(). Both stay None while the flag is off.
     verified_status: str | None = None
     verification: dict[str, Any] | None = None
+
+    # Host snapshot for task finalization, including todos restored from a
+    # checkpoint. Durable todo steps/checkpoints and the task's next_action
+    # retain the evidence.
+    pending_task_items: list[str] = field(default_factory=list)
 
     # Set when the agent_runs INSERT was rejected deterministically (CHECK/FK/
     # unique violation). The run itself keeps executing — tracking must never

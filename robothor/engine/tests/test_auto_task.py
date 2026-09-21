@@ -89,7 +89,7 @@ class TestAutoTaskResolution:
 
         mock_resolve = MagicMock(return_value=True)
         with (
-            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.run_finalizer.update_run"),
             patch("robothor.engine.run_finalizer.create_steps_batch"),
             patch("robothor.crm.dal.resolve_task", mock_resolve),
         ):
@@ -98,6 +98,7 @@ class TestAutoTaskResolution:
                 "task-uuid-123",
                 resolution="Run completed: All done!",
                 agent_id="test-agent",
+                tenant_id="default",
             )
 
     def test_persist_run_sets_todo_on_failure(self, engine_config):
@@ -113,13 +114,14 @@ class TestAutoTaskResolution:
 
         mock_update = MagicMock(return_value=True)
         with (
-            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.run_finalizer.update_run"),
             patch("robothor.engine.run_finalizer.create_steps_batch"),
             patch("robothor.crm.dal.update_task", mock_update),
         ):
             runner._persist_run_sync(run)
             mock_update.assert_called_once()
             call_kwargs = mock_update.call_args.kwargs
+            assert call_kwargs["tenant_id"] == "default"
             assert call_kwargs["status"] == "TODO"
             assert "failed" in call_kwargs["tags"]
 
@@ -136,7 +138,7 @@ class TestAutoTaskResolution:
 
         mock_resolve = MagicMock()
         with (
-            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.run_finalizer.update_run"),
             patch("robothor.engine.run_finalizer.create_steps_batch"),
             patch("robothor.crm.dal.resolve_task", mock_resolve),
         ):

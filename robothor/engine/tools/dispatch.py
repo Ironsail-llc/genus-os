@@ -493,6 +493,16 @@ async def _runtime_denial(
         from robothor.engine.runtime.deadlines import require_time
 
         require_time()
+        if ctx.is_benchmark:
+            # A benchmark child has no durable stop to honour, no resume claim
+            # and no goal to admit against — `effect_dispatch._bypass` already
+            # excludes it from the durable ledger for exactly those reasons.
+            # It matters more than consistency: every check below READS THE
+            # DATABASE, and the benchmark sandbox's guarantee is that such a
+            # run touches none. The read raised inside this handler and was
+            # returned as a crash result, so the sandbox refusal the caller
+            # expected never happened and the write appeared to reach the DB.
+            return None
         from robothor.engine.resume_claim import current as resume_claim
         from robothor.engine.resume_claim import require_owned
 
