@@ -2,22 +2,32 @@
 
 import asyncio
 import json
+from typing import Any, TypeVar
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import SecretStr
+from pydantic import BaseModel, SecretStr
 
 from robothor.autonomy.broker import ExecutionPlan
 from robothor.autonomy.enrollment import EnrollmentRequest, EnrollmentStore
 from robothor.autonomy.identity import scope_for_actor
-from robothor.autonomy.models import Delegation, ResourceInput, RuntimeSettings, StrictModel
+from robothor.autonomy.models import (
+    Delegation,
+    ResourceInput,
+    RuntimeSettings,
+    Scope,
+    StrictModel,
+)
 from robothor.autonomy.onboarding import import_contact_profile
 from robothor.autonomy.runtime import run_browser
 from robothor.autonomy.store import AutonomyStore, declared_plan
 
 router = APIRouter(prefix="/api/autonomy", tags=["autonomy"])
-_resumes: set[asyncio.Task] = set()
+_resumes: set[asyncio.Task[None]] = set()
+
+#: What `_body` parses into: whichever request model the caller named.
+_Body = TypeVar("_Body", bound=BaseModel)
 
 
 class VerificationInput(StrictModel):
@@ -32,7 +42,7 @@ class EnrollmentCompletion(EnrollmentToken):
     resource: ResourceInput
 
 
-async def require_personal_owner(request: Request):
+async def require_personal_owner(request: Request) -> Scope:
     auth = getattr(request.state, "auth", None)
     if (
         not auth
@@ -48,7 +58,11 @@ async def require_personal_owner(request: Request):
         raise HTTPException(409, "Link your account identity before personal enrollment") from None
 
 
-async def _body(request: Request, model, invalid="Invalid enrollment data; no values were stored"):
+async def _body(
+    request: Request,
+    model: type[_Body],
+    invalid: str = "Invalid enrollment data; no values were stored",
+) -> _Body:
     # Do not use automatic FastAPI model parsing here: validation responses
     # otherwise echo rejected input (including a pasted card or password).
     try:
@@ -60,12 +74,12 @@ async def _body(request: Request, model, invalid="Invalid enrollment data; no va
         raise HTTPException(422, invalid) from None
 
 
-def _safe(value):
+def _safe(value: Any) -> JSONResponse:
     return JSONResponse(value, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/status")
-async def status(request: Request):
+async def status(request: Request) -> JSONResponse:
     scope = await require_personal_owner(request)
     store = AutonomyStore()
     try:
@@ -82,7 +96,7 @@ async def status(request: Request):
 
 
 @router.post("/resources")
-async def enroll(request: Request):
+async def enroll(request: Request) -> JSONResponse:
     scope = await require_personal_owner(request)
     body = await _body(request, ResourceInput)
     try:
@@ -94,7 +108,7 @@ async def enroll(request: Request):
 
 
 @router.post("/profile-from-contact")
-async def profile_from_contact(request: Request):
+async def profile_from_contact(request: Request) -> JSONResponse:
     scope = await require_personal_owner(request)
     await _body(request, StrictModel)  # no caller-supplied person or tenant IDs
     try:
@@ -106,7 +120,7 @@ async def profile_from_contact(request: Request):
 
 
 @router.post("/enrollments")
-async def enrollment_create(request: Request):
+async def enrollment_create(request: Request) -> JSONResponse:
     scope = await require_personal_owner(request)
     body = await _body(request, EnrollmentRequest)
     try:
@@ -116,7 +130,7 @@ async def enrollment_create(request: Request):
 
 
 @router.post("/enrollments/inspect")
-async def enrollment_inspect(request: Request):
+async def enrollment_inspect(request: Request) -> JSONResponse:
     scope = await require_personal_owner(request)
     body = await _body(request, EnrollmentToken)
     try:
@@ -132,7 +146,7 @@ async def enrollment_inspect(request: Request):
 
 
 @router.post("/enrollments/complete")
-async def enrollment_complete(request: Request):
+async def enrollment_complete(request: Request) -> JSONResponse:
     scope = await require_personal_owner(request)
     body = await _body(request, EnrollmentCompletion)
     try:
@@ -153,7 +167,7 @@ async def enrollment_complete(request: Request):
 
 
 @router.post("/resources/refresh-descriptions")
-async def refresh_descriptions(request: Request):
+async def refresh_descriptions(request: Request) -> JSONResponse:
     scope = await require_personal_owner(request)
     await _body(request, StrictModel)
     try:
@@ -164,7 +178,7 @@ async def refresh_descriptions(request: Request):
 
 
 @router.delete("/resources/{resource_id}")
-async def revoke_resource(resource_id: UUID, request: Request):
+async def revoke_resource(resource_id: UUID, request: Request) -> JSONResponse:
     scope = await require_personal_owner(request)
     try:
         await asyncio.to_thread(AutonomyStore().revoke_resource, scope, str(resource_id))
@@ -174,7 +188,7 @@ async def revoke_resource(resource_id: UUID, request: Request):
 
 
 @router.post("/grants")
-async def delegate(request: Request):
+async def delegate(request: Request) -> JSONResponse:
     scope = await require_personal_owner(request)
     policy = await _body(
         request,
@@ -186,7 +200,7 @@ async def delegate(request: Request):
 
 
 @router.delete("/grants/{grant_id}")
-async def revoke_grant(grant_id: UUID, request: Request):
+async def revoke_grant(grant_id: UUID, request: Request) -> JSONResponse:
     scope = await require_personal_owner(request)
     try:
         await asyncio.to_thread(AutonomyStore().revoke_grant, scope, str(grant_id))
@@ -196,7 +210,7 @@ async def revoke_grant(grant_id: UUID, request: Request):
 
 
 @router.delete("/grants/{grant_id}/payment-hold")
-async def clear_payment_hold(grant_id: UUID, request: Request):
+async def clear_payment_hold(grant_id: UUID, request: Request) -> JSONResponse:
     """Owner-only: resume spending on a grant frozen after an overspend.
 
     Clearing records that the operator has looked at the charge. It never
@@ -212,7 +226,7 @@ async def clear_payment_hold(grant_id: UUID, request: Request):
 
 
 @router.put("/settings")
-async def configure(request: Request):
+async def configure(request: Request) -> JSONResponse:
     scope = await require_personal_owner(request)
     settings = await _body(request, RuntimeSettings)
     # Payment processing posture is a deployment operation, not a grant a
@@ -229,7 +243,7 @@ async def configure(request: Request):
 
 
 @router.get("/operations")
-async def operations(request: Request):
+async def operations(request: Request) -> JSONResponse:
     scope = await require_personal_owner(request)
     rows = await asyncio.to_thread(AutonomyStore().recent_operations, scope)
     # datetime encoding is handled without accepting arbitrary stored values.
@@ -243,7 +257,7 @@ async def operations(request: Request):
 
 
 @router.post("/operations/{operation_id}/verification")
-async def verification(operation_id: UUID, request: Request):
+async def verification(operation_id: UUID, request: Request) -> JSONResponse:
     scope = await require_personal_owner(request)
     body = await _body(request, VerificationInput)
     import re
@@ -257,7 +271,7 @@ async def verification(operation_id: UUID, request: Request):
     except Exception:
         raise HTTPException(409, "Operation is not waiting for this verification") from None
 
-    async def resume():
+    async def resume() -> None:
         try:
             await run_browser(
                 scope, str(operation_id), row["agent_id"], plan, verification_code=code
@@ -274,7 +288,7 @@ async def verification(operation_id: UUID, request: Request):
 
 
 @router.get("/operations/{operation_id}/terms")
-async def terms_history(operation_id: UUID, request: Request):
+async def terms_history(operation_id: UUID, request: Request) -> JSONResponse:
     from robothor.autonomy.terms_audit import TermsAudit
 
     scope = await require_personal_owner(request)
@@ -288,7 +302,7 @@ async def terms_history(operation_id: UUID, request: Request):
 
 
 @router.get("/operations/{operation_id}/terms/{snapshot_id}")
-async def terms_detail(operation_id: UUID, snapshot_id: UUID, request: Request):
+async def terms_detail(operation_id: UUID, snapshot_id: UUID, request: Request) -> JSONResponse:
     from robothor.autonomy.terms_audit import TermsAudit
 
     scope = await require_personal_owner(request)
@@ -304,7 +318,7 @@ async def terms_detail(operation_id: UUID, snapshot_id: UUID, request: Request):
 
 
 @router.delete("/operations/{operation_id}/terms")
-async def forget_terms(operation_id: UUID, request: Request):
+async def forget_terms(operation_id: UUID, request: Request) -> JSONResponse:
     """The owner's own delete for what the browser observed on their behalf.
 
     Until this existed the routes offered `DELETE /resources/{id}` and
@@ -328,7 +342,7 @@ async def forget_terms(operation_id: UUID, request: Request):
 
 
 @router.get("/operations/{operation_id}/payment")
-async def payment_status(operation_id: UUID, request: Request):
+async def payment_status(operation_id: UUID, request: Request) -> JSONResponse:
     from robothor.autonomy.payment_journal import PaymentJournal
 
     scope = await require_personal_owner(request)
@@ -344,7 +358,7 @@ async def payment_status(operation_id: UUID, request: Request):
 
 
 @router.post("/operations/{operation_id}/abandon")
-async def abandon_operation(operation_id: UUID, request: Request):
+async def abandon_operation(operation_id: UUID, request: Request) -> JSONResponse:
     """The owner's way out of an operation nobody can resolve.
 
     An external verification that lapses leaves money reserved against a
@@ -363,7 +377,7 @@ async def abandon_operation(operation_id: UUID, request: Request):
 
 
 @router.post("/handoffs/{handoff_id}/check")
-async def check_external_handoff(handoff_id: UUID, request: Request):
+async def check_external_handoff(handoff_id: UUID, request: Request) -> JSONResponse:
     from robothor.autonomy.handoff_recovery import HandoffChecks
     from robothor.autonomy.handoff_worker import check_one
     from robothor.autonomy.handoffs import HandoffStore
