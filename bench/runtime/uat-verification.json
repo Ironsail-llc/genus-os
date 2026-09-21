@@ -5809,6 +5809,25 @@
         "terminal prepared versus dispatched effects"
       ],
       "unqualified": "arbitrary external-provider reconciliation"
+    },
+    "default_streaming_cohort": {
+      "product_revision": "9163df1d1e6",
+      "harness_revision": "8ad8b32053b",
+      "verified": 29,
+      "failed": 1,
+      "samples": 30,
+      "p95_seconds": 47.53229081298923,
+      "p95_ci95_seconds": [
+        28.31414220399165,
+        60.00796230399283
+      ],
+      "over_30_seconds": 5,
+      "duplicates": 0,
+      "post_return_model_calls": 0,
+      "screening_passed": false,
+      "report": "bench/runtime/uat-runtime-default-streaming-cohort-report.json",
+      "log": "bench/runtime/uat-runtime-default-streaming-cohort.log",
+      "note": "Normal timeouts/full tools/selected primary. Sample 22 hit native classification deadline before tool dispatch; no task/effect. Actual returned latency was 60.008 seconds. Other 29 preserve both task and calculation. Older harness measures stream opening only, so completion/usage uncertainty is retained for all 59 stream invocations. Full cohort completed; pytest 1 failed,80 passed,2 skipped,2 warnings,716.08 seconds."
     }
   },
   "calendar": {
@@ -6047,7 +6066,7 @@
     ]
   },
   "remaining": [
-    "Product 9163df1d1e6 adds durable goal-control recovery; focused and canonical checks pass and the full engine selection passed 11,440 tests (29 skipped, 243 deselected). A test-only cloud allowance/health-isolation non-streaming cohort passed 30/30, p95 22.049 seconds, but is not a production policy. Streaming diagnostics passed 3/3; a 30-request normal-streaming screen is now running before policy decisions. Earlier failed cohorts remain retained; installed models/defaults unchanged.",
+    "Product 9163df1d1e6 passes the full engine selection (11,440 passed,29 skipped,243 deselected) and focused/canonical correctness checks, but normal streaming live screening failed: 29/30 correct, p95 47.532 seconds, one deadline failure before task creation. Test-only full stream allowance passes 15 contracts and is entering three-request diagnostics; no default is promoted. A prior non-streaming cloud-only ten-second experiment passed 30/30, p95 22.049 seconds, but does not qualify streaming or a scoped product policy. Preserve earlier failures; selected models remain unchanged.",
     "Complete representative workload comparison against accepted integration baseline eea3252b1577e3f51e6d6a6216d6f242fd7ac4a1. Matched scripted standalone/compound task checks now pass with both minimal and selected main/full-catalogue profiles; current selected-profile p95 overhead is 54\u201356 ms versus baseline 134\u2013135 ms, with one fewer planning call. These remain two task scenarios with synthetic providers and isolated instructions/memory, not a representative live comparison.",
     "Qualify workload-wide selected-provider deadlines and latency, including requests competing with background goals. Local scripted HTTP acknowledgement/stop/progress and synthetic 1/5/20-tenant limits are measured; live-provider mixed-load limits remain unqualified. Preserve failures, unfinished attempts and uncertainty.",
     "Supported recovery source audit is documented in docs/architecture/runtime-outcome-recovery.md with executable coverage links. CRM task/note readbacks, calendar attendee evidence, saved acknowledgements and committed goal controls have distinct claim boundaries. Continue ingress/failure coverage review; arbitrary external-provider recovery remains unqualified.",

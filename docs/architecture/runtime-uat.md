@@ -1929,3 +1929,10 @@ The harness now explicitly supports `streaming: true` through the native runner 
 ### Current goal-history engine regression completed — 2026-09-21
 
 Product `9163df1d1e6` stayed unchanged while the full engine selection completed: 11,440 passed, 29 skipped, 243 deselected, 393 warnings in 395.46 seconds. Exact selection: `not slow and not integration and not llm and not e2e and not smoke`. Retain the marker expression when comparing historical counts. Separate native integration and goal/chat coverage remain indexed. After this process exited successfully, a thirty-request normal-streaming compound-task screen started with existing selected models, private tasks, and no experimental model allowance. Output is `/tmp/runtime-default-streaming-cohort.jsonl`; no result is claimed until it finishes.
+
+
+### Normal streaming cohort completed and retained — 2026-09-21
+
+The full thirty-request default streaming screen failed correctness and latency: 29 verified, one deadline failure before any business dispatch, p95 47.532 seconds (95% bootstrap interval 28.314–60.008), five over 30 seconds. Twenty-nine matching TODO tasks and requested calculations were verified; no duplicate tasks or post-return model calls. The failed request returned after 60.008 seconds with native deadline cancellation and no effect/task. All 59 provider invocations used the selected primary. Native recorded cost $0.10825 omits unknown stream usage: this older harness observes only connection creation, so zero recorded opening errors does not prove zero interrupted streams.
+
+Raw population, summary and failed pytest log are retained under `uat-runtime-default-streaming-cohort*`. Pytest: one failed, 80 passed, two skipped, two warnings in 716.08 seconds. A separate three-request diagnostic of the test-only full-stream allowance has started. It uses the same selected models and private business tools and records stream completion/error telemetry. No new model, production setting or scoped native product policy is selected by this experiment.
