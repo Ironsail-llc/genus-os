@@ -1,0 +1,27 @@
+{
+  "revision": "2ffe534bbc0",
+  "change": "Interactive profile lookup runs in a worker thread with a maximum 60-second wait from native boundary entry, constrained by any earlier inherited deadline. Timeout or cancellation before execution records the original request outcome through the real admission audit path. Late lookup completion cannot start the discarded execution. Loader-originated TimeoutError retains its own cause rather than being mislabeled as runtime expiry.",
+  "focused": {
+    "passed": 160,
+    "warnings": 1,
+    "seconds": 14.94,
+    "log": "/tmp/runtime-profile-lookup-regression.log"
+  },
+  "canonical_browser": {
+    "passed": 33,
+    "skipped": 1,
+    "warnings": 1,
+    "seconds": 26.08,
+    "log": "/tmp/runtime-profile-lookup-native.log"
+  },
+  "blocked_read_evidence": "Two private-database cases block a real lookup thread while the event loop continues. Timeout and explicit task cancellation each produce a terminal, unverified original-request audit outcome before the thread is released. Releasing the thread afterwards leaves native execution uncalled. Tests release and join their own fixture threads.",
+  "checks": "Ruff lint/format and diff checks pass; no size cap increased. The new lookup cases are included in runtime-contract CI; no hosted run is claimed.",
+  "limits": "A timed-out filesystem thread is not forcibly killed; it can finish reading but cannot start execution. This does not prove resilience under a saturated or permanently blocked executor, nor prompt acknowledgement during every slow lookup. General conversational classification and full acceptance remain open. The isolated tests perform no model/business calls; native/browser coverage uses synthetic providers. No production deployment.",
+  "http": {
+    "passed": 1,
+    "seconds": 24.55,
+    "samples": 30,
+    "artifact": "bench/runtime/uat-profile-lookup-http.json",
+    "log": "/tmp/runtime-profile-lookup-http.log"
+  }
+}

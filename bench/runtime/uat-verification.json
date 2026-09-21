@@ -2115,6 +2115,10 @@
     "resolved_simple_profile_admission": {
       "revision": "bad57a53d59",
       "artifact": "bench/runtime/uat-resolved-profile-admission.json"
+    },
+    "profile_lookup_interruption": {
+      "revision": "2ffe534bbc0",
+      "artifact": "bench/runtime/uat-profile-lookup-interruption.json"
     }
   },
   "calendar": {
