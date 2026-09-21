@@ -1,0 +1,51 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's the state of the one active goal, operator:\n\n**Goal:** \"Finish the requested work\" (finite, owner: main) \u2014 status **waiting**, version 4.\n\n**Finished:**\n- \u2705 **Prepare the first item** \u2014 status DONE.\n\n**Still left:**\n- \u2b1c **Check the remaining item** \u2014 status TODO. This is the one open task, and it's what the goal is waiting on.\n\n**What happens next / caveats:**\n- The goal is parked in a **wait** on that TODO task. Its scheduled review is **2026-09-22 03:44 UTC** (tomorrow), and it would also wake early if that task changes state.\n- **Automatic pursuit is currently disabled** for this tenant (`execution_enabled: false`), so nothing will advance on its own \u2014 the wait's wake conditions are registered triggers, not a promise of progress. The remaining item needs to be worked explicitly.\n- Success criterion on record: \"The requested work has been checked.\" No evidence has been logged yet, and independent evidence is required, so the goal can't be marked complete until the remaining item is actually checked and evidenced.\n\nWant me to take on the remaining TODO (\"Check the remaining item\") now?",
+      "run": {
+        "text": "Here's the state of the one active goal, operator:\n\n**Goal:** \"Finish the requested work\" (finite, owner: main) \u2014 status **waiting**, version 4.\n\n**Finished:**\n- \u2705 **Prepare the first item** \u2014 status DONE.\n\n**Still left:**\n- \u2b1c **Check the remaining item** \u2014 status TODO. This is the one open task, and it's what the goal is waiting on.\n\n**What happens next / caveats:**\n- The goal is parked in a **wait** on that TODO task. Its scheduled review is **2026-09-22 03:44 UTC** (tomorrow), and it would also wake early if that task changes state.\n- **Automatic pursuit is currently disabled** for this tenant (`execution_enabled: false`), so nothing will advance on its own \u2014 the wait's wake conditions are registered triggers, not a promise of progress. The remaining item needs to be worked explicitly.\n- Success criterion on record: \"The requested work has been checked.\" No evidence has been logged yet, and independent evidence is required, so the goal can't be marked complete until the remaining item is actually checked and evidenced.\n\nWant me to take on the remaining TODO (\"Check the remaining item\") now?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14209,
+        "output_tokens": 470,
+        "duration_ms": 18031,
+        "total_cost_usd": 0.0012,
+        "run_id": "26512d79-ec10-4a63-81ea-eb0a9174ebd2"
+      },
+      "elapsed_ms": 18093.56062900042
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the work is paused.\n\n**Goal:** \"Finish the requested work\" \u2014 status **paused** (was waiting), now version 5.\n\n**What this means:**\n- The scheduled review (2026-09-22 03:44 UTC) and any wake triggers are now **inert** \u2014 a paused goal does not wake.\n- The remaining TODO (\"Check the remaining item\", cbb583d2) is untouched and still open; pausing the goal doesn't change the task itself.\n- Nothing was lost: the goal's objective and success criterion (\"The requested work has been checked\") are intact.\n\nTo pick this back up, just say the word and I'll resume it \u2014 resume requires an operator, so it'll wait for you.",
+      "run": {
+        "text": "Done, operator \u2014 the work is paused.\n\n**Goal:** \"Finish the requested work\" \u2014 status **paused** (was waiting), now version 5.\n\n**What this means:**\n- The scheduled review (2026-09-22 03:44 UTC) and any wake triggers are now **inert** \u2014 a paused goal does not wake.\n- The remaining TODO (\"Check the remaining item\", cbb583d2) is untouched and still open; pausing the goal doesn't change the task itself.\n- Nothing was lost: the goal's objective and success criterion (\"The requested work has been checked\") are intact.\n\nTo pick this back up, just say the word and I'll resume it \u2014 resume requires an operator, so it'll wait for you.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 19846,
+        "output_tokens": 450,
+        "duration_ms": 15227,
+        "total_cost_usd": 0.0012,
+        "run_id": "8f8ba50a-f81f-4306-a133-f2694707f28a"
+      },
+      "elapsed_ms": 15250.884246997884
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 7,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

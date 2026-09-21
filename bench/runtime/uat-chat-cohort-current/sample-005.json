@@ -1,0 +1,51 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator:\n\n**Goal:** \"Finish the requested work\" (goal `28377abb`, status: **waiting**)\n\n**Finished:**\n- \u2705 **Prepare the first item** (`417c92b6`) \u2014 status DONE\n\n**Still left:**\n- \u2b1c **Check the remaining item** (`be72cbec`) \u2014 status TODO, no resolution yet\n\n**Why it's paused:** The goal is waiting on that one remaining task. It's set to wake on its scheduled review at **2026-09-22 03:47 UTC** (about 24 hours from now), or earlier if task `be72cbec` changes. No blocker is recorded, and there's no evidence logged yet.\n\nOne thing to flag: **automatic pursuit is disabled** for this tenant (`execution_enabled: false`), so the goal won't progress on its own \u2014 the wake trigger is registered, but nothing will run automatically until execution is enabled. If you want me to move on the remaining item now, just say so.",
+      "run": {
+        "text": "Here's where things stand, operator:\n\n**Goal:** \"Finish the requested work\" (goal `28377abb`, status: **waiting**)\n\n**Finished:**\n- \u2705 **Prepare the first item** (`417c92b6`) \u2014 status DONE\n\n**Still left:**\n- \u2b1c **Check the remaining item** (`be72cbec`) \u2014 status TODO, no resolution yet\n\n**Why it's paused:** The goal is waiting on that one remaining task. It's set to wake on its scheduled review at **2026-09-22 03:47 UTC** (about 24 hours from now), or earlier if task `be72cbec` changes. No blocker is recorded, and there's no evidence logged yet.\n\nOne thing to flag: **automatic pursuit is disabled** for this tenant (`execution_enabled: false`), so the goal won't progress on its own \u2014 the wake trigger is registered, but nothing will run automatically until execution is enabled. If you want me to move on the remaining item now, just say so.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14225,
+        "output_tokens": 424,
+        "duration_ms": 12207,
+        "total_cost_usd": 0.0012,
+        "run_id": "57d0bcbf-a0b6-4124-a640-137c0be45414"
+      },
+      "elapsed_ms": 12258.905287999369
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the goal is paused.\n\n**Goal:** \"Finish the requested work\" (`28377abb-e09e-44f9-9ce6-d3444dc70223`) \u2014 status now **paused** (version 5).\n\nWhat this means:\n- \u23f8\ufe0f The scheduled wake at **2026-09-22 03:47 UTC** will **no longer fire** \u2014 paused goals don't wake on their review time or on task changes.\n- \u2b1c The remaining task **Check the remaining item** (`be72cbec`) is untouched \u2014 still TODO, not cancelled.\n- \u2705 **Prepare the first item** (`417c92b6`) remains DONE.\n\nNothing else was changed. Whenever you want it moving again, just say so and I'll resume it (resuming requires your go-ahead as the operator).",
+      "run": {
+        "text": "Done, operator \u2014 the goal is paused.\n\n**Goal:** \"Finish the requested work\" (`28377abb-e09e-44f9-9ce6-d3444dc70223`) \u2014 status now **paused** (version 5).\n\nWhat this means:\n- \u23f8\ufe0f The scheduled wake at **2026-09-22 03:47 UTC** will **no longer fire** \u2014 paused goals don't wake on their review time or on task changes.\n- \u2b1c The remaining task **Check the remaining item** (`be72cbec`) is untouched \u2014 still TODO, not cancelled.\n- \u2705 **Prepare the first item** (`417c92b6`) remains DONE.\n\nNothing else was changed. Whenever you want it moving again, just say so and I'll resume it (resuming requires your go-ahead as the operator).",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 19678,
+        "output_tokens": 534,
+        "duration_ms": 13444,
+        "total_cost_usd": 0.0013,
+        "run_id": "0b4eb7fd-3e22-4888-8d4c-d1cf86f394b7"
+      },
+      "elapsed_ms": 13467.333685002814
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 7,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

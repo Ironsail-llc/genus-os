@@ -1,0 +1,51 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator:\n\n**Finished**\n- **\"Prepare the first item\"** (`bfbf8341`) \u2014 status **DONE**.\n\n**Still left**\n- **\"Check the remaining item\"** (`a124724f`) \u2014 status **TODO**. This is the one open item, and it's the reason the goal is parked.\n\n**Goal state** (`2dd8f49a`, objective: \"Finish the requested work\")\n- Status: **waiting** \u2014 blocked only on that remaining task.\n- Success criterion: \"The requested work has been checked\" \u2014 not yet met (no evidence recorded).\n- Wake conditions: a scheduled review at **2026-09-22 03:49 UTC** (tomorrow), or a change to either linked task, or an event carrying that task's ID.\n- **Automatic pursuit is disabled** for this tenant (`execution_enabled: false`), so the goal won't advance on its own \u2014 it will only wake on the review/event triggers, and even then won't run without execution enabled.\n\nSo: one of two items done, one TODO outstanding. Want me to work the remaining item now, or leave it for the scheduled review?",
+      "run": {
+        "text": "Here's where things stand, operator:\n\n**Finished**\n- **\"Prepare the first item\"** (`bfbf8341`) \u2014 status **DONE**.\n\n**Still left**\n- **\"Check the remaining item\"** (`a124724f`) \u2014 status **TODO**. This is the one open item, and it's the reason the goal is parked.\n\n**Goal state** (`2dd8f49a`, objective: \"Finish the requested work\")\n- Status: **waiting** \u2014 blocked only on that remaining task.\n- Success criterion: \"The requested work has been checked\" \u2014 not yet met (no evidence recorded).\n- Wake conditions: a scheduled review at **2026-09-22 03:49 UTC** (tomorrow), or a change to either linked task, or an event carrying that task's ID.\n- **Automatic pursuit is disabled** for this tenant (`execution_enabled: false`), so the goal won't advance on its own \u2014 it will only wake on the review/event triggers, and even then won't run without execution enabled.\n\nSo: one of two items done, one TODO outstanding. Want me to work the remaining item now, or leave it for the scheduled review?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14182,
+        "output_tokens": 415,
+        "duration_ms": 11380,
+        "total_cost_usd": 0.0012,
+        "run_id": "d23eda7e-cbad-4a9a-842c-0b0654c36c42"
+      },
+      "elapsed_ms": 11443.906423999579
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the work is paused.\n\n**Goal `2dd8f49a` (\"Finish the requested work\")**\n- Status: **waiting \u2192 paused** (version 5)\n- It was blocked on the one open task, **\"Check the remaining item\"** (`a124724f`, TODO).\n- While paused, it will **not** wake on its scheduled review (2026-09-22 03:49 UTC) or on any event/linked-task change. Nothing will advance on its own.\n\nTwo notes:\n- The remaining task itself is untouched \u2014 still **TODO**. Pausing the goal stops pursuit of it, but doesn't close or cancel it.\n- Automatic pursuit was already disabled for this tenant (`execution_enabled: false`), so nothing was running anyway; the pause makes that explicit and blocks the wake triggers.\n\nSay the word when you want it resumed, and I'll unpause it (that requires you as operator, which you are).",
+      "run": {
+        "text": "Done, operator \u2014 the work is paused.\n\n**Goal `2dd8f49a` (\"Finish the requested work\")**\n- Status: **waiting \u2192 paused** (version 5)\n- It was blocked on the one open task, **\"Check the remaining item\"** (`a124724f`, TODO).\n- While paused, it will **not** wake on its scheduled review (2026-09-22 03:49 UTC) or on any event/linked-task change. Nothing will advance on its own.\n\nTwo notes:\n- The remaining task itself is untouched \u2014 still **TODO**. Pausing the goal stops pursuit of it, but doesn't close or cancel it.\n- Automatic pursuit was already disabled for this tenant (`execution_enabled: false`), so nothing was running anyway; the pause makes that explicit and blocks the wake triggers.\n\nSay the word when you want it resumed, and I'll unpause it (that requires you as operator, which you are).",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 20219,
+        "output_tokens": 651,
+        "duration_ms": 13645,
+        "total_cost_usd": 0.0014,
+        "run_id": "96fc6399-28aa-4603-85ba-f7b00bf74572"
+      },
+      "elapsed_ms": 13671.13573700044
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 7,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

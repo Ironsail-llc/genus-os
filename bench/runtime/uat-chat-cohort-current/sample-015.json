@@ -1,0 +1,50 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's the state of the one active goal (\"Finish the requested work\"):\n\n**Finished**\n- \u2705 **Prepare the first item** \u2014 status DONE.\n\n**Still left**\n- \u2b1c **Check the remaining item** \u2014 status TODO. This is the only outstanding piece, and it's what the goal is currently waiting on.\n\n**Goal status:** `waiting` \u2014 parked on that TODO task, with a scheduled review at **Tue, Sep 22, 2026 03:51 UTC** (or earlier if the linked task changes). No evidence has been recorded against the success criterion (\"The requested work has been checked\") yet, and there are no runs or blockers logged.\n\n**One thing worth flagging:** automatic pursuit is currently **disabled** for this tenant (`execution_enabled: false`). So the goal won't make progress on its own \u2014 the scheduled review is a registered trigger, not a promise that anything will run. The remaining item needs either you to enable execution or a manual nudge to get it checked.\n\nWant me to take care of the remaining item now?",
+      "run": {
+        "text": "Here's the state of the one active goal (\"Finish the requested work\"):\n\n**Finished**\n- \u2705 **Prepare the first item** \u2014 status DONE.\n\n**Still left**\n- \u2b1c **Check the remaining item** \u2014 status TODO. This is the only outstanding piece, and it's what the goal is currently waiting on.\n\n**Goal status:** `waiting` \u2014 parked on that TODO task, with a scheduled review at **Tue, Sep 22, 2026 03:51 UTC** (or earlier if the linked task changes). No evidence has been recorded against the success criterion (\"The requested work has been checked\") yet, and there are no runs or blockers logged.\n\n**One thing worth flagging:** automatic pursuit is currently **disabled** for this tenant (`execution_enabled: false`). So the goal won't make progress on its own \u2014 the scheduled review is a registered trigger, not a promise that anything will run. The remaining item needs either you to enable execution or a manual nudge to get it checked.\n\nWant me to take care of the remaining item now?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14218,
+        "output_tokens": 481,
+        "duration_ms": 9254,
+        "total_cost_usd": 0.0012,
+        "run_id": "dde72484-1452-489c-9e92-47f5d22713be"
+      },
+      "elapsed_ms": 9323.998217001645
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the goal is paused.\n\n**\"Finish the requested work\"** is now `paused` (version 5).\n\n- The scheduled review at Tue, Sep 22 03:51 UTC **will not fire** while it's paused \u2014 paused goals don't wake.\n- The remaining TODO task (\"Check the remaining item\", `8016a635`) is untouched and still outstanding.\n- No evidence was recorded against the success criterion, and nothing else changed.\n\nTo pick this back up, just say the word and I'll resume it \u2014 or I can go ahead and check that remaining item whenever you want.",
+      "run": {
+        "text": "Done, operator \u2014 the goal is paused.\n\n**\"Finish the requested work\"** is now `paused` (version 5).\n\n- The scheduled review at Tue, Sep 22 03:51 UTC **will not fire** while it's paused \u2014 paused goals don't wake.\n- The remaining TODO task (\"Check the remaining item\", `8016a635`) is untouched and still outstanding.\n- No evidence was recorded against the success criterion, and nothing else changed.\n\nTo pick this back up, just say the word and I'll resume it \u2014 or I can go ahead and check that remaining item whenever you want.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14672,
+        "output_tokens": 358,
+        "duration_ms": 6451,
+        "total_cost_usd": 0.0011,
+        "run_id": "f6b1516e-0a95-40d2-b19f-49a7de2eaaeb"
+      },
+      "elapsed_ms": 6469.315557998925
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 6,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator:\n\n**Finished**\n- \u2705 **Prepare the first item** \u2014 status DONE.\n\n**Still left**\n- \u2b1c **Check the remaining item** (TODO) \u2014 this is the one open task, and it's what the goal is waiting on.\n\n**Goal:** \"Finish the requested work\" (goal `597e91b5`) \u2014 status **waiting**, blocked on that one task. Success criterion is \"The requested work has been checked,\" and no evidence has been recorded yet.\n\nTwo things worth flagging:\n- **Automatic pursuit is currently disabled** for this tenant (`execution_enabled: false`), so nothing will advance on its own \u2014 the goal won't progress until that's turned on or you act on it directly.\n- The goal is set to wake on a **scheduled review at 2026-09-22 03:47 UTC** (tomorrow), or sooner if the linked task changes.\n\nSo: one item done, one item left. Want me to take on the remaining check now?",
+      "run": {
+        "text": "Here's where things stand, operator:\n\n**Finished**\n- \u2705 **Prepare the first item** \u2014 status DONE.\n\n**Still left**\n- \u2b1c **Check the remaining item** (TODO) \u2014 this is the one open task, and it's what the goal is waiting on.\n\n**Goal:** \"Finish the requested work\" (goal `597e91b5`) \u2014 status **waiting**, blocked on that one task. Success criterion is \"The requested work has been checked,\" and no evidence has been recorded yet.\n\nTwo things worth flagging:\n- **Automatic pursuit is currently disabled** for this tenant (`execution_enabled: false`), so nothing will advance on its own \u2014 the goal won't progress until that's turned on or you act on it directly.\n- The goal is set to wake on a **scheduled review at 2026-09-22 03:47 UTC** (tomorrow), or sooner if the linked task changes.\n\nSo: one item done, one item left. Want me to take on the remaining check now?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14336,
+        "output_tokens": 429,
+        "duration_ms": 10648,
+        "total_cost_usd": 0.0012,
+        "run_id": "460fab94-9315-45f8-af00-0fd49f84a222"
+      },
+      "elapsed_ms": 10715.834206999716
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the goal is now **paused**.\n\n**Goal `597e91b5`** (\"Finish the requested work\") \u2014 status changed from `waiting` \u2192 **`paused`** (version 5).\n\nWhat this means:\n- **No automatic pursuit.** The scheduled wake for 2026-09-22 03:47 UTC is now inert \u2014 paused goals don't wake on their scheduled review or on linked-task changes. (Automatic pursuit was already disabled for this tenant, so nothing was going to run on its own regardless.)\n- **Nothing was cancelled or lost.** The open task **\"Check the remaining item\"** (`26ebdf95`) is untouched and still TODO, and the success criterion (\"The requested work has been checked\") remains unmet with no evidence recorded.\n\nTo pick this back up later, just say the word \u2014 resuming requires an operator action, so it'll stay parked until you ask.",
+      "run": {
+        "text": "Done, operator \u2014 the goal is now **paused**.\n\n**Goal `597e91b5`** (\"Finish the requested work\") \u2014 status changed from `waiting` \u2192 **`paused`** (version 5).\n\nWhat this means:\n- **No automatic pursuit.** The scheduled wake for 2026-09-22 03:47 UTC is now inert \u2014 paused goals don't wake on their scheduled review or on linked-task changes. (Automatic pursuit was already disabled for this tenant, so nothing was going to run on its own regardless.)\n- **Nothing was cancelled or lost.** The open task **\"Check the remaining item\"** (`26ebdf95`) is untouched and still TODO, and the success criterion (\"The requested work has been checked\") remains unmet with no evidence recorded.\n\nTo pick this back up later, just say the word \u2014 resuming requires an operator action, so it'll stay parked until you ask.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 19514,
+        "output_tokens": 504,
+        "duration_ms": 13947,
+        "total_cost_usd": 0.0013,
+        "run_id": "1655143a-d4df-4bcf-b240-5eb61cd0eb6a"
+      },
+      "elapsed_ms": 13975.98703300173
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 7,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

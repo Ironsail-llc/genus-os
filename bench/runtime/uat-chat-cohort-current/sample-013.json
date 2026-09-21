@@ -1,0 +1,51 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's the state of the one active goal, operator:\n\n**Goal: \"Finish the requested work\"** \u2014 status: **waiting** (version 4)\n\n**Finished:**\n- \u2705 **\"Prepare the first item\"** \u2014 status DONE (task `753ce3fe`)\n\n**Still left:**\n- \u2b1c **\"Check the remaining item\"** \u2014 status TODO (task `368d8ea0`)\n\n**Why it's waiting:** the goal is parked on that one unfinished task. It's registered to wake on a scheduled review at **2026-09-22 03:50 UTC** (tomorrow), or earlier if that linked task changes.\n\n**One thing worth flagging:** automatic pursuit is currently **disabled** for this tenant (`execution_enabled: false`). So even when the wake condition fires, the goal won't make progress on its own \u2014 it needs to be driven manually, or execution enabled. The goal's success criterion is \"The requested work has been checked,\" and no evidence has been recorded yet.\n\nWant me to go ahead and check that remaining item now?",
+      "run": {
+        "text": "Here's the state of the one active goal, operator:\n\n**Goal: \"Finish the requested work\"** \u2014 status: **waiting** (version 4)\n\n**Finished:**\n- \u2705 **\"Prepare the first item\"** \u2014 status DONE (task `753ce3fe`)\n\n**Still left:**\n- \u2b1c **\"Check the remaining item\"** \u2014 status TODO (task `368d8ea0`)\n\n**Why it's waiting:** the goal is parked on that one unfinished task. It's registered to wake on a scheduled review at **2026-09-22 03:50 UTC** (tomorrow), or earlier if that linked task changes.\n\n**One thing worth flagging:** automatic pursuit is currently **disabled** for this tenant (`execution_enabled: false`). So even when the wake condition fires, the goal won't make progress on its own \u2014 it needs to be driven manually, or execution enabled. The goal's success criterion is \"The requested work has been checked,\" and no evidence has been recorded yet.\n\nWant me to go ahead and check that remaining item now?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14297,
+        "output_tokens": 469,
+        "duration_ms": 9528,
+        "total_cost_usd": 0.0012,
+        "run_id": "46b34fba-f9f3-4aea-8ff0-6ca739eb6ed5"
+      },
+      "elapsed_ms": 9579.272301998571
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the goal is now **paused**.\n\n**Goal: \"Finish the requested work\"** \u2014 status: **paused** (version 5)\n\n- The scheduled wake for 2026-09-22 03:50 UTC no longer applies \u2014 paused goals don't wake, so nothing will fire on its own.\n- The linked task **\"Check the remaining item\"** (`368d8ea0`) is untouched and still **TODO**.\n- No evidence was recorded, so the success criterion (\"The requested work has been checked\") remains unmet.\n\nTo pick this back up later, just say the word and I'll resume it \u2014 you can also tell me to check that remaining item directly whenever you're ready.",
+      "run": {
+        "text": "Done, operator \u2014 the goal is now **paused**.\n\n**Goal: \"Finish the requested work\"** \u2014 status: **paused** (version 5)\n\n- The scheduled wake for 2026-09-22 03:50 UTC no longer applies \u2014 paused goals don't wake, so nothing will fire on its own.\n- The linked task **\"Check the remaining item\"** (`368d8ea0`) is untouched and still **TODO**.\n- No evidence was recorded, so the success criterion (\"The requested work has been checked\") remains unmet.\n\nTo pick this back up later, just say the word and I'll resume it \u2014 you can also tell me to check that remaining item directly whenever you're ready.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 19516,
+        "output_tokens": 417,
+        "duration_ms": 7224,
+        "total_cost_usd": 0.0012,
+        "run_id": "9de08006-15e5-4bc2-853a-2ca51aa3189c"
+      },
+      "elapsed_ms": 7251.722893000988
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 7,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

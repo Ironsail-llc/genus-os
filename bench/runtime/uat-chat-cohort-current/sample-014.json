@@ -1,0 +1,51 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's the state of the work, operator:\n\n**Finished**\n- **\"Prepare the first item\"** (`fe4faaf6`) \u2014 status **DONE**.\n\n**Still left**\n- **\"Check the remaining item\"** (`ba0be5be`) \u2014 status **TODO**, no resolution recorded. This is the one open item.\n\n**Goal tracking this**\n- Goal `83499c84` \u2014 *\"Finish the requested work\"* \u2014 status **waiting**, version 4.\n- Success criterion: *\"The requested work has been checked.\"* Not yet met (no evidence recorded).\n- It's waiting on the TODO task `ba0be5be`, with a scheduled review at **2026-09-22 03:50 UTC** (tomorrow) as its wake condition.\n\n**One caveat worth flagging:** automatic pursuit is **disabled** for this tenant (`execution_enabled: false`). So the goal will not make progress on its own \u2014 the scheduled review is a registered trigger, not a promise that anything will run. The remaining item needs to be checked explicitly.\n\nWant me to take on checking `ba0be5be` now?",
+      "run": {
+        "text": "Here's the state of the work, operator:\n\n**Finished**\n- **\"Prepare the first item\"** (`fe4faaf6`) \u2014 status **DONE**.\n\n**Still left**\n- **\"Check the remaining item\"** (`ba0be5be`) \u2014 status **TODO**, no resolution recorded. This is the one open item.\n\n**Goal tracking this**\n- Goal `83499c84` \u2014 *\"Finish the requested work\"* \u2014 status **waiting**, version 4.\n- Success criterion: *\"The requested work has been checked.\"* Not yet met (no evidence recorded).\n- It's waiting on the TODO task `ba0be5be`, with a scheduled review at **2026-09-22 03:50 UTC** (tomorrow) as its wake condition.\n\n**One caveat worth flagging:** automatic pursuit is **disabled** for this tenant (`execution_enabled: false`). So the goal will not make progress on its own \u2014 the scheduled review is a registered trigger, not a promise that anything will run. The remaining item needs to be checked explicitly.\n\nWant me to take on checking `ba0be5be` now?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14617,
+        "output_tokens": 596,
+        "duration_ms": 11535,
+        "total_cost_usd": 0.0013,
+        "run_id": "a58e3fbf-e1d3-47f6-b03e-18bf57882323"
+      },
+      "elapsed_ms": 11611.175865000405
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the work is paused.\n\n- **Goal `83499c84`** \u2014 *\"Finish the requested work\"* \u2014 now **paused** (version 5).\n- Paused goals **do not wake** \u2014 the scheduled review at 2026-09-22 03:50 UTC and any linked-task events are suspended while it's paused. Nothing will pursue this on its own.\n\n**Unchanged state underneath:**\n- Task `ba0be5be` \u2014 *\"Check the remaining item\"* \u2014 is still **TODO**, no resolution recorded. Pausing the goal doesn't touch the task itself.\n- Task `fe4faaf6` \u2014 *\"Prepare the first item\"* \u2014 remains **DONE**.\n\nTo pick this back up later, just say so and I'll resume the goal (that requires an operator, which you are). Want me to leave the task as-is, or mark it too?",
+      "run": {
+        "text": "Done, operator \u2014 the work is paused.\n\n- **Goal `83499c84`** \u2014 *\"Finish the requested work\"* \u2014 now **paused** (version 5).\n- Paused goals **do not wake** \u2014 the scheduled review at 2026-09-22 03:50 UTC and any linked-task events are suspended while it's paused. Nothing will pursue this on its own.\n\n**Unchanged state underneath:**\n- Task `ba0be5be` \u2014 *\"Check the remaining item\"* \u2014 is still **TODO**, no resolution recorded. Pausing the goal doesn't touch the task itself.\n- Task `fe4faaf6` \u2014 *\"Prepare the first item\"* \u2014 remains **DONE**.\n\nTo pick this back up later, just say so and I'll resume the goal (that requires an operator, which you are). Want me to leave the task as-is, or mark it too?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 19878,
+        "output_tokens": 542,
+        "duration_ms": 11699,
+        "total_cost_usd": 0.0012,
+        "run_id": "39d63d9c-5f94-42ea-a514-a2b6b69c087e"
+      },
+      "elapsed_ms": 11726.41375600142
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 7,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's the state of your one active goal, **\"Finish the requested work\"** (goal `ba9af4c4`):\n\n**Finished**\n- \u2705 **Prepare the first item** \u2014 task `01a4eed7`, status **DONE**.\n\n**Still left**\n- \u2b1c **Check the remaining item** \u2014 task `1418e603`, status **TODO**. This is the only outstanding piece of work.\n\n**Goal status:** `waiting` \u2014 it's parked on that remaining task, with a scheduled review at **2026-09-22 03:58 UTC** (tomorrow). It will also wake early if the linked task changes or a matching event arrives.\n\n**One important caveat:** automatic pursuit is currently **disabled** for this tenant (`execution_enabled: false`). So the goal will not make progress on its own \u2014 the wake conditions are registered triggers, not a promise of action. To move the remaining item forward, it needs to be picked up (or execution enabled) explicitly.\n\nWant me to take on the remaining \"Check the remaining item\" task now?",
+      "run": {
+        "text": "Here's the state of your one active goal, **\"Finish the requested work\"** (goal `ba9af4c4`):\n\n**Finished**\n- \u2705 **Prepare the first item** \u2014 task `01a4eed7`, status **DONE**.\n\n**Still left**\n- \u2b1c **Check the remaining item** \u2014 task `1418e603`, status **TODO**. This is the only outstanding piece of work.\n\n**Goal status:** `waiting` \u2014 it's parked on that remaining task, with a scheduled review at **2026-09-22 03:58 UTC** (tomorrow). It will also wake early if the linked task changes or a matching event arrives.\n\n**One important caveat:** automatic pursuit is currently **disabled** for this tenant (`execution_enabled: false`). So the goal will not make progress on its own \u2014 the wake conditions are registered triggers, not a promise of action. To move the remaining item forward, it needs to be picked up (or execution enabled) explicitly.\n\nWant me to take on the remaining \"Check the remaining item\" task now?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14180,
+        "output_tokens": 453,
+        "duration_ms": 11027,
+        "total_cost_usd": 0.0012,
+        "run_id": "01036432-9159-4acd-8e1b-ef9b0c673bd3"
+      },
+      "elapsed_ms": 11101.92905599979
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the goal is paused.\n\n**Goal `ba9af4c4` \u2014 \"Finish the requested work\"**\n- **Status:** `waiting` \u2192 **`paused`** (version 5)\n- **Effect:** it will no longer wake on its scheduled review (was 2026-09-22 03:58 UTC) or on linked-task/event triggers. Paused goals don't wake at all.\n\n**Where things stand:**\n- \u2705 **Prepare the first item** \u2014 task `01a4eed7`, DONE\n- \u2b1c **Check the remaining item** \u2014 task `1418e603`, still TODO (unchanged; pausing the goal doesn't touch the task itself)\n\nTwo notes:\n- Automatic pursuit was already disabled for this tenant (`execution_enabled: false`), so nothing was running on its own \u2014 the pause just removes the registered wake triggers.\n- The remaining task `1418e603` is still open and unassigned. It stays on the books; say the word if you want it picked up, reassigned, or closed out.\n\nWant me to resume the goal later, or is this a full stop?",
+      "run": {
+        "text": "Done, operator \u2014 the goal is paused.\n\n**Goal `ba9af4c4` \u2014 \"Finish the requested work\"**\n- **Status:** `waiting` \u2192 **`paused`** (version 5)\n- **Effect:** it will no longer wake on its scheduled review (was 2026-09-22 03:58 UTC) or on linked-task/event triggers. Paused goals don't wake at all.\n\n**Where things stand:**\n- \u2705 **Prepare the first item** \u2014 task `01a4eed7`, DONE\n- \u2b1c **Check the remaining item** \u2014 task `1418e603`, still TODO (unchanged; pausing the goal doesn't touch the task itself)\n\nTwo notes:\n- Automatic pursuit was already disabled for this tenant (`execution_enabled: false`), so nothing was running on its own \u2014 the pause just removes the registered wake triggers.\n- The remaining task `1418e603` is still open and unassigned. It stays on the books; say the word if you want it picked up, reassigned, or closed out.\n\nWant me to resume the goal later, or is this a full stop?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 19625,
+        "output_tokens": 572,
+        "duration_ms": 16505,
+        "total_cost_usd": 0.0013,
+        "run_id": "c3bcb074-b52f-481b-9ee7-f359f48b8310"
+      },
+      "elapsed_ms": 16535.50035400258
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 7,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

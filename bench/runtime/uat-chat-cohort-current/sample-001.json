@@ -1,0 +1,51 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator \u2014 this is the state of your goal **\"Finish the requested work\"** (`2fbd0f07`, finite, owner: main):\n\n**Finished**\n- \u2705 **Prepare the first item** \u2014 status `DONE`\n\n**Still left**\n- \u2b1c **Check the remaining item** (`06277810`) \u2014 status `TODO`, no resolution recorded\n\n**Goal status:** `waiting` \u2014 it's parked on that one open task (\"One requested task still needs checking\"). No evidence has been recorded against the success criterion (\"The requested work has been checked\") yet, and there are no runs or attempts logged.\n\n**What happens next:** a scheduled review is set for **2026-09-22 03:44 UTC** (tomorrow), and the goal will also wake if the linked task `06277810` changes. One caveat: **automatic pursuit is currently disabled for this tenant** (`execution_enabled: false`), so the goal won't progress on its own \u2014 it will only move when that task is actually checked off.\n\nSo: one item done, one item outstanding, and the goal is blocked on that outstanding check. Want me to take the remaining item now, or leave it for the scheduled review?",
+      "run": {
+        "text": "Here's where things stand, operator \u2014 this is the state of your goal **\"Finish the requested work\"** (`2fbd0f07`, finite, owner: main):\n\n**Finished**\n- \u2705 **Prepare the first item** \u2014 status `DONE`\n\n**Still left**\n- \u2b1c **Check the remaining item** (`06277810`) \u2014 status `TODO`, no resolution recorded\n\n**Goal status:** `waiting` \u2014 it's parked on that one open task (\"One requested task still needs checking\"). No evidence has been recorded against the success criterion (\"The requested work has been checked\") yet, and there are no runs or attempts logged.\n\n**What happens next:** a scheduled review is set for **2026-09-22 03:44 UTC** (tomorrow), and the goal will also wake if the linked task `06277810` changes. One caveat: **automatic pursuit is currently disabled for this tenant** (`execution_enabled: false`), so the goal won't progress on its own \u2014 it will only move when that task is actually checked off.\n\nSo: one item done, one item outstanding, and the goal is blocked on that outstanding check. Want me to take the remaining item now, or leave it for the scheduled review?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14659,
+        "output_tokens": 647,
+        "duration_ms": 19506,
+        "total_cost_usd": 0.0014,
+        "run_id": "49316222-f3a9-421f-b1b9-41972286d4a7"
+      },
+      "elapsed_ms": 19562.84401599987
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the goal **\"Finish the requested work\"** (`2fbd0f07`) is now **paused** (version 5, was `waiting`).\n\nWhat that means:\n- **No further progress** \u2014 the goal won't move on its own, and the scheduled review for **2026-09-22 03:44 UTC** will not fire.\n- **No wake on task change** \u2014 the linked task `06277810` (\"Check the remaining item\", still `TODO`) changing will no longer wake the goal while it's paused.\n- The task itself is untouched \u2014 it's still `TODO`; the pause only stops the goal from pursuing it.\n\nState preserved as-is: one item done (\"Prepare the first item\"), one outstanding, no evidence recorded yet.\n\nTo pick it back up, just say the word and I'll resume it \u2014 a resume needs your go-ahead, so it stays parked until then.",
+      "run": {
+        "text": "Done, operator \u2014 the goal **\"Finish the requested work\"** (`2fbd0f07`) is now **paused** (version 5, was `waiting`).\n\nWhat that means:\n- **No further progress** \u2014 the goal won't move on its own, and the scheduled review for **2026-09-22 03:44 UTC** will not fire.\n- **No wake on task change** \u2014 the linked task `06277810` (\"Check the remaining item\", still `TODO`) changing will no longer wake the goal while it's paused.\n- The task itself is untouched \u2014 it's still `TODO`; the pause only stops the goal from pursuing it.\n\nState preserved as-is: one item done (\"Prepare the first item\"), one outstanding, no evidence recorded yet.\n\nTo pick it back up, just say the word and I'll resume it \u2014 a resume needs your go-ahead, so it stays parked until then.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 19981,
+        "output_tokens": 553,
+        "duration_ms": 21088,
+        "total_cost_usd": 0.0013,
+        "run_id": "a173a7b4-5378-43e5-a9ad-b1d8c51268ee"
+      },
+      "elapsed_ms": 21109.137974999612
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 7,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator:\n\n**Finished**\n- \u2705 **Prepare the first item** \u2014 status DONE.\n\n**Still left**\n- \u2b1c **Check the remaining item** \u2014 still TODO. This is the one open item, and it's what the goal is currently waiting on.\n\n**Goal status**\n- Goal *\"Finish the requested work\"* is **waiting**, not complete. It's parked on the open task above, with a scheduled review due **Tue, Sep 22, 2026 at 03:50 UTC** (it can also wake earlier if that task changes).\n- Note: automatic pursuit is currently **disabled** for this tenant (`execution_enabled: false`), so nothing will progress on its own \u2014 the review will only fire if execution is turned on. If you want it to move, say the word and I'll flag it for you to enable.\n\nSo: one of two items done, one remaining, and the goal is on hold until that last item is checked.",
+      "run": {
+        "text": "Here's where things stand, operator:\n\n**Finished**\n- \u2705 **Prepare the first item** \u2014 status DONE.\n\n**Still left**\n- \u2b1c **Check the remaining item** \u2014 still TODO. This is the one open item, and it's what the goal is currently waiting on.\n\n**Goal status**\n- Goal *\"Finish the requested work\"* is **waiting**, not complete. It's parked on the open task above, with a scheduled review due **Tue, Sep 22, 2026 at 03:50 UTC** (it can also wake earlier if that task changes).\n- Note: automatic pursuit is currently **disabled** for this tenant (`execution_enabled: false`), so nothing will progress on its own \u2014 the review will only fire if execution is turned on. If you want it to move, say the word and I'll flag it for you to enable.\n\nSo: one of two items done, one remaining, and the goal is on hold until that last item is checked.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14157,
+        "output_tokens": 451,
+        "duration_ms": 10416,
+        "total_cost_usd": 0.0012,
+        "run_id": "21216c1f-2a1e-4ea8-9715-9e1d4bd77876"
+      },
+      "elapsed_ms": 10483.650853002473
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done \u2014 the goal is paused, operator.\n\n**What changed**\n- Goal *\"Finish the requested work\"* \u2192 status **paused** (was *waiting*), version 5.\n- The scheduled review (Tue, Sep 22, 2026 at 03:50 UTC) will **no longer wake it**, and a change to the open task won't either. Paused goals don't wake on their own.\n\n**Unchanged**\n- The open task **Check the remaining item** (`18bad847`) is still TODO \u2014 pausing the goal doesn't touch the task itself.\n- Automatic pursuit remains disabled for this tenant (`execution_enabled: false`).\n\nNothing will progress while it's paused. When you want to pick it back up, say the word and I'll resume it (resuming requires your go-ahead as operator).",
+      "run": {
+        "text": "Done \u2014 the goal is paused, operator.\n\n**What changed**\n- Goal *\"Finish the requested work\"* \u2192 status **paused** (was *waiting*), version 5.\n- The scheduled review (Tue, Sep 22, 2026 at 03:50 UTC) will **no longer wake it**, and a change to the open task won't either. Paused goals don't wake on their own.\n\n**Unchanged**\n- The open task **Check the remaining item** (`18bad847`) is still TODO \u2014 pausing the goal doesn't touch the task itself.\n- Automatic pursuit remains disabled for this tenant (`execution_enabled: false`).\n\nNothing will progress while it's paused. When you want to pick it back up, say the word and I'll resume it (resuming requires your go-ahead as operator).",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14514,
+        "output_tokens": 400,
+        "duration_ms": 10749,
+        "total_cost_usd": 0.0011,
+        "run_id": "7701c0d2-82ef-4069-a4f1-5aed734b7550"
+      },
+      "elapsed_ms": 10779.247780003061
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 6,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

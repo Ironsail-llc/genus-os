@@ -1,0 +1,50 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator:\n\n**Goal: \"Finish the requested work\"** (status: *waiting*, version 4)\n\n**\u2705 Finished**\n- **Prepare the first item** \u2014 status `DONE`\n\n**\u2b1c Still left**\n- **Check the remaining item** \u2014 status `TODO` (task `77bdbd35`)\n\n**Why it's waiting:** the goal is parked on that one open task \u2014 its wait reason is *\"One requested task still needs checking.\"* It's set to wake on a scheduled review at **2026-09-22 03:48 UTC** (about 24h out), or sooner if that task changes.\n\n**One thing worth flagging:** automatic pursuit is currently **disabled** for this tenant (`execution_enabled: false`). So even when the wake condition fires, the goal won't make progress on its own \u2014 it needs execution turned on, or a nudge from you. Nothing has been attempted yet (0 attempts, no runs, no evidence recorded).\n\nWant me to pick up the remaining task now, or leave it parked until the scheduled review?",
+      "run": {
+        "text": "Here's where things stand, operator:\n\n**Goal: \"Finish the requested work\"** (status: *waiting*, version 4)\n\n**\u2705 Finished**\n- **Prepare the first item** \u2014 status `DONE`\n\n**\u2b1c Still left**\n- **Check the remaining item** \u2014 status `TODO` (task `77bdbd35`)\n\n**Why it's waiting:** the goal is parked on that one open task \u2014 its wait reason is *\"One requested task still needs checking.\"* It's set to wake on a scheduled review at **2026-09-22 03:48 UTC** (about 24h out), or sooner if that task changes.\n\n**One thing worth flagging:** automatic pursuit is currently **disabled** for this tenant (`execution_enabled: false`). So even when the wake condition fires, the goal won't make progress on its own \u2014 it needs execution turned on, or a nudge from you. Nothing has been attempted yet (0 attempts, no runs, no evidence recorded).\n\nWant me to pick up the remaining task now, or leave it parked until the scheduled review?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14250,
+        "output_tokens": 444,
+        "duration_ms": 8438,
+        "total_cost_usd": 0.0012,
+        "run_id": "2705d0e4-4c7b-4b8f-82a5-91b067b57c3e"
+      },
+      "elapsed_ms": 8485.46831600106
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the work is paused.\n\n**Goal: \"Finish the requested work\"** is now **paused** (version 5).\n\n- **State before:** *waiting* \u2014 parked on task `77bdbd35` (\"Check the remaining item\", TODO) with a scheduled review at 2026-09-22 03:48 UTC.\n- **State now:** *paused* \u2014 it will no longer wake on that scheduled review or on the task change. Paused goals don't wake at all.\n\n**What this means:**\n- \u2705 **Prepare the first item** \u2014 still `DONE`.\n- \u2b1c **Check the remaining item** (`77bdbd35`) \u2014 still `TODO`, and now untouched. The task itself wasn't cancelled, just the goal's pursuit of it.\n- Automatic pursuit was already disabled for this tenant, so nothing was running on its own anyway \u2014 this makes the stop explicit.\n\nNothing was attempted (0 attempts, no runs, no evidence), so there's no partial work to clean up.\n\nSay the word when you want it moving again and I'll resume it \u2014 note that resuming is an operator action, so it needs your go-ahead.",
+      "run": {
+        "text": "Done, operator \u2014 the work is paused.\n\n**Goal: \"Finish the requested work\"** is now **paused** (version 5).\n\n- **State before:** *waiting* \u2014 parked on task `77bdbd35` (\"Check the remaining item\", TODO) with a scheduled review at 2026-09-22 03:48 UTC.\n- **State now:** *paused* \u2014 it will no longer wake on that scheduled review or on the task change. Paused goals don't wake at all.\n\n**What this means:**\n- \u2705 **Prepare the first item** \u2014 still `DONE`.\n- \u2b1c **Check the remaining item** (`77bdbd35`) \u2014 still `TODO`, and now untouched. The task itself wasn't cancelled, just the goal's pursuit of it.\n- Automatic pursuit was already disabled for this tenant, so nothing was running on its own anyway \u2014 this makes the stop explicit.\n\nNothing was attempted (0 attempts, no runs, no evidence), so there's no partial work to clean up.\n\nSay the word when you want it moving again and I'll resume it \u2014 note that resuming is an operator action, so it needs your go-ahead.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14946,
+        "output_tokens": 596,
+        "duration_ms": 11691,
+        "total_cost_usd": 0.0012,
+        "run_id": "f4cf3d8f-cb58-4a1d-a384-ad02c59ac7c0"
+      },
+      "elapsed_ms": 11712.52843199909
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 6,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

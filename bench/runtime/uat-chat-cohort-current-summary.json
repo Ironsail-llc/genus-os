@@ -1,0 +1,217 @@
+{
+  "expected_conversations": 30,
+  "counts": {
+    "passed": 30,
+    "failed": 0,
+    "unresolved": 0,
+    "not_started": 0
+  },
+  "conversations": [
+    {
+      "repetition": 0,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 1,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 2,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 3,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 4,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 5,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 6,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 7,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 8,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 9,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 10,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 11,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 12,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 13,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 14,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 15,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 16,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 17,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 18,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 19,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 20,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 21,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 22,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 23,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 24,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 25,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 26,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 27,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 28,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 29,
+      "state": "passed",
+      "exit_code": 0
+    }
+  ],
+  "elapsed_ms": {
+    "status": {
+      "samples": 30,
+      "p50": 11837.929207002162,
+      "p95": 19562.84401599987,
+      "p95_ci95": [
+        15844.912533997558,
+        26299.13870299788
+      ],
+      "missing": 0
+    },
+    "pause": {
+      "samples": 30,
+      "p50": 11712.52843199909,
+      "p95": 27825.112776001333,
+      "p95_ci95": [
+        20289.978773998882,
+        34581.14806899903
+      ],
+      "missing": 0
+    }
+  },
+  "complete_population": true,
+  "manual_acceptance": false,
+  "latency_note": "Measured distributions include completed failed attempts when timing exists. Missing turns remain counted and cannot qualify the cohort. Status and pause are summarized separately.",
+  "execution_revision": "cd9c7ce68a3",
+  "product_revision": "49627a99058",
+  "report_revision": "baa647f5fbd",
+  "scope": "Thirty independent live conversations through native chat and private goal handlers: status, then pause. Selected model chain from main.yaml, isolated minimal manifest/workspace, synthetic business dispatch, private PostgreSQL goal/task state. This is not the complete production profile or a matched baseline/runtime comparison.",
+  "artifact_directory": "bench/runtime/uat-chat-cohort-current",
+  "provider_attempts": 198,
+  "returned_models": {
+    "deepseek/deepseek-v4.1-flash": 60
+  },
+  "engine_estimated_cost_usd": 0.07379999999999999,
+  "billing_reconciled": false,
+  "max_turn_elapsed_ms": 34581.14806899903,
+  "turns_above_30s": [
+    {
+      "conversation": 22,
+      "turn": 1,
+      "elapsed_ms": 34581.14806899903
+    }
+  ],
+  "turns_above_60s": 0,
+  "language_review": {
+    "accepted": false,
+    "finding": "Some replies state automatic pursuit is disabled, then offer to leave work to the scheduled review, which can imply automatic progress that is unavailable. Replies are also verbose and expose fixture IDs/versions.",
+    "examples": [
+      1,
+      19,
+      20
+    ],
+    "scope": "Human-readable inspection by the implementing assistant, not independent judgment scoring or user acceptance."
+  },
+  "limits": "Observed per-turn p95 meets the 30-second reference in this cohort, but pause p95 uncertainty extends above it. One pause took 34.58 seconds. All returned responses used the selected primary; the full fallback chain was not forced through outages. Correct state alone does not accept the wording. Prior failures remain preserved; full acceptance and remaining normal-chat review stay open. No production deployment."
+}

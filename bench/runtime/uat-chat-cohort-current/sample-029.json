@@ -1,0 +1,51 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator:\n\n**Goal:** \"Finish the requested work\" \u2014 status **waiting**, version 4.\n\n**Finished**\n- \u2705 **Prepare the first item** \u2014 task `24488b22`, status DONE.\n\n**Still left**\n- \u2b1c **Check the remaining item** \u2014 task `2e2a6021`, status TODO. This is the one open item, and it's the reason the goal is parked.\n\n**What happens next**\n- The goal is waiting on that task, with a scheduled review at **2026-09-22 03:58 UTC** (about 24h out). It can also wake earlier if that linked task changes.\n- Note: **automatic pursuit is disabled** for this tenant (`execution_enabled: false`), so nothing will advance on its own \u2014 the wake triggers are registered but won't fire into action unless execution is turned on. If you want the remaining item checked now, say so and I'll take it up.\n\nOne caveat: I can see the task's title and status, but not its body/details from here, so I can't tell you what \"the remaining item\" actually is \u2014 only that it's outstanding.",
+      "run": {
+        "text": "Here's where things stand, operator:\n\n**Goal:** \"Finish the requested work\" \u2014 status **waiting**, version 4.\n\n**Finished**\n- \u2705 **Prepare the first item** \u2014 task `24488b22`, status DONE.\n\n**Still left**\n- \u2b1c **Check the remaining item** \u2014 task `2e2a6021`, status TODO. This is the one open item, and it's the reason the goal is parked.\n\n**What happens next**\n- The goal is waiting on that task, with a scheduled review at **2026-09-22 03:58 UTC** (about 24h out). It can also wake earlier if that linked task changes.\n- Note: **automatic pursuit is disabled** for this tenant (`execution_enabled: false`), so nothing will advance on its own \u2014 the wake triggers are registered but won't fire into action unless execution is turned on. If you want the remaining item checked now, say so and I'll take it up.\n\nOne caveat: I can see the task's title and status, but not its body/details from here, so I can't tell you what \"the remaining item\" actually is \u2014 only that it's outstanding.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14269,
+        "output_tokens": 532,
+        "duration_ms": 13445,
+        "total_cost_usd": 0.0013,
+        "run_id": "37e38b45-da2a-4090-bcfc-60a7ef2750a0"
+      },
+      "elapsed_ms": 13497.256168000604
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the work is paused.\n\n**Goal:** \"Finish the requested work\" \u2014 status now **paused** (version 5).\n\n**What that means**\n- The goal will **not** wake on its own \u2014 paused goals don't fire on their scheduled review or on linked-task changes.\n- The scheduled review (2026-09-22 03:58 UTC) and the linked task (`2e2a6021`, still TODO) remain in place but are inert while paused.\n- Automatic pursuit was already disabled for this tenant, so nothing was advancing anyway.\n\n**Still outstanding when you want to resume:** the one open item \u2014 \"Check the remaining item\" (`2e2a6021`).\n\nJust say the word and I'll resume it.",
+      "run": {
+        "text": "Done, operator \u2014 the work is paused.\n\n**Goal:** \"Finish the requested work\" \u2014 status now **paused** (version 5).\n\n**What that means**\n- The goal will **not** wake on its own \u2014 paused goals don't fire on their scheduled review or on linked-task changes.\n- The scheduled review (2026-09-22 03:58 UTC) and the linked task (`2e2a6021`, still TODO) remain in place but are inert while paused.\n- Automatic pursuit was already disabled for this tenant, so nothing was advancing anyway.\n\n**Still outstanding when you want to resume:** the one open item \u2014 \"Check the remaining item\" (`2e2a6021`).\n\nJust say the word and I'll resume it.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 19650,
+        "output_tokens": 392,
+        "duration_ms": 10485,
+        "total_cost_usd": 0.0012,
+        "run_id": "f0d7b1c0-40df-47ea-841c-547498f9661a"
+      },
+      "elapsed_ms": 10505.54847499734
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 7,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

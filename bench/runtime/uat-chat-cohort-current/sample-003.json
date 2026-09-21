@@ -1,0 +1,51 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's the state of your goal **\"Finish the requested work\"** (goal `a436dda7`, status: *waiting*):\n\n**Finished**\n- \u2705 **Prepare the first item** \u2014 task `eb01e238`, status **DONE**\n\n**Still left**\n- \u2b1c **Check the remaining item** \u2014 task `f32d207e`, status **TODO** (no resolution recorded yet)\n\n**What happens next**\nThe goal is parked waiting on that one open task. It will wake on either:\n- the scheduled review at **2026-09-22 03:46 UTC** (tomorrow), or\n- a change/event on task `f32d207e`.\n\nOne caveat: automatic pursuit is **disabled** for this tenant (`execution_enabled: false`), so the goal won't make progress on its own \u2014 the remaining check needs to be run explicitly. Want me to take care of the remaining item now?",
+      "run": {
+        "text": "Here's the state of your goal **\"Finish the requested work\"** (goal `a436dda7`, status: *waiting*):\n\n**Finished**\n- \u2705 **Prepare the first item** \u2014 task `eb01e238`, status **DONE**\n\n**Still left**\n- \u2b1c **Check the remaining item** \u2014 task `f32d207e`, status **TODO** (no resolution recorded yet)\n\n**What happens next**\nThe goal is parked waiting on that one open task. It will wake on either:\n- the scheduled review at **2026-09-22 03:46 UTC** (tomorrow), or\n- a change/event on task `f32d207e`.\n\nOne caveat: automatic pursuit is **disabled** for this tenant (`execution_enabled: false`), so the goal won't make progress on its own \u2014 the remaining check needs to be run explicitly. Want me to take care of the remaining item now?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14324,
+        "output_tokens": 563,
+        "duration_ms": 15798,
+        "total_cost_usd": 0.0013,
+        "run_id": "02e4f312-ddf4-41b3-9c66-1404bf0b7497"
+      },
+      "elapsed_ms": 15844.912533997558
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the goal **\"Finish the requested work\"** (`a436dda7`) is now **paused** (version 5).\n\nWhat that means:\n- It will **not** wake on its scheduled review or on any task event \u2014 paused goals stay parked until you resume them.\n- The state is preserved as-is: task `eb01e238` remains DONE, and task `f32d207e` (\"Check the remaining item\") remains TODO.\n\nJust say the word when you want it resumed, and it'll pick up from here.",
+      "run": {
+        "text": "Done, operator \u2014 the goal **\"Finish the requested work\"** (`a436dda7`) is now **paused** (version 5).\n\nWhat that means:\n- It will **not** wake on its scheduled review or on any task event \u2014 paused goals stay parked until you resume them.\n- The state is preserved as-is: task `eb01e238` remains DONE, and task `f32d207e` (\"Check the remaining item\") remains TODO.\n\nJust say the word when you want it resumed, and it'll pick up from here.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 19364,
+        "output_tokens": 403,
+        "duration_ms": 10942,
+        "total_cost_usd": 0.0012,
+        "run_id": "027c7c88-5124-491d-95b9-cc744fb54710"
+      },
+      "elapsed_ms": 10961.270719999447
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 7,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's the state of the tracked work, operator:\n\n**Goal:** \"Finish the requested work\" \u2014 status **waiting** (version 4)\n\n| Task | Status |\n|---|---|\n| Prepare the first item (`4804acea`) | \u2705 **DONE** |\n| Check the remaining item (`5775860b`) | \u2b1c **TODO** \u2014 still open |\n\n**Finished:** \"Prepare the first item\" is done.\n\n**Still left:** \"Check the remaining item\" \u2014 this is the one outstanding item, and it's the reason the goal is parked in a wait rather than complete.\n\n**What happens next:** The goal is waiting on that task. It has a scheduled review at **2026-09-22 03:52 UTC** (tomorrow), and it will also wake if that linked task changes. Note that automatic pursuit is currently **disabled** for this tenant (`execution_enabled: false`), so the goal won't advance on its own \u2014 the wait is a registered trigger, not a promise of automatic progress. If you want that last item checked now, say the word and I'll take it on.",
+      "run": {
+        "text": "Here's the state of the tracked work, operator:\n\n**Goal:** \"Finish the requested work\" \u2014 status **waiting** (version 4)\n\n| Task | Status |\n|---|---|\n| Prepare the first item (`4804acea`) | \u2705 **DONE** |\n| Check the remaining item (`5775860b`) | \u2b1c **TODO** \u2014 still open |\n\n**Finished:** \"Prepare the first item\" is done.\n\n**Still left:** \"Check the remaining item\" \u2014 this is the one outstanding item, and it's the reason the goal is parked in a wait rather than complete.\n\n**What happens next:** The goal is waiting on that task. It has a scheduled review at **2026-09-22 03:52 UTC** (tomorrow), and it will also wake if that linked task changes. Note that automatic pursuit is currently **disabled** for this tenant (`execution_enabled: false`), so the goal won't advance on its own \u2014 the wait is a registered trigger, not a promise of automatic progress. If you want that last item checked now, say the word and I'll take it on.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14330,
+        "output_tokens": 539,
+        "duration_ms": 10396,
+        "total_cost_usd": 0.0013,
+        "run_id": "b4b84907-f035-4f0a-a08f-5866253a2307"
+      },
+      "elapsed_ms": 10448.079805999441
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the work is paused.\n\n**Goal:** \"Finish the requested work\" (`789d228b`) \u2014 status now **paused** (version 5, was waiting at v4).\n\n**What this means:**\n- The scheduled review for **2026-09-22 03:52 UTC** and the linked-task wake on `5775860b` **no longer apply** \u2014 paused goals don't wake on their own.\n- Automatic pursuit was already disabled for this tenant (`execution_enabled: false`), so nothing was advancing it anyway.\n\n**State preserved:** The one outstanding task, \"Check the remaining item\" (`5775860b`), is still open and untouched \u2014 pausing parked the goal, it didn't cancel or complete anything.\n\nWhenever you want to pick it back up, say the word and I'll resume it.",
+      "run": {
+        "text": "Done, operator \u2014 the work is paused.\n\n**Goal:** \"Finish the requested work\" (`789d228b`) \u2014 status now **paused** (version 5, was waiting at v4).\n\n**What this means:**\n- The scheduled review for **2026-09-22 03:52 UTC** and the linked-task wake on `5775860b` **no longer apply** \u2014 paused goals don't wake on their own.\n- Automatic pursuit was already disabled for this tenant (`execution_enabled: false`), so nothing was advancing it anyway.\n\n**State preserved:** The one outstanding task, \"Check the remaining item\" (`5775860b`), is still open and untouched \u2014 pausing parked the goal, it didn't cancel or complete anything.\n\nWhenever you want to pick it back up, say the word and I'll resume it.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14857,
+        "output_tokens": 488,
+        "duration_ms": 8456,
+        "total_cost_usd": 0.0012,
+        "run_id": "3f44c16d-11ad-454b-984a-2fcdbe621ebc"
+      },
+      "elapsed_ms": 8480.452668998623
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 6,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

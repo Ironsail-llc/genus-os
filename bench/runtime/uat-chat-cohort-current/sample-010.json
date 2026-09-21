@@ -1,0 +1,50 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator:\n\n**Goal: \"Finish the requested work\"** \u2014 status: **waiting** (not complete)\n\n| Task | Status |\n|---|---|\n| Prepare the first item | \u2705 **DONE** |\n| Check the remaining item | \u2b1c **TODO** \u2014 still open |\n\n**Finished:** \"Prepare the first item\" is done.\n\n**Still left:** \"Check the remaining item\" (task `6896520c`) has not been checked yet. The goal is parked on exactly that task \u2014 it's waiting for the task to change, with a scheduled review tomorrow (2026\u201109\u201122 03:49 UTC).\n\nTwo things worth flagging:\n- **Automatic pursuit is off** (`execution_enabled: false`), so the goal won't advance on its own \u2014 it won't wake to work the remaining task unless execution is enabled or you steer it.\n- The goal has **no recorded evidence** yet, and it requires independent evidence before it can be marked complete.\n\nWant me to go ahead and check the remaining item now?",
+      "run": {
+        "text": "Here's where things stand, operator:\n\n**Goal: \"Finish the requested work\"** \u2014 status: **waiting** (not complete)\n\n| Task | Status |\n|---|---|\n| Prepare the first item | \u2705 **DONE** |\n| Check the remaining item | \u2b1c **TODO** \u2014 still open |\n\n**Finished:** \"Prepare the first item\" is done.\n\n**Still left:** \"Check the remaining item\" (task `6896520c`) has not been checked yet. The goal is parked on exactly that task \u2014 it's waiting for the task to change, with a scheduled review tomorrow (2026\u201109\u201122 03:49 UTC).\n\nTwo things worth flagging:\n- **Automatic pursuit is off** (`execution_enabled: false`), so the goal won't advance on its own \u2014 it won't wake to work the remaining task unless execution is enabled or you steer it.\n- The goal has **no recorded evidence** yet, and it requires independent evidence before it can be marked complete.\n\nWant me to go ahead and check the remaining item now?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14246,
+        "output_tokens": 493,
+        "duration_ms": 11996,
+        "total_cost_usd": 0.0012,
+        "run_id": "a7c3d117-0aa6-459e-bb72-34772c188d85"
+      },
+      "elapsed_ms": 12068.500884997775
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the goal is now **paused**.\n\n**Goal: \"Finish the requested work\"** \u2014 status: **paused** (was waiting), version 5\n\n- The scheduled review for tomorrow (2026\u201109\u201122 03:49 UTC) will **not** fire while it's paused \u2014 paused goals don't wake.\n- Automatic pursuit was already off (`execution_enabled: false`), so nothing was advancing on its own anyway.\n- The remaining task, **\"Check the remaining item\"** (`6896520c`), is still open and untouched \u2014 pausing doesn't change it.\n\nNothing was cancelled or lost; the work is simply parked. Whenever you want to pick it back up, say the word and I'll resume the goal (and can check that remaining item then).",
+      "run": {
+        "text": "Done, operator \u2014 the goal is now **paused**.\n\n**Goal: \"Finish the requested work\"** \u2014 status: **paused** (was waiting), version 5\n\n- The scheduled review for tomorrow (2026\u201109\u201122 03:49 UTC) will **not** fire while it's paused \u2014 paused goals don't wake.\n- Automatic pursuit was already off (`execution_enabled: false`), so nothing was advancing on its own anyway.\n- The remaining task, **\"Check the remaining item\"** (`6896520c`), is still open and untouched \u2014 pausing doesn't change it.\n\nNothing was cancelled or lost; the work is simply parked. Whenever you want to pick it back up, say the word and I'll resume the goal (and can check that remaining item then).",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14702,
+        "output_tokens": 430,
+        "duration_ms": 10381,
+        "total_cost_usd": 0.0011,
+        "run_id": "d1cd7825-6c09-4bad-81c8-bd66afdcb357"
+      },
+      "elapsed_ms": 10406.248753999535
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 6,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

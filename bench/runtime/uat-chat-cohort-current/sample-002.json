@@ -1,0 +1,51 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator:\n\n**Goal: \"Finish the requested work\"** (b88b12a6) \u2014 status **waiting**, version 4\n\n**Finished:**\n- \u2705 **\"Prepare the first item\"** (a1dd4889) \u2014 status **DONE**\n\n**Still left:**\n- \u2b1c **\"Check the remaining item\"** (af2f574a) \u2014 status **TODO**, no resolution recorded\n\nThat one open task is the only thing gating the goal. The goal's success criterion \u2014 *\"The requested work has been checked\"* \u2014 is not yet satisfied, and no evidence has been recorded against it.\n\n**What happens next:** The goal is waiting on that task. It will wake either on its scheduled review (**2026-09-22 03:45 UTC**, ~24h from now) or if the linked task changes. One caveat: **automatic execution is currently disabled** for this tenant (`execution_enabled: false`), so the goal will not progress on its own \u2014 the wake is a registered trigger, not a promise of automatic work. If you want that last item checked now rather than waiting for the review, say so and I'll take it up.",
+      "run": {
+        "text": "Here's where things stand, operator:\n\n**Goal: \"Finish the requested work\"** (b88b12a6) \u2014 status **waiting**, version 4\n\n**Finished:**\n- \u2705 **\"Prepare the first item\"** (a1dd4889) \u2014 status **DONE**\n\n**Still left:**\n- \u2b1c **\"Check the remaining item\"** (af2f574a) \u2014 status **TODO**, no resolution recorded\n\nThat one open task is the only thing gating the goal. The goal's success criterion \u2014 *\"The requested work has been checked\"* \u2014 is not yet satisfied, and no evidence has been recorded against it.\n\n**What happens next:** The goal is waiting on that task. It will wake either on its scheduled review (**2026-09-22 03:45 UTC**, ~24h from now) or if the linked task changes. One caveat: **automatic execution is currently disabled** for this tenant (`execution_enabled: false`), so the goal will not progress on its own \u2014 the wake is a registered trigger, not a promise of automatic work. If you want that last item checked now rather than waiting for the review, say so and I'll take it up.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14371,
+        "output_tokens": 657,
+        "duration_ms": 15604,
+        "total_cost_usd": 0.0013,
+        "run_id": "0f97630d-1398-4ac2-9d6a-558a3ae8fdfc"
+      },
+      "elapsed_ms": 15657.679722000466
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the work is paused.\n\n**Goal: \"Finish the requested work\"** (b88b12a6) \u2014 status now **paused**, version 5.\n\n**What this changes:**\n- The scheduled review wake (**2026-09-22 03:45 UTC**) will **not** fire.\n- The linked-task wake on **\"Check the remaining item\"** (af2f574a) will **not** fire either \u2014 paused goals don't wake on any trigger.\n- Nothing was cancelled or deleted. The goal, its criteria (*\"The requested work has been checked\"*), and the open task are all intact.\n\n**State it's parked in:**\n- \u2705 \"Prepare the first item\" \u2014 DONE\n- \u2b1c \"Check the remaining item\" \u2014 still TODO, unresolved\n\nTo pick this back up, just say so and I'll resume it (that's an operator action, so it needs your word). Note that even on resume, automatic execution remains disabled for this tenant (`execution_enabled: false`), so progress would still require an explicit nudge from you rather than happening on its own.",
+      "run": {
+        "text": "Done, operator \u2014 the work is paused.\n\n**Goal: \"Finish the requested work\"** (b88b12a6) \u2014 status now **paused**, version 5.\n\n**What this changes:**\n- The scheduled review wake (**2026-09-22 03:45 UTC**) will **not** fire.\n- The linked-task wake on **\"Check the remaining item\"** (af2f574a) will **not** fire either \u2014 paused goals don't wake on any trigger.\n- Nothing was cancelled or deleted. The goal, its criteria (*\"The requested work has been checked\"*), and the open task are all intact.\n\n**State it's parked in:**\n- \u2705 \"Prepare the first item\" \u2014 DONE\n- \u2b1c \"Check the remaining item\" \u2014 still TODO, unresolved\n\nTo pick this back up, just say so and I'll resume it (that's an operator action, so it needs your word). Note that even on resume, automatic execution remains disabled for this tenant (`execution_enabled: false`), so progress would still require an explicit nudge from you rather than happening on its own.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 19790,
+        "output_tokens": 544,
+        "duration_ms": 16089,
+        "total_cost_usd": 0.0013,
+        "run_id": "0759cb21-a5a7-4d9e-ab72-7801d8ba1400"
+      },
+      "elapsed_ms": 16113.362220999988
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 7,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator:\n\n**Goal:** \"Finish the requested work\" (finite, owner: main) \u2014 status **waiting**, version 4.\n\n**Finished:**\n- \u2705 **Prepare the first item** (`178810bc`) \u2014 status DONE.\n\n**Still left:**\n- \u2b1c **Check the remaining item** (`8c369fe8`) \u2014 status TODO, no resolution yet. This is the one open item, and it's what the goal is waiting on.\n\n**What happens next:**\n- The goal is parked with the wait reason *\"One requested task still needs checking\"* and won't be worked automatically right now \u2014 **automatic pursuit is disabled for this tenant** (`execution_enabled: false`), so I can't promise it will progress on its own.\n- It's registered to wake on a **scheduled review at 2026-09-22 03:53 UTC**, or earlier if the linked task `8c369fe8` changes (e.g., gets completed). Those are registered triggers, not evidence one has fired.\n\nSo: one item done, one item left to check. Want me to take a look at the remaining item now, or leave it to the scheduled review?",
+      "run": {
+        "text": "Here's where things stand, operator:\n\n**Goal:** \"Finish the requested work\" (finite, owner: main) \u2014 status **waiting**, version 4.\n\n**Finished:**\n- \u2705 **Prepare the first item** (`178810bc`) \u2014 status DONE.\n\n**Still left:**\n- \u2b1c **Check the remaining item** (`8c369fe8`) \u2014 status TODO, no resolution yet. This is the one open item, and it's what the goal is waiting on.\n\n**What happens next:**\n- The goal is parked with the wait reason *\"One requested task still needs checking\"* and won't be worked automatically right now \u2014 **automatic pursuit is disabled for this tenant** (`execution_enabled: false`), so I can't promise it will progress on its own.\n- It's registered to wake on a **scheduled review at 2026-09-22 03:53 UTC**, or earlier if the linked task `8c369fe8` changes (e.g., gets completed). Those are registered triggers, not evidence one has fired.\n\nSo: one item done, one item left to check. Want me to take a look at the remaining item now, or leave it to the scheduled review?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14215,
+        "output_tokens": 501,
+        "duration_ms": 26223,
+        "total_cost_usd": 0.0012,
+        "run_id": "ed6784f2-902f-47da-82e6-e447b488402b"
+      },
+      "elapsed_ms": 26299.13870299788
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the work is paused.\n\n**Goal:** \"Finish the requested work\" (`9b587f61`) \u2014 status **paused** (now version 5).\n\n**What this means:**\n- The goal will **not** wake on its scheduled review (2026-09-22 03:53 UTC) or on any linked-task change while paused \u2014 paused goals don't wake.\n- The linked task `8c369fe8` (\"Check the remaining item\") is untouched and still **TODO**; pausing the goal doesn't change the task itself.\n\n**State at pause:**\n- \u2705 Prepare the first item (`178810bc`) \u2014 DONE\n- \u2b1c Check the remaining item (`8c369fe8`) \u2014 TODO\n\nJust say the word if you'd like me to resume it later (resuming needs your go-ahead, since it's an operator action).",
+      "run": {
+        "text": "Done, operator \u2014 the work is paused.\n\n**Goal:** \"Finish the requested work\" (`9b587f61`) \u2014 status **paused** (now version 5).\n\n**What this means:**\n- The goal will **not** wake on its scheduled review (2026-09-22 03:53 UTC) or on any linked-task change while paused \u2014 paused goals don't wake.\n- The linked task `8c369fe8` (\"Check the remaining item\") is untouched and still **TODO**; pausing the goal doesn't change the task itself.\n\n**State at pause:**\n- \u2705 Prepare the first item (`178810bc`) \u2014 DONE\n- \u2b1c Check the remaining item (`8c369fe8`) \u2014 TODO\n\nJust say the word if you'd like me to resume it later (resuming needs your go-ahead, since it's an operator action).",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 19842,
+        "output_tokens": 480,
+        "duration_ms": 12836,
+        "total_cost_usd": 0.0012,
+        "run_id": "6675c9d4-7447-41b6-803d-8fcfc6804051"
+      },
+      "elapsed_ms": 12856.63644500164
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 7,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

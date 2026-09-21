@@ -1,0 +1,50 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator \u2014 one goal on the board:\n\n**Goal: \"Finish the requested work\"** (finite, owner: main) \u2014 status **waiting**, version 4.\n\n**Finished:**\n- \u2705 **Prepare the first item** \u2014 DONE.\n\n**Still left:**\n- \u2b1c **Check the remaining item** (`8044a970`) \u2014 still **TODO**. This is the one open item, and it's what the goal is waiting on.\n\n**What happens next:**\n- The goal is parked with reason *\"One requested task still needs checking\"* and will wake on its scheduled review at **2026-09-22 03:48 UTC** (tomorrow), or earlier if task `8044a970` changes.\n- \u26a0\ufe0f Note: **automatic pursuit is disabled** for this tenant (`execution_enabled: false`), so nothing will move on its own \u2014 the wake conditions are registered triggers, but the goal won't actually be pursued until execution is enabled. If you want that remaining item checked now, say the word and I'll take it on directly.\n\nNo evidence has been recorded against the goal's success criterion (\"The requested work has been checked\") yet, which is consistent with the one task still being open.",
+      "run": {
+        "text": "Here's where things stand, operator \u2014 one goal on the board:\n\n**Goal: \"Finish the requested work\"** (finite, owner: main) \u2014 status **waiting**, version 4.\n\n**Finished:**\n- \u2705 **Prepare the first item** \u2014 DONE.\n\n**Still left:**\n- \u2b1c **Check the remaining item** (`8044a970`) \u2014 still **TODO**. This is the one open item, and it's what the goal is waiting on.\n\n**What happens next:**\n- The goal is parked with reason *\"One requested task still needs checking\"* and will wake on its scheduled review at **2026-09-22 03:48 UTC** (tomorrow), or earlier if task `8044a970` changes.\n- \u26a0\ufe0f Note: **automatic pursuit is disabled** for this tenant (`execution_enabled: false`), so nothing will move on its own \u2014 the wake conditions are registered triggers, but the goal won't actually be pursued until execution is enabled. If you want that remaining item checked now, say the word and I'll take it on directly.\n\nNo evidence has been recorded against the goal's success criterion (\"The requested work has been checked\") yet, which is consistent with the one task still being open.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14182,
+        "output_tokens": 476,
+        "duration_ms": 12800,
+        "total_cost_usd": 0.0012,
+        "run_id": "e52b9cb1-f8b0-4c05-9e02-5b70d6f9c531"
+      },
+      "elapsed_ms": 12869.935080001596
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the goal **\"Finish the requested work\"** is now **paused** (version 5).\n\n- **Before:** status `waiting`, parked on task `8044a970` with a scheduled review at 2026-09-22 03:48 UTC.\n- **Now:** status `paused`. It will **not** wake on its scheduled review or on any task/event trigger while paused \u2014 paused goals stay put until you resume them.\n\nNothing else was touched: the open task `8044a970` (\"Check the remaining item\") is still TODO, and no evidence was recorded. Whenever you want to pick this back up, just say so and I'll resume it.",
+      "run": {
+        "text": "Done, operator \u2014 the goal **\"Finish the requested work\"** is now **paused** (version 5).\n\n- **Before:** status `waiting`, parked on task `8044a970` with a scheduled review at 2026-09-22 03:48 UTC.\n- **Now:** status `paused`. It will **not** wake on its scheduled review or on any task/event trigger while paused \u2014 paused goals stay put until you resume them.\n\nNothing else was touched: the open task `8044a970` (\"Check the remaining item\") is still TODO, and no evidence was recorded. Whenever you want to pick this back up, just say so and I'll resume it.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 15034,
+        "output_tokens": 427,
+        "duration_ms": 9710,
+        "total_cost_usd": 0.0012,
+        "run_id": "5ed08241-39fd-48de-baf4-1f33da299462"
+      },
+      "elapsed_ms": 9733.564303001913
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 6,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

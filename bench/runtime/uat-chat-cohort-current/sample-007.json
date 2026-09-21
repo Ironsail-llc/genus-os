@@ -1,0 +1,51 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's the state of the work, operator:\n\n**Finished**\n- **Prepare the first item** (`e18d8422`) \u2014 status **DONE**.\n\n**Still left**\n- **Check the remaining item** (`87126e4e`) \u2014 status **TODO**. This is the one open task.\n\n**Goal status**\n- Goal `340362b5` (\"Finish the requested work\") is **waiting**, blocked on that remaining task. Success criterion: \"The requested work has been checked.\"\n- Wake conditions: a scheduled review at **2026-09-22 03:47 UTC** (tomorrow), or a change to the linked task `87126e4e`.\n\nOne caveat: **automatic pursuit is disabled** for this tenant (`execution_enabled: false`), so the goal will not progress on its own \u2014 the scheduled review and task-change triggers are registered but won't fire into action until execution is enabled. The remaining item needs to be checked manually or execution turned on.\n\nWant me to take the remaining item now?",
+      "run": {
+        "text": "Here's the state of the work, operator:\n\n**Finished**\n- **Prepare the first item** (`e18d8422`) \u2014 status **DONE**.\n\n**Still left**\n- **Check the remaining item** (`87126e4e`) \u2014 status **TODO**. This is the one open task.\n\n**Goal status**\n- Goal `340362b5` (\"Finish the requested work\") is **waiting**, blocked on that remaining task. Success criterion: \"The requested work has been checked.\"\n- Wake conditions: a scheduled review at **2026-09-22 03:47 UTC** (tomorrow), or a change to the linked task `87126e4e`.\n\nOne caveat: **automatic pursuit is disabled** for this tenant (`execution_enabled: false`), so the goal will not progress on its own \u2014 the scheduled review and task-change triggers are registered but won't fire into action until execution is enabled. The remaining item needs to be checked manually or execution turned on.\n\nWant me to take the remaining item now?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14379,
+        "output_tokens": 455,
+        "duration_ms": 13467,
+        "total_cost_usd": 0.0012,
+        "run_id": "b54739e5-0d8a-4115-85cb-d629d8cca3b5"
+      },
+      "elapsed_ms": 13522.223924999707
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the work is paused.\n\n**Goal `340362b5` (\"Finish the requested work\")** \u2014 status is now **paused** (version 5, was `waiting`).\n\nWhat this means:\n- The goal will **not** wake on its own. Paused goals don't fire the scheduled review or the linked-task trigger.\n- The remaining open task **`87126e4e` (\"Check the remaining item\")** is untouched and still **TODO** \u2014 pausing the goal doesn't change the task itself.\n- Automatic pursuit was already disabled for this tenant (`execution_enabled: false`), so nothing was running in the background regardless.\n\nTo pick this back up later, just tell me to resume it \u2014 resuming requires an operator, so it won't restart on its own.",
+      "run": {
+        "text": "Done, operator \u2014 the work is paused.\n\n**Goal `340362b5` (\"Finish the requested work\")** \u2014 status is now **paused** (version 5, was `waiting`).\n\nWhat this means:\n- The goal will **not** wake on its own. Paused goals don't fire the scheduled review or the linked-task trigger.\n- The remaining open task **`87126e4e` (\"Check the remaining item\")** is untouched and still **TODO** \u2014 pausing the goal doesn't change the task itself.\n- Automatic pursuit was already disabled for this tenant (`execution_enabled: false`), so nothing was running in the background regardless.\n\nTo pick this back up later, just tell me to resume it \u2014 resuming requires an operator, so it won't restart on its own.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 19547,
+        "output_tokens": 481,
+        "duration_ms": 10774,
+        "total_cost_usd": 0.0013,
+        "run_id": "90b6654f-2b20-4fa3-b480-81d660a6eb72"
+      },
+      "elapsed_ms": 10791.340642997966
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 7,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's the state of play, operator:\n\n**Goal:** \"Finish the requested work\" (finite, owner: main) \u2014 status **waiting**, version 4.\n- Success criteria: *\"The requested work has been checked\"* \u2014 not yet satisfied (no evidence recorded).\n\n**Linked tasks:**\n| Task | Status |\n|---|---|\n| Prepare the first item (`38ecf69a`) | \u2705 **DONE** |\n| Check the remaining item (`232a8480`) | \u23f3 **TODO** \u2014 still open |\n\n**So:**\n- **Finished:** \"Prepare the first item.\"\n- **Still left:** \"Check the remaining item\" \u2014 this is the single outstanding item, and it's the reason the goal is parked in a wait state.\n\n**What happens next:** The goal is waiting on that task. It will wake either on its scheduled review at **2026-09-22 03:54 UTC** (about 24h from now) or sooner if task `232a8480` changes (e.g., it's completed or updated). Note that automatic pursuit is currently **disabled** for this tenant (`execution_enabled: false`), so nothing will advance on its own \u2014 the wake is a registered trigger, not a promise of automatic progress. Completing task `232a8480` is what would actually move this goal toward done.\n\nWant me to take on \"Check the remaining item\" now, or is there a specific item you had in mind for it?",
+      "run": {
+        "text": "Here's the state of play, operator:\n\n**Goal:** \"Finish the requested work\" (finite, owner: main) \u2014 status **waiting**, version 4.\n- Success criteria: *\"The requested work has been checked\"* \u2014 not yet satisfied (no evidence recorded).\n\n**Linked tasks:**\n| Task | Status |\n|---|---|\n| Prepare the first item (`38ecf69a`) | \u2705 **DONE** |\n| Check the remaining item (`232a8480`) | \u23f3 **TODO** \u2014 still open |\n\n**So:**\n- **Finished:** \"Prepare the first item.\"\n- **Still left:** \"Check the remaining item\" \u2014 this is the single outstanding item, and it's the reason the goal is parked in a wait state.\n\n**What happens next:** The goal is waiting on that task. It will wake either on its scheduled review at **2026-09-22 03:54 UTC** (about 24h from now) or sooner if task `232a8480` changes (e.g., it's completed or updated). Note that automatic pursuit is currently **disabled** for this tenant (`execution_enabled: false`), so nothing will advance on its own \u2014 the wake is a registered trigger, not a promise of automatic progress. Completing task `232a8480` is what would actually move this goal toward done.\n\nWant me to take on \"Check the remaining item\" now, or is there a specific item you had in mind for it?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14554,
+        "output_tokens": 616,
+        "duration_ms": 14513,
+        "total_cost_usd": 0.0013,
+        "run_id": "2054b6bc-0f51-4aa9-bc6b-ecfe883731ac"
+      },
+      "elapsed_ms": 14577.154620998044
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the work is paused.\n\n**Goal:** \"Finish the requested work\" (`bc0b921e`) \u2014 status **paused** (was *waiting*), now at version 5.\n\n**What this changes:**\n- The goal will **no longer wake** on its scheduled review (2026-09-22 03:54 UTC) or on any change to the linked task `232a8480`. Paused goals don't wake.\n- Nothing was cancelled or deleted \u2014 the linked task \"Check the remaining item\" (`232a8480`) stays open as-is, and the goal's criteria are untouched.\n\n**To pick this back up**, just say the word and I'll resume it (resuming is an operator action, so it needs your go-ahead). Want me to resume it later, or leave it parked?",
+      "run": {
+        "text": "Done, operator \u2014 the work is paused.\n\n**Goal:** \"Finish the requested work\" (`bc0b921e`) \u2014 status **paused** (was *waiting*), now at version 5.\n\n**What this changes:**\n- The goal will **no longer wake** on its scheduled review (2026-09-22 03:54 UTC) or on any change to the linked task `232a8480`. Paused goals don't wake.\n- Nothing was cancelled or deleted \u2014 the linked task \"Check the remaining item\" (`232a8480`) stays open as-is, and the goal's criteria are untouched.\n\n**To pick this back up**, just say the word and I'll resume it (resuming is an operator action, so it needs your go-ahead). Want me to resume it later, or leave it parked?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 20473,
+        "output_tokens": 549,
+        "duration_ms": 22566,
+        "total_cost_usd": 0.0013,
+        "run_id": "519fd856-6477-4384-826e-def7b059c37b"
+      },
+      "elapsed_ms": 22592.24634599741
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "get_pursuit_goal",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 7,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

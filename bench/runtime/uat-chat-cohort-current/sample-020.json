@@ -1,0 +1,51 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's the state of your goal **\"Finish the requested work\"** (goal `87268345`, currently *waiting*, version 4):\n\n**Finished**\n- \u2705 **Prepare the first item** \u2014 task `c1113052`, status **DONE**.\n\n**Still left**\n- \u2b1c **Check the remaining item** \u2014 task `186e3c26`, status **TODO**. This is the one open item, and it's what the goal is waiting on.\n- The goal itself is not complete: success criterion *\"The requested work has been checked\"* has no evidence recorded yet, so nothing is satisfied.\n\n**What happens next**\n- The goal is parked with a wait on task `186e3c26`. It can wake on either its scheduled review (**2026-09-22 03:54 UTC**, i.e. ~24h from now) or a change to that linked task.\n- \u26a0\ufe0f Automatic pursuit is **disabled** for this tenant (`execution_enabled: false`), so the goal will **not** advance on its own \u2014 the remaining item needs to be checked manually, or you'd need to enable execution.\n\nSo: one item done, one item (the check) outstanding. Want me to take the check on now, or leave it to the scheduled review?",
+      "run": {
+        "text": "Here's the state of your goal **\"Finish the requested work\"** (goal `87268345`, currently *waiting*, version 4):\n\n**Finished**\n- \u2705 **Prepare the first item** \u2014 task `c1113052`, status **DONE**.\n\n**Still left**\n- \u2b1c **Check the remaining item** \u2014 task `186e3c26`, status **TODO**. This is the one open item, and it's what the goal is waiting on.\n- The goal itself is not complete: success criterion *\"The requested work has been checked\"* has no evidence recorded yet, so nothing is satisfied.\n\n**What happens next**\n- The goal is parked with a wait on task `186e3c26`. It can wake on either its scheduled review (**2026-09-22 03:54 UTC**, i.e. ~24h from now) or a change to that linked task.\n- \u26a0\ufe0f Automatic pursuit is **disabled** for this tenant (`execution_enabled: false`), so the goal will **not** advance on its own \u2014 the remaining item needs to be checked manually, or you'd need to enable execution.\n\nSo: one item done, one item (the check) outstanding. Want me to take the check on now, or leave it to the scheduled review?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14353,
+        "output_tokens": 592,
+        "duration_ms": 14117,
+        "total_cost_usd": 0.0013,
+        "run_id": "38f3f0b6-29ed-4b36-aa10-f831ab05dc60"
+      },
+      "elapsed_ms": 14187.911873999838
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the goal is paused.\n\n**Goal `87268345` \u2014 \"Finish the requested work\"**\n- Status: **waiting \u2192 paused** (version 4 \u2192 5)\n- The scheduled review (2026-09-22 03:54 UTC) and the linked-task wake on `186e3c26` will **no longer fire** while it's paused. Paused goals don't wake on their own.\n- Nothing was lost: task `c1113052` is still DONE, and `186e3c26` (\"Check the remaining item\") remains TODO with its wait record intact.\n\nNote: automatic pursuit was already disabled for this tenant, so pausing changes little operationally \u2014 but it does formally stop the review trigger. Say the word when you want it resumed, and I'll pick it back up from the same wait.",
+      "run": {
+        "text": "Done, operator \u2014 the goal is paused.\n\n**Goal `87268345` \u2014 \"Finish the requested work\"**\n- Status: **waiting \u2192 paused** (version 4 \u2192 5)\n- The scheduled review (2026-09-22 03:54 UTC) and the linked-task wake on `186e3c26` will **no longer fire** while it's paused. Paused goals don't wake on their own.\n- Nothing was lost: task `c1113052` is still DONE, and `186e3c26` (\"Check the remaining item\") remains TODO with its wait record intact.\n\nNote: automatic pursuit was already disabled for this tenant, so pausing changes little operationally \u2014 but it does formally stop the review trigger. Say the word when you want it resumed, and I'll pick it back up from the same wait.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 19987,
+        "output_tokens": 498,
+        "duration_ms": 10235,
+        "total_cost_usd": 0.0012,
+        "run_id": "776193d1-3602-4051-b73d-65b71a9032f8"
+      },
+      "elapsed_ms": 10268.512381000619
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 7,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

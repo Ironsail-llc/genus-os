@@ -1,0 +1,8 @@
+.                                                                        [100%]
+=============================== warnings summary ===============================
+robothor/engine/tests/test_runtime_chat_goal_acceptance.py::test_unfinished_goal_review_and_pause_through_normal_chat[single-goal]
+  /home/philip/robothor-runtime-modernization/.venv/lib/python3.14/site-packages/pydantic/_internal/_generate_schema.py:1480: UserWarning: Item 'summary' on TypedDict class 'ChatCompletionReasoningItem' is using the `ReadOnly` qualifier. Pydantic will not protect items from any mutation on dictionary instances.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1 passed, 1 deselected, 1 warning in 19.16s

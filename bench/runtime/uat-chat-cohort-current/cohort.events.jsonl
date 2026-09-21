@@ -1,0 +1,60 @@
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 0, "recorded_at": "2026-09-21T03:44:09.081497+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 0, "recorded_at": "2026-09-21T03:44:45.465406+00:00", "exit_code": 0, "artifact": "sample-000.json", "log": "sample-000.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 1, "recorded_at": "2026-09-21T03:44:45.467425+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 1, "recorded_at": "2026-09-21T03:45:29.349670+00:00", "exit_code": 0, "artifact": "sample-001.json", "log": "sample-001.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 2, "recorded_at": "2026-09-21T03:45:29.352124+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 2, "recorded_at": "2026-09-21T03:46:04.169404+00:00", "exit_code": 0, "artifact": "sample-002.json", "log": "sample-002.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 3, "recorded_at": "2026-09-21T03:46:04.171529+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 3, "recorded_at": "2026-09-21T03:46:34.547431+00:00", "exit_code": 0, "artifact": "sample-003.json", "log": "sample-003.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 4, "recorded_at": "2026-09-21T03:46:34.550088+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 4, "recorded_at": "2026-09-21T03:46:59.096135+00:00", "exit_code": 0, "artifact": "sample-004.json", "log": "sample-004.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 5, "recorded_at": "2026-09-21T03:46:59.098796+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 5, "recorded_at": "2026-09-21T03:47:28.013799+00:00", "exit_code": 0, "artifact": "sample-005.json", "log": "sample-005.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 6, "recorded_at": "2026-09-21T03:47:28.015926+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 6, "recorded_at": "2026-09-21T03:47:55.771922+00:00", "exit_code": 0, "artifact": "sample-006.json", "log": "sample-006.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 7, "recorded_at": "2026-09-21T03:47:55.774230+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 7, "recorded_at": "2026-09-21T03:48:23.049726+00:00", "exit_code": 0, "artifact": "sample-007.json", "log": "sample-007.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 8, "recorded_at": "2026-09-21T03:48:23.051546+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 8, "recorded_at": "2026-09-21T03:48:46.450604+00:00", "exit_code": 0, "artifact": "sample-008.json", "log": "sample-008.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 9, "recorded_at": "2026-09-21T03:48:46.452646+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 9, "recorded_at": "2026-09-21T03:49:13.987744+00:00", "exit_code": 0, "artifact": "sample-009.json", "log": "sample-009.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 10, "recorded_at": "2026-09-21T03:49:13.989870+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 10, "recorded_at": "2026-09-21T03:49:40.929269+00:00", "exit_code": 0, "artifact": "sample-010.json", "log": "sample-010.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 11, "recorded_at": "2026-09-21T03:49:40.932000+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 11, "recorded_at": "2026-09-21T03:50:09.411290+00:00", "exit_code": 0, "artifact": "sample-011.json", "log": "sample-011.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 12, "recorded_at": "2026-09-21T03:50:09.413723+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 12, "recorded_at": "2026-09-21T03:50:35.784792+00:00", "exit_code": 0, "artifact": "sample-012.json", "log": "sample-012.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 13, "recorded_at": "2026-09-21T03:50:35.787526+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 13, "recorded_at": "2026-09-21T03:50:57.053008+00:00", "exit_code": 0, "artifact": "sample-013.json", "log": "sample-013.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 14, "recorded_at": "2026-09-21T03:50:57.055524+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 14, "recorded_at": "2026-09-21T03:51:23.757134+00:00", "exit_code": 0, "artifact": "sample-014.json", "log": "sample-014.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 15, "recorded_at": "2026-09-21T03:51:23.759823+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 15, "recorded_at": "2026-09-21T03:51:42.646189+00:00", "exit_code": 0, "artifact": "sample-015.json", "log": "sample-015.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 16, "recorded_at": "2026-09-21T03:51:42.648254+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 16, "recorded_at": "2026-09-21T03:52:16.209247+00:00", "exit_code": 0, "artifact": "sample-016.json", "log": "sample-016.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 17, "recorded_at": "2026-09-21T03:52:16.211936+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 17, "recorded_at": "2026-09-21T03:52:56.170806+00:00", "exit_code": 0, "artifact": "sample-017.json", "log": "sample-017.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 18, "recorded_at": "2026-09-21T03:52:56.173595+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 18, "recorded_at": "2026-09-21T03:53:18.381662+00:00", "exit_code": 0, "artifact": "sample-018.json", "log": "sample-018.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 19, "recorded_at": "2026-09-21T03:53:18.384441+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 19, "recorded_at": "2026-09-21T03:54:00.460733+00:00", "exit_code": 0, "artifact": "sample-019.json", "log": "sample-019.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 20, "recorded_at": "2026-09-21T03:54:00.463425+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 20, "recorded_at": "2026-09-21T03:54:28.264103+00:00", "exit_code": 0, "artifact": "sample-020.json", "log": "sample-020.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 21, "recorded_at": "2026-09-21T03:54:28.266583+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 21, "recorded_at": "2026-09-21T03:55:08.846319+00:00", "exit_code": 0, "artifact": "sample-021.json", "log": "sample-021.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 22, "recorded_at": "2026-09-21T03:55:08.848721+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 22, "recorded_at": "2026-09-21T03:55:58.500508+00:00", "exit_code": 0, "artifact": "sample-022.json", "log": "sample-022.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 23, "recorded_at": "2026-09-21T03:55:58.503360+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 23, "recorded_at": "2026-09-21T03:56:16.861418+00:00", "exit_code": 0, "artifact": "sample-023.json", "log": "sample-023.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 24, "recorded_at": "2026-09-21T03:56:16.863524+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 24, "recorded_at": "2026-09-21T03:56:37.411345+00:00", "exit_code": 0, "artifact": "sample-024.json", "log": "sample-024.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 25, "recorded_at": "2026-09-21T03:56:37.412996+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 25, "recorded_at": "2026-09-21T03:57:01.601065+00:00", "exit_code": 0, "artifact": "sample-025.json", "log": "sample-025.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 26, "recorded_at": "2026-09-21T03:57:01.603254+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 26, "recorded_at": "2026-09-21T03:57:40.395363+00:00", "exit_code": 0, "artifact": "sample-026.json", "log": "sample-026.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 27, "recorded_at": "2026-09-21T03:57:40.398188+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 27, "recorded_at": "2026-09-21T03:58:16.484615+00:00", "exit_code": 0, "artifact": "sample-027.json", "log": "sample-027.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 28, "recorded_at": "2026-09-21T03:58:16.487100+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 28, "recorded_at": "2026-09-21T03:58:49.037706+00:00", "exit_code": 0, "artifact": "sample-028.json", "log": "sample-028.log"}
+{"event": "sample_started", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 29, "recorded_at": "2026-09-21T03:58:49.040342+00:00"}
+{"event": "sample_finished", "model": "openrouter/deepseek/deepseek-v4.1-flash", "repetition": 29, "recorded_at": "2026-09-21T03:59:17.963673+00:00", "exit_code": 0, "artifact": "sample-029.json", "log": "sample-029.log"}

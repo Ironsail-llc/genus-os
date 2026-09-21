@@ -1,0 +1,52 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator:\n\n**Finished**\n- **\"Prepare the first item\"** \u2014 status **DONE**.\n\n**Still left**\n- **\"Check the remaining item\"** \u2014 status **TODO**. This is the one open item, and it's the blocker the goal is waiting on.\n\n**Goal status** (`a0cfd745\u2026`, \"Finish the requested work\")\n- Status: **waiting** \u2014 reason: *\"One requested task still needs checking\"*, tied to task `17b99fb6`.\n- Success criterion: *\"The requested work has been checked\"* \u2014 not yet met (no evidence recorded).\n- Wake conditions: a **scheduled review at 2026-09-22 03:51 UTC** (tomorrow), or a change/event on the linked tasks (`17b99fb6`, `8807b221`).\n- **Automatic pursuit is disabled** (`execution_enabled: false`), so nothing will advance on its own \u2014 the goal won't wake and act without that being enabled, and it's not something I can turn on myself.\n\nSo: one of two items is done, and the remaining \"Check the remaining item\" task is what's outstanding.\n\nTwo notes:\n- I couldn't pull memory context \u2014 the memory-search skill isn't available to me in this session, so this is read straight from the goal/task records.\n- If you want, I can take the remaining item now (or you can enable execution so it's picked up at the scheduled review). Which would you prefer?",
+      "run": {
+        "text": "Here's where things stand, operator:\n\n**Finished**\n- **\"Prepare the first item\"** \u2014 status **DONE**.\n\n**Still left**\n- **\"Check the remaining item\"** \u2014 status **TODO**. This is the one open item, and it's the blocker the goal is waiting on.\n\n**Goal status** (`a0cfd745\u2026`, \"Finish the requested work\")\n- Status: **waiting** \u2014 reason: *\"One requested task still needs checking\"*, tied to task `17b99fb6`.\n- Success criterion: *\"The requested work has been checked\"* \u2014 not yet met (no evidence recorded).\n- Wake conditions: a **scheduled review at 2026-09-22 03:51 UTC** (tomorrow), or a change/event on the linked tasks (`17b99fb6`, `8807b221`).\n- **Automatic pursuit is disabled** (`execution_enabled: false`), so nothing will advance on its own \u2014 the goal won't wake and act without that being enabled, and it's not something I can turn on myself.\n\nSo: one of two items is done, and the remaining \"Check the remaining item\" task is what's outstanding.\n\nTwo notes:\n- I couldn't pull memory context \u2014 the memory-search skill isn't available to me in this session, so this is read straight from the goal/task records.\n- If you want, I can take the remaining item now (or you can enable execution so it's picked up at the scheduled review). Which would you prefer?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14726,
+        "output_tokens": 736,
+        "duration_ms": 18635,
+        "total_cost_usd": 0.0014,
+        "run_id": "6d547c87-6366-44ee-a0f3-a938b3474a6b"
+      },
+      "elapsed_ms": 18705.72928399997
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the work is paused.\n\n**Goal `a0cfd745\u2026` (\"Finish the requested work\")**\n- Status: **waiting \u2192 paused** (version 5).\n- While paused, it will **not** wake on its scheduled review (2026-09-22 03:51 UTC) or on any task event. Nothing will advance on its own.\n\n**Unchanged**\n- Task `17b99fb6` (\"Check the remaining item\") is still **TODO** \u2014 I didn't touch it, and \"Prepare the first item\" remains DONE.\n- Success criterion (\"The requested work has been checked\") is still unmet; no evidence recorded.\n\nNote: `execution_enabled` was already `false`, so nothing was running automatically anyway \u2014 the pause makes that explicit and blocks the scheduled wake.\n\nTo pick this back up later, just say the word and I'll resume it (resuming requires your go-ahead). Want me to leave it paused indefinitely, or resume at a specific time?",
+      "run": {
+        "text": "Done, operator \u2014 the work is paused.\n\n**Goal `a0cfd745\u2026` (\"Finish the requested work\")**\n- Status: **waiting \u2192 paused** (version 5).\n- While paused, it will **not** wake on its scheduled review (2026-09-22 03:51 UTC) or on any task event. Nothing will advance on its own.\n\n**Unchanged**\n- Task `17b99fb6` (\"Check the remaining item\") is still **TODO** \u2014 I didn't touch it, and \"Prepare the first item\" remains DONE.\n- Success criterion (\"The requested work has been checked\") is still unmet; no evidence recorded.\n\nNote: `execution_enabled` was already `false`, so nothing was running automatically anyway \u2014 the pause makes that explicit and blocks the scheduled wake.\n\nTo pick this back up later, just say the word and I'll resume it (resuming requires your go-ahead). Want me to leave it paused indefinitely, or resume at a specific time?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 20446,
+        "output_tokens": 534,
+        "duration_ms": 11915,
+        "total_cost_usd": 0.0013,
+        "run_id": "451d7a8f-0c1a-41ac-8029-810fe51694dd"
+      },
+      "elapsed_ms": 11944.321789000242
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "get_pursuit_goal",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 7,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

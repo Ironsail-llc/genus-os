@@ -1,0 +1,50 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator.\n\n**Goal:** \"Finish the requested work\" \u2014 status **waiting**, version 4.\n\n**Finished:**\n- \u2705 **Prepare the first item** \u2014 DONE\n\n**Still left:**\n- \u2b1c **Check the remaining item** (task `1ea186f5`) \u2014 still TODO. This is the only open task, and the goal is explicitly waiting on it.\n\n**What happens next:**\n- The goal is in a **wait** state, keyed to that remaining task. It will wake on its scheduled review at **2026-09-22 03:52 UTC** (or sooner if the linked task changes \u2014 a status update on `1ea186f5` counts as a wake trigger).\n- One caveat: automatic pursuit is currently **disabled** for this tenant (`execution_enabled: false`). So the goal won't make progress on its own \u2014 the wake conditions are registered, but nothing will run until execution is turned on or the work is driven manually.\n\nSo: one of two items done, one outstanding, and the goal is parked until it wakes or you re-enable execution. Want me to do anything with the remaining item now?",
+      "run": {
+        "text": "Here's where things stand, operator.\n\n**Goal:** \"Finish the requested work\" \u2014 status **waiting**, version 4.\n\n**Finished:**\n- \u2705 **Prepare the first item** \u2014 DONE\n\n**Still left:**\n- \u2b1c **Check the remaining item** (task `1ea186f5`) \u2014 still TODO. This is the only open task, and the goal is explicitly waiting on it.\n\n**What happens next:**\n- The goal is in a **wait** state, keyed to that remaining task. It will wake on its scheduled review at **2026-09-22 03:52 UTC** (or sooner if the linked task changes \u2014 a status update on `1ea186f5` counts as a wake trigger).\n- One caveat: automatic pursuit is currently **disabled** for this tenant (`execution_enabled: false`). So the goal won't make progress on its own \u2014 the wake conditions are registered, but nothing will run until execution is turned on or the work is driven manually.\n\nSo: one of two items done, one outstanding, and the goal is parked until it wakes or you re-enable execution. Want me to do anything with the remaining item now?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14197,
+        "output_tokens": 465,
+        "duration_ms": 8764,
+        "total_cost_usd": 0.0012,
+        "run_id": "0d391da1-54f5-450a-a5e0-cb4ce4b1ec6c"
+      },
+      "elapsed_ms": 8820.796191001136
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the goal is now **paused** (version 5).\n\n**Goal:** \"Finish the requested work\" \u2014 status **paused**.\n\n**What that means:**\n- The scheduled review (was set for 2026-09-22 03:52 UTC) will **not** fire, and the wake trigger on task `1ea186f5` is now inert. Paused goals don't wake on their own.\n- The one open item \u2014 **Check the remaining item** (task `1ea186f5`) \u2014 is untouched and still TODO. Pausing stops pursuit; it doesn't change the task.\n- The completed item (**Prepare the first item**) stays done.\n\nNothing will run against this goal until you resume it. Want me to leave it here, or resume it later once you're ready?",
+      "run": {
+        "text": "Done, operator \u2014 the goal is now **paused** (version 5).\n\n**Goal:** \"Finish the requested work\" \u2014 status **paused**.\n\n**What that means:**\n- The scheduled review (was set for 2026-09-22 03:52 UTC) will **not** fire, and the wake trigger on task `1ea186f5` is now inert. Paused goals don't wake on their own.\n- The one open item \u2014 **Check the remaining item** (task `1ea186f5`) \u2014 is untouched and still TODO. Pausing stops pursuit; it doesn't change the task.\n- The completed item (**Prepare the first item**) stays done.\n\nNothing will run against this goal until you resume it. Want me to leave it here, or resume it later once you're ready?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14954,
+        "output_tokens": 469,
+        "duration_ms": 27801,
+        "total_cost_usd": 0.0012,
+        "run_id": "f28856ac-007e-4344-a420-b12b3e47ab86"
+      },
+      "elapsed_ms": 27825.112776001333
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 6,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}
