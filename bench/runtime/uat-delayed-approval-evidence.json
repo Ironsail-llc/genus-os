@@ -1,0 +1,47 @@
+{
+  "revision": "2d5b4c2985d",
+  "finding": "An approval with no execution record continued showing its initial admission message indefinitely.",
+  "change": "At an outcome read at least 60 seconds after the durable receipt, report execution_evidence_delayed and explain that no execution record is available yet. Continue original-request audit reads. Do not infer no effects, finalize the request or replay its work. Legacy records without a receipt timestamp retain the ordinary admission explanation.",
+  "initial_failure": {
+    "failed": 1,
+    "log": "/tmp/runtime-delayed-approval-before.log"
+  },
+  "backend": {
+    "passed": 90,
+    "seconds": 8.45,
+    "log": "/tmp/runtime-delayed-approval-backend.log"
+  },
+  "component": {
+    "passed": 9,
+    "seconds": 0.863,
+    "log": "/tmp/runtime-delayed-approval-ui.log"
+  },
+  "frontend": {
+    "revision": "2d5b4c2985d",
+    "files": 150,
+    "passed": 1661,
+    "failed": 0,
+    "seconds": 9.55,
+    "log": "/tmp/runtime-delayed-approval-frontend.log"
+  },
+  "canonical_browser": {
+    "passed": 33,
+    "skipped": 1,
+    "warnings": 1,
+    "seconds": 25.4,
+    "log": "/tmp/runtime-delayed-approval-native.log"
+  },
+  "build": {
+    "passed": true,
+    "log": "/tmp/runtime-delayed-approval-build.log"
+  },
+  "process_evidence": "A separate Python worker commits the real plan claim to private PostgreSQL, then exits abruptly with code 23 before invoking any runner. After deleting the chat session, parent-process recovery still reads the approval receipt; no run row exists. A separate aged-receipt case verifies the delayed explanation and subsequent precedence of a late completed run.",
+  "limits": "The explanation appears at the next outcome read after receipt age reaches 60 seconds; this does not establish the general 60-second simple-action deadline. This is approval evidence recovery, not automatic orphaned-worker resumption. New rendered cases mock backend responses; canonical backend integration is separate. No production action, deployment, full acceptance or provider performance qualification.",
+  "checks": "Fresh standalone build, Ruff lint/format, ESLint and diff checks pass.",
+  "rendered_chat": {
+    "passed": 36,
+    "failed": 0,
+    "reported_duration": "1.3m",
+    "log": "/tmp/runtime-delayed-approval-browser.log"
+  }
+}

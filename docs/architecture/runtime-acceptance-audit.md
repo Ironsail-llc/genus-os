@@ -645,3 +645,14 @@ At `41faa8f1fa6`, a new ordinary-chat test starts from a real draft in a private
 The single case passes (3.49s, one dependency warning). Combined confirmation, goal-chat, performance, benchmark and size checks pass all 15 tests (6.70s, one dependency warning). Ruff lint/format and diff checks pass. The case is included in the runtime-contract CI job, with no remote CI execution claimed. No product code changed in this step.
 
 The user was asked to review the actual response wording in normal chat; manual acceptance remains pending. Calendar transport is fake and run/history persistence is mocked; operation persistence and handler behavior are real. This is not a live-provider latency or full durable-chat integration claim. No production notification, calendar change or deployment occurred. Full acceptance remains open.
+
+
+## Explain delayed approval evidence and retain it after process exit
+
+At `2d5b4c2985d`, outcome recovery distinguishes an approval receipt at least 60 seconds old with no execution record. It reports that missing evidence explicitly and continues checking the original request. Chat displays this recorded explanation and retains Stop, including after reload. A late execution result supersedes the notice. The notice remains nonterminal and unverified; it is not proof that no effects occurred or authorization to repeat the action. Legacy approvals without a receipt timestamp retain the ordinary admission explanation.
+
+A failing private-database test reproduced the missing delayed state. A separate process test now commits the actual plan claim and exits abruptly with code 23 before invoking any runner. After session deletion, parent-process recovery still finds the receipt; no run row exists. This proves approval evidence survives that process boundary, not recovery of an executing or orphaned worker.
+
+Verification passes 90 backend recovery/claim/size checks (8.45s), nine component checks (0.863s), all 1,661 frontend tests across 150 files (9.55s), all 36 rendered deep/ordinary chat cases (reported 1.3m), and 33 canonical native/browser integrations (25.40s, one worker-only skip and one dependency warning). The rendered delayed-approval tests use mocked backend responses; canonical backend persistence tests are separate. Fresh build, Ruff lint/format, ESLint and diff checks pass. Evidence is in `bench/runtime/uat-delayed-approval-evidence.json`.
+
+The notice appears on the next outcome read after the receipt reaches the age threshold. This does not establish the general 60-second simple-action deadline or automatic orphaned-worker resumption. Manual review of the repeated-confirmation chat case remains pending. Full acceptance, production/provider qualification and rollout remain open. No production change occurred.
