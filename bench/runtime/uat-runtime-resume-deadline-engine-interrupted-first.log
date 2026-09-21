@@ -1,0 +1,65 @@
+........................................................................ [  0%]
+........................................................................ [  1%]
+........................................................................ [  1%]
+..............................................ssssssssssssss............ [  2%]
+........................................................................ [  3%]
+........................................................................ [  3%]
+........................................................................ [  4%]
+........................................................................ [  5%]
+........................................................................ [  5%]
+........................................................................ [  6%]
+........................................................................ [  6%]
+........................................................................ [  7%]
+........................................................................ [  8%]
+........................................................................ [  8%]
+........................................................................ [  9%]
+........................................................................ [ 10%]
+........................................................................ [ 10%]
+........................................................................ [ 11%]
+
+=============================== warnings summary ===============================
+robothor/engine/tests/test_admin_approvals.py:17
+  /home/philip/robothor-runtime-modernization/robothor/engine/tests/test_admin_approvals.py:17: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient
+
+.venv/lib/python3.14/site-packages/starlette/testclient.py:53
+  /home/philip/robothor-runtime-modernization/.venv/lib/python3.14/site-packages/starlette/testclient.py:53: DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.
+    _PortalFactoryType = Callable[[], AbstractContextManager[anyio.abc.BlockingPortal]]
+
+robothor/engine/tests/test_admin_approvals.py: 7 warnings
+robothor/engine/tests/test_admin_plugins.py: 25 warnings
+robothor/engine/tests/test_admin_plugins_install.py: 25 warnings
+robothor/engine/tests/test_admin_plugins_offloop.py: 16 warnings
+robothor/engine/tests/test_admin_providers.py: 45 warnings
+robothor/engine/tests/test_admin_providers_defaults_read.py: 3 warnings
+robothor/engine/tests/test_admin_scheduler.py: 11 warnings
+robothor/engine/tests/test_benchmark_decontamination.py: 4 warnings
+  /home/philip/robothor-runtime-modernization/robothor/engine/health.py:1210: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+robothor/engine/tests/test_admin_approvals.py: 7 warnings
+robothor/engine/tests/test_admin_plugins.py: 25 warnings
+robothor/engine/tests/test_admin_plugins_install.py: 25 warnings
+robothor/engine/tests/test_admin_plugins_offloop.py: 16 warnings
+robothor/engine/tests/test_admin_providers.py: 45 warnings
+robothor/engine/tests/test_admin_providers_defaults_read.py: 3 warnings
+robothor/engine/tests/test_admin_scheduler.py: 11 warnings
+robothor/engine/tests/test_benchmark_decontamination.py: 4 warnings
+  /home/philip/robothor-runtime-modernization/.venv/lib/python3.14/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! KeyboardInterrupt !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+/home/philip/.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/asyncio/runners.py:132: KeyboardInterrupt
+(to show a full traceback on KeyboardInterrupt use --full-trace)
+1282 passed, 15 skipped, 220 deselected, 274 warnings in 34.67s

@@ -36,6 +36,15 @@ def require_time():
         raise ClassificationDeadlineError(_expires.get())
 
 
+def owned_deadline():
+    """Transfer only this admission's still-active classification bound."""
+    require_time()
+    window = _window.get()
+    if _release_allowed.get() and window is not None and window.when() is not None:
+        return _expires.get()
+    return None
+
+
 def release():
     require_time()  # A late classification cannot revive an expired request.
     window = _window.get()

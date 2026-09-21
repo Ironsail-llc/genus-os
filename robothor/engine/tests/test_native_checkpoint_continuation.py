@@ -2,7 +2,10 @@
 
 import json
 import os
+import subprocess
+import sys
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
@@ -23,12 +26,16 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.mark.asyncio
-async def test_native_checkpoint_continues_saved_conversation(engine_config, sample_agent_config):
+@pytest.mark.parametrize("expired", [False, True])
+async def test_native_checkpoint_continues_saved_conversation(
+    engine_config, sample_agent_config, expired
+):
     dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
     if "host=/tmp/runtime-migrated-" not in dsn:
         pytest.skip("requires disposable canonical migration harness")
     tenant, original = "continuation-" + uuid4().hex, str(uuid4())
     client = str(uuid4())
+    deadline = datetime.now(UTC) + timedelta(seconds=-1 if expired else 30)
     auth = AuthContext(
         tenant_id=tenant, user_id="service:" + sample_agent_config.id, role="owner", typ="user"
     )
@@ -64,6 +71,10 @@ async def test_native_checkpoint_continues_saved_conversation(engine_config, sam
                 auth.user_id,
                 request_key(auth, "web:main", client),
             ),
+        )
+        cur.execute(
+            "UPDATE agent_runs SET runtime_context=%s WHERE id=%s",
+            (Json({"deadline": deadline.isoformat()}), original),
         )
         cur.execute(
             "INSERT INTO agent_run_checkpoints(run_id,step_number,messages,schema_version) VALUES (%s,2,%s,1)",
@@ -111,6 +122,35 @@ async def test_native_checkpoint_continues_saved_conversation(engine_config, sam
         patch("litellm.acompletion", side_effect=provider),
         patch.object(runner.registry, "execute", new_callable=AsyncMock) as tools,
     ):
+        if expired:
+            # A fresh process has no inherited timeout/context; only the saved row
+            # can prevent this continuation from admitting new execution.
+            probe = subprocess.run(
+                [sys.executable, "-c", EXPIRED_PROBE, tenant, original],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            assert probe.returncode == 0, probe.stderr
+            assert "saved deadline denied execution" in probe.stdout
+            from robothor.engine.runtime.deadlines import RuntimeDeadlineError
+
+            with pytest.raises(RuntimeDeadlineError):
+                await runner.execute(
+                    sample_agent_config.id,
+                    "Resume from checkpoint",
+                    agent_config=sample_agent_config,
+                    trigger_type=TriggerType.EVENT,
+                    tenant_id=tenant,
+                    resume_from_run_id=original,
+                )
+            assert seen == []
+            tools.assert_not_awaited()
+            with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+                cur.execute("SELECT count(*) FROM agent_runs WHERE tenant_id=%s", (tenant,))
+                assert cur.fetchone()[0] == 1
+            return
         resumed = await runner.execute(
             sample_agent_config.id,
             "Resume from checkpoint",
@@ -135,6 +175,7 @@ async def test_native_checkpoint_continues_saved_conversation(engine_config, sam
         assert runtime["tenant_id"] == tenant and runtime["runtime_id"] == "current"
 
         assert runtime["resume_from_run_id"] == original
+        assert datetime.fromisoformat(runtime["deadline"]) == deadline
 
     outcome = read_outcome(auth, "web:main", client)
     assert outcome["run_id"] == resumed.id and outcome["state"] == "completed"
@@ -143,3 +184,23 @@ async def test_native_checkpoint_continues_saved_conversation(engine_config, sam
     from robothor.engine.daemon import _resume_scan
 
     assert original not in {candidate.run_id for candidate in _resume_scan(tenant)}
+
+
+EXPIRED_PROBE = """
+import asyncio, sys
+from robothor.engine.runtime import CurrentRuntime, ExecutionContext, RunRequest
+from robothor.engine.runtime.contracts import StateEnvelope
+from robothor.engine.runtime.deadlines import RuntimeDeadlineError
+async def execute(**kwargs):
+    raise AssertionError("Expired saved request admitted new execution")
+async def main():
+    request = RunRequest(ExecutionContext(sys.argv[1], "operator", "fresh-process"),
+        "main", "Continue", resume_from=sys.argv[2], checkpoint=StateEnvelope())
+    try:
+        await CurrentRuntime(execute).run(request)
+    except RuntimeDeadlineError:
+        print("saved deadline denied execution")
+    else:
+        raise AssertionError("Expired deadline was not restored")
+asyncio.run(main())
+"""

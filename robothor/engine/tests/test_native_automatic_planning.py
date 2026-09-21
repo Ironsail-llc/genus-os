@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -113,6 +114,7 @@ async def test_expired_automatic_plan_preserves_native_execution(
     monkeypatch.setattr(LLMClient, "_call_llm", provider)
     monkeypatch.setattr(LLMClient, "_call_llm_streaming", provider)
     # Enough context triggers the existing automatic complexity heuristic.
+    admitted = datetime.now(UTC)
     async with asyncio.timeout(3):
         run = await engine.execute(
             sample_agent_config.id,
@@ -128,6 +130,9 @@ async def test_expired_automatic_plan_preserves_native_execution(
     assert planning == [sample_agent_config.model_primary] and finished == [True]
     assert len(execution) == 2
     with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute("SELECT runtime_context FROM agent_runs WHERE id=%s", (run.id,))
+        deadline = datetime.fromisoformat(cur.fetchone()[0]["deadline"])
+        assert admitted < deadline <= admitted + timedelta(seconds=1.1)
         cur.execute("SELECT body,status FROM crm_tasks WHERE tenant_id=%s", (tenant,))
         assert cur.fetchall() == [("Synthetic", "TODO")]
         cur.execute(

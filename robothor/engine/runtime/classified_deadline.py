@@ -79,22 +79,33 @@ async def apply(session, window, config, route, plan):
     from robothor.engine.runtime.deadlines import require_time
 
     deadline = _deadline(config, route, plan)
+    unclassified = deadline is None
     context = active_context.get()
-    if deadline is None or context is None:
-        if (
-            plan
-            and plan.success
-            and plan.difficulty in ("moderate", "complex")
-            and isinstance(getattr(plan, "raw", None), dict)
-            and getattr(plan, "raw", {}).get("difficulty") == plan.difficulty
-        ):
+    identified_long = (
+        plan
+        and plan.success
+        and plan.difficulty in ("moderate", "complex")
+        and isinstance(getattr(plan, "raw", None), dict)
+        and plan.raw.get("difficulty") == plan.difficulty
+    )
+    if deadline is None:
+        if identified_long:
             classification_window.release()
+            return
+        deadline = classification_window.owned_deadline()
+    if deadline is None or context is None:
         return
     if context.deadline is not None and context.deadline <= deadline:
-        classification_window.release()
+        if not unclassified:
+            classification_window.release()
         return
     context = replace(context, deadline=deadline)
     active_context.set(context)  # Restored by the enclosing runtime admission.
+    if unclassified:
+        # Preserve the original classification owner and its interruption contract.
+        require_time(context)
+        await asyncio.to_thread(_persist, session.run, context)
+        return
     remaining = (deadline - datetime.now(UTC)).total_seconds()
     when = asyncio.get_running_loop().time() + max(0, remaining)
     window.reschedule(min(window.when(), when) if window.when() is not None else when)

@@ -155,10 +155,13 @@ class CheckpointManager:
                     return None
                 result = dict(row)
                 if tenant_id is not None:
-                    cur.execute("SELECT tenant_id FROM agent_runs WHERE id=%s", (run_id,))
+                    cur.execute(
+                        "SELECT tenant_id,runtime_context FROM agent_runs WHERE id=%s", (run_id,)
+                    )
                     owner = cur.fetchone()
                     if not owner or owner["tenant_id"] != tenant_id:
                         return None
+                    result["runtime_context"] = owner.get("runtime_context") or {}
                 # Skip resume if schema version doesn't match
                 saved_version = result.get("schema_version", 0)
                 if saved_version != CHECKPOINT_SCHEMA_VERSION:

@@ -93,3 +93,23 @@ async def test_late_classification_does_not_start_a_fresh_sixty_seconds(monkeypa
         saved.assert_not_called()
     finally:
         active_context.reset(token)
+
+
+async def test_repeated_unclassified_application_keeps_original_guard(monkeypatch):
+    from robothor.engine.runtime.classification_window import ClassificationDeadlineError, guard
+
+    monkeypatch.setattr("robothor.engine.runtime.action_policy.SIMPLE_ACTION_SECONDS", 0.03)
+    saved = Mock()
+    monkeypatch.setattr(policy, "_persist", saved)
+    req = request()
+    token = active_context.set(req.context)
+    try:
+        with policy.admission(req), pytest.raises(ClassificationDeadlineError):
+            async with guard(req), asyncio.timeout(None) as window:
+                for _ in range(2):
+                    await policy.apply(SimpleNamespace(run=object()), window, config(), ROUTE, None)
+                assert window.when() is None  # Classification guard remains the owner.
+                await asyncio.Event().wait()
+        saved.assert_called_once()
+    finally:
+        active_context.reset(token)

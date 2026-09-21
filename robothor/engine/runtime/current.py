@@ -107,6 +107,9 @@ class CurrentRuntime:
 
             if await asyncio.to_thread(stopped, context.tenant_id, request.resume_from):
                 raise ValueError("stopped runs cannot be resumed implicitly")
+            from robothor.engine.runtime.resume_deadline import restore
+
+            context = restore(context, saved)
             options["resume_from_run_id"] = request.resume_from
         elif "resume_from_run_id" in options:
             raise ValueError("use the explicit resume contract")
@@ -148,7 +151,14 @@ class CurrentRuntime:
         try:
             require_time(context)
             entered[0] = True
-            run = await self._execute(agent_id=request.agent_id, message=request.message, **options)
+            from robothor.engine.runtime.deadlines import execute_before_deadline
+
+            run = await execute_before_deadline(
+                context,
+                lambda: self._execute(
+                    agent_id=request.agent_id, message=request.message, **options
+                ),
+            )
         finally:
             remove(activity)
             current.reset(activity_token)
