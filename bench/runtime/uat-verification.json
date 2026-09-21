@@ -3641,6 +3641,17 @@
       "canonical_warnings": 1,
       "canonical_seconds": 21.67,
       "note": "Actual daemon SIGKILL and coordinator recovery on private storage with scripted provider. Corrected stale harness assumption that waiting clears recovery. No product change; import-only lint correction after the final run."
+    },
+    "native_task_browser_recovery": {
+      "product_revision": "d694f5296c0",
+      "passed": 51,
+      "skipped": 2,
+      "warnings": 1,
+      "seconds": 46.55,
+      "log": "bench/runtime/uat-runtime-task-browser-canonical.log",
+      "report": "bench/runtime/uat-runtime-task-browser.json",
+      "fresh_build_log": "bench/runtime/uat-runtime-task-browser-build.log",
+      "scope": "Actual Chromium/Next/native chat and runner/private CRM, scripted model, response discarded after creation. Audit and event publication stubbed. No production tools or manual acceptance."
     }
   },
   "calendar": {

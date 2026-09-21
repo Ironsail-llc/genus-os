@@ -1,0 +1,14 @@
+{
+  "sends": 1,
+  "reads": 1,
+  "text": "The task was created. Robothor checked the stored task and recovered its result without creating another task. (Operation 3413d101-666b-4ee0-ba0c-e058144fd212)",
+  "request_id": "13400585-31d1-4833-8285-7098c64a4476",
+  "product_revision": "d694f5296c0",
+  "scope": "Actual Chromium/Next/native chat and runner/private CRM, scripted model, response discarded after creation. Audit and event publication stubbed. No production tools or manual acceptance.",
+  "task_rows": 1,
+  "run_rows": 1,
+  "confirmed_receipts": 1,
+  "model_calls": 2,
+  "reconnect_model_calls": 0,
+  "manual_acceptance": false
+}
