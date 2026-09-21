@@ -4927,6 +4927,66 @@
       "scope": "Fresh-process admission probes verify expired denial, exact future deadline restoration and malformed denial in current and backport. Private current/rollback/current daemon boot, state preservation and separate native admission pass. HTTP admission inside booted daemon and dependency/container rollback remain unqualified. No live providers or deployment.",
       "current_product_changed": false,
       "backport_patch": "bench/runtime/rollback-deadline-compatibility.patch"
+    },
+    "accepted_baseline_native_task_comparison": {
+      "baseline_revision": "eea3252b1577e3f51e6d6a6216d6f242fd7ac4a1",
+      "current_revision": "f69694be958e05cac504ccca57e3b6edcd9a9bb0",
+      "passed": true,
+      "scope": "Thirty warm requests plus retained warmup per scenario and revision. Full native runner with real private CRM, identical scripted two-turn provider and minimal task-protocol profile. Legacy finalReport-off behavior on both revisions; does not measure new host final-report speed. Network denied. Sequential revision blocks, not live-provider, HTTP ingress, full production prompt/memory, or framework qualification. Tool schemas and product prompts intentionally come from each revision.",
+      "worker_sha256": "2460d6c21cd4fede3bb7174892f804a5ac2f6c470cfd28678efc0f9374daedd7",
+      "harness_note": "New comparison harness on f69694be958, unchanged product. Timeout-output retention was added after the successful comparison and verified separately with a forced subprocess timeout.",
+      "canonical_summary": "72 passed, 2 skipped, 1 warning in 37.30s",
+      "timeout_test_summary": ".                                                                        [100%]\n1 passed in 0.15s",
+      "measurements": {
+        "baseline": {
+          "scenarios": {
+            "standalone": {
+              "samples": 30,
+              "p50": 118.0637579964241,
+              "p95": 123.67307698877994,
+              "p95_ci95": [
+                122.34558998898137,
+                128.35606500448193
+              ]
+            },
+            "compound": {
+              "samples": 30,
+              "p50": 123.97586299630348,
+              "p95": 127.6069669984281,
+              "p95_ci95": [
+                126.12435600021854,
+                129.01988199155312
+              ]
+            }
+          },
+          "verified": 62,
+          "exit_code": 0
+        },
+        "current": {
+          "scenarios": {
+            "standalone": {
+              "samples": 30,
+              "p50": 35.114949991111644,
+              "p95": 44.970133996685036,
+              "p95_ci95": [
+                38.83637400576845,
+                47.64348000753671
+              ]
+            },
+            "compound": {
+              "samples": 30,
+              "p50": 35.65630099910777,
+              "p95": 48.703653999837115,
+              "p95_ci95": [
+                44.96158899564762,
+                50.823297002352774
+              ]
+            }
+          },
+          "verified": 62,
+          "exit_code": 0
+        }
+      }
     }
   },
   "calendar": {
@@ -5165,7 +5225,7 @@
     ]
   },
   "remaining": [
-    "Current ceb9d85f68d 30-request selected-model native task screen PASSED: 30 verified single tasks and replies, 30 persisted deadlines, no duplicates or post-return model calls; p95 21.046 seconds (bootstrap interval 15.417\u201322.969), none over 30 or 60 seconds. All used the host task report. Prior failed populations are retained. Compound-intent selection, matched accepted-baseline comparison, full production prompt/memory parity and fleet operating limits remain unqualified. Three task-plus-calculation diagnostics preserved both obligations without the task-only finalizer; this is not broad compound-intent qualification. Durations 50.003, 29.834 and 26.225 seconds show remaining response latency outside the standalone path.",
+    "Current ceb9d85f68d 30-request selected-model native task screen PASSED: 30 verified single tasks and replies, 30 persisted deadlines, no duplicates or post-return model calls; p95 21.046 seconds (bootstrap interval 15.417\u201322.969), none over 30 or 60 seconds. All used the host task report. Prior failed populations are retained. Compound-intent selection, matched accepted-baseline comparison, full production prompt/memory parity and fleet operating limits remain unqualified. Three task-plus-calculation diagnostics preserved both obligations without the task-only finalizer; this is not broad compound-intent qualification. Durations 50.003, 29.834 and 26.225 seconds show remaining response latency outside the standalone path. Direct accepted-baseline/current native scripted checks now pass 30 warm standalone and compound task requests per revision: same two model calls, one TODO task, no post-return calls. p95 123.673\u219244.970 ms and 127.607\u219248.704 ms. This is minimal-profile engine behavior/overhead evidence, not the outstanding representative live workload comparison.",
     "The local 60-second policy now covers unclassified interactive setup/planning and unknown classification, then retains the same admission clock for simple execution. Explicit valid non-simple classifications retain their existing limits; exclusions protect goals and delegated/resumed work. Native compressed-clock tests and 31 main-profile synthetic task runs pass. Real-provider classification accuracy, workload-wide deadline behavior and production ingress timing remain unqualified; do not infer those from scripted responses.",
     "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded. Production ingress, selected-provider p95 across the representative workload, and mixed-load fallback operating limits are not certified. Dispatch-only improvements do not qualify complete request latency.",
     "Retain the current runtime: the tested bounded candidates failed required behavior and are not finalists. Any future replacement still needs behavior parity, matched configurations, 100-repetition finalist measurements and compatible checkpoint upgrades. No replacement is selected.",

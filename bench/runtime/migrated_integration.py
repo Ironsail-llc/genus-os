@@ -84,6 +84,10 @@ def main():
                 "ROBOTHOR_TEST_DB_DSN": dsn,
                 "ROBOTHOR_DEFAULT_TENANT": "default",
             }
+            if "--native-task-comparison" in sys.argv:
+                from bench.runtime.native_task_comparison import drill
+
+                drill(root, env)
             if "--crm-dispatch-ab" in sys.argv:
                 from bench.runtime.crm_dispatch_screening import ab_drill
 
