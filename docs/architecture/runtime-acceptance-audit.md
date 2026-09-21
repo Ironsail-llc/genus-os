@@ -43,7 +43,7 @@ The user need not identify whether an ordinary request became a task or a goal.
 | Candidate tools through native admission and dispatch | `test_native_dispatch.py`, prepared `NativeGateway`, private run/step/receipt tables | Both frameworks exercise native gates and durable step recording; duplicate proposals stop after verified success; uncertain step acknowledgement stops queued work. Native manifest/memory bootstrap, interactive approval lifecycle and general external-write reconciliation remain incomplete |
 | Pinned dependencies and one upgrade per finalist | Candidate lock, `upgrade-before.json`, `upgrade-after.json` | Public action/API upgrade drill completed; checkpoint upgrade parity is not proven |
 | Identical model/prompt/tool/resource comparison | Comparator refuses mismatched/unknown configuration | Existing live native/candidate prompts differ. Those cohorts cannot establish comparative superiority |
-| Correctness, ≥20% overall p95 improvement, no critical scenario >10% slower | Executable comparator gates, including per-scenario outcomes | No candidate has qualified; 100 matched repetitions per finalist still required before selection |
+| Correctness, ≥20% overall p95 improvement, no critical scenario >10% slower | Executable comparator gates; `qualification-decision.json` | No behavior-qualified finalists in this revision. A future finalist must still pass 100 matched repetitions and the unchanged latency gates before selection |
 | Lowest qualifying p95, uncertainty/integration burden tie-break | Bootstrap measurement support | No qualifying finalists to rank; retain current runtime |
 | New-session rollout, active checkpoint compatibility, rollback without replay | Native compatibility/stop-preservation contracts and documented admission rollback | Private canonical fresh/populated schema upgrades and real daemon restart drills preserve stopped work, paused goals, checkpoints and uncertain operations. Synthetic full-daemon active-goal recovery and native saved-message continuation pass. Application rollback remains unverified. No production promotion or rollback was performed or authorized |
 | Monthly compatibility / prompt security updates | `.github/workflows/runtime-contracts.yml`, including canonical browser/native saved-plan recovery after app build | Monthly/PR synthetic checks configured; the matching combined command passes locally, but hosted CI and operational update review remain unverified |
@@ -66,10 +66,14 @@ It must not depend on the user recognizing synthetic customer names or knowing t
 internal task-versus-goal distinction. Their feedback on the running installation does
 not by itself accept the isolated modernization build.
 
-For runtime selection, the next implementation work is shared-contract candidate
-integration and matched configuration capture. Further unmatched smoke repetitions
-cannot close those gaps. There is no justification to replace the current engine from
-the existing measurements. The local MiMo deadline failure is preserved as an incomplete
+For this tested revision, both bounded candidate integrations fail the required
+checkpoint-resumption capability and are not finalists. `qualification-decision.json`
+records the refusal checks with each adapter's own checkpoint envelope. OpenCode
+has not established the server-side controls needed to advance. Retain the improved
+current engine under the approved fallback rule. This is not a conclusion about
+upstream frameworks' ultimate capabilities. Any future candidate iteration must
+pass the same behavior contracts before matched finalist performance testing;
+unmatched smoke repetitions cannot qualify a replacement. The local MiMo deadline failure is preserved as an incomplete
 action, with zero writes and no false completion; it is not edited out of the cohort.
 
 Deployment review remains a separate, explicitly excluded action. Lack of deployment
@@ -656,3 +660,12 @@ A failing private-database test reproduced the missing delayed state. A separate
 Verification passes 90 backend recovery/claim/size checks (8.45s), nine component checks (0.863s), all 1,661 frontend tests across 150 files (9.55s), all 36 rendered deep/ordinary chat cases (reported 1.3m), and 33 canonical native/browser integrations (25.40s, one worker-only skip and one dependency warning). The rendered delayed-approval tests use mocked backend responses; canonical backend persistence tests are separate. Fresh build, Ruff lint/format, ESLint and diff checks pass. Evidence is in `bench/runtime/uat-delayed-approval-evidence.json`.
 
 The notice appears on the next outcome read after the receipt reaches the age threshold. This does not establish the general 60-second simple-action deadline or automatic orphaned-worker resumption. Manual review of the repeated-confirmation chat case remains pending. Full acceptance, production/provider qualification and rollout remain open. No production change occurred.
+
+
+## Candidate qualification decision and new-admission preservation
+
+At `ad65df0b14b`, both installed candidate adapters were tested with their own runtime/checkpoint envelope. Pydantic AI 2.46.0 and Deep Agents 0.7.15 reject resumption before host preparation or model work. All 43 adapter/boundary tests pass (2.05s); these tests prove safe refusal, not the required resumption capability. `bench/runtime/qualification-decision.json` records both integrations as not qualified for general replacement in this revision. OpenCode's existing transport-only evidence does not establish the controls needed to advance. No candidate is a finalist; retain the improved current engine under the approved fallback rule. This does not claim upstream frameworks cannot support recovery. Any future qualifying candidate still needs unchanged matched configurations, finalist sample counts, uncertainty and latency gates. No latency superiority is claimed.
+
+The native new-admission preservation drill now includes the independent approval receipt and early request Stop. A completed synthetic new request makes one model call and zero business calls while leaving those records, the earlier cancelled run/control/checkpoint, paused goal/budget and uncertain calendar operation unchanged. All 33 canonical native/browser integrations pass (24.14s, one worker-only skip and one dependency warning). Evidence is in `bench/runtime/uat-approval-admission-preservation.json`.
+
+This is record preservation under new native admission, not an application routing switch or binary downgrade. An application rollback drill remains a future promotion gate; no candidate is eligible for that promotion now. Product acceptance work continues independently, and the repeated-confirmation normal-chat review remains pending. No production deployment or action occurred.

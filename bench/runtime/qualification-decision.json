@@ -1,0 +1,40 @@
+{
+  "revision": "ad65df0b14b",
+  "decision": "Retain the improved current runtime. No tested alternative integration is a finalist for this revision.",
+  "basis": "The approved plan rejects candidates that fail required behavior and retains the current engine when none qualifies. Checkpoint execution/resumption is required for a general replacement.",
+  "candidates": {
+    "pydantic-ai": {
+      "package": "pydantic-ai-slim",
+      "version": "2.46.0",
+      "status": "not_qualified",
+      "required_behavior": "Compatible checkpoint resumption",
+      "observed": "A resume request carrying this adapter's own StateEnvelope is rejected before host preparation or model work."
+    },
+    "deepagents": {
+      "package": "deepagents",
+      "version": "0.7.15",
+      "status": "not_qualified",
+      "required_behavior": "Compatible checkpoint resumption",
+      "observed": "A resume request carrying this adapter's own StateEnvelope is rejected before host preparation or model work."
+    },
+    "opencode": {
+      "status": "not_advanced_to_finalist",
+      "evidence": "bench/runtime/opencode/result.json",
+      "observed": "SDK transport serialization passes; server-side tool denial, trusted identity, budget admission and durable stop/recovery remain unverified."
+    }
+  },
+  "verification": {
+    "command": "PYDANTIC_AI_NO_BANNER=1 .venv-native-candidates/bin/python -m pytest -q --no-cov bench/runtime/test_adapter.py bench/runtime/test_candidate_boundaries.py",
+    "passed": 43,
+    "seconds": 2.05,
+    "log": "/tmp/runtime-candidate-resume-qualification.log",
+    "meaning": "Tests verify the implemented refusal and its lack of side effects. A passing refusal test does not mean the candidate meets the required resumption capability."
+  },
+  "finalists": [],
+  "replacement_selected": false,
+  "performance_qualification": {
+    "established": false,
+    "reason": "No candidate passes required behavior. Earlier unmatched latency cohorts cannot establish superiority; no additional finalist model spend is warranted for these revisions. A future qualifying integration still needs the unchanged matched 100-repetition, uncertainty and p95 gates."
+  },
+  "limits": "This is a decision about the tested bounded integrations, not a claim that upstream frameworks cannot support recovery. Public-adapter improvements or upgrades can reopen screening. Product reliability and goal acceptance continue independently. No deployment or full product acceptance."
+}

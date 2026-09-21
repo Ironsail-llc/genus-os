@@ -2085,6 +2085,16 @@
     "delayed_approval_evidence": {
       "revision": "2d5b4c2985d",
       "artifact": "bench/runtime/uat-delayed-approval-evidence.json"
+    },
+    "candidate_qualification_decision": {
+      "revision": "ad65df0b14b",
+      "artifact": "bench/runtime/qualification-decision.json",
+      "finalists": [],
+      "current_runtime_retained": true
+    },
+    "approval_admission_preservation": {
+      "revision": "ad65df0b14b",
+      "artifact": "bench/runtime/uat-approval-admission-preservation.json"
     }
   },
   "calendar": {

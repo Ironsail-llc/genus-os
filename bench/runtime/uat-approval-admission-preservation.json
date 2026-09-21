@@ -1,0 +1,28 @@
+{
+  "revision": "ad65df0b14b",
+  "scope": "Native admission on the current runtime with canonical private PostgreSQL and a synthetic provider. No application routing switch, binary downgrade, deployment or live rollback.",
+  "new_admission": {
+    "status": "completed",
+    "runtime_id": "current",
+    "model_calls": 1,
+    "business_tool_calls": 0
+  },
+  "preserved_snapshots": [
+    "approval receipt with stored plan",
+    "early request Stop",
+    "cancelled run",
+    "run Stop",
+    "checkpoint",
+    "paused goal and prior budget usage",
+    "uncertain executing calendar operation"
+  ],
+  "canonical_browser": {
+    "passed": 33,
+    "skipped": 1,
+    "warnings": 1,
+    "seconds": 24.14,
+    "log": "/tmp/runtime-admission-approval-preservation.log"
+  },
+  "candidate_screening": "bench/runtime/qualification-decision.json",
+  "limits": "Snapshot preservation does not establish an application-level runtime routing rollback. A future promotion needs that drill; no candidate integration qualifies for promotion in this revision. Full product acceptance and normal-chat confirmation review remain open."
+}
