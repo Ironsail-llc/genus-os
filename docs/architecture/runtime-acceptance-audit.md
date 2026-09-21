@@ -1222,3 +1222,12 @@ Evidence: original regression **two failed**; initial focused suite **44 passed*
 Scope: new successful mapping responses only. Historical `finished` records without saved responses cannot gain evidence retroactively. Error/nonmapping responses and unsupported external readback remain separate limitations. Audit persistence can itself fail after an external service acts; those attempts remain fenced for reconciliation rather than being blindly repeated. No model configuration, production records or deployment changed. Manual and overall acceptance remain open.
 
 Broad engine verification on the final change passed **11,302 tests, 29 skipped, 218 deselected, 393 warnings in 389.55 seconds**. Selection excludes slow/integration/LLM/e2e/smoke markers; source and collected tests were frozen throughout the invocation. No regression was detected in this selection. The canonical suite above exercises separate native recovery cases. Log: `bench/runtime/uat-runtime-reported-result-engine.log`. Ruff formatting/lint and diff checks passed.
+
+
+## Rollback qualification invalidated by new response receipts
+
+At base `f0a6f652775`, source review found that the formerly qualified `b1671409892` rollback target only recovers independently confirmed effects. It does not understand newly retained `finished` tool responses. The application rollback drill now runs a behavioral preflight against current and archived target code in separate subprocesses with private canonical storage before any daemon boot. It seeds an acknowledged response and calls actual effect admission; no handler or model is invoked.
+
+The current revision returned the original saved receipt. The older target reserved a fresh `prepared` attempt instead. The gate therefore returned `rejected_incompatible_receipt_recovery`, `rollback_qualified=false`, and `daemon_started=false`. This disproves compatibility for the new state; the earlier successful drill remains historical evidence for its earlier product revision only. A compatible rollback build still requires preparation and qualification. This is a local evaluation gate, not a deployed guard against arbitrary operator downgrades.
+
+The same invocation completed the canonical suite: **56 passed, two skipped, one warning in 32.71 seconds**. Ruff and diff checks passed. Evidence: `bench/runtime/uat-runtime-rollback-receipt-gate.log`. No product source changed in this step, so the preceding 11,302-pass engine result still applies. Manual acceptance remains pending; no automatic continuation is counted as user approval.

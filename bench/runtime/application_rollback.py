@@ -37,6 +37,22 @@ def drill(root, env, dsn):
     for name in ("pyproject.toml", "uv.lock"):
         if (current / name).exists():
             assert (current / name).read_bytes() == (checkout / name).read_bytes(), name
+    from bench.runtime.rollback_receipts import probe
+
+    compatibility = {
+        "current": probe(current, env, dsn),
+        "rollback": probe(checkout, env, dsn),
+    }
+    assert compatibility["current"]["reuses_saved_response"], compatibility
+    if not compatibility["rollback"]["reuses_saved_response"]:
+        return {
+            "target_revision": target,
+            "status": "rejected_incompatible_receipt_recovery",
+            "receipt_compatibility": compatibility,
+            "daemon_started": False,
+            "rollback_qualified": False,
+            "reason": "Target would reserve a duplicate attempt instead of recovering a saved response.",
+        }
     identifiers = seed(dsn)
     stopped_run = identifiers[0]
     effect = str(uuid4())
