@@ -351,3 +351,73 @@ async def test_older_execution_cannot_clear_newer_pending_plan(
     assert response.status_code == 200
     assert session.active_plan is newer
     assert newer.status == "pending"
+
+
+@pytest.mark.parametrize("action", ["reject", "iterate"])
+async def test_approved_plan_cannot_be_rejected_or_revised_as_pending(
+    client,  # noqa: F811
+    mock_runner,  # noqa: F811
+    monkeypatch,
+    action,
+):
+    from datetime import UTC, datetime
+
+    from robothor.engine.chat import _get_session
+    from robothor.engine.models import PlanState
+
+    monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "enforce")
+    session = _get_session("agent:main:user:bob")
+    plan = PlanState(
+        plan_id="approved",
+        plan_text="Original",
+        original_message="Original",
+        status="approved",
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    session.active_plan = plan
+    mock_runner.execute = AsyncMock(
+        return_value=AgentRun(status=RunStatus.COMPLETED, output_text="Changed[PLAN_READY]")
+    )
+    with patch("robothor.engine.chat._auth_context", return_value=_member_auth("bob")):
+        response = await client.post(
+            f"/chat/plan/{action}", json={"plan_id": plan.plan_id, "feedback": "Change it"}
+        )
+    assert response.status_code == 409
+    assert session.active_plan is plan and plan.status == "approved"
+    mock_runner.execute.assert_not_called()
+
+
+async def test_failed_revision_does_not_publish_or_mutate_pending_draft(
+    client,  # noqa: F811
+    mock_runner,  # noqa: F811
+    monkeypatch,
+):
+    from datetime import UTC, datetime
+
+    from robothor.engine.chat import _get_session
+    from robothor.engine.models import PlanState
+
+    monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "enforce")
+    session = _get_session("agent:main:user:bob")
+    original = PlanState(
+        plan_id="original",
+        plan_text="Original",
+        original_message="Original",
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    session.active_plan = original
+    mock_runner.execute = AsyncMock(
+        return_value=AgentRun(
+            status=RunStatus.FAILED,
+            error_message="Revision could not be verified",
+            output_text="Partial[PLAN_READY]",
+        )
+    )
+    with patch("robothor.engine.chat._auth_context", return_value=_member_auth("bob")):
+        response = await client.post(
+            "/chat/plan/iterate", json={"plan_id": "original", "feedback": "Change it"}
+        )
+    assert "event: plan\n" not in response.text
+    assert session.active_plan is original
+    assert original.plan_text == "Original" and original.revision_count == 0
+    assert "Revision could not be verified" in response.text

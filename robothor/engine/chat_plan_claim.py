@@ -68,6 +68,11 @@ def approval_refusal(session, plan_id):
             {"error": "No matching pending plan", "request_admitted": False}, status_code=404
         )
 
+    if session.active_plan.status != "pending":
+        return JSONResponse(
+            {"error": "This plan is no longer pending.", "request_admitted": False}, status_code=409
+        )
+
     if _plan_is_expired(session.active_plan):
         session.active_plan.status = "expired"
         session.active_plan = None

@@ -1694,6 +1694,34 @@
       "ratchet": "Completion helper extraction reduced run_approved below the oversized-function threshold; removed its obsolete exception rather than increasing any cap.",
       "checks": "Ruff lint/format and diff checks pass.",
       "limits": "The competing-new-plan case is verified through mocked-runner HTTP tests and actual private SQL separately. Canonical browser cases verify ordinary retirement and original-request recovery. Revision/rejection write races and death between approval claim and native admission remain open; no production deployment or full acceptance claim."
+    },
+    "pending_plan_changes": {
+      "artifact": "bench/runtime/uat-plan-pending-changes.json",
+      "initial_failure": "Three HTTP tests failed: approved drafts could be rejected/revised, and failed revision output was published.",
+      "before_log": "/tmp/runtime-plan-mutation-before.log",
+      "fix": "Condition pending revision/rejection on the exact scoped durable draft. Publish only successful revisions with a fresh approval ID and updated hash. Preserve original draft/history on failure.",
+      "focused": {
+        "passed": 177,
+        "seconds": 8.3,
+        "log": "/tmp/runtime-plan-mutation-final.log"
+      },
+      "canonical_browser": {
+        "passed": 29,
+        "skipped": 1,
+        "warnings": 1,
+        "seconds": 18.72,
+        "log": "/tmp/runtime-plan-mutation-native.log"
+      },
+      "coverage": [
+        "approved plan refuses revision and rejection",
+        "failed revision preserves draft",
+        "delayed revision after rejection/approval/new revision refuses publication",
+        "concurrent revisions have one durable winner",
+        "old approval cannot consume revised draft",
+        "tenant/session/exact draft isolation",
+        "revision hash and history match saved draft"
+      ],
+      "limits": "Private SQL tests cover competing mutations; canonical browser covers original saved-plan recovery and duplicate approvals, not revision/rejection races. Broad engine results predate this patch. Claim-before-run process death, new plan-start ordering and full external-service reconciliation remain open. No production deployment or full acceptance claim."
     }
   },
   "calendar": {

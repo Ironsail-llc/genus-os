@@ -828,3 +828,12 @@ Two failing HTTP cases reproduced normal and deep execution clearing a newer pen
 The private SQL/cache suite passes 16 checks (1.12s). The plan/deep/session/store/size selection passes 161 tests (10.96s); 42 persistence/Telegram/deep compatibility checks pass (3.97s). Canonical browser/native integrations pass 29 tests (14.37s), with one worker-only skip and one dependency warning. Helper extraction brought run_approved below the oversized-function threshold, so its old exception was removed; no cap was increased. Ruff, formatting and diff checks pass. Evidence: `bench/runtime/uat-plan-late-completion.json`.
 
 The newer-plan race is tested through mocked-runner HTTP and private SQL layers separately; the browser drill verifies ordinary retirement and original-request recovery. Revision/rejection write races and claim-before-run process death remain open. No production action, deployment, or full acceptance is claimed.
+
+
+## Pending draft revisions and rejections
+
+Three failing HTTP tests reproduced revision/rejection of an already approved plan and publication of partial output from a failed revision. Pending changes now use an awaited conditional database update matching tenant, session and the exact draft. A late revision cannot restore a rejected draft or overwrite an approval/new revision. Successful revisions receive a fresh approval ID and updated text hash; failed revisions leave the original text and revision history unchanged. Recovery recognizes revision runs as plan exploration.
+
+The focused HTTP, private PostgreSQL, plan/deep/session and size-ratchet selection passes 177 tests (8.30s). Private tests include concurrent revision winners, stale approval refusal, scope isolation and publication only after a durable successful change. Canonical browser/native integrations pass 29 tests (18.72s), with one worker-only skip and one dependency warning. Those browser cases cover saved-plan recovery and duplicate approvals; revision/rejection races are tested at the HTTP/helper/SQL layers. Evidence: `bench/runtime/uat-plan-pending-changes.json`.
+
+The user rejected asking them to investigate uncertain outcomes: Robothor should consult its audit records and automatically reconcile external results. A sent request is not itself proof of provider completion. This is an acceptance requirement, not acceptance of all recovery paths. Claim-before-run process death, new plan-start ordering, broader reconciliation and remaining runtime acceptance gates stay open. No deployment or full acceptance is claimed.

@@ -230,6 +230,9 @@ def chat_app(engine_config, mock_runner, monkeypatch):
     monkeypatch.setattr("robothor.engine.chat_plan_claim.claim_plan", AsyncMock(return_value=True))
     monkeypatch.setattr("robothor.engine.chat_plan_claim.clear_claim", lambda *args: None)
     monkeypatch.setattr("robothor.engine.chat_plan_claim.already_admitted", lambda *args: False)
+    monkeypatch.setattr(
+        "robothor.engine.chat_plan_changes.replace_pending_async", AsyncMock(return_value=True)
+    )
     _sessions.clear()
     app = FastAPI()
     with patch("robothor.engine.chat.load_all_sessions", return_value={}):

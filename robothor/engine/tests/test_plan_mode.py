@@ -230,6 +230,9 @@ def chat_app(engine_config, mock_runner, monkeypatch):
     monkeypatch.setattr("robothor.engine.chat_plan_claim.claim_plan", AsyncMock(return_value=True))
     monkeypatch.setattr("robothor.engine.chat_plan_claim.clear_claim", lambda *args: None)
     monkeypatch.setattr("robothor.engine.chat_plan_claim.already_admitted", lambda *args: False)
+    monkeypatch.setattr(
+        "robothor.engine.chat_plan_changes.replace_pending_async", AsyncMock(return_value=True)
+    )
     _sessions.clear()
     app = FastAPI()
     with patch("robothor.engine.chat.load_all_sessions", return_value={}):
@@ -592,7 +595,7 @@ class TestPlanStatus:
 class TestPlanIterate:
     @pytest.mark.asyncio
     async def test_iterate_revises_plan_text(self, client, mock_runner):
-        """POST /plan/iterate revises the plan and keeps same plan_id."""
+        """Each revised draft needs a fresh approval identity."""
         session = _get_session("iter:main:test")
         session.active_plan = PlanState(
             plan_id="iter-plan-1",
@@ -634,8 +637,8 @@ class TestPlanIterate:
         assert len(plan_events) == 1
         assert "Do Z" in plan_events[0]["data"]["plan_text"]
 
-        # Same plan_id preserved
-        assert session.active_plan.plan_id == "iter-plan-1"
+        # An approval for the old draft must not authorize this revision.
+        assert session.active_plan.plan_id != "iter-plan-1"
         assert session.active_plan.revision_count == 1
         assert len(session.active_plan.revision_history) == 1
         assert session.active_plan.revision_history[0]["feedback"] == "add step 3"

@@ -49,6 +49,7 @@ from starlette.responses import StreamingResponse
 from robothor.constants import DEFAULT_TENANT
 from robothor.engine.chat_history import MAX_HISTORY as _MAX_HISTORY
 from robothor.engine.chat_history import ChatHistory, append_turn, as_history
+from robothor.engine.chat_plan_changes import reject_plan, revise_plan
 from robothor.engine.chat_plan_claim import (
     admit_plan,
     approval_refusal,
@@ -58,7 +59,9 @@ from robothor.engine.chat_plan_claim import (
 from robothor.engine.chat_result import result_text
 from robothor.engine.chat_session_cache import SessionCache
 from robothor.engine.chat_store import (
-    clear_plan_state_async,
+    clear_plan_state_async as clear_plan_state_async,
+)
+from robothor.engine.chat_store import (
     clear_session_async,
     load_all_sessions,
     load_session,
@@ -1180,32 +1183,7 @@ async def plan_reject(request: Request) -> JSONResponse:
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
 
-    if not session.active_plan or session.active_plan.plan_id != plan_id:
-        return JSONResponse({"error": "No matching pending plan"}, status_code=404)
-
-    session.active_plan.status = "rejected"
-    session.active_plan.rejection_feedback = feedback
-
-    # Inject rejection feedback into session so agent can learn
-    if feedback:
-        from robothor.secrets.redaction import redact as _redact_text
-
-        session.history.append(
-            {
-                "role": "system",
-                "content": _redact_text(
-                    f"[PLAN REJECTED] The previous plan was rejected. Feedback: {feedback}"
-                ),
-            }
-        )
-
-    session.active_plan = None
-
-    # Persist cleared state
-    if _config:
-        asyncio.create_task(clear_plan_state_async(session_key, tenant_id=auth.tenant_id))
-
-    return JSONResponse({"ok": True})
+    return await reject_plan(session, auth, session_key, plan_id, feedback)
 
 
 @router.post("/plan/iterate", response_model=None)
@@ -1227,25 +1205,12 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
 
-    if not session.active_plan or session.active_plan.plan_id != plan_id:
-        return JSONResponse({"error": "No matching pending plan"}, status_code=404)
+    if refusal := approval_refusal(session, plan_id):
+        return refusal
+    from copy import deepcopy
 
-    if _plan_is_expired(session.active_plan):
-        session.active_plan.status = "expired"
-        session.active_plan = None
-        return JSONResponse({"error": "Plan expired"}, status_code=410)
-
-    plan = session.active_plan
-
-    # Save current plan to revision history
-    plan.revision_history.append(
-        {
-            "plan_text": plan.plan_text,
-            "feedback": feedback,
-            "timestamp": datetime.now(UTC).isoformat(),
-        }
-    )
-    plan.revision_count += 1
+    original = session.active_plan
+    plan = deepcopy(original)
 
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
 
@@ -1300,27 +1265,15 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
                 identity=identity,
             )
 
-            revised_plan_text = _extract_plan_text(run.output_text or "")
-
-            # Update history
-            append_turn(session, user_message=feedback, assistant_text=run.output_text)
-
-            if revised_plan_text:
-                plan.plan_text = revised_plan_text
-
-                # Persist updated plan state
-                asyncio.create_task(
-                    save_plan_state_async(
-                        session_key,
-                        _plan_to_dict(plan),
-                        tenant_id=auth.tenant_id,
-                    )
-                )
-
+            revised, output = await revise_plan(
+                session, original, plan, run, feedback, auth.tenant_id, session_key
+            )
+            append_turn(session, user_message=feedback, assistant_text=output)
+            if revised:
                 await queue.put(
                     {
                         "event": "plan",
-                        "data": _plan_to_dict(plan),
+                        "data": _plan_to_dict(revised),
                     }
                 )
 
@@ -1328,13 +1281,16 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
                 {
                     "event": "done",
                     "data": {
-                        "text": run.output_text or "",
+                        "text": output,
+                        "status": run.status.value,
                         "model": run.model_used,
                         "input_tokens": run.input_tokens,
                         "output_tokens": run.output_tokens,
                         "duration_ms": run.duration_ms,
-                        "plan_id": plan.plan_id,
-                        "revision_count": plan.revision_count,
+                        "plan_id": revised.plan_id if revised else None,
+                        "revision_count": revised.revision_count
+                        if revised
+                        else plan.revision_count,
                     },
                 }
             )

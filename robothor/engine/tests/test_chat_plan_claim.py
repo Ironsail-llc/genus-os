@@ -157,3 +157,107 @@ async def test_cache_retirement_preserves_another_approval_of_same_plan(monkeypa
     monkeypatch.setattr(chat_plan_claim, "clear_claim", lambda *args: None)
     await chat_plan_claim.finish_plan(session, older, "tenant", "session")
     assert session.active_plan is newer
+
+
+@pytest.mark.parametrize("intervening", ["reject", "approve", "revise"])
+def test_delayed_revision_cannot_restore_or_overwrite_changed_plan(saved, monkeypatch, intervening):
+    from robothor.engine import chat_plan_changes
+
+    plan, connect = saved
+    monkeypatch.setattr(chat_plan_changes, "get_connection", connect)
+    newer = replace(plan, plan_id=str(uuid4()), plan_text="New reviewed draft")
+    if intervening == "approve":
+        assert chat_plan_claim.claim("tenant", "session", plan, "approval")
+    else:
+        assert chat_plan_changes.replace_pending(
+            "tenant", "session", plan, newer if intervening == "revise" else None
+        )
+    assert not chat_plan_changes.replace_pending("tenant", "session", plan, newer)
+    assert not chat_plan_changes.replace_pending("tenant", "session", plan, None)
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT plan_state FROM chat_sessions WHERE tenant_id='tenant' AND session_key='session'"
+        )
+        recorded = cur.fetchone()[0]
+    if intervening == "reject":
+        assert recorded is None
+    elif intervening == "approve":
+        assert recorded["status"] == "approved" and recorded["approval_request_id"] == "approval"
+    else:
+        assert recorded["plan_id"] == newer.plan_id
+
+
+def test_concurrent_revisions_publish_one_fresh_approval_identity(saved, monkeypatch):
+    from robothor.engine import chat_plan_changes
+
+    plan, connect = saved
+    monkeypatch.setattr(chat_plan_changes, "get_connection", connect)
+    revisions = [
+        replace(plan, plan_id=str(uuid4()), plan_text=text) for text in ["First", "Second"]
+    ]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(
+            pool.map(
+                lambda revised: chat_plan_changes.replace_pending(
+                    "tenant", "session", plan, revised
+                ),
+                revisions,
+            )
+        )
+    assert sorted(results) == [False, True]
+    assert not chat_plan_claim.claim("tenant", "session", plan, "stale-approval")
+    winner = revisions[results.index(True)]
+    assert chat_plan_claim.claim("tenant", "session", winner, "fresh-approval")
+
+
+@pytest.mark.parametrize(
+    "mismatch",
+    ["tenant", "session", "plan_id", "plan_text", "original_message", "deep_plan", "created_at"],
+)
+def test_pending_changes_require_scoped_exact_draft(saved, monkeypatch, mismatch):
+    from robothor.engine import chat_plan_changes
+
+    plan, connect = saved
+    monkeypatch.setattr(chat_plan_changes, "get_connection", connect)
+    tenant, session = "tenant", "session"
+    if mismatch == "tenant":
+        tenant = "other"
+    elif mismatch == "session":
+        session = "other"
+    else:
+        plan = replace(plan, **{mismatch: True if mismatch == "deep_plan" else "changed"})
+    assert not chat_plan_changes.replace_pending(tenant, session, plan, None)
+
+
+@pytest.mark.parametrize("rejected", [False, True])
+async def test_revision_publishes_only_durable_fresh_draft(saved, monkeypatch, rejected):
+    from copy import deepcopy
+    from hashlib import sha256
+    from types import SimpleNamespace
+
+    from robothor.engine import chat_plan_changes
+    from robothor.engine.models import AgentRun, RunStatus
+
+    plan, connect = saved
+    monkeypatch.setattr(chat_plan_changes, "get_connection", connect)
+    session = SimpleNamespace(active_plan=plan)
+    snapshot = deepcopy(plan)
+    run = AgentRun(status=RunStatus.COMPLETED, output_text="Revised draft[PLAN_READY]")
+    if rejected:
+        assert chat_plan_changes.replace_pending("tenant", "session", plan, None)
+        session.active_plan = None
+    revised, output = await chat_plan_changes.revise_plan(
+        session, plan, snapshot, run, "Change it", "tenant", "session"
+    )
+    assert plan == snapshot
+    if rejected:
+        assert revised is None and session.active_plan is None
+        assert "not applied" in output
+    else:
+        assert revised is session.active_plan
+        assert revised.plan_id != plan.plan_id
+        assert revised.plan_hash == sha256(revised.plan_text.encode()).hexdigest()[:16]
+        assert revised.revision_count == 1
+        assert revised.revision_history[0]["plan_text"] == plan.plan_text
+        assert not chat_plan_claim.claim("tenant", "session", plan, "stale")
+        assert chat_plan_claim.claim("tenant", "session", revised, "fresh")
