@@ -1,0 +1,29 @@
+{
+  "scope": "Synthetic response loss after real isolated CRM commit; native dispatcher and authenticated HTTP reconnect, no model calls",
+  "outcome": {
+    "state": "failed",
+    "stop_requested": false,
+    "terminal": true,
+    "run_id": "19693c04-d5e0-4457-90a6-8fccab685019",
+    "agent_id": "main",
+    "text": "[Run failed: Completion was not verified.]\n\nThe CRM note was created. Robothor checked the stored note and recovered its result without creating another note. (Operation c6a6b3d8-768f-4456-bbf4-41b6ffdd761f)",
+    "effects": [
+      {
+        "operation_id": "c6a6b3d8-768f-4456-bbf4-41b6ffdd761f",
+        "agent_id": "main",
+        "kind": "runtime_effect",
+        "tool_name": "create_note",
+        "status": "confirmed",
+        "verified": true,
+        "reconciliation_pending": false
+      }
+    ],
+    "reconciliation_pending": false,
+    "verified": false,
+    "source": "run_record",
+    "plan_exploration": false
+  },
+  "write_calls": 1,
+  "reconnect_model_calls": 0,
+  "manual_acceptance": false
+}

@@ -96,3 +96,53 @@ async def test_committed_note_response_loss_recovers_without_another_write(monke
     assert outcome["effects"][0]["verified"]
     assert "The CRM note was created" in outcome["text"]
     assert len(calls) == 1
+
+    # Deliver the same saved facts through the actual authenticated reconnect route.
+    import json
+    from pathlib import Path
+    from unittest.mock import AsyncMock
+
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    from robothor.auth.deps import AuthContext
+    from robothor.engine import chat
+
+    auth = AuthContext(tenant_id=tenant, user_id="service:main", role="owner", typ="user")
+    monkeypatch.setattr(chat, "_sessions", {})
+    forbidden_model = AsyncMock(side_effect=AssertionError("Reconnect must not rerun the model"))
+    monkeypatch.setattr("litellm.acompletion", forbidden_model)
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def authenticate(request, call_next):
+        request.state.auth = auth
+        return await call_next(request)
+
+    app.include_router(chat.router)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as http:
+        for _ in range(2):
+            response = await http.get(
+                "/chat/outcome", params={"request_id": client, "session_key": "web:main"}
+            )
+            assert response.status_code == 200
+            assert response.headers["cache-control"] == "no-store"
+            assert response.json() == outcome
+    assert len(calls) == 1
+    forbidden_model.assert_not_awaited()
+    artifact_dir = os.environ.get("ROBOTHOR_RUNTIME_NOTE_CHAT_ARTIFACT_DIR")
+    if artifact_dir:
+        directory = Path(artifact_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        with (directory / ("deferred.json" if deferred else "immediate.json")).open("x") as stream:
+            json.dump(
+                {
+                    "scope": "Synthetic response loss after real isolated CRM commit; native dispatcher and authenticated HTTP reconnect, no model calls",
+                    "outcome": outcome,
+                    "write_calls": len(calls),
+                    "reconnect_model_calls": forbidden_model.await_count,
+                    "manual_acceptance": False,
+                },
+                stream,
+                indent=2,
+            )

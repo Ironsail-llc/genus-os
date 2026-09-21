@@ -3331,6 +3331,34 @@
         "No new browser end-to-end run or user acceptance is claimed.",
         "List summary evidence and other provider readback remain open."
       ]
+    },
+    "current_chat_and_note_reconnect": {
+      "base_revision": "8101cc1b371",
+      "live_status_pause": {
+        "passed": 1,
+        "deselected": 1,
+        "seconds": 15.34,
+        "provider_calls": 5,
+        "status_elapsed_ms": 6159.902,
+        "pause_elapsed_ms": 5705.313,
+        "estimated_cost_usd": 0.0021,
+        "artifact": "bench/runtime/uat-runtime-chat-current-audit-diagnostic.json",
+        "scope": "One diagnostic with the already selected chain; isolated minimal manifest and synthetic business data. Not a performance cohort or billing reconciliation."
+      },
+      "canonical": {
+        "passed": 36,
+        "skipped": 1,
+        "warnings": 1,
+        "seconds": 12.25,
+        "log": "bench/runtime/uat-runtime-note-chat-acceptance-final.log"
+      },
+      "http_recovery_artifacts": [
+        "bench/runtime/uat-note-chat-immediate.json",
+        "bench/runtime/uat-note-chat-deferred.json"
+      ],
+      "behavior": "After real isolated CRM commit and synthetic response loss, both immediate and background readback produce the same receipt through two authenticated /chat/outcome requests. Exactly one create, zero reconnect model calls. Failed run remains failed; verified action does not falsely complete the full request.",
+      "intermediate": "First HTTP fixture omitted authenticated request state and received 503 before reaching the route. Fixed fixture; actual auth dependency retained. Failure log preserved.",
+      "manual_acceptance": false
     }
   },
   "calendar": {

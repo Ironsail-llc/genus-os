@@ -1282,3 +1282,12 @@ The full frontend selection passed **150 files / 1,665 tests in 9.03 seconds**. 
 A first command invoked pnpm from the wrong directory and failed its version check without running tests. The corrected app-directory invocation used the configured version. One new assertion incorrectly assumed reads passed no options; GET calls include headers. The corrected test checks the method and rejects writes during polling. The initial full run's one failing assertion and all corrected results are retained in the evidence index.
 
 This completes the detail-panel presentation for the existing action-count API. List-summary projection, additional provider readback and normal-chat manual acceptance remain open. No deployment or overall acceptance is claimed.
+
+
+## Current-model chat diagnostic and authenticated note reconnect
+
+At product revision `8101cc1b371`, the existing status/pause scenario passed once through native chat with the user's selected model chain (primary DeepSeek v4.1 Flash through OpenRouter). Status elapsed time was 6.160 seconds; pause 5.705 seconds. Five provider calls produced both factual reports, with estimated cost $0.0021, not billing-reconciled. The synthetic goal became paused and its tasks stayed DONE/TODO. No production business tools or goals were used. This is a current diagnostic, not another qualifying cohort or new manual acceptance.
+
+The canonical CRM-note recovery test now also delivers its saved evidence through the actual authenticated `/chat/outcome` route twice. For both immediate and deferred readback, only one real isolated CRM note is created, reconnect makes zero model calls, and both HTTP responses match the stored outcome. The run retains failed status while the action receipt is verified; no whole-request completion is invented. The concrete responses are archived as `uat-note-chat-immediate.json` and `uat-note-chat-deferred.json`.
+
+The first HTTP fixture omitted authenticated request state and got 503 before entering the route. It was corrected to supply fixture authentication through middleware while retaining the route dependency. Final canonical integration passed 36 with one skipped in 12.25 seconds. The failure log and final evidence are retained. No product source changed in this follow-up; only verification coverage and artifacts changed. Overall acceptance and deployment remain false.
