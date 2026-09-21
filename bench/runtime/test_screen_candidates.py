@@ -26,7 +26,11 @@ async def test_screen_does_not_count_returned_or_failed_work_as_success(monkeypa
     for name in ["pydantic_model", "deep_model"]:
         monkeypatch.setattr(screen_candidates, name, lambda: None)
     monkeypatch.setattr(screen_candidates.importlib.metadata, "version", lambda name: "fixture")
-    report = await screen_candidates.screen(2)
+    events = []
+    report = await screen_candidates.screen(2, record_event=events.append)
+    finished = [event["sample"] for event in events if event["event"] == "sample_finished"]
+    assert len(finished) == 6
+    assert all(row["status"] != "completed" for row in finished)
     assert not report["correctness_passed"]
     assert len(report["samples"]) == 4
     assert len(report["warmups"]) == 2
@@ -69,7 +73,7 @@ def test_cli_preserves_failure_report_and_fails_the_screen(monkeypatch, tmp_path
         "correctness_passed": False,
     }
 
-    async def screen(samples):
+    async def screen(samples, record_event=None):
         assert samples == 30
         return report
 

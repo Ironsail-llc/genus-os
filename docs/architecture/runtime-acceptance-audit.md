@@ -560,3 +560,12 @@ Review of the offline screening harness found unconditional completed status for
 The pinned candidate contract selection passes 111 tests (14.55s), including injected unverified, missing-write, extra-dispatch and timeout cases, successful sample accounting, failed-report exit and overwrite protection. The actual offline screen completes 30 measured repetitions per candidate plus two retained warm-ups: all 62 samples pass. This uses Pydantic AI 2.46.0 and Deep Agents 0.7.15 with synthetic models/tools and no provider network calls. Raw results: `bench/runtime/uat-candidate-screen-preserved.json`; verification: `bench/runtime/uat-screening-evidence.json`.
 
 CI now includes these failure-contract checks and an always-run artifact upload for the screening report. YAML and step wiring were checked locally; hosted CI was not run. This is correctness evidence only, not matched native/candidate performance evidence. Process death before final report persistence is still outside this writer's coverage. Candidate qualification, the unresolved admission recovery work and all other acceptance gates remain open. No runtime selection or deployment occurred.
+
+
+## Screening evidence survives process termination
+
+A failing owned-subprocess test demonstrated that killing the screen before final report creation lost its sample evidence. The CLI now creates an exclusive JSONL journal, flushing and fsyncing metadata, each sample start and each observed outcome. Overall completion is recorded only after screening finishes. Either an existing journal or report prevents accidental overwrite. CI's always-run upload now includes both files.
+
+The pinned candidate suite passes 112 tests (11.80s), including SIGKILL after a successful warm-up and the start of repetition 1. That drill preserves the finished sample and unfinished sample identity, produces no final report, and verifies a fresh invocation refuses to overwrite the partial evidence. The 30-repetition-per-candidate offline run passes all 60 measured samples plus two warm-ups; all 62 start/finish pairs match the final report exactly (126 journal events). Raw report/journal and verification are linked in `bench/runtime/uat-screening-journal-verification.json`. Ruff, formatting, diff and workflow YAML checks pass; hosted CI was not run.
+
+This closes process-termination evidence loss in the offline screening writer. It is not a power-loss drill, production admission recovery, matched provider comparison or runtime qualification. Other acceptance gates remain open and no deployment occurred.

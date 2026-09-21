@@ -1855,6 +1855,29 @@
       "ci": "Added screening failure-contract tests and always-run upload of /tmp/screening.json using the artifact action revision already pinned elsewhere in the repository. YAML/order inspected locally; hosted CI not run.",
       "checks": "Ruff lint/format and diff checks pass.",
       "limits": "Offline synthetic gateway screening only. Not an identical native/candidate workload, live-provider latency cohort, framework-default comparison, or promotion result. Process death before final report persistence is not covered by this report writer. No runtime selected or deployment performed."
+    },
+    "candidate_screening_journal": {
+      "artifact": "bench/runtime/uat-screening-journal-verification.json",
+      "initial_failure": "Killing an offline screening process left no sample evidence because the report was written only after all repetitions finished.",
+      "before_log": "/tmp/runtime-screen-journal-before.log",
+      "fix": "Exclusively create a JSONL journal; flush and fsync screen metadata, each sample start and each outcome. Emit overall completion only after the screen finishes. Refuse reuse when either journal or report already exists. CI always uploads both files.",
+      "candidate_contracts": {
+        "passed": 112,
+        "seconds": 11.8,
+        "log": "/tmp/runtime-screen-journal-candidates.log"
+      },
+      "screen": {
+        "report": "bench/runtime/uat-candidate-screen-journal.json",
+        "journal": "bench/runtime/uat-candidate-screen-journal.json.jsonl",
+        "measured_samples": 60,
+        "warmups": 2,
+        "events": 126,
+        "correctness_passed": true,
+        "log": "/tmp/runtime-screen-journal-samples.log"
+      },
+      "crash_drill": "Owned subprocess is SIGKILLed after finishing its warm-up and starting repetition 1. Journal retains one completed sample plus the unfinished sample identity; final report is absent. A fresh invocation against the same evidence path refuses without modifying the journal.",
+      "verification": "All 62 start/finish pairs match the completed report exactly. Injected failure/timeout outcomes remain in the recorder. Ruff, formatting, diff and workflow YAML checks pass; hosted CI not run.",
+      "limits": "Offline benchmark evidence durability under process termination, not recovery of production approvals or external actions. This is not a power-loss drill, provider-latency comparison or runtime qualification. No deployment."
     }
   },
   "calendar": {
