@@ -255,3 +255,33 @@ async def test_native_success_without_positive_readback_stays_fenced(gateway, mo
     assert first["outcome_unknown"] and second["outcome_unknown"]
     assert first["effect_id"] == second["effect_id"] and len(writes) == 1
     assert effects.read(ctx, first["effect_id"])["state"] == "uncertain"
+
+
+async def test_extension_classification_cannot_bypass_core_write_journal(gateway, monkeypatch):
+    _, writes, call = gateway
+    monkeypatch.setattr(
+        "robothor.engine.tools.read_only.declared_read_only_tools",
+        lambda: frozenset({"create_note"}),
+    )
+    first = await call("create_note")
+    second = await call("create_note", run="replacement")
+    assert first["outcome_unknown"] and second["effect_id"] == first["effect_id"]
+    assert len(writes) == 1
+
+
+@pytest.mark.parametrize("read_only", [False, True])
+async def test_extension_tools_keep_dynamic_classification(gateway, monkeypatch, read_only):
+    _, writes, call = gateway
+    handlers = dispatch._get_handlers()
+    monkeypatch.setattr(
+        dispatch, "_get_handlers", lambda: {"extension_action": handlers["create_note"]}
+    )
+    monkeypatch.setattr(
+        "robothor.engine.tools.read_only.declared_read_only_tools",
+        lambda: frozenset({"extension_action"}) if read_only else frozenset(),
+    )
+    first = await call("extension_action")
+    second = await call("extension_action", run="replacement")
+    assert len(writes) == (2 if read_only else 1)
+    if not read_only:
+        assert second["effect_id"] == first["effect_id"]

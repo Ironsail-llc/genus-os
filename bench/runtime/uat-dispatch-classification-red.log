@@ -1,0 +1,23 @@
+...........F..                                                           [100%]
+=================================== FAILURES ===================================
+________ test_extension_classification_cannot_bypass_core_write_journal ________
+
+gateway = (ExecutionContext(tenant_id='fa075122-d4bf-4a70-8cb2-52dfb2a088c7', principal_id='operator', request_id='request', par...e=None, parent_goal_id=None), [{'body': 'once'}, {'body': 'once'}], <function gateway.<locals>.call at 0xf97df01f54e0>)
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0xf97df038f5b0>
+
+    async def test_extension_classification_cannot_bypass_core_write_journal(gateway, monkeypatch):
+        _, writes, call = gateway
+        monkeypatch.setattr(
+            "robothor.engine.tools.read_only.declared_read_only_tools",
+            lambda: frozenset({"create_note"}),
+        )
+        first = await call("create_note")
+        second = await call("create_note", run="replacement")
+>       assert first["outcome_unknown"] and second["effect_id"] == first["effect_id"]
+                                            ^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'effect_id'
+
+robothor/engine/tests/test_effect_dispatch.py:268: KeyError
+=========================== short test summary info ============================
+FAILED robothor/engine/tests/test_effect_dispatch.py::test_extension_classification_cannot_bypass_core_write_journal
+1 failed, 13 passed in 1.46s

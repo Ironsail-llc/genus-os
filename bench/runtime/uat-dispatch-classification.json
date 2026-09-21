@@ -1,0 +1,509 @@
+{
+  "base_revision": "76d3362818f",
+  "ab": {
+    "reference_effect_dispatch_revision": "76d3362818f",
+    "samples": [
+      {
+        "index": 0,
+        "warmup": true,
+        "implementation": "reference",
+        "duration_ms": 126.72040199686307,
+        "verified": true
+      },
+      {
+        "index": 1,
+        "warmup": true,
+        "implementation": "current",
+        "duration_ms": 14.254403999075294,
+        "verified": true
+      },
+      {
+        "index": 2,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 13.71022200328298,
+        "verified": true
+      },
+      {
+        "index": 3,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 9.096824003790971,
+        "verified": true
+      },
+      {
+        "index": 4,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 8.000891997653525,
+        "verified": true
+      },
+      {
+        "index": 5,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 19.638210003904533,
+        "verified": true
+      },
+      {
+        "index": 6,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 9.514621000562329,
+        "verified": true
+      },
+      {
+        "index": 7,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 21.705849998397753,
+        "verified": true
+      },
+      {
+        "index": 8,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 18.40915600041626,
+        "verified": true
+      },
+      {
+        "index": 9,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 19.471343999612145,
+        "verified": true
+      },
+      {
+        "index": 10,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 20.742207001603674,
+        "verified": true
+      },
+      {
+        "index": 11,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 19.403631005843636,
+        "verified": true
+      },
+      {
+        "index": 12,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 17.22992600116413,
+        "verified": true
+      },
+      {
+        "index": 13,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 23.707504995400086,
+        "verified": true
+      },
+      {
+        "index": 14,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 19.97800599929178,
+        "verified": true
+      },
+      {
+        "index": 15,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 16.940866997174453,
+        "verified": true
+      },
+      {
+        "index": 16,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 16.00930399581557,
+        "verified": true
+      },
+      {
+        "index": 17,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 16.528238003957085,
+        "verified": true
+      },
+      {
+        "index": 18,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 21.966733002045657,
+        "verified": true
+      },
+      {
+        "index": 19,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 13.714829998207279,
+        "verified": true
+      },
+      {
+        "index": 20,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 20.183560001896694,
+        "verified": true
+      },
+      {
+        "index": 21,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 26.325613995140884,
+        "verified": true
+      },
+      {
+        "index": 22,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 23.820290000003297,
+        "verified": true
+      },
+      {
+        "index": 23,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 23.58529499906581,
+        "verified": true
+      },
+      {
+        "index": 24,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 18.142000000807457,
+        "verified": true
+      },
+      {
+        "index": 25,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 23.642000000108965,
+        "verified": true
+      },
+      {
+        "index": 26,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 21.226628006843384,
+        "verified": true
+      },
+      {
+        "index": 27,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 19.074588002695236,
+        "verified": true
+      },
+      {
+        "index": 28,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 19.00620300148148,
+        "verified": true
+      },
+      {
+        "index": 29,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 14.482359001704026,
+        "verified": true
+      },
+      {
+        "index": 30,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 19.74529899598565,
+        "verified": true
+      },
+      {
+        "index": 31,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 24.13331800198648,
+        "verified": true
+      },
+      {
+        "index": 32,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 15.795444996911101,
+        "verified": true
+      },
+      {
+        "index": 33,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 23.43431800545659,
+        "verified": true
+      },
+      {
+        "index": 34,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 22.065646000555716,
+        "verified": true
+      },
+      {
+        "index": 35,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 21.463719000166748,
+        "verified": true
+      },
+      {
+        "index": 36,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 11.32860999496188,
+        "verified": true
+      },
+      {
+        "index": 37,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 21.744921999925282,
+        "verified": true
+      },
+      {
+        "index": 38,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 16.293499000312295,
+        "verified": true
+      },
+      {
+        "index": 39,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 19.886964997567702,
+        "verified": true
+      },
+      {
+        "index": 40,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 17.256469996937085,
+        "verified": true
+      },
+      {
+        "index": 41,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 14.152689996990375,
+        "verified": true
+      },
+      {
+        "index": 42,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 16.750016999139916,
+        "verified": true
+      },
+      {
+        "index": 43,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 15.767846001836006,
+        "verified": true
+      },
+      {
+        "index": 44,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 23.845730000175536,
+        "verified": true
+      },
+      {
+        "index": 45,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 16.701392996765207,
+        "verified": true
+      },
+      {
+        "index": 46,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 17.055092997907195,
+        "verified": true
+      },
+      {
+        "index": 47,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 14.956668004742824,
+        "verified": true
+      },
+      {
+        "index": 48,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 14.027632998477202,
+        "verified": true
+      },
+      {
+        "index": 49,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 23.20533899910515,
+        "verified": true
+      },
+      {
+        "index": 50,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 22.277951997239143,
+        "verified": true
+      },
+      {
+        "index": 51,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 21.774091001134366,
+        "verified": true
+      },
+      {
+        "index": 52,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 16.365372997825034,
+        "verified": true
+      },
+      {
+        "index": 53,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 17.473321000579745,
+        "verified": true
+      },
+      {
+        "index": 54,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 20.651628998166416,
+        "verified": true
+      },
+      {
+        "index": 55,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 13.129414997820277,
+        "verified": true
+      },
+      {
+        "index": 56,
+        "warmup": false,
+        "implementation": "reference",
+        "duration_ms": 19.543729002180044,
+        "verified": true
+      },
+      {
+        "index": 57,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 11.133071995573118,
+        "verified": true
+      },
+      {
+        "index": 58,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 10.098340004333295,
+        "verified": true
+      },
+      {
+        "index": 59,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 14.951324003050104,
+        "verified": true
+      },
+      {
+        "index": 60,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 15.493425999011379,
+        "verified": true
+      },
+      {
+        "index": 61,
+        "warmup": false,
+        "implementation": "current",
+        "duration_ms": 9.25847399776103,
+        "verified": true
+      }
+    ],
+    "measurements": {
+      "reference": {
+        "p50_ms": 21.58478449928225,
+        "p95_ms": 24.003903401171556,
+        "p95_ci95_ms": [
+          23.642000000108965,
+          26.325613995140884
+        ]
+      },
+      "current": {
+        "p50_ms": 15.225047001877101,
+        "p95_ms": 18.956117253401317,
+        "p95_ci95_ms": [
+          17.15125114969851,
+          19.471343999612145
+        ]
+      }
+    },
+    "scope": "Seeded randomized 30/30 comparison in one worker. Prior/current effect_dispatch functions use identical current dependencies, database and native handler. Warmups retained; every task verified. This isolates the core-classification path, not complete revision, agent or provider latency."
+  },
+  "profile_before_inclusive_stages": {
+    "runtime_denial": {
+      "calls": 60,
+      "median_ms": 1.0202840021520387
+    },
+    "read_only_classification": {
+      "calls": 30,
+      "median_ms": 5.36188599653542
+    },
+    "effect_begin": {
+      "calls": 30,
+      "median_ms": 1.4898330009600613
+    },
+    "effect_mark_dispatched": {
+      "calls": 30,
+      "median_ms": 0.4757415008498356
+    },
+    "business_handler": {
+      "calls": 30,
+      "median_ms": 1.3478079999913462
+    },
+    "effect_finish": {
+      "calls": 30,
+      "median_ms": 0.6760399992344901
+    },
+    "effect_read": {
+      "calls": 90,
+      "median_ms": 0.41632449938333593
+    },
+    "crm_readback": {
+      "calls": 30,
+      "median_ms": 0.35181999555788934
+    },
+    "effect_resolve": {
+      "calls": 30,
+      "median_ms": 1.2218784977449104
+    },
+    "receipt_recovery": {
+      "calls": 30,
+      "median_ms": 2.1698655000363942
+    }
+  },
+  "focused_passed": 67,
+  "canonical_passed": 46,
+  "canonical_skipped": 2,
+  "canonical_warnings": 1,
+  "canonical_seconds": 21.08,
+  "note": "Retain authoritative core classification before extension lookup. Profiling and separate timing runs are retained, including noisy unprofiled results. Randomized same-worker comparison supports a narrower dispatch improvement; no complete harness/provider or replacement qualification."
+}

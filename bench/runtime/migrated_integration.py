@@ -84,6 +84,10 @@ def main():
                 "ROBOTHOR_TEST_DB_DSN": dsn,
                 "ROBOTHOR_DEFAULT_TENANT": "default",
             }
+            if "--crm-dispatch-ab" in sys.argv:
+                from bench.runtime.crm_dispatch_screening import ab_drill
+
+                print("CRM_DISPATCH_AB " + json.dumps(ab_drill(root, env)), flush=True)
             if "--crm-dispatch-screening" in sys.argv:
                 from bench.runtime.crm_dispatch_screening import drill
 

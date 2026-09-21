@@ -47,9 +47,12 @@ async def invoke(name, args, ctx, dispatch):
     # Native admission resolves delegated/restored identity after the outer runtime
     # context is constructed. Use the executor's authenticated business principal.
     context = replace(context, principal_id=ctx.user_id or context.principal_id)
+    from robothor.engine.tools.dispatch import builtin_handlers
     from robothor.engine.tools.read_only import declared_read_only_tools
 
-    if name in await asyncio.to_thread(declared_read_only_tools):
+    # Core reads already bypassed above. Extensions cannot own or reclassify a
+    # core write, so avoid rediscovering plugins for those authoritative names.
+    if name not in builtin_handlers() and name in await asyncio.to_thread(declared_read_only_tools):
         return await dispatch()
     try:
         record = await _reserve(context, name, args, ctx)

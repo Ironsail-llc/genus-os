@@ -3706,6 +3706,16 @@
       "size_passed": 6,
       "current_trial_p95_ms": 20.991723155020736,
       "note": "Reverted: fewer journal reads did not establish measured latency improvement. Sequential screening is not a causal before/after proof; retain prior product code pending profiling."
+    },
+    "core_dispatch_classification": {
+      "base_revision": "76d3362818f",
+      "report": "bench/runtime/uat-dispatch-classification.json",
+      "focused_passed": 67,
+      "canonical_passed": 46,
+      "ab_samples_each": 30,
+      "reference_p95_ms": 24.003903401171556,
+      "current_p95_ms": 18.956117253401317,
+      "note": "Retain authoritative core classification before extension lookup. Profiling and separate timing runs are retained, including noisy unprofiled results. Randomized same-worker comparison supports a narrower dispatch improvement; no complete harness/provider or replacement qualification."
     }
   },
   "calendar": {
