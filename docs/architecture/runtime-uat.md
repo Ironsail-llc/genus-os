@@ -1349,3 +1349,10 @@ Trusted native CRM creation/dedup handlers now opt into positive readback for or
 The focused dispatch/CRM-recovery/tools/effects/size selection passed 102 tests in 7.77 seconds. Canonical integration passed 42 with one skipped in 11.94 seconds, including successful note/task replay and distinct-request creation. A negative-readback case confirms that a handler success claim alone cannot clear uncertainty or permit a repeat. Ruff and diff checks passed.
 
 These cases use actual private CRM storage and different worker IDs, not an OS-level kill after successful return. Other providers still need their own readback semantics. The prior broad engine/browser results predate this change, and no manual acceptance or production deployment is claimed.
+
+
+## Saved success after actual worker exit
+
+At product revision `b1671409892`, the canonical private integration suite passed **44 tests, two skipped, one warning in 25.94 seconds**. New note and task cases each launch a separate process that performs the real native CRM dispatch, saves its verified receipt, then exits immediately with code 76 before reply delivery. A fresh replacement process recovers the same result ID. Its write handler is configured to fail if invoked; each case leaves exactly one CRM row and makes zero model calls. The log is `bench/runtime/uat-runtime-success-receipt-process-crash.log`.
+
+This extends the earlier different-worker-ID evidence to actual OS process exits. It covers the native dispatcher and private CRM, not the complete AgentRunner or daemon process lifecycle. Audit publishing and event publishing are stubbed; the durable runtime receipt and CRM row are real. Two skips are harness-only worker cases. No product source changed. Other provider outcomes, broader regression qualification, manual acceptance and production deployment remain separate.

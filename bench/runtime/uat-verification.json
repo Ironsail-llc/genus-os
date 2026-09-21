@@ -3555,6 +3555,17 @@
         "Tests use fresh worker IDs and actual private CRM state, not a literal process kill after successful return.",
         "No new broad engine, browser, or manual UAT result. No deployment."
       ]
+    },
+    "successful_crm_receipt_process_exit": {
+      "product_revision": "b1671409892",
+      "passed": 44,
+      "skipped": 2,
+      "warnings": 1,
+      "seconds": 25.94,
+      "log": "bench/runtime/uat-runtime-success-receipt-process-crash.log",
+      "command": ".venv/bin/python -m bench.runtime.migrated_integration",
+      "scope": "Canonical private integration suite, including separate OS processes for native create_note and create_task success receipt recovery. First worker exits with code 76 after durable success; replacement recovers same ID without invoking write handler. Exactly one CRM row and zero model calls in each case.",
+      "limitations": "Dispatcher/CRM process recovery, not full AgentRunner or daemon process recovery. No additional provider, manual acceptance or deployment qualification."
     }
   },
   "calendar": {
