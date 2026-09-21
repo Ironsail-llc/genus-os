@@ -61,6 +61,7 @@ class RunStatus(StrEnum):
 
 
 class ErrorType(StrEnum):
+    UNCERTAIN_OUTCOME = "uncertain_outcome"
     AUTH = "auth"
     RATE_LIMIT = "rate_limit"
     NOT_FOUND = "not_found"

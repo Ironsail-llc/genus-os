@@ -156,6 +156,17 @@ def get_recovery_action(
         error_msg: The original error message (for spawn context)
         helper_spawns_used: How many helper spawns already used this run
     """
+    if error_type == ErrorType.UNCERTAIN_OUTCOME:
+        return RecoveryAction(
+            action="inject",
+            message=(
+                f"The outcome of '{tool_name}' is unknown; its effects may already exist. "
+                "Use the original audit and read-only state checks to establish the result. "
+                "Do not repeat or replace the action, or delegate another attempt, "
+                "while its outcome remains unresolved."
+            ),
+        )
+
     can_spawn = agent_config.can_spawn_agents and helper_spawns_used < MAX_HELPER_SPAWNS
 
     if error_type == ErrorType.RATE_LIMIT:

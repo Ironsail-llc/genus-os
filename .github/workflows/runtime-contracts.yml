@@ -56,6 +56,8 @@ jobs:
           bench/runtime/test_chat_cohort.py
           bench/runtime/test_chat_cohort_report.py
           robothor/engine/tests/test_runtime_uncertain_write_contract.py
+          robothor/engine/tests/test_uncertain_outcome_recovery.py
+          robothor/engine/tests/test_native_uncertain_recovery.py
           robothor/engine/tests/test_runtime_verified_outcomes.py
           robothor/engine/tests/test_runtime_fallback_wire.py
           robothor/engine/tests/test_runtime_http_acceptance.py

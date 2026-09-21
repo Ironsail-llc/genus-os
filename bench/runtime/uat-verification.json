@@ -9,16 +9,16 @@
   "replacement_selected": false,
   "checks": {
     "engine": {
-      "revision": "e949d6bedf8",
-      "passed": 11175,
+      "revision": "30453348e10",
+      "passed": 11182,
       "failed": 0,
       "skipped": 29,
       "deselected": 188,
       "warnings": 393,
-      "seconds": 384.96,
+      "seconds": 387.63,
       "selection": "not slow and not integration and not llm and not e2e and not smoke",
-      "log": "bench/runtime/uat-factual-report-engine-regression.log",
-      "note": "Before subsequent tool-description guidance edits. Existing warnings remain. This is correctness coverage, not a matched latency comparison."
+      "log": "bench/runtime/uat-engine-uncertain-write-regression.log",
+      "note": "Product source and collected tests unchanged during this run. Before subsequent uncertain-outcome recovery planner change; that change is checked separately. Existing warnings remain. Not a performance comparison."
     },
     "frontend": {
       "revision": "2d5b4c2985d",
@@ -3102,7 +3102,33 @@
       "artifact": "bench/runtime/uat-uncertain-write-classification.json",
       "passed": 33,
       "failed": 0,
-      "scope": "Error classification only; broader engine regression in progress."
+      "scope": "Error classification; broad engine and native canonical integrations passed at 30453348e10."
+    },
+    "engine_before_uncertain_writes": {
+      "revision": "e949d6bedf8",
+      "passed": 11175,
+      "failed": 0,
+      "skipped": 29,
+      "deselected": 188,
+      "warnings": 393,
+      "seconds": 384.96,
+      "selection": "not slow and not integration and not llm and not e2e and not smoke",
+      "log": "bench/runtime/uat-factual-report-engine-regression.log",
+      "note": "Before subsequent tool-description guidance edits. Existing warnings remain. This is correctness coverage, not a matched latency comparison."
+    },
+    "uncertain_write_canonical": {
+      "revision": "30453348e10",
+      "passed": 36,
+      "skipped": 1,
+      "warnings": 1,
+      "seconds": 26.5,
+      "log": "bench/runtime/uat-uncertain-write-canonical.log"
+    },
+    "uncertain_outcome_recovery": {
+      "artifact": "bench/runtime/uat-uncertain-recovery-guidance.json",
+      "passed": 177,
+      "failed": 0,
+      "scope": "Latest recovery-planner and native-runner focused coverage; broad engine run predates this additive category and planner change."
     }
   },
   "calendar": {

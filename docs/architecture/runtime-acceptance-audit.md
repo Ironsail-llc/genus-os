@@ -1,6 +1,6 @@
 # Runtime acceptance audit
 
-Audited locally on 2026-09-20, against accepted integration revision `eea3252b15`.
+Audited locally through 2026-09-21, against accepted integration revision `eea3252b15`.
 This is a requirements audit, not release approval. The current engine remains selected.
 The user's positive experience with existing task/goal behavior is the baseline to preserve.
 The user need not identify whether an ordinary request became a task or a goal.
@@ -32,7 +32,11 @@ The user need not identify whether an ordinary request became a task or a goal.
 | Tenant isolation / delegated controls / memory | Native engine and goal suites, including RLS and tenant/control tests | Native behavior tested; no equivalent candidate evidence |
 | Provider fallback | Native verified-outcome checks and `uat-fallback-deadline-reason.json` | Selected cloud chain passes synthetic HTTP 503 retry/fallback checks, one verified write, no post-success calls and shared host-deadline cancellation with accurate finalization reason. Live configured-chain outage/load behavior and local GPU fallback remain unqualified |
 | Everyday requests competing with goals | `uat-mixed-runtime-final.jsonl` | 1,560 verified synthetic actions across 1/5/20 tenants; local resource limits published, not production capacity |
-| No introduced regressions | At `fd6c67f2b6c`: broad engine 11,162 passed, zero failed. Latest frontend 1,661 passed; canonical native/browser 35 passed. Prior goal results, scopes and failure logs retained in `uat-verification.json` | The broad engine invocation excludes slow/integration/LLM/e2e/smoke tests; selected canonical integrations are verified separately. Existing network coroutine warning remains; these scopes do not establish full acceptance |
+| No introduced regressions | At `30453348e10`: broad engine 11,182 passed, zero failed. Latest full frontend 1,661 passed; affected chat component 13 passed; canonical native/browser 36 passed. Subsequent recovery-planner guidance changes are verified separately. Prior goal results, scopes and failure logs retained in `uat-verification.json` | The broad engine invocation excludes slow/integration/LLM/e2e/smoke tests; selected canonical integrations are verified separately. Existing network coroutine warning remains; these scopes do not establish full acceptance |
+
+The factual single-goal chat path passed 30 live screening conversations at `37d510a4174`: all 60 turns used trusted reports, with p95 12.323 seconds for status and 22.483 seconds for Pause. Intervals remain wide (9.009–43.529 and 7.580–57.887); prior sequential cohorts do not establish a causal performance improvement. Full native/tool/workspace configuration parity and remaining user acceptance are still open. See `bench/runtime/uat-chat-cohort-factual-report-summary.json`.
+
+Shared HTTP and tool-handler errors now preserve unknown write outcomes instead of advertising them as retryable (`30453348e10`). The synthetic committed-write contract failed before the change and passes afterward. This is error classification, not yet a generic durable duplicate barrier or provider-specific recovery; those requirements remain incomplete.
 
 ## Alternative runtimes and rollout
 

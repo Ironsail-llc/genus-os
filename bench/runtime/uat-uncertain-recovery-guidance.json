@@ -1,0 +1,34 @@
+{
+  "change": "Structured unknown-effect outcomes override text-based timeout retry and helper recommendations. The recovery planner asks for the original audit and read-only state checks; it does not recommend repeating, replacing or delegating the unresolved action.",
+  "red": {
+    "failed": 4,
+    "seconds": 1.3,
+    "log": "bench/runtime/uat-uncertain-recovery-before.log"
+  },
+  "focused": {
+    "passed": 81,
+    "seconds": 5.22,
+    "log": "bench/runtime/uat-uncertain-recovery-after.log"
+  },
+  "native": {
+    "passed": 1,
+    "seconds": 1.31,
+    "log": "bench/runtime/uat-native-uncertain-recovery.log",
+    "scope": "Scripted provider in actual native runtime; synthetic mutating handler commits once then returns an uncertain timeout. Next provider turn verifies audit/readback guidance and calls the read tool. Independent host predicate finalizes after readback. Exactly two provider calls, one write, one read. Not a live-provider cohort or durable restart test."
+  },
+  "integrated": {
+    "passed": 177,
+    "warnings": 1,
+    "seconds": 7.77,
+    "log": "bench/runtime/uat-uncertain-recovery-integrated.log",
+    "includes": "Native runner, outcome classification, recovery actions, telemetry, supported outcome validation and size checks."
+  },
+  "remaining": [
+    "Durable duplicate barrier against repeated model-proposed uncertain writes and across restarts.",
+    "Provider-specific reconciliation beyond existing supported calendar operation.",
+    "Recovery of committed goal controls after a later model failure."
+  ],
+  "full_acceptance_passed": false,
+  "manual_acceptance": false,
+  "production_deployed": false
+}
