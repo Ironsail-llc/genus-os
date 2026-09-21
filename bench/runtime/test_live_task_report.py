@@ -91,3 +91,26 @@ def test_successful_fallback_does_not_treat_cancelled_provider_usage_as_free(tmp
     assert result["native_estimated_cost_usd"] == 0.01
     assert result["provider_calls_without_result"] == 1
     assert result["cost_estimate_excludes_unknown_provider_usage"]
+
+
+@pytest.mark.parametrize("observed", [False, True])
+def test_stream_completion_uncertainty_is_not_counted_as_free_usage(tmp_path, observed):
+    path = tmp_path / "streams.jsonl"
+    identity = {"index": 0, "request_id": "one"}
+    call = {"model": "primary", "stream": True}
+    if observed:
+        call["stream_completed"] = False
+    row = {
+        **identity,
+        "verified": True,
+        "duration_ms": 1000,
+        "provider_calls": [call],
+        "runs": [{"estimated_cost_usd": 0.01}],
+        "post_return_model_calls": 0,
+        "task_count": 1,
+    }
+    write(path, [{"configuration": {"samples": 1}}, {"started": identity}, {"sample": row}])
+    result = report(path)
+    assert result["interrupted_streams"] == int(observed)
+    assert result["streams_without_completion_telemetry"] == int(not observed)
+    assert result["cost_estimate_excludes_unknown_provider_usage"]

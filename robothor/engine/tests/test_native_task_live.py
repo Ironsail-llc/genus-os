@@ -44,6 +44,9 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
     model_slice = settings.get("model_slice_seconds")
     isolate_timeout_health = settings.get("isolate_short_timeout_health", False)
     cloud_only = settings.get("model_slice_cloud_only", False)
+    bound_stream = settings.get("bound_stream_consumption", False)
+    assert type(bound_stream) is bool
+    assert not bound_stream or (streaming and model_slice is not None)
     assert type(isolate_timeout_health) is bool
     assert type(cloud_only) is bool
     assert not isolate_timeout_health or model_slice is not None
@@ -58,6 +61,10 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
             isolate_short_timeout_health=isolate_timeout_health,
             cloud_only=cloud_only,
         )
+    if bound_stream:
+        from bench.runtime.stream_allowance_experiment import install as install_stream
+
+        install_stream(monkeypatch, model_slice, cloud_only=cloud_only)
     workspace = Path(settings["installation"])
     agent = load_agent_config(
         "main", workspace / "docs/agents", workspace=workspace, trigger_type="webchat"
@@ -92,7 +99,12 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
         calls.append(call)
         started = time.perf_counter()
         try:
-            return await original_provider(**kwargs)
+            result = await original_provider(**kwargs)
+            if kwargs.get("stream"):
+                from bench.runtime.stream_observation import ObservedStream
+
+                return ObservedStream(result, call, started)
+            return result
         except BaseException as exc:
             call["error_type"] = type(exc).__name__
             raise
@@ -167,6 +179,7 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
                         "experimental_model_slice_cloud_only": cloud_only,
                         "task_protocol": agent.task_protocol,
                         "streaming": streaming,
+                        "experimental_bound_stream_consumption": bound_stream,
                         "provider_call_duration_scope": "stream creation only when streaming; full request duration includes consumption",
                         "samples": samples,
                         "scenario": scenario,

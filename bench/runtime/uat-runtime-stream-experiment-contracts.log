@@ -1,0 +1,8 @@
+...............                                                          [100%]
+=============================== warnings summary ===============================
+bench/runtime/test_stream_allowance_experiment.py::test_native_stream_fallback_discards_incomplete_tool_arguments
+  /home/philip/robothor-runtime-modernization/.venv/lib/python3.14/site-packages/pydantic/_internal/_generate_schema.py:1480: UserWarning: Item 'summary' on TypedDict class 'ChatCompletionReasoningItem' is using the `ReadOnly` qualifier. Pydantic will not protect items from any mutation on dictionary instances.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+15 passed, 1 warning in 1.38s

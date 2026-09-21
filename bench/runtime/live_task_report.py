@@ -40,6 +40,14 @@ def report(path):
     incomplete_calls = sum(
         bool(call.get("error_type")) for row in rows for call in row["provider_calls"]
     )
+    unobserved_streams = sum(
+        call.get("stream") is True and "stream_completed" not in call
+        for row in rows
+        for call in row["provider_calls"]
+    )
+    interrupted_streams = sum(
+        call.get("stream_completed") is False for row in rows for call in row["provider_calls"]
+    )
     latency_passed = (
         len(rows) == expected
         and latency["p95"] is not None
@@ -59,8 +67,10 @@ def report(path):
             run["estimated_cost_usd"] for row in rows for run in row["runs"]
         ),
         "provider_calls_without_result": incomplete_calls,
+        "interrupted_streams": interrupted_streams,
+        "streams_without_completion_telemetry": unobserved_streams,
         "cost_estimate_excludes_unknown_provider_usage": bool(
-            incomplete_calls or counts["unfinished"]
+            incomplete_calls or counts["unfinished"] or interrupted_streams or unobserved_streams
         ),
         "post_return_model_calls": sum(row["post_return_model_calls"] for row in rows),
         "duplicate_task_samples": sum(row["task_count"] > 1 for row in rows),
