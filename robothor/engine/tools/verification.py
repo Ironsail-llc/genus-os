@@ -470,8 +470,9 @@ def _enforce_message(tool_name: str, outcome: VerificationOutcome) -> str:
     return (
         f"Post-condition check FAILED for {tool_name}: the call reported success, but "
         f"reading {outcome.reference} back from the environment did not confirm it. "
-        "Do NOT report this as done. Retry the action, or tell the operator plainly "
-        "that it did not take effect."
+        "Do NOT report this as done or repeat the action. Check the original audit "
+        "record and reconcile with read-only provider checks. Failed readback does "
+        "not prove that the action did not take effect."
     )
 
 
@@ -573,6 +574,9 @@ async def verify_tool_result(
         if mode == "enforce":
             enforced = dict(result)
             enforced["verification_failed"] = True
+            enforced["outcome_unknown"] = True
+            enforced["retryable"] = False
+            enforced["error"] = _enforce_message(tool_name, outcome)
             enforced["verification_message"] = _enforce_message(tool_name, outcome)
             return enforced
         return result

@@ -1,0 +1,22 @@
+...........F                                                             [100%]
+=================================== FAILURES ===================================
+___ test_late_admission_cannot_dispatch_after_prepared_record_was_withdrawn ____
+
+effect_db = <function effect_db.<locals>.connect at 0xe574f61500f0>
+
+    def test_late_admission_cannot_dispatch_after_prepared_record_was_withdrawn(effect_db):
+        ctx = context()
+        record = effects.begin(ctx, "old-worker", "main", "create_note", {"body": "one"})
+        assert record["state"] == "prepared"
+        assert effects.abandon_run(ctx, "old-worker") == 1
+        assert not effects.mark_dispatched(ctx, record["id"], "old-worker")
+>       assert effects.read(ctx, record["id"])["state"] == "not_applied"
+E       AssertionError: assert 'uncertain' == 'not_applied'
+E         
+E         - not_applied
+E         + uncertain
+
+robothor/engine/tests/test_runtime_effects.py:260: AssertionError
+=========================== short test summary info ============================
+FAILED robothor/engine/tests/test_runtime_effects.py::test_late_admission_cannot_dispatch_after_prepared_record_was_withdrawn
+1 failed, 11 passed in 1.47s

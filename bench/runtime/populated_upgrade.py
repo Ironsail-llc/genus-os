@@ -13,6 +13,7 @@ ADDITIONS = {
     "138_goal_provider_reservations",
     "139_goal_task_family_controls",
     "140_chat_approval_receipts",
+    "141_runtime_effects",
 }
 TABLES = (
     "chat_sessions",

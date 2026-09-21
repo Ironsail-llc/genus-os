@@ -346,3 +346,17 @@ def isolated_runtime_control_store(monkeypatch):
     monkeypatch.setattr(
         "robothor.engine.runtime.controls.issue", lambda *args, **kwargs: {"status": "stopping"}
     )
+
+
+@pytest.fixture(autouse=True)
+def isolated_effect_store(monkeypatch):
+    """A native unit test must opt into a private effect database, never a shared default."""
+    import os
+
+    if "host=/tmp/runtime-migrated-" in os.environ.get("ROBOTHOR_TEST_DB_DSN", ""):
+        return  # Canonical integration harness supplies a disposable, fully migrated DB.
+
+    def unavailable():
+        raise AssertionError("Use an isolated effect_db fixture for durable effect tests")
+
+    monkeypatch.setattr("robothor.engine.runtime.effects.get_connection", unavailable)

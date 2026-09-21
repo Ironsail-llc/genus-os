@@ -3129,6 +3129,43 @@
       "passed": 177,
       "failed": 0,
       "scope": "Latest recovery-planner and native-runner focused coverage; broad engine run predates this additive category and planner change."
+    },
+    "durable_effect_journal": {
+      "base_revision": "d8d19b4dc7b",
+      "migration": 141,
+      "broad_engine": {
+        "passed": 11209,
+        "skipped": 29,
+        "deselected": 189,
+        "warnings": 393,
+        "seconds": 383.23,
+        "log": "bench/runtime/uat-runtime-engine-effects-regression.log",
+        "scope": "Journal implementation before subsequent enforced-verification classification fix."
+      },
+      "final_focused": {
+        "passed": 67,
+        "seconds": 7.55,
+        "log": "bench/runtime/uat-runtime-effects-final-selection.log"
+      },
+      "canonical_native": {
+        "passed": 37,
+        "skipped": 1,
+        "log": "bench/runtime/uat-runtime-effects-native-journal-final.log",
+        "scope": "Before subsequent enforced-verification classification fix."
+      },
+      "limitations": [
+        "Automatic abandoned-run recovery is not wired into startup/reaper.",
+        "Generic provider-specific readback callbacks remain test-only; existing calendar reconciliation is separate.",
+        "Goal wait/progress bookkeeping can be blocked by uncertainty; goal workspace does not yet project this ledger.",
+        "No production migration or deployment. No overall acceptance claim."
+      ],
+      "canonical_latest": {
+        "passed": 31,
+        "skipped": 1,
+        "seconds": 8.27,
+        "log": "bench/runtime/uat-runtime-effects-canonical-latest.log",
+        "scope": "Final source; default canonical selection without optional browser cases."
+      }
     }
   },
   "calendar": {

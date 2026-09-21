@@ -1,0 +1,722 @@
+Applied 001_init.sql (001_init)
+Applied 001_crm_tables.sql (001_crm_tables)
+Applied 004_telemetry_table.sql (004_telemetry_table)
+Applied 005_task_coordination.sql (005_task_coordination)
+Applied 006_task_state_machine.sql (006_task_state_machine)
+Applied 007_routines.sql (007_routines)
+Applied 008_multi_tenancy.sql (008_multi_tenancy)
+Applied 009_agent_notifications.sql (009_agent_notifications)
+Applied 010_health_tables.sql (010_health_tables)
+Applied 011_agent_engine.sql (011_agent_engine)
+Applied 012_webchat_trigger_type.sql (012_webchat_trigger_type)
+Applied 013_workflow_engine.sql (013_workflow_engine)
+Applied 014_engine_enhancements.sql (014_engine_enhancements)
+Applied 015_chat_history.sql (015_chat_history)
+Applied 015b_supervisor_to_main.sql (015b_supervisor_to_main)
+Applied 016_sub_agents.sql (016_sub_agents)
+Applied 017_timezone_new_york.sql (017_timezone_new_york)
+Applied 018_migration_tracking.sql (018_migration_tracking)
+Applied 019_unified_session.sql (019_unified_session)
+Applied 020_plan_mode.sql (020_plan_mode)
+Applied 021_deep_reason.sql (021_deep_reason)
+Applied 022_tool_events.sql (022_tool_events)
+Applied 023_memory_v4_schema.sql (023_memory_v4_schema)
+Applied 024_requires_human.sql (024_requires_human)
+Applied 025_federation.sql (025_federation)
+Applied 026_consolidation_tracking.sql (026_consolidation_tracking)
+Applied 027_auto_task.sql (027_auto_task)
+Applied 027_kairos_buddy.sql (027_kairos_buddy)
+Applied 028_agent_teams.sql (028_agent_teams)
+Applied 028_per_agent_buddy.sql (028_per_agent_buddy)
+Applied 029_cache_token_tracking.sql (029_cache_token_tracking)
+Applied 029_managed_agents.sql (029_managed_agents)
+Applied 030_buddy_effectiveness.sql (030_buddy_effectiveness)
+Applied 030_checkpoint_schema_version.sql (030_checkpoint_schema_version)
+Applied 031_add_escalation_type.sql (031_add_escalation_type)
+Applied 031_agent_reviews.sql (031_agent_reviews)
+Applied 032_run_status_skipped.sql (032_run_status_skipped)
+Applied 032a_seed_legacy_primary_tenant.sql (032a_seed_legacy_primary_tenant)
+Applied 033_memory_multi_tenancy.sql (033_memory_multi_tenancy)
+Applied 034_buddy_goals_scoring.sql (034_buddy_goals_scoring)
+Applied 034_outcome_assessment.sql (034_outcome_assessment)
+Applied 035_drop_legacy_buddy_columns.sql (035_drop_legacy_buddy_columns)
+Applied 035_retention_indexes.sql (035_retention_indexes)
+Applied 036_buddy_reviewer_type.sql (036_buddy_reviewer_type)
+Applied 036_devops_metrics.sql (036_devops_metrics)
+Applied 037_access_control.sql (037_access_control)
+Applied 037_scheduling_policy.sql (037_scheduling_policy)
+Applied 038_audit_user_id.sql (038_audit_user_id)
+Applied 038_reap_category.sql (038_reap_category)
+Applied 039_operator_identity.sql (039_operator_identity)
+Applied 040_memory_episodes.sql (040_memory_episodes)
+Applied 041_memory_procedures.sql (041_memory_procedures)
+Applied 042_chat_embeddings.sql (042_chat_embeddings)
+Applied 043_fact_outcomes.sql (043_fact_outcomes)
+Applied 044_agent_breadcrumbs.sql (044_agent_breadcrumbs)
+Applied 045_channel_bus.sql (045_channel_bus)
+Applied 046_person_linkage.sql (046_person_linkage)
+Applied 046b_orphan_cleanup.sql (046b_orphan_cleanup)
+Applied 047_messaging_kernel.sql (047_messaging_kernel)
+Applied 048_voice_calendar.sql (048_voice_calendar)
+Applied 049_timeline_activity.sql (049_timeline_activity)
+Applied 050_task_planner_fields.sql (050_task_planner_fields)
+Applied 051_task_followup.sql (051_task_followup)
+Applied 052_multi_tenant_telegram_users.sql (052_multi_tenant_telegram_users)
+Applied 062_step_type_warmup_phase.sql (062_step_type_warmup_phase)
+Applied 063_benchmark_results.sql (063_benchmark_results)
+Applied 065_session_goal_meta.sql (065_session_goal_meta)
+Applied 066_session_goal_meta_v2.sql (066_session_goal_meta_v2)
+Applied 067_task_history_kind_schema.sql (067_task_history_kind_schema)
+Applied 068_curator_state.sql (068_curator_state)
+Applied 069_memory_facts_drift.sql (069_memory_facts_drift)
+Applied 070_user_cronjobs.sql (070_user_cronjobs)
+Applied 071_memory_vault.sql (071_memory_vault)
+Applied 071_user_accounts.sql (071_user_accounts)
+Applied 072_memory_intents.sql (072_memory_intents)
+Applied 073_memory_facts_active_hnsw.sql (073_memory_facts_active_hnsw)
+Applied 074_memory_active_hnsw_partials.sql (074_memory_active_hnsw_partials)
+Applied 075_operator_signals.sql (075_operator_signals)
+Applied 076_judge_reviewer_type.sql (076_judge_reviewer_type)
+Applied 077_message_reactions_unique.sql (077_message_reactions_unique)
+Applied 078_memory_facts_content_hash_unique.sql (078_memory_facts_content_hash_unique)
+Applied 079_guardrail_event_modes.sql (079_guardrail_event_modes)
+Applied 080_judge_reviewer_type.sql (080_judge_reviewer_type)
+Applied 081_tenant_rls_backstop.sql (081_tenant_rls_backstop)
+Applied 082_tenant_rls_app_role.sql (082_tenant_rls_app_role)
+Applied 083_rls_global_role_defaults.sql (083_rls_global_role_defaults)
+Applied 084_feature_flags.sql (084_feature_flags)
+Applied 085_sso_binding_grants.sql (085_sso_binding_grants)
+Applied 086_user_permissions.sql (086_user_permissions)
+Applied 087_role_permission_guardrails.sql (087_role_permission_guardrails)
+Applied 088_member_role_read_only.sql (088_member_role_read_only)
+Applied 089_face_identities.sql (089_face_identities)
+Applied 092_memory_access_rollup.sql (092_memory_access_rollup)
+Applied 093_memory_write_jobs.sql (093_memory_write_jobs)
+Applied 094_memory_decay_shadow.sql (094_memory_decay_shadow)
+Applied 095_memory_bitemporal.sql (095_memory_bitemporal)
+Applied 096_memory_block_budget.sql (096_memory_block_budget)
+Applied 097_trigger_type_channel_event.sql (097_trigger_type_channel_event)
+Applied 098_tenant_column_defaults.sql (098_tenant_column_defaults)
+Applied 099_notification_types.sql (099_notification_types)
+Applied 100_run_verification.sql (100_run_verification)
+Applied 102_agent_reviews_nullable_rating.sql (102_agent_reviews_nullable_rating)
+Applied 103_benchmark_pass_rate_truth.sql (103_benchmark_pass_rate_truth)
+Applied 104_benchmark_sandbox_tenant.sql (104_benchmark_sandbox_tenant)
+Applied 105_agent_messages.sql (105_agent_messages)
+Applied 106_workflow_approvals.sql (106_workflow_approvals)
+Applied 107_seed_service_role.sql (107_seed_service_role)
+Applied 108_run_resume_attempts.sql (108_run_resume_attempts)
+Applied 109_facts_entities_lower_gin.sql (109_facts_entities_lower_gin)
+Applied 110_tool_event_error_message.sql (110_tool_event_error_message)
+Applied 111_drop_shadowing_ann_index.sql (111_drop_shadowing_ann_index)
+Applied 112_federation_principals.sql (112_federation_principals)
+Applied 113_add_do_not_contact.sql (113_add_do_not_contact)
+Applied 114_local_login.sql (114_local_login)
+Applied 115_backfill_sandbox_denied_error_type.sql (115_backfill_sandbox_denied_error_type)
+Applied 116_benchmark_digest_notification_type.sql (116_benchmark_digest_notification_type)
+Applied 117_agent_questions.sql (117_agent_questions)
+Applied 118_user_channel_identities.sql (118_user_channel_identities)
+Applied 119_workflow_step_timeout.sql (119_workflow_step_timeout)
+Applied 120_tenant_rls_cover_new_tables.sql (120_tenant_rls_cover_new_tables)
+Applied 121_channel_conversation_refs.sql (121_channel_conversation_refs)
+Applied 122_trigger_type_channel.sql (122_trigger_type_channel)
+Applied 123_agent_run_task_text.sql (123_agent_run_task_text)
+Applied 124_guardrail_context_overflow.sql (124_guardrail_context_overflow)
+Applied 125_agent_run_step_batch.sql (125_agent_run_step_batch)
+Applied 126_calendar_operations.sql (126_calendar_operations)
+Applied 126_durable_operations.sql (126_durable_operations)
+Applied 126_goal_pursuit.sql (126_goal_pursuit)
+Applied 127_autonomous_execution.sql (127_autonomous_execution)
+Applied 127_runtime_contract.sql (127_runtime_contract)
+Applied 127_sales_intelligence.sql (127_sales_intelligence)
+Applied 128_autonomy_resource_descriptors.sql (128_autonomy_resource_descriptors)
+Applied 128_sales_business_observations.sql (128_sales_business_observations)
+Applied 129_autonomy_workflows.sql (129_autonomy_workflows)
+Applied 129_sales_binding_repair.sql (129_sales_binding_repair)
+Applied 130_autonomy_request_context.sql (130_autonomy_request_context)
+Applied 130_sales_deployments.sql (130_sales_deployments)
+Applied 131_autonomy_enrollments.sql (131_autonomy_enrollments)
+Applied 131_sales_calibration.sql (131_sales_calibration)
+Applied 132_autonomy_enrollment_rls.sql (132_autonomy_enrollment_rls)
+Applied 132_sales_research_delegation.sql (132_sales_research_delegation)
+Applied 133_autonomy_terms_audit.sql (133_autonomy_terms_audit)
+Applied 133_operation_fragments.sql (133_operation_fragments)
+Applied 134_autonomy_material_documents.sql (134_autonomy_material_documents)
+Applied 134_web_render_permission.sql (134_web_render_permission)
+Applied 135_sales_requests.sql (135_sales_requests)
+Applied 136_sales_pipedrive_scope.sql (136_sales_pipedrive_scope)
+Applied 137_sales_analyst_permissions.sql (137_sales_analyst_permissions)
+Applied 138_goal_provider_reservations.sql (138_goal_provider_reservations)
+Applied 139_goal_task_family_controls.sql (139_goal_task_family_controls)
+Applied 140_chat_approval_receipts.sql (140_chat_approval_receipts)
+Nothing to apply.
+Applied 001_init.sql (001_init)
+Applied 001_crm_tables.sql (001_crm_tables)
+Applied 004_telemetry_table.sql (004_telemetry_table)
+Applied 005_task_coordination.sql (005_task_coordination)
+Applied 006_task_state_machine.sql (006_task_state_machine)
+Applied 007_routines.sql (007_routines)
+Applied 008_multi_tenancy.sql (008_multi_tenancy)
+Applied 009_agent_notifications.sql (009_agent_notifications)
+Applied 010_health_tables.sql (010_health_tables)
+Applied 011_agent_engine.sql (011_agent_engine)
+Applied 012_webchat_trigger_type.sql (012_webchat_trigger_type)
+Applied 013_workflow_engine.sql (013_workflow_engine)
+Applied 014_engine_enhancements.sql (014_engine_enhancements)
+Applied 015_chat_history.sql (015_chat_history)
+Applied 015b_supervisor_to_main.sql (015b_supervisor_to_main)
+Applied 016_sub_agents.sql (016_sub_agents)
+Applied 017_timezone_new_york.sql (017_timezone_new_york)
+Applied 018_migration_tracking.sql (018_migration_tracking)
+Applied 019_unified_session.sql (019_unified_session)
+Applied 020_plan_mode.sql (020_plan_mode)
+Applied 021_deep_reason.sql (021_deep_reason)
+Applied 022_tool_events.sql (022_tool_events)
+Applied 023_memory_v4_schema.sql (023_memory_v4_schema)
+Applied 024_requires_human.sql (024_requires_human)
+Applied 025_federation.sql (025_federation)
+Applied 026_consolidation_tracking.sql (026_consolidation_tracking)
+Applied 027_auto_task.sql (027_auto_task)
+Applied 027_kairos_buddy.sql (027_kairos_buddy)
+Applied 028_agent_teams.sql (028_agent_teams)
+Applied 028_per_agent_buddy.sql (028_per_agent_buddy)
+Applied 029_cache_token_tracking.sql (029_cache_token_tracking)
+Applied 029_managed_agents.sql (029_managed_agents)
+Applied 030_buddy_effectiveness.sql (030_buddy_effectiveness)
+Applied 030_checkpoint_schema_version.sql (030_checkpoint_schema_version)
+Applied 031_add_escalation_type.sql (031_add_escalation_type)
+Applied 031_agent_reviews.sql (031_agent_reviews)
+Applied 032_run_status_skipped.sql (032_run_status_skipped)
+Applied 032a_seed_legacy_primary_tenant.sql (032a_seed_legacy_primary_tenant)
+Applied 033_memory_multi_tenancy.sql (033_memory_multi_tenancy)
+Applied 034_buddy_goals_scoring.sql (034_buddy_goals_scoring)
+Applied 034_outcome_assessment.sql (034_outcome_assessment)
+Applied 035_drop_legacy_buddy_columns.sql (035_drop_legacy_buddy_columns)
+Applied 035_retention_indexes.sql (035_retention_indexes)
+Applied 036_buddy_reviewer_type.sql (036_buddy_reviewer_type)
+Applied 036_devops_metrics.sql (036_devops_metrics)
+Applied 037_access_control.sql (037_access_control)
+Applied 037_scheduling_policy.sql (037_scheduling_policy)
+Applied 038_audit_user_id.sql (038_audit_user_id)
+Applied 038_reap_category.sql (038_reap_category)
+Applied 039_operator_identity.sql (039_operator_identity)
+Applied 040_memory_episodes.sql (040_memory_episodes)
+Applied 041_memory_procedures.sql (041_memory_procedures)
+Applied 042_chat_embeddings.sql (042_chat_embeddings)
+Applied 043_fact_outcomes.sql (043_fact_outcomes)
+Applied 044_agent_breadcrumbs.sql (044_agent_breadcrumbs)
+Applied 045_channel_bus.sql (045_channel_bus)
+Applied 046_person_linkage.sql (046_person_linkage)
+Applied 046b_orphan_cleanup.sql (046b_orphan_cleanup)
+Applied 047_messaging_kernel.sql (047_messaging_kernel)
+Applied 048_voice_calendar.sql (048_voice_calendar)
+Applied 049_timeline_activity.sql (049_timeline_activity)
+Applied 050_task_planner_fields.sql (050_task_planner_fields)
+Applied 051_task_followup.sql (051_task_followup)
+Applied 052_multi_tenant_telegram_users.sql (052_multi_tenant_telegram_users)
+Applied 062_step_type_warmup_phase.sql (062_step_type_warmup_phase)
+Applied 063_benchmark_results.sql (063_benchmark_results)
+Applied 065_session_goal_meta.sql (065_session_goal_meta)
+Applied 066_session_goal_meta_v2.sql (066_session_goal_meta_v2)
+Applied 067_task_history_kind_schema.sql (067_task_history_kind_schema)
+Applied 068_curator_state.sql (068_curator_state)
+Applied 069_memory_facts_drift.sql (069_memory_facts_drift)
+Applied 070_user_cronjobs.sql (070_user_cronjobs)
+Applied 071_memory_vault.sql (071_memory_vault)
+Applied 071_user_accounts.sql (071_user_accounts)
+Applied 072_memory_intents.sql (072_memory_intents)
+Applied 073_memory_facts_active_hnsw.sql (073_memory_facts_active_hnsw)
+Applied 074_memory_active_hnsw_partials.sql (074_memory_active_hnsw_partials)
+Applied 075_operator_signals.sql (075_operator_signals)
+Applied 076_judge_reviewer_type.sql (076_judge_reviewer_type)
+Applied 077_message_reactions_unique.sql (077_message_reactions_unique)
+Applied 078_memory_facts_content_hash_unique.sql (078_memory_facts_content_hash_unique)
+Applied 079_guardrail_event_modes.sql (079_guardrail_event_modes)
+Applied 080_judge_reviewer_type.sql (080_judge_reviewer_type)
+Applied 081_tenant_rls_backstop.sql (081_tenant_rls_backstop)
+Applied 082_tenant_rls_app_role.sql (082_tenant_rls_app_role)
+Applied 083_rls_global_role_defaults.sql (083_rls_global_role_defaults)
+Applied 084_feature_flags.sql (084_feature_flags)
+Applied 085_sso_binding_grants.sql (085_sso_binding_grants)
+Applied 086_user_permissions.sql (086_user_permissions)
+Applied 087_role_permission_guardrails.sql (087_role_permission_guardrails)
+Applied 088_member_role_read_only.sql (088_member_role_read_only)
+Applied 089_face_identities.sql (089_face_identities)
+Applied 092_memory_access_rollup.sql (092_memory_access_rollup)
+Applied 093_memory_write_jobs.sql (093_memory_write_jobs)
+Applied 094_memory_decay_shadow.sql (094_memory_decay_shadow)
+Applied 095_memory_bitemporal.sql (095_memory_bitemporal)
+Applied 096_memory_block_budget.sql (096_memory_block_budget)
+Applied 097_trigger_type_channel_event.sql (097_trigger_type_channel_event)
+Applied 098_tenant_column_defaults.sql (098_tenant_column_defaults)
+Applied 099_notification_types.sql (099_notification_types)
+Applied 100_run_verification.sql (100_run_verification)
+Applied 102_agent_reviews_nullable_rating.sql (102_agent_reviews_nullable_rating)
+Applied 103_benchmark_pass_rate_truth.sql (103_benchmark_pass_rate_truth)
+Applied 104_benchmark_sandbox_tenant.sql (104_benchmark_sandbox_tenant)
+Applied 105_agent_messages.sql (105_agent_messages)
+Applied 106_workflow_approvals.sql (106_workflow_approvals)
+Applied 107_seed_service_role.sql (107_seed_service_role)
+Applied 108_run_resume_attempts.sql (108_run_resume_attempts)
+Applied 109_facts_entities_lower_gin.sql (109_facts_entities_lower_gin)
+Applied 110_tool_event_error_message.sql (110_tool_event_error_message)
+Applied 111_drop_shadowing_ann_index.sql (111_drop_shadowing_ann_index)
+Applied 112_federation_principals.sql (112_federation_principals)
+Applied 113_add_do_not_contact.sql (113_add_do_not_contact)
+Applied 114_local_login.sql (114_local_login)
+Applied 115_backfill_sandbox_denied_error_type.sql (115_backfill_sandbox_denied_error_type)
+Applied 116_benchmark_digest_notification_type.sql (116_benchmark_digest_notification_type)
+Applied 117_agent_questions.sql (117_agent_questions)
+Applied 118_user_channel_identities.sql (118_user_channel_identities)
+Applied 119_workflow_step_timeout.sql (119_workflow_step_timeout)
+Applied 120_tenant_rls_cover_new_tables.sql (120_tenant_rls_cover_new_tables)
+Applied 121_channel_conversation_refs.sql (121_channel_conversation_refs)
+Applied 122_trigger_type_channel.sql (122_trigger_type_channel)
+Applied 123_agent_run_task_text.sql (123_agent_run_task_text)
+Applied 124_guardrail_context_overflow.sql (124_guardrail_context_overflow)
+Applied 125_agent_run_step_batch.sql (125_agent_run_step_batch)
+Applied 126_calendar_operations.sql (126_calendar_operations)
+Applied 126_durable_operations.sql (126_durable_operations)
+Applied 126_goal_pursuit.sql (126_goal_pursuit)
+Applied 127_autonomous_execution.sql (127_autonomous_execution)
+Applied 127_sales_intelligence.sql (127_sales_intelligence)
+Applied 128_autonomy_resource_descriptors.sql (128_autonomy_resource_descriptors)
+Applied 128_sales_business_observations.sql (128_sales_business_observations)
+Applied 129_autonomy_workflows.sql (129_autonomy_workflows)
+Applied 129_sales_binding_repair.sql (129_sales_binding_repair)
+Applied 130_autonomy_request_context.sql (130_autonomy_request_context)
+Applied 130_sales_deployments.sql (130_sales_deployments)
+Applied 131_autonomy_enrollments.sql (131_autonomy_enrollments)
+Applied 131_sales_calibration.sql (131_sales_calibration)
+Applied 132_autonomy_enrollment_rls.sql (132_autonomy_enrollment_rls)
+Applied 132_sales_research_delegation.sql (132_sales_research_delegation)
+Applied 133_autonomy_terms_audit.sql (133_autonomy_terms_audit)
+Applied 133_operation_fragments.sql (133_operation_fragments)
+Applied 134_autonomy_material_documents.sql (134_autonomy_material_documents)
+Applied 134_web_render_permission.sql (134_web_render_permission)
+Applied 135_sales_requests.sql (135_sales_requests)
+Applied 136_sales_pipedrive_scope.sql (136_sales_pipedrive_scope)
+Applied 137_sales_analyst_permissions.sql (137_sales_analyst_permissions)
+Applied 127_runtime_contract.sql (127_runtime_contract)
+Applied 138_goal_provider_reservations.sql (138_goal_provider_reservations)
+Applied 139_goal_task_family_controls.sql (139_goal_task_family_controls)
+Applied 140_chat_approval_receipts.sql (140_chat_approval_receipts)
+Nothing to apply.
+POPULATED_UPGRADE {"added_migrations": ["127_runtime_contract", "138_goal_provider_reservations", "139_goal_task_family_controls", "140_chat_approval_receipts"], "preserved_tables": ["chat_sessions", "crm_tasks", "goal_pursuit_settings", "pursuit_goals", "pursuit_goal_tasks", "pursuit_goal_history", "pursuit_goal_attempts", "agent_runs", "agent_run_steps", "agent_run_checkpoints", "calendar_operations"], "repeat_apply_noop": true, "blocked_ancestor_denies_linked_task": true, "ordinary_task_runnable": true, "legacy_runtime_identity_added": true, "existing_approval_receipt_preserved": true}
+......................FFs............                                    [100%]
+=================================== FAILURES ===================================
+__________ test_native_goal_recovery_reconciles_before_waiting[False] __________
+
+engine_config = EngineConfig(bot_token='test-token-123', default_chat_id='12345', port=18899, tenant_id='native-recovery-38c1a44ac8394...t_count=1, required_agent_ids=(), main_session_key='agent:main:primary', operator_name='', instance_id='', nats_url='')
+sample_agent_config = AgentConfig(id='main', name='Test Agent', description='A test agent', model_primary='openrouter/test/model', model_fal...get=False, human_approval_tools=[], human_approval_timeout=300, human_approval_fail_open=False, validation_warnings=[])
+crash = False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("crash", [False, True])
+    async def test_native_goal_recovery_reconciles_before_waiting(
+        engine_config, sample_agent_config, crash
+    ):
+        dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
+        if "host=/tmp/runtime-migrated-" not in dsn:
+            pytest.skip("requires the disposable canonical migration harness")
+        tenant = "native-recovery-" + uuid4().hex
+        with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+            cur.execute("INSERT INTO crm_tenants(id,display_name) VALUES (%s,%s)", (tenant, tenant))
+        engine_config = replace(engine_config, tenant_id=tenant)
+        sample_agent_config.id = "main"
+        sample_agent_config.task_protocol = False
+        sample_agent_config.difficulty_class = "simple"
+        sample_agent_config.tools_allowed = ["get_pursuit_goal", "update_pursuit_goal"]
+        sample_agent_config.model_fallbacks = []
+        store.set_enabled(tenant, True, "operator")
+        goal = store.create(
+            tenant,
+            CreateGoal(
+                objective="Recover synthetic work",
+                success_criteria=["Reply received"],
+                token_budget=1000000,
+            ),
+            "operator",
+        )
+        if crash:
+            env = {key: value for key, value in os.environ.items() if key.startswith("ROBOTHOR_DB_")}
+            env.update(PATH=os.environ["PATH"], ROBOTHOR_TEST_DB_DSN=dsn, RUNTIME_CRASH_TENANT=tenant)
+            child = subprocess.run(
+                [sys.executable, "-m", "pytest", "-q", "-s", __file__ + "::test_native_crash_worker"],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            assert child.returncode == -signal.SIGKILL, child.stdout + child.stderr
+            marker = next(
+                line.removeprefix("NATIVE_CRASH ")
+                for line in child.stdout.splitlines()
+                if line.startswith("NATIVE_CRASH ")
+            )
+            old_attempt = json.loads(marker)["attempt"]
+        else:
+            _, old_attempt = store.claim(tenant)
+            store.heartbeat(tenant, goal["id"], old_attempt, tokens=30)
+        with store.transaction() as cur:
+            cur.execute(
+                "UPDATE pursuit_goals SET lease_until=now()-interval '1 minute' WHERE tenant_id=%s",
+                (tenant,),
+            )
+        recovered, attempt = store.claim(tenant)
+        assert recovered["recovery_required"] and attempt != old_attempt
+        prior_tokens = recovered["tokens_used"]
+        assert prior_tokens > 150 if crash else prior_tokens == 30
+        calls = []
+    
+        async def provider(**kwargs):
+            state = store.control(tenant, goal["id"])
+            index = len(calls)
+            calls.append(kwargs)
+            assert index < 3, "native runner continued after the goal yielded"
+            action = "reconciled" if index == 1 else "wait"
+            if index < 2:
+                assert state["recovery_required"]
+            else:
+                assert not state["recovery_required"]
+            args = {
+                "goal_id": goal["id"],
+                "version": state["version"],
+                "action": action,
+                "note": "Synthetic audit checked"
+                if action == "reconciled"
+                else "Await synthetic reply",
+            }
+            if action == "wait":
+                args["event_type"] = "fixture.reply"
+            return litellm.ModelResponse(
+                model=sample_agent_config.model_primary,
+                choices=[
+                    {
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": f"recovery_{index}",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "update_pursuit_goal",
+                                        "arguments": json.dumps(args),
+                                    },
+                                }
+                            ],
+                        },
+                    }
+                ],
+                usage={"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+            )
+    
+        with (
+            patch(
+                "robothor.engine.config.load_agent_config_or_broken", return_value=sample_agent_config
+            ),
+            patch("litellm.acompletion", side_effect=provider),
+        ):
+            controller = GoalController(AgentRunner(engine_config), engine_config)
+            await controller.execute(recovered, attempt)
+            with patch("robothor.goals.events.capture"):
+                await controller.tick()
+            await get_task_registry().drain(timeout=5)
+        result = store.get(tenant, goal["id"])
+        assert len(calls) == 3
+>       assert result["status"] == "waiting", result
+E       AssertionError: {'id': '79794259-82d6-4e4c-b796-2e1786920527', 'kind': 'short', 'mode': 'finite', 'wait': None, ...}
+E       assert 'queued' == 'waiting'
+E         
+E         - waiting
+E         + queued
+
+robothor/engine/tests/test_native_goal_recovery.py:140: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.llm_client:llm_client.py:1501 litellm cost calculation failed, using fallback: This model isn't mapped yet. model=openrouter/test/model, custom_llm_provider=openrouter. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.llm_client:llm_client.py:1501 litellm cost calculation failed, using fallback: This model isn't mapped yet. model=openrouter/test/model, custom_llm_provider=openrouter. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.runtime.effect_dispatch:effect_dispatch.py:56 Effect admission unavailable; dispatch refused
+Traceback (most recent call last):
+  File "/home/philip/robothor-runtime-modernization/robothor/engine/runtime/effect_dispatch.py", line 50, in invoke
+    record = await asyncio.to_thread(
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+        effects.begin, context, ctx.run_id, ctx.agent_id, name, args
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/philip/.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/asyncio/threads.py", line 25, in to_thread
+    return await loop.run_in_executor(None, func_call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/philip/.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/concurrent/futures/thread.py", line 86, in run
+    result = ctx.run(self.task)
+  File "/home/philip/.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/concurrent/futures/thread.py", line 73, in run
+    return fn(*args, **kwargs)
+  File "/home/philip/robothor-runtime-modernization/robothor/engine/runtime/effects.py", line 53, in begin
+    cur.execute(
+    ~~~~~~~~~~~^
+        """SELECT * FROM agent_runtime_effects WHERE tenant_id=%s AND principal_id=%s
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+        (context.tenant_id, context.principal_id, context.request_id, digest),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/philip/robothor-runtime-modernization/.venv/lib/python3.14/site-packages/psycopg2/extras.py", line 236, in execute
+    return super().execute(query, vars)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+psycopg2.errors.UndefinedTable: relation "agent_runtime_effects" does not exist
+LINE 1: SELECT * FROM agent_runtime_effects WHERE tenant_id='native-...
+                      ^
+
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.llm_client:llm_client.py:2136 Model openrouter/test/model failed: assert not True
+ERROR    robothor.engine.llm_client:llm_client.py:2503 All models failed. Models: ['openrouter/test/model'], broken: set(), last error: AssertionError('assert not True')
+ERROR    robothor.engine.runner:failure.py:15 Agent main failed: I could not get an answer from any model, so this run stopped without doing the work. openrouter/test/model — it was tried and did not answer. This agent has no local fallback configured, so there was nothing left to try.
+Traceback (most recent call last):
+  File "/home/philip/robothor-runtime-modernization/robothor/engine/runner.py", line 1294, in execute
+    await self._run_loop(
+    ...<16 lines>...
+    )
+  File "/home/philip/robothor-runtime-modernization/robothor/engine/runner.py", line 2003, in _run_loop
+    raise all_models_failed(session, models, broken_models)
+robothor.engine.last_resort.AllModelsFailedError: I could not get an answer from any model, so this run stopped without doing the work. openrouter/test/model — it was tried and did not answer. This agent has no local fallback configured, so there was nothing left to try.
+__________ test_native_goal_recovery_reconciles_before_waiting[True] ___________
+
+engine_config = EngineConfig(bot_token='test-token-123', default_chat_id='12345', port=18899, tenant_id='native-recovery-e82230f7593e4...t_count=1, required_agent_ids=(), main_session_key='agent:main:primary', operator_name='', instance_id='', nats_url='')
+sample_agent_config = AgentConfig(id='main', name='Test Agent', description='A test agent', model_primary='openrouter/test/model', model_fal...get=False, human_approval_tools=[], human_approval_timeout=300, human_approval_fail_open=False, validation_warnings=[])
+crash = True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("crash", [False, True])
+    async def test_native_goal_recovery_reconciles_before_waiting(
+        engine_config, sample_agent_config, crash
+    ):
+        dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
+        if "host=/tmp/runtime-migrated-" not in dsn:
+            pytest.skip("requires the disposable canonical migration harness")
+        tenant = "native-recovery-" + uuid4().hex
+        with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+            cur.execute("INSERT INTO crm_tenants(id,display_name) VALUES (%s,%s)", (tenant, tenant))
+        engine_config = replace(engine_config, tenant_id=tenant)
+        sample_agent_config.id = "main"
+        sample_agent_config.task_protocol = False
+        sample_agent_config.difficulty_class = "simple"
+        sample_agent_config.tools_allowed = ["get_pursuit_goal", "update_pursuit_goal"]
+        sample_agent_config.model_fallbacks = []
+        store.set_enabled(tenant, True, "operator")
+        goal = store.create(
+            tenant,
+            CreateGoal(
+                objective="Recover synthetic work",
+                success_criteria=["Reply received"],
+                token_budget=1000000,
+            ),
+            "operator",
+        )
+        if crash:
+            env = {key: value for key, value in os.environ.items() if key.startswith("ROBOTHOR_DB_")}
+            env.update(PATH=os.environ["PATH"], ROBOTHOR_TEST_DB_DSN=dsn, RUNTIME_CRASH_TENANT=tenant)
+            child = subprocess.run(
+                [sys.executable, "-m", "pytest", "-q", "-s", __file__ + "::test_native_crash_worker"],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+>           assert child.returncode == -signal.SIGKILL, child.stdout + child.stderr
+E           AssertionError: F
+E             =================================== FAILURES ===================================
+E             ___________________________ test_native_crash_worker ___________________________
+E             
+E             engine_config = EngineConfig(bot_token='test-token-123', default_chat_id='12345', port=18899, tenant_id='native-recovery-e82230f7593e4...t_count=1, required_agent_ids=(), main_session_key='agent:main:primary', operator_name='', instance_id='', nats_url='')
+E             sample_agent_config = AgentConfig(id='main', name='Test Agent', description='A test agent', model_primary='openrouter/test/model', model_fal...get=False, human_approval_tools=[], human_approval_timeout=300, human_approval_fail_open=False, validation_warnings=[])
+E             
+E                 @pytest.mark.asyncio
+E                 async def test_native_crash_worker(engine_config, sample_agent_config):
+E                     """Only the parent test enables this worker in its private database."""
+E                     tenant = os.environ.get("RUNTIME_CRASH_TENANT")
+E                     dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
+E                     if not tenant or "host=/tmp/runtime-migrated-" not in dsn:
+E                         pytest.skip("subprocess crash worker only")
+E                     engine_config = replace(engine_config, tenant_id=tenant)
+E                     sample_agent_config.id = "main"
+E                     sample_agent_config.task_protocol = False
+E                     sample_agent_config.difficulty_class = "simple"
+E                     sample_agent_config.tools_allowed = ["get_pursuit_goal", "update_pursuit_goal"]
+E                     sample_agent_config.model_fallbacks = []
+E                     goal, attempt = store.claim(tenant)
+E                     calls = 0
+E                 
+E                     async def provider(**kwargs):
+E                         nonlocal calls
+E                         calls += 1
+E                         if calls == 2:
+E                             # The first native tool effect and its step must already be durable.
+E                             with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+E                                 cur.execute(
+E                                     "SELECT count(*) FROM agent_run_steps s JOIN agent_runs r ON r.id=s.run_id WHERE r.tenant_id=%s AND s.tool_input->>'action'='progress'",
+E                                     (tenant,),
+E                                 )
+E                                 assert cur.fetchone()[0] == 1
+E                             assert store.control(tenant, goal["id"])["checkpoint"] == "Saved before crash"
+E                             print("NATIVE_CRASH " + json.dumps({"attempt": attempt}), flush=True)
+E                             os.kill(os.getpid(), signal.SIGKILL)
+E                         state = store.control(tenant, goal["id"])
+E                         return litellm.ModelResponse(
+E                             model=sample_agent_config.model_primary,
+E                             choices=[
+E                                 {
+E                                     "finish_reason": "tool_calls",
+E                                     "message": {
+E                                         "role": "assistant",
+E                                         "content": None,
+E                                         "tool_calls": [
+E                                             {
+E                                                 "id": "before_crash",
+E                                                 "type": "function",
+E                                                 "function": {
+E                                                     "name": "update_pursuit_goal",
+E                                                     "arguments": json.dumps(
+E                                                         {
+E                                                             "goal_id": goal["id"],
+E                                                             "version": state["version"],
+E                                                             "action": "progress",
+E                                                             "note": "Saved before crash",
+E                                                             "next_action": "Read saved progress",
+E                                                         }
+E                                                     ),
+E                                                 },
+E                                             }
+E                                         ],
+E                                     },
+E                                 }
+E                             ],
+E                             usage={"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+E                         )
+E                 
+E                     with (
+E                         patch(
+E                             "robothor.engine.config.load_agent_config_or_broken", return_value=sample_agent_config
+E                         ),
+E                         patch("litellm.acompletion", side_effect=provider),
+E                     ):
+E                         await GoalController(AgentRunner(engine_config), engine_config).execute(goal, attempt)
+E             >       pytest.fail("worker returned instead of reaching the crash point")
+E             E       Failed: worker returned instead of reaching the crash point
+E             
+E             robothor/engine/tests/test_native_goal_recovery.py:248: Failed
+E             ------------------------------ Captured log call -------------------------------
+E             WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+E             WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+E             WARNING  robothor.engine.tools.registry:registry.py:755 Adapter 'impetus-one' unavailable (backoff 300s): Invalid Content-Length in MCP response
+E             WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+E             WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+E             WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+E             WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+E             WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+E             WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+E             WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+E             WARNING  robothor.engine.llm_client:llm_client.py:1501 litellm cost calculation failed, using fallback: This model isn't mapped yet. model=openrouter/test/model, custom_llm_provider=openrouter. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json.
+E             WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+E             WARNING  robothor.engine.runtime.effect_dispatch:effect_dispatch.py:56 Effect admission unavailable; dispatch refused
+E             Traceback (most recent call last):
+E               File "/home/philip/robothor-runtime-modernization/robothor/engine/runtime/effect_dispatch.py", line 50, in invoke
+E                 record = await asyncio.to_thread(
+E                          ^^^^^^^^^^^^^^^^^^^^^^^^
+E                     effects.begin, context, ctx.run_id, ctx.agent_id, name, args
+E                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E                 )
+E                 ^
+E               File "/home/philip/.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/asyncio/threads.py", line 25, in to_thread
+E                 return await loop.run_in_executor(None, func_call)
+E                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               File "/home/philip/.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/concurrent/futures/thread.py", line 86, in run
+E                 result = ctx.run(self.task)
+E               File "/home/philip/.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/concurrent/futures/thread.py", line 73, in run
+E                 return fn(*args, **kwargs)
+E               File "/home/philip/robothor-runtime-modernization/robothor/engine/runtime/effects.py", line 53, in begin
+E                 cur.execute(
+E                 ~~~~~~~~~~~^
+E                     """SELECT * FROM agent_runtime_effects WHERE tenant_id=%s AND principal_id=%s
+E                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E                 ...<2 lines>...
+E                     (context.tenant_id, context.principal_id, context.request_id, digest),
+E                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E                 )
+E                 ^
+E               File "/home/philip/robothor-runtime-modernization/.venv/lib/python3.14/site-packages/psycopg2/extras.py", line 236, in execute
+E                 return super().execute(query, vars)
+E                        ~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+E             psycopg2.errors.UndefinedTable: relation "agent_runtime_effects" does not exist
+E             LINE 1: SELECT * FROM agent_runtime_effects WHERE tenant_id='native-...
+E                                   ^
+E             
+E             WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+E             WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+E             WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+E             WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+E             WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+E             WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+E             WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+E             WARNING  robothor.engine.llm_client:llm_client.py:2136 Model openrouter/test/model failed: assert '' == 'Saved before crash'\n  \n  - Saved before crash
+E             ERROR    robothor.engine.llm_client:llm_client.py:2503 All models failed. Models: ['openrouter/test/model'], broken: set(), last error: AssertionError("assert '' == 'Saved before crash'\n  \n  - Saved before crash")
+E             ERROR    robothor.engine.runner:failure.py:15 Agent main failed: I could not get an answer from any model, so this run stopped without doing the work. openrouter/test/model — it was tried and did not answer. This agent has no local fallback configured, so there was nothing left to try.
+E             Traceback (most recent call last):
+E               File "/home/philip/robothor-runtime-modernization/robothor/engine/runner.py", line 1294, in execute
+E                 await self._run_loop(
+E                 ...<16 lines>...
+E                 )
+E               File "/home/philip/robothor-runtime-modernization/robothor/engine/runner.py", line 2003, in _run_loop
+E                 raise all_models_failed(session, models, broken_models)
+E             robothor.engine.last_resort.AllModelsFailedError: I could not get an answer from any model, so this run stopped without doing the work. openrouter/test/model — it was tried and did not answer. This agent has no local fallback configured, so there was nothing left to try.
+E             =============================== warnings summary ===============================
+E             robothor/engine/tests/test_native_goal_recovery.py::test_native_crash_worker
+E               /home/philip/robothor-runtime-modernization/.venv/lib/python3.14/site-packages/pydantic/_internal/_generate_schema.py:1480: UserWarning: Item 'summary' on TypedDict class 'ChatCompletionReasoningItem' is using the `ReadOnly` qualifier. Pydantic will not protect items from any mutation on dictionary instances.
+E                 warnings.warn(
+E             
+E             -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+E             =========================== short test summary info ============================
+E             FAILED robothor/engine/tests/test_native_goal_recovery.py::test_native_crash_worker
+E             1 failed, 1 warning in 1.66s
+E             
+E           assert 1 == -<Signals.SIGKILL: 9>
+E            +  where 1 = CompletedProcess(args=['/home/philip/robothor-runtime-modernization/.venv/bin/python', '-m', 'pytest', '-q', '-s', '/h...bothor/engine/tests/test_native_goal_recovery.py::test_native_crash_worker\n1 failed, 1 warning in 1.66s\n', stderr='').returncode
+E            +  and   <Signals.SIGKILL: 9> = signal.SIGKILL
+
+robothor/engine/tests/test_native_goal_recovery.py:62: AssertionError
+=============================== warnings summary ===============================
+robothor/engine/tests/test_native_goal_recovery.py::test_native_goal_recovery_reconciles_before_waiting[False]
+  /home/philip/robothor-runtime-modernization/.venv/lib/python3.14/site-packages/pydantic/_internal/_generate_schema.py:1480: UserWarning: Item 'summary' on TypedDict class 'ChatCompletionReasoningItem' is using the `ReadOnly` qualifier. Pydantic will not protect items from any mutation on dictionary instances.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED robothor/engine/tests/test_native_goal_recovery.py::test_native_goal_recovery_reconciles_before_waiting[False]
+FAILED robothor/engine/tests/test_native_goal_recovery.py::test_native_goal_recovery_reconciles_before_waiting[True]
+2 failed, 34 passed, 1 skipped, 1 warning in 27.29s

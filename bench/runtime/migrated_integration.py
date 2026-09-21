@@ -62,6 +62,7 @@ def main():
                     "138_goal_provider_reservations",
                     "139_goal_task_family_controls",
                     "140_chat_approval_receipts",
+                    "141_runtime_effects",
                 } <= set(applied)
                 assert apply(connection=conn) == []
             pg("createdb", "-h", socket, "-U", "runtime_test", "runtime_upgrade_test")
@@ -114,6 +115,7 @@ def main():
                     "robothor/engine/tests/test_native_admission_rollback.py",
                     "robothor/engine/tests/test_native_deadline_recovery.py",
                     "robothor/engine/tests/test_native_goal_report_audit.py",
+                    "robothor/engine/tests/test_native_effect_journal.py",
                     "robothor/engine/tests/test_native_checkpoint_continuation.py",
                     "robothor/engine/tests/test_native_deep_worker_recovery.py",
                     *(

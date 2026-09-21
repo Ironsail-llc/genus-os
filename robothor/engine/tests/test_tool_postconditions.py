@@ -126,6 +126,9 @@ class TestEnforceRung:
             out = await verify_tool_result("gws_gmail_send", {}, {"id": "msg-ghost"}, _ctx())
 
         assert out["verification_failed"] is True
+        assert out["outcome_unknown"] is True
+        assert out["retryable"] is False
+        assert "Do NOT report this as done or repeat" in out["error"]
         assert out["id"] == "msg-ghost", "the original result must survive the injection"
         assert "gws_gmail_send" in out["verification_message"]
         assert _rows(evidence)[0]["verified"] is False

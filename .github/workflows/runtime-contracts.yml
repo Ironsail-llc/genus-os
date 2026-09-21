@@ -55,6 +55,9 @@ jobs:
           bench/runtime/test_native_journal.py
           bench/runtime/test_chat_cohort.py
           bench/runtime/test_chat_cohort_report.py
+          robothor/engine/tests/test_runtime_effects.py
+          robothor/engine/tests/test_effect_dispatch.py
+          robothor/engine/tests/test_tool_postconditions.py
           robothor/engine/tests/test_runtime_uncertain_write_contract.py
           robothor/engine/tests/test_uncertain_outcome_recovery.py
           robothor/engine/tests/test_native_uncertain_recovery.py

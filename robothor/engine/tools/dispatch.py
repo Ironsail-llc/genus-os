@@ -530,6 +530,14 @@ async def _execute_tool(
     if denial:
         return denial
 
+    from robothor.engine.runtime.effect_dispatch import invoke
+
+    return await invoke(name, args, ctx, lambda: _dispatch_admitted(name, args, ctx))
+
+
+async def _dispatch_admitted(name: str, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    agent_id, run_id, tenant_id = ctx.agent_id, ctx.run_id, ctx.tenant_id
+    user_id, workspace, is_benchmark = ctx.user_id, ctx.workspace, ctx.is_benchmark
     from robothor.engine.tools import get_registry
 
     route = get_registry().get_adapter_route(name)
@@ -547,7 +555,9 @@ async def _execute_tool(
             _audit_tool_call(
                 name, agent_id, tenant_id, user_id=user_id, status="error", error=str(e)
             )
-            return {"error": f"Adapter tool '{name}' failed: {e}"}
+            return tool_response_failure(
+                name, {"error": f"Adapter tool '{name}' failed: {e}", "retryable": True}
+            )
 
     handlers = _get_handlers()
     handler = handlers.get(name)

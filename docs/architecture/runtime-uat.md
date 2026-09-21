@@ -1205,3 +1205,16 @@ Four further regression cases showed that the recovery planner ignored structure
 The new native scripted-provider case commits a synthetic write, loses its response, checks that the next model turn receives the correct recovery guidance, and reads the effect back. An independent host predicate then completes the run. Exactly one write, one read and two model calls occur; there is no model work after verified readback. The combined latest native runner/recovery/telemetry/completion/size selection passed 177 tests. See `bench/runtime/uat-uncertain-recovery-guidance.json`, including the retained four-case red result.
 
 This verifies guidance and wiring with synthetic effects; it does not mechanically prevent a model from proposing another write, establish durable duplicate prevention after restart, or add every provider's readback. Those remain incomplete. The broad 11,182-test run predates this planner change and is not presented as a rerun of the latest revision.
+
+
+## Durable effect journal: local recovery contracts
+
+Migration 141 adds tenant/principal-scoped action admission and outcome records. Native runtime dispatch records an intent before invoking a mutating tool. An unresolved identical intent cannot be dispatched again by a replacement worker. Uncertainty also fences related request/goal/budget writes; reads remain available. Trusted settled readback can confirm the recorded result or prove nonapplication. Confirmed recovery returns the recorded result without another write. Cancellation and late-worker tests preserve uncertainty after dispatch; cancellation before dispatch withdraws admission. Existing calendar reconciliation retains its separate ledger.
+
+Local tests include concurrent identical admissions, tenant isolation/RLS, a real subprocess dying after a synthetic provider write, a replacement native runner attempting the same write, and trusted synthetic readback. The broad engine selection passed 11,209 tests, 29 skipped and 189 deselected (393 warnings, 383.23 seconds). Canonical native integration passed 37 with one skipped. Both runs preceded a further enforced-verification fix: failed readback now says to inspect the audit and reconcile, never to blindly retry or claim nonapplication. The final focused selection including that fix passed 67 tests in 7.55 seconds. Logs and scope are recorded in `bench/runtime/uat-verification.json`.
+
+Intermediate failures are retained: prepared-state abandonment SQL, omitted migration registration, and an incorrect scripted-provider phase in the new native fixture. These were corrected before the successful results above.
+
+This is not complete automatic recovery. The abandoned-run operation is not yet wired into startup/reaper recovery, generic trusted readback callbacks are supplied by tests, and the new ledger is not yet projected into the goal workspace or chat outcome endpoint. Uncertainty can currently block internal goal wait/progress bookkeeping, which needs a narrowly authorized path without clearing the business-write fence. Runtime-bound dispatch is required. No production migration, deployment, framework selection or overall manual acceptance is claimed.
+
+Final-source canonical integration was rerun without the optional browser cases: 31 passed, one skipped, in 8.27 seconds. See `uat-runtime-effects-canonical-latest.log`.
