@@ -1,0 +1,38 @@
+
+> app@1.100.2 test /home/philip/robothor-runtime-modernization/app
+> vitest run __tests__/components/goals-view.test.tsx
+
+
+ RUN  v4.1.11 /home/philip/robothor-runtime-modernization/app
+
+ ❯ __tests__/components/goals-view.test.tsx (0 test)
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  __tests__/components/goals-view.test.tsx [ __tests__/components/goals-view.test.tsx ]
+Error: Transform failed with 1 error:
+
+[31m[PARSE_ERROR] [0mExpected `}` but found `{`
+     [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/components/views/goals-view.tsx:140:13 [38;5;246m][0m
+     [38;5;246m│[0m
+ [38;5;246m140 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m{[38;5;249mg[0m[38;5;249mo[0m[38;5;249ma[0m[38;5;249ml[0m[38;5;249m.[0m[38;5;249mb[0m[38;5;249ml[0m[38;5;249mo[0m[38;5;249mc[0m[38;5;249mk[0m[38;5;249me[0m[38;5;249mr[0m[38;5;249m [0m[38;5;249m&[0m[38;5;249m&[0m[38;5;249m [0m[38;5;249m<[0m[38;5;249ms[0m[38;5;249mp[0m[38;5;249ma[0m[38;5;249mn[0m[38;5;249m [0m[38;5;249mc[0m[38;5;249ml[0m[38;5;249ma[0m[38;5;249ms[0m[38;5;249ms[0m[38;5;249mN[0m[38;5;249ma[0m[38;5;249mm[0m[38;5;249me[0m[38;5;249m=[0m[38;5;249m"[0m[38;5;249mb[0m[38;5;249ml[0m[38;5;249mo[0m[38;5;249mc[0m[38;5;249mk[0m[38;5;249m"[0m[38;5;249m>[0m[38;5;249m{[0m[38;5;249mg[0m[38;5;249mo[0m[38;5;249ma[0m[38;5;249ml[0m[38;5;249m.[0m[38;5;249mb[0m[38;5;249ml[0m[38;5;249mo[0m[38;5;249mc[0m[38;5;249mk[0m[38;5;249me[0m[38;5;249mr[0m[38;5;249m}[0m[38;5;249m<[0m[38;5;249m/[0m[38;5;249ms[0m[38;5;249mp[0m[38;5;249ma[0m[38;5;249mn[0m[38;5;249m>[0m[38;5;249m}[0m
+ [38;5;240m    │[0m             ┬  
+ [38;5;240m    │[0m             ╰── `}` expected
+[38;5;246m─────╯[0m
+
+  Plugin: vite:oxc
+  File: /home/philip/robothor-runtime-modernization/app/src/components/views/goals-view.tsx
+ ❯ transformWithOxc node_modules/.pnpm/vite@8.1.4_@types+node@20.19.33_jiti@2.6.1/node_modules/vite/dist/node/chunks/node.js:4017:19
+ ❯ TransformPluginContext.transform node_modules/.pnpm/vite@8.1.4_@types+node@20.19.33_jiti@2.6.1/node_modules/vite/dist/node/chunks/node.js:4088:26
+ ❯ EnvironmentPluginContainer.transform node_modules/.pnpm/vite@8.1.4_@types+node@20.19.33_jiti@2.6.1/node_modules/vite/dist/node/chunks/node.js:30151:51
+ ❯ loadAndTransform node_modules/.pnpm/vite@8.1.4_@types+node@20.19.33_jiti@2.6.1/node_modules/vite/dist/node/chunks/node.js:20098:26
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  no tests
+   Start at  03:35:59
+   Duration  923ms (transform 47ms, setup 85ms, import 0ms, tests 0ms, environment 576ms)
+
+ ELIFECYCLE  Test failed. See above for more details.

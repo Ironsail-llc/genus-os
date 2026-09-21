@@ -21,13 +21,12 @@
       "note": "Source and collected tests unchanged during run. Includes journal, terminal-owner sweep, CRM note automatic readback and chat receipt projection. Predates the subsequent goal bookkeeping fix. Warnings include deprecations and unawaited network coroutines; not a warning-free or performance result."
     },
     "frontend": {
-      "base_revision": "d28cf89572a",
+      "base_revision": "56aa76e6aa0",
+      "passed": 1666,
       "files": 150,
-      "passed": 1665,
-      "failed": 0,
-      "seconds": 9.03,
-      "log": "bench/runtime/uat-runtime-goal-evidence-frontend-final.log",
-      "note": "Final product source. Followed only by a test-fixture lint cleanup; affected file then passed eight tests and strict eslint passed. Existing jsdom navigation warning remains."
+      "seconds": 9.07,
+      "log": "bench/runtime/uat-runtime-goal-list-frontend.log",
+      "note": "Final source; existing jsdom navigation notice remains."
     },
     "goals_private_database": {
       "passed": 58,
@@ -3359,6 +3358,47 @@
       "behavior": "After real isolated CRM commit and synthetic response loss, both immediate and background readback produce the same receipt through two authenticated /chat/outcome requests. Exactly one create, zero reconnect model calls. Failed run remains failed; verified action does not falsely complete the full request.",
       "intermediate": "First HTTP fixture omitted authenticated request state and received 503 before reaching the route. Fixed fixture; actual auth dependency retained. Failure log preserved.",
       "manual_acceptance": false
+    },
+    "frontend_before_goal_list_evidence": {
+      "base_revision": "d28cf89572a",
+      "files": 150,
+      "passed": 1665,
+      "failed": 0,
+      "seconds": 9.03,
+      "log": "bench/runtime/uat-runtime-goal-evidence-frontend-final.log",
+      "note": "Final product source. Followed only by a test-fixture lint cleanup; affected file then passed eight tests and strict eslint passed. Existing jsdom navigation warning remains."
+    },
+    "goal_list_action_evidence": {
+      "base_revision": "56aa76e6aa0",
+      "focused": {
+        "passed": 129,
+        "warnings": 2,
+        "seconds": 17.43,
+        "log": "bench/runtime/uat-runtime-goal-list-evidence.log"
+      },
+      "canonical": {
+        "passed": 36,
+        "skipped": 1,
+        "warnings": 1,
+        "seconds": 11.11,
+        "log": "bench/runtime/uat-runtime-goal-list-canonical.log"
+      },
+      "ui": {
+        "passed": 9,
+        "seconds": 0.999,
+        "log": "bench/runtime/uat-runtime-goal-list-ui-final.log"
+      },
+      "lint": {
+        "passed": true,
+        "log": "bench/runtime/uat-runtime-goal-list-lint.log"
+      },
+      "behavior": "Goal discovery returns fresh tenant-scoped action counts using one aggregate query for the bounded list and descendants. List cards show pending actions and qualify complete status when unsettled; detail and list counts agree without a version change.",
+      "intermediate": "Initial UI transform failed on a missing JSX closing brace; corrected, retained log, and reran targeted and full frontend checks.",
+      "limitations": [
+        "No new broad engine or browser end-to-end run.",
+        "Earlier normal-chat recovery question remains awaiting user response; not counted as accepted.",
+        "Other provider recovery and full acceptance remain incomplete."
+      ]
     }
   },
   "calendar": {

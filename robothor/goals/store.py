@@ -177,6 +177,10 @@ def list_goals(tenant: str, *, task_summary: bool = False) -> list[dict[str, Any
             (tenant,),
         )
         goals = [r["data"] for r in cur.fetchall()]
+        if goals:
+            from robothor.goals.effect_summary import attach
+
+            attach(cur, tenant, goals)
         if task_summary and goals:
             from robothor.goals.task_summary import attach_task_summaries
 

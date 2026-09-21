@@ -140,7 +140,18 @@ it("qualifies a recorded complete status when unresolved effects remain", async 
     ? response({ goal: current }) : response({ goals: [current], enabled: true })));
   render(<GoalsView visible />);
   fireEvent.click(await screen.findByRole("button", { name: /Deliver report/ }));
-  expect(await screen.findByText(/Marked complete; action verification pending/)).toBeInTheDocument();
+  await waitFor(() => expect(screen.getAllByText(/Marked complete; action verification pending/)).toHaveLength(2));
   expect(screen.getByText(/2 recorded actions in this goal or its children still need verification/)).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Approve completion" })).not.toBeInTheDocument();
+});
+
+
+it("shows unresolved family actions in the list without opening details", async () => {
+  const current = { ...goal, action_evidence: { pending: 2, confirmed: 0 } };
+  const fetch = vi.fn(() => response({ goals: [current], enabled: true }));
+  vi.stubGlobal("fetch", fetch);
+  render(<GoalsView visible />);
+  expect(await screen.findByRole("button", { name: /2 actions await verification across this goal and its children/ })).toBeInTheDocument();
+  expect(screen.queryByRole("region", { name: "Goal details" })).not.toBeInTheDocument();
+  expect(fetch.mock.calls).toHaveLength(1);
 });

@@ -1,20 +1,39 @@
 """Goal-family action evidence from durable, tenant-scoped runtime records."""
 
 
-def summary(cur, tenant, goal_id, *, exclude_id=None):
+def summaries(cur, tenant, goal_ids, *, exclude_id=None):
+    """One aggregate query for a bounded goal list and all its descendants."""
+    if not goal_ids:
+        return {}
     cur.execute(
         """WITH RECURSIVE family AS (
-            SELECT id FROM pursuit_goals WHERE tenant_id=%s AND id=%s
+            SELECT id AS root,id FROM pursuit_goals WHERE tenant_id=%s AND id::text=ANY(%s)
             UNION
-            SELECT child.id FROM pursuit_goals child JOIN family parent
+            SELECT parent.root,child.id FROM pursuit_goals child JOIN family parent
               ON child.data->>'parent_goal_id'=parent.id::text WHERE child.tenant_id=%s
-        ) SELECT count(*) FILTER (WHERE e.state IN ('prepared','dispatching','uncertain')) AS pending,
+        ) SELECT f.root,
+                 count(*) FILTER (WHERE e.state IN ('prepared','dispatching','uncertain')) AS pending,
                  count(*) FILTER (WHERE e.state='confirmed') AS confirmed
-          FROM agent_runtime_effects e JOIN family f ON e.goal_id=f.id::text
-          WHERE e.tenant_id=%s AND (%s::uuid IS NULL OR e.id<>%s::uuid)""",
-        (tenant, goal_id, tenant, tenant, exclude_id, exclude_id),
+          FROM family f LEFT JOIN agent_runtime_effects e
+            ON e.goal_id=f.id::text AND e.tenant_id=%s
+              AND (%s::uuid IS NULL OR e.id<>%s::uuid)
+          GROUP BY f.root""",
+        (tenant, list(goal_ids), tenant, tenant, exclude_id, exclude_id),
     )
-    return dict(cur.fetchone())
+    return {
+        str(row["root"]): {"pending": row["pending"], "confirmed": row["confirmed"]}
+        for row in cur.fetchall()
+    }
+
+
+def summary(cur, tenant, goal_id, *, exclude_id=None):
+    return summaries(cur, tenant, [goal_id], exclude_id=exclude_id)[goal_id]
+
+
+def attach(cur, tenant, goals):
+    counts = summaries(cur, tenant, [goal["id"] for goal in goals])
+    for goal in goals:
+        goal["action_evidence"] = counts[goal["id"]]
 
 
 def require_settled(cur, tenant, goal_id):

@@ -1,0 +1,13 @@
+
+> app@1.100.2 test /home/philip/robothor-runtime-modernization/app
+> vitest run __tests__/components/goals-view.test.tsx
+
+
+ RUN  v4.1.11 /home/philip/robothor-runtime-modernization/app
+
+
+ Test Files  1 passed (1)
+      Tests  9 passed (9)
+   Start at  03:36:27
+   Duration  999ms (transform 76ms, setup 80ms, import 136ms, tests 458ms, environment 260ms)
+

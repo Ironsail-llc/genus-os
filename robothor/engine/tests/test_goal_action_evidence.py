@@ -45,6 +45,9 @@ def test_report_reads_child_uncertainty_and_later_verified_receipt(family):
     effects.finish(ctx, row["id"], "worker", uncertain=True)
     snapshot = store.get(ctx.tenant_id, parent["id"])
     assert snapshot["action_evidence"] == {"pending": 1, "confirmed": 0}
+    listed = {g["id"]: g for g in store.list_goals(ctx.tenant_id)}
+    assert listed[parent["id"]]["action_evidence"] == snapshot["action_evidence"]
+    assert listed[child["id"]]["action_evidence"] == snapshot["action_evidence"]
     text = render_goal_progress(snapshot, execution_enabled=True)
     assert "still need verification" in text and "The goal is not complete" in text
     assert effects.resolve(
@@ -55,6 +58,9 @@ def test_report_reads_child_uncertainty_and_later_verified_receipt(family):
     refreshed = store.get(ctx.tenant_id, parent["id"])
     assert refreshed["action_evidence"] == {"pending": 0, "confirmed": 1}
     assert refreshed["status"] == parent["status"]
+    listed = {g["id"]: g for g in store.list_goals(ctx.tenant_id)}
+    assert listed[parent["id"]]["action_evidence"] == refreshed["action_evidence"]
+    assert listed[parent["id"]]["version"] == parent["version"]
     assert "still need verification" not in render_goal_progress(refreshed, execution_enabled=True)
 
 

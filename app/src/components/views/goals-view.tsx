@@ -135,7 +135,8 @@ export function GoalsView({ visible }: { visible: boolean }) {
           {loaded && goals.length === 0 && <p>No goals yet.</p>}
           {goals.map(goal => <button key={goal.id} onClick={() => void select(goal.id)} className="block w-full border rounded p-3 text-left" disabled={busy}>
             <span className="font-medium">{goal.objective}</span>
-            <span className="block text-sm text-muted-foreground">{goal.kind === "short" ? "Short-term" : "Long-term"} · {goal.mode} · {goal.status}</span>
+            <span className="block text-sm text-muted-foreground">{goal.kind === "short" ? "Short-term" : "Long-term"} · {goal.mode} · {goal.status === "complete" && (goal.action_evidence?.pending ?? 0) > 0 ? "Marked complete; action verification pending" : goal.status}</span>
+            {(goal.action_evidence?.pending ?? 0) > 0 && <span className="block text-sm">{goal.action_evidence!.pending} {goal.action_evidence!.pending === 1 ? "action awaits" : "actions await"} verification across this goal and its children.</span>}
             {goal.blocker && <span className="block">{goal.blocker}</span>}
             {goal.status === "waiting" && <span className="block text-sm">{goal.wait?.reason} · Next review {new Date(goal.ready_at).toLocaleString()}</span>}
             {goal.assessment && <span className="block text-sm">Latest assessment: {goal.assessment.status}</span>}

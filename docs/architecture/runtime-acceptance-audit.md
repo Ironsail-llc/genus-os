@@ -963,3 +963,12 @@ At product revision `8101cc1b371`, the existing status/pause scenario passed onc
 The canonical CRM-note recovery test now also delivers its saved evidence through the actual authenticated `/chat/outcome` route twice. For both immediate and deferred readback, only one real isolated CRM note is created, reconnect makes zero model calls, and both HTTP responses match the stored outcome. The run retains failed status while the action receipt is verified; no whole-request completion is invented. The concrete responses are archived as `uat-note-chat-immediate.json` and `uat-note-chat-deferred.json`.
 
 The first HTTP fixture omitted authenticated request state and got 503 before entering the route. It was corrected to supply fixture authentication through middleware while retaining the route dependency. Final canonical integration passed 36 with one skipped in 12.25 seconds. The failure log and final evidence are retained. No product source changed in this follow-up; only verification coverage and artifacts changed. Overall acceptance and deployment remain false.
+
+
+## Goal list action evidence
+
+Following `56aa76e6aa0`, goal discovery attaches current pending/confirmed action counts in a single aggregate query for the bounded goal list and its descendants. Full detail reads and list reads share this query. The list shows pending action verification without requiring selection and qualifies a stored complete status when effects remain unsettled. Counts update after readback without changing the goal version. Existing task summaries remain separate.
+
+Focused goal/effect/bookkeeping/size tests passed 129 in 17.43 seconds; canonical integration passed 36 with one skipped in 11.11 seconds. Nine goal-view tests passed, strict eslint and Ruff passed, and the full frontend selection passed 150 files / 1,666 tests in 9.07 seconds. A missing JSX brace initially prevented UI test collection; its log is retained with the corrected results. Existing jsdom navigation notices remain.
+
+This closes the list-summary presentation gap for recorded runtime effects. It is not a new broad engine or real-browser result, and does not qualify additional provider readbacks. The previous normal-chat recovery question has no user response yet and remains unaccepted. Overall acceptance and deployment remain false.
