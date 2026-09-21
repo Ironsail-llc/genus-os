@@ -39,6 +39,8 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
     if "deferred_tools" in settings:
         assert type(settings["deferred_tools"]) is bool
         monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "1" if settings["deferred_tools"] else "0")
+    provider_sort = settings.get("provider_sort")
+    assert provider_sort in {None, "latency", "throughput"}
     streaming = settings.get("streaming", False)
     assert type(streaming) is bool
     model_slice = settings.get("model_slice_seconds")
@@ -79,6 +81,10 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
     index, title = 0, ""
 
     async def provider(**kwargs):
+        if provider_sort:
+            from bench.runtime.provider_sort_experiment import apply
+
+            kwargs = apply(kwargs["model"], kwargs, provider_sort)
         assert kwargs["model"] in allowed_models, "Unconfigured model refused"
         assert len(calls) < 12, "Diagnostic provider-call limit reached"
         planning = any(
@@ -94,6 +100,7 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
             "phase": "planning" if planning else "execution",
             "max_tokens": kwargs.get("max_tokens"),
             "thinking_budget_tokens": (kwargs.get("thinking") or {}).get("budget_tokens"),
+            "provider_sort": ((kwargs.get("extra_body") or {}).get("provider") or {}).get("sort"),
             "timeout_seconds": kwargs.get("timeout")
             if isinstance(kwargs.get("timeout"), int | float)
             else None,
@@ -173,6 +180,8 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
                         "fallbacks": agent.model_fallbacks,
                         "temperature": agent.temperature,
                         "reasoning_effort": agent.reasoning_effort,
+                        "experimental_provider_sort": provider_sort,
+                        "provider_order": agent.provider_order,
                         "tools_allowed": len(agent.tools_allowed),
                         "tools_advertised": len(advertised),
                         "schema_characters": len(json.dumps(advertised, ensure_ascii=False)),
