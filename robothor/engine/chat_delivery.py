@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 _INTERRUPTED = {RunStatus.FAILED, RunStatus.TIMEOUT, RunStatus.CANCELLED}
 
 
-def _saved_result(run_id, auth):
+def _saved_result(run_id, auth, observed_run=None):
     with get_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("SET LOCAL statement_timeout = '750ms'")
         cur.execute(
@@ -26,7 +26,24 @@ def _saved_result(run_id, auth):
             (run_id, auth.tenant_id, auth.user_id),
         )
         row = cur.fetchone()
-        if not row or RunStatus(row["status"]) not in _INTERRUPTED:
+        if not row:
+            return None
+        # Native terminal delivery can precede its asynchronous run-row update.
+        # Use the returned terminal status only for this same authenticated run;
+        # action outcomes still come exclusively from durable receipt records.
+        if (
+            observed_run is not None
+            and str(observed_run.id) == run_id
+            and observed_run.status in _INTERRUPTED
+            and row["status"] in {"pending", "running"}
+        ):
+            row = {
+                **row,
+                "status": observed_run.status.value,
+                "output_text": observed_run.output_text,
+                "error_message": observed_run.error_message,
+            }
+        if RunStatus(row["status"]) not in _INTERRUPTED:
             return None
         receipts = family_calendar_receipts(cur, row, auth)
         receipts += family_effect_receipts(cur, row, auth)
@@ -50,7 +67,7 @@ async def final_result(run, auth):
     try:
         identifier = str(UUID(str(run.id)))
         async with asyncio.timeout(1):
-            saved = await asyncio.to_thread(_saved_result, identifier, auth)
+            saved = await asyncio.to_thread(_saved_result, identifier, auth, run)
             return saved or {"text": fallback}
     except Exception as exc:
         # A failed audit read is not evidence of either success or nonapplication.

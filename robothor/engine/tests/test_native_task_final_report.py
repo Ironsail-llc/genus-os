@@ -24,10 +24,18 @@ from robothor.engine.task_registry import get_task_registry
 pytestmark = pytest.mark.integration
 
 
-@pytest.mark.parametrize("compound", [False, True])
-@pytest.mark.parametrize("final_report", [False, True])
+@pytest.mark.parametrize(
+    "final_report,compound,fail_after_creation",
+    [
+        (False, False, False),
+        (False, True, False),
+        (True, False, False),
+        (True, True, False),
+        (True, True, True),
+    ],
+)
 async def test_native_task_report_delivers_and_recovers_without_extra_model(
-    engine_config, sample_agent_config, monkeypatch, final_report, compound
+    engine_config, sample_agent_config, monkeypatch, final_report, compound, fail_after_creation
 ):
     dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
     if "host=/tmp/runtime-migrated-" not in dsn:
@@ -60,6 +68,8 @@ async def test_native_task_report_delivers_and_recovers_without_extra_model(
     async def provider(self, messages, models, tools, on_content=None, **kwargs):
         calls.append(True)
         assert len(calls) <= expected_calls, "Unnecessary model after verified final report"
+        if fail_after_creation and len(calls) == 2:
+            return None  # All configured models are exhausted after a confirmed write.
         message = {"role": "assistant", "content": "Created task: One. Status: TODO."}
         if compound:
             message["content"] += " Separately, 17 times 19 is 323."
@@ -120,9 +130,14 @@ async def test_native_task_report_delivers_and_recovers_without_extra_model(
             for part in response.text.split("\n\n")
             if part.startswith("event: done\n")
         ]
-        assert len(done) == 1 and done[0]["status"] == "completed"
-        assert "Created task:" in done[0]["text"] and "Status: TODO" in done[0]["text"]
-        if compound:
+        assert len(done) == 1
+        assert done[0]["status"] == ("failed" if fail_after_creation else "completed")
+        if fail_after_creation:
+            assert "task was created" in done[0]["text"].lower()
+            assert "323" not in done[0]["text"]
+        else:
+            assert "Created task:" in done[0]["text"] and "Status: TODO" in done[0]["text"]
+        if compound and not fail_after_creation:
             assert "323" in done[0]["text"], "Task-only report dropped the additional obligation"
         # Terminal delivery can precede the asynchronous run-record write. The
         # reconnect client polls that original identity, never re-executes it.
@@ -149,6 +164,13 @@ async def test_native_task_report_delivers_and_recovers_without_extra_model(
             (tenant,),
         )
         assert cur.fetchall() == [("confirmed", 1)]
+        if fail_after_creation:
+            cur.execute(
+                "SELECT status,error_message FROM agent_runs WHERE id=%s", (recovered["run_id"],)
+            )
+            status, error = cur.fetchone()
+            assert status == "failed"
+            assert "without doing the work" not in error
         cur.execute(
             "SELECT tool_output FROM agent_run_steps WHERE run_id=%s AND step_type='checkpoint' AND tool_name='create_task'",
             (recovered["run_id"],),

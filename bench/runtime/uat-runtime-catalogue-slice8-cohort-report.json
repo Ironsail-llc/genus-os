@@ -1,0 +1,58 @@
+{
+  "configuration": {
+    "primary": "openrouter/deepseek/deepseek-v4.1-flash",
+    "fallbacks": [
+      "openrouter/xiaomi/mimo-v2.5",
+      "openrouter/deepseek/deepseek-v4-flash",
+      "ollama_chat/qwen3.8:27b"
+    ],
+    "temperature": 0.5,
+    "tools_allowed": 104,
+    "tools_advertised": 112,
+    "schema_characters": 74925,
+    "deferred_tools": false,
+    "experimental_model_slice_seconds": 8,
+    "task_protocol": true,
+    "samples": 30,
+    "scenario": "task_and_calculation",
+    "synthetic_tenant_prefix": "runtime-live-",
+    "scope": "Native runner, installation profile settings, isolated workspace and private CRM. Only requested task tools execute. No production instructions/memory staged; 65-second harness cutoff and 12-call diagnostic limit. Provider counts include planning. Native cost estimates are not billing. Not ASGI/browser latency or a matched baseline comparison."
+  },
+  "counts": {
+    "verified": 12,
+    "failed": 3,
+    "unfinished": 1,
+    "not_started": 14
+  },
+  "elapsed_ms": {
+    "samples": 15,
+    "p50": 17737.130016001174,
+    "p95": 38674.72903999442,
+    "p95_ci95": [
+      24052.490225003567,
+      38674.72903999442
+    ]
+  },
+  "over_30_seconds": 1,
+  "over_60_seconds": 0,
+  "provider_invocations": {
+    "openrouter/deepseek/deepseek-v4.1-flash": 6,
+    "openrouter/xiaomi/mimo-v2.5": 12,
+    "openrouter/deepseek/deepseek-v4-flash": 19,
+    "ollama_chat/qwen3.8:27b": 5
+  },
+  "native_estimated_cost_usd": 0.036548,
+  "provider_calls_without_result": 17,
+  "cost_estimate_excludes_unknown_provider_usage": true,
+  "post_return_model_calls": 0,
+  "duplicate_task_samples": 0,
+  "stored_task_matches": 13,
+  "confirmed_action_samples": 13,
+  "interrupted_after_confirmed_action": 1,
+  "latency_passed": false,
+  "screening_passed": false,
+  "manual_acceptance": false,
+  "note": "All finished attempts contribute timing, including failed/cutoff attempts; missing attempts cannot qualify. Provider invocations count LiteLLM calls, not independently observed HTTP retries. Cost is native recorded estimate, not billing; interrupted calls may incur charges absent from this estimate. Direct native admission, not chat ingress/queue timing; no matched baseline or framework-selection claim.",
+  "stopped_early": true,
+  "stop_reason": "Model exhaustion failed requests; one confirmed task was followed by an inaccurate no-work error. Rejected experiment; interrupted to reproduce/fix terminal delivery."
+}

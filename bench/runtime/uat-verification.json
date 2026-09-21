@@ -5601,13 +5601,23 @@
       "product_revision": "c342a50cd74",
       "harness_start_revision": "bf1605ebb57",
       "samples": 30,
-      "status": "running",
-      "artifact": "/tmp/runtime-catalogue-slice8-cohort.jsonl",
+      "status": "interrupted_and_rejected",
+      "artifact": "bench/runtime/uat-runtime-catalogue-slice8-cohort.jsonl",
       "model_slice_seconds": 8,
       "deferred_tools": false,
       "model_selection_changed": false,
       "installed_configuration_changed": false,
-      "performance_qualified": false
+      "performance_qualified": false,
+      "verified": 12,
+      "failed": 3,
+      "unfinished": 1,
+      "not_started": 14,
+      "confirmed_actions": 13,
+      "duplicate_actions": 0,
+      "provider_calls_without_result": 17,
+      "promoted": false,
+      "report": "bench/runtime/uat-runtime-catalogue-slice8-cohort-report.json",
+      "reason": "Aggressive allowance exhausted model chain and cooled down configured providers; one action succeeded before request failure. Stopped after 15 completed attempts to fix misleading failure delivery."
     },
     "short_timeout_health_experiment": {
       "product_revision": "c342a50cd74",
@@ -5626,6 +5636,31 @@
         "bench/runtime/uat-runtime-isolated-timeout-health-contract.log",
         "bench/runtime/uat-runtime-short-timeout-breaker-contracts.log"
       ]
+    },
+    "failed_run_receipt_delivery_race": {
+      "base_revision": "af911977c95",
+      "product_changed": true,
+      "reproduction": "Confirmed task followed by model exhaustion sometimes delivered no-work error because terminal run-row persistence lagged behind chat delivery. Diagnostic DB read changed timing and demonstrated the race; original and diagnostic failures retained.",
+      "fix": "Neutral model-exhaustion wording; for the same authenticated run only, terminal native result may replace pending/running status during receipt projection. Saved action facts still come from durable records; other terminal runs, missing rows and mismatched identities are not reinterpreted.",
+      "unit": {
+        "passed": 34,
+        "seconds": 2.68
+      },
+      "focused_native": {
+        "passed": 5,
+        "deselected": 76,
+        "warnings": 1,
+        "seconds": 5.4
+      },
+      "canonical": {
+        "passed": 79,
+        "skipped": 2,
+        "warnings": 1,
+        "seconds": 34.76
+      },
+      "broad_engine": "pending",
+      "live_qualification": "pending",
+      "rollback_backport": "pending; 43b4af63073 predates this correction"
     }
   },
   "calendar": {
@@ -5864,13 +5899,13 @@
     ]
   },
   "remaining": [
-    "Current product c342a50cd74 passes focused, canonical and full engine checks (11,443 engine tests). Full-tool and deferred-tool compound screens verified all 30 requests but failed latency (p95 33.872 and 39.362 seconds). A test-only 10-second model allowance also verified all 30 but failed at p95 30.046 seconds; eight interrupted provider calls make cost estimates incomplete. An 8-second allowance screen is running. No timeout or deferred-tool default has been promoted; prior failures remain retained. Short model allowances can open the shared breaker and affect later goal model selection; test-only health isolation is implemented and unit-verified but not live-qualified. A passing short-timeout population alone is insufficient for promotion.",
+    "Latest local product additionally fixes a confirmed-action delivery race and misleading no-work wording after model exhaustion. It passes 34 focused unit checks and 79 canonical tests; broad regression and changed-source live qualification remain pending. Eight-second shared-breaker screening was rejected/interrupted (12 verified, three failed, one unfinished, 14 not started). No short-timeout or deferred-tool default is promoted. Isolated-health timeout evaluation has not run.",
     "Complete representative workload comparison against accepted integration baseline eea3252b1577e3f51e6d6a6216d6f242fd7ac4a1. Matched scripted standalone/compound task checks now pass with both minimal and selected main/full-catalogue profiles; current selected-profile p95 overhead is 54\u201356 ms versus baseline 134\u2013135 ms, with one fewer planning call. These remain two task scenarios with synthetic providers and isolated instructions/memory, not a representative live comparison.",
     "Qualify workload-wide selected-provider deadlines and latency, including requests competing with background goals. Local scripted HTTP acknowledgement/stop/progress and synthetic 1/5/20-tenant limits are measured; live-provider mixed-load limits remain unqualified. Preserve failures, unfinished attempts and uncertainty.",
     "Recheck the supported outcome-recovery inventory and remaining ingress/failure cases against action contracts. Calendar and CRM note/task readbacks, task browser reconnect, saved responses, native checkpoints and daemon goal recovery have evidence; these do not establish arbitrary external-provider recovery.",
     "Normal-chat manual acceptance is recorded for unfinished-work status, duplicate calendar confirmation, audit recovery and parent/child pause. Selective resume remains pending user review; no response has been received. Other required goal-control UAT and overall acceptance remain open.",
     "Retain the current runtime: tested candidates failed mandatory behavior and are not finalists. Any future replacement needs full parity, matched 100-repetition finalist measurements and upgrade qualification. No replacement is selected.",
-    "Rollback 43b4af63073 now passes receipt, task identity, persisted deadline and complete-request reporting gates, plus actual current/rollback/current daemon HTTP admission/audit recovery with stopped/effect state preserved. Container/dependency rollback and hosted CI have not been demonstrated. Production deployment and production ingress certification are outside the authorized local work; nothing is deployed."
+    "Rollback 43b4af63073 now passes receipt, task identity, persisted deadline and complete-request reporting gates, plus actual current/rollback/current daemon HTTP admission/audit recovery with stopped/effect state preserved. Container/dependency rollback and hosted CI have not been demonstrated. Production deployment and production ingress certification are outside the authorized local work; nothing is deployed. The latest failed-run receipt race/wording correction still needs rollback compatibility/backport verification; 43b4af63073 predates it."
   ],
   "local_model_screening": {
     "artifact": "uat-local-native-summary.json",
