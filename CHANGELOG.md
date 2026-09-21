@@ -1,3 +1,9 @@
+## [1.102.1](https://github.com/Ironsail-llc/genus-os/compare/v1.102.0...v1.102.1) (2026-09-21)
+
+### Bug Fixes
+
+* **engine:** bound confirmed attendee updates and reduce request overhead ([#610](https://github.com/Ironsail-llc/genus-os/issues/610)) ([568f8af](https://github.com/Ironsail-llc/genus-os/commit/568f8af48e32e31de8ec2c46600d8081a0118fae))
+
 ## [1.102.0](https://github.com/Ironsail-llc/genus-os/compare/v1.101.1...v1.102.0) (2026-09-21)
 
 ### Features
