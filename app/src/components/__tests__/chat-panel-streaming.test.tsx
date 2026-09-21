@@ -38,6 +38,30 @@ describe("ChatPanel streaming UX", () => {
     vi.restoreAllMocks();
   });
 
+  it.each([false, true])("renders a host report from done, replacing any preamble (%s)", async (preamble) => {
+    localStorage.clear();
+    const report = "The goal is paused. One task remains open. Scheduled reviews will not run.";
+    const events = [
+      ...(preamble ? [{ event: "delta", data: { text: "Checking the goal now." } }] : []),
+      { event: "tool_start", data: { tool: "report_pursuit_goal", call_id: "report" } },
+      { event: "tool_end", data: { tool: "report_pursuit_goal", call_id: "report" } },
+      { event: "done", data: { status: "completed", text: report } },
+    ];
+    const requests = vi.fn(async (url: string | URL | Request) => {
+      if (String(url) === "/api/chat/send") {
+        return new Response(makeSSEStream(events), { headers: { "content-type": "text/event-stream" } });
+      }
+      return { ok: true, json: async () => ({ messages: [], agents: [] }) };
+    });
+    vi.stubGlobal("fetch", requests);
+    render(<ChatPanel />);
+    await act(async () => { await typeAndSend(screen.getByTestId("chat-input") as HTMLTextAreaElement, "Pause that work."); });
+    await waitFor(() => expect(screen.getByText(report)).toBeTruthy());
+    expect(screen.queryByText("Checking the goal now.")).toBeNull();
+    expect(requests.mock.calls.filter(([url]) => String(url) === "/api/chat/send")).toHaveLength(1);
+    expect(requests.mock.calls.some(([url]) => String(url).startsWith("/api/chat/outcome"))).toBe(false);
+  });
+
   it("tool_start SSE event shows tool name in normal chat mode", async () => {
     let finish!: () => void;
     const release = new Promise<void>((resolve) => { finish = resolve; });

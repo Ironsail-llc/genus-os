@@ -18,7 +18,7 @@ from bench.runtime.chat_cohort_report import report
 from bench.runtime.native_journal import NativeJournal
 
 
-def collect(manifest, directory, samples=30):
+def collect(manifest, directory, samples=30, *, factual_report=False):
     if samples < 30:
         raise ValueError("At least 30 repetitions are required for this cohort")
     configured = yaml.safe_load(manifest.read_text())["model"]
@@ -32,12 +32,18 @@ def collect(manifest, directory, samples=30):
     snapshot = directory / "model-settings.yaml"
     with snapshot.open("x") as stream:
         yaml.safe_dump({"model": selected}, stream)
+    with (directory / "scenario.json").open("x") as stream:
+        json.dump({"samples": samples, "factual_report": factual_report}, stream)
     journal = NativeJournal(directory / "cohort.jsonl")
     root = Path(__file__).resolve().parents[2]
     for index in range(samples):
         output = directory / f"sample-{index:03d}.json"
         log = directory / f"sample-{index:03d}.log"
-        settings = {"manifest": str(snapshot.resolve()), "output": str(output.resolve())}
+        settings = {
+            "manifest": str(snapshot.resolve()),
+            "output": str(output.resolve()),
+            "factual_report": factual_report,
+        }
         journal.record("sample_started", model, index)
         with log.open("x") as stream:
             result = subprocess.run(
@@ -71,8 +77,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--output-directory", required=True, type=Path)
+    parser.add_argument("--factual-report", action="store_true")
     args = parser.parse_args()
-    directory = collect(args.manifest, args.output_directory)
+    directory = collect(args.manifest, args.output_directory, factual_report=args.factual_report)
     result = report(directory)
     with (directory / "summary.json").open("x") as stream:
         json.dump(result, stream, indent=2)

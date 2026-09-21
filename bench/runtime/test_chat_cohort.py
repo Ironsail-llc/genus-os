@@ -34,13 +34,17 @@ def test_model_settings_are_frozen_before_first_conversation(tmp_path, monkeypat
     assert yaml.safe_load((directory / "model-settings.yaml").read_text()) == {"model": selected}
 
 
-def test_failed_conversation_does_not_disappear_or_stop_later_samples(tmp_path, monkeypatch):
+@pytest.mark.parametrize("factual_report", [False, True])
+def test_failed_conversation_does_not_disappear_or_stop_later_samples(
+    tmp_path, monkeypatch, factual_report
+):
     manifest = tmp_path / "main.yaml"
     manifest.write_text("model:\n  primary: openrouter/selected/model\n")
     calls = []
 
     def invoke(command, **kwargs):
         settings = json.loads(kwargs["env"]["ROBOTHOR_RUNTIME_CHAT_LIVE"])
+        assert settings["factual_report"] is factual_report
         from pathlib import Path
 
         path = Path(settings["output"])
@@ -52,7 +56,11 @@ def test_failed_conversation_does_not_disappear_or_stop_later_samples(tmp_path, 
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr("bench.runtime.chat_cohort.subprocess.run", invoke)
-    directory = collect(manifest, tmp_path / "cohort")
+    directory = collect(manifest, tmp_path / "cohort", factual_report=factual_report)
+    assert json.loads((directory / "scenario.json").read_text()) == {
+        "samples": 30,
+        "factual_report": factual_report,
+    }
     events = [
         json.loads(line) for line in (directory / "cohort.events.jsonl").read_text().splitlines()
     ]
@@ -92,7 +100,7 @@ def test_command_reports_screening_failure_from_retained_evidence(tmp_path, monk
             exit_code=int(case == "child_failed" and index == 0),
             artifact=artifact,
         )
-    monkeypatch.setattr("bench.runtime.chat_cohort.collect", lambda *args: directory)
+    monkeypatch.setattr("bench.runtime.chat_cohort.collect", lambda *args, **kwargs: directory)
     monkeypatch.setattr(
         "sys.argv",
         ["chat_cohort", "--manifest", "selected.yaml", "--output-directory", str(directory)],

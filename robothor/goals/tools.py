@@ -36,7 +36,8 @@ def schemas() -> dict[str, Any]:
             CreateGoal.model_json_schema(),
         ),
         "get_pursuit_goal": (
-            "Read goal criteria, current version, evidence, tasks and execution history. "
+            "Read goal criteria, current version, evidence, tasks and execution history for further work. "
+            "For a final single-goal chat status reply, use report_pursuit_goal instead. "
             "execution_enabled reports whether automatic pursuit is enabled for this tenant; "
             "do not promise automatic progress when false. A waiting goal may wake on its "
             "scheduled review or a matching event/linked-task change; paused goals do not wake. "
@@ -50,8 +51,9 @@ def schemas() -> dict[str, Any]:
         ),
         "list_pursuit_goals": (
             "List the current tenant's operator goals, including paused and waiting goals. "
-            "Use this for progress questions: objectives, criteria, evidence, versions and task "
-            "summaries are included. Read an individual goal only when additional detail is needed "
+            "Use this to discover goals or compare their progress: objectives, criteria, evidence, versions and task "
+            "summaries are included. Once a single goal is selected, use report_pursuit_goal for its final "
+            "chat status reply. Read an individual goal only when additional detail is needed "
             "(full task list, history, child goals, runs or registered wake conditions). "
             "Includes exact linked-task counts by status and up to three task titles per status; "
             "truncated previews are not the full task list. Task counts do not prove goal completion. "
@@ -61,6 +63,7 @@ def schemas() -> dict[str, Any]:
         ),
         "report_pursuit_goal": (
             "Finish this chat reply with a factual report of one explicitly selected goal. "
+            "Prefer this for a single-goal status question or to confirm a requested goal control. "
             "Use only when that report answers the user's entire request; finish other requested "
             "work first. This reads current goal, task and child state; it does not execute work "
             "or pause/resume anything. Call alone, after any requested controls. The host publishes "

@@ -9,17 +9,16 @@
   "replacement_selected": false,
   "checks": {
     "engine": {
-      "revision": "fd6c67f2b6c",
-      "product_revision": "49627a99058",
-      "passed": 11162,
+      "revision": "e949d6bedf8",
+      "passed": 11175,
       "failed": 0,
       "skipped": 29,
-      "deselected": 187,
+      "deselected": 188,
       "warnings": 393,
-      "seconds": 370.91,
+      "seconds": 384.96,
       "selection": "not slow and not integration and not llm and not e2e and not smoke",
-      "log": "/tmp/runtime-engine-deadline-reason-regression.log",
-      "note": "Product source and collected engine tests remained unchanged during the run. Later live-journal changes affect bench helpers and the opt-in slow native live test, excluded here. The two new canonical deadline recovery cases are integration-marked and verified separately. Live provider samples overlapped part of this run; elapsed time is not a matched baseline performance comparison. Existing unawaited connect_tcp warning remains; its collection location does not identify the initiator."
+      "log": "bench/runtime/uat-factual-report-engine-regression.log",
+      "note": "Before subsequent tool-description guidance edits. Existing warnings remain. This is correctness coverage, not a matched latency comparison."
     },
     "frontend": {
       "revision": "2d5b4c2985d",
@@ -3044,6 +3043,50 @@
       ],
       "finding": "In these four turns, recorded model-call time dominates elapsed time; tool work is 14\u201320 ms and other elapsed time is under 160 ms. In the detailed status turn, list/get decisions take 2.198s and 1.548s, while final answer generation takes 10.681s. The detailed pause final answer takes 5.284s. This directs the next investigation toward model round trips and final-response generation.",
       "limits": "Two live diagnostic conversations, not a screening cohort or causal explanation of the prior p95 change. Native LLM_CALL timing includes the call/streaming path, not an independent provider-server measurement. Earlier cohort timing cannot be reconstructed from these new observations. Production behavior unchanged; wording defect and full acceptance remain open. No deployment."
+    },
+    "engine_before_factual_reports": {
+      "revision": "fd6c67f2b6c",
+      "product_revision": "49627a99058",
+      "passed": 11162,
+      "failed": 0,
+      "skipped": 29,
+      "deselected": 187,
+      "warnings": 393,
+      "seconds": 370.91,
+      "selection": "not slow and not integration and not llm and not e2e and not smoke",
+      "log": "/tmp/runtime-engine-deadline-reason-regression.log",
+      "note": "Product source and collected engine tests remained unchanged during the run. Later live-journal changes affect bench helpers and the opt-in slow native live test, excluded here. The two new canonical deadline recovery cases are integration-marked and verified separately. Live provider samples overlapped part of this run; elapsed time is not a matched baseline performance comparison. Existing unawaited connect_tcp warning remains; its collection location does not identify the initiator."
+    },
+    "factual_report_canonical": {
+      "revision": "e949d6bedf8",
+      "passed": 36,
+      "skipped": 1,
+      "seconds": 27.04,
+      "log": "bench/runtime/uat-factual-report-canonical.log",
+      "scope": "Includes original persisted goal report recovered twice after synthetic goal state changed; no repeated model or business action; foreign tenant denied."
+    },
+    "factual_report_rendered_chat": {
+      "passed": 13,
+      "seconds": 1.09,
+      "log": "bench/runtime/uat-factual-report-rendered-chat.log",
+      "scope": "Component tests with mocked transport, including done-only report and replacement of streamed preamble; not a full frontend rerun."
+    },
+    "factual_report_guidance": {
+      "passed": 27,
+      "seconds": 5.94,
+      "log": "bench/runtime/uat-factual-report-guidance.log"
+    },
+    "factual_report_live_diagnostic_0": {
+      "passed": false,
+      "artifact": "bench/runtime/uat-factual-report-live-diagnostic-0.json",
+      "log": "bench/runtime/uat-factual-report-live-diagnostic-0.log",
+      "finding": "Both goal states correct, but neither reply used the factual report tool. Freeform text offered a review despite disabled automatic pursuit. Not a qualifying performance cohort."
+    },
+    "factual_report_live_diagnostic_1": {
+      "passed": true,
+      "artifact": "bench/runtime/uat-factual-report-live-diagnostic-1.json",
+      "log": "bench/runtime/uat-factual-report-live-diagnostic-1.log",
+      "finding": "After tool-description guidance, both turns used trusted factual reports. Status used 2 model calls and pause 3; no model rewrite after report publication. One diagnostic, not a 30-repetition cohort or proof of performance improvement."
     }
   },
   "calendar": {
