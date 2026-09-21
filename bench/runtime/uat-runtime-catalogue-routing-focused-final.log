@@ -1,0 +1,47 @@
+..............F......................                                    [100%]
+=================================== FAILURES ===================================
+__ test_catalogue_routing_changes_only_optional_ordinary_chat_planning[goal] ___
+
+variant = 'goal'
+
+    @pytest.mark.parametrize(
+        "variant",
+        ["chat", "explicit", "goal", "child", "resume", "cron", "approved", "planning_model"],
+    )
+    def test_catalogue_routing_changes_only_optional_ordinary_chat_planning(variant):
+        from robothor.engine.run_lifecycle import RunLifecycleMixin
+    
+        req, cfg = request(), config()
+        if variant == "explicit":
+            cfg.planning_enabled = True
+        elif variant == "planning_model":
+            cfg.planning_model = "selected-planner"
+        elif variant == "goal":
+>           req = replace(req, context=replace(req.context, goal_id="goal"))
+                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+robothor/engine/tests/test_automatic_planning_budget.py:50: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+../.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/dataclasses.py:1770: in replace
+    return _replace(obj, **changes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+../.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/dataclasses.py:1804: in _replace
+    return self.__class__(**changes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+<string>:12: in __init__
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = ExecutionContext(tenant_id='tenant', principal_id='operator', request_id='request', parent_id=None, goal_id='goal', attempt_id=None, budget_id=None, deadline=None, parent_goal_id=None)
+
+    def __post_init__(self) -> None:
+        if not all((self.tenant_id, self.principal_id, self.request_id)):
+            raise ValueError("tenant, principal and request identity are required")
+        if bool(self.goal_id) != bool(self.attempt_id):
+>           raise ValueError("goal and attempt identity must travel together")
+E           ValueError: goal and attempt identity must travel together
+
+robothor/engine/runtime/contracts.py:35: ValueError
+=========================== short test summary info ============================
+FAILED robothor/engine/tests/test_automatic_planning_budget.py::test_catalogue_routing_changes_only_optional_ordinary_chat_planning[goal]
+1 failed, 36 passed in 0.49s

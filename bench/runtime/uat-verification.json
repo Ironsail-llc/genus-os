@@ -5377,6 +5377,45 @@
       ],
       "report": "bench/runtime/uat-runtime-rollback-reporting-report.json",
       "patch": "bench/runtime/rollback-reporting-compatibility.patch"
+    },
+    "interactive_catalogue_routing": {
+      "revision": "c342a50cd74",
+      "change": "Do not infer complex work solely from available tool count for ordinary interactive automatic planning. Preserve manual/explicit/long-context/background/goal/child/resumed policies and full tool catalogue.",
+      "focused": {
+        "passed": 37,
+        "seconds": 0.29
+      },
+      "canonical": {
+        "passed": 76,
+        "skipped": 2,
+        "warnings": 1,
+        "seconds": 35.26
+      },
+      "live_canonical": {
+        "passed": 77,
+        "skipped": 2,
+        "warnings": 1,
+        "seconds": 76.94
+      },
+      "diagnostic": {
+        "verified": 3,
+        "durations_ms": [
+          9540.197729002102,
+          7534.166084005847,
+          22972.39420400001
+        ],
+        "planning_calls": 0,
+        "duplicate_actions": 0,
+        "model_selection_changed": false
+      },
+      "initial_fixture_failures": [
+        "Goal ExecutionContext fixture omitted required attempt identity.",
+        "Wildcard tool name is unsupported; replaced with registered builtin schema names and kept >20 assertion."
+      ],
+      "broad_regression": "running; /tmp/runtime-catalogue-routing-engine.log",
+      "screening_30": "running; /tmp/runtime-catalogue-routing-cohort.jsonl",
+      "performance_qualified": false,
+      "report": "bench/runtime/uat-runtime-catalogue-routing-live-report.json"
     }
   },
   "calendar": {
