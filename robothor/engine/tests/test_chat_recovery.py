@@ -215,7 +215,8 @@ def test_interrupted_run_reports_verified_action_receipt_without_claiming_delive
     assert result["effects"][0]["verified"] is True
     assert "calendar change is recorded as complete and verified" in result["text"]
     assert "delivery is not verified" in result["text"]
-    assert "Run interrupted" in result["text"]
+    assert result["text"].startswith("The calendar change is recorded as complete and verified")
+    assert "Execution was interrupted. Any remaining work is not confirmed." in result["text"]
 
 
 @pytest.mark.parametrize("status", ["blocked", "executing"])
