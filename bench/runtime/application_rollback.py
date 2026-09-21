@@ -17,16 +17,29 @@ import psycopg2
 from bench.runtime.daemon_drill import run
 from bench.runtime.restart_state import seed, verify
 
-# This compatible revision already contains durable stopping and CRM receipts.
+# This prior revision plus a narrow response-recovery backport contains durable
+# stopping and both independently verified and reported CRM receipts.
 # The accepted integration baseline predates those controls and is not a safe
 # rollback target for sessions admitted by the modernization implementation.
-TARGET = "b1671409892"
+TARGET_BASE = "b1671409892"
+TARGET = "15cd1835003"
 
 
 def drill(root, env, dsn):
     current = Path.cwd().resolve()
     target = subprocess.check_output(["git", "rev-parse", TARGET + "^{commit}"], text=True).strip()
-    subprocess.run(["git", "merge-base", "--is-ancestor", target, "HEAD"], check=True)
+    base = subprocess.check_output(["git", "rev-parse", TARGET_BASE], text=True).strip()
+    subprocess.run(["git", "merge-base", "--is-ancestor", base, "HEAD"], check=True)
+    assert subprocess.check_output(["git", "rev-parse", target + "^"], text=True).strip() == base
+    assert set(
+        subprocess.check_output(
+            ["git", "diff", "--name-only", base, target], text=True
+        ).splitlines()
+    ) == {
+        "robothor/engine/runtime/effects.py",
+        "robothor/engine/runtime/effect_dispatch.py",
+        "robothor/engine/runtime/effect_results.py",
+    }
     archive = root / "rollback-code.tar"
     subprocess.run(["git", "archive", "--output", str(archive), target], check=True)
     checkout = root / "rollback-code"
@@ -56,6 +69,7 @@ def drill(root, env, dsn):
     identifiers = seed(dsn)
     stopped_run = identifiers[0]
     effect = str(uuid4())
+    reported = str(uuid4())
     with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute(
             """INSERT INTO agent_runtime_effects
@@ -65,6 +79,15 @@ def drill(root, env, dsn):
         )
         cur.execute("SELECT to_jsonb(e) FROM agent_runtime_effects e WHERE id=%s", (effect,))
         before = cur.fetchone()[0]
+        cur.execute(
+            """INSERT INTO agent_runtime_effects
+            (id,tenant_id,principal_id,request_id,run_id,agent_id,tool_name,fingerprint,state,resolution)
+            VALUES (%s,'default','operator',%s,%s,'main','synthetic_reported_write',%s,'finished',
+                    '{"source":"tool_response","result":{"id":"synthetic","ok":true}}')""",
+            (reported, str(uuid4()), stopped_run, "b" * 64),
+        )
+        cur.execute("SELECT to_jsonb(e) FROM agent_runtime_effects e WHERE id=%s", (reported,))
+        reported_before = cur.fetchone()[0]
     results = []
     for phase, code in (("current", current), ("rollback", checkout), ("restore", current)):
         location = root / ("application-" + phase)
@@ -101,17 +124,23 @@ def drill(root, env, dsn):
         with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
             cur.execute("SELECT to_jsonb(e) FROM agent_runtime_effects e WHERE id=%s", (effect,))
             assert cur.fetchone()[0] == before, "Rollback changed or replayed unresolved effect"
+            cur.execute("SELECT to_jsonb(e) FROM agent_runtime_effects e WHERE id=%s", (reported,))
+            assert cur.fetchone()[0] == reported_before, "Rollback changed the saved tool response"
         results.append(
             {
                 "phase": phase,
                 **result,
                 "stopped_state_preserved": True,
                 "unresolved_effect_preserved": True,
+                "reported_response_preserved": True,
                 "new_native_admission_passed": True,
             }
         )
     return {
         "target_revision": target,
+        "target_base_revision": base,
+        "receipt_compatibility": compatibility,
+        "rollback_qualified": True,
         "current_revision": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], text=True
         ).strip(),

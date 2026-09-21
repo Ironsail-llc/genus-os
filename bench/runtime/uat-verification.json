@@ -3977,6 +3977,76 @@
       },
       "log": "bench/runtime/uat-runtime-rollback-receipt-gate.log",
       "scope": "Actual effects.begin loaded in separate subprocesses from current and archived older source against disposable canonical DB. No model or handler dispatch. Rejects incompatible target before daemon boot."
+    },
+    "rollback_saved_response_backport": {
+      "target_revision": "15cd18350035bb4a5205d285677a851786a4eba7",
+      "target_base_revision": "b1671409892e389684d9267b50c985143f1b9031",
+      "receipt_compatibility": {
+        "current": {
+          "reuses_saved_response": true,
+          "state": "finished"
+        },
+        "rollback": {
+          "reuses_saved_response": true,
+          "state": "finished"
+        }
+      },
+      "rollback_qualified": true,
+      "current_revision": "028db1581baabb4cb596e021a6134a87384ed84e",
+      "dependency_pins_equal": true,
+      "phases": [
+        {
+          "phase": "current",
+          "health_ready": true,
+          "code_origin": "robothor/engine/daemon.py",
+          "shutdown_exit_code": 0,
+          "shutdown_seconds": 0.9656898489993182,
+          "recovery_worker_spawns": 1,
+          "stopped_state_preserved": true,
+          "unresolved_effect_preserved": true,
+          "reported_response_preserved": true,
+          "new_native_admission_passed": true
+        },
+        {
+          "phase": "rollback",
+          "health_ready": true,
+          "code_origin": "robothor/engine/daemon.py",
+          "shutdown_exit_code": 0,
+          "shutdown_seconds": 0.9669545950018801,
+          "recovery_worker_spawns": 1,
+          "stopped_state_preserved": true,
+          "unresolved_effect_preserved": true,
+          "reported_response_preserved": true,
+          "new_native_admission_passed": true
+        },
+        {
+          "phase": "restore",
+          "health_ready": true,
+          "code_origin": "robothor/engine/daemon.py",
+          "shutdown_exit_code": 0,
+          "shutdown_seconds": 1.0711040699970908,
+          "recovery_worker_spawns": 1,
+          "stopped_state_preserved": true,
+          "unresolved_effect_preserved": true,
+          "reported_response_preserved": true,
+          "new_native_admission_passed": true
+        }
+      ],
+      "scope": "Actual daemon boot, resume scan and shutdown across current/prior/current source checkouts, private database and Redis, no provider access. Each revision also passes its real native new-admission contract in a separate process with a scripted provider. Does not exercise HTTP admission in the booted daemon or container/dependency rollback.",
+      "canonical": {
+        "passed": 56,
+        "skipped": 2,
+        "warnings": 1,
+        "seconds": 25.84
+      },
+      "backport_focused": {
+        "passed": 24,
+        "seconds": 3.24
+      },
+      "log": "bench/runtime/uat-runtime-rollback-backport-final.log",
+      "backport_patch": "bench/runtime/rollback-saved-responses.patch",
+      "branch": "fix/runtime-rollback-saved-responses",
+      "note": "Product source on modernization unchanged. Old unmodified target remains incompatible. Local same-dependency code rollback only; no deployment or manual acceptance."
     }
   },
   "calendar": {
@@ -4181,7 +4251,7 @@
     "Retain the current runtime: the tested bounded candidates failed required behavior and are not finalists. Any future replacement still needs behavior parity, matched configurations, 100-repetition finalist measurements and compatible checkpoint upgrades. No replacement is selected.",
     "Calendar and CRM note/task audit recovery, actual task browser reconnection, concurrent native readback, full-daemon goal crash recovery and saved checkpoint continuation are locally verified. Fresh-context recovery after a persisted response, including cleared engine cache, is also verified. Other external-provider readbacks, recovery when both reply persistence and browser request identity are absent, and loaded-fleet performance remain incomplete.",
     "The normal-chat unfinished-work/pause case is accepted. Manual acceptance of verified recovery and remaining goal controls is pending; automatic goal continuations do not count as acceptance.",
-    "The prior compatible-code rollback result predates saved handler responses. A new behavioral preflight rejects that old target because it reserves a duplicate attempt instead of recovering the saved response. Prepare and verify a compatible rollback build; HTTP admission in its booted daemon, container/dependency rollback and hosted CI remain unverified. No production deployment is authorized."
+    "The prior unmodified rollback target remains incompatible with saved handler responses. Backported target 15cd1835003 passes local current/backport/current daemon, state-preservation and separate native-admission checks. HTTP admission within the booted daemon, container/dependency rollback and hosted CI remain unverified. No production deployment is authorized."
   ],
   "local_model_screening": {
     "artifact": "uat-local-native-summary.json",
@@ -4448,5 +4518,14 @@
     "Calendar and CRM note/task audit recovery, actual task browser reconnection, concurrent native readback, full-daemon goal crash recovery and saved checkpoint continuation are locally verified. Fresh-context recovery after a persisted response, including cleared engine cache, is also verified. Other external-provider readbacks, recovery when both reply persistence and browser request identity are absent, and loaded-fleet performance remain incomplete.",
     "The normal-chat unfinished-work/pause case is accepted. Manual acceptance of verified recovery and remaining goal controls is pending; automatic goal continuations do not count as acceptance.",
     "Local compatible code rollback preserves stopped/paused/unresolved state and new native admissions. HTTP admission in the booted rollback daemon, container/dependency rollback and hosted CI remain unverified. No production deployment is authorized or required to claim these local results; production expansion requires its own concrete review."
+  ],
+  "remaining_before_rollback_backport": [
+    "Full representative native-workload reliability and provider latency remain unqualified. Existing configured-model screening uses reduced profiles; 97-field installation parsing parity does not establish full prompt/tool/memory execution parity. Preserve all observed failures and timeouts.",
+    "Eligible simple profiles and deterministic calendar confirmation have bounded deadlines. Classification and enforcement of the 60-second policy across all simple conversational actions remain unproven.",
+    "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded. Production ingress, selected-provider p95 across the representative workload, and mixed-load fallback operating limits are not certified. Dispatch-only improvements do not qualify complete request latency.",
+    "Retain the current runtime: the tested bounded candidates failed required behavior and are not finalists. Any future replacement still needs behavior parity, matched configurations, 100-repetition finalist measurements and compatible checkpoint upgrades. No replacement is selected.",
+    "Calendar and CRM note/task audit recovery, actual task browser reconnection, concurrent native readback, full-daemon goal crash recovery and saved checkpoint continuation are locally verified. Fresh-context recovery after a persisted response, including cleared engine cache, is also verified. Other external-provider readbacks, recovery when both reply persistence and browser request identity are absent, and loaded-fleet performance remain incomplete.",
+    "The normal-chat unfinished-work/pause case is accepted. Manual acceptance of verified recovery and remaining goal controls is pending; automatic goal continuations do not count as acceptance.",
+    "The prior compatible-code rollback result predates saved handler responses. A new behavioral preflight rejects that old target because it reserves a duplicate attempt instead of recovering the saved response. Prepare and verify a compatible rollback build; HTTP admission in its booted daemon, container/dependency rollback and hosted CI remain unverified. No production deployment is authorized."
   ]
 }
