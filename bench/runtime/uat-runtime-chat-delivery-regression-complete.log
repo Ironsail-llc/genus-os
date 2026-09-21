@@ -1,0 +1,42 @@
+........................................................................ [ 15%]
+........................................................................ [ 31%]
+........................................................................ [ 47%]
+........................................................................ [ 63%]
+........................................................................ [ 78%]
+........................................................................ [ 94%]
+.........................                                                [100%]
+=============================== warnings summary ===============================
+robothor/engine/tests/test_admin_approvals.py:17
+  /home/philip/robothor-runtime-modernization/robothor/engine/tests/test_admin_approvals.py:17: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient
+
+.venv/lib/python3.14/site-packages/starlette/testclient.py:53
+  /home/philip/robothor-runtime-modernization/.venv/lib/python3.14/site-packages/starlette/testclient.py:53: DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.
+    _PortalFactoryType = Callable[[], AbstractContextManager[anyio.abc.BlockingPortal]]
+
+robothor/engine/tests/test_dashboard_completions.py::test_member_chat_scope_can_complete_with_fixed_render_settings
+robothor/engine/tests/test_health_apis.py::TestControlRouteAuth::test_rejects_chat_only_identity
+  /home/philip/robothor-runtime-modernization/robothor/engine/health.py:1210: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+robothor/engine/tests/test_dashboard_completions.py::test_member_chat_scope_can_complete_with_fixed_render_settings
+robothor/engine/tests/test_health_apis.py::TestControlRouteAuth::test_rejects_chat_only_identity
+  /home/philip/robothor-runtime-modernization/.venv/lib/python3.14/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+robothor/engine/tests/test_native_goal_report.py::test_factual_goal_status_and_pause_through_native_chat[True]
+  /home/philip/robothor-runtime-modernization/.venv/lib/python3.14/site-packages/pydantic/_internal/_generate_schema.py:1480: UserWarning: Item 'summary' on TypedDict class 'ChatCompletionReasoningItem' is using the `ReadOnly` qualifier. Pydantic will not protect items from any mutation on dictionary instances.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+457 passed, 1 skipped, 11126 deselected, 7 warnings in 41.32s

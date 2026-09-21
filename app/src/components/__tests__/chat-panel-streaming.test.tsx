@@ -191,7 +191,7 @@ describe("ChatPanel streaming UX", () => {
 describe("ordinary chat terminal outcomes", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it.each(["eof", "transport", "aborted", "failed", "failed_with_text", "timeout", "cancelled", "completed"])(
+  it.each(["eof", "transport", "aborted", "failed", "failed_with_text", "timeout", "cancelled", "completed", "audited_failed"])(
     "does not mistake partial text for completion after %s",
     async (outcome) => {
       let sends = 0;
@@ -214,7 +214,9 @@ describe("ordinary chat terminal outcomes", () => {
           if (outcome === "transport") throw new TypeError("Failed to fetch");
           const events = [{ event: "delta", data: { text: "Everything is done." } }];
           if (outcome !== "eof") {
-            const terminal = outcome === "aborted"
+            const terminal = outcome === "audited_failed"
+              ? { text: "Task creation verified. Remaining work is not confirmed.", status: "failed", audit_outcome: true }
+              : outcome === "aborted"
               ? { text: "", aborted: true }
               : outcome === "failed"
                 ? { text: "", status: "failed" }
@@ -231,11 +233,11 @@ describe("ordinary chat terminal outcomes", () => {
       });
       render(<ChatPanel />);
       await typeAndSend(screen.getByTestId("chat-input") as HTMLTextAreaElement, "Do the work");
-      const expected = outcome === "completed" ? "Verified result" : recoveredText;
+      const expected = outcome === "audited_failed" ? "Task creation verified. Remaining work is not confirmed." : outcome === "completed" ? "Verified result" : recoveredText;
       await waitFor(() => expect(screen.getByTestId("message-assistant").textContent).toContain(expected));
       expect(screen.queryByText("Everything is done.")).toBeNull();
       expect(sends).toBe(1);
-      expect(reads).toBe(outcome === "completed" ? 0 : 1);
+      expect(reads).toBe(["completed", "audited_failed"].includes(outcome) ? 0 : 1);
     },
   );
 });

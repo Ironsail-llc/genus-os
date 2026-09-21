@@ -1619,3 +1619,9 @@ Final verification: **11,321 passed, 29 skipped, 226 deselected, 393 warnings in
 The selected-model native task screen at `229837f906d` created all 30 requested tasks exactly once, but three final replies hit the native deadline after creation. All three confirmed outcomes were readable through the actual chat recovery projection without repeating the action. That projection still leads with technical cancellation text; normal chat delivery also needs to use its retained evidence promptly. This has not been manually accepted.
 
 Latency failed: p95 60.010 seconds (bootstrap interval 52.079–60.011), versus the 30-second target. All 30 timings, including the three failed replies, are retained. This was isolated native execution with installation model/settings, not full production instructions/memory, HTTP ingress or a matched baseline comparison. No production changes occurred. See [the acceptance audit](runtime-acceptance-audit.md#selected-model-native-task-screen-acceptance-failed) and `bench/runtime/uat-runtime-native-task-live-report.json` for full evidence and limits. Continue editing and remeasurement; do not declare overall acceptance from the 30 successful task writes.
+
+## Initial reply after a verified action and interrupted execution
+
+Local chat now presents saved action evidence in the first interrupted reply, including when the runtime raises after recording its interruption. The tested reply begins “The task was created” and ends “Execution was interrupted. Any remaining work is not confirmed.” The task remains TODO; the run remains cancelled. Reconnecting gives the same result without another creation or model call. The browser displays host-audited settled results directly and continues recovery for unresolved outcomes.
+
+This addresses reporting, not the still-failed live latency target. Manual acceptance remains pending; nothing was deployed.

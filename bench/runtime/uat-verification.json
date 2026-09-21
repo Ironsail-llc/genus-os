@@ -4323,6 +4323,50 @@
         "bench/runtime/uat-runtime-native-task-live-report.json",
         "bench/runtime/uat-runtime-native-task-live-traces.json"
       ]
+    },
+    "chat_interrupted_delivery": {
+      "base_revision": "9236ee1360c",
+      "canonical": {
+        "passed": 65,
+        "skipped": 2,
+        "warnings": 1,
+        "seconds": 38.99
+      },
+      "chat_regression": {
+        "passed": 457,
+        "skipped": 1,
+        "deselected": 11126,
+        "warnings": 7,
+        "seconds": 41.32,
+        "selection": "chat or module_size or function_size, excluding integration/llm/e2e/smoke/slow"
+      },
+      "frontend": {
+        "tests": 18,
+        "files": 2,
+        "seconds": 1.86
+      },
+      "typecheck": "pnpm exec tsc --noEmit: exit 0",
+      "scope": "Actual native HTTP task creation followed by scripted reply deadline; first SSE audited outcome and reconnect text agree, chat history preserved, one task and action, two provider calls, cross-user/tenant reads denied. Frontend renders host-audited settled failures without another recovery request. Not a live latency remeasurement or full workload acceptance.",
+      "initial_failures": [
+        "Native fixture streaming signature mismatch (1 failed, 64 passed).",
+        "Native deadline raised after persisting cancellation; initial chat lacked audited done event (1 failed, 64 passed).",
+        "Function-size ratchet: run_approved 201 lines; replaced duplicate event-field assembly without raising threshold (1 failed, 456 passed)."
+      ],
+      "artifacts": [
+        "bench/runtime/uat-runtime-chat-delivery-canonical-complete.log",
+        "bench/runtime/uat-runtime-chat-delivery-canonical-final-source.log",
+        "bench/runtime/uat-runtime-chat-delivery-canonical-final.log",
+        "bench/runtime/uat-runtime-chat-delivery-canonical-verified.log",
+        "bench/runtime/uat-runtime-chat-delivery-canonical.log",
+        "bench/runtime/uat-runtime-chat-delivery-focused.log",
+        "bench/runtime/uat-runtime-chat-delivery-frontend.log",
+        "bench/runtime/uat-runtime-chat-delivery-recovery.log",
+        "bench/runtime/uat-runtime-chat-delivery-regression-complete.log",
+        "bench/runtime/uat-runtime-chat-delivery-regression-final.log",
+        "bench/runtime/uat-runtime-chat-delivery-regression.log",
+        "bench/runtime/uat-runtime-chat-delivery-size.log",
+        "bench/runtime/uat-runtime-chat-delivery-types.log"
+      ]
     }
   },
   "calendar": {
@@ -4525,7 +4569,7 @@
     "The local 60-second policy now covers unclassified interactive setup/planning and unknown classification, then retains the same admission clock for simple execution. Explicit valid non-simple classifications retain their existing limits; exclusions protect goals and delegated/resumed work. Native compressed-clock tests and 31 main-profile synthetic task runs pass. Real-provider classification accuracy, workload-wide deadline behavior and production ingress timing remain unqualified; do not infer those from scripted responses.",
     "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded. Production ingress, selected-provider p95 across the representative workload, and mixed-load fallback operating limits are not certified. Dispatch-only improvements do not qualify complete request latency.",
     "Retain the current runtime: the tested bounded candidates failed required behavior and are not finalists. Any future replacement still needs behavior parity, matched configurations, 100-repetition finalist measurements and compatible checkpoint upgrades. No replacement is selected.",
-    "Calendar and CRM note/task audit recovery, actual task browser reconnection, concurrent native readback, full-daemon goal crash recovery and saved checkpoint continuation are locally verified. Fresh-context recovery after a persisted response, including cleared engine cache, is also verified. Other external-provider readbacks, recovery when both reply persistence and browser request identity are absent, and loaded-fleet performance remain incomplete. Three actual live deadline interruptions recovered confirmed task receipts via the chat outcome projection, but the text still leads with a technical cancellation message. Normal chat final-result delivery must also use the receipts promptly; recovery-only evidence does not prove the initial reply does so.",
+    "Calendar and CRM note/task audit recovery, actual task browser reconnection, concurrent native readback, full-daemon goal crash recovery and saved checkpoint continuation are locally verified. Fresh-context recovery after a persisted response, including cleared engine cache, is also verified. Other external-provider readbacks, recovery when both reply persistence and browser request identity are absent, and loaded-fleet performance remain incomplete. Initial ordinary HTTP chat now delivers stored verified task evidence after an interruption in a compressed-clock native test, and frontend tests display settled audited outcomes directly. Returned plan interruptions share formatting; plan exception paths, other ingress and live timing still need appropriate qualification. Whole-run completion is not inferred from action receipts.",
     "The normal-chat unfinished-work/pause case is accepted. Manual acceptance of verified recovery and remaining goal controls is pending; automatic goal continuations do not count as acceptance.",
     "The prior unmodified rollback target remains incompatible with saved handler responses. Backported target 15cd1835003 passes local current/backport/current daemon, state-preservation and separate native-admission checks. HTTP admission within the booted daemon, container/dependency rollback and hosted CI remain unverified. No production deployment is authorized."
   ],
@@ -4837,6 +4881,15 @@
     "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded. Production ingress, selected-provider p95 across the representative workload, and mixed-load fallback operating limits are not certified. Dispatch-only improvements do not qualify complete request latency.",
     "Retain the current runtime: the tested bounded candidates failed required behavior and are not finalists. Any future replacement still needs behavior parity, matched configurations, 100-repetition finalist measurements and compatible checkpoint upgrades. No replacement is selected.",
     "Calendar and CRM note/task audit recovery, actual task browser reconnection, concurrent native readback, full-daemon goal crash recovery and saved checkpoint continuation are locally verified. Fresh-context recovery after a persisted response, including cleared engine cache, is also verified. Other external-provider readbacks, recovery when both reply persistence and browser request identity are absent, and loaded-fleet performance remain incomplete.",
+    "The normal-chat unfinished-work/pause case is accepted. Manual acceptance of verified recovery and remaining goal controls is pending; automatic goal continuations do not count as acceptance.",
+    "The prior unmodified rollback target remains incompatible with saved handler responses. Backported target 15cd1835003 passes local current/backport/current daemon, state-preservation and separate native-admission checks. HTTP admission within the booted daemon, container/dependency rollback and hosted CI remain unverified. No production deployment is authorized."
+  ],
+  "remaining_before_chat_delivery": [
+    "The 30-request live installation-main task screen FAILED acceptance: 30 exact task records and confirmed actions, but only 27 completed replies; three native deadline cancellations after creation. p95 60.010 seconds (bootstrap interval 52.079\u201360.011), 21 requests over 30 seconds. Improve timely verified-result delivery and remeasure, preserving failures. This used selected models/settings, isolated instructions/memory and private tools, not full production prompt parity or a matched baseline comparison.",
+    "The local 60-second policy now covers unclassified interactive setup/planning and unknown classification, then retains the same admission clock for simple execution. Explicit valid non-simple classifications retain their existing limits; exclusions protect goals and delegated/resumed work. Native compressed-clock tests and 31 main-profile synthetic task runs pass. Real-provider classification accuracy, workload-wide deadline behavior and production ingress timing remain unqualified; do not infer those from scripted responses.",
+    "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded. Production ingress, selected-provider p95 across the representative workload, and mixed-load fallback operating limits are not certified. Dispatch-only improvements do not qualify complete request latency.",
+    "Retain the current runtime: the tested bounded candidates failed required behavior and are not finalists. Any future replacement still needs behavior parity, matched configurations, 100-repetition finalist measurements and compatible checkpoint upgrades. No replacement is selected.",
+    "Calendar and CRM note/task audit recovery, actual task browser reconnection, concurrent native readback, full-daemon goal crash recovery and saved checkpoint continuation are locally verified. Fresh-context recovery after a persisted response, including cleared engine cache, is also verified. Other external-provider readbacks, recovery when both reply persistence and browser request identity are absent, and loaded-fleet performance remain incomplete. Three actual live deadline interruptions recovered confirmed task receipts via the chat outcome projection, but the text still leads with a technical cancellation message. Normal chat final-result delivery must also use the receipts promptly; recovery-only evidence does not prove the initial reply does so.",
     "The normal-chat unfinished-work/pause case is accepted. Manual acceptance of verified recovery and remaining goal controls is pending; automatic goal continuations do not count as acceptance.",
     "The prior unmodified rollback target remains incompatible with saved handler responses. Backported target 15cd1835003 passes local current/backport/current daemon, state-preservation and separate native-admission checks. HTTP admission within the booted daemon, container/dependency rollback and hosted CI remain unverified. No production deployment is authorized."
   ]

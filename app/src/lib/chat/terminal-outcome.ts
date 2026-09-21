@@ -3,9 +3,14 @@ export const OUTCOME_UNKNOWN =
   "Connection interrupted. Checking the recorded result…";
 
 export function terminalOutcome(
-  data: { text?: unknown; status?: unknown; aborted?: unknown },
+  data: { text?: unknown; status?: unknown; aborted?: unknown; audit_outcome?: unknown },
   partial: string,
 ): string | undefined {
+  // Only the host's scoped, settled audit projection can replace recovery for an
+  // interrupted run. Model prose alone remains insufficient.
+  if (data.audit_outcome === true && typeof data.text === "string" && data.text) {
+    return data.text;
+  }
   if (data.aborted === true) return OUTCOME_UNKNOWN;
   if (["failed", "timeout", "cancelled"].includes(String(data.status))) {
     // A terminal execution error does not establish the outcome of dispatched

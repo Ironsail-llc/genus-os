@@ -225,3 +225,129 @@ async def test_planner_classified_chat_times_out_and_persists_its_deadline(
         assert "Runtime deadline expired" in reason
         deadline = datetime.fromisoformat(context["deadline"])
         assert 0.49 <= (deadline - before).total_seconds() < 0.7
+
+
+async def test_initial_chat_delivers_verified_task_after_reply_deadline(
+    engine_config, sample_agent_config, monkeypatch
+):
+    import json
+
+    import litellm
+
+    from robothor.crm import dal
+    from robothor.engine import chat_delivery
+    from robothor.engine.llm_client import LLMClient
+    from robothor.engine.runtime import effects
+
+    dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
+    if "host=/tmp/runtime-migrated-" not in dsn:
+        pytest.skip("requires disposable canonical migration harness")
+    tenant = "delivery-" + uuid4().hex
+    auth = AuthContext(tenant_id=tenant, user_id="operator", role="owner", typ="user")
+    with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute("INSERT INTO crm_tenants(id,display_name) VALUES (%s,%s)", (tenant, tenant))
+    sample_agent_config.id = "main"
+    sample_agent_config.task_protocol = False
+    sample_agent_config.planning_enabled = False
+    sample_agent_config.difficulty_class = "simple"
+    sample_agent_config.model_fallbacks = []
+    sample_agent_config.tools_allowed = ["create_task"]
+    engine = AgentRunner(replace(engine_config, tenant_id=tenant))
+    monkeypatch.setattr("robothor.engine.runtime.action_policy.SIMPLE_ACTION_SECONDS", 0.5)
+    monkeypatch.setattr(
+        "robothor.engine.runner.load_agent_config_or_reason",
+        lambda *a, **k: (sample_agent_config, None),
+    )
+    monkeypatch.setattr(dal, "get_connection", effects.get_connection)
+    monkeypatch.setattr(dal, "_safe_audit", lambda *a, **k: None)
+    monkeypatch.setattr("robothor.events.bus.publish", lambda *a, **k: None)
+    monkeypatch.setattr("robothor.goals.events.capture", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "robothor.llm.ollama.get_embeddings_batch_async", AsyncMock(return_value=[])
+    )
+    calls = []
+
+    async def provider(self, messages, models, tools, on_content=None, **kwargs):
+        calls.append(True)
+        if len(calls) > 1:
+            await asyncio.Event().wait()
+        return litellm.ModelResponse(
+            choices=[
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "create-once",
+                                "type": "function",
+                                "function": {
+                                    "name": "create_task",
+                                    "arguments": json.dumps(
+                                        {"title": "Delivery evidence", "body": "Synthetic only"}
+                                    ),
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            usage={"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20},
+        )
+
+    monkeypatch.setattr(LLMClient, "_call_llm", provider)
+    monkeypatch.setattr(LLMClient, "_call_llm_streaming", provider)
+    monkeypatch.setattr(chat, "_runner", engine)
+    monkeypatch.setattr(chat, "_config", engine.config)
+    monkeypatch.setattr(chat, "_auth_context", lambda _: auth)
+    app = FastAPI()
+    app.include_router(chat.router)
+    session = "agent:main:delivery-" + uuid4().hex
+    client_id = str(uuid4())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/chat/send",
+            json={
+                "message": "Create one synthetic task",
+                "session_key": session,
+                "request_id": client_id,
+            },
+        )
+        assert response.status_code == 200
+        events = [
+            json.loads(part.split("data: ", 1)[1])
+            for part in response.text.split("\n\n")
+            if part.startswith("event: done\n")
+        ]
+        assert len(events) == 1
+        delivered = events[0]
+        assert delivered["status"] == "cancelled"
+        assert delivered["audit_outcome"] is True
+        assert delivered["text"].startswith("The task was created.")
+        assert "remaining work is not confirmed" in delivered["text"]
+        recovered = (
+            await client.get(
+                "/chat/outcome", params={"session_key": session, "request_id": client_id}
+            )
+        ).json()
+        assert recovered["text"] == delivered["text"]
+        assert not recovered["verified"] and not recovered["reconciliation_pending"]
+        assert chat._get_session(session).history[-1]["content"] == delivered["text"]
+    await get_task_registry().drain(timeout=5)
+    assert len(calls) == 2
+    for caller in [
+        AuthContext(tenant_id="foreign", user_id=auth.user_id, role="owner", typ="user"),
+        AuthContext(tenant_id=tenant, user_id="someone-else", role="owner", typ="user"),
+    ]:
+        assert chat_delivery._saved_result(delivered["run_id"], caller) is None
+    with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute("SELECT body,status FROM crm_tasks WHERE tenant_id=%s", (tenant,))
+        assert cur.fetchall() == [("Synthetic only", "TODO")]
+        cur.execute(
+            "SELECT state,count(*) FROM agent_runtime_effects WHERE tenant_id=%s GROUP BY state",
+            (tenant,),
+        )
+        assert cur.fetchall() == [("confirmed", 1)]

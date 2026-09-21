@@ -1,0 +1,9 @@
+
+ RUN  v4.1.11 /home/philip/robothor-runtime-modernization/app
+
+
+ Test Files  2 passed (2)
+      Tests  18 passed (18)
+   Start at  08:00:37
+   Duration  1.86s (transform 182ms, setup 123ms, import 571ms, tests 570ms, environment 1.15s)
+

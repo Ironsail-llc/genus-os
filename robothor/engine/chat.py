@@ -47,6 +47,8 @@ from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 
 from robothor.constants import DEFAULT_TENANT
+from robothor.engine.chat_delivery import deliver_interruption
+from robothor.engine.chat_delivery import final_result as delivery_result
 from robothor.engine.chat_history import MAX_HISTORY as _MAX_HISTORY
 from robothor.engine.chat_history import ChatHistory, append_turn, as_history
 from robothor.engine.chat_plan_changes import reject_plan, revise_plan
@@ -416,7 +418,8 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 identity=identity,
             )
 
-            final_text = result_text(run)
+            delivered = await delivery_result(run, auth)
+            final_text = delivered["text"]
             # Always record user message in session history
             append_turn(
                 session,
@@ -461,7 +464,7 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 {
                     "event": "done",
                     "data": {
-                        "text": final_text,
+                        **delivered,
                         "status": run.status.value,
                         "model": run.model_used,
                         "input_tokens": run.input_tokens,
@@ -473,8 +476,12 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 }
             )
         except asyncio.CancelledError:
+            if await deliver_interruption(queue, session, auth, session_key, message, aborted=True):
+                return
             await queue.put({"event": "done", "data": {"text": "", "aborted": True}})
         except Exception as e:
+            if await deliver_interruption(queue, session, auth, session_key, message):
+                return
             logger.error("Chat agent error: %s", e, exc_info=True)
             # Record the failed attempt so next run has context
             append_turn(
@@ -980,7 +987,8 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                     identity=identity,
                 )
 
-                final_text = result_text(run)
+                delivered = await delivery_result(run, auth)
+                final_text = delivered["text"]
 
                 # Track execution run ID
                 plan.execution_run_id = run.id
@@ -1031,7 +1039,7 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                     {
                         "event": "done",
                         "data": {
-                            "text": final_text,
+                            **delivered,
                             "status": run.status.value,
                             "execution_time_s": round(duration_s, 1),
                             "cost_usd": round(cost_usd, 2),
@@ -1087,7 +1095,8 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                     identity=identity,
                 )
 
-                final_text = result_text(run)
+                delivered = await delivery_result(run, auth)
+                final_text = delivered["text"]
 
                 # Track execution run ID
                 plan.execution_run_id = run.id
@@ -1119,7 +1128,7 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                     {
                         "event": "done",
                         "data": {
-                            "text": final_text,
+                            **delivered,
                             "status": run.status.value,
                             "model": run.model_used,
                             "input_tokens": run.input_tokens,
