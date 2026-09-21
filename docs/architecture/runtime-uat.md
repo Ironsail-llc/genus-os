@@ -1974,3 +1974,10 @@ The installed main profile has no explicit provider order. Official [OpenRouter 
 ### Hosting-provider throughput diagnostics passed — 2026-09-21
 
 Three private compound-task streaming requests with the fixture-only `provider.sort=throughput` preference completed correctly in 4.166, 4.515 and 5.329 seconds. Each preserved exactly one matching task and the additional calculation. Models, effort, full tools and native timeouts remained unchanged. Canonical run: 84 passed, two skipped, two warnings in50.95seconds. Raw diagnostics and summary are retained under `uat-runtime-throughput-streaming-diagnostic*`. Three samples are not qualification. The thirty-request screen is now running at `/tmp/runtime-throughput-streaming-cohort.jsonl`; no installed setting or product default changed.
+
+
+### Throughput-routing streaming screen passed — 2026-09-21
+
+The full thirty-request screen under fixture-only `provider.sort=throughput` passed correctness and latency: 30/30 verified, p95 7.652 seconds (95% bootstrap interval4.954–11.851), median3.958seconds, none over30seconds. Exactly one matching task and the additional calculation per request; zero duplicates/post-return calls; sixty completed primary streams. Native estimated cost$0.149817 is not verified billing and no cost reduction is claimed. Models, full tools, effort and native timeouts were unchanged. Canonical run84passed,2skipped,2warnings,162.80seconds. Raw data and summary: `uat-runtime-throughput-streaming-cohort*`.
+
+Next implementation must place this preference inside Robothor's native routing boundary with explicit scope and regression coverage: ordinary bounded root chat requests only; preserve explicit provider order/sort, provider compatibility/allowlists, price constraints, fallback flags and local models. Goal/delegated/resumed/approved-plan/identified-long work must retain existing policy. The experiment does not establish a matched runtime replacement improvement, broader workload correctness, production fleet capacity or permission to deploy. Installed settings and active goals remain untouched.
