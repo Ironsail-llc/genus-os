@@ -4597,7 +4597,7 @@
         "seconds": 472.34,
         "scope": "Final execution/guard logic; cached-receipt label was refined during this run and covered separately by 58 focused final tests. Four new replay parametrizations are not part of this broad count."
       },
-      "live_selection_and_latency": "One diagnostic on 5728c35430e verified one task in 4.367 seconds using selected primary model: one planning and one execution call, no post-creation model call. Not a 30-sample latency qualification.",
+      "live_selection_and_latency": "30-request screen passed on ceb9d85f68d; see task_final_report_live_cohort. Compound-intent selection remains unqualified.",
       "scope": "Host-scoped final receipt after matching independent stored title/body/status evidence. Model selects standalone intent; host does not prove arbitrary natural-language completeness. Denies goal/delegated/multi-tool/read-only/background/checkpoint-resume/approved-plan/open-checklist contexts, unsupported arguments, uncertain or mismatched evidence. Existing final validators and late controls remain."
     },
     "task_report_rollback_identity": {
@@ -4631,6 +4631,64 @@
       },
       "product_changed_after_measured_revision": false,
       "remaining": "30-sample current-source latency screen and compound-intent selection remain unqualified."
+    },
+    "task_final_report_live_cohort": {
+      "configuration": {
+        "primary": "openrouter/deepseek/deepseek-v4.1-flash",
+        "fallbacks": [
+          "openrouter/xiaomi/mimo-v2.5",
+          "openrouter/deepseek/deepseek-v4-flash",
+          "ollama_chat/qwen3.8:27b"
+        ],
+        "temperature": 0.5,
+        "tools_allowed": 104,
+        "task_protocol": true,
+        "samples": 30,
+        "synthetic_tenant_prefix": "runtime-live-",
+        "scope": "Native runner, installation profile settings, isolated workspace and private CRM. Only requested task tools execute. No production instructions/memory staged; 65-second harness cutoff and 12-call diagnostic limit. Provider counts include planning. Native cost estimates are not billing. Not ASGI/browser latency or a matched baseline comparison."
+      },
+      "counts": {
+        "verified": 30,
+        "failed": 0,
+        "unfinished": 0,
+        "not_started": 0
+      },
+      "elapsed_ms": {
+        "samples": 30,
+        "p50": 8692.882660994655,
+        "p95": 21045.530327988672,
+        "p95_ci95": [
+          15417.11177698744,
+          22969.119221001165
+        ]
+      },
+      "over_30_seconds": 0,
+      "over_60_seconds": 0,
+      "provider_invocations": {
+        "openrouter/deepseek/deepseek-v4.1-flash": 62,
+        "openrouter/xiaomi/mimo-v2.5": 5
+      },
+      "native_estimated_cost_usd": 0.090823,
+      "post_return_model_calls": 0,
+      "duplicate_task_samples": 0,
+      "stored_task_matches": 30,
+      "confirmed_action_samples": 30,
+      "interrupted_after_confirmed_action": 0,
+      "latency_passed": true,
+      "screening_passed": true,
+      "manual_acceptance": false,
+      "note": "All finished attempts contribute timing, including failed/cutoff attempts; missing attempts cannot qualify. Provider invocations count LiteLLM calls, not independently observed HTTP retries. Cost is native recorded estimate, not billing. Direct native admission, not chat ingress/queue timing; no matched baseline or framework-selection claim.",
+      "measured_revision": "ceb9d85f68d5614c81ee23e51e5106694a952c0c",
+      "product_revision": "5728c35430e",
+      "canonical": {
+        "passed": 73,
+        "skipped": 2,
+        "warnings": 1,
+        "seconds": 350.93
+      },
+      "persisted_deadlines": 30,
+      "host_task_reports": 29,
+      "comparison_note": "Prior 7f000740037 task cohort p95 45.344 seconds. Sequential unmatched measurements; no causal estimate, accepted-baseline parity or representative-workload qualification."
     }
   },
   "calendar": {
@@ -4869,7 +4927,7 @@
     ]
   },
   "remaining": [
-    "Current revision 7f000740037 FAILED the 30-request selected-model native task latency screen: all 30 tasks/replies correct, one task each, all saved deadlines present and no post-return model calls; p95 45.344 seconds (bootstrap interval 30.694\u201350.873), seven requests over 30 seconds, none over 60. Investigate verified-result delivery latency and avoid unnecessary model/tool work without truncating requests with remaining obligations. Earlier populations remain preserved; the earlier passing point estimate does not qualify this source. No matched causal baseline, full production prompt/memory parity or fleet operating limits are claimed. A new explicit host task-report option passes native one-model-turn tests and control/receipt guards; its live intent selection and latency still require qualification.",
+    "Current ceb9d85f68d 30-request selected-model native task screen PASSED: 30 verified single tasks and replies, 30 persisted deadlines, no duplicates or post-return model calls; p95 21.046 seconds (bootstrap interval 15.417\u201322.969), none over 30 or 60 seconds. All used the host task report. Prior failed populations are retained. Compound-intent selection, matched accepted-baseline comparison, full production prompt/memory parity and fleet operating limits remain unqualified.",
     "The local 60-second policy now covers unclassified interactive setup/planning and unknown classification, then retains the same admission clock for simple execution. Explicit valid non-simple classifications retain their existing limits; exclusions protect goals and delegated/resumed work. Native compressed-clock tests and 31 main-profile synthetic task runs pass. Real-provider classification accuracy, workload-wide deadline behavior and production ingress timing remain unqualified; do not infer those from scripted responses.",
     "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded. Production ingress, selected-provider p95 across the representative workload, and mixed-load fallback operating limits are not certified. Dispatch-only improvements do not qualify complete request latency.",
     "Retain the current runtime: the tested bounded candidates failed required behavior and are not finalists. Any future replacement still needs behavior parity, matched configurations, 100-repetition finalist measurements and compatible checkpoint upgrades. No replacement is selected.",
@@ -5277,5 +5335,14 @@
     "Calendar and CRM note/task audit recovery, actual task browser reconnection, concurrent native readback, full-daemon goal crash recovery and saved checkpoint continuation are locally verified. Fresh-context recovery after a persisted response, including cleared engine cache, is also verified. Other external-provider readbacks, recovery when both reply persistence and browser request identity are absent, and loaded-fleet performance remain incomplete. Initial ordinary HTTP chat now delivers stored verified task evidence after an interruption in a compressed-clock native test, and frontend tests display settled audited outcomes directly. Approved normal-plan exception delivery now also passes a native private-database HTTP test, with one saved task and no re-execution on duplicate approval. Approved deep-plan stop now also passes a native worker-thread HTTP test: durable stop, pending/stopping response, denied late tool, late result/cost persistence and duplicate-approval denial. The external reasoning function is synthetic; live external-framework failures, other ingress and live timing still need appropriate qualification. Whole-run completion is not inferred from action receipts.",
     "Manually accepted in normal chat: unfinished-work status with pause preserving the open task; repeated calendar confirmation without another write/invitation; saved-evidence recovery without repeating an action; and pause propagation to the unfinished child without marking either goal complete. Other goal controls and overall acceptance remain pending.",
     "The prior unmodified rollback target remains incompatible with saved handler responses. Backported target 15cd1835003 passes local current/backport/current daemon, state-preservation and separate native-admission checks. HTTP admission within the booted daemon, container/dependency rollback and hosted CI remain unverified. No production deployment is authorized."
+  ],
+  "remaining_before_task_final_cohort": [
+    "Current revision 7f000740037 FAILED the 30-request selected-model native task latency screen: all 30 tasks/replies correct, one task each, all saved deadlines present and no post-return model calls; p95 45.344 seconds (bootstrap interval 30.694\u201350.873), seven requests over 30 seconds, none over 60. Investigate verified-result delivery latency and avoid unnecessary model/tool work without truncating requests with remaining obligations. Earlier populations remain preserved; the earlier passing point estimate does not qualify this source. No matched causal baseline, full production prompt/memory parity or fleet operating limits are claimed. A new explicit host task-report option passes native one-model-turn tests and control/receipt guards; its live intent selection and latency still require qualification.",
+    "The local 60-second policy now covers unclassified interactive setup/planning and unknown classification, then retains the same admission clock for simple execution. Explicit valid non-simple classifications retain their existing limits; exclusions protect goals and delegated/resumed work. Native compressed-clock tests and 31 main-profile synthetic task runs pass. Real-provider classification accuracy, workload-wide deadline behavior and production ingress timing remain unqualified; do not infer those from scripted responses.",
+    "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded. Production ingress, selected-provider p95 across the representative workload, and mixed-load fallback operating limits are not certified. Dispatch-only improvements do not qualify complete request latency.",
+    "Retain the current runtime: the tested bounded candidates failed required behavior and are not finalists. Any future replacement still needs behavior parity, matched configurations, 100-repetition finalist measurements and compatible checkpoint upgrades. No replacement is selected.",
+    "Calendar and CRM note/task audit recovery, actual task browser reconnection, concurrent native readback, full-daemon goal crash recovery and saved checkpoint continuation are locally verified. Fresh-context recovery after a persisted response, including cleared engine cache, is also verified. Other external-provider readbacks, recovery when both reply persistence and browser request identity are absent, and loaded-fleet performance remain incomplete. Initial ordinary HTTP chat now delivers stored verified task evidence after an interruption in a compressed-clock native test, and frontend tests display settled audited outcomes directly. Approved normal-plan exception delivery now also passes a native private-database HTTP test, with one saved task and no re-execution on duplicate approval. Approved deep-plan stop now also passes a native worker-thread HTTP test: durable stop, pending/stopping response, denied late tool, late result/cost persistence and duplicate-approval denial. The external reasoning function is synthetic; live external-framework failures, other ingress and live timing still need appropriate qualification. Whole-run completion is not inferred from action receipts.",
+    "Manually accepted in normal chat: unfinished-work status with pause preserving the open task; repeated calendar confirmation without another write/invitation; saved-evidence recovery without repeating an action; and pause propagation to the unfinished child without marking either goal complete. Other goal controls and overall acceptance remain pending.",
+    "The prior rollback target 15cd1835003 is rejected for task-report fingerprint incompatibility. Backport 5a8ce0323d8 passes saved-response and task-report identity probes plus the local current/rollback/current daemon/state/new-admission drill. HTTP admission in the booted daemon, downgraded checkpoint deadline restoration, container/dependency rollback and hosted CI remain unqualified. No production deployment is authorized."
   ]
 }

@@ -1,0 +1,58 @@
+{
+  "configuration": {
+    "primary": "openrouter/deepseek/deepseek-v4.1-flash",
+    "fallbacks": [
+      "openrouter/xiaomi/mimo-v2.5",
+      "openrouter/deepseek/deepseek-v4-flash",
+      "ollama_chat/qwen3.8:27b"
+    ],
+    "temperature": 0.5,
+    "tools_allowed": 104,
+    "task_protocol": true,
+    "samples": 30,
+    "synthetic_tenant_prefix": "runtime-live-",
+    "scope": "Native runner, installation profile settings, isolated workspace and private CRM. Only requested task tools execute. No production instructions/memory staged; 65-second harness cutoff and 12-call diagnostic limit. Provider counts include planning. Native cost estimates are not billing. Not ASGI/browser latency or a matched baseline comparison."
+  },
+  "counts": {
+    "verified": 30,
+    "failed": 0,
+    "unfinished": 0,
+    "not_started": 0
+  },
+  "elapsed_ms": {
+    "samples": 30,
+    "p50": 8692.882660994655,
+    "p95": 21045.530327988672,
+    "p95_ci95": [
+      15417.11177698744,
+      22969.119221001165
+    ]
+  },
+  "over_30_seconds": 0,
+  "over_60_seconds": 0,
+  "provider_invocations": {
+    "openrouter/deepseek/deepseek-v4.1-flash": 62,
+    "openrouter/xiaomi/mimo-v2.5": 5
+  },
+  "native_estimated_cost_usd": 0.090823,
+  "post_return_model_calls": 0,
+  "duplicate_task_samples": 0,
+  "stored_task_matches": 30,
+  "confirmed_action_samples": 30,
+  "interrupted_after_confirmed_action": 0,
+  "latency_passed": true,
+  "screening_passed": true,
+  "manual_acceptance": false,
+  "note": "All finished attempts contribute timing, including failed/cutoff attempts; missing attempts cannot qualify. Provider invocations count LiteLLM calls, not independently observed HTTP retries. Cost is native recorded estimate, not billing. Direct native admission, not chat ingress/queue timing; no matched baseline or framework-selection claim.",
+  "measured_revision": "ceb9d85f68d5614c81ee23e51e5106694a952c0c",
+  "product_revision": "5728c35430e",
+  "canonical": {
+    "passed": 73,
+    "skipped": 2,
+    "warnings": 1,
+    "seconds": 350.93
+  },
+  "persisted_deadlines": 30,
+  "host_task_reports": 29,
+  "comparison_note": "Prior 7f000740037 task cohort p95 45.344 seconds. Sequential unmatched measurements; no causal estimate, accepted-baseline parity or representative-workload qualification."
+}
