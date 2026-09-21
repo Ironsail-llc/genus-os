@@ -781,3 +781,12 @@ Planning now journals its request and uses original-request outcome recovery aft
 The initial matching-plan check failed (1 failed, 20 passed). The expanded backend regression passes 142 tests (5.94s); final focused checks including rejected/expired/foreign-run/failed-run refusal pass 78 tests (6.28s). The full frontend suite passes 1,654 tests in 149 files (9.40s), with the existing jsdom navigation notice. Three new component cases prove one preparation, matching original request and zero approvals. Canonical migration/native integrations pass 26 tests (6.33s, one worker-only skip and one dependency warning). Ruff, ESLint, TypeScript and diff checks pass. Evidence: `bench/runtime/uat-saved-plan-recovery.json`.
 
 Backend HTTP tests mock runner/persistence and component tests mock outcome transport; this is not yet one browser-to-engine disconnection drill. Simultaneous plan revision and a crash between completed exploration and saved draft remain unqualified. No deployment or additional manual acceptance is claimed.
+
+
+## Browser-to-native-engine saved-plan recovery
+
+The new optional `--chat-browser` canonical integration drill uses a freshly built standalone app, real Chromium, actual Next chat proxies, loopback FastAPI chat, native AgentRunner and private canonical PostgreSQL. It forwards the plan request and consumes the saved-plan response, then drops that response before the browser receives it. Unrelated dashboard APIs and provider transport are synthetic; the native planning and alignment logic remain active.
+
+The browser restores the approval card after one outcome read. Database checks require one completed native run and one matching pending plan. There is exactly one planning submission, no approval and no business-tool execution. Provider calls are the existing two draft passes and one alignment check, with no recovery generation. The initial attempts exposed a test timeout and a scripted provider missing the alignment response; both fixture issues and failed logs are preserved.
+
+The complete canonical command passes 27 integrations (12.36s), with one intentional worker-only skip and one dependency warning. Ruff, Node syntax, formatting and diff checks pass. Evidence: `bench/runtime/uat-native-plan-browser.json`. This establishes the combined synthetic browser-to-engine disconnect case previously missing; it does not establish a live latency cohort, production authentication qualification, or manual acceptance. Nothing was deployed.

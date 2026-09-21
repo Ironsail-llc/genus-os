@@ -1482,6 +1482,53 @@
         "41 synthetic recovery checks initially lacked the existing canonical trigger_detail column; private fixture schema was aligned before passing."
       ],
       "limits": "Backend HTTP tests mock runner and plan persistence; browser component tests mock outcome transport. Canonical integration separately exercises native checkpoint/chat query compatibility, not a complete browser-to-engine draft disconnect. Simultaneous plan revisions and crash between completed exploration and plan persistence remain unqualified. No production deployment, live provider call, or new manual acceptance."
+    },
+    "native_plan_browser": {
+      "command": ".venv/bin/python -m bench.runtime.migrated_integration --chat-browser",
+      "prerequisite": "Fresh app standalone build; completed using a minimal test environment and dead bridge/engine URLs, with no app environment files.",
+      "path": [
+        "Chromium ChatPanel",
+        "actual Next plan and outcome proxies",
+        "loopback FastAPI chat router",
+        "native AgentRunner with scripted provider transport",
+        "disposable canonically migrated PostgreSQL"
+      ],
+      "fault": "Forward plan preparation to the real engine, consume its completed saved-plan response, then abort delivery at the browser network boundary.",
+      "observed": {
+        "plan_submissions": 1,
+        "outcome_reads": 1,
+        "approvals": 0,
+        "native_runs": 1,
+        "native_run_status": "completed",
+        "saved_plan_status": "pending",
+        "business_tool_calls": 0,
+        "provider_calls": [
+          "draft",
+          "draft",
+          "alignment"
+        ],
+        "restored_approval_card": true
+      },
+      "result": {
+        "passed": 27,
+        "skipped": 1,
+        "warnings": 1,
+        "seconds": 12.36,
+        "log": "/tmp/runtime-plan-browser-integration-third.log"
+      },
+      "build_log": "/tmp/runtime-plan-browser-build.log",
+      "initial_failures": [
+        {
+          "log": "/tmp/runtime-plan-browser-integration.log",
+          "reason": "Default pytest 30-second timeout interrupted browser drill; dedicated bounded 120-second test timeout added."
+        },
+        {
+          "log": "/tmp/runtime-plan-browser-integration-second.log",
+          "reason": "Scripted provider did not answer the real plan-alignment checker; native engine correctly refused plan readiness. Fixture now supplies ALIGNED and retains the checker."
+        }
+      ],
+      "checks": "Ruff lint/format, Node syntax and diff checks pass. Owned browser process group and loopback engine close; private cluster is removed.",
+      "limits": "One synthetic end-to-end case, not a latency cohort. Unrelated dashboard APIs are fixtures; engine identity is synthetic local middleware. No production credentials, deployment, live model, historical meeting changes or manual acceptance."
     }
   },
   "calendar": {

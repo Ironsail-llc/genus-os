@@ -2,6 +2,7 @@
 
 Invoke with the repository Python environment: python -m bench.runtime.migrated_integration.
 No shared database is read, migrated or modified.
+--chat-browser adds a real Chromium/Next/native-chat recovery drill; build app/ first.
 """
 
 import json
@@ -111,6 +112,11 @@ def main():
                     "robothor/engine/tests/test_native_goal_recovery.py",
                     "robothor/engine/tests/test_native_admission_rollback.py",
                     "robothor/engine/tests/test_native_checkpoint_continuation.py",
+                    *(
+                        ["robothor/engine/tests/test_native_plan_browser.py"]
+                        if "--chat-browser" in sys.argv
+                        else []
+                    ),
                 ],
                 env=env,
                 check=False,

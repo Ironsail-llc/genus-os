@@ -1,0 +1,181 @@
+"""Real browser/Next/chat/native-runner draft recovery on the private canonical DB."""
+
+import asyncio
+import json
+import os
+import signal
+import socket
+from contextlib import suppress
+from dataclasses import replace
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
+from uuid import uuid4
+
+import litellm
+import psycopg2
+import pytest
+import uvicorn
+from fastapi import FastAPI, Request
+
+from robothor.auth.deps import AuthContext
+from robothor.engine import chat
+from robothor.engine.runner import AgentRunner
+from robothor.engine.task_registry import get_task_registry
+
+pytestmark = pytest.mark.integration
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(120)
+async def test_saved_plan_recovers_through_browser_and_native_engine(
+    engine_config, sample_agent_config
+):
+    dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
+    if "host=/tmp/runtime-migrated-" not in dsn:
+        pytest.skip("requires --chat-browser canonical harness and freshly built app")
+    tenant = "plan-browser-" + uuid4().hex
+    with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute("INSERT INTO crm_tenants(id,display_name) VALUES (%s,%s)", (tenant, tenant))
+    config = replace(engine_config, tenant_id=tenant)
+    sample_agent_config.id = "main"
+    sample_agent_config.task_protocol = False
+    sample_agent_config.difficulty_class = "simple"
+    sample_agent_config.model_fallbacks = []
+    runner = AgentRunner(config)
+    auth = AuthContext(tenant_id=tenant, user_id="service:main", role="owner", typ="service")
+    calls = []
+
+    async def provider(**kwargs):
+        alignment = any(
+            "Return exactly ALIGNED" in str(message.get("content", ""))
+            for message in kwargs["messages"]
+        )
+        calls.append("alignment" if alignment else "draft")
+        content = "ALIGNED" if alignment else "Inspect the synthetic task record[PLAN_READY]"
+        if not kwargs.get("stream"):
+            return litellm.ModelResponse(
+                model=kwargs["model"],
+                choices=[
+                    {"message": {"role": "assistant", "content": content}, "finish_reason": "stop"}
+                ],
+                usage={"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20},
+            )
+
+        async def chunks():
+            yield litellm.ModelResponse(
+                model=kwargs["model"],
+                stream=True,
+                choices=[
+                    {"delta": {"role": "assistant", "content": content}, "finish_reason": None}
+                ],
+            )
+            yield litellm.ModelResponse(
+                model=kwargs["model"],
+                stream=True,
+                choices=[{"delta": {}, "finish_reason": "stop"}],
+                usage={"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20},
+            )
+
+        return chunks()
+
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def synthetic_identity(request: Request, call_next):
+        assert request.client.host == "127.0.0.1"
+        request.state.auth = auth
+        return await call_next(request)
+
+    app.include_router(chat.router)
+    engine_socket = socket.socket()
+    engine_socket.bind(("127.0.0.1", 0))
+    engine_socket.listen()
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        ui_port = probe.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(app, log_level="warning", lifespan="off"))
+    server_task = None
+    browser = None
+    browser_log = (config.workspace / "plan-browser.log").open("wb")
+    root = Path(__file__).resolve().parents[3]
+    env = {
+        "PATH": os.environ["PATH"],
+        "HOME": os.environ["HOME"],
+        "PORT": str(ui_port),
+        "HOSTNAME": "127.0.0.1",
+        "ROBOTHOR_ENGINE_URL": f"http://127.0.0.1:{engine_socket.getsockname()[1]}",
+        "BRIDGE_URL": "http://127.0.0.1:59999",
+        "GENUS_ENVIRONMENT": "test",
+        "GENUS_INSECURE_DEV_MODE": "true",
+        "AUTH_TRUST_HOST": "true",
+        "AUTH_SECRET": "isolated-plan-browser-test-secret-never-used-in-production",
+        "AUTH_OIDC_ISSUER": "https://idp.playwright.invalid",
+        "AUTH_OIDC_CLIENT_ID": "test",
+        "AUTH_OIDC_CLIENT_SECRET": "test",
+        "GENUS_BRIDGE_SSO_SECRET": "test",
+    }
+    try:
+        with (
+            patch("litellm.acompletion", side_effect=provider),
+            patch(
+                "robothor.engine.runner.load_agent_config_or_reason",
+                return_value=(sample_agent_config, None),
+            ),
+            patch(
+                "robothor.llm.ollama.get_embeddings_batch_async",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch.object(runner.registry, "execute", new_callable=AsyncMock) as tools,
+        ):
+            chat._sessions.clear()
+            chat.init_chat(runner, config)
+            server_task = asyncio.create_task(server.serve(sockets=[engine_socket]))
+            while not server.started:
+                if server_task.done():
+                    await server_task
+                await asyncio.sleep(0.01)
+            browser = await asyncio.create_subprocess_exec(
+                "node",
+                "scripts/runtime-plan-recovery.mjs",
+                cwd=root / "app",
+                env=env,
+                stdout=browser_log,
+                stderr=asyncio.subprocess.STDOUT,
+                start_new_session=True,
+            )
+            async with asyncio.timeout(90):
+                await browser.wait()
+            browser_log.flush()
+            output = (config.workspace / "plan-browser.log").read_bytes()
+            assert browser.returncode == 0, output.decode()
+            marker = next(
+                line for line in output.decode().splitlines() if line.startswith("PLAN_BROWSER ")
+            )
+            report = json.loads(marker.removeprefix("PLAN_BROWSER "))
+            assert report["restored"] and report["starts"] == 1 and report["approvals"] == 0
+            await get_task_registry().drain(timeout=5)
+            assert calls == ["draft", "draft", "alignment"]
+            tools.assert_not_awaited()
+            with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+                cur.execute("SELECT id,status FROM agent_runs WHERE tenant_id=%s", (tenant,))
+                ((run_id, status),) = cur.fetchall()
+                assert status == "completed"
+                cur.execute(
+                    "SELECT plan_state FROM chat_sessions WHERE tenant_id=%s AND plan_state IS NOT NULL",
+                    (tenant,),
+                )
+                ((plan,),) = cur.fetchall()
+                assert plan["exploration_run_id"] == str(run_id) and plan["status"] == "pending"
+            print(marker, flush=True)
+    finally:
+        if browser is not None:
+            with suppress(ProcessLookupError):
+                os.killpg(browser.pid, signal.SIGKILL)
+            await browser.wait()
+        server.should_exit = True
+        if server_task is not None:
+            await asyncio.wait_for(server_task, timeout=10)
+        browser_log.close()
+        engine_socket.close()
+        chat._sessions.clear()
