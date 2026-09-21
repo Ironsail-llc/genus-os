@@ -49,7 +49,10 @@ def explicit_principals(monkeypatch, tmp_path):
 @pytest.fixture
 def runner(engine_config):
     """Create an AgentRunner with mocked dependencies."""
-    with patch("robothor.engine.runner.get_registry") as mock_reg:
+    with (
+        patch("robothor.engine.runner.get_registry") as mock_reg,
+        patch("robothor.engine.runtime.classified_deadline._persist"),
+    ):
         mock_registry = MagicMock()
         mock_registry.build_for_agent.return_value = []
         mock_registry.get_tool_names.return_value = []

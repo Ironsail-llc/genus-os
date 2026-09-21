@@ -34,10 +34,12 @@ class CurrentRuntime:
         *,
         audit_admission=False,
         acceptance_attempted=False,
+        admitted_at=None,
     ) -> None:
         self._execute = execute
         self._audit_admission = audit_admission
         self._acceptance_attempted = acceptance_attempted
+        self._admitted_at = admitted_at
 
     async def run(self, request: RunRequest, on_event=None) -> RuntimeResult:
         from robothor.engine.runtime.action_policy import apply_action_deadline
@@ -48,9 +50,13 @@ class CurrentRuntime:
         # execution; a stalled checkpoint must not defer the start of the clock.
         entered = [False]
         try:
-            return await execute_before_deadline(
-                constrain_context(request.context), lambda: self._run(request, on_event, entered)
-            )
+            from robothor.engine.runtime.classified_deadline import admission
+
+            with admission(request, self._admitted_at):
+                return await execute_before_deadline(
+                    constrain_context(request.context),
+                    lambda: self._run(request, on_event, entered),
+                )
         except (TimeoutError, asyncio.CancelledError):
             from robothor.engine.runtime.deadlines import remaining
 
@@ -236,7 +242,10 @@ def runtime_entrypoint(execute):
                 return await execute(self, **options)
 
         runtime = CurrentRuntime(
-            native, audit_admission=True, acceptance_attempted=acceptance_attempted
+            native,
+            audit_admission=True,
+            acceptance_attempted=acceptance_attempted,
+            admitted_at=admitted_at,
         )
         return (await runtime.run(request)).run
 

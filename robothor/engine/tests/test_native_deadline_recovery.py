@@ -128,3 +128,100 @@ async def test_native_interruption_reason_survives_chat_recovery(
         assert foreign.json()["state"] == "not_found"
     assert calls == [sample_agent_config.model_primary, sample_agent_config.model_fallbacks[0]]
     tools.assert_not_awaited()
+
+
+@pytest.mark.parametrize("suppress_cancel", [False, True])
+async def test_planner_classified_chat_times_out_and_persists_its_deadline(
+    engine_config, sample_agent_config, monkeypatch, suppress_cancel
+):
+    import json
+
+    import litellm
+
+    dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
+    if "host=/tmp/runtime-migrated-" not in dsn:
+        pytest.skip("requires disposable canonical migration harness")
+    tenant = "classified-deadline-" + uuid4().hex
+    with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute("INSERT INTO crm_tenants(id,display_name) VALUES (%s,%s)", (tenant, tenant))
+    engine = AgentRunner(replace(engine_config, tenant_id=tenant))
+    sample_agent_config.task_protocol = False
+    sample_agent_config.difficulty_class = ""
+    sample_agent_config.planning_enabled = True
+    sample_agent_config.model_fallbacks = []
+    monkeypatch.setattr("robothor.engine.runtime.action_policy.SIMPLE_ACTION_SECONDS", 0.5)
+    calls = []
+
+    async def provider(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            assert "Analyze this task" in str(kwargs["messages"])
+            return litellm.ModelResponse(
+                choices=[
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": json.dumps(
+                                {
+                                    "difficulty": "simple",
+                                    "estimated_steps": 1,
+                                    "plan": [
+                                        {"step": 1, "action": "Create task", "tool": "create_task"}
+                                    ],
+                                    "risks": [],
+                                    "success_criteria": "Stored task exists",
+                                }
+                            ),
+                        },
+                        "finish_reason": "stop",
+                    }
+                ]
+            )
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            if not suppress_cancel:
+                raise
+            return litellm.ModelResponse(
+                choices=[
+                    {
+                        "message": {"role": "assistant", "content": "Everything completed."},
+                        "finish_reason": "stop",
+                    }
+                ]
+            )
+        raise AssertionError("Unreachable provider completion")
+
+    monkeypatch.setattr("litellm.acompletion", provider)
+    tools = AsyncMock(side_effect=AssertionError("Deadline must stop before business execution"))
+    monkeypatch.setattr(engine.registry, "execute", tools)
+    before = datetime.now(UTC)
+    from contextlib import nullcontext
+
+    with pytest.raises(RuntimeDeadlineError) if suppress_cancel else nullcontext():
+        async with asyncio.timeout(3):
+            run = await engine.execute(
+                sample_agent_config.id,
+                "Create a synthetic task",
+                agent_config=sample_agent_config,
+                trigger_type=TriggerType.WEBCHAT,
+                tenant_id=tenant,
+                user_id="operator",
+                user_role="owner",
+            )
+            assert str(run.status) == "cancelled"
+    await get_task_registry().drain(timeout=5)
+    assert len(calls) == 2
+    tools.assert_not_awaited()
+    with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT status,runtime_context,error_message FROM agent_runs WHERE tenant_id=%s",
+            (tenant,),
+        )
+        rows = cur.fetchall()
+        assert len(rows) == 1
+        state, context, reason = rows[0]
+        assert state == "cancelled"
+        assert "Runtime deadline expired" in reason
+        deadline = datetime.fromisoformat(context["deadline"])
+        assert 0.49 <= (deadline - before).total_seconds() < 0.7

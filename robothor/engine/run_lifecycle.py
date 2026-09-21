@@ -374,6 +374,20 @@ class RunLifecycleMixin:
 
     # ─── v2 Enhancement Helpers ───────────────────────────────────────
 
+    def _attach_plan_context(self, session, plan_result):
+        """Optional planner formatting must not abort native execution."""
+        try:
+            from robothor.engine.planner import format_plan_context
+            from robothor.engine.session import ENGINE_CONTEXT_ROLE
+
+            context = format_plan_context(plan_result)
+            if context:
+                session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": context})
+            return context
+        except Exception as exc:
+            logger.warning("Plan context formatting failed (non-fatal): %s", _sanitize(exc))
+            return ""
+
     def _apply_routing(self, agent_config: AgentConfig, message: str, tool_count: int) -> Any:
         """Apply difficulty-aware routing. Returns RouteConfig or None."""
         try:

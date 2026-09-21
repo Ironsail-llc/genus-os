@@ -1,0 +1,448 @@
+Applied 001_init.sql (001_init)
+Applied 001_crm_tables.sql (001_crm_tables)
+Applied 004_telemetry_table.sql (004_telemetry_table)
+Applied 005_task_coordination.sql (005_task_coordination)
+Applied 006_task_state_machine.sql (006_task_state_machine)
+Applied 007_routines.sql (007_routines)
+Applied 008_multi_tenancy.sql (008_multi_tenancy)
+Applied 009_agent_notifications.sql (009_agent_notifications)
+Applied 010_health_tables.sql (010_health_tables)
+Applied 011_agent_engine.sql (011_agent_engine)
+Applied 012_webchat_trigger_type.sql (012_webchat_trigger_type)
+Applied 013_workflow_engine.sql (013_workflow_engine)
+Applied 014_engine_enhancements.sql (014_engine_enhancements)
+Applied 015_chat_history.sql (015_chat_history)
+Applied 015b_supervisor_to_main.sql (015b_supervisor_to_main)
+Applied 016_sub_agents.sql (016_sub_agents)
+Applied 017_timezone_new_york.sql (017_timezone_new_york)
+Applied 018_migration_tracking.sql (018_migration_tracking)
+Applied 019_unified_session.sql (019_unified_session)
+Applied 020_plan_mode.sql (020_plan_mode)
+Applied 021_deep_reason.sql (021_deep_reason)
+Applied 022_tool_events.sql (022_tool_events)
+Applied 023_memory_v4_schema.sql (023_memory_v4_schema)
+Applied 024_requires_human.sql (024_requires_human)
+Applied 025_federation.sql (025_federation)
+Applied 026_consolidation_tracking.sql (026_consolidation_tracking)
+Applied 027_auto_task.sql (027_auto_task)
+Applied 027_kairos_buddy.sql (027_kairos_buddy)
+Applied 028_agent_teams.sql (028_agent_teams)
+Applied 028_per_agent_buddy.sql (028_per_agent_buddy)
+Applied 029_cache_token_tracking.sql (029_cache_token_tracking)
+Applied 029_managed_agents.sql (029_managed_agents)
+Applied 030_buddy_effectiveness.sql (030_buddy_effectiveness)
+Applied 030_checkpoint_schema_version.sql (030_checkpoint_schema_version)
+Applied 031_add_escalation_type.sql (031_add_escalation_type)
+Applied 031_agent_reviews.sql (031_agent_reviews)
+Applied 032_run_status_skipped.sql (032_run_status_skipped)
+Applied 032a_seed_legacy_primary_tenant.sql (032a_seed_legacy_primary_tenant)
+Applied 033_memory_multi_tenancy.sql (033_memory_multi_tenancy)
+Applied 034_buddy_goals_scoring.sql (034_buddy_goals_scoring)
+Applied 034_outcome_assessment.sql (034_outcome_assessment)
+Applied 035_drop_legacy_buddy_columns.sql (035_drop_legacy_buddy_columns)
+Applied 035_retention_indexes.sql (035_retention_indexes)
+Applied 036_buddy_reviewer_type.sql (036_buddy_reviewer_type)
+Applied 036_devops_metrics.sql (036_devops_metrics)
+Applied 037_access_control.sql (037_access_control)
+Applied 037_scheduling_policy.sql (037_scheduling_policy)
+Applied 038_audit_user_id.sql (038_audit_user_id)
+Applied 038_reap_category.sql (038_reap_category)
+Applied 039_operator_identity.sql (039_operator_identity)
+Applied 040_memory_episodes.sql (040_memory_episodes)
+Applied 041_memory_procedures.sql (041_memory_procedures)
+Applied 042_chat_embeddings.sql (042_chat_embeddings)
+Applied 043_fact_outcomes.sql (043_fact_outcomes)
+Applied 044_agent_breadcrumbs.sql (044_agent_breadcrumbs)
+Applied 045_channel_bus.sql (045_channel_bus)
+Applied 046_person_linkage.sql (046_person_linkage)
+Applied 046b_orphan_cleanup.sql (046b_orphan_cleanup)
+Applied 047_messaging_kernel.sql (047_messaging_kernel)
+Applied 048_voice_calendar.sql (048_voice_calendar)
+Applied 049_timeline_activity.sql (049_timeline_activity)
+Applied 050_task_planner_fields.sql (050_task_planner_fields)
+Applied 051_task_followup.sql (051_task_followup)
+Applied 052_multi_tenant_telegram_users.sql (052_multi_tenant_telegram_users)
+Applied 062_step_type_warmup_phase.sql (062_step_type_warmup_phase)
+Applied 063_benchmark_results.sql (063_benchmark_results)
+Applied 065_session_goal_meta.sql (065_session_goal_meta)
+Applied 066_session_goal_meta_v2.sql (066_session_goal_meta_v2)
+Applied 067_task_history_kind_schema.sql (067_task_history_kind_schema)
+Applied 068_curator_state.sql (068_curator_state)
+Applied 069_memory_facts_drift.sql (069_memory_facts_drift)
+Applied 070_user_cronjobs.sql (070_user_cronjobs)
+Applied 071_memory_vault.sql (071_memory_vault)
+Applied 071_user_accounts.sql (071_user_accounts)
+Applied 072_memory_intents.sql (072_memory_intents)
+Applied 073_memory_facts_active_hnsw.sql (073_memory_facts_active_hnsw)
+Applied 074_memory_active_hnsw_partials.sql (074_memory_active_hnsw_partials)
+Applied 075_operator_signals.sql (075_operator_signals)
+Applied 076_judge_reviewer_type.sql (076_judge_reviewer_type)
+Applied 077_message_reactions_unique.sql (077_message_reactions_unique)
+Applied 078_memory_facts_content_hash_unique.sql (078_memory_facts_content_hash_unique)
+Applied 079_guardrail_event_modes.sql (079_guardrail_event_modes)
+Applied 080_judge_reviewer_type.sql (080_judge_reviewer_type)
+Applied 081_tenant_rls_backstop.sql (081_tenant_rls_backstop)
+Applied 082_tenant_rls_app_role.sql (082_tenant_rls_app_role)
+Applied 083_rls_global_role_defaults.sql (083_rls_global_role_defaults)
+Applied 084_feature_flags.sql (084_feature_flags)
+Applied 085_sso_binding_grants.sql (085_sso_binding_grants)
+Applied 086_user_permissions.sql (086_user_permissions)
+Applied 087_role_permission_guardrails.sql (087_role_permission_guardrails)
+Applied 088_member_role_read_only.sql (088_member_role_read_only)
+Applied 089_face_identities.sql (089_face_identities)
+Applied 092_memory_access_rollup.sql (092_memory_access_rollup)
+Applied 093_memory_write_jobs.sql (093_memory_write_jobs)
+Applied 094_memory_decay_shadow.sql (094_memory_decay_shadow)
+Applied 095_memory_bitemporal.sql (095_memory_bitemporal)
+Applied 096_memory_block_budget.sql (096_memory_block_budget)
+Applied 097_trigger_type_channel_event.sql (097_trigger_type_channel_event)
+Applied 098_tenant_column_defaults.sql (098_tenant_column_defaults)
+Applied 099_notification_types.sql (099_notification_types)
+Applied 100_run_verification.sql (100_run_verification)
+Applied 102_agent_reviews_nullable_rating.sql (102_agent_reviews_nullable_rating)
+Applied 103_benchmark_pass_rate_truth.sql (103_benchmark_pass_rate_truth)
+Applied 104_benchmark_sandbox_tenant.sql (104_benchmark_sandbox_tenant)
+Applied 105_agent_messages.sql (105_agent_messages)
+Applied 106_workflow_approvals.sql (106_workflow_approvals)
+Applied 107_seed_service_role.sql (107_seed_service_role)
+Applied 108_run_resume_attempts.sql (108_run_resume_attempts)
+Applied 109_facts_entities_lower_gin.sql (109_facts_entities_lower_gin)
+Applied 110_tool_event_error_message.sql (110_tool_event_error_message)
+Applied 111_drop_shadowing_ann_index.sql (111_drop_shadowing_ann_index)
+Applied 112_federation_principals.sql (112_federation_principals)
+Applied 113_add_do_not_contact.sql (113_add_do_not_contact)
+Applied 114_local_login.sql (114_local_login)
+Applied 115_backfill_sandbox_denied_error_type.sql (115_backfill_sandbox_denied_error_type)
+Applied 116_benchmark_digest_notification_type.sql (116_benchmark_digest_notification_type)
+Applied 117_agent_questions.sql (117_agent_questions)
+Applied 118_user_channel_identities.sql (118_user_channel_identities)
+Applied 119_workflow_step_timeout.sql (119_workflow_step_timeout)
+Applied 120_tenant_rls_cover_new_tables.sql (120_tenant_rls_cover_new_tables)
+Applied 121_channel_conversation_refs.sql (121_channel_conversation_refs)
+Applied 122_trigger_type_channel.sql (122_trigger_type_channel)
+Applied 123_agent_run_task_text.sql (123_agent_run_task_text)
+Applied 124_guardrail_context_overflow.sql (124_guardrail_context_overflow)
+Applied 125_agent_run_step_batch.sql (125_agent_run_step_batch)
+Applied 126_calendar_operations.sql (126_calendar_operations)
+Applied 126_durable_operations.sql (126_durable_operations)
+Applied 126_goal_pursuit.sql (126_goal_pursuit)
+Applied 127_autonomous_execution.sql (127_autonomous_execution)
+Applied 127_runtime_contract.sql (127_runtime_contract)
+Applied 127_sales_intelligence.sql (127_sales_intelligence)
+Applied 128_autonomy_resource_descriptors.sql (128_autonomy_resource_descriptors)
+Applied 128_sales_business_observations.sql (128_sales_business_observations)
+Applied 129_autonomy_workflows.sql (129_autonomy_workflows)
+Applied 129_sales_binding_repair.sql (129_sales_binding_repair)
+Applied 130_autonomy_request_context.sql (130_autonomy_request_context)
+Applied 130_sales_deployments.sql (130_sales_deployments)
+Applied 131_autonomy_enrollments.sql (131_autonomy_enrollments)
+Applied 131_sales_calibration.sql (131_sales_calibration)
+Applied 132_autonomy_enrollment_rls.sql (132_autonomy_enrollment_rls)
+Applied 132_sales_research_delegation.sql (132_sales_research_delegation)
+Applied 133_autonomy_terms_audit.sql (133_autonomy_terms_audit)
+Applied 133_operation_fragments.sql (133_operation_fragments)
+Applied 134_autonomy_material_documents.sql (134_autonomy_material_documents)
+Applied 134_web_render_permission.sql (134_web_render_permission)
+Applied 135_sales_requests.sql (135_sales_requests)
+Applied 136_sales_pipedrive_scope.sql (136_sales_pipedrive_scope)
+Applied 137_sales_analyst_permissions.sql (137_sales_analyst_permissions)
+Applied 138_goal_provider_reservations.sql (138_goal_provider_reservations)
+Applied 139_goal_task_family_controls.sql (139_goal_task_family_controls)
+Applied 140_chat_approval_receipts.sql (140_chat_approval_receipts)
+Applied 141_runtime_effects.sql (141_runtime_effects)
+Applied 142_goal_effect_lookup.sql (142_goal_effect_lookup)
+Nothing to apply.
+Applied 001_init.sql (001_init)
+Applied 001_crm_tables.sql (001_crm_tables)
+Applied 004_telemetry_table.sql (004_telemetry_table)
+Applied 005_task_coordination.sql (005_task_coordination)
+Applied 006_task_state_machine.sql (006_task_state_machine)
+Applied 007_routines.sql (007_routines)
+Applied 008_multi_tenancy.sql (008_multi_tenancy)
+Applied 009_agent_notifications.sql (009_agent_notifications)
+Applied 010_health_tables.sql (010_health_tables)
+Applied 011_agent_engine.sql (011_agent_engine)
+Applied 012_webchat_trigger_type.sql (012_webchat_trigger_type)
+Applied 013_workflow_engine.sql (013_workflow_engine)
+Applied 014_engine_enhancements.sql (014_engine_enhancements)
+Applied 015_chat_history.sql (015_chat_history)
+Applied 015b_supervisor_to_main.sql (015b_supervisor_to_main)
+Applied 016_sub_agents.sql (016_sub_agents)
+Applied 017_timezone_new_york.sql (017_timezone_new_york)
+Applied 018_migration_tracking.sql (018_migration_tracking)
+Applied 019_unified_session.sql (019_unified_session)
+Applied 020_plan_mode.sql (020_plan_mode)
+Applied 021_deep_reason.sql (021_deep_reason)
+Applied 022_tool_events.sql (022_tool_events)
+Applied 023_memory_v4_schema.sql (023_memory_v4_schema)
+Applied 024_requires_human.sql (024_requires_human)
+Applied 025_federation.sql (025_federation)
+Applied 026_consolidation_tracking.sql (026_consolidation_tracking)
+Applied 027_auto_task.sql (027_auto_task)
+Applied 027_kairos_buddy.sql (027_kairos_buddy)
+Applied 028_agent_teams.sql (028_agent_teams)
+Applied 028_per_agent_buddy.sql (028_per_agent_buddy)
+Applied 029_cache_token_tracking.sql (029_cache_token_tracking)
+Applied 029_managed_agents.sql (029_managed_agents)
+Applied 030_buddy_effectiveness.sql (030_buddy_effectiveness)
+Applied 030_checkpoint_schema_version.sql (030_checkpoint_schema_version)
+Applied 031_add_escalation_type.sql (031_add_escalation_type)
+Applied 031_agent_reviews.sql (031_agent_reviews)
+Applied 032_run_status_skipped.sql (032_run_status_skipped)
+Applied 032a_seed_legacy_primary_tenant.sql (032a_seed_legacy_primary_tenant)
+Applied 033_memory_multi_tenancy.sql (033_memory_multi_tenancy)
+Applied 034_buddy_goals_scoring.sql (034_buddy_goals_scoring)
+Applied 034_outcome_assessment.sql (034_outcome_assessment)
+Applied 035_drop_legacy_buddy_columns.sql (035_drop_legacy_buddy_columns)
+Applied 035_retention_indexes.sql (035_retention_indexes)
+Applied 036_buddy_reviewer_type.sql (036_buddy_reviewer_type)
+Applied 036_devops_metrics.sql (036_devops_metrics)
+Applied 037_access_control.sql (037_access_control)
+Applied 037_scheduling_policy.sql (037_scheduling_policy)
+Applied 038_audit_user_id.sql (038_audit_user_id)
+Applied 038_reap_category.sql (038_reap_category)
+Applied 039_operator_identity.sql (039_operator_identity)
+Applied 040_memory_episodes.sql (040_memory_episodes)
+Applied 041_memory_procedures.sql (041_memory_procedures)
+Applied 042_chat_embeddings.sql (042_chat_embeddings)
+Applied 043_fact_outcomes.sql (043_fact_outcomes)
+Applied 044_agent_breadcrumbs.sql (044_agent_breadcrumbs)
+Applied 045_channel_bus.sql (045_channel_bus)
+Applied 046_person_linkage.sql (046_person_linkage)
+Applied 046b_orphan_cleanup.sql (046b_orphan_cleanup)
+Applied 047_messaging_kernel.sql (047_messaging_kernel)
+Applied 048_voice_calendar.sql (048_voice_calendar)
+Applied 049_timeline_activity.sql (049_timeline_activity)
+Applied 050_task_planner_fields.sql (050_task_planner_fields)
+Applied 051_task_followup.sql (051_task_followup)
+Applied 052_multi_tenant_telegram_users.sql (052_multi_tenant_telegram_users)
+Applied 062_step_type_warmup_phase.sql (062_step_type_warmup_phase)
+Applied 063_benchmark_results.sql (063_benchmark_results)
+Applied 065_session_goal_meta.sql (065_session_goal_meta)
+Applied 066_session_goal_meta_v2.sql (066_session_goal_meta_v2)
+Applied 067_task_history_kind_schema.sql (067_task_history_kind_schema)
+Applied 068_curator_state.sql (068_curator_state)
+Applied 069_memory_facts_drift.sql (069_memory_facts_drift)
+Applied 070_user_cronjobs.sql (070_user_cronjobs)
+Applied 071_memory_vault.sql (071_memory_vault)
+Applied 071_user_accounts.sql (071_user_accounts)
+Applied 072_memory_intents.sql (072_memory_intents)
+Applied 073_memory_facts_active_hnsw.sql (073_memory_facts_active_hnsw)
+Applied 074_memory_active_hnsw_partials.sql (074_memory_active_hnsw_partials)
+Applied 075_operator_signals.sql (075_operator_signals)
+Applied 076_judge_reviewer_type.sql (076_judge_reviewer_type)
+Applied 077_message_reactions_unique.sql (077_message_reactions_unique)
+Applied 078_memory_facts_content_hash_unique.sql (078_memory_facts_content_hash_unique)
+Applied 079_guardrail_event_modes.sql (079_guardrail_event_modes)
+Applied 080_judge_reviewer_type.sql (080_judge_reviewer_type)
+Applied 081_tenant_rls_backstop.sql (081_tenant_rls_backstop)
+Applied 082_tenant_rls_app_role.sql (082_tenant_rls_app_role)
+Applied 083_rls_global_role_defaults.sql (083_rls_global_role_defaults)
+Applied 084_feature_flags.sql (084_feature_flags)
+Applied 085_sso_binding_grants.sql (085_sso_binding_grants)
+Applied 086_user_permissions.sql (086_user_permissions)
+Applied 087_role_permission_guardrails.sql (087_role_permission_guardrails)
+Applied 088_member_role_read_only.sql (088_member_role_read_only)
+Applied 089_face_identities.sql (089_face_identities)
+Applied 092_memory_access_rollup.sql (092_memory_access_rollup)
+Applied 093_memory_write_jobs.sql (093_memory_write_jobs)
+Applied 094_memory_decay_shadow.sql (094_memory_decay_shadow)
+Applied 095_memory_bitemporal.sql (095_memory_bitemporal)
+Applied 096_memory_block_budget.sql (096_memory_block_budget)
+Applied 097_trigger_type_channel_event.sql (097_trigger_type_channel_event)
+Applied 098_tenant_column_defaults.sql (098_tenant_column_defaults)
+Applied 099_notification_types.sql (099_notification_types)
+Applied 100_run_verification.sql (100_run_verification)
+Applied 102_agent_reviews_nullable_rating.sql (102_agent_reviews_nullable_rating)
+Applied 103_benchmark_pass_rate_truth.sql (103_benchmark_pass_rate_truth)
+Applied 104_benchmark_sandbox_tenant.sql (104_benchmark_sandbox_tenant)
+Applied 105_agent_messages.sql (105_agent_messages)
+Applied 106_workflow_approvals.sql (106_workflow_approvals)
+Applied 107_seed_service_role.sql (107_seed_service_role)
+Applied 108_run_resume_attempts.sql (108_run_resume_attempts)
+Applied 109_facts_entities_lower_gin.sql (109_facts_entities_lower_gin)
+Applied 110_tool_event_error_message.sql (110_tool_event_error_message)
+Applied 111_drop_shadowing_ann_index.sql (111_drop_shadowing_ann_index)
+Applied 112_federation_principals.sql (112_federation_principals)
+Applied 113_add_do_not_contact.sql (113_add_do_not_contact)
+Applied 114_local_login.sql (114_local_login)
+Applied 115_backfill_sandbox_denied_error_type.sql (115_backfill_sandbox_denied_error_type)
+Applied 116_benchmark_digest_notification_type.sql (116_benchmark_digest_notification_type)
+Applied 117_agent_questions.sql (117_agent_questions)
+Applied 118_user_channel_identities.sql (118_user_channel_identities)
+Applied 119_workflow_step_timeout.sql (119_workflow_step_timeout)
+Applied 120_tenant_rls_cover_new_tables.sql (120_tenant_rls_cover_new_tables)
+Applied 121_channel_conversation_refs.sql (121_channel_conversation_refs)
+Applied 122_trigger_type_channel.sql (122_trigger_type_channel)
+Applied 123_agent_run_task_text.sql (123_agent_run_task_text)
+Applied 124_guardrail_context_overflow.sql (124_guardrail_context_overflow)
+Applied 125_agent_run_step_batch.sql (125_agent_run_step_batch)
+Applied 126_calendar_operations.sql (126_calendar_operations)
+Applied 126_durable_operations.sql (126_durable_operations)
+Applied 126_goal_pursuit.sql (126_goal_pursuit)
+Applied 127_autonomous_execution.sql (127_autonomous_execution)
+Applied 127_sales_intelligence.sql (127_sales_intelligence)
+Applied 128_autonomy_resource_descriptors.sql (128_autonomy_resource_descriptors)
+Applied 128_sales_business_observations.sql (128_sales_business_observations)
+Applied 129_autonomy_workflows.sql (129_autonomy_workflows)
+Applied 129_sales_binding_repair.sql (129_sales_binding_repair)
+Applied 130_autonomy_request_context.sql (130_autonomy_request_context)
+Applied 130_sales_deployments.sql (130_sales_deployments)
+Applied 131_autonomy_enrollments.sql (131_autonomy_enrollments)
+Applied 131_sales_calibration.sql (131_sales_calibration)
+Applied 132_autonomy_enrollment_rls.sql (132_autonomy_enrollment_rls)
+Applied 132_sales_research_delegation.sql (132_sales_research_delegation)
+Applied 133_autonomy_terms_audit.sql (133_autonomy_terms_audit)
+Applied 133_operation_fragments.sql (133_operation_fragments)
+Applied 134_autonomy_material_documents.sql (134_autonomy_material_documents)
+Applied 134_web_render_permission.sql (134_web_render_permission)
+Applied 135_sales_requests.sql (135_sales_requests)
+Applied 136_sales_pipedrive_scope.sql (136_sales_pipedrive_scope)
+Applied 137_sales_analyst_permissions.sql (137_sales_analyst_permissions)
+Applied 127_runtime_contract.sql (127_runtime_contract)
+Applied 138_goal_provider_reservations.sql (138_goal_provider_reservations)
+Applied 139_goal_task_family_controls.sql (139_goal_task_family_controls)
+Applied 140_chat_approval_receipts.sql (140_chat_approval_receipts)
+Applied 141_runtime_effects.sql (141_runtime_effects)
+Applied 142_goal_effect_lookup.sql (142_goal_effect_lookup)
+Nothing to apply.
+POPULATED_UPGRADE {"added_migrations": ["127_runtime_contract", "138_goal_provider_reservations", "139_goal_task_family_controls", "140_chat_approval_receipts", "141_runtime_effects", "142_goal_effect_lookup"], "preserved_tables": ["chat_sessions", "crm_tasks", "goal_pursuit_settings", "pursuit_goals", "pursuit_goal_tasks", "pursuit_goal_history", "pursuit_goal_attempts", "agent_runs", "agent_run_steps", "agent_run_checkpoints", "calendar_operations"], "repeat_apply_noop": true, "blocked_ancestor_denies_linked_task": true, "ordinary_task_runnable": true, "legacy_runtime_identity_added": true, "existing_approval_receipt_preserved": true}
+..........................s.....F...............s............            [100%]
+=================================== FAILURES ===================================
+____ test_planner_classified_chat_times_out_and_persists_its_deadline[True] ____
+
+engine_config = EngineConfig(bot_token='test-token-123', default_chat_id='12345', port=18899, tenant_id='test-tenant', workspace=Posix...t_count=1, required_agent_ids=(), main_session_key='agent:main:primary', operator_name='', instance_id='', nats_url='')
+sample_agent_config = AgentConfig(id='test-agent', name='Test Agent', description='A test agent', model_primary='openrouter/test/model', mod...get=False, human_approval_tools=[], human_approval_timeout=300, human_approval_fail_open=False, validation_warnings=[])
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0xe831fc139e80>
+suppress_cancel = True
+
+    @pytest.mark.parametrize("suppress_cancel", [False, True])
+    async def test_planner_classified_chat_times_out_and_persists_its_deadline(
+        engine_config, sample_agent_config, monkeypatch, suppress_cancel
+    ):
+        import json
+    
+        import litellm
+    
+        dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
+        if "host=/tmp/runtime-migrated-" not in dsn:
+            pytest.skip("requires disposable canonical migration harness")
+        tenant = "classified-deadline-" + uuid4().hex
+        with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+            cur.execute("INSERT INTO crm_tenants(id,display_name) VALUES (%s,%s)", (tenant, tenant))
+        engine = AgentRunner(replace(engine_config, tenant_id=tenant))
+        sample_agent_config.task_protocol = False
+        sample_agent_config.difficulty_class = ""
+        sample_agent_config.planning_enabled = True
+        sample_agent_config.model_fallbacks = []
+        monkeypatch.setattr("robothor.engine.runtime.action_policy.SIMPLE_ACTION_SECONDS", 0.5)
+        calls = []
+    
+        async def provider(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                assert "Analyze this task" in str(kwargs["messages"])
+                return litellm.ModelResponse(
+                    choices=[
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": json.dumps(
+                                    {
+                                        "difficulty": "simple",
+                                        "estimated_steps": 1,
+                                        "plan": [
+                                            {"step": 1, "action": "Create task", "tool": "create_task"}
+                                        ],
+                                        "risks": [],
+                                        "success_criteria": "Stored task exists",
+                                    }
+                                ),
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ]
+                )
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                if not suppress_cancel:
+                    raise
+                return litellm.ModelResponse(
+                    choices=[
+                        {
+                            "message": {"role": "assistant", "content": "Everything completed."},
+                            "finish_reason": "stop",
+                        }
+                    ]
+                )
+            raise AssertionError("Unreachable provider completion")
+    
+        monkeypatch.setattr("litellm.acompletion", provider)
+        tools = AsyncMock(side_effect=AssertionError("Deadline must stop before business execution"))
+        monkeypatch.setattr(engine.registry, "execute", tools)
+        before = datetime.now(UTC)
+        async with asyncio.timeout(3):
+>           run = await engine.execute(
+                sample_agent_config.id,
+                "Create a synthetic task",
+                agent_config=sample_agent_config,
+                trigger_type=TriggerType.WEBCHAT,
+                tenant_id=tenant,
+                user_id="operator",
+                user_role="owner",
+            )
+
+robothor/engine/tests/test_native_deadline_recovery.py:200: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+robothor/engine/runtime/current.py:250: in wrapped
+    return (await runtime.run(request)).run
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+robothor/engine/runtime/current.py:56: in run
+    return await execute_before_deadline(
+robothor/engine/runtime/deadlines.py:57: in execute_before_deadline
+    return await execute()
+           ^^^^^^^^^^^^^^^
+robothor/engine/runtime/current.py:143: in _run
+    run = await self._execute(agent_id=request.agent_id, message=request.message, **options)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+robothor/engine/runtime/current.py:242: in native
+    return await execute(self, **options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+robothor/engine/runner.py:1326: in execute
+    require_time()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+context = None
+
+    def require_time(context=None):
+        seconds = remaining(context)
+        if seconds is not None and seconds <= 0:
+>           raise RuntimeDeadlineError(
+                "Runtime deadline expired; new dispatch denied. Reconcile already dispatched effects."
+            )
+E           robothor.engine.runtime.deadlines.RuntimeDeadlineError: Runtime deadline expired; new dispatch denied. Reconcile already dispatched effects.
+
+robothor/engine/runtime/deadlines.py:45: RuntimeDeadlineError
+------------------------------ Captured log call -------------------------------
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.llm_client:llm_client.py:1501 litellm cost calculation failed, using fallback: This model isn't mapped yet. model=openrouter/test/model, custom_llm_provider=openrouter. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json.
+WARNING  robothor.engine.model_registry:model_registry.py:673 Unknown model 'openrouter/test/model' — not in the static registry or litellm catalog; using conservative 128K fallback. Add it to model_registry._MODEL_REGISTRY.
+WARNING  robothor.engine.runner:runner.py:1390 Agent test-agent cancelled: Runtime deadline expired; new dispatch denied. Reconcile already dispatched effects.
+=============================== warnings summary ===============================
+robothor/engine/tests/test_native_goal_recovery.py::test_native_goal_recovery_waits_safely_or_reconciles_explicitly[False-False]
+  /home/philip/robothor-runtime-modernization/.venv/lib/python3.14/site-packages/pydantic/_internal/_generate_schema.py:1480: UserWarning: Item 'summary' on TypedDict class 'ChatCompletionReasoningItem' is using the `ReadOnly` qualifier. Pydantic will not protect items from any mutation on dictionary instances.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED robothor/engine/tests/test_native_deadline_recovery.py::test_planner_classified_chat_times_out_and_persists_its_deadline[True]
+1 failed, 58 passed, 2 skipped, 1 warning in 39.17s

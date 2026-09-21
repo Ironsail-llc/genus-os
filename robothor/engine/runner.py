@@ -1017,7 +1017,7 @@ class AgentRunner(
         # This lets agents run for hours on complex tasks without being killed.
         trace = None  # initialized inside timeout block, but referenced in except handlers
         try:
-            async with asyncio.timeout(bounded_timeout(hard_timeout, session)):
+            async with asyncio.timeout(bounded_timeout(hard_timeout, session)) as native_window:
                 # Record run in database (sync DB call — run in executor to avoid blocking event loop)
                 import psycopg2
 
@@ -1117,32 +1117,22 @@ class AgentRunner(
                 route = self._apply_routing(agent_config, message, len(tool_names))
 
                 # ── [PLANNER] Generate plan if enabled ──
+                from robothor.engine.runtime.classified_deadline import (
+                    apply as apply_classified_deadline,
+                )
+
                 plan_result = None
-                plan_context = ""
                 if not getattr(session, "routine_operation_id", None) and self._should_plan(
                     agent_config, route
                 ):
                     plan_result = await self._run_planner(
                         agent_config, message, planner_tool_names(_prepared), models
                     )
+                    await apply_classified_deadline(
+                        session, native_window, agent_config, route, plan_result
+                    )
                     if plan_result and plan_result.success:
-                        # Planner is non-fatal end to end: a malformed plan must
-                        # never abort the run over an optional context string.
-                        try:
-                            from robothor.engine.planner import format_plan_context
-
-                            plan_context = format_plan_context(plan_result)
-                            if plan_context:
-                                session.messages.append(
-                                    {"role": ENGINE_CONTEXT_ROLE, "content": plan_context}
-                                )
-                        except Exception as e:
-                            plan_context = ""
-                            logger.warning(
-                                "Plan context formatting failed (non-fatal, "
-                                "continuing without plan): %s",
-                                _sanitize(e),
-                            )
+                        self._attach_plan_context(session, plan_result)
 
                         # Dispatch PLAN_CREATED hook
                         try:
@@ -1166,6 +1156,10 @@ class AgentRunner(
                             logger.warning(
                                 "Failed to publish planner hook context: %s", _sanitize(e)
                             )
+
+                await apply_classified_deadline(
+                    session, native_window, agent_config, route, plan_result
+                )
 
                 # ── [TELEMETRY] Create trace context ──
                 trace = self._create_trace(agent_config, session, spawn_context=spawn_context)
@@ -1309,6 +1303,11 @@ class AgentRunner(
                             on_status=report_status,
                             on_stream_event=on_stream_event,
                         )
+                    if native_window is not None and native_window.expired() is True:
+                        from robothor.engine.runtime.deadlines import require_time
+
+                        require_time()
+                        raise TimeoutError("Native execution deadline expired")
                     # A run the watchdog flagged that RETURNED (cooperative
                     # abort, or the loop's own wall-clock self-check) must
                     # finalize as TIMEOUT, exactly like one the cancel

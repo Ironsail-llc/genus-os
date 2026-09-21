@@ -316,6 +316,7 @@ def _mock_run_persistence():
     """
     with (
         patch("robothor.engine.runner.create_run"),
+        patch("robothor.engine.runtime.classified_deadline._persist"),
         patch("robothor.engine.tracking.create_steps_batch", return_value=0),
         patch("robothor.engine.runner.AgentRunner._persist_run"),
     ):

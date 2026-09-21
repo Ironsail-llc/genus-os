@@ -93,6 +93,10 @@ def enclosing_deadline_reason(exc: BaseException) -> str:
 
     if isinstance(exc, WorkflowDeadlineError | RuntimeDeadlineError):
         return str(exc)
+    if isinstance(exc, TimeoutError):
+        seconds = remaining()
+        if seconds is not None and seconds <= 0:
+            return "Runtime deadline expired; execution cancelled. Reconcile already dispatched effects."
     import asyncio
 
     window = _active_window.get()

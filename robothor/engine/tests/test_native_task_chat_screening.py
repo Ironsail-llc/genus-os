@@ -209,6 +209,9 @@ async def test_warm_chat_task_screening(engine_config, sample_agent_config, monk
                                 (tenant,),
                             )
                             sample["runtime_deadline_assigned"] = cur.fetchone()[0] is not None
+                            assert sample["runtime_deadline_assigned"], (
+                                "Simple action lacks a deadline"
+                            )
                         sample.update(verified=True, run_status="completed", model_calls=turn_calls)
                     except Exception as exc:
                         sample.update(
