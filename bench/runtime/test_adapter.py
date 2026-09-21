@@ -12,7 +12,7 @@ from bench.runtime.adapter import CandidateRuntime
 from bench.runtime.candidates import FixtureGateway
 from bench.runtime.test_candidate_boundaries import candidate
 from robothor.engine.models import AgentRun
-from robothor.engine.runtime.contracts import ExecutionContext, RunRequest, StateEnvelope
+from robothor.engine.runtime.contracts import ExecutionContext, RunRequest
 from robothor.engine.runtime.current import active_context
 
 
@@ -119,16 +119,17 @@ async def test_unsuccessful_execution_is_persisted_without_false_completion(name
 
 
 @pytest.mark.asyncio
-async def test_resume_refused_before_admission_or_model_work():
+@pytest.mark.parametrize("name", ["pydantic-ai", "deepagents"])
+async def test_resume_refused_before_admission_or_model_work(name):
     host, calls = Host(), []
-    runtime = CandidateRuntime(candidate("pydantic-ai", [], calls), host)
+    runtime = CandidateRuntime(candidate(name, [], calls), host)
     original = request()
     resume = RunRequest(
         original.context,
         original.agent_id,
         original.message,
         resume_from="old-run",
-        checkpoint=StateEnvelope(),
+        checkpoint=runtime.identity,
     )
     with pytest.raises(ValueError, match="replay denied"):
         await runtime.run(resume)

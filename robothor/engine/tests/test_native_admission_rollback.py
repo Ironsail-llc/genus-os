@@ -24,9 +24,17 @@ async def test_new_native_admission_preserves_old_operation_and_stop(
     if "host=/tmp/runtime-migrated-" not in dsn:
         pytest.skip("requires disposable canonical migration harness")
     tenant = "rollback-" + uuid4().hex
-    old_run, operation, goal = [str(uuid4()) for _ in range(3)]
+    old_run, operation, goal, approval = [str(uuid4()) for _ in range(4)]
     with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("INSERT INTO crm_tenants(id,display_name) VALUES (%s,%s)", (tenant, tenant))
+        cur.execute(
+            "INSERT INTO chat_approval_receipts(tenant_id,request_id,session_key,plan_id,plan_state) VALUES (%s,%s,'web:main',%s,'{\"status\":\"approved\"}')",
+            (tenant, approval, str(uuid4())),
+        )
+        cur.execute(
+            "INSERT INTO agent_runtime_request_stops(tenant_id,request_id,note) VALUES (%s,%s,'Keep approval stopped')",
+            (tenant, approval),
+        )
         cur.execute(
             "INSERT INTO agent_runs(id,tenant_id,agent_id,trigger_type,status,error_message) VALUES (%s,%s,'main','event','cancelled','Explicit stop')",
             (old_run, tenant),
@@ -52,6 +60,14 @@ async def test_new_native_admission_preserves_old_operation_and_stop(
         with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
             result = []
             for query, parameters in [
+                (
+                    "SELECT to_jsonb(r) FROM chat_approval_receipts r WHERE tenant_id=%s AND request_id=%s",
+                    (tenant, approval),
+                ),
+                (
+                    "SELECT to_jsonb(r) FROM agent_runtime_request_stops r WHERE tenant_id=%s AND request_id=%s",
+                    (tenant, approval),
+                ),
                 ("SELECT to_jsonb(r) FROM agent_runs r WHERE id=%s", (old_run,)),
                 ("SELECT to_jsonb(r) FROM agent_runtime_controls r WHERE run_id=%s", (old_run,)),
                 ("SELECT to_jsonb(r) FROM agent_run_checkpoints r WHERE run_id=%s", (old_run,)),
