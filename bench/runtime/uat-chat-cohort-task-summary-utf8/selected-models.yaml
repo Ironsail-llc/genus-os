@@ -1,0 +1,7 @@
+model:
+  fallbacks:
+  - openrouter/xiaomi/mimo-v2.5
+  - openrouter/deepseek/deepseek-v4-flash
+  - ollama_chat/qwen3.8:27b
+  primary: openrouter/deepseek/deepseek-v4.1-flash
+  temperature: 0.5

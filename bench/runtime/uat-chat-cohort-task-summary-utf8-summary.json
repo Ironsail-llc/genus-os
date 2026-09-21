@@ -1,0 +1,245 @@
+{
+  "expected_conversations": 30,
+  "counts": {
+    "passed": 30,
+    "failed": 0,
+    "unresolved": 0,
+    "not_started": 0
+  },
+  "conversations": [
+    {
+      "repetition": 0,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 1,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 2,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 3,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 4,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 5,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 6,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 7,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 8,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 9,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 10,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 11,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 12,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 13,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 14,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 15,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 16,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 17,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 18,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 19,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 20,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 21,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 22,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 23,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 24,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 25,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 26,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 27,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 28,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 29,
+      "state": "passed",
+      "exit_code": 0
+    }
+  ],
+  "elapsed_ms": {
+    "status": {
+      "samples": 30,
+      "p50": 15806.886698002927,
+      "p95": 32656.86151900445,
+      "p95_ci95": [
+        24286.91287300171,
+        33329.049119995034
+      ],
+      "missing": 0
+    },
+    "pause": {
+      "samples": 30,
+      "p50": 17123.44599700009,
+      "p95": 35423.270088998834,
+      "p95_ci95": [
+        21296.394256001804,
+        49293.25081299612
+      ],
+      "missing": 0
+    }
+  },
+  "complete_population": true,
+  "manual_acceptance": false,
+  "screening_passed": false,
+  "screening_targets": {
+    "turn_p95_ms": 30000,
+    "turn_deadline_ms": 60000
+  },
+  "latency_note": "Measured distributions include completed failed attempts when timing exists. Missing turns remain counted and cannot qualify the cohort. Status and pause are summarized separately.",
+  "revision": "fc5b658fdec",
+  "product_revision": "2488b5322db",
+  "process_exit_code": 1,
+  "provider_attempts": 168,
+  "estimated_cost_usd": 0.0711,
+  "billing_reconciled": false,
+  "returned_models": {
+    "deepseek/deepseek-v4.1-flash": 60
+  },
+  "model_calls_by_turn": {
+    "status": {
+      "2": 21,
+      "3": 9
+    },
+    "pause": {
+      "3": 21,
+      "4": 9
+    }
+  },
+  "over_30_seconds": [
+    {
+      "sample": 0,
+      "turn": 0,
+      "elapsed_ms": 33329.049119995034
+    },
+    {
+      "sample": 1,
+      "turn": 0,
+      "elapsed_ms": 32656.86151900445
+    },
+    {
+      "sample": 18,
+      "turn": 1,
+      "elapsed_ms": 35423.270088998834
+    },
+    {
+      "sample": 21,
+      "turn": 1,
+      "elapsed_ms": 49293.25081299612
+    }
+  ],
+  "language_review": {
+    "status_replies_inspected": 30,
+    "examples_offering_disabled_review_as_next_step": [
+      3,
+      8,
+      10,
+      24
+    ],
+    "other_findings": "Verbose replies expose internal IDs/versions, some imply a task change can overcome disabled pursuit, and some offer an enablement action outside the fixture tool set. This is not an exhaustive semantic failure count or user acceptance."
+  },
+  "finding": "30/30 state checks pass but both status and pause p95 exceed the 30s screen. Fewer status calls did not establish acceptable latency or language. Do not promote this as a no-regression improvement.",
+  "limits": "Sequential isolated minimal-profile cohort with existing selected models and synthetic goal/task data, not full production parity or a causal comparison to earlier p95 measurements. Unrelated offline unit checks ran during portions of collection. Renderer/channel prototypes were not installed in the measured path. No production deployment.",
+  "full_acceptance_passed": false
+}

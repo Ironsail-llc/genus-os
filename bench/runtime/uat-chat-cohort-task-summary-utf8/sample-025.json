@@ -1,0 +1,172 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator \u2014 this is one goal with two tasks:\n\n**Finished**\n- \u2705 *Prepare the first item* \u2014 task `8fcf7054`, status **DONE**\n\n**Still left**\n- \u2b1c *Check the remaining item* \u2014 task `818e8d8a`, status **TODO**\n\n**Goal status** \u2014 \"Finish the requested work\" (`35d5026d`)\n- State: **waiting**, specifically on that one outstanding task (\"One requested task still needs checking\").\n- Success criterion \u2014 *\"The requested work has been checked\"* \u2014 is **not yet met**: the goal has no recorded evidence yet, so nothing is verified as complete.\n- Wake scheduled for **2026-09-22 05:02 UTC** (about 24h out), or earlier if the linked task changes.\n\nOne thing worth flagging: **automatic pursuit is currently disabled** (`execution_enabled: false`). So although a wake is registered, nothing will advance on its own \u2014 the remaining check will only get done if it's triggered or run manually. If you want that last item checked now rather than waiting for the scheduled review, say the word and I'll take it on.\n\nTask counts show one done and one open; they don't by themselves prove the objective is finished \u2014 and with an empty evidence list, it isn't yet.",
+      "run": {
+        "text": "Here's where things stand, operator \u2014 this is one goal with two tasks:\n\n**Finished**\n- \u2705 *Prepare the first item* \u2014 task `8fcf7054`, status **DONE**\n\n**Still left**\n- \u2b1c *Check the remaining item* \u2014 task `818e8d8a`, status **TODO**\n\n**Goal status** \u2014 \"Finish the requested work\" (`35d5026d`)\n- State: **waiting**, specifically on that one outstanding task (\"One requested task still needs checking\").\n- Success criterion \u2014 *\"The requested work has been checked\"* \u2014 is **not yet met**: the goal has no recorded evidence yet, so nothing is verified as complete.\n- Wake scheduled for **2026-09-22 05:02 UTC** (about 24h out), or earlier if the linked task changes.\n\nOne thing worth flagging: **automatic pursuit is currently disabled** (`execution_enabled: false`). So although a wake is registered, nothing will advance on its own \u2014 the remaining check will only get done if it's triggered or run manually. If you want that last item checked now rather than waiting for the scheduled review, say the word and I'll take it on.\n\nTask counts show one done and one open; they don't by themselves prove the objective is finished \u2014 and with an empty evidence list, it isn't yet.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 8531,
+        "output_tokens": 649,
+        "duration_ms": 8405,
+        "total_cost_usd": 0.001,
+        "run_id": "8b06c163-cede-4ded-9895-d0890d119f79"
+      },
+      "elapsed_ms": 8463.312339001277,
+      "measurements": {
+        "run_id": "8b06c163-cede-4ded-9895-d0890d119f79",
+        "duration_ms": 8405,
+        "model_calls": 2,
+        "tool_calls": 1,
+        "provider_ms": 8324,
+        "tool_wall_ms": 11,
+        "compaction_ms": 0,
+        "compactions": 0,
+        "input_tokens": 8531,
+        "time_to_first_action_ms": 939,
+        "time_to_verified_completion_ms": null,
+        "post_completion_tool_calls": null,
+        "steps": [
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 914,
+            "input_tokens": 3942,
+            "output_tokens": 79,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "list_pursuit_goals",
+            "model": null,
+            "duration_ms": 11,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 7410,
+            "input_tokens": 4589,
+            "output_tokens": 570,
+            "failed": false
+          }
+        ]
+      }
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the goal is now **paused**.\n\n**Goal** \u2014 \"Finish the requested work\" (`35d5026d-90e8-4e3c-92d7-fb14b009767d`)\n- Status: **waiting \u2192 paused** (version 5)\n- It was waiting on task `818e8d8a` (\"Check the remaining item\").\n\nTwo things to note now that it's paused:\n- **Paused goals don't wake.** The registered review (`2026-09-22 05:02 UTC`) and the linked-task trigger are both suspended, so the outstanding check won't fire on its own even if that task changes. Nothing will advance until you resume it.\n- **The task itself is untouched** \u2014 `818e8d8a` is still **TODO**. Pausing the goal didn't change any task state.\n\nOne small correction on my earlier message: I quoted the goal ID as `35d5026d`, which is only the leading fragment. The engine needs the full UUID, so my first read attempt failed on that. I pulled the complete ID from the goal list and used it for the pause.\n\nSay the word if you want me to **resume** it (and optionally run that remaining check), or leave it parked here.",
+      "run": {
+        "text": "Done, operator \u2014 the goal is now **paused**.\n\n**Goal** \u2014 \"Finish the requested work\" (`35d5026d-90e8-4e3c-92d7-fb14b009767d`)\n- Status: **waiting \u2192 paused** (version 5)\n- It was waiting on task `818e8d8a` (\"Check the remaining item\").\n\nTwo things to note now that it's paused:\n- **Paused goals don't wake.** The registered review (`2026-09-22 05:02 UTC`) and the linked-task trigger are both suspended, so the outstanding check won't fire on its own even if that task changes. Nothing will advance until you resume it.\n- **The task itself is untouched** \u2014 `818e8d8a` is still **TODO**. Pausing the goal didn't change any task state.\n\nOne small correction on my earlier message: I quoted the goal ID as `35d5026d`, which is only the leading fragment. The engine needs the full UUID, so my first read attempt failed on that. I pulled the complete ID from the goal list and used it for the pause.\n\nSay the word if you want me to **resume** it (and optionally run that remaining check), or leave it parked here.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 20786,
+        "output_tokens": 617,
+        "duration_ms": 7914,
+        "total_cost_usd": 0.0011,
+        "run_id": "82ecb32b-86ce-482f-8434-1fe1fbc19b44"
+      },
+      "elapsed_ms": 7937.1639149976545,
+      "measurements": {
+        "run_id": "82ecb32b-86ce-482f-8434-1fe1fbc19b44",
+        "duration_ms": 7914,
+        "model_calls": 4,
+        "tool_calls": 3,
+        "provider_ms": 7864,
+        "tool_wall_ms": 19,
+        "compaction_ms": 0,
+        "compactions": 0,
+        "input_tokens": 20786,
+        "time_to_first_action_ms": 1714,
+        "time_to_verified_completion_ms": null,
+        "post_completion_tool_calls": null,
+        "steps": [
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 1708,
+            "input_tokens": 4575,
+            "output_tokens": 108,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "get_pursuit_goal",
+            "model": null,
+            "duration_ms": 3,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": true
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 860,
+            "input_tokens": 4795,
+            "output_tokens": 61,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "list_pursuit_goals",
+            "model": null,
+            "duration_ms": 9,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 1818,
+            "input_tokens": 5425,
+            "output_tokens": 151,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "update_pursuit_goal",
+            "model": null,
+            "duration_ms": 7,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 3478,
+            "input_tokens": 5991,
+            "output_tokens": 297,
+            "failed": false
+          }
+        ]
+      }
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 6,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

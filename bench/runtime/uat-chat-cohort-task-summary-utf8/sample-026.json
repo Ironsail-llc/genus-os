@@ -1,0 +1,172 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator.\n\n**The one goal in play:** \"Finish the requested work\" (short/finite, owner `main`, status **waiting**, v4).\n\n**Finished \u2014 1 of 2 linked tasks**\n- \u2705 **Prepare the first item** (`334e99d8`) \u2014 status DONE\n\n**Still left \u2014 1 of 2**\n- \u2b1c **Check the remaining item** (`fba938f1`) \u2014 status TODO. This is the exact task the goal is parked on: the wait reason is \"One requested task still needs checking,\" and the goal's wake condition is tied to a change on this task.\n\n**Caveats worth flagging:**\n- **The goal's success criterion is \"The requested work has been checked,\" and there's no evidence recorded against it yet** (`evidence: []`, assessment null). A task sitting in DONE is a status, not proof of the criterion \u2014 so I'd call the goal *in progress*, not *done*.\n- The DONE task has `resolution: null`, so it was closed by status change without a recorded resolution note.\n- **Automatic pursuit is off** (`execution_enabled: false`). Nothing will advance on its own. The goal is registered to wake on either the scheduled review **2026-09-22 05:02 UTC** or a change to task `fba938f1` \u2014 but that's a registered trigger, not a promise it will run.\n\n**Net:** 1 task done, 1 task left, and that last task is the only thing standing between this goal and completion. If you want it moved now rather than waiting on the timer, say the word and I'll pick up the check on `fba938f1`.",
+      "run": {
+        "text": "Here's where things stand, operator.\n\n**The one goal in play:** \"Finish the requested work\" (short/finite, owner `main`, status **waiting**, v4).\n\n**Finished \u2014 1 of 2 linked tasks**\n- \u2705 **Prepare the first item** (`334e99d8`) \u2014 status DONE\n\n**Still left \u2014 1 of 2**\n- \u2b1c **Check the remaining item** (`fba938f1`) \u2014 status TODO. This is the exact task the goal is parked on: the wait reason is \"One requested task still needs checking,\" and the goal's wake condition is tied to a change on this task.\n\n**Caveats worth flagging:**\n- **The goal's success criterion is \"The requested work has been checked,\" and there's no evidence recorded against it yet** (`evidence: []`, assessment null). A task sitting in DONE is a status, not proof of the criterion \u2014 so I'd call the goal *in progress*, not *done*.\n- The DONE task has `resolution: null`, so it was closed by status change without a recorded resolution note.\n- **Automatic pursuit is off** (`execution_enabled: false`). Nothing will advance on its own. The goal is registered to wake on either the scheduled review **2026-09-22 05:02 UTC** or a change to task `fba938f1` \u2014 but that's a registered trigger, not a promise it will run.\n\n**Net:** 1 task done, 1 task left, and that last task is the only thing standing between this goal and completion. If you want it moved now rather than waiting on the timer, say the word and I'll pick up the check on `fba938f1`.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14931,
+        "output_tokens": 860,
+        "duration_ms": 12069,
+        "total_cost_usd": 0.0012,
+        "run_id": "12cd120d-406c-4b92-bb41-2773403d4079"
+      },
+      "elapsed_ms": 12125.78539399692,
+      "measurements": {
+        "run_id": "12cd120d-406c-4b92-bb41-2773403d4079",
+        "duration_ms": 12069,
+        "model_calls": 3,
+        "tool_calls": 2,
+        "provider_ms": 11965,
+        "tool_wall_ms": 19,
+        "compaction_ms": 0,
+        "compactions": 0,
+        "input_tokens": 14931,
+        "time_to_first_action_ms": 1131,
+        "time_to_verified_completion_ms": null,
+        "post_completion_tool_calls": null,
+        "steps": [
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 1111,
+            "input_tokens": 3938,
+            "output_tokens": 68,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "list_pursuit_goals",
+            "model": null,
+            "duration_ms": 10,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 3473,
+            "input_tokens": 4571,
+            "output_tokens": 252,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "get_pursuit_goal",
+            "model": null,
+            "duration_ms": 9,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 7381,
+            "input_tokens": 6422,
+            "output_tokens": 540,
+            "failed": false
+          }
+        ]
+      }
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the goal is now **paused**.\n\n- **Goal:** \"Finish the requested work\" (`ff401b0c`) \u2014 status **waiting \u2192 paused**, version 4 \u2192 5.\n- **Effect:** paused goals don't wake. The registered triggers \u2014 the scheduled review (2026-09-22 05:02 UTC) and the change on task `fba938f1` \u2014 will no longer fire this goal, on top of automatic pursuit already being off (`execution_enabled: false`). So it's fully parked until you say otherwise.\n\n**State frozen at pause (unchanged):**\n- \u2705 `334e99d8` \"Prepare the first item\" \u2014 DONE\n- \u2b1c `fba938f1` \"Check the remaining item\" \u2014 TODO, still unchecked\n- Success criterion \"The requested work has been checked\" \u2014 still no evidence recorded\n\nOne small correction to my earlier summary: I described the goal as \"short/finite.\" It's actually **kind `long`, mode `finite`** \u2014 the finite part was right, the \"short\" was not. Doesn't change anything about the pause.\n\nSay the word when you want it resumed and I'll pick up the check on `fba938f1`.",
+      "run": {
+        "text": "Done, operator \u2014 the goal is now **paused**.\n\n- **Goal:** \"Finish the requested work\" (`ff401b0c`) \u2014 status **waiting \u2192 paused**, version 4 \u2192 5.\n- **Effect:** paused goals don't wake. The registered triggers \u2014 the scheduled review (2026-09-22 05:02 UTC) and the change on task `fba938f1` \u2014 will no longer fire this goal, on top of automatic pursuit already being off (`execution_enabled: false`). So it's fully parked until you say otherwise.\n\n**State frozen at pause (unchanged):**\n- \u2705 `334e99d8` \"Prepare the first item\" \u2014 DONE\n- \u2b1c `fba938f1` \"Check the remaining item\" \u2014 TODO, still unchecked\n- Success criterion \"The requested work has been checked\" \u2014 still no evidence recorded\n\nOne small correction to my earlier summary: I described the goal as \"short/finite.\" It's actually **kind `long`, mode `finite`** \u2014 the finite part was right, the \"short\" was not. Doesn't change anything about the pause.\n\nSay the word when you want it resumed and I'll pick up the check on `fba938f1`.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 16370,
+        "output_tokens": 778,
+        "duration_ms": 10541,
+        "total_cost_usd": 0.0011,
+        "run_id": "707e3a9e-5f07-4e77-b8d7-96a5edaceebe"
+      },
+      "elapsed_ms": 10565.55472400214,
+      "measurements": {
+        "run_id": "707e3a9e-5f07-4e77-b8d7-96a5edaceebe",
+        "duration_ms": 10541,
+        "model_calls": 3,
+        "tool_calls": 2,
+        "provider_ms": 10497,
+        "tool_wall_ms": 13,
+        "compaction_ms": 0,
+        "compactions": 0,
+        "input_tokens": 16370,
+        "time_to_first_action_ms": 2379,
+        "time_to_verified_completion_ms": null,
+        "post_completion_tool_calls": null,
+        "steps": [
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 2372,
+            "input_tokens": 4736,
+            "output_tokens": 141,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "list_pursuit_goals",
+            "model": null,
+            "duration_ms": 9,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 4126,
+            "input_tokens": 5448,
+            "output_tokens": 295,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "update_pursuit_goal",
+            "model": null,
+            "duration_ms": 4,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 3999,
+            "input_tokens": 6186,
+            "output_tokens": 342,
+            "failed": false
+          }
+        ]
+      }
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 6,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

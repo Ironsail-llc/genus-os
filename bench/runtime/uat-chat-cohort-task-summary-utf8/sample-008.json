@@ -1,0 +1,172 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's the state of your work, operator:\n\n**Goal: \"Finish the requested work\"** \u2014 status **waiting** (not finished), version 4.\n\n**Finished**\n- \u2705 **Prepare the first item** \u2014 DONE (task `49618d0e`)\n\n**Still left**\n- \u2b1c **Check the remaining item** \u2014 TODO (task `a75d9651`)\n\n**Why it's waiting, and what happens next**\n- The goal is parked on that one open task \u2014 its own note says \"One requested task still needs checking.\"\n- No evidence has been recorded against the success criterion (\"The requested work has been checked\"), so the goal is not complete.\n- **Automatic pursuit is currently disabled** for this tenant (`execution_enabled: false`), so nothing will advance on its own right now.\n- Two things would wake it once execution is on: a **scheduled review on 2026-09-22 04:51 UTC** (daily), or a **change to the linked task** `a75d9651` (e.g. it gets marked done or updated). Note these are registered triggers, not a promise that a review has already fired.\n\n**Bottom line:** 1 of 2 tasks done; the goal stays open until \"Check the remaining item\" is resolved and that's recorded as evidence.\n\nWant me to take the remaining task now, or leave it for the scheduled review?",
+      "run": {
+        "text": "Here's the state of your work, operator:\n\n**Goal: \"Finish the requested work\"** \u2014 status **waiting** (not finished), version 4.\n\n**Finished**\n- \u2705 **Prepare the first item** \u2014 DONE (task `49618d0e`)\n\n**Still left**\n- \u2b1c **Check the remaining item** \u2014 TODO (task `a75d9651`)\n\n**Why it's waiting, and what happens next**\n- The goal is parked on that one open task \u2014 its own note says \"One requested task still needs checking.\"\n- No evidence has been recorded against the success criterion (\"The requested work has been checked\"), so the goal is not complete.\n- **Automatic pursuit is currently disabled** for this tenant (`execution_enabled: false`), so nothing will advance on its own right now.\n- Two things would wake it once execution is on: a **scheduled review on 2026-09-22 04:51 UTC** (daily), or a **change to the linked task** `a75d9651` (e.g. it gets marked done or updated). Note these are registered triggers, not a promise that a review has already fired.\n\n**Bottom line:** 1 of 2 tasks done; the goal stays open until \"Check the remaining item\" is resolved and that's recorded as evidence.\n\nWant me to take the remaining task now, or leave it for the scheduled review?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14735,
+        "output_tokens": 572,
+        "duration_ms": 19233,
+        "total_cost_usd": 0.0013,
+        "run_id": "8c7e81bc-045d-4993-8e58-2eff65c4c2de"
+      },
+      "elapsed_ms": 19282.813630998135,
+      "measurements": {
+        "run_id": "8c7e81bc-045d-4993-8e58-2eff65c4c2de",
+        "duration_ms": 19233,
+        "model_calls": 3,
+        "tool_calls": 2,
+        "provider_ms": 19138,
+        "tool_wall_ms": 18,
+        "compaction_ms": 0,
+        "compactions": 0,
+        "input_tokens": 14735,
+        "time_to_first_action_ms": 2721,
+        "time_to_verified_completion_ms": null,
+        "post_completion_tool_calls": null,
+        "steps": [
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 2700,
+            "input_tokens": 3940,
+            "output_tokens": 65,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "list_pursuit_goals",
+            "model": null,
+            "duration_ms": 10,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 3226,
+            "input_tokens": 4567,
+            "output_tokens": 100,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "get_pursuit_goal",
+            "model": null,
+            "duration_ms": 8,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 13212,
+            "input_tokens": 6228,
+            "output_tokens": 407,
+            "failed": false
+          }
+        ]
+      }
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the goal is paused.\n\n**Goal: \"Finish the requested work\"** \u2014 status now **paused** (version 5).\n\n- It was **waiting** on the open task `a75d9651` (\"Check the remaining item\"); it will no longer wake on its own.\n- The scheduled review (2026-09-22 04:51 UTC) and the linked-task wake condition **no longer apply while paused** \u2014 a paused goal does not wake. Automatic pursuit was already disabled for this tenant, so nothing was advancing regardless.\n- Progress is preserved: task `49618d0e` (\"Prepare the first item\") remains DONE, and `a75d9651` remains TODO.\n\nSay the word when you want it resumed, and I'll pick it back up.",
+      "run": {
+        "text": "Done, operator \u2014 the goal is paused.\n\n**Goal: \"Finish the requested work\"** \u2014 status now **paused** (version 5).\n\n- It was **waiting** on the open task `a75d9651` (\"Check the remaining item\"); it will no longer wake on its own.\n- The scheduled review (2026-09-22 04:51 UTC) and the linked-task wake condition **no longer apply while paused** \u2014 a paused goal does not wake. Automatic pursuit was already disabled for this tenant, so nothing was advancing regardless.\n- Progress is preserved: task `49618d0e` (\"Prepare the first item\") remains DONE, and `a75d9651` remains TODO.\n\nSay the word when you want it resumed, and I'll pick it back up.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 15754,
+        "output_tokens": 438,
+        "duration_ms": 18648,
+        "total_cost_usd": 0.0012,
+        "run_id": "dc7d2d19-e4c6-4e4c-9859-f433fea5e0b5"
+      },
+      "elapsed_ms": 18673.372378005297,
+      "measurements": {
+        "run_id": "dc7d2d19-e4c6-4e4c-9859-f433fea5e0b5",
+        "duration_ms": 18648,
+        "model_calls": 3,
+        "tool_calls": 2,
+        "provider_ms": 18604,
+        "tool_wall_ms": 14,
+        "compaction_ms": 0,
+        "compactions": 0,
+        "input_tokens": 15754,
+        "time_to_first_action_ms": 7351,
+        "time_to_verified_completion_ms": null,
+        "post_completion_tool_calls": null,
+        "steps": [
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 7346,
+            "input_tokens": 4598,
+            "output_tokens": 126,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "list_pursuit_goals",
+            "model": null,
+            "duration_ms": 8,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 3764,
+            "input_tokens": 5301,
+            "output_tokens": 142,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "update_pursuit_goal",
+            "model": null,
+            "duration_ms": 6,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 7494,
+            "input_tokens": 5855,
+            "output_tokens": 170,
+            "failed": false
+          }
+        ]
+      }
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 6,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}
