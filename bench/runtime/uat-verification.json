@@ -5887,6 +5887,26 @@
       "seconds": 3.27,
       "log": "bench/runtime/uat-runtime-goal-cancel-recovery.log",
       "scope": "Parent/child pause or cancel, with narrow tools or actual broad-tool deferral, after failed final model reply. TODO task preserved, scoped history and reconnect recovery, stale controls denied, no extra model calls. No new manual acceptance."
+    },
+    "stream_phase_diagnostic": {
+      "product_revision": "9163df1d1e6",
+      "samples": 3,
+      "verified": 3,
+      "durations_seconds": [
+        15.311844579002354,
+        7.213305615994614,
+        11.708899828998256
+      ],
+      "report": "bench/runtime/uat-runtime-stream-phase-diagnostic-report.json",
+      "note": "Normal full-tool streaming settings. Six primary calls completed. Requested thinking ceiling8192/max output16384; medium effort. No SDK-exposed usage chunks observed, so no inference about actual thinking-token spend. Goal/cost budget source inspection confirms unknown usage retains conservative reservations. Three fast samples do not overturn failed cohorts."
+    },
+    "provider_throughput_experiment": {
+      "status": "three-request diagnostic running",
+      "product_revision": "9163df1d1e6",
+      "contracts_passed": 13,
+      "log": "bench/runtime/uat-runtime-provider-sort-contracts.log",
+      "reference": "https://openrouter.ai/docs/guides/routing/provider-selection",
+      "scope": "Test-only OpenRouter provider.sort=throughput; unchanged selected models, full tools, effort and normal timeouts. Preserve allowlists, price limits and fallback flags; reject overriding existing order/sort. No installed change or claimed cost improvement."
     }
   },
   "calendar": {

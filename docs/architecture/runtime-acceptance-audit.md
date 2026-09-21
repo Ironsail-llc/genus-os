@@ -1701,3 +1701,10 @@ The full tool-discovery streaming cohort completed30/30 correctly with exactly o
 Expanded native control-recovery coverage passed four cases: pause/cancel with narrow tools or real broad-tool deferral. Parent/child state, TODO preservation, failed-reply audit recovery, tenant/principal isolation, stale controls and model-call counts are checked. Cancellation is not newly user-accepted by these tests.
 
 Next: three normal-settings streaming diagnostics with first-reasoning/answer timing and reported usage. This is a measurement run, not another policy selection. No production changes.
+
+
+### Stream phases measured; constrained routing diagnostic started — 2026-09-21
+
+Three instrumented normal-settings requests passed in15.312,7.213,11.709seconds. Connection creation took0.197–0.330seconds; first reasoning appeared0.965–1.864seconds into each call and first answer/tool bytes1.308–7.384seconds. All six primary streams completed. Medium effort requests an8192-token thinking ceiling within16384 output tokens; that is not actual usage. No usage chunks were exposed by the SDK. Source inspection confirms unknown usage retains conservative goal/cost reservations; this audit does not claim exact provider billing or measured thinking-token spend.
+
+The installed main profile has no explicit provider order. Official [OpenRouter provider routing documentation](https://openrouter.ai/docs/guides/routing/provider-selection), checked2026-09-21, supports sorting hosting providers by throughput without selecting a different model. A fixture-only experiment preserves existing provider constraints and refuses to override explicit order/sort; thirteen routing/stream/reporting contracts pass. Three throughput-preference diagnostics are running with unchanged models, effort, full tools and normal timeouts. No production change or cost improvement is claimed.
