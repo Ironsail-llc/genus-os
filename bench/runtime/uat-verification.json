@@ -3611,6 +3611,18 @@
       },
       "scope": "Chat recovery distinguishes verified creation from an existing deduplicated task. Actual isolated CRM acknowledgement-loss cases project their confirmed receipt into chat twice, preserving failed overall run status and one task creation. Dedup wording uses trusted saved result metadata.",
       "limitations": "Latest broad engine run predates this presentation change. No new browser or manual acceptance claimed."
+    },
+    "local_application_code_rollback": {
+      "base_revision": "40b294adce7",
+      "report": "bench/runtime/uat-runtime-application-rollback.json",
+      "log": "bench/runtime/uat-runtime-application-rollback.log",
+      "phases_passed": 3,
+      "native_admission_probes_passed": 3,
+      "canonical_passed": 44,
+      "canonical_skipped": 2,
+      "canonical_warnings": 1,
+      "canonical_seconds": 19.52,
+      "scope": "Actual daemon boot, resume scan and shutdown across current/prior/current source checkouts, private database and Redis, no provider access. Each revision also passes its real native new-admission contract in a separate process with a scripted provider. Does not exercise HTTP admission in the booted daemon or container/dependency rollback."
     }
   },
   "calendar": {

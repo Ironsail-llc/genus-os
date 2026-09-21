@@ -84,6 +84,10 @@ def main():
                 "ROBOTHOR_TEST_DB_DSN": dsn,
                 "ROBOTHOR_DEFAULT_TENANT": "default",
             }
+            if "--application-rollback" in sys.argv:
+                from bench.runtime.application_rollback import drill
+
+                print("APPLICATION_ROLLBACK " + json.dumps(drill(root, env, dsn)), flush=True)
             if "--daemon" in sys.argv:
                 from bench.runtime.daemon_drill import run
 

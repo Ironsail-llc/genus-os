@@ -35,7 +35,8 @@ subprocess.Popen = PrivatePopen
 """
 
 
-def run(root, database_env, *, resume=False, goal_phase=None):
+def run(root, database_env, *, resume=False, goal_phase=None, code_root=None):
+    code_root = Path(code_root or Path.cwd()).resolve()
     root = root / "daemon-drill"
     root.mkdir()
     workspace = root / "workspace"
@@ -50,7 +51,13 @@ def run(root, database_env, *, resume=False, goal_phase=None):
 
         (workspace / "docs/agents/main.yaml").write_text(MANIFEST)
         extra = "\nfrom bench.runtime.daemon_goal_crash import install\ninstall()\n"
-    (guard / "sitecustomize.py").write_text(GUARD + extra)
+    (guard / "sitecustomize.py").write_text(
+        GUARD
+        + "\nimport robothor.engine.daemon as drill_daemon\n"
+        + "assert Path(drill_daemon.__file__).resolve().is_relative_to(Path(os.environ['RUNTIME_DRILL_CODE']))\n"
+        + "Path(root + '/code-origin.txt').write_text(drill_daemon.__file__)\n"
+        + extra
+    )
     redis_socket = root / "redis.sock"
     redis = subprocess.Popen(
         [
@@ -78,9 +85,10 @@ def run(root, database_env, *, resume=False, goal_phase=None):
         env.update(
             {
                 "PATH": os.environ["PATH"],
-                "PYTHONPATH": str(guard) + os.pathsep + str(Path.cwd()),
+                "PYTHONPATH": str(guard) + os.pathsep + str(code_root),
                 "PYTHONUNBUFFERED": "1",
                 "RUNTIME_DRILL_ROOT": str(root),
+                "RUNTIME_DRILL_CODE": str(code_root),
                 "ROBOTHOR_WORKSPACE": str(workspace),
                 "ROBOTHOR_OWNER_CONFIG": str(root / "owner.yaml"),
                 "ROBOTHOR_DEFAULT_TENANT": "default",
@@ -158,8 +166,11 @@ def run(root, database_env, *, resume=False, goal_phase=None):
                         "Crash left a live owned process: " + str(stat)
                     )
             assert spawns, "Recovery worker was not started"
+            origin = Path((root / "code-origin.txt").read_text()).resolve()
+            assert origin.is_relative_to(code_root)
             return {
                 "health_ready": True,
+                "code_origin": str(origin.relative_to(code_root)),
                 "shutdown_exit_code": code,
                 "shutdown_seconds": time.monotonic() - started,
                 "recovery_worker_spawns": len(spawns),

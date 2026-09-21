@@ -1,0 +1,41 @@
+{
+  "target_revision": "b1671409892e389684d9267b50c985143f1b9031",
+  "current_revision": "40b294adce7ec3e52c6b6b40c19963e9c392220f",
+  "dependency_pins_equal": true,
+  "phases": [
+    {
+      "phase": "current",
+      "health_ready": true,
+      "code_origin": "robothor/engine/daemon.py",
+      "shutdown_exit_code": 0,
+      "shutdown_seconds": 1.322336262994213,
+      "recovery_worker_spawns": 1,
+      "stopped_state_preserved": true,
+      "unresolved_effect_preserved": true,
+      "new_native_admission_passed": true
+    },
+    {
+      "phase": "rollback",
+      "health_ready": true,
+      "code_origin": "robothor/engine/daemon.py",
+      "shutdown_exit_code": 0,
+      "shutdown_seconds": 1.3190167880020454,
+      "recovery_worker_spawns": 1,
+      "stopped_state_preserved": true,
+      "unresolved_effect_preserved": true,
+      "new_native_admission_passed": true
+    },
+    {
+      "phase": "restore",
+      "health_ready": true,
+      "code_origin": "robothor/engine/daemon.py",
+      "shutdown_exit_code": 0,
+      "shutdown_seconds": 1.3211724369975855,
+      "recovery_worker_spawns": 1,
+      "stopped_state_preserved": true,
+      "unresolved_effect_preserved": true,
+      "new_native_admission_passed": true
+    }
+  ],
+  "scope": "Actual daemon boot, resume scan and shutdown across current/prior/current source checkouts, private database and Redis, no provider access. Each revision also passes its real native new-admission contract in a separate process with a scripted provider. Does not exercise HTTP admission in the booted daemon or container/dependency rollback."
+}
