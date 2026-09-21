@@ -139,7 +139,7 @@ systemctl show robothor-engine.service -p ExecStart -p WorkingDirectory
 ```
 
 On 2026-09-19 this host answered with a **preview deployment** under
-`/home/philip/.local/share/robothor/combined-preview/<hash>/`, while
+`$HOME/.local/share/robothor/combined-preview/<hash>/`, while
 `infra/systemd/robothor-engine.service` names `/opt/robothor` — a path that
 **does not exist** on this host. Editing the checkout does not change the
 running engine. The live copy was still carrying the defect
