@@ -1,5 +1,12 @@
 """Record a native request that expired before entering the execution engine."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from robothor.engine.runtime.contracts import RunRequest
+
 import asyncio
 import logging
 from datetime import UTC, datetime
@@ -7,7 +14,7 @@ from datetime import UTC, datetime
 logger = logging.getLogger(__name__)
 
 
-async def record_timeout(request):
+async def record_timeout(request: RunRequest) -> None:
     from robothor.engine.models import RunStatus
 
     await _record(
@@ -17,7 +24,7 @@ async def record_timeout(request):
     )
 
 
-async def record_interrupted(request):
+async def record_interrupted(request: RunRequest) -> None:
     from robothor.engine.models import RunStatus
 
     await _record(
@@ -27,7 +34,7 @@ async def record_interrupted(request):
     )
 
 
-async def _record(request, status, explanation):
+async def _record(request: RunRequest, status: Any, explanation: str) -> None:
     from robothor.engine.models import AgentRun, TriggerType
     from robothor.engine.runtime.current import active_context
     from robothor.engine.tracking import create_run

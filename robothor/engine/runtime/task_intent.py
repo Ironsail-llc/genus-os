@@ -4,8 +4,11 @@ Only quoted title/body commands are recognized. Other natural language continues
 through the ordinary model loop; a model's finalReport flag cannot widen scope.
 """
 
+from __future__ import annotations
+
 import json
 import re
+from typing import Any
 
 _QUOTED = r'"(?:[^"\\]|\\.)*"'
 _COMMAND = re.compile(
@@ -18,7 +21,7 @@ _COMMAND = re.compile(
 _CONSTRAINTS = {"use the task tool", "do not contact anyone", "don't contact anyone"}
 
 
-def standalone(text, args):
+def standalone(text: Any, args: dict[str, Any]) -> bool:
     if not isinstance(text, str) or len(text) > 10_000 or args.get("status", "TODO") != "TODO":
         return False
     match = _COMMAND.fullmatch(text)
@@ -38,7 +41,7 @@ def standalone(text, args):
     return title == args.get("title") and body == (args.get("body") or "")
 
 
-def permits(session, args):
+def permits(session: Any, args: dict[str, Any]) -> bool:
     from robothor.engine.skill_contract import loaded_skill_text
     from robothor.engine.task_context import read_context
 

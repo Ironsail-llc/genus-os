@@ -1,10 +1,17 @@
 """Restore saved request limits without renewing a checkpoint's authority."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from robothor.engine.runtime.contracts import ExecutionContext
+
 from dataclasses import replace
 from datetime import datetime
 
 
-def restore(context, checkpoint):
+def restore(context: ExecutionContext, checkpoint: dict[str, Any]) -> ExecutionContext:
     saved = checkpoint.get("runtime_context") or {}
     if not isinstance(saved, dict):
         raise ValueError("invalid saved runtime context")

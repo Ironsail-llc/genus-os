@@ -1,10 +1,17 @@
 """Bound acceptance delivery, including before interactive configuration lookup."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from robothor.engine.runtime.contracts import ExecutionContext, RunRequest
+
 import asyncio
 import logging
 
 
-async def emit(callback, context):
+async def emit(callback: Any, context: ExecutionContext) -> bool:
     from robothor.engine.runtime.deadlines import remaining
 
     if callback is None:
@@ -31,7 +38,7 @@ async def emit(callback, context):
     return True
 
 
-async def before_lookup(request):
+async def before_lookup(request: RunRequest) -> bool:
     from robothor.engine.runtime.profile_admission import needs_lookup
 
     if not needs_lookup(request):

@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
 import asyncio
 import os
 from contextlib import contextmanager
@@ -9,7 +14,7 @@ from datetime import UTC, datetime
 
 
 @contextmanager
-def watchdog_scope():
+def watchdog_scope() -> Iterator[None]:
     """Also clean up a watchdog when setup exits before the run-loop finally."""
     from robothor.engine.stall_watchdog import _active_watchdog_var
 
@@ -27,8 +32,16 @@ def watchdog_scope():
 
 
 async def restored_context(
-    run_id, agent_id, tenant, trigger, readonly, execution, identity, user_id, role
-):
+    run_id: str,
+    agent_id: str,
+    tenant: str,
+    trigger: Any,
+    readonly: bool,
+    execution: bool,
+    identity: Any,
+    user_id: str,
+    role: str,
+) -> tuple[bool, bool, Any, str, str]:
     from robothor.engine.checkpoint import CheckpointManager
     from robothor.engine.models import TriggerType
     from robothor.engine.task_context import read_context
@@ -61,7 +74,15 @@ async def restored_context(
     return readonly, execution, identity, user_id, role
 
 
-def principal(config, agent_id, trigger, user_id, role, spawn, system_triggers):
+def principal(
+    config: Any,
+    agent_id: str,
+    trigger: Any,
+    user_id: str,
+    role: str,
+    spawn: Any,
+    system_triggers: Any,
+) -> tuple[str, str] | None:
     if spawn and not user_id and spawn.user_id:
         user_id, role = spawn.user_id, spawn.user_role
     if trigger in system_triggers:
@@ -75,7 +96,7 @@ def principal(config, agent_id, trigger, user_id, role, spawn, system_triggers):
     return user_id, role
 
 
-def bounded_timeout(timeout, session):
+def bounded_timeout(timeout: float | None, session: Any) -> float | None:
     from robothor.engine.runtime.current import active_context
     from robothor.engine.runtime.deadlines import owns_deadline
 
@@ -88,7 +109,7 @@ def bounded_timeout(timeout, session):
     return timeout
 
 
-async def attach_session(session):
+async def attach_session(session: Any) -> None:
     from robothor.engine.runtime.activity import register
     from robothor.goals.runtime import attach_run
 
@@ -96,7 +117,7 @@ async def attach_session(session):
     register(session)
 
 
-def initialize_budget(run, config, spawn):
+def initialize_budget(run: Any, config: Any, spawn: Any) -> None:
     from robothor.goals.runtime import initialize_token_budget
 
     initialize_token_budget(run, config, spawn)

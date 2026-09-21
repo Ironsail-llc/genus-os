@@ -1,5 +1,14 @@
 """Recoverable outcome for a request whose setup expired before its run was saved."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from datetime import datetime
+
+    from robothor.engine.runtime.contracts import ExecutionContext, RunRequest
+
 import asyncio
 import logging
 from dataclasses import replace
@@ -9,7 +18,7 @@ from robothor.db.connection import get_connection
 logger = logging.getLogger(__name__)
 
 
-def _has_run(context):
+def _has_run(context: ExecutionContext) -> bool:
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """SELECT 1 FROM agent_runs WHERE tenant_id=%s
@@ -20,7 +29,7 @@ def _has_run(context):
         return bool(cur.fetchone())
 
 
-async def record_timeout(request, deadline):
+async def record_timeout(request: RunRequest, deadline: datetime | None) -> None:
     from robothor.engine.models import RunStatus
     from robothor.engine.runtime.admission_audit import _record
     from robothor.engine.runtime.classification_window import REASON

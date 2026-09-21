@@ -1,9 +1,13 @@
 """Remember a server-selected existing task before delivering a deduplication result."""
 
+from __future__ import annotations
+
+from typing import Any
+
 from robothor.engine.runtime import effects
 
 
-def remember_existing(tenant_id, task_id, *, cursor=None):
+def remember_existing(tenant_id: str, task_id: Any, *, cursor: Any = None) -> None:
     record = effects.active_effect.get()
     if record is None or record["tool_name"] != "create_task":
         return
@@ -18,7 +22,7 @@ def remember_existing(tenant_id, task_id, *, cursor=None):
     record["_native_readback"] = True
 
 
-def _bind(cur, record, task_id):
+def _bind(cur: Any, record: dict[str, Any], task_id: Any) -> None:
     cur.execute(
         """UPDATE agent_runtime_effects e
            SET resolution=jsonb_build_object('lookup',jsonb_build_object('task_id',t.id::text)),

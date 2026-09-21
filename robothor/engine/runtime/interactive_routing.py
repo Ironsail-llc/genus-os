@@ -1,9 +1,12 @@
 """Prefer throughput only for the qualified, bounded ordinary-chat paths."""
 
+from __future__ import annotations
+
 from dataclasses import replace
+from typing import Any
 
 
-def prefer_throughput(session):
+def prefer_throughput(session: Any) -> bool:
     from robothor.engine.runtime.classification_window import owned_deadline
     from robothor.engine.runtime.classified_deadline import admitted_request, eligible
     from robothor.engine.runtime.current import active_context

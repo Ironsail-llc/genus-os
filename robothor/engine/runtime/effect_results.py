@@ -1,11 +1,18 @@
 """Retain acknowledged tool results without inventing independent verification."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from robothor.engine.runtime.contracts import ExecutionContext
+
 from psycopg2.extras import Json
 
 from robothor.engine.runtime import effects
 
 
-def record(context, effect_id, run_id, result):
+def record(context: ExecutionContext, effect_id: Any, run_id: str, result: Any) -> bool:
     """Only the dispatched owner can atomically store a returned response."""
     with effects.get_connection() as conn, conn.cursor() as cur:
         cur.execute(
@@ -22,10 +29,10 @@ def record(context, effect_id, run_id, result):
                 run_id,
             ),
         )
-        return cur.rowcount == 1
+        return bool(cur.rowcount == 1)
 
 
-def cacheable(result):
+def cacheable(result: Any) -> bool:
     return (
         isinstance(result, dict)
         and not result.get("error")
