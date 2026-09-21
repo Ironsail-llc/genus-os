@@ -5478,12 +5478,34 @@
       "product_revision": "c342a50cd74",
       "harness_start_revision": "ce263e29f88",
       "samples": 30,
-      "status": "running",
-      "artifact": "/tmp/runtime-catalogue-deferred-cohort.jsonl",
+      "status": "complete",
+      "artifact": "bench/runtime/uat-runtime-catalogue-deferred-cohort.jsonl",
       "experimental_override": "ROBOTHOR_RIP_16_ENABLED=true inside the private live fixture only",
       "model_selection_changed": false,
       "installed_configuration_changed": false,
-      "performance_qualified": false
+      "performance_qualified": false,
+      "verified": 30,
+      "failed": 0,
+      "p50_ms": 13628.47474499722,
+      "p95_ms": 39362.434369002585,
+      "p95_ci95_ms": [
+        23735.921846993733,
+        42528.601907994016
+      ],
+      "over30": 3,
+      "over60": 0,
+      "duplicate_actions": 0,
+      "post_return_model_calls": 0,
+      "native_estimated_cost_usd": 0.043299,
+      "screening_passed": false,
+      "canonical": {
+        "passed": 77,
+        "skipped": 2,
+        "warnings": 1,
+        "seconds": 559.17
+      },
+      "report": "bench/runtime/uat-runtime-catalogue-deferred-cohort-report.json",
+      "promoted": false
     },
     "deferred_wrapped_note_recovery": {
       "product_revision": "c342a50cd74",
@@ -5504,6 +5526,18 @@
         "bench/runtime/uat-runtime-deferred-note-canonical.log",
         "bench/runtime/uat-runtime-deferred-discovery-current.log"
       ]
+    },
+    "catalogue_model_slice10_screen": {
+      "product_revision": "c342a50cd74",
+      "harness_start_revision": "c5645694445",
+      "samples": 30,
+      "status": "running",
+      "artifact": "/tmp/runtime-catalogue-slice10-cohort.jsonl",
+      "model_slice_seconds": 10,
+      "deferred_tools": false,
+      "model_selection_changed": false,
+      "installed_configuration_changed": false,
+      "performance_qualified": false
     }
   },
   "calendar": {
@@ -5742,7 +5776,7 @@
     ]
   },
   "remaining": [
-    "Current product c342a50cd74 passes focused, canonical and full engine checks (11,443 engine tests). Its selected-model compound screen verified all 30 requests with no duplicate tasks or post-return calls, but p95 33.872 seconds exceeds the 30-second target (three requests over 30, none over 60). A separate thirty-request deferred-tool experiment is running in the private harness; no installed/default flag has changed. Earlier failed populations remain in the record.",
+    "Current product c342a50cd74 passes focused, canonical and full engine checks (11,443 engine tests). Its selected-model compound screen verified all 30 requests with no duplicates/post-return calls, but p95 33.872 seconds exceeds the 30-second target. A separate 30-request deferred-tool screen also verified all requests but failed latency (p95 39.362 seconds); the installed/default flag stays off. A test-only 10-second per-model allowance screen with full tools and the existing fallback chain is running. No timeout default has changed. Earlier failures remain retained.",
     "Complete the agreed representative local workload comparison against accepted integration baseline eea3252b1577e3f51e6d6a6216d6f242fd7ac4a1. Existing matched scripted standalone/compound task tests establish narrower behavior and overhead parity; no representative live comparison or general speed claim follows from them. The live task fixture uses selected profile settings but omits production instructions and memory.",
     "Qualify workload-wide selected-provider deadlines and latency, including requests competing with background goals. Local scripted HTTP acknowledgement/stop/progress and synthetic 1/5/20-tenant limits are measured; live-provider mixed-load limits remain unqualified. Preserve failures, unfinished attempts and uncertainty.",
     "Recheck the supported outcome-recovery inventory and remaining ingress/failure cases against action contracts. Calendar and CRM note/task readbacks, task browser reconnect, saved responses, native checkpoints and daemon goal recovery have evidence; these do not establish arbitrary external-provider recovery.",
