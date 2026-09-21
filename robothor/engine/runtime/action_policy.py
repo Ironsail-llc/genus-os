@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 SIMPLE_ACTION_SECONDS = 60
 
 
-def apply_action_deadline(request):
+def apply_action_deadline(request, *, admitted_at=None):
     options = request.options
     if (
         request.resume_from
@@ -26,7 +26,7 @@ def apply_action_deadline(request):
     )
     if in_benchmark_run() or not (simple_profile or _confirmed_operation(request)):
         return request
-    deadline = datetime.now(UTC) + timedelta(seconds=SIMPLE_ACTION_SECONDS)
+    deadline = (admitted_at or datetime.now(UTC)) + timedelta(seconds=SIMPLE_ACTION_SECONDS)
     if request.context.deadline is not None:
         deadline = min(deadline, request.context.deadline)
     # This policy only restricts time. Native tool admission still checks

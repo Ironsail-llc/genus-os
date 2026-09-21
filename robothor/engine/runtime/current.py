@@ -200,6 +200,11 @@ def runtime_entrypoint(execute):
 
     @wraps(execute)
     async def wrapped(self, *args, **kwargs):
+        from datetime import UTC, datetime
+
+        from robothor.engine.runtime.profile_admission import prepare, resolved_profile
+
+        admitted_at = datetime.now(UTC)
         values = dict(parameters.bind(self, *args, **kwargs).arguments)
         values.pop("self")
         agent_id, message = values.pop("agent_id"), values.pop("message")
@@ -231,8 +236,11 @@ def runtime_entrypoint(execute):
             context, agent_id, message, values, resume, StateEnvelope() if resume else None
         )
 
+        request, resolution = prepare(self, request, admitted_at)
+
         async def native(**options):
-            return await execute(self, **options)
+            with resolved_profile(resolution):
+                return await execute(self, **options)
 
         return (await CurrentRuntime(native, audit_admission=True).run(request)).run
 

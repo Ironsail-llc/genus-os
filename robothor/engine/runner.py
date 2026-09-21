@@ -40,7 +40,9 @@ from robothor.engine.config import (
     EngineConfig,
     _prompt_cache,
     build_system_prompt,
-    load_agent_config_or_reason,
+)
+from robothor.engine.config import (
+    load_agent_config_or_reason as load_agent_config_or_reason,
 )
 
 # ── Log-injection sanitizer ──
@@ -110,6 +112,7 @@ from robothor.engine.run_pacing import DeadlinePacer, checkin_note, mode_for_run
 from robothor.engine.run_replan import maybe_replan  # noqa: E402
 from robothor.engine.runtime.current import runtime_entrypoint
 from robothor.engine.runtime.deadlines import enclosing_deadline_reason
+from robothor.engine.runtime.profile_admission import load_for_run
 from robothor.engine.runtime.setup import (
     attach_session,
     bounded_timeout,
@@ -547,7 +550,7 @@ class AgentRunner(
 
         reason = f"Agent config not found: {agent_id}"
         if agent_config is None:
-            agent_config, reason = load_agent_config_or_reason(agent_id, self.config.manifest_dir)
+            agent_config, reason = load_for_run(agent_id, self.config.manifest_dir)
         if agent_config is None:
             logger.error("Agent run refused: %s", _sanitize(reason))
             session = AgentSession(agent_id, trigger_type, trigger_detail, resolved_tenant)

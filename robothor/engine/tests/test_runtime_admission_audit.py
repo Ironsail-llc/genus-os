@@ -286,3 +286,57 @@ async def test_simple_interactive_profile_expiry_has_recoverable_audit(
         recorded = cur.fetchone()[0]
     assert recorded["deadline"] is not None
     assert recorded["request_id"] == request.context.request_id
+
+
+async def test_resolved_simple_profile_expiry_is_recoverable_before_native_execution(
+    records,  # noqa: F811
+    audit_store,
+    monkeypatch,
+    tmp_path,  # noqa: F811
+):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from robothor.engine.runtime import action_policy
+    from robothor.engine.runtime.current import runtime_entrypoint
+
+    auth, client = identity(), str(uuid4())
+    identifier = request_key(auth, "web:main", client)
+    loader = Mock(return_value=(SimpleNamespace(difficulty_class="simple"), ""))
+    monkeypatch.setattr("robothor.engine.runner.load_agent_config_or_reason", loader)
+    monkeypatch.setattr(action_policy, "SIMPLE_ACTION_SECONDS", 0.02)
+
+    class Runner:
+        config = SimpleNamespace(tenant_id=auth.tenant_id, manifest_dir=tmp_path)
+
+        @runtime_entrypoint
+        async def execute(
+            self,
+            agent_id,
+            message,
+            user_id="",
+            tenant_id=None,
+            correlation_id=None,
+            trigger_type=None,
+            agent_config=None,
+            on_status=None,
+        ):
+            pytest.fail("expired admission entered native execution")
+
+    async def stalled(event):
+        await asyncio.Event().wait()
+
+    with pytest.raises(RuntimeDeadlineError):
+        await Runner().execute(
+            "main",
+            "Create the requested task",
+            user_id=auth.user_id,
+            correlation_id=identifier,
+            trigger_type="webchat",
+            on_status=stalled,
+        )
+    loader.assert_called_once_with("main", tmp_path)
+    outcome = read_outcome(auth, "web:main", client)
+    assert outcome["state"] == "timeout" and outcome["terminal"]
+    assert "expired before execution began" in outcome["text"]
+    assert not outcome["verified"] and not outcome["effects"]
