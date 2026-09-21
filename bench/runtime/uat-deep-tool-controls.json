@@ -1,0 +1,71 @@
+{
+  "revision": "45ec6dd16d7",
+  "initial_failures": [
+    {
+      "finding": "Deep callbacks neither retained their owner context across threads nor denied dispatch after durable Stop.",
+      "log": "/tmp/runtime-deep-tool-controls-before.log"
+    },
+    {
+      "finding": "Same-request approval retry could miss a newly committed admission before refusing a changed cache entry.",
+      "logs": [
+        "/tmp/runtime-deep-tool-native-verified.log",
+        "/tmp/runtime-approval-cache-race-before.log"
+      ]
+    },
+    {
+      "finding": "Registry drain ignored persistence spawned by finishing workers.",
+      "logs": [
+        "/tmp/runtime-deep-tool-native-rechecked.log",
+        "/tmp/runtime-drain-descendants-before.log"
+      ]
+    }
+  ],
+  "fixes": [
+    "Capture the trusted deep-run identity and context in each of six built-in callbacks, copy that context for each invocation, and consult durable control before dispatch. Restore binding after worker exit; control-store errors deny dispatch.",
+    "Recheck original admission before returning a cached-plan refusal.",
+    "Drain newly spawned background work within the original total drain deadline; cancel unfinished children at that deadline."
+  ],
+  "deep_focused": {
+    "passed": 95,
+    "seconds": 9.73,
+    "log": "/tmp/runtime-deep-tool-controls-final.log"
+  },
+  "approval_focused": {
+    "passed": 140,
+    "seconds": 12.07,
+    "log": "/tmp/runtime-approval-cache-race-after.log"
+  },
+  "combined_races": {
+    "passed": 66,
+    "seconds": 6.85,
+    "log": "/tmp/runtime-deep-tool-races-final.log"
+  },
+  "canonical_browser": {
+    "passed": 33,
+    "skipped": 1,
+    "warnings": 1,
+    "seconds": 24.51,
+    "log": "/tmp/runtime-deep-tool-all-final.log"
+  },
+  "goals": {
+    "passed": 85,
+    "warnings": 2,
+    "seconds": 10.68,
+    "log": "/tmp/runtime-goals-regression-deep-controls.log"
+  },
+  "native_coverage": "Private canonical DB worker starts before Stop, then attempts an exec_shell callback after Stop. Underlying synthetic effect is denied; cancelled audit retains the late result and cost. Real-control browser approval/recovery cases also pass.",
+  "limits": "Only runner-owned deep custom callbacks are bound here. Standalone/unbound deep-tool entry paths, arbitrary REPL code and framework-owned provider requests are not claimed gated. This does not establish general deep-framework authorization parity, process-death recovery or full acceptance. No production deployment.",
+  "broad_engine": {
+    "revision": "45ec6dd16d7",
+    "passed": 11119,
+    "failed": 0,
+    "skipped": 29,
+    "deselected": 185,
+    "warnings": 393,
+    "seconds": 352.57,
+    "selection": "not slow and not integration and not llm and not e2e and not smoke",
+    "log": "/tmp/runtime-engine-regression-deep-controls.log",
+    "note": "Single clean broad invocation after deep callback controls, approval cache-race fix and dynamic registry drain. Source code/tests unchanged during run; committed while it ran. Existing connect_tcp unawaited-coroutine warning remains; its collection location is not evidence of the initiating path."
+  },
+  "checks": "Ruff lint/format, Node syntax and diff checks pass; no size cap increased."
+}
