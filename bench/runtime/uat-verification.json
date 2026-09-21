@@ -21,12 +21,12 @@
       "note": "Single clean broad invocation after deep callback controls, approval cache-race fix and dynamic registry drain. Source code/tests unchanged during run; committed while it ran. Existing connect_tcp unawaited-coroutine warning remains; its collection location is not evidence of the initiating path."
     },
     "frontend": {
-      "revision": "da202e576fb",
-      "files": 149,
-      "passed": 1648,
+      "revision": "103e2dc7371",
+      "files": 150,
+      "passed": 1660,
       "failed": 0,
-      "seconds": 9.09,
-      "log": "/tmp/runtime-frontend-regression-da202e.log"
+      "seconds": 9.49,
+      "log": "/tmp/runtime-recovery-stop-frontend-all.log"
     },
     "goals_private_database": {
       "passed": 58,
@@ -2052,6 +2052,18 @@
         "note": "Single clean broad invocation after deep callback controls, approval cache-race fix and dynamic registry drain. Source code/tests unchanged during run; committed while it ran. Existing connect_tcp unawaited-coroutine warning remains; its collection location is not evidence of the initiating path."
       },
       "checks": "Ruff lint/format, Node syntax and diff checks pass; no size cap increased."
+    },
+    "frontend_before_recovery_stop": {
+      "revision": "da202e576fb",
+      "files": 149,
+      "passed": 1648,
+      "failed": 0,
+      "seconds": 9.09,
+      "log": "/tmp/runtime-frontend-regression-da202e.log"
+    },
+    "recovery_message_stop": {
+      "artifact": "bench/runtime/uat-recovery-message-stop.json",
+      "revision": "103e2dc7371"
     }
   },
   "calendar": {

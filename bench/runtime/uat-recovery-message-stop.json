@@ -1,0 +1,41 @@
+{
+  "revision": "103e2dc7371",
+  "change": "Recovering chat messages retain a Stop control tied to their original request and agent, including after reload. Confirmation requires a durable acknowledgement. Audit reads continue without resubmitting work.",
+  "initial_browser_run": {
+    "passed": 30,
+    "failed": 6,
+    "log": "/tmp/runtime-recovery-stop-browser.log",
+    "finding": "Six existing terminal-error fixtures expected stream-only error reporting. Current recovery intentionally reads durable outcome evidence for these failures; updated fixtures retain the failed/timeout/cancelled state and assert two original-request audit reads and one approval."
+  },
+  "frontend": {
+    "revision": "103e2dc7371",
+    "files": 150,
+    "passed": 1660,
+    "failed": 0,
+    "seconds": 9.49,
+    "log": "/tmp/runtime-recovery-stop-frontend-all.log"
+  },
+  "focused_stop_recovery": {
+    "passed": 8,
+    "log": "/tmp/runtime-recovery-stop-unit.log"
+  },
+  "canonical_browser": {
+    "passed": 33,
+    "skipped": 1,
+    "warnings": 1,
+    "seconds": 28.0,
+    "log": "/tmp/runtime-recovery-stop-native.log"
+  },
+  "build": {
+    "passed": true,
+    "log": "/tmp/runtime-recovery-stop-build.log"
+  },
+  "limits": "The new rendered Stop-button scenarios mock backend APIs. Separate canonical integrations exercise real Next/native request controls and private audit persistence. No live-provider measurement, production deployment or full acceptance is claimed.",
+  "checks": "ESLint, fresh standalone build and diff checks pass.",
+  "rendered_chat": {
+    "passed": 36,
+    "failed": 0,
+    "duration_reported": "1.3m",
+    "log": "/tmp/runtime-recovery-stop-browser-final.log"
+  }
+}
