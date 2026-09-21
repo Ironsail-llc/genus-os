@@ -14,7 +14,7 @@ Endpoints:
   POST /chat/plan/start   — Start plan mode: explore with read-only tools
   POST /chat/plan/approve — Approve pending plan: execute with full tools
   POST /chat/plan/reject  — Reject pending plan (optional feedback)
-  POST /chat/plan/iterate — Revise pending plan with feedback (keeps same plan_id)
+  POST /chat/plan/iterate — Revise pending plan with feedback (new approval identity)
   GET  /chat/plan/status  — Check plan state for a session
   POST /chat/deep/start   — Start deep reasoning (RLM), return SSE stream
   GET  /chat/deep/status  — Check active deep reasoning state

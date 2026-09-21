@@ -28,6 +28,11 @@ try {
       if (response.status() !== 200 || !(await response.text()).includes("event: plan")) {
         throw new Error(`Native plan did not finish: ${response.status()} ${await response.text()}`);
       }
+      if (process.env.RUNTIME_APPROVAL_TEST === "status_first") {
+        const status = await page.request.get(`${base}/api/chat/plan/status`);
+        expect(status.status()).toBe(200);
+        expect((await status.json()).active).toBe(false);
+      }
       return route.abort("connectionreset");
     }
     if (path === "/api/chat/outcome") {

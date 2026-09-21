@@ -110,7 +110,7 @@ async def test_failed_exploration_cannot_publish_partial_plan(
 
 
 @pytest.mark.parametrize("match", [True, False])
-@pytest.mark.parametrize("cache_lost", [True, False])
+@pytest.mark.parametrize("cache_lost", [True, False, "status_first"])
 async def test_outcome_restores_only_its_own_saved_plan(
     client,  # noqa: F811
     mock_runner,  # noqa: F811
@@ -131,6 +131,8 @@ async def test_outcome_restores_only_its_own_saved_plan(
         await client.post("/chat/plan/start", json={"message": "Prepare a plan"})
         if cache_lost:
             _sessions.clear()
+        if cache_lost == "status_first":
+            assert (await client.get("/chat/plan/status")).json()["active"] is False
         outcome = {
             "terminal": True,
             "state": "completed",
@@ -421,3 +423,46 @@ async def test_failed_revision_does_not_publish_or_mutate_pending_draft(
     assert session.active_plan is original
     assert original.plan_text == "Original" and original.revision_count == 0
     assert "Revision could not be verified" in response.text
+
+
+@pytest.mark.parametrize("competing", ["plan", "task"])
+async def test_recovery_does_not_replace_session_work_started_during_saved_plan_read(competing):
+    import asyncio
+    from datetime import UTC, datetime
+
+    from robothor.engine.chat import _get_session
+    from robothor.engine.chat_plan_recovery import attach_plan
+    from robothor.engine.models import PlanState
+
+    key = f"recovery-race-{competing}"
+    session = _get_session(key)
+    outcome = {"terminal": True, "state": "completed", "run_id": "run", "plan_exploration": True}
+    saved = {
+        "plan_text": "Check the record",
+        "original_message": "Prepare a plan",
+        "plan_id": "saved",
+        "exploration_run_id": "run",
+        "status": "pending",
+        "created_at": datetime.now(UTC).isoformat(),
+    }
+    newer = PlanState(plan_id="newer", plan_text="New work", original_message="Prepare new work")
+    task = asyncio.create_task(asyncio.Event().wait())
+
+    async def read(*args, **kwargs):
+        if competing == "plan":
+            session.active_plan = newer
+        else:
+            session.active_task = task
+        return saved
+
+    try:
+        with patch("asyncio.to_thread", side_effect=read):
+            await attach_plan(outcome, session, "request", _member_auth("bob"), key)
+        assert "plan" not in outcome
+        assert session.active_plan is (newer if competing == "plan" else None)
+        if competing == "task":
+            assert session.active_task is task
+    finally:
+        _sessions.pop(key, None)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

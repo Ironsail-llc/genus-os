@@ -27,14 +27,14 @@ pytestmark = pytest.mark.integration
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(120)
-@pytest.mark.parametrize("approval_case", ["none", "distinct", "same"])
+@pytest.mark.parametrize("approval_case", ["none", "status_first", "distinct", "same"])
 async def test_saved_plan_recovers_through_browser_and_native_engine(
     engine_config, sample_agent_config, approval_case
 ):
     dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
     if "host=/tmp/runtime-migrated-" not in dsn:
         pytest.skip("requires --chat-browser canonical harness and freshly built app")
-    approve_twice = approval_case != "none"
+    approve_twice = approval_case in {"distinct", "same"}
     tenant = "plan-browser-" + uuid4().hex
     with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("INSERT INTO crm_tenants(id,display_name) VALUES (%s,%s)", (tenant, tenant))
@@ -85,11 +85,22 @@ async def test_saved_plan_recovers_through_browser_and_native_engine(
         return chunks()
 
     app = FastAPI()
+    cache_reset = False
 
     @app.middleware("http")
     async def synthetic_identity(request: Request, call_next):
+        nonlocal cache_reset
         assert request.client.host == "127.0.0.1"
         request.state.auth = auth
+        if (
+            approval_case == "status_first"
+            and request.url.path == "/chat/plan/status"
+            and len(calls) == 3
+            and not cache_reset
+        ):
+            # Simulate lost process-local sessions; the canonical DB remains intact.
+            chat._sessions.clear()
+            cache_reset = True
         return await call_next(request)
 
     app.include_router(chat.router)
@@ -161,6 +172,7 @@ async def test_saved_plan_recovers_through_browser_and_native_engine(
             )
             report = json.loads(marker.removeprefix("PLAN_BROWSER "))
             assert report["restored"] and report["starts"] == 1
+            assert cache_reset is (approval_case == "status_first")
             assert report["approvals"] == (
                 3 if approval_case == "same" else 2 if approve_twice else 0
             )

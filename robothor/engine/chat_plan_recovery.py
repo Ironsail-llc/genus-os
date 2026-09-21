@@ -24,7 +24,8 @@ async def attach_plan(outcome, session, request_id, auth, session_key):
         return
     plan = session.active_plan if session is not None else None
     if (
-        session is None
+        plan is None
+        and (session is None or session.active_task is None)
         and outcome.get("plan_exploration")
         and outcome.get("terminal")
         and outcome.get("state") == "completed"

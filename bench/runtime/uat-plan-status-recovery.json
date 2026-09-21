@@ -1,0 +1,28 @@
+{
+  "initial_failure": "Status-first reconnect creates an empty cached session, which prevented recovery of its durable pending plan. Matching HTTP recovery test failed.",
+  "before_log": "/tmp/runtime-plan-status-recovery-before.log",
+  "fix": "Recover matching saved pending plans for idle empty sessions as well as missing sessions; recheck session state after reading to preserve competing new work.",
+  "focused": {
+    "passed": 195,
+    "seconds": 14.25,
+    "log": "/tmp/runtime-plan-status-recovery-final.log"
+  },
+  "native_browser": {
+    "passed": 30,
+    "skipped": 1,
+    "warnings": 1,
+    "seconds": 20.1,
+    "log": "/tmp/runtime-plan-status-recovery-native-final.log"
+  },
+  "browser_case": "Actual browser/Next/native runner/private canonical PostgreSQL. Lose process-local sessions after saving draft; request plan status before outcome recovery. Saved pending plan restored, one preparation run, zero approval/execution requests, no business tools.",
+  "intermediate_test_errors": [
+    "New race fixture omitted required original_message; fixed.",
+    "New race cases shared a cached session; isolated keys and cleanup added."
+  ],
+  "intermediate_logs": [
+    "/tmp/runtime-plan-status-recovery-after.log",
+    "/tmp/runtime-plan-status-recovery-fixed.log"
+  ],
+  "checks": "Ruff lint/format, Node syntax and git diff checks pass.",
+  "limits": "This covers reconnect request ordering, not full process-restart behavior for every workflow or all external-service reconciliation. No production deployment or full acceptance claim."
+}
