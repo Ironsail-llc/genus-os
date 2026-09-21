@@ -19,6 +19,8 @@ class ReportTurn:
     active: bool = True
     consumed: bool = False
     message: str | None = None
+    finalizes: bool = True
+    allowed_goal_statuses: tuple[str, ...] | None = None
 
 
 _turn: ContextVar[ReportTurn | None] = ContextVar("goal_report_turn", default=None)
@@ -26,9 +28,18 @@ _turn: ContextVar[ReportTurn | None] = ContextVar("goal_report_turn", default=No
 
 @contextmanager
 def report_turn(
-    tenant_id: str, agent_id: str, run_id: str, *, enabled: bool, tool_name="report_pursuit_goal"
+    tenant_id: str,
+    agent_id: str,
+    run_id: str,
+    *,
+    enabled: bool,
+    tool_name="report_pursuit_goal",
+    finalizes=True,
+    allowed_goal_statuses=None,
 ):
     state = ReportTurn(tenant_id, agent_id, run_id, enabled, tool_name)
+    state.finalizes = finalizes
+    state.allowed_goal_statuses = allowed_goal_statuses
     token = _turn.set(state)
     try:
         yield state

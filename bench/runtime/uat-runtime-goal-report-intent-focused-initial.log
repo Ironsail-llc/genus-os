@@ -1,0 +1,48 @@
+.........................F                                               [100%]
+=================================== FAILURES ===================================
+_____________ test_report_reads_authorized_goal_facts_only[valid] ______________
+
+db = '4d147ee5-8a9d-4e3e-b6a8-589abe3b982c', case = 'valid'
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "case", ["missing_id", "foreign_goal", "viewer", "extra_facts", "noninteractive", "valid"]
+    )
+    async def test_report_reads_authorized_goal_facts_only(db, case):  # noqa: F811
+        goal = create(str(uuid4()) if case == "foreign_goal" else db)
+        role = "viewer" if case == "viewer" else "owner"
+        session = AgentSession(
+            "main", TriggerType.CRON if case == "noninteractive" else TriggerType.WEBCHAT, tenant_id=db
+        )
+        ctx = ToolContext(
+            agent_id="main",
+            run_id=session.run.id,
+            tenant_id=db,
+            user_id="operator",
+            user_role=role,
+            identity=IdentityContext(db, "webchat", "operator", True, role=role),
+        )
+        args = {} if case == "missing_id" else {"goal_id": goal["id"]}
+        if case == "extra_facts":
+            args["message"] = "Everything is complete"
+        req = SimpleNamespace(session=session, readonly_mode=False)
+        with report_scope(req, ["report_pursuit_goal"]) as state:
+            result = await HANDLERS["report_pursuit_goal"](args, ctx)
+        record_report_turn(state, session, [])
+        if case == "valid":
+            assert result["goal"]["id"] == goal["id"]
+            assert result["goal"]["version"] == goal["version"]
+>           assert finish_goal_report(session)
+E           assert False
+E            +  where False = finish_goal_report(<robothor.engine.session.AgentSession object at 0xf81899b57490>)
+
+robothor/goals/tests/test_report_handler.py:49: AssertionError
+=============================== warnings summary ===============================
+robothor/engine/tests/test_native_goal_report.py::test_factual_goal_status_and_pause_through_native_chat[True]
+  /home/philip/robothor-runtime-modernization/.venv/lib/python3.14/site-packages/pydantic/_internal/_generate_schema.py:1480: UserWarning: Item 'summary' on TypedDict class 'ChatCompletionReasoningItem' is using the `ReadOnly` qualifier. Pydantic will not protect items from any mutation on dictionary instances.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED robothor/goals/tests/test_report_handler.py::test_report_reads_authorized_goal_facts_only[valid]
+1 failed, 25 passed, 1 warning in 3.44s

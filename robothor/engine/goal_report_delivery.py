@@ -10,8 +10,10 @@ REPORT_TOOL = "report_pursuit_goal"
 
 
 def report_scope(req, names):
+    from robothor.engine.goal_report_intent import admission
     from robothor.engine.runtime.task_report import requested
 
+    finalizes, statuses = admission(req) if names == [REPORT_TOOL] else (False, None)
     run = req.session.run
     task_report = requested(req, names)
     enabled = (
@@ -30,12 +32,14 @@ def report_scope(req, names):
         run.id,
         enabled=enabled,
         tool_name="create_task" if task_report else REPORT_TOOL,
+        finalizes=task_report or finalizes,
+        allowed_goal_statuses=statuses,
     )
 
 
 def record_report_turn(state, session, errors):
     message = consume_report(state, session.run)
-    session.pending_goal_report = message if not errors else None
+    session.pending_goal_report = message if not errors and state.finalizes else None
     session.pending_goal_report_tool = state.tool_name
 
 

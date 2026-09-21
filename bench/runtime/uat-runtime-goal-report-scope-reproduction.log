@@ -1,0 +1,22 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________ test_goal_report_must_not_finish_an_additional_question ____________
+
+    def test_goal_report_must_not_finish_an_additional_question():
+        session=AgentSession('main',TriggerType.WEBCHAT,tenant_id='tenant')
+        session.run.task_text="What's finished, and what's still left? Also calculate 17 times 19."
+        req=SimpleNamespace(session=session,readonly_mode=False)
+        ctx=ToolContext(agent_id='main',tenant_id='tenant',run_id=session.run.id)
+        with report_scope(req,['report_pursuit_goal']) as state:
+            if state.enabled:
+                publish_report(ctx,'The goal is waiting. One task remains open.')
+        record_report_turn(state,session,[])
+>       assert not finish_goal_report(session), 'Goal-only report dropped the separate question'
+E       AssertionError: Goal-only report dropped the separate question
+E       assert not True
+E        +  where True = finish_goal_report(<robothor.engine.session.AgentSession object at 0xfff56861a510>)
+
+/tmp/test_goal_report_scope_reproduction.py:18: AssertionError
+=========================== short test summary info ============================
+FAILED ../../../tmp/test_goal_report_scope_reproduction.py::test_goal_report_must_not_finish_an_additional_question
+1 failed in 0.87s
