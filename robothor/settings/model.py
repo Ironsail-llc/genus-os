@@ -797,6 +797,12 @@ class EngineSettings(SettingsGroup):
 
     restart_units: ClassVar[tuple[str, ...]] = ("robothor-engine",)
 
+    calendar_operations_enabled: bool = declare(
+        False,
+        "ROBOTHOR_CALENDAR_OPERATIONS_ENABLED",
+        "Enable durable native attendee updates after migrations 126/127 and test-calendar canaries.",
+    )
+
     host: str = declare(
         "127.0.0.1",
         "ROBOTHOR_ENGINE_HOST",
@@ -1198,6 +1204,23 @@ class ChannelSettings(SettingsGroup):
     """How the instance reaches people, and who it says it is."""
 
     restart_units: ClassVar[tuple[str, ...]] = ("robothor-engine",)
+
+    google_workspace_token: str = declare(
+        "",
+        "GOOGLE_WORKSPACE_CLI_TOKEN",
+        "Workspace access token for native conditional calendar requests.",
+        secret=True,
+    )
+    google_workspace_config_dir: str = declare(
+        "",
+        "GOOGLE_WORKSPACE_CLI_CONFIG_DIR",
+        "Workspace CLI credential directory; defaults to ~/.config/gws.",
+    )
+    google_workspace_credentials_file: str = declare(
+        "",
+        "GOOGLE_WORKSPACE_CLI_CREDENTIALS_FILE",
+        "Authorized-user credentials used by the Workspace CLI.",
+    )
 
     enabled: str = declare(
         "",

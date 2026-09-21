@@ -8,6 +8,34 @@ from robothor.engine.prompts import EVIDENCE_OUTRANKS_NAMES
 from robothor.engine.vision_fallback import PROVENANCE_NOTE
 from robothor.goals.legacy_schemas import legacy_goal_schemas
 
+_CALENDAR_ATTENDEE_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "gws_calendar_add_attendees",
+        "description": (
+            "Use this to add attendees to an EXISTING meeting while preserving existing guests and RSVPs. "
+            "For a draft pass draft=true; confirm with operation_id only. "
+            "Verifies once and stops. Notifications requested is not delivery proof. "
+            "On error report partial state; never remove/re-add guests, resend, or upgrade tools."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string"},
+                "operation_id": {
+                    "type": "string",
+                    "description": "Execute a previously drafted operation with its original arguments",
+                },
+                "draft": {"type": "boolean", "default": False},
+                "attendees": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+                "calendar": {"type": "string", "enum": ["operator", "own"], "default": "operator"},
+                "calendar_id": {"type": "string", "description": "Explicit calendar override"},
+            },
+            "required": [],
+        },
+    },
+}
+
 # Long descriptions live out here: get_engine_schemas is already one of the
 # engine's largest functions and the size ratchet only lets it shrink.
 _WEB_SEARCH_DESCRIPTION = (
@@ -1750,6 +1778,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
             },
         },
     }
+    schemas["gws_calendar_add_attendees"] = _CALENDAR_ATTENDEE_SCHEMA
     schemas["gws_calendar_delete"] = {
         "type": "function",
         "function": {

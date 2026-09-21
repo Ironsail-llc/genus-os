@@ -33,6 +33,22 @@ from robothor.engine.tools.handlers import gws as gws_handlers
 OPERATOR_EMAIL = "alice@example.com"
 ASSISTANT_EMAIL = "bot@example.com"
 
+#: Minimal valid arguments per calendar tool. Derived coverage below asserts
+#: this covers EVERY registered ``gws_calendar_*`` tool, so adding one without
+#: an identity case here fails rather than shipping uncovered.
+CALENDAR_TOOL_ARGS: dict[str, dict[str, Any]] = {
+    "gws_calendar_create": {"summary": "s", "start": "a", "end": "b"},
+    "gws_calendar_list": {"time_min": "2026-10-01T00:00:00Z"},
+    "gws_calendar_delete": {"event_id": "e"},
+    "gws_calendar_add_attendees": {"event_id": "e", "attendees": ["sam@example.com"]},
+}
+
+
+def _calendar_tools() -> list[str]:
+    from robothor.engine.tools import GWS_TOOLS
+
+    return sorted(name for name in GWS_TOOLS if name.startswith("gws_calendar_"))
+
 
 @pytest.fixture
 def operator(monkeypatch: pytest.MonkeyPatch, tmp_path):
@@ -199,18 +215,19 @@ class TestCalendarIsValidated:
         assert gws_handlers._resolve_calendar({"calendar": " OWN "}) == ("primary", "own")
         assert gws_handlers._resolve_calendar({"calendar": "Operator"})[1] == "operator"
 
-    @pytest.mark.parametrize(
-        ("tool", "args"),
-        [
-            ("gws_calendar_create", {"summary": "s", "start": "a", "end": "b"}),
-            ("gws_calendar_list", {"time_min": "2026-10-01T00:00:00Z"}),
-            ("gws_calendar_delete", {"event_id": "e"}),
-        ],
-    )
+    def test_every_calendar_tool_has_a_case_here(self) -> None:
+        """A hardcoded list of three let a FOURTH calendar write tool ship
+        with no identity coverage at all. The cases are derived from the
+        registry now, so the next one cannot slip past either."""
+        assert set(_calendar_tools()) == set(CALENDAR_TOOL_ARGS)
+
+    @pytest.mark.parametrize("tool", _calendar_tools())
     def test_every_calendar_tool_refuses_rather_than_writing(
-        self, operator, recorder, tool: str, args: dict
+        self, operator, recorder, tool: str
     ) -> None:
-        out = gws_handlers._handle_gws_tool(tool, {**args, "calendar": "primary"})
+        out = gws_handlers._handle_gws_tool(
+            tool, {**CALENDAR_TOOL_ARGS[tool], "calendar": "primary"}
+        )
 
         assert "error" in out
         assert out["hint"] == "invalid_params"

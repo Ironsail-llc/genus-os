@@ -1859,6 +1859,13 @@ class LLMClient:
         # reasoning on it. See reasoning_replay.
         messages = strip_reasoning_for_model(messages, model)
 
+        # Engine bookkeeping keys (``_pin``, and any sibling we add) are ours,
+        # not the provider's: OpenAI-compatible endpoints reject unrecognised
+        # message fields. Copy-on-write, so the session keeps its own keys.
+        from robothor.engine.context_control import strip_engine_keys
+
+        messages = strip_engine_keys(messages)
+
         # For models that support Anthropic-style prompt caching, enable it on
         # the system message by converting it to content-block format with
         # cache_control. This is now a catalog-driven capability lookup (see
