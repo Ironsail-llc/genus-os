@@ -790,3 +790,12 @@ The new optional `--chat-browser` canonical integration drill uses a freshly bui
 The browser restores the approval card after one outcome read. Database checks require one completed native run and one matching pending plan. There is exactly one planning submission, no approval and no business-tool execution. Provider calls are the existing two draft passes and one alignment check, with no recovery generation. The initial attempts exposed a test timeout and a scripted provider missing the alignment response; both fixture issues and failed logs are preserved.
 
 The complete canonical command passes 27 integrations (12.36s), with one intentional worker-only skip and one dependency warning. Ruff, Node syntax, formatting and diff checks pass. Evidence: `bench/runtime/uat-native-plan-browser.json`. This establishes the combined synthetic browser-to-engine disconnect case previously missing; it does not establish a live latency cohort, production authentication qualification, or manual acceptance. Nothing was deployed.
+
+
+## Broad verification after saved-plan recovery
+
+At revision `9f83e49d0e6`, the broad engine selection passes 11,054 tests, with 29 skipped, 179 deselected and 393 warnings (356.15s). The separate goal suite passes all 85 tests, with two dependency warnings (10.79s). No test failures were introduced in these selections. The previously observed unawaited connect_tcp warning remains; its collecting test does not establish the application path that initiated it. These suite durations are not runtime/provider performance measurements. Logs and the earlier engine result are preserved in `bench/runtime/uat-verification.json`.
+
+The monthly/PR browser compatibility job now invokes the canonical browser/native saved-plan recovery command after its existing app build and Chromium setup. The job uses Ubuntu 24.04 and installs its [PostgreSQL 16 pgvector package](https://packages.ubuntu.com/noble/postgresql-16-pgvector), which the canonical schema needs. YAML parsing and prerequisite order checks pass, and the matching combined command already passed locally. Hosted CI has not been run; this change configures ongoing coverage without claiming a hosted result.
+
+The acceptance matrix now includes delivered execution-error recovery and saved-plan readiness explicitly. Full acceptance remains false: matched candidate qualification, broader external-service reconciliation, application rollback and remaining normal-chat acceptance are not established by these passing checks. No deployment occurred.

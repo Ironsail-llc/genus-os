@@ -67,7 +67,7 @@ jobs:
           PYDANTIC_AI_NO_BANNER=1 /tmp/runtime-native-candidates/bin/python -m pytest -q --no-cov bench/runtime/test_native_dispatch.py
 
   browser-contracts:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -83,7 +83,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: app/pnpm-lock.yaml
       - run: pip install -e '.[dev,api]'
-      - run: sudo apt-get update && sudo apt-get install -y postgresql-16
+      - run: sudo apt-get update && sudo apt-get install -y postgresql-16 postgresql-16-pgvector
       - run: pnpm install --frozen-lockfile
         working-directory: app
       - run: pnpm exec playwright install --with-deps chromium
@@ -110,3 +110,5 @@ jobs:
         working-directory: app
         env:
           PLAYWRIGHT_PORT: '5323'
+      - name: Recover a saved plan through browser, native engine and canonical database
+        run: python -m bench.runtime.migrated_integration --chat-browser

@@ -9,17 +9,16 @@
   "replacement_selected": false,
   "checks": {
     "engine": {
-      "revision": "aa0312e8cf3",
-      "passed": 11041,
+      "revision": "9f83e49d0e6",
+      "passed": 11054,
       "failed": 0,
       "skipped": 29,
-      "deselected": 178,
-      "seconds": 355.39,
+      "deselected": 179,
+      "seconds": 356.15,
       "warnings": 393,
       "selection": "not slow and not integration and not llm and not e2e and not smoke",
-      "coroutine_origin_tracking_depth": 8,
-      "log": "/tmp/runtime-engine-regression-aa0312e8cf3.log",
-      "note": "Post-extraction broad pass. One connect_tcp coroutine warning remains; origin trace ends in HTTPX/HTTPCore -> AnyIO socket connect -> task-group call_for_coroutine. Application initiating caller not established. Diagnostic tracing run is not a performance cohort."
+      "log": "/tmp/runtime-engine-regression-9f83e49d0e6.log",
+      "note": "Broad regression after terminal-error and saved-plan recovery changes. Existing unawaited connect_tcp warning remains; collection location is not evidence of the initiating application path. Test duration is not a provider-performance cohort."
     },
     "frontend": {
       "revision": "da202e576fb",
@@ -1529,6 +1528,36 @@
       ],
       "checks": "Ruff lint/format, Node syntax and diff checks pass. Owned browser process group and loopback engine close; private cluster is removed.",
       "limits": "One synthetic end-to-end case, not a latency cohort. Unrelated dashboard APIs are fixtures; engine identity is synthetic local middleware. No production credentials, deployment, live model, historical meeting changes or manual acceptance."
+    },
+    "engine_before_saved_plan_recovery": {
+      "revision": "aa0312e8cf3",
+      "passed": 11041,
+      "failed": 0,
+      "skipped": 29,
+      "deselected": 178,
+      "seconds": 355.39,
+      "warnings": 393,
+      "selection": "not slow and not integration and not llm and not e2e and not smoke",
+      "coroutine_origin_tracking_depth": 8,
+      "log": "/tmp/runtime-engine-regression-aa0312e8cf3.log",
+      "note": "Post-extraction broad pass. One connect_tcp coroutine warning remains; origin trace ends in HTTPX/HTTPCore -> AnyIO socket connect -> task-group call_for_coroutine. Application initiating caller not established. Diagnostic tracing run is not a performance cohort."
+    },
+    "goals_after_saved_plan_recovery": {
+      "revision": "9f83e49d0e6",
+      "passed": 85,
+      "failed": 0,
+      "warnings": 2,
+      "seconds": 10.79,
+      "log": "/tmp/runtime-goals-regression-9f83e49d0e6.log"
+    },
+    "monthly_native_plan_browser": {
+      "workflow": ".github/workflows/runtime-contracts.yml",
+      "job": "browser-contracts",
+      "runner": "ubuntu-24.04",
+      "added_command": "python -m bench.runtime.migrated_integration --chat-browser",
+      "prerequisites": "Existing app build/Chromium setup; added postgresql-16-pgvector package.",
+      "package_source": "https://packages.ubuntu.com/noble/postgresql-16-pgvector",
+      "verification": "YAML parsed and step order checked. Same combined command previously passed 27 tests locally. Hosted workflow has not been run."
     }
   },
   "calendar": {
