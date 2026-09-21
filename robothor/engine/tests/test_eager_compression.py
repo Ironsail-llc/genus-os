@@ -98,6 +98,31 @@ def test_an_offload_stub_is_never_rethinned():
     assert s.messages[-2]["content"] == stub_before
 
 
+def test_a_readback_of_an_offload_is_never_rethinned():
+    """The read-back is the agent's ONLY copy of the offloaded data. Thinning
+    it re-offloads it and hands back a stub, so the agent reads again — the
+    loop this exemption exists to break. The ledger marks the call loop-exempt
+    at record time; thinning has to honor that, not just the stub shape."""
+    s = _session(offload_threshold=100)
+    _add_tool_msg(s, "w" * 500)  # offloads immediately
+    path = s.messages[-1]["content"].split("[Full output: ")[1].split(" —")[0]
+
+    # the agent reads the artifact back to get the full content
+    s.record_tool_call(
+        tool_name="read_file",
+        tool_input={"path": path},
+        tool_output={"content": "w" * 500},
+        tool_call_id="t2",
+    )
+    readback = s.messages[-1]["content"]
+    assert "w" * 100 in readback, "read-back did not return the raw content"
+
+    _add_tool_msg(s, "current")
+    s.thin_previous_tool_results(protect_after_index=len(s.messages) - 1)
+
+    assert s.messages[-2]["content"] == readback, "the read-back was re-thinned"
+
+
 class TestFleetDefaultPlumbing:
     @staticmethod
     def _flag(v2: dict) -> bool:
