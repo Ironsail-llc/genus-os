@@ -4597,7 +4597,7 @@
         "seconds": 472.34,
         "scope": "Final execution/guard logic; cached-receipt label was refined during this run and covered separately by 58 focused final tests. Four new replay parametrizations are not part of this broad count."
       },
-      "live_selection_and_latency": "not yet measured",
+      "live_selection_and_latency": "One diagnostic on 5728c35430e verified one task in 4.367 seconds using selected primary model: one planning and one execution call, no post-creation model call. Not a 30-sample latency qualification.",
       "scope": "Host-scoped final receipt after matching independent stored title/body/status evidence. Model selects standalone intent; host does not prove arbitrary natural-language completeness. Denies goal/delegated/multi-tool/read-only/background/checkpoint-resume/approved-plan/open-checklist contexts, unsupported arguments, uncertain or mismatched evidence. Existing final validators and late controls remain."
     },
     "task_report_rollback_identity": {
@@ -4607,6 +4607,30 @@
       "saved_response_and_task_report_fingerprint_probes_passed": true,
       "current_rollback_current_daemon_checks_passed": true,
       "scope": "Same dependency environment, private DB/Redis, no provider network. Existing stopped/unresolved/recorded response preservation and separate native new-admission checks. Does not qualify HTTP within booted daemon, container/dependency rollback, or deadline restoration by downgraded checkpoints."
+    },
+    "task_final_report_live_diagnostic": {
+      "measured_revision": "5728c35430e",
+      "samples": 1,
+      "verified": 1,
+      "elapsed_ms": 4367.418978989008,
+      "screening_qualified": false,
+      "report": "bench/runtime/uat-runtime-task-final-live-report.json",
+      "initial_combined_run": {
+        "passed": 71,
+        "failed": 2,
+        "skipped": 2,
+        "reason": "Reconnect tests polled before asynchronous terminal run-record persistence."
+      },
+      "test_fix": "Poll the original request identity for at most two seconds; preserve recovered text, audit explanation and unchanged task/model counts.",
+      "canonical_recheck": {
+        "passed": 72,
+        "skipped": 2,
+        "warnings": 1,
+        "seconds": 40.15,
+        "log": "bench/runtime/uat-runtime-task-final-recovery-poll.log"
+      },
+      "product_changed_after_measured_revision": false,
+      "remaining": "30-sample current-source latency screen and compound-intent selection remain unqualified."
     }
   },
   "calendar": {

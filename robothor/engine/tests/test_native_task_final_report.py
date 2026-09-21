@@ -1,5 +1,6 @@
 """One native creation can deliver verified facts without a second model turn."""
 
+import asyncio
 import json
 import os
 from dataclasses import replace
@@ -116,12 +117,19 @@ async def test_native_task_report_delivers_and_recovers_without_extra_model(
         ]
         assert len(done) == 1 and done[0]["status"] == "completed"
         assert "Created task:" in done[0]["text"] and "Status: TODO" in done[0]["text"]
-        recovered = (
-            await client.get(
-                "/chat/outcome", params={"session_key": session, "request_id": client_id}
-            )
-        ).json()
-        assert recovered["terminal"] and recovered["text"].startswith(done[0]["text"])
+        # Terminal delivery can precede the asynchronous run-record write. The
+        # reconnect client polls that original identity, never re-executes it.
+        async with asyncio.timeout(2):
+            while True:
+                recovered = (
+                    await client.get(
+                        "/chat/outcome", params={"session_key": session, "request_id": client_id}
+                    )
+                ).json()
+                if recovered.get("terminal"):
+                    break
+                await asyncio.sleep(0.01)
+        assert recovered["text"].startswith(done[0]["text"])
         assert "without creating another task" in recovered["text"]
         assert chat._get_session(session).history[-1]["content"] == done[0]["text"]
     await get_task_registry().drain(timeout=5)
