@@ -39,6 +39,8 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
     if "deferred_tools" in settings:
         assert type(settings["deferred_tools"]) is bool
         monkeypatch.setenv("ROBOTHOR_RIP_16_ENABLED", "1" if settings["deferred_tools"] else "0")
+    streaming = settings.get("streaming", False)
+    assert type(streaming) is bool
     model_slice = settings.get("model_slice_seconds")
     isolate_timeout_health = settings.get("isolate_short_timeout_health", False)
     cloud_only = settings.get("model_slice_cloud_only", False)
@@ -164,6 +166,8 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
                         "experimental_isolate_short_timeout_health": isolate_timeout_health,
                         "experimental_model_slice_cloud_only": cloud_only,
                         "task_protocol": agent.task_protocol,
+                        "streaming": streaming,
+                        "provider_call_duration_scope": "stream creation only when streaming; full request duration includes consumption",
                         "samples": samples,
                         "scenario": scenario,
                         "synthetic_tenant_prefix": "runtime-live-",
@@ -194,6 +198,11 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
                     " Also calculate 17 times 19 and tell me the result in your reply, "
                     "separately from the task. Keep the task body exactly as requested."
                 )
+            content_updates = []
+
+            async def on_content(content, updates=content_updates):
+                updates.append(time.perf_counter())
+
             started = time.perf_counter()
             try:
                 async with asyncio.timeout(65):
@@ -206,10 +215,12 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
                         user_id="operator",
                         user_role="owner",
                         correlation_id=request_id,
+                        on_content=on_content if streaming else None,
                     )
             except Exception as exc:
                 row["error_type"] = type(exc).__name__
             row["duration_ms"] = (time.perf_counter() - started) * 1000
+            row["content_update_count"] = len(content_updates)
             returned_calls = len(calls)
             await get_task_registry().drain(timeout=5)
             row["post_return_model_calls"] = len(calls) - returned_calls
