@@ -3737,6 +3737,31 @@
       "selection": "not slow and not integration and not llm and not e2e and not smoke",
       "log": "bench/runtime/uat-runtime-engine-crm-receipts-regression.log",
       "note": "Product source and collected tests unchanged throughout run. Includes task creation and dedup recovery plus successful CRM receipt persistence. No detected regression in this selection; excludes canonical integrations, tested separately. Existing warnings retained."
+    },
+    "warm_native_chat_task_overhead": {
+      "product_revision": "ad4ab2ef976",
+      "summary": {
+        "p50_ms": 36.349727499327855,
+        "p95_ms": 48.75875940088008,
+        "p95_ci95_ms": [
+          43.45256639862782,
+          58.19994500052417
+        ],
+        "samples": 30,
+        "warmups": 1,
+        "model_calls": 62,
+        "external_model_calls": 0,
+        "scope": "Authenticated ASGI chat admission through native runner, real private task creation and reply. Scripted immediate model, minimal profile, no TCP/browser/provider latency. Audit/event publication and embeddings stubbed. Verification queries and post-response background drain excluded from timing."
+      },
+      "raw_samples": "bench/runtime/uat-task-chat-screening.jsonl",
+      "log": "bench/runtime/uat-task-chat-screening.log",
+      "passed": 47,
+      "skipped": 2,
+      "warnings": 1,
+      "seconds": 24.26,
+      "run_statuses_verified": true,
+      "local_case_target_passed": true,
+      "full_live_cohort_qualified": false
     }
   },
   "calendar": {

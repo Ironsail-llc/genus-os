@@ -136,6 +136,11 @@ def main():
                     "robothor/engine/tests/test_native_checkpoint_continuation.py",
                     "robothor/engine/tests/test_native_deep_worker_recovery.py",
                     *(
+                        ["robothor/engine/tests/test_native_task_chat_screening.py"]
+                        if "--task-chat-screening" in sys.argv
+                        else []
+                    ),
+                    *(
                         [
                             "robothor/engine/tests/test_native_plan_browser.py",
                             "robothor/engine/tests/test_native_task_browser.py",
