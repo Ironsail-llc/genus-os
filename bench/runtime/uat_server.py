@@ -234,6 +234,7 @@ def main():
                 )
                 cur.execute((ROOT / "crm/migrations/126_goal_pursuit.sql").read_text())
                 cur.execute((ROOT / "crm/migrations/141_runtime_effects.sql").read_text())
+                cur.execute((ROOT / "crm/migrations/142_goal_effect_lookup.sql").read_text())
             uvicorn.run(application(dsn, args.ui_port), host="127.0.0.1", port=args.port)
         finally:
             command("pg_ctl", "-D", data, "-m", "immediate", "-w", "stop")

@@ -73,6 +73,7 @@ def private_database(tmp_path_factory):
             cur.execute(family_controls.read_text())
             cur.execute(family_controls.read_text())
             cur.execute(migration.with_name("141_runtime_effects.sql").read_text())
+            cur.execute(migration.with_name("142_goal_effect_lookup.sql").read_text())
         yield dsn
     finally:
         command("pg_ctl", "-D", data, "-m", "immediate", "-w", "stop")

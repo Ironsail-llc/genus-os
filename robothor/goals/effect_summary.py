@@ -16,6 +16,7 @@ def summaries(cur, tenant, goal_ids, *, exclude_id=None):
                  count(*) FILTER (WHERE e.state='confirmed') AS confirmed
           FROM family f LEFT JOIN agent_runtime_effects e
             ON e.goal_id=f.id::text AND e.tenant_id=%s
+              AND e.state IN ('prepared','dispatching','uncertain','confirmed')
               AND (%s::uuid IS NULL OR e.id<>%s::uuid)
           GROUP BY f.root""",
         (tenant, list(goal_ids), tenant, tenant, exclude_id, exclude_id),

@@ -28,6 +28,7 @@ def effect_db(private_database, monkeypatch):  # noqa: F811
         migration = Path(__file__).parents[3] / "crm/migrations/141_runtime_effects.sql"
         cur.execute(migration.read_text())
         cur.execute(migration.read_text())
+        cur.execute(migration.with_name("142_goal_effect_lookup.sql").read_text())
     monkeypatch.setattr(effects, "get_connection", connect)
     return connect
 

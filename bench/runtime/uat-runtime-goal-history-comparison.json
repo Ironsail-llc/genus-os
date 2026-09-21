@@ -1,0 +1,21 @@
+{
+  "before": {
+    "p95_ms": 58.47775285037642,
+    "p95_bootstrap_95_interval_ms": [
+      58.23969224693428,
+      58.55063499620883
+    ],
+    "median_ms": 56.93688999963342,
+    "samples": 30
+  },
+  "after": {
+    "p95_ms": 2.673194398812484,
+    "p95_bootstrap_95_interval_ms": [
+      2.506485448611784,
+      2.676907999557443
+    ],
+    "median_ms": 1.8089460027113091,
+    "samples": 30
+  },
+  "scope": "Sequential local synthetic database lookup screening, not a framework or end-to-end latency qualification."
+}

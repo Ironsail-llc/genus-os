@@ -3399,6 +3399,56 @@
         "Earlier normal-chat recovery question remains awaiting user response; not counted as accepted.",
         "Other provider recovery and full acceptance remain incomplete."
       ]
+    },
+    "goal_evidence_history_lookup": {
+      "base_revision": "733a77122d4",
+      "migration": 142,
+      "measurements": {
+        "before": {
+          "p95_ms": 58.47775285037642,
+          "p95_bootstrap_95_interval_ms": [
+            58.23969224693428,
+            58.55063499620883
+          ],
+          "median_ms": 56.93688999963342,
+          "samples": 30
+        },
+        "after": {
+          "p95_ms": 2.673194398812484,
+          "p95_bootstrap_95_interval_ms": [
+            2.506485448611784,
+            2.676907999557443
+          ],
+          "median_ms": 1.8089460027113091,
+          "samples": 30
+        },
+        "scope": "Sequential local synthetic database lookup screening, not a framework or end-to-end latency qualification."
+      },
+      "comparison": "bench/runtime/uat-runtime-goal-history-comparison.json",
+      "focused": {
+        "passed": 120,
+        "warnings": 2,
+        "seconds": 18.29,
+        "log": "bench/runtime/uat-runtime-goal-history-after.log"
+      },
+      "canonical": {
+        "passed": 36,
+        "skipped": 1,
+        "warnings": 1,
+        "seconds": 12.35,
+        "log": "bench/runtime/uat-runtime-goal-history-canonical.log"
+      },
+      "packaging": {
+        "passed": 8,
+        "seconds": 0.14,
+        "log": "bench/runtime/uat-runtime-goal-history-packaging.log"
+      },
+      "behavior": "Filter relevant effect states before the goal-family join; migration 142 adds a matching partial index. Planner reads 20 relevant rows instead of joining 100000 historical rows in the synthetic probe. Counts remain unchanged.",
+      "limitations": [
+        "Sequential single-process synthetic SQL measurements; not framework qualification or mixed-tenant operating limits.",
+        "No production migration or deployment.",
+        "Broad engine pass predates current changes; normal-chat UAT response still pending."
+      ]
     }
   },
   "calendar": {

@@ -63,6 +63,7 @@ def main():
                     "139_goal_task_family_controls",
                     "140_chat_approval_receipts",
                     "141_runtime_effects",
+                    "142_goal_effect_lookup",
                 } <= set(applied)
                 assert apply(connection=conn) == []
             pg("createdb", "-h", socket, "-U", "runtime_test", "runtime_upgrade_test")

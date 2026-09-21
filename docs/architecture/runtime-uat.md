@@ -1300,3 +1300,12 @@ Following `56aa76e6aa0`, goal discovery attaches current pending/confirmed actio
 Focused goal/effect/bookkeeping/size tests passed 129 in 17.43 seconds; canonical integration passed 36 with one skipped in 11.11 seconds. Nine goal-view tests passed, strict eslint and Ruff passed, and the full frontend selection passed 150 files / 1,666 tests in 9.07 seconds. A missing JSX brace initially prevented UI test collection; its log is retained with the corrected results. Existing jsdom navigation notices remain.
 
 This closes the list-summary presentation gap for recorded runtime effects. It is not a new broad engine or real-browser result, and does not qualify additional provider readbacks. The previous normal-chat recovery question has no user response yet and remains unaccepted. Overall acceptance and deployment remain false.
+
+
+## Accumulated-history lookup screening
+
+At `733a77122d4`, a disposable PostgreSQL probe with 20 goals and 100,000 effect records (99,980 finished; 20 uncertain) showed that the goal-count lookup joined all 100,000 rows. Across 30 repetitions, median was 56.937 ms and p95 58.478 ms. The query now excludes irrelevant states before joining, and additive migration 142 supplies a matching partial index. In a fresh equivalent synthetic fixture, the planner used an index-only scan over 20 rows. Across 30 repetitions, median was 1.809 ms and p95 2.673 ms. Every sample returned identical expected counts.
+
+A deterministic 2,000-resample bootstrap gives conditional 95% p95 intervals of 58.240–58.551 ms before and 2.506–2.677 ms after. These are sequential local SQL measurements, not end-to-end agent speed, framework selection evidence or measured mixed-tenant operating limits. Raw samples and query plans are retained in `uat-runtime-goal-history-before.json` and `uat-runtime-goal-history-after.json`; the summary is `uat-runtime-goal-history-comparison.json`.
+
+The focused goal/effect/history/size selection passed 120 tests in 18.29 seconds, canonical integration and populated upgrade passed 36 with one skipped in 12.35 seconds, and migration packaging passed eight. Migration 142 is registered in the canonical manifest and isolated fixture/upgrade harnesses; production was not migrated. The synthetic history contract is included in compatibility CI. Overall acceptance remains false and the previous normal-chat recovery question still awaits a user response.

@@ -14,6 +14,7 @@ ADDITIONS = {
     "139_goal_task_family_controls",
     "140_chat_approval_receipts",
     "141_runtime_effects",
+    "142_goal_effect_lookup",
 }
 TABLES = (
     "chat_sessions",
