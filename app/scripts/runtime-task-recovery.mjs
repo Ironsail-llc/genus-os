@@ -15,9 +15,11 @@ try {
   }
   if (!ready) throw new Error("Isolated Next server did not become ready");
   browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage();
+  let page = await browser.newPage();
+  const freshContext = process.env.TASK_RECOVERY_FRESH_CONTEXT === "1";
   let sends = 0, reads = 0, original;
-  await page.route("**/api/**", async route => {
+  let commitObserved = false;
+  const routing = async route => {
     const path = new URL(route.request().url()).pathname;
     if (path === "/api/chat/send") {
       sends++;
@@ -26,7 +28,9 @@ try {
       const body = await response.text();
       expect(response.status(), body).toBe(200);
       expect(body).toContain("Task creation recorded.");
-      return route.abort("connectionreset");
+      await route.abort("connectionreset");
+      commitObserved = true;
+      return;
     }
     if (path === "/api/chat/outcome") {
       reads++;
@@ -37,10 +41,30 @@ try {
     if (path === "/api/dashboard/generate") return route.fulfill({ status: 204 });
     if (path === "/api/events/stream") return route.fulfill({ contentType: "text/event-stream", body: "event: ping\ndata: {}\n\n" });
     return route.fulfill({ json: { agents: [], messages: [], status: "healthy" } });
-  });
+  };
+  await page.route("**/api/**", routing);
   await page.goto(base, { waitUntil: "networkidle" });
   await page.getByTestId("chat-input").fill("Create the synthetic browser task");
   await page.getByTestId("send-button").click();
+  if (freshContext) {
+    await expect.poll(() => commitObserved, { timeout: 30000 }).toBe(true);
+    await page.context().close();
+    const readsBeforeFresh = reads;
+    const restored = await fetch(`${process.env.ROBOTHOR_ENGINE_URL}/fixture/reload-chat`, { method: "POST" });
+    expect(restored.status).toBe(200);
+    expect(await restored.json()).toEqual({ restored: true });
+    page = await browser.newPage();
+    await page.route("**/api/**", routing);
+    await page.goto(base, { waitUntil: "networkidle" });
+    expect(await page.evaluate(() => Object.keys(sessionStorage).filter(key => key.startsWith("helm.chat.pending.v1.")))).toEqual([]);
+    const saved = page.getByText("Task creation recorded.", { exact: true });
+    await expect(saved).toBeVisible({ timeout: 30000 });
+    expect(sends).toBe(1);
+    await delay(1500);
+    expect(reads).toBe(readsBeforeFresh);
+    expect(sends).toBe(1);
+    console.log("TASK_BROWSER " + JSON.stringify({ sends, reads, fresh_context: true, restored_from_database: true, text: await saved.innerText(), request_id: original }));
+  } else {
   const receipt = page.getByText(/The task was created\. Robothor checked the stored task/);
   await expect(receipt).toBeVisible({ timeout: 30000 });
   expect(await receipt.innerText()).toContain("without creating another task");
@@ -51,6 +75,7 @@ try {
   expect(reads).toBe(readsAtCompletion);
   expect(sends).toBe(1);
   console.log("TASK_BROWSER " + JSON.stringify({ sends, reads, text: await receipt.innerText(), request_id: original }));
+  }
 } finally {
   await browser?.close();
   server.kill("SIGTERM");

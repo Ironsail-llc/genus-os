@@ -29,7 +29,10 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.mark.timeout(120)
-async def test_task_receipt_recovers_in_browser(engine_config, sample_agent_config, monkeypatch):
+@pytest.mark.parametrize("fresh_context", [False, True])
+async def test_task_receipt_recovers_in_browser(
+    engine_config, sample_agent_config, monkeypatch, fresh_context
+):
     dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
     if "host=/tmp/runtime-migrated-" not in dsn:
         pytest.skip("requires --chat-browser canonical harness and freshly built app")
@@ -102,6 +105,23 @@ async def test_task_receipt_recovers_in_browser(engine_config, sample_agent_conf
         return await call_next(request)
 
     app.include_router(chat.router)
+
+    @app.post("/fixture/reload-chat")
+    async def reload_chat():
+        # Test-only endpoint on the isolated fixture server, never a product route.
+        for _ in range(100):
+            saved = await asyncio.to_thread(chat.load_all_sessions, tenant_id=tenant)
+            if any(
+                message.get("content") == "Task creation recorded."
+                for session in saved.values()
+                for message in session.get("history", [])
+            ):
+                chat._sessions.clear()
+                chat.init_chat(AgentRunner(config), config)
+                return {"restored": True}
+            await asyncio.sleep(0.05)
+        raise AssertionError("Completed response was not persisted")
+
     engine_socket = socket.socket()
     engine_socket.bind(("127.0.0.1", 0))
     engine_socket.listen()
@@ -126,6 +146,7 @@ async def test_task_receipt_recovers_in_browser(engine_config, sample_agent_conf
         "AUTH_OIDC_CLIENT_ID": "test",
         "AUTH_OIDC_CLIENT_SECRET": "test",
         "GENUS_BRIDGE_SSO_SECRET": "test",
+        "TASK_RECOVERY_FRESH_CONTEXT": "1" if fresh_context else "0",
     }
     log_path = config.workspace / "task-browser.log"
     try:
@@ -164,6 +185,15 @@ async def test_task_receipt_recovers_in_browser(engine_config, sample_agent_conf
             assert cur.fetchall() == [("confirmed",)]
             cur.execute("SELECT count(*) FROM agent_runs WHERE tenant_id=%s", (tenant,))
             assert cur.fetchone() == (1,)
+        artifact_dir = os.environ.get("ROBOTHOR_RUNTIME_TASK_BROWSER_ARTIFACT_DIR")
+        if artifact_dir:
+            directory = Path(artifact_dir)
+            directory.mkdir(parents=True, exist_ok=True)
+            name = "fresh-context" if fresh_context else "same-context"
+            with (directory / (name + ".json")).open("x") as stream:
+                json.dump(json.loads(marker.removeprefix("TASK_BROWSER ")), stream, indent=2)
+            with (directory / (name + ".log")).open("x") as stream:
+                stream.write(output)
         print(marker, flush=True)
     finally:
         if browser is not None:

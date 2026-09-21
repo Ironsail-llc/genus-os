@@ -1,0 +1,6 @@
+▲ Next.js 16.3.3
+- Local:         http://127.0.0.1:44311
+- Network:       http://127.0.0.1:44311
+✓ Ready in 0ms
+✓ Running next.config took 1.9ms
+TASK_BROWSER {"sends":1,"reads":1,"fresh_context":true,"restored_from_database":true,"text":"Task creation recorded.","request_id":"46445411-0d6a-43a7-9341-bb9f08d301ed"}
