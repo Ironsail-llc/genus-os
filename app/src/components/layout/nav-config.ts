@@ -33,6 +33,7 @@ export type ViewId =
   | "inbox"
   | "tasks"
   | "sales"
+  | "goals"
   | "agents"
   | "workflows"
   | "dashboard"
@@ -214,6 +215,7 @@ export const navGroups: NavGroup[] = [
       // does not carry review tasks yet — the approvals route behind it lists
       // workflow approvals and agent questions only — so this entry stays
       // until those move across.
+      { id: "goals", label: "Goals", view: "goals", icon: Flag, requires: "operator" },
       { id: "tasks", label: "Tasks", view: "tasks", icon: ListTodo },
       { id: "sales", label: "Sales", view: "sales", icon: Users, requires: "operator" },
       { id: "agents", label: "Agents", view: "agents", icon: Bot },
@@ -270,6 +272,7 @@ export const viewTitles: Record<ViewId, string> = {
   inbox: "Inbox",
   tasks: "Tasks",
   sales: "Sales",
+  goals: "Goals",
   agents: "Agents",
   workflows: "Automations",
   dashboard: "Dashboard",

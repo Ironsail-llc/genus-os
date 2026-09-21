@@ -114,6 +114,11 @@ def check_completion_contract(run: AgentRun, config: EngineConfig) -> ContractVe
     ``missing_completion_requirements`` finds nothing missing, ``missing``
     (with the reasons) otherwise.
     """
+    from robothor.goals.runtime import binding
+
+    if binding.get() is not None:
+        # Pursuits enforce their criterion-specific contract at the update boundary.
+        return None
     goal = get_active_goal(tenant_id=run.tenant_id, agent_id=run.agent_id)
     if goal is None:
         return None

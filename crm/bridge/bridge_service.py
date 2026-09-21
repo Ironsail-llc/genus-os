@@ -62,6 +62,7 @@ from routers.notifications import router as notifications_router
 from routers.people import router as people_router
 from routers.plugins import router as plugins_router
 from routers.providers import router as providers_router
+from routers.pursuit_goals import router as pursuit_goals_router
 from routers.routines import router as routines_router
 from routers.runs import router as runs_router
 from routers.settings import router as settings_router
@@ -171,6 +172,7 @@ app.include_router(people_router)
 app.include_router(providers_router)
 app.include_router(conversations_router)
 app.include_router(notes_tasks_router)
+app.include_router(pursuit_goals_router)
 app.include_router(memory_router)
 # The operator's view of the memory_facts TABLE (list / forget preview /
 # forget). Its own router because its gate is not memory_router's: every route

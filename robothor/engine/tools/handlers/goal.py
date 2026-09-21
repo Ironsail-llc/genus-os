@@ -175,3 +175,9 @@ async def _update_goal(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
     except ValueError as exc:
         return {"error": str(exc)}
     return {"goal": summarize_goal(goal, workspace=ctx.workspace or None, tenant_id=ctx.tenant_id)}
+
+
+# Operator pursuits coexist with legacy performance/session-goal tools.
+from robothor.goals.tools import HANDLERS as PURSUIT_HANDLERS  # noqa: E402
+
+HANDLERS.update(PURSUIT_HANDLERS)

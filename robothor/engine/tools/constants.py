@@ -283,6 +283,8 @@ READONLY_TOOLS: frozenset[str] = frozenset(
         "get_agent_stats",
         "get_agent_performance_summary",
         "get_goal",
+        "get_pursuit_goal",
+        "list_pursuit_goals",
         # Buddy's per-run reviews and the fleet roll-up — SELECT-only.
         # Added 2026-08-21: agent-architect's instructions require citing a
         # review_id, and the benchmark harness (which derives its allow-list
@@ -401,6 +403,11 @@ OPT_IN_TOOLS: frozenset[str] = frozenset(
 # GOAL_TOOLS are force-added by the registry filter, so they're omitted here.
 CORE_TOOLS: frozenset[str] = frozenset(
     {
+        # Durable operator goal controls must remain directly reachable.
+        "create_pursuit_goal",
+        "get_pursuit_goal",
+        "list_pursuit_goals",
+        "update_pursuit_goal",
         # File / shell
         "read_file",
         "write_file",

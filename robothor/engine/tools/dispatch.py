@@ -483,6 +483,27 @@ async def _execute_tool(
         _audit_tool_call(name, agent_id, tenant_id, user_id=user_id, status="denied", error=msg)
         return {"error": msg, "denied_by_whitelist": True}
 
+    ctx = ToolContext(
+        agent_id=agent_id,
+        run_id=run_id,
+        tenant_id=tenant_id,
+        workspace=workspace,
+        user_id=user_id,
+        user_role=user_role,
+        accessible_tenant_ids=accessible_tenant_ids,
+        task_author_override=task_author_override,
+        is_benchmark=is_benchmark,
+        identity=identity,
+    )
+    from robothor.goals.runtime import admit_tool
+
+    try:
+        await asyncio.to_thread(admit_tool, name, args, ctx)
+    except Exception as exc:
+        err_msg, crashed = _describe_exception(exc)
+        _audit_tool_call(name, agent_id, tenant_id, user_id=user_id, status="denied", error=err_msg)
+        return {"error": err_msg, "tool_crashed": True} if crashed else {"error": err_msg}
+
     from robothor.engine.tools import get_registry
 
     route = get_registry().get_adapter_route(name)
@@ -502,18 +523,6 @@ async def _execute_tool(
             )
             return {"error": f"Adapter tool '{name}' failed: {e}"}
 
-    ctx = ToolContext(
-        agent_id=agent_id,
-        run_id=run_id,
-        tenant_id=tenant_id,
-        workspace=workspace,
-        user_id=user_id,
-        user_role=user_role,
-        accessible_tenant_ids=accessible_tenant_ids,
-        task_author_override=task_author_override,
-        is_benchmark=is_benchmark,
-        identity=identity,
-    )
     handlers = _get_handlers()
     handler = handlers.get(name)
     if handler is None:

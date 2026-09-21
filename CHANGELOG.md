@@ -1,3 +1,9 @@
+## [1.102.0](https://github.com/Ironsail-llc/genus-os/compare/v1.101.1...v1.102.0) (2026-09-21)
+
+### Features
+
+* **goals:** add durable short and long term goal pursuit ([#603](https://github.com/Ironsail-llc/genus-os/issues/603)) ([bc3d26d](https://github.com/Ironsail-llc/genus-os/commit/bc3d26d6d00903c8bdf5f6e66dfbd2012c9007ae))
+
 ## [1.101.1](https://github.com/Ironsail-llc/genus-os/compare/v1.101.0...v1.101.1) (2026-09-20)
 
 ### Bug Fixes

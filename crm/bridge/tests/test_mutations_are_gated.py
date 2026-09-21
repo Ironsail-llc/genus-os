@@ -74,6 +74,12 @@ JUSTIFIED_WITHOUT_OPERATOR_GATE: dict[str, str] = {
         "require_operator() would incorrectly forbid another tenant's own sales team. "
         "Covered by robothor/sales/tests/test_api.py."
     ),
+    "/api/goals": (
+        "Tenant-owned goals: goal_operator dependency rejects service tokens and "
+        "non-owner/admin roles; TenantMiddleware pins the verified tenant. "
+        "Platform-only require_operator would exclude other tenants' own operators. "
+        "Dependency enforcement is exercised in robothor/goals/tests/test_api.py."
+    ),
     "/api/auth": (
         "Public session bootstrap/rotation — AuthMiddleware._PUBLIC_PATHS lists "
         "/api/auth/sso|refresh|logout and _authorization_denial() returns None for "

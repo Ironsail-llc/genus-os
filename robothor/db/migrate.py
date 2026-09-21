@@ -842,6 +842,16 @@ def apply(
                 raise
             print(f"Applied {migration.filename} ({migration.migration_id})")
             applied_ids.append(migration.migration_id)
+        if applied_ids:
+            # Anything that caches "this schema object does not exist yet"
+            # has just been made wrong by this call. In-process callers
+            # (`genus doctor --fix`, tests, an embedded migrate) would
+            # otherwise keep the stale answer for the life of the process;
+            # a separate `genus migrate` process is covered by the caches'
+            # own expiry instead, since nothing here can reach it.
+            from robothor.goals.compat import reset_probe
+
+            reset_probe()
         return applied_ids
 
 
