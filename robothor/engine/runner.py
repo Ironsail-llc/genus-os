@@ -1545,10 +1545,10 @@ class AgentRunner(
         )
 
         # Record run in DB
-        try:
-            create_run(session.run)
-        except Exception as e:
-            logger.warning("Failed to record deep run start: %s", _sanitize(e))
+        from robothor.engine.runtime.deep_admission import record_deep
+
+        if error := record_deep(session.run, create_run):
+            return self._finish_run(session.fail(error))
 
         # Build context — use override (from deep plan) or fall back to conversation history
         if context_override:
@@ -1618,14 +1618,14 @@ class AgentRunner(
         progress_task = asyncio.create_task(_progress_loop())
 
         try:
-            from robothor.engine.rlm_tool import DeepReasonConfig, execute_deep_reason
+            from robothor.engine.runtime.deep_admission import execute_deep_checked
 
-            config = DeepReasonConfig(workspace=str(self.config.workspace))
             result = await asyncio.to_thread(  # type: ignore[call-arg]
-                execute_deep_reason,
+                execute_deep_checked,
+                run=session.run,
                 query=query,
                 context=context,
-                config=config,
+                workspace=str(self.config.workspace),
                 on_event=lambda e: event_queue.put_nowait(e),
             )
 
@@ -1692,10 +1692,9 @@ class AgentRunner(
             with contextlib.suppress(asyncio.CancelledError):
                 await progress_task
 
-            tb = traceback.format_exc()
-            logger.error("execute_deep failed: %s", _sanitize(e), exc_info=True)
-            session.record_error(str(e), tb)
-            return self._finish_run(session.fail(str(e), tb))
+            from robothor.engine.runtime.failure import failed_or_stopped
+
+            return self._finish_run(failed_or_stopped(session, e, traceback.format_exc()))
 
     async def _run_loop(
         self,

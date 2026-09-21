@@ -30,7 +30,7 @@ _REAL_STOPPED = controls.stopped
 @pytest.mark.asyncio
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
-    "approval_case", ["none", "status_first", "distinct", "same", "early_stop"]
+    "approval_case", ["none", "status_first", "distinct", "same", "early_stop", "early_deep_stop"]
 )
 async def test_saved_plan_recovers_through_browser_and_native_engine(
     engine_config, sample_agent_config, approval_case
@@ -94,7 +94,7 @@ async def test_saved_plan_recovers_through_browser_and_native_engine(
 
     async def gated_admit(*args, **kwargs):
         result = await admit(*args, **kwargs)
-        if approval_case == "early_stop" and result[0] is not None:
+        if approval_case in {"early_stop", "early_deep_stop"} and result[0] is not None:
             await release_admission.wait()
         return result
 
@@ -157,6 +157,10 @@ async def test_saved_plan_recovers_through_browser_and_native_engine(
             patch.object(chat, "admit_plan", side_effect=gated_admit),
             patch.object(controls, "stopped", _REAL_STOPPED),
             patch(
+                "robothor.engine.rlm_tool.execute_deep_reason",
+                return_value={"response": "Unexpected synthetic deep execution"},
+            ) as deep_worker,
+            patch(
                 "robothor.engine.runner.load_agent_config_or_reason",
                 return_value=(sample_agent_config, None),
             ),
@@ -200,7 +204,7 @@ async def test_saved_plan_recovers_through_browser_and_native_engine(
                 else 2
                 if approve_twice
                 else 1
-                if approval_case == "early_stop"
+                if approval_case in {"early_stop", "early_deep_stop"}
                 else 0
             )
             await get_task_registry().drain(timeout=5)
@@ -208,11 +212,14 @@ async def test_saved_plan_recovers_through_browser_and_native_engine(
                 ["execution"] if approve_twice else []
             )
             tools.assert_not_awaited()
+            deep_worker.assert_not_called()
             with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
                 cur.execute("SELECT id,status FROM agent_runs WHERE tenant_id=%s", (tenant,))
                 runs = cur.fetchall()
-                assert len(runs) == (2 if approve_twice or approval_case == "early_stop" else 1)
-                if approval_case == "early_stop":
+                assert len(runs) == (
+                    2 if approve_twice or approval_case in {"early_stop", "early_deep_stop"} else 1
+                )
+                if approval_case in {"early_stop", "early_deep_stop"}:
                     assert sorted(status for _, status in runs) == ["cancelled", "completed"]
                     assert report["early_stop"]["durable_stop"]
                 else:
@@ -222,7 +229,7 @@ async def test_saved_plan_recovers_through_browser_and_native_engine(
                     (tenant,),
                 )
                 plans = cur.fetchall()
-                if approve_twice or approval_case == "early_stop":
+                if approve_twice or approval_case in {"early_stop", "early_deep_stop"}:
                     assert not plans or plans[0][0]["status"] == "approved"
                 else:
                     ((plan,),) = plans

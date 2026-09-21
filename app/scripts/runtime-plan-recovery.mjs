@@ -25,7 +25,8 @@ try {
       original = route.request().postDataJSON().request_id;
       // Forward the real request all the way through Next and the native runner,
       // wait for its saved draft, then lose its response at the browser boundary.
-      const response = await route.fetch();
+      const response = await route.fetch(process.env.RUNTIME_APPROVAL_TEST === "early_deep_stop"
+        ? { postData: JSON.stringify({ ...route.request().postDataJSON(), deep_plan: true }) } : {});
       if (response.status() !== 200 || !(await response.text()).includes("event: plan")) {
         throw new Error(`Native plan did not finish: ${response.status()} ${await response.text()}`);
       }
@@ -58,7 +59,7 @@ try {
   expect(approvals).toBe(0);
   await expect(page.getByText(/\[PLAN_READY\]/)).toHaveCount(0);
   let approvalStatuses = [];
-  const earlyStopResult = process.env.RUNTIME_APPROVAL_TEST === "early_stop" ? await earlyStop(page, base) : null;
+  const earlyStopResult = ["early_stop", "early_deep_stop"].includes(process.env.RUNTIME_APPROVAL_TEST) ? await earlyStop(page, base) : null;
   if (["distinct", "same"].includes(process.env.RUNTIME_APPROVAL_TEST)) {
     const saved = await (await page.request.get(`${base}/api/chat/plan/status`)).json();
     const same = process.env.RUNTIME_APPROVAL_TEST === "same";

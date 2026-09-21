@@ -1903,6 +1903,33 @@
       "chat_outcome": "Stopped as requested.",
       "checks": "Ruff lint/format, Node syntax and diff checks pass; no size cap increased.",
       "limits": "The early-stop requests use browser fetch/API requests, not a dedicated Stop-button rendering assertion. The gate simulates delayed admission, not process death/restart. This covers ordinary native plan approval; deep-engine classification and orphaned approval recovery remain unverified. No production deployment or full acceptance claim."
+    },
+    "deep_admission_stop": {
+      "artifact": "bench/runtime/uat-deep-admission-stop.json",
+      "initial_failures": {
+        "early_stop": "Deep approval started its synthetic worker despite an already committed request stop.",
+        "browser_log": "/tmp/runtime-deep-stop-before.log",
+        "unit_log": "/tmp/runtime-deep-stop-unit-before.log",
+        "audit": "Deep execution continued after create_run raised an audit-store error.",
+        "audit_log": "/tmp/runtime-deep-audit-before.log"
+      },
+      "fix": "Check the scoped durable stop on the worker thread immediately before invoking deep execution. Typed stop uses shared cancelled finalization and Stopped as requested. An initial audit write failure refuses worker launch. Generic deep errors retain failure handling.",
+      "focused": {
+        "passed": 52,
+        "seconds": 8.94,
+        "log": "/tmp/runtime-deep-admission-final.log"
+      },
+      "canonical_browser": {
+        "passed": 32,
+        "skipped": 1,
+        "warnings": 1,
+        "seconds": 22.49,
+        "log": "/tmp/runtime-deep-admission-browser-final.log"
+      },
+      "coverage": "Actual browser/Next/native/private canonical database deep-plan approval held after its claim, then stopped before release. Saved execution is cancelled and deep worker, execution model and business tools are never called. Unit audit-failure case also asserts no worker launch. Existing successful deep/context/progress tests pass.",
+      "intermediate_ratchet": "First helper arrangement grew execute_deep from cap 224 to 225 lines. Moved deep configuration construction into the admission helper; all size checks pass without increasing caps. Log /tmp/runtime-deep-stop-focused.log.",
+      "checks": "Ruff lint/format, Node syntax and diff checks pass.",
+      "limits": "This verifies deep worker admission only. Cancellation and provider/tool enforcement inside an already-running deep worker, admission crash recovery, general deadlines and remaining acceptance gates are not established here. Browser requests use fetch/API for early stop; no production deployment or full acceptance claim."
     }
   },
   "calendar": {
