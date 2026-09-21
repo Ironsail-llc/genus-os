@@ -24,5 +24,26 @@
     "/tmp/runtime-plan-status-recovery-fixed.log"
   ],
   "checks": "Ruff lint/format, Node syntax and git diff checks pass.",
-  "limits": "This covers reconnect request ordering, not full process-restart behavior for every workflow or all external-service reconciliation. No production deployment or full acceptance claim."
+  "limits": "This covers reconnect request ordering, not full process-restart behavior for every workflow or all external-service reconciliation. No production deployment or full acceptance claim.",
+  "broad_regression": {
+    "revision": "c9a2ccc14ac",
+    "selection": "not slow and not integration and not llm and not e2e and not smoke",
+    "initial_run": {
+      "passed": 11092,
+      "failed": 2,
+      "skipped": 29,
+      "deselected": 181,
+      "warnings": 393,
+      "seconds": 362.45,
+      "log": "/tmp/runtime-engine-regression-plan-recovery.log"
+    },
+    "failure_reason": "Broad process collected two new race tests before the required original_message fixture field was added; both failed during fixture construction. Subsequent fixture session isolation was also corrected before the final focused run.",
+    "failed_cases_rerun": {
+      "passed": 2,
+      "failed": 0,
+      "seconds": 0.7,
+      "log": "/tmp/runtime-engine-regression-plan-recovery-rerun.log"
+    },
+    "note": "All selected cases have passing results across the broad run and corrected-case rerun, not a single clean broad invocation. Product code was unchanged during the broad run; test fixtures and the integration-only browser case changed. Existing unawaited connect_tcp warning remains. No full-acceptance or provider-performance claim."
+  }
 }

@@ -32,7 +32,7 @@ The user need not identify whether an ordinary request became a task or a goal.
 | Tenant isolation / delegated controls / memory | Native engine and goal suites, including RLS and tenant/control tests | Native behavior tested; no equivalent candidate evidence |
 | Provider fallback | Native injected-primary-failure verified-outcome test | One verified write after fallback and no post-success calls; real configured-chain outage/load behavior remains unqualified |
 | Everyday requests competing with goals | `uat-mixed-runtime-final.jsonl` | 1,560 verified synthetic actions across 1/5/20 tenants; local resource limits published, not production capacity |
-| No introduced regressions | Broad native run at `aa0312e8cf3`: 11,041 passed, zero failures; goals at `7c5f5c64b21`: 85 passed. Frontend at `da202e576fb`: 1,648 passed; scopes and warnings in `uat-verification.json` | The post-fix broad suite passes without raising the size cap. One network coroutine warning remains; tested scopes do not establish full acceptance |
+| No introduced regressions | Latest broad engine selection: 11,092 passed, two fixture-construction failures; corrected cases pass 2/2 at `c9a2ccc14ac`. Focused selection 195 passed; canonical browser/native 30 passed. Earlier goals/frontend results and original failures retained in `uat-verification.json` | Passing evidence spans the broad run and corrected-case rerun, not one clean broad invocation. Existing network coroutine warning remains; tested scopes do not establish full acceptance |
 
 ## Alternative runtimes and rollout
 
@@ -526,3 +526,10 @@ A failing HTTP case reproduced a reconnect ordering bug: requesting plan status 
 The final focused selection passes 195 tests (14.25s). The canonical browser/native suite adds a status-first reconnect case and passes 30 tests (20.10s), with one worker-only skip and one dependency warning. The added case clears only process-local sessions after a real draft has been persisted, calls the actual status proxy, and recovers through the browser, Next proxy, native engine and private canonical database. It produces one preparation run, no approval/execution and no business-tool calls. Two test-fixture mistakes and their logs are preserved in `bench/runtime/uat-plan-status-recovery.json`; both were corrected. Ruff, formatting, Node syntax and diff checks pass.
 
 This is evidence for reconnect ordering, not general restart or all-provider reconciliation. Full acceptance remains open and no deployment occurred.
+
+
+## Broad engine regression after plan recovery and admission changes
+
+The broad non-slow/non-integration/non-LLM/non-e2e/non-smoke engine selection completed with 11,092 passed, two failed, 29 skipped, 181 deselected and 393 warnings in 362.45s. Its two failures were new race-test fixtures collected before the required original_message field was added; both failed before reaching the behavior being tested. Those exact cases pass against committed revision `c9a2ccc14ac` (2 passed, 0.70s), as does the corrected 195-test focused selection. Product logic did not change during the broad run. The integration-only browser case was added during that run and separately passes in the canonical suite.
+
+Every selected case has passing evidence across the broad run and corrected-case rerun. This is not described as one clean broad invocation. The existing unawaited connect_tcp warning remains, and its collection location does not identify the initiating path. Original failures and rerun logs are preserved under `engine_plan_recovery_regression` in `bench/runtime/uat-verification.json`. Full acceptance and deployment remain unclaimed.
