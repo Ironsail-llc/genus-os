@@ -935,8 +935,10 @@ async def save_plan_state_async(
     session_key: str,
     plan_dict: dict[str, Any],
     tenant_id: str = DEFAULT_TENANT,
+    *,
+    strict: bool = False,
 ) -> None:
-    """Non-blocking wrapper around save_plan_state."""
+    """Persist asynchronously; strict callers require durability before proceeding."""
     loop = asyncio.get_running_loop()
     try:
         await loop.run_in_executor(
@@ -944,6 +946,8 @@ async def save_plan_state_async(
             lambda: save_plan_state(session_key, plan_dict, tenant_id=tenant_id),
         )
     except Exception as e:
+        if strict:
+            raise
         logger.warning("Failed to persist plan state for %s: %s", sanitize_log(session_key), e)
 
 

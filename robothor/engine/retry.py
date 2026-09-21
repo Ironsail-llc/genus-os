@@ -69,6 +69,10 @@ async def retry_async(
         try:
             return await fn(*args, **kwargs)
         except retryable_exceptions as e:
+            from robothor.engine.workflow_budget import propagates_to_caller
+
+            if propagates_to_caller(e):
+                raise
             last_exc = e
             if attempt >= max_attempts:
                 break
@@ -110,6 +114,10 @@ def retry_sync(
         try:
             return fn(*args, **kwargs)
         except retryable_exceptions as e:
+            from robothor.engine.workflow_budget import propagates_to_caller
+
+            if propagates_to_caller(e):
+                raise
             last_exc = e
             if attempt >= max_attempts:
                 break

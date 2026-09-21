@@ -41,7 +41,9 @@ from robothor.engine.config import (
     EngineConfig,
     _prompt_cache,
     build_system_prompt,
-    load_agent_config_or_reason,
+)
+from robothor.engine.config import (
+    load_agent_config_or_reason as load_agent_config_or_reason,
 )
 
 # ── Log-injection sanitizer ──
@@ -52,7 +54,7 @@ from robothor.engine.context_budget import keep_context_within_budget
 # Re-exported for existing importers. The `as` form is what marks a name as
 # deliberately re-exported; a plain import reads to mypy as a private detail,
 # which is the right default and the wrong one here.
-from robothor.engine.deliverables import task_text_from  # noqa: E402
+from robothor.engine.deliverable_contract import task_text_for_run  # noqa: E402
 from robothor.engine.error_actions import apply_error_recovery, inject_error_feedback
 from robothor.engine.finalization_budget import FinalizationBudget  # noqa: E402
 from robothor.engine.injection_screen import screen_run_prompt
@@ -79,6 +81,7 @@ from robothor.engine.models import (
     TriggerType,
 )
 from robothor.engine.output_validation import request_output_repair, validated_completion
+from robothor.engine.plan_integrity import nudge_for_plan_research
 from robothor.engine.prompts import (
     EXECUTION_MODE_PREAMBLE,
 )
@@ -108,6 +111,16 @@ from robothor.engine.run_lifecycle import RunLifecycleMixin, spawn_post_stall_au
 from robothor.engine.run_llm_calls import LLMCallMixin  # noqa: E402
 from robothor.engine.run_pacing import DeadlinePacer, checkin_note, mode_for_run  # noqa: E402
 from robothor.engine.run_replan import maybe_replan  # noqa: E402
+from robothor.engine.runtime.current import runtime_entrypoint
+from robothor.engine.runtime.deadlines import enclosing_deadline_reason
+from robothor.engine.runtime.profile_admission import load_for_run
+from robothor.engine.runtime.setup import (
+    attach_session,
+    bounded_timeout,
+    initialize_budget,
+    principal,
+    restored_context,
+)
 from robothor.engine.sandbox_policy import agent_holds_exec, resolve_sandbox_decision
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.session import ENGINE_CONTEXT_ROLE, AgentSession
@@ -133,8 +146,8 @@ from robothor.engine.toolset_prep import (
 )
 from robothor.engine.tracking import create_run, update_run
 from robothor.engine.warmup_steps import record_warmup_steps
-from robothor.engine.workflow_budget import WorkflowDeadlineError, propagates_to_caller
-from robothor.engine.workflow_completion import finish_after_tools
+from robothor.engine.workflow_budget import propagates_to_caller
+from robothor.engine.workflow_completion import finish_after_tools, host_rendered_output
 
 # Per-tool wall-clock caps. The tables and the rule live in
 # robothor/engine/tool_timeouts.py; re-exported under their old private names
@@ -498,9 +511,10 @@ class AgentRunner(
         if agent_config is not None:
             return agent_config, None
         reason = f"Agent config not found: {agent_id}"
-        agent_config, loaded_reason = load_agent_config_or_reason(
-            agent_id, self.config.manifest_dir
-        )
+        # `load_for_run` reuses the profile already resolved at admission when
+        # there is one, and falls back to `load_agent_config_or_reason`. Reading
+        # the manifest again here would undo the runtime's single-lookup work.
+        agent_config, loaded_reason = load_for_run(agent_id, self.config.manifest_dir)
         if agent_config is not None:
             return agent_config, None
         logger.error("Agent run refused: %s", _sanitize(loaded_reason or reason))
@@ -508,6 +522,7 @@ class AgentRunner(
         session.start("", message, [])
         return None, session.fail(loaded_reason or reason)
 
+    @runtime_entrypoint
     async def execute(
         self,
         agent_id: str,
@@ -555,7 +570,22 @@ class AgentRunner(
         # Falling through to the config default writes a row the connection's RLS
         # binding refuses, and the refusal arrives as an opaque
         # InsufficientPrivilege at INSERT time. See test_nested_run_tenant.py.
+        from robothor.autonomy.intake import protect_payment_text
+
+        message = protect_payment_text(message)
         resolved_tenant = tenant_id or current_tenant_scope() or self.config.tenant_id
+
+        readonly_mode, execution_mode, identity, user_id, user_role = await restored_context(
+            resume_from_run_id,
+            agent_id,
+            resolved_tenant,
+            trigger_type,
+            readonly_mode,
+            execution_mode,
+            identity,
+            user_id,
+            user_role,
+        )
 
         agent_config, refusal = self._config_or_refusal(
             agent_id, agent_config, message, trigger_type, trigger_detail, resolved_tenant
@@ -563,36 +593,20 @@ class AgentRunner(
         if refusal is not None:
             return refusal
 
-        # Resolve a concrete execution identity before creating the run.  An
-        # empty role used to mean "system" and silently bypass every per-user
-        # permission check.  System triggers now receive the manifest's explicit
-        # service role; interactive triggers must carry a verified caller (with
-        # the sole exception of explicit loopback insecure-development mode).
-        effective_user_id = user_id
-        effective_user_role = user_role
-        if spawn_context and not effective_user_id and spawn_context.user_id:
-            effective_user_id = spawn_context.user_id
-            effective_user_role = spawn_context.user_role
-
-        if trigger_type in _SYSTEM_TRIGGER_TYPES:
-            effective_user_id = effective_user_id or f"service:{agent_id}"
-            effective_user_role = effective_user_role or agent_config.service_role or "service"
-        elif not effective_user_id or not effective_user_role:
-            from robothor.auth.runtime import auth_required
-
-            bind_host = os.environ.get("ROBOTHOR_ENGINE_HOST", "127.0.0.1")
-            if not auth_required(bind_host=bind_host):
-                effective_user_id = effective_user_id or "loopback-development-operator"
-                effective_user_role = effective_user_role or "owner"
-            else:
-                logger.warning(
-                    "Rejected interactive run without verified identity: agent=%s trigger=%s",
-                    _sanitize(agent_id),
-                    trigger_type.value,
-                )
-                session = AgentSession(agent_id, trigger_type, trigger_detail, resolved_tenant)
-                session.start("", message, [])
-                return session.fail("Authentication identity required for interactive run")
+        actor = principal(
+            agent_config,
+            agent_id,
+            trigger_type,
+            user_id,
+            user_role,
+            spawn_context,
+            _SYSTEM_TRIGGER_TYPES,
+        )
+        if actor is None:
+            session = AgentSession(agent_id, trigger_type, trigger_detail, resolved_tenant)
+            session.start("", message, [])
+            return session.fail("Authentication identity required for interactive run")
+        effective_user_id, effective_user_role = actor
 
         # ── Identity — who is this run's message addressed to? ────────────
         # Precedence and its reasoning live in robothor/engine/run_identity.py:
@@ -615,7 +629,6 @@ class AgentRunner(
 
         set_reasoning_effort(agent_config.reasoning_effort)
 
-        # Create session
         session = AgentSession(
             agent_id=agent_id,
             trigger_type=trigger_type,
@@ -625,16 +638,14 @@ class AgentRunner(
             tool_offload_threshold=agent_config.tool_offload_threshold,
         )
 
+        await attach_session(session)
         session.response_format = agent_config.response_format
         session.provider_order = agent_config.provider_order
-
-        from robothor.goals.runtime import attach_run
-
-        await asyncio.to_thread(attach_run, session.run)
 
         # User identity threading
         session.run.user_id = effective_user_id
         session.run.user_role = effective_user_role
+        session.run.resume_from_run_id = resume_from_run_id
 
         # Benchmark sandbox marker — stamps the AgentRun (read by the tool
         # wrappers) and the task-local run context (read by the memory write
@@ -1015,15 +1026,23 @@ class AgentRunner(
             autonomy_active=_prepared.autonomy_active,
         )
 
+        session.readonly_mode = readonly_mode
+        from robothor.engine.task_context import install_context, read_context
+
+        task_record = read_context(session.messages)
+        if task_record:
+            task_record["mode"] = "plan" if readonly_mode else "execute"
+            install_context(session.messages, task_record)
+
         from robothor.engine.routine_request import bind_confirmation
 
+        # Five arguments, not three: #610 scopes the draft to this agent and
+        # skips binding in plan mode. The branch predates both.
         await bind_confirmation(session, message, conversation_history, agent_config, readonly_mode)
 
         watchdog.touch("session_started")
 
-        from robothor.goals.runtime import initialize_token_budget
-
-        initialize_token_budget(session.run, agent_config, spawn_context)
+        initialize_budget(session.run, agent_config, spawn_context)
 
         # Stage 5 — propagate the CRM task this run is advancing so the
         # agent_runs row carries it from INSERT time. Previously only the
@@ -1039,7 +1058,7 @@ class AgentRunner(
         # This lets agents run for hours on complex tasks without being killed.
         trace = None  # initialized inside timeout block, but referenced in except handlers
         try:
-            async with asyncio.timeout(hard_timeout):
+            async with asyncio.timeout(bounded_timeout(hard_timeout, session)) as native_window:
                 # Record run in database (sync DB call — run in executor to avoid blocking event loop)
                 import psycopg2
 
@@ -1139,32 +1158,22 @@ class AgentRunner(
                 route = self._apply_routing(agent_config, message, len(tool_names))
 
                 # ── [PLANNER] Generate plan if enabled ──
+                from robothor.engine.runtime.classified_deadline import (
+                    apply as apply_classified_deadline,
+                )
+
                 plan_result = None
-                plan_context = ""
                 if not getattr(session, "routine_operation_bound", False) and self._should_plan(
                     agent_config, route
                 ):
                     plan_result = await self._run_planner(
                         agent_config, message, planner_tool_names(_prepared), models
                     )
+                    await apply_classified_deadline(
+                        session, native_window, agent_config, route, plan_result
+                    )
                     if plan_result and plan_result.success:
-                        # Planner is non-fatal end to end: a malformed plan must
-                        # never abort the run over an optional context string.
-                        try:
-                            from robothor.engine.planner import format_plan_context
-
-                            plan_context = format_plan_context(plan_result)
-                            if plan_context:
-                                session.messages.append(
-                                    {"role": ENGINE_CONTEXT_ROLE, "content": plan_context}
-                                )
-                        except Exception as e:
-                            plan_context = ""
-                            logger.warning(
-                                "Plan context formatting failed (non-fatal, "
-                                "continuing without plan): %s",
-                                _sanitize(e),
-                            )
+                        self._attach_plan_context(session, plan_result)
 
                         # Dispatch PLAN_CREATED hook
                         try:
@@ -1189,6 +1198,10 @@ class AgentRunner(
                                 "Failed to publish planner hook context: %s", _sanitize(e)
                             )
 
+                await apply_classified_deadline(
+                    session, native_window, agent_config, route, plan_result
+                )
+
                 # ── [TELEMETRY] Create trace context ──
                 trace = self._create_trace(agent_config, session, spawn_context=spawn_context)
 
@@ -1203,7 +1216,7 @@ class AgentRunner(
                 # ── [CHECKPOINT] Resume from checkpoint if requested ──
                 resumed_scratchpad = None
                 if resume_from_run_id:
-                    resumed_scratchpad = self._resume_from_checkpoint(resume_from_run_id, session)
+                    resumed_scratchpad = await self._resume_checkpoint(resume_from_run_id, session)
 
                 # ── [SANDBOX] Create sandbox for computer-use / exec agents ──
                 # Explicit "docker" always sandboxes; "host" always opts out.
@@ -1331,6 +1344,11 @@ class AgentRunner(
                             on_status=report_status,
                             on_stream_event=on_stream_event,
                         )
+                    if native_window is not None and native_window.expired() is True:
+                        from robothor.engine.runtime.deadlines import require_time
+
+                        require_time()
+                        raise TimeoutError("Native execution deadline expired")
                     # A run the watchdog flagged that RETURNED (cooperative
                     # abort, or the loop's own wall-clock self-check) must
                     # finalize as TIMEOUT, exactly like one the cancel
@@ -1383,7 +1401,7 @@ class AgentRunner(
             # run's clock never fired, and the exception already names the
             # workflow, step and model. It outranks abort_reason, which would
             # otherwise both mask the message and re-stamp the row a timeout.
-            _deadline = str(_cancel_exc) if isinstance(_cancel_exc, WorkflowDeadlineError) else ""
+            _deadline = enclosing_deadline_reason(_cancel_exc)
             _outcome = _cancel_outcome(
                 timed_out=isinstance(_cancel_exc, TimeoutError),
                 declared_timeout_seconds=agent_config.timeout_seconds,
@@ -1436,11 +1454,10 @@ class AgentRunner(
                 raise
             return finished
         except Exception as e:
-            tb = traceback.format_exc()
-            logger.error("Agent %s failed: %s", _sanitize(agent_id), _sanitize(e), exc_info=True)
-            session.record_error(str(e), tb)
+            from robothor.engine.runtime.failure import failed_or_stopped
+
             return self._finish_run(
-                session.fail(str(e), tb),
+                failed_or_stopped(session, e, traceback.format_exc()),
                 trace=trace,
                 agent_config=agent_config,
                 session=session,
@@ -1461,8 +1478,13 @@ class AgentRunner(
 
         # ── [VERIFIER] Self-validation step ──
         output_text = session.get_final_text()
-        if not getattr(session, "routine_operation_bound", False) and self._should_verify(
-            agent_config, route, session
+        # Two independent reasons not to verify: a bound routine confirmation
+        # (#610) and a host-rendered answer such as a goal report. Either one
+        # alone is sufficient, so both have to be checked.
+        if (
+            not getattr(session, "routine_operation_bound", False)
+            and not host_rendered_output(session)
+            and self._should_verify(agent_config, route, session)
         ):
             output_text = await self._run_verification(
                 agent_config,
@@ -1571,10 +1593,10 @@ class AgentRunner(
         )
 
         # Record run in DB
-        try:
-            create_run(session.run)
-        except Exception as e:
-            logger.warning("Failed to record deep run start: %s", _sanitize(e))
+        from robothor.engine.runtime.deep_admission import record_deep
+
+        if error := record_deep(session.run, create_run):
+            return self._finish_run(session.fail(error))
 
         # Build context — use override (from deep plan) or fall back to conversation history
         if context_override:
@@ -1644,21 +1666,21 @@ class AgentRunner(
         progress_task = asyncio.create_task(_progress_loop())
 
         try:
-            from robothor.engine.rlm_tool import DeepReasonConfig, execute_deep_reason
+            from robothor.engine.runtime.deep_admission import execute_deep_checked
+            from robothor.engine.runtime.deep_worker import owned_deep_call
 
-            config = DeepReasonConfig(workspace=str(self.config.workspace))
-            result = await asyncio.to_thread(  # type: ignore[call-arg]
-                execute_deep_reason,
+            result = await owned_deep_call(
+                session,
+                self._finish_run,
+                progress_stop,
+                progress_task,
+                execute_deep_checked,
+                run=session.run,
                 query=query,
                 context=context,
-                config=config,
+                workspace=str(self.config.workspace),
                 on_event=lambda e: event_queue.put_nowait(e),
             )
-
-            progress_stop.set()
-            progress_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await progress_task
 
             elapsed = time.monotonic() - start_time
 
@@ -1713,15 +1735,9 @@ class AgentRunner(
             return self._finish_run(session.complete(response_text))
 
         except Exception as e:
-            progress_stop.set()
-            progress_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await progress_task
+            from robothor.engine.runtime.failure import failed_or_stopped
 
-            tb = traceback.format_exc()
-            logger.error("execute_deep failed: %s", _sanitize(e), exc_info=True)
-            session.record_error(str(e), tb)
-            return self._finish_run(session.fail(str(e), tb))
+            return self._finish_run(failed_or_stopped(session, e, traceback.format_exc()))
 
     async def _run_loop(
         self,
@@ -1832,7 +1848,7 @@ class AgentRunner(
                     session,
                     _stop.budget,
                     elapsed=_stop.elapsed,
-                    task_text=task_text_from(session.messages),
+                    task_text=task_text_for_run(session.run, session),
                     workspace=_workspace,
                 )
                 return
@@ -1844,7 +1860,7 @@ class AgentRunner(
                     wrapup_note(
                         elapsed=_stop.elapsed,
                         budget_seconds=_stop.budget.seconds,
-                        task_text=task_text_from(session.messages),
+                        task_text=task_text_for_run(session.run, session),
                         workspace=_workspace,
                     ),
                     _workspace,
@@ -1877,7 +1893,7 @@ class AgentRunner(
             _dl_note = _pacer.note_for(
                 self._active_watchdog,
                 iteration=_iteration,
-                task_text=task_text_from(session.messages),
+                task_text=task_text_for_run(session.run, session),
                 workspace=_workspace,
                 run_id=session.run.id,
             )
@@ -1904,7 +1920,7 @@ class AgentRunner(
                 _pacer.mode,
                 run_id=session.run.id,
                 session=session,
-                task_text=task_text_from(session.messages),
+                task_text=task_text_for_run(session.run, session),
                 workspace=_workspace,
                 fraction=_stop.fraction_spent(),
             )
@@ -2020,7 +2036,7 @@ class AgentRunner(
                     session,
                     _stop.budget,
                     elapsed=_stop.elapsed,
-                    task_text=task_text_from(session.messages),
+                    task_text=task_text_for_run(session.run, session),
                     workspace=_workspace,
                 )
                 return
@@ -2047,22 +2063,14 @@ class AgentRunner(
 
             # Check if we're done (no tool calls)
             if not assistant_msg.tool_calls:
-                # In plan mode, nudge the agent to research if it skipped tools
-                # on the very first iteration (only fires once).
-                if readonly_mode and _iteration == 0:
-                    session.messages.append(
-                        {
-                            "role": ENGINE_CONTEXT_ROLE,
-                            "content": (
-                                "[SYSTEM] You proposed a plan without using any tools to "
-                                "research first. Before finalizing, use your tools to discover "
-                                "and verify. For example: `list_directory` to find files, "
-                                "`read_file` to read them, `search_memory` for context. "
-                                "Do NOT ask the user to look things up for you."
-                            ),
-                        }
-                    )
+                if readonly_mode and nudge_for_plan_research(session, _iteration):
                     continue
+
+                if readonly_mode:
+                    from robothor.engine.plan_integrity import require_alignment
+
+                    if await require_alignment(self, session, models, assistant_msg.content or ""):
+                        continue
 
                 if request_output_repair(session) or nudge_for_missing_deliverable(
                     session, _workspace
@@ -2078,7 +2086,7 @@ class AgentRunner(
                     session,
                     _stop.budget,
                     elapsed=_stop.elapsed,
-                    task_text=task_text_from(session.messages),
+                    task_text=task_text_for_run(session.run, session),
                     workspace=_workspace,
                 )
                 return
@@ -2111,6 +2119,11 @@ class AgentRunner(
             )
 
             if finish_after_tools(session):
+                return
+
+            from robothor.engine.goal_report_delivery import finish_goal_report
+
+            if finish_goal_report(session):
                 return
 
             # ── [ERROR RECOVERY] Attempt autonomous recovery before escalation ──

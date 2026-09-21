@@ -56,6 +56,8 @@ def classify_difficulty(
     tool_count: int,
     manual_override: str = "",
     plan_difficulty: str = "",
+    *,
+    catalogue_implies_complexity: bool = True,
 ) -> str:
     """Classify task difficulty. Returns: simple, moderate, complex."""
     # Priority 1: manual override from manifest
@@ -70,7 +72,7 @@ def classify_difficulty(
     msg_len = len(message)
     if msg_len < 100 and tool_count <= 5:
         return "simple"
-    if msg_len > 500 or tool_count > 20:
+    if msg_len > 500 or (catalogue_implies_complexity and tool_count > 20):
         return "complex"
     return "moderate"
 
@@ -80,7 +82,15 @@ def get_route_config(
     tool_count: int,
     manual_override: str = "",
     plan_difficulty: str = "",
+    *,
+    catalogue_implies_complexity: bool = True,
 ) -> RouteConfig:
     """Get route configuration for a task."""
-    difficulty = classify_difficulty(message, tool_count, manual_override, plan_difficulty)
+    difficulty = classify_difficulty(
+        message,
+        tool_count,
+        manual_override,
+        plan_difficulty,
+        catalogue_implies_complexity=catalogue_implies_complexity,
+    )
     return ROUTE_PRESETS.get(difficulty, ROUTE_PRESETS["moderate"])

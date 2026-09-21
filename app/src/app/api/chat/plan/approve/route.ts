@@ -6,7 +6,7 @@ export async function POST(req: Request) {
   const planId = body.plan_id;
   const chosen = await resolveChatAgent(body.agent);
   if (!chosen.ok) {
-      return new Response(JSON.stringify({ error: chosen.error }), {
+      return new Response(JSON.stringify({ error: chosen.error, request_admitted: false }), {
         status: chosen.status,
         headers: { "Content-Type": "application/json" },
       });
@@ -14,7 +14,7 @@ export async function POST(req: Request) {
   const sessionKey = chosen.key;
 
   if (!planId || typeof planId !== "string") {
-    return new Response(JSON.stringify({ error: "plan_id required" }), {
+    return new Response(JSON.stringify({ error: "plan_id required", request_admitted: false }), {
       status: 400,
       headers: { "Content-Type": "application/json" },
     });
@@ -23,7 +23,14 @@ export async function POST(req: Request) {
   const client = getEngineClient();
 
   try {
-    const engineRes = await client.planApprove(planId, sessionKey);
+    const engineRes = await (body.request_id === undefined ? client.planApprove(planId, sessionKey) : client.planApprove(planId, sessionKey, body.request_id));
+
+    if (engineRes.ok === false) {
+      return new Response(engineRes.body, {
+        status: engineRes.status,
+        headers: { "Content-Type": engineRes.headers.get("content-type") ?? "application/json", "Cache-Control": "no-store" },
+      });
+    }
 
     if (!engineRes.body) {
       return new Response(
