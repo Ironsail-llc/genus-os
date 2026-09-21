@@ -135,6 +135,24 @@ def budget_scope(budget: RequestBudget) -> Iterator[RequestBudget]:
 
 
 async def bounded_completion(call: Callable[..., Awaitable[Any]], **kwargs: Any) -> Any:
+    """Admit one provider request, under a goal's shared budget when there is one."""
+    from robothor.engine.runtime.provider_budget import assert_provider_authorized
+    from robothor.goals.runtime import binding
+
+    await assert_provider_authorized()
+
+    current = binding.get()
+    if current is not None and current.provider_budget is not None:
+        from robothor.engine.runtime.provider_budget import goal_completion
+
+        async def funded(**bounded: Any) -> Any:
+            return await _cost_bounded_completion(call, **bounded)
+
+        return await goal_completion(funded, kwargs, current.provider_budget)
+    return await _cost_bounded_completion(call, **kwargs)
+
+
+async def _cost_bounded_completion(call: Callable[..., Awaitable[Any]], **kwargs: Any) -> Any:
     """Wrap each actual provider attempt, not the caller's whole retry loop."""
     budget = active_budget()
     if budget is None:

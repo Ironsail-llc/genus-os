@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, cast
 import httpx
 
 from robothor.constants import DEFAULT_TENANT
+from robothor.engine.tools.response_failure import http_status_failure, tool_response_failure
 
 if TYPE_CHECKING:
     from robothor.config import Config
@@ -482,6 +483,36 @@ async def _refuse_before_handler(
     return None
 
 
+async def _runtime_denial(
+    name: str, args: dict[str, Any], ctx: ToolContext
+) -> dict[str, Any] | None:
+    from robothor.goals.runtime import admit_tool
+
+    try:
+        from robothor.engine.runtime.controls import stopped
+        from robothor.engine.runtime.deadlines import require_time
+
+        require_time()
+        from robothor.engine.resume_claim import current as resume_claim
+        from robothor.engine.resume_claim import require_owned
+
+        if resume_claim.get() is not None:
+            await asyncio.to_thread(require_owned)
+        if ctx.run_id and await asyncio.to_thread(stopped, ctx.tenant_id, ctx.run_id):
+            raise ValueError(
+                "durable stop denies further tool dispatch; reconcile in-flight effects"
+            )
+        await asyncio.to_thread(admit_tool, name, args, ctx)
+    except Exception as exc:
+        err_msg, crashed = _describe_exception(exc)
+        _audit_tool_call(
+            name, ctx.agent_id, ctx.tenant_id, user_id=ctx.user_id, status="denied", error=err_msg
+        )
+        return {"error": err_msg, "tool_crashed": True} if crashed else {"error": err_msg}
+
+    return None
+
+
 async def _execute_tool(
     name: str,
     args: dict[str, Any],
@@ -521,15 +552,18 @@ async def _execute_tool(
         is_benchmark=is_benchmark,
         identity=identity,
     )
-    from robothor.goals.runtime import admit_tool
+    denial = await _runtime_denial(name, args, ctx)
+    if denial:
+        return denial
 
-    try:
-        await asyncio.to_thread(admit_tool, name, args, ctx)
-    except Exception as exc:
-        err_msg, crashed = _describe_exception(exc)
-        _audit_tool_call(name, agent_id, tenant_id, user_id=user_id, status="denied", error=err_msg)
-        return {"error": err_msg, "tool_crashed": True} if crashed else {"error": err_msg}
+    from robothor.engine.runtime.effect_dispatch import invoke
 
+    return await invoke(name, args, ctx, lambda: _dispatch_admitted(name, args, ctx))
+
+
+async def _dispatch_admitted(name: str, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    agent_id, run_id, tenant_id = ctx.agent_id, ctx.run_id, ctx.tenant_id
+    user_id, workspace, is_benchmark = ctx.user_id, ctx.workspace, ctx.is_benchmark
     from robothor.engine.tools import get_registry
 
     route = get_registry().get_adapter_route(name)
@@ -547,7 +581,9 @@ async def _execute_tool(
             _audit_tool_call(
                 name, agent_id, tenant_id, user_id=user_id, status="error", error=str(e)
             )
-            return {"error": f"Adapter tool '{name}' failed: {e}"}
+            return tool_response_failure(
+                name, {"error": f"Adapter tool '{name}' failed: {e}", "retryable": True}
+            )
 
     handlers = _get_handlers()
     handler = handlers.get(name)
@@ -608,7 +644,7 @@ async def _execute_tool(
         err_msg = f"backing service error (HTTP {status})"
         logger.warning("Tool %s: %s", name, err_msg)
         _audit_tool_call(name, agent_id, tenant_id, user_id=user_id, status="error", error=err_msg)
-        return {"error": err_msg, "retryable": status >= 500}
+        return http_status_failure(name, status, err_msg)
     except httpx.HTTPError as e:
         # Transport-level failure (connect refused, timeout, protocol error)
         # from a handler that didn't route through service_client — e.g. the
@@ -617,7 +653,7 @@ async def _execute_tool(
         err_msg = f"backing service unreachable: {type(e).__name__}"
         logger.warning("Tool %s: %s", name, err_msg)
         _audit_tool_call(name, agent_id, tenant_id, user_id=user_id, status="error", error=err_msg)
-        return {"error": err_msg, "retryable": True}
+        return tool_response_failure(name, {"error": err_msg, "retryable": True})
     except Exception as e:
         err_msg, crashed = _describe_exception(e)
         if crashed:

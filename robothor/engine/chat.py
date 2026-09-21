@@ -14,7 +14,7 @@ Endpoints:
   POST /chat/plan/start   — Start plan mode: explore with read-only tools
   POST /chat/plan/approve — Approve pending plan: execute with full tools
   POST /chat/plan/reject  — Reject pending plan (optional feedback)
-  POST /chat/plan/iterate — Revise pending plan with feedback (keeps same plan_id)
+  POST /chat/plan/iterate — Revise pending plan with feedback (new approval identity)
   GET  /chat/plan/status  — Check plan state for a session
   POST /chat/deep/start   — Start deep reasoning (RLM), return SSE stream
   GET  /chat/deep/status  — Check active deep reasoning state
@@ -42,16 +42,28 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 
 from robothor.constants import DEFAULT_TENANT
+from robothor.engine.chat_delivery import deliver_interruption, deliver_plan_interruption
+from robothor.engine.chat_delivery import final_result as delivery_result
 from robothor.engine.chat_history import MAX_HISTORY as _MAX_HISTORY
 from robothor.engine.chat_history import ChatHistory, append_turn, as_history
+from robothor.engine.chat_plan_changes import reject_plan, revise_plan
+from robothor.engine.chat_plan_claim import (
+    admit_plan,
+    approval_refusal,
+    approval_retry,
+    finish_plan,
+)
+from robothor.engine.chat_result import result_text
 from robothor.engine.chat_session_cache import SessionCache
 from robothor.engine.chat_store import (
-    clear_plan_state_async,
+    clear_plan_state_async as clear_plan_state_async,
+)
+from robothor.engine.chat_store import (
     clear_session_async,
     load_all_sessions,
     load_session,
@@ -60,7 +72,8 @@ from robothor.engine.chat_store import (
     save_plan_state_async,
 )
 from robothor.engine.feature_flags import per_user_sessions_mode
-from robothor.engine.models import PLAN_TTL_SECONDS, DeepRunState, PlanState, TriggerType
+from robothor.engine.models import PLAN_TTL_SECONDS, DeepRunState, PlanState, RunStatus, TriggerType
+from robothor.engine.runtime.chat_control import start, stop
 from robothor.engine.sanitize import sanitize_log
 
 if TYPE_CHECKING:
@@ -224,6 +237,7 @@ class ChatSession:
         super().__setattr__(name, value)
 
     active_task: asyncio.Task[Any] | None = None
+    active_request_id: str | None = None
     model_override: str | None = None
     plan_mode: bool = False
     active_plan: PlanState | None = None
@@ -315,7 +329,12 @@ def _restore_sessions(config: EngineConfig) -> None:
                     status=plan_data.get("status", "pending"),
                     created_at=plan_data.get("created_at", ""),
                     exploration_run_id=plan_data.get("exploration_run_id", ""),
+                    approval_request_id=plan_data.get("approval_request_id", ""),
                     rejection_feedback=plan_data.get("rejection_feedback", ""),
+                    plan_hash=plan_data.get("plan_hash", ""),
+                    task_context=plan_data.get("task_context", {}),
+                    creator_sender_info=plan_data.get("creator_sender_info"),
+                    deep_plan=plan_data.get("deep_plan", False),
                     revision_count=plan_data.get("revision_count", 0),
                     revision_history=plan_data.get("revision_history", []),
                     execution_run_id=plan_data.get("execution_run_id", ""),
@@ -399,23 +418,22 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 identity=identity,
             )
 
+            delivered = await delivery_result(run, auth)
+            final_text = delivered["text"]
             # Always record user message in session history
             append_turn(
                 session,
                 user_message=message,
-                assistant_text=(
-                    run.output_text
-                    or (f"[Run failed: {run.error_message}]" if run.error_message else None)
-                ),
+                assistant_text=final_text or None,
             )
 
             # Persist to DB (fire-and-forget)
-            if run.output_text and _config:
+            if final_text and _config:
                 asyncio.create_task(
                     save_exchange_async(
                         session_key,
                         message,
-                        run.output_text,
+                        final_text,
                         channel="webchat",
                         model_override=session.model_override,
                         tenant_id=auth.tenant_id,
@@ -446,7 +464,8 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 {
                     "event": "done",
                     "data": {
-                        "text": run.output_text or "",
+                        **delivered,
+                        "status": run.status.value,
                         "model": run.model_used,
                         "input_tokens": run.input_tokens,
                         "output_tokens": run.output_tokens,
@@ -457,8 +476,12 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
                 }
             )
         except asyncio.CancelledError:
+            if await deliver_interruption(queue, session, auth, session_key, message, aborted=True):
+                return
             await queue.put({"event": "done", "data": {"text": "", "aborted": True}})
         except Exception as e:
+            if await deliver_interruption(queue, session, auth, session_key, message):
+                return
             logger.error("Chat agent error: %s", e, exc_info=True)
             # Record the failed attempt so next run has context
             append_turn(
@@ -471,11 +494,11 @@ async def chat_send(request: Request) -> StreamingResponse | JSONResponse:
             await queue.put({"event": "error", "data": {"error": str(e)}})
         finally:
             await queue.put(None)  # Sentinel
-            session.active_task = None
+            if session.active_task is asyncio.current_task():
+                session.active_task = None
 
     # Start agent as background task
-    task = asyncio.create_task(run_agent())
-    session.active_task = task
+    task = start(session, run_agent, auth, session_key, body.get("request_id"))
 
     async def sse_generator() -> AsyncGenerator[str, None]:
         """Yield SSE events from the queue, with keepalive comments."""
@@ -515,7 +538,16 @@ async def chat_history(request: Request, session_key: str = "", limit: int = 50)
     session = _get_session(session_key)
     messages = session.history[-limit:] if limit > 0 else session.history
 
-    return JSONResponse({"sessionKey": session_key, "messages": messages})
+    from robothor.engine.runtime.chat_control import recovery_scope
+
+    return JSONResponse(
+        {
+            "sessionKey": session_key,
+            "messages": messages,
+            "recoveryScope": recovery_scope(auth, session_key),
+        },
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.post("/inject")
@@ -558,6 +590,27 @@ async def chat_inject(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
+@router.get("/outcome")
+async def chat_outcome(
+    request: Request, background_tasks: BackgroundTasks, request_id: str, session_key: str = ""
+) -> JSONResponse:
+    """Read only the authenticated caller's original request record."""
+    from robothor.engine.chat_recovery import read_outcome
+
+    auth = _auth_context(request)
+    key = _effective_session_key(auth, session_key)
+    result = await asyncio.to_thread(read_outcome, auth, key, request_id)
+    from robothor.engine.chat_plan_recovery import attach_plan
+    from robothor.engine.runtime.chat_control import request_key
+
+    await attach_plan(result, _sessions.get(key), request_key(auth, key, request_id), auth, key)
+    if result.get("terminal") and result.get("reconciliation_pending"):
+        from robothor.engine.calendar_reconciliation import reconcile_outcome
+
+        background_tasks.add_task(reconcile_outcome, auth, key, request_id)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/abort")
 async def chat_abort(request: Request) -> JSONResponse:
     """Cancel the running response for a session."""
@@ -567,13 +620,7 @@ async def chat_abort(request: Request) -> JSONResponse:
     auth = _auth_context(request)
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
-    aborted = False
-
-    if session.active_task and not session.active_task.done():
-        session.active_task.cancel()
-        aborted = True
-
-    return JSONResponse({"ok": True, "aborted": aborted})
+    return JSONResponse(await stop(session, auth, session_key, body.get("request_id")))
 
 
 @router.post("/clear")
@@ -652,7 +699,7 @@ def _plan_is_expired(plan: PlanState) -> bool:
 
 def _extract_plan_text(output: str) -> str:
     """Extract plan text from agent output, stripping the [PLAN_READY] marker."""
-    if not output:
+    if not output or output.startswith("[PLAN_FAILED]"):
         return ""
     marker = "[PLAN_READY]"
     idx = output.find(marker)
@@ -674,8 +721,10 @@ def _plan_to_dict(plan: PlanState) -> dict[str, Any]:
         "revision_count": plan.revision_count,
         "revision_history": plan.revision_history,
         "execution_run_id": plan.execution_run_id,
+        "approval_request_id": plan.approval_request_id,
         "deep_plan": plan.deep_plan,
         "plan_hash": plan.plan_hash,
+        "task_context": plan.task_context,
     }
 
 
@@ -686,7 +735,9 @@ def _plan_to_dict(plan: PlanState) -> dict[str, Any]:
 async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
     """Start plan mode: run agent with read-only tools, return plan via SSE."""
     if _runner is None or _config is None:
-        return JSONResponse({"error": "Chat not initialized"}, status_code=503)
+        return JSONResponse(
+            {"error": "Chat not initialized", "request_admitted": False}, status_code=503
+        )
     auth = _auth_context(request)
     identity = _resolve_webchat_identity(auth)
 
@@ -696,7 +747,9 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
     deep_plan: bool = body.get("deep_plan", False)
 
     if not message:
-        return JSONResponse({"error": "message required"}, status_code=400)
+        return JSONResponse(
+            {"error": "message required", "request_admitted": False}, status_code=400
+        )
 
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
@@ -757,16 +810,17 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
             )
 
             # Extract plan from output
-            plan_text = _extract_plan_text(run.output_text or "")
+            output = result_text(run)
+            plan_text = _extract_plan_text(output) if run.status == RunStatus.COMPLETED else ""
 
             # Accumulate history so revisions have full context
-            append_turn(session, user_message=message, assistant_text=run.output_text)
-            if run.output_text and _config:
+            append_turn(session, user_message=message, assistant_text=output)
+            if output and _config:
                 asyncio.create_task(
                     save_exchange_async(
                         session_key,
                         message,
-                        run.output_text,
+                        output,
                         channel="webchat",
                         model_override=session.model_override,
                         tenant_id=auth.tenant_id,
@@ -786,18 +840,11 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
                     deep_plan=deep_plan,
                     plan_hash=hashlib.sha256(plan_text.encode()).hexdigest()[:16],
                 )
+                # Publish only after the draft can survive a connection loss.
+                await save_plan_state_async(
+                    session_key, _plan_to_dict(plan), tenant_id=auth.tenant_id, strict=True
+                )
                 session.active_plan = plan
-
-                # Persist plan state to DB (awaited — plan state is critical)
-                if _config:
-                    try:
-                        await save_plan_state_async(
-                            session_key,
-                            _plan_to_dict(plan),
-                            tenant_id=auth.tenant_id,
-                        )
-                    except Exception as e:
-                        logger.warning("Failed to persist plan state: %s", e)
 
                 # Send plan event
                 await queue.put(
@@ -812,7 +859,8 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
                 {
                     "event": "done",
                     "data": {
-                        "text": run.output_text or "",
+                        "text": output,
+                        "status": run.status.value,
                         "model": run.model_used,
                         "input_tokens": run.input_tokens,
                         "output_tokens": run.output_tokens,
@@ -828,10 +876,10 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
             await queue.put({"event": "error", "data": {"error": str(e)}})
         finally:
             await queue.put(None)
-            session.active_task = None
+            if session.active_task is asyncio.current_task():
+                session.active_task = None
 
-    task = asyncio.create_task(run_plan_agent())
-    session.active_task = task
+    task = start(session, run_plan_agent, auth, session_key, body.get("request_id"))
 
     async def sse_generator() -> AsyncGenerator[str, None]:
         import json as _json
@@ -879,24 +927,22 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
 
-    if not session.active_plan or session.active_plan.plan_id != plan_id:
-        return JSONResponse({"error": "No matching pending plan"}, status_code=404)
+    if retry := await approval_retry(auth, session_key, body.get("request_id")):
+        return retry
+    if refusal := approval_refusal(session, plan_id):
+        return await approval_retry(auth, session_key, body.get("request_id")) or refusal
 
-    if _plan_is_expired(session.active_plan):
-        session.active_plan.status = "expired"
-        session.active_plan = None
-        return JSONResponse({"error": "Plan expired"}, status_code=410)
-
-    # Verify plan integrity — ensure plan wasn't modified between proposal and approval
-    if session.active_plan.plan_hash:
-        import hashlib
-
-        current_hash = hashlib.sha256(session.active_plan.plan_text.encode()).hexdigest()[:16]
-        if current_hash != session.active_plan.plan_hash:
-            return JSONResponse({"error": "Plan integrity check failed"}, status_code=409)
-
-    plan = session.active_plan
-    plan.status = "approved"
+    plan, client_id = await admit_plan(session, auth, session_key, body.get("request_id"))
+    if plan is None:
+        if retry := await approval_retry(auth, session_key, client_id):
+            return retry
+        return JSONResponse(
+            {
+                "error": "That plan was already approved or changed. No new execution was started.",
+                "request_admitted": False,
+            },
+            status_code=409,
+        )
 
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
 
@@ -941,6 +987,9 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                     identity=identity,
                 )
 
+                delivered = await delivery_result(run, auth)
+                final_text = delivered["text"]
+
                 # Track execution run ID
                 plan.execution_run_id = run.id
 
@@ -948,71 +997,56 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                 append_turn(
                     session,
                     user_message=f"[Deep plan executed] {plan.original_message}",
-                    assistant_text=(
-                        run.output_text
-                        or (
-                            f"[Deep reasoning failed: {run.error_message}]"
-                            if run.error_message
-                            else None
-                        )
-                    ),
+                    assistant_text=final_text,
                 )
 
                 # Persist to DB
-                if run.output_text and _config:
+                if final_text and _config:
                     asyncio.create_task(
                         save_exchange_async(
                             session_key,
                             plan.original_message,
-                            run.output_text,
+                            final_text,
                             channel="webchat",
                             model_override=session.model_override,
                             tenant_id=auth.tenant_id,
                         )
                     )
 
-                # Clear plan + persist
-                session.active_plan = None
-                if _config:
-                    asyncio.create_task(
-                        clear_plan_state_async(session_key, tenant_id=auth.tenant_id)
-                    )
+                # Retire only this approval; newer work may already be pending.
+                await finish_plan(session, plan, auth.tenant_id, session_key)
 
                 # Emit deep result + done
                 duration_s = (run.duration_ms or 0) / 1000
                 cost_usd = run.total_cost_usd or 0.0
 
-                if run.output_text:
+                if run.status == RunStatus.COMPLETED and final_text:
                     await queue.put(
                         {
                             "event": "deep_result",
                             "data": {
-                                "response": run.output_text,
+                                "response": final_text,
                                 "execution_time_s": round(duration_s, 1),
                                 "cost_usd": round(cost_usd, 2),
                             },
                         }
                     )
+                elif run.status != RunStatus.COMPLETED:
                     await queue.put(
-                        {
-                            "event": "done",
-                            "data": {
-                                "text": run.output_text,
-                                "execution_time_s": round(duration_s, 1),
-                                "cost_usd": round(cost_usd, 2),
-                                "duration_ms": run.duration_ms,
-                            },
-                        }
+                        {"event": "error", "data": {"error": run.error_message or final_text}}
                     )
-                elif run.error_message:
-                    await queue.put({"event": "error", "data": {"error": run.error_message}})
-                    await queue.put(
-                        {"event": "done", "data": {"text": "", "error": run.error_message}}
-                    )
-                else:
-                    await queue.put(
-                        {"event": "done", "data": {"text": "", "duration_ms": run.duration_ms}}
-                    )
+                await queue.put(
+                    {
+                        "event": "done",
+                        "data": {
+                            **delivered,
+                            "status": run.status.value,
+                            "execution_time_s": round(duration_s, 1),
+                            "cost_usd": round(cost_usd, 2),
+                            "duration_ms": run.duration_ms,
+                        },
+                    }
+                )
             else:
                 # ── Normal plan execution with full tools ──
                 last_sent_len = 0
@@ -1061,6 +1095,9 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                     identity=identity,
                 )
 
+                delivered = await delivery_result(run, auth)
+                final_text = delivered["text"]
+
                 # Track execution run ID
                 plan.execution_run_id = run.id
 
@@ -1068,41 +1105,31 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                 append_turn(
                     session,
                     user_message=f"[Plan executed] {plan.original_message}",
-                    assistant_text=(
-                        run.output_text
-                        or (
-                            f"[Execution failed: {run.error_message}]"
-                            if run.error_message
-                            else None
-                        )
-                    ),
+                    assistant_text=final_text,
                 )
 
                 # Persist to DB
-                if run.output_text and _config:
+                if final_text and _config:
                     asyncio.create_task(
                         save_exchange_async(
                             session_key,
                             plan.original_message,
-                            run.output_text,
+                            final_text,
                             channel="webchat",
                             model_override=session.model_override,
                             tenant_id=auth.tenant_id,
                         )
                     )
 
-                # Clear plan + persist
-                session.active_plan = None
-                if _config:
-                    asyncio.create_task(
-                        clear_plan_state_async(session_key, tenant_id=auth.tenant_id)
-                    )
+                # Retire only this approval; newer work may already be pending.
+                await finish_plan(session, plan, auth.tenant_id, session_key)
 
                 await queue.put(
                     {
                         "event": "done",
                         "data": {
-                            "text": run.output_text or "",
+                            **delivered,
+                            "status": run.status.value,
                             "model": run.model_used,
                             "input_tokens": run.input_tokens,
                             "output_tokens": run.output_tokens,
@@ -1110,17 +1137,14 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                         },
                     }
                 )
-        except asyncio.CancelledError:
-            await queue.put({"event": "done", "data": {"text": "", "aborted": True}})
-        except Exception as e:
-            logger.error("Plan execution error: %s", e, exc_info=True)
-            await queue.put({"event": "error", "data": {"error": str(e)}})
+        except (asyncio.CancelledError, Exception) as exc:
+            await deliver_plan_interruption(queue, session, auth, session_key, plan, exc)
         finally:
             await queue.put(None)
-            session.active_task = None
+            if session.active_task is asyncio.current_task():
+                session.active_task = None
 
-    task = asyncio.create_task(run_approved())
-    session.active_task = task
+    task = start(session, run_approved, auth, session_key, client_id)
 
     async def sse_generator() -> AsyncGenerator[str, None]:
         import json as _json
@@ -1165,32 +1189,7 @@ async def plan_reject(request: Request) -> JSONResponse:
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
 
-    if not session.active_plan or session.active_plan.plan_id != plan_id:
-        return JSONResponse({"error": "No matching pending plan"}, status_code=404)
-
-    session.active_plan.status = "rejected"
-    session.active_plan.rejection_feedback = feedback
-
-    # Inject rejection feedback into session so agent can learn
-    if feedback:
-        from robothor.secrets.redaction import redact as _redact_text
-
-        session.history.append(
-            {
-                "role": "system",
-                "content": _redact_text(
-                    f"[PLAN REJECTED] The previous plan was rejected. Feedback: {feedback}"
-                ),
-            }
-        )
-
-    session.active_plan = None
-
-    # Persist cleared state
-    if _config:
-        asyncio.create_task(clear_plan_state_async(session_key, tenant_id=auth.tenant_id))
-
-    return JSONResponse({"ok": True})
+    return await reject_plan(session, auth, session_key, plan_id, feedback)
 
 
 @router.post("/plan/iterate", response_model=None)
@@ -1212,25 +1211,12 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
 
-    if not session.active_plan or session.active_plan.plan_id != plan_id:
-        return JSONResponse({"error": "No matching pending plan"}, status_code=404)
+    if refusal := approval_refusal(session, plan_id):
+        return refusal
+    from copy import deepcopy
 
-    if _plan_is_expired(session.active_plan):
-        session.active_plan.status = "expired"
-        session.active_plan = None
-        return JSONResponse({"error": "Plan expired"}, status_code=410)
-
-    plan = session.active_plan
-
-    # Save current plan to revision history
-    plan.revision_history.append(
-        {
-            "plan_text": plan.plan_text,
-            "feedback": feedback,
-            "timestamp": datetime.now(UTC).isoformat(),
-        }
-    )
-    plan.revision_count += 1
+    original = session.active_plan
+    plan = deepcopy(original)
 
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
 
@@ -1285,27 +1271,15 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
                 identity=identity,
             )
 
-            revised_plan_text = _extract_plan_text(run.output_text or "")
-
-            # Update history
-            append_turn(session, user_message=feedback, assistant_text=run.output_text)
-
-            if revised_plan_text:
-                plan.plan_text = revised_plan_text
-
-                # Persist updated plan state
-                asyncio.create_task(
-                    save_plan_state_async(
-                        session_key,
-                        _plan_to_dict(plan),
-                        tenant_id=auth.tenant_id,
-                    )
-                )
-
+            revised, output = await revise_plan(
+                session, original, plan, run, feedback, auth.tenant_id, session_key
+            )
+            append_turn(session, user_message=feedback, assistant_text=output)
+            if revised:
                 await queue.put(
                     {
                         "event": "plan",
-                        "data": _plan_to_dict(plan),
+                        "data": _plan_to_dict(revised),
                     }
                 )
 
@@ -1313,13 +1287,16 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
                 {
                     "event": "done",
                     "data": {
-                        "text": run.output_text or "",
+                        "text": output,
+                        "status": run.status.value,
                         "model": run.model_used,
                         "input_tokens": run.input_tokens,
                         "output_tokens": run.output_tokens,
                         "duration_ms": run.duration_ms,
-                        "plan_id": plan.plan_id,
-                        "revision_count": plan.revision_count,
+                        "plan_id": revised.plan_id if revised else None,
+                        "revision_count": revised.revision_count
+                        if revised
+                        else plan.revision_count,
                     },
                 }
             )
@@ -1330,10 +1307,10 @@ async def plan_iterate(request: Request) -> StreamingResponse | JSONResponse:
             await queue.put({"event": "error", "data": {"error": str(e)}})
         finally:
             await queue.put(None)
-            session.active_task = None
+            if session.active_task is asyncio.current_task():
+                session.active_task = None
 
-    task = asyncio.create_task(run_iteration())
-    session.active_task = task
+    task = start(session, run_iteration, auth, session_key, body.get("request_id"))
 
     async def sse_generator() -> AsyncGenerator[str, None]:
         import json as _json
@@ -1526,11 +1503,11 @@ async def deep_start(request: Request) -> StreamingResponse | JSONResponse:
             await queue.put({"event": "error", "data": {"error": str(e)}})
         finally:
             await queue.put(None)
-            session.active_task = None
+            if session.active_task is asyncio.current_task():
+                session.active_task = None
             session.active_deep = None
 
-    task = asyncio.create_task(run_deep())
-    session.active_task = task
+    task = start(session, run_deep, auth, session_key, body.get("request_id"))
 
     async def sse_generator() -> AsyncGenerator[str, None]:
         import json as _json

@@ -104,6 +104,8 @@ from robothor.engine.request_budget import (
 )
 from robothor.engine.required_tool import tool_choice
 from robothor.engine.retry import retry_async
+from robothor.engine.runtime.deadlines import RuntimeDeadlineError
+from robothor.engine.runtime.provider_budget import DurableStopError
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.stall_watchdog import _active_watchdog_var
 from robothor.engine.workflow_budget import bound_call_timeout
@@ -250,6 +252,21 @@ def _record_execution_mode(model: str) -> None:
         record_completion(model)
     except Exception:  # pragma: no cover - telemetry must never break a call
         logger.debug("Execution-mode signal failed for %s", model, exc_info=True)
+
+
+async def _emit_buffered_completion(result, on_content, emit) -> None:
+    content = str(result.choices[0].message.content or "")
+    if on_content and content:
+        await on_content(content)
+    await emit({"type": "text_delta", "delta": content, "accumulated": content})
+    await emit(
+        {
+            "type": "usage",
+            "input_tokens": 0,
+            "output_tokens": 0,
+        }
+    )
+    await emit({"type": "message_stop"})
 
 
 def _per_call_timeout(model: str, timeout_override: float | None) -> float:
@@ -1253,6 +1270,16 @@ async def llm_call(
                 retryable_exceptions=_RETRYABLE_EXCEPTIONS,
                 backoff_base=1.0,
             )
+        except RequestRouteUnavailableError as exc:
+            last = exc
+            logger.info("No eligible funded route for %s — advancing", _sanitize(candidate))
+        except (DurableStopError, RuntimeDeadlineError):
+            # Neither is a funding refusal. `DurableStopError` subclasses
+            # `RequestBudgetError`, so main's handler below would otherwise turn an
+            # operator's committed stop -- and an expired runtime deadline -- into
+            # "advance to the next model", which is exactly the control being
+            # ignored. They propagate; funding refusals still advance.
+            raise
         except RequestBudgetError as exc:
             last = _funding_refusal(exc, candidate)
         except Exception as exc:  # noqa: BLE001 - the next model is the point
@@ -1572,8 +1599,12 @@ class LLMClient:
         )
         try:
             from robothor.engine.provider_routing import provider_order_scope
+            from robothor.engine.runtime.interactive_routing import prefer_throughput
 
-            with provider_order_scope(getattr(session, "provider_order", {})):
+            with provider_order_scope(
+                getattr(session, "provider_order", {}),
+                prefer_throughput=prefer_throughput(session),
+            ):
                 if on_content or on_stream_event:
                     response = await self._call_llm_streaming(
                         session.messages,
@@ -2415,6 +2446,16 @@ class LLMClient:
                     if not noted:
                         note_outcome(model, attempt_started, error=ce)
                     raise
+                except RequestRouteUnavailableError as exc:
+                    last_error = exc
+                    logger.info("No eligible funded route for %s — advancing", _sanitize(model))
+                except (DurableStopError, RuntimeDeadlineError):
+                    # Neither is a funding refusal. `DurableStopError` subclasses
+                    # `RequestBudgetError`, so main's handler below would otherwise turn an
+                    # operator's committed stop -- and an expired runtime deadline -- into
+                    # "advance to the next model", which is exactly the control being
+                    # ignored. They propagate; funding refusals still advance.
+                    raise
                 except RequestBudgetError as exc:
                     last_error = _funding_refusal(exc, model)
                     break
@@ -2579,20 +2620,7 @@ class LLMClient:
                         with self._watchdog_wait(f"llm_inflight:{model}", per_call_timeout):
                             async with asyncio.timeout(per_call_timeout):
                                 result = await bounded_completion(codex_acompletion, **kwargs)
-                        content = str(result.choices[0].message.content or "")
-                        if on_content and content:
-                            await on_content(content)
-                        await _emit(
-                            {"type": "text_delta", "delta": content, "accumulated": content}
-                        )
-                        await _emit(
-                            {
-                                "type": "usage",
-                                "input_tokens": 0,
-                                "output_tokens": 0,
-                            }
-                        )
-                        await _emit({"type": "message_stop"})
+                        await _emit_buffered_completion(result, on_content, _emit)
                         note_outcome(model, attempt_started, shape=describe_completion(result))
                         return result
 
@@ -2623,6 +2651,8 @@ class LLMClient:
                             )
                         except StopAsyncIteration:
                             break
+                        except RuntimeDeadlineError:
+                            raise
                         except TimeoutError:
                             logger.warning(
                                 "Stream stalled for %ds, aborting model=%s",
@@ -2690,6 +2720,16 @@ class LLMClient:
                     get_model_breaker().record_success(model)
                     _record_execution_mode(model)
                     return rebuilt
+                except RequestRouteUnavailableError as exc:
+                    last_error = exc
+                    logger.info("No eligible funded route for %s — advancing", _sanitize(model))
+                except (DurableStopError, RuntimeDeadlineError):
+                    # Neither is a funding refusal. `DurableStopError` subclasses
+                    # `RequestBudgetError`, so main's handler below would otherwise turn an
+                    # operator's committed stop -- and an expired runtime deadline -- into
+                    # "advance to the next model", which is exactly the control being
+                    # ignored. They propagate; funding refusals still advance.
+                    raise
                 except RequestBudgetError as exc:
                     last_error = _funding_refusal(exc, model)
                     break
