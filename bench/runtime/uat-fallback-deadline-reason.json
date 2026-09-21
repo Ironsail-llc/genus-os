@@ -1,0 +1,58 @@
+{
+  "revision": "49627a99058",
+  "change": "Track the owning asyncio timeout window in task context. Native cancellation finalization can name an expired host deadline before asyncio converts its cancellation into RuntimeDeadlineError. Reset window ownership on exit and do not relabel ordinary cancellation. Preserve existing cancelled status for enclosing host/workflow cancellation.",
+  "selected_chain_snapshot": {
+    "source": "/home/philip/robothor/docs/agents/main.yaml",
+    "primary": "openrouter/deepseek/deepseek-v4.1-flash",
+    "fallbacks": [
+      "openrouter/xiaomi/mimo-v2.5",
+      "openrouter/deepseek/deepseek-v4-flash",
+      "ollama_chat/qwen3.8:27b"
+    ],
+    "temperature": 0.5,
+    "note": "Only model selection was read from the configured manifest. Other native configuration is the isolated fixture. No local-GPU fallback dispatch or live provider access."
+  },
+  "initial_failure": {
+    "failed": 2,
+    "passed": 2,
+    "seconds": 3.77,
+    "log": "/tmp/runtime-fallback-reason-before.log",
+    "finding": "Both stalled cloud fallback cases submitted a cancelled run with only the external-cancellation explanation instead of the expired host deadline."
+  },
+  "fixture_diagnostics": [
+    {
+      "log": "/tmp/runtime-fallback-wire-initial.log",
+      "failed": 2,
+      "passed": 2,
+      "reason": "Expected a returned timeout result, but the runtime contract raises RuntimeDeadlineError. The unit persistence fixture also needed the synchronous cancellation finalizer mocked."
+    },
+    {
+      "log": "/tmp/runtime-fallback-audit-before.log",
+      "failed": 2,
+      "passed": 2,
+      "reason": "Probe initially expected timeout status. Existing enclosing host/workflow cancellation deliberately preserves cancelled status; corrected the assertion before isolating the lost-reason defect."
+    },
+    {
+      "log": "/tmp/runtime-fallback-reason-final.log",
+      "failed": 2,
+      "passed": 73,
+      "reason": "Two new ownership tests lacked execute_before_deadline import; corrected before final verification."
+    }
+  ],
+  "focused": {
+    "passed": 167,
+    "warnings": 1,
+    "seconds": 12.05,
+    "log": "/tmp/runtime-fallback-reason-regression.log"
+  },
+  "canonical_browser": {
+    "passed": 33,
+    "skipped": 1,
+    "warnings": 1,
+    "seconds": 23.94,
+    "log": "/tmp/runtime-fallback-reason-native.log"
+  },
+  "evidence": "Actual native runtime and LiteLLM OpenRouter serialization receive synthetic HTTP 503 responses for the first one or two configured cloud models. Exactly one native retry per failed model precedes fallback; all attempts retain the original deadline and temperature. Successful fallback performs one independently verified synthetic write with no later provider work. Stalled fallback expiry performs zero writes, raises the host deadline error, and submits the cancelled run with the accurate deadline reason to mocked persistence. Separate ownership tests verify ordinary cancellation and context reset.",
+  "checks": "Ruff lint/format and diff checks pass; no size cap increased. Native fallback wire tests added to runtime-contract CI; no hosted run claimed.",
+  "limits": "This verifies synthetic provider transport and finalization arguments, not live-provider outage latency, complete configured-profile parity, local GPU fallback, concurrent fallback load or actual database persistence of this particular deadline reason. Broad engine result 11156 remains attached to preceding product revision 3581b1a9db5. Full acceptance and remaining manual UAT stay open. No production deployment."
+}
