@@ -3505,6 +3505,28 @@
         "Existing task-dedup branches can reuse a different task ID; their lost-return recovery is not qualified by the new-ID lookup. They remain fenced when uncertain.",
         "No new broad engine or live-chat task recovery result. Manual acceptance and production deployment remain false."
       ]
+    },
+    "deduplicated_task_recovery": {
+      "base_revision": "8034c6e3476",
+      "focused": {
+        "passed": 329,
+        "warnings": 2,
+        "seconds": 24.69,
+        "log": "bench/runtime/uat-runtime-task-dedup-final-focused.log"
+      },
+      "canonical": {
+        "passed": 40,
+        "skipped": 1,
+        "warnings": 1,
+        "seconds": 12.67,
+        "log": "bench/runtime/uat-runtime-task-dedup-canonical.log"
+      },
+      "behavior": "Both thread-key and goal-linked task deduplication persist the server-selected existing task ID before returning. Lost return recovery reads that task and preserves deduplicated=true. Binding requires the active task dispatch, matching tenant/principal/run, an undeleted same-tenant task and no conflicting prior target.",
+      "limitations": [
+        "Crash or storage failure before the lookup binding is durable can still leave an unresolved admission; no action is replayed to guess its outcome.",
+        "Recovery establishes a task result, not task completion or downstream notification delivery.",
+        "Broad engine, browser and live-chat results predate this change. Manual acceptance remains pending."
+      ]
     }
   },
   "calendar": {

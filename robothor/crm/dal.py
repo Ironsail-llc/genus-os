@@ -1217,6 +1217,9 @@ def create_task(
 
             existing_goal_task = prepare_task(cur, tenant_id, title, body, assigned_to_agent)
             if existing_goal_task:
+                from robothor.engine.runtime.task_receipts import remember_existing
+
+                remember_existing(tenant_id, existing_goal_task, cursor=cur)
                 return existing_goal_task
             cur.execute(
                 """

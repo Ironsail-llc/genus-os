@@ -1001,3 +1001,12 @@ New runtime-bound native task creations now use the host-reserved effect UUID as
 Canonical integration passed 38 with one skipped in 15.12 seconds. Its immediate and deferred task cases each leave exactly one task after two identical dispatch attempts. The focused task/CRM/effect/size selection passed 220 in 10.50 seconds. Existing task attribution, human-review forwarding and CRM behavior are included in that selection. The new focused contract is registered in compatibility CI; Ruff and diff checks passed.
 
 This proves creation, not task completion or Redis event/notification delivery. Existing dedup paths may reuse an older task ID instead of the reserved one; recovery of a lost return from those paths is not established by this verifier. They retain uncertainty protection. The prior broad engine result predates these changes. No live-chat task UAT, overall acceptance or deployment is claimed.
+
+
+## Existing-task deduplication receipts
+
+Following `8034c6e3476`, the thread-key handler path records the existing task selected by its trusted read before returning. The goal-linked DAL path records its selected task in the same database transaction as that lookup. Both bind only the active `create_task` effect and an undeleted same-tenant task. A conflicting existing target or stale/non-dispatching owner cannot overwrite the binding. This metadata is internal and not a model-facing argument.
+
+Task readback now uses that saved target when present, otherwise the reserved new-task ID. Positive recovery returns the existing task and `deduplicated: true`; it does not claim a new task was created. Canonical tests use actual handler and DAL deduplication for both paths, inject response loss after the result, and recover the original ID while leaving exactly one task. They passed as part of 40 canonical tests (one skipped, 12.67 seconds). The focused engine/CRM/goals/size selection passed 329 with two warnings in 24.69 seconds. Foreign/deleted targets, attempted rebinding and stale-owner mutation are covered. Ruff and diff checks passed.
+
+This closes the previously unqualified lost-return case after a deduplication target has been durably recorded. A crash before that binding is durable can still leave an unresolved admission; the code does not replay an action to infer its outcome. Task completion and downstream notification delivery remain separate facts. No new broad engine, browser, live-chat manual acceptance or deployment is claimed.

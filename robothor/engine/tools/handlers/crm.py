@@ -458,6 +458,9 @@ async def _create_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
                 tenant_id=ctx.tenant_id,
             )
             if existing:
+                from robothor.engine.runtime.task_receipts import remember_existing
+
+                await asyncio.to_thread(remember_existing, ctx.tenant_id, existing["id"])
                 return {
                     "id": existing["id"],
                     "title": existing["title"],

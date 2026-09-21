@@ -59,3 +59,42 @@ async def test_task_validation_error_is_not_returned_as_successful_task_id(monke
     monkeypatch.setattr(dispatch, "_audit_tool_call", lambda *a, **k: None)
     result = await dispatch._execute_tool("create_task", {"title": "Once"}, user_role="service")
     assert result == {"error": "synthetic validation failure"}
+
+
+@pytest.mark.parametrize("case", ["valid", "deleted", "foreign"])
+def test_existing_task_receipt_is_scoped_immutable_and_read_back(effect_db, case):  # noqa: F811
+    from robothor.engine.runtime.task_receipts import remember_existing
+
+    ctx = context()
+    existing, replacement = str(uuid4()), str(uuid4())
+    with effect_db() as conn, conn.cursor() as cur:
+        for identifier in [existing, replacement]:
+            cur.execute(
+                "INSERT INTO crm_tasks(id,tenant_id,title) VALUES (%s,%s,'Existing')",
+                (identifier, str(uuid4()) if case == "foreign" else ctx.tenant_id),
+            )
+    row = effects.begin(ctx, "worker", "main", "create_task", {"title": "Existing"})
+    effects.mark_dispatched(ctx, row["id"], "worker")
+    token = effects.active_effect.set(row)
+    try:
+        if case == "foreign":
+            with pytest.raises(ValueError, match="could not be bound"):
+                remember_existing(ctx.tenant_id, existing)
+            assert effects.read(ctx, row["id"])["resolution"] is None
+            return
+        remember_existing(ctx.tenant_id, existing)
+        with pytest.raises(ValueError, match="could not be bound"):
+            remember_existing(ctx.tenant_id, replacement)
+        effects.finish(ctx, row["id"], "worker", uncertain=True)
+        with pytest.raises(ValueError, match="could not be bound"):
+            remember_existing(ctx.tenant_id, existing)
+    finally:
+        effects.active_effect.reset(token)
+    if case == "deleted":
+        with effect_db() as conn, conn.cursor() as cur:
+            cur.execute("UPDATE crm_tasks SET deleted_at=now() WHERE id=%s", (existing,))
+        assert task_recovery.recover(ctx, row["id"]) is None
+        assert effects.read(ctx, row["id"])["state"] == "uncertain"
+    else:
+        result = task_recovery.recover(ctx, row["id"])
+        assert result["id"] == existing and result["deduplicated"] and result["recovered"]

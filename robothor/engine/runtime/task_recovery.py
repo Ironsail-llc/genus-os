@@ -25,12 +25,13 @@ def task_options(ctx, args):
 
 
 def verify(record):
-    # The host reserved this UUID before the create handler ran. The model
-    # cannot supply it as an argument or nominate a different existing task.
+    # Either the reserved new ID or an existing ID recorded by trusted dedup code.
+    lookup = (record.get("resolution") or {}).get("lookup") or {}
+    identifier = str(lookup.get("task_id") or record["id"])
     with effects.get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT title FROM crm_tasks WHERE tenant_id=%s AND id=%s AND deleted_at IS NULL",
-            (record["tenant_id"], str(record["id"])),
+            (record["tenant_id"], identifier),
         )
         row = cur.fetchone()
     if row is None:
@@ -38,8 +39,8 @@ def verify(record):
     return effects.Verification(
         "applied",
         True,
-        "crm_tasks:" + str(record["id"]),
-        {"id": str(record["id"]), "title": row[0]},
+        "crm_tasks:" + identifier,
+        {"id": identifier, "title": row[0], **({"deduplicated": True} if lookup else {})},
     )
 
 
