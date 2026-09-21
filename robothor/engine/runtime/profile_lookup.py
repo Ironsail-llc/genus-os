@@ -16,6 +16,7 @@ async def lookup(request, directory, admitted_at):
         execute_before_deadline,
         remaining,
     )
+    from robothor.engine.runtime.profile_progress import read_with_progress
 
     deadline = admitted_at + timedelta(seconds=LOOKUP_SECONDS)
     if request.context.deadline is not None:
@@ -26,7 +27,9 @@ async def lookup(request, directory, admitted_at):
     try:
         return await execute_before_deadline(
             bounded.context,
-            lambda: asyncio.to_thread(load_agent_config_or_reason, request.agent_id, directory),
+            lambda: read_with_progress(
+                request, admitted_at, load_agent_config_or_reason, directory
+            ),
         )
     except RuntimeDeadlineError:
         await record_timeout(bounded)

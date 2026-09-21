@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 
 from robothor.engine.chat_recovery import read_outcome
-from robothor.engine.runtime import profile_lookup
+from robothor.engine.runtime import profile_lookup, profile_progress
 from robothor.engine.runtime.chat_control import request_key
 from robothor.engine.runtime.current import runtime_entrypoint
 from robothor.engine.runtime.deadlines import RuntimeDeadlineError
@@ -34,11 +34,15 @@ async def test_blocked_lookup_is_interruptible_and_records_original_outcome(
     entered, release, finished = Event(), Event(), Event()
     execution = Mock()
     accepted = []
+    progress_entered = asyncio.Event()
 
     async def status(event):
         if event.get("event") == "accepted":
             assert not entered.is_set()
             accepted.append(event)
+        elif event.get("event") == "progress":
+            progress_entered.set()
+            await asyncio.Event().wait()
 
     def blocked(*args):
         entered.set()
@@ -51,6 +55,7 @@ async def test_blocked_lookup_is_interruptible_and_records_original_outcome(
     loader = Mock(side_effect=blocked)
     monkeypatch.setattr("robothor.engine.runner.load_agent_config_or_reason", loader)
     monkeypatch.setattr(profile_lookup, "LOOKUP_SECONDS", 0.2)
+    monkeypatch.setattr(profile_progress, "INTERVAL_SECONDS", 0.01)
 
     class Runner:
         config = SimpleNamespace(tenant_id=auth.tenant_id, manifest_dir=tmp_path)
@@ -86,6 +91,7 @@ async def test_blocked_lookup_is_interruptible_and_records_original_outcome(
         # still blocked, so unrelated requests/Stop can make progress.
         assert not finished.is_set() and not task.done()
         assert len(accepted) == 1
+        await asyncio.wait_for(progress_entered.wait(), 1)
         if cancel:
             task.cancel()
         with pytest.raises(asyncio.CancelledError if cancel else RuntimeDeadlineError):
