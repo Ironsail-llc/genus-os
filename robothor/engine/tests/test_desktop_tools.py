@@ -207,7 +207,9 @@ class TestDesktopClick:
         with patch("robothor.engine.tools.handlers.desktop._run_xdotool") as mock_xdo:
             mock_xdo.return_value = {"stdout": "", "exit_code": 0}
             await _click({"x": 100, "y": 200}, ctx)
-            mock_xdo.assert_called_once_with("mousemove", "100", "200", "click", "1")
+            mock_xdo.assert_called_once_with(
+                "mousemove", "100", "200", "click", "1", agent_id="computer-use"
+            )
 
     @pytest.mark.asyncio
     async def test_click_rejects_invalid_coords(self, ctx, mock_cfg):
@@ -228,7 +230,9 @@ class TestDesktopType:
         with patch("robothor.engine.tools.handlers.desktop._run_xdotool") as mock_xdo:
             mock_xdo.return_value = {"stdout": "", "exit_code": 0}
             await _type_text({"text": "hello world"}, ctx)
-            mock_xdo.assert_called_once_with("type", "--delay", "50", "--", "hello world")
+            mock_xdo.assert_called_once_with(
+                "type", "--delay", "50", "--", "hello world", agent_id="computer-use"
+            )
 
     @pytest.mark.asyncio
     async def test_type_rejects_empty_text(self, ctx, mock_cfg):
@@ -249,7 +253,7 @@ class TestDesktopKey:
         with patch("robothor.engine.tools.handlers.desktop._run_xdotool") as mock_xdo:
             mock_xdo.return_value = {"stdout": "", "exit_code": 0}
             await _key({"key": "ctrl+a"}, ctx)
-            mock_xdo.assert_called_once_with("key", "--", "ctrl+a")
+            mock_xdo.assert_called_once_with("key", "--", "ctrl+a", agent_id="computer-use")
 
     @pytest.mark.asyncio
     async def test_key_rejects_empty(self, ctx, mock_cfg):
@@ -270,7 +274,7 @@ class TestDesktopScroll:
         with patch("robothor.engine.tools.handlers.desktop._run_xdotool") as mock_xdo:
             mock_xdo.return_value = {"stdout": "", "exit_code": 0}
             await _scroll({"direction": "down", "clicks": 5}, ctx)
-            mock_xdo.assert_called_once_with("click", "--repeat", "5", "5")
+            mock_xdo.assert_called_once_with("click", "--repeat", "5", "5", agent_id="computer-use")
 
     @pytest.mark.asyncio
     async def test_scroll_up(self, ctx, mock_cfg):
@@ -279,7 +283,7 @@ class TestDesktopScroll:
         with patch("robothor.engine.tools.handlers.desktop._run_xdotool") as mock_xdo:
             mock_xdo.return_value = {"stdout": "", "exit_code": 0}
             await _scroll({"direction": "up", "clicks": 3}, ctx)
-            mock_xdo.assert_called_once_with("click", "--repeat", "3", "4")
+            mock_xdo.assert_called_once_with("click", "--repeat", "3", "4", agent_id="computer-use")
 
     @pytest.mark.asyncio
     async def test_scroll_caps_at_20(self, ctx, mock_cfg):
@@ -288,7 +292,9 @@ class TestDesktopScroll:
         with patch("robothor.engine.tools.handlers.desktop._run_xdotool") as mock_xdo:
             mock_xdo.return_value = {"stdout": "", "exit_code": 0}
             await _scroll({"direction": "down", "clicks": 100}, ctx)
-            mock_xdo.assert_called_once_with("click", "--repeat", "20", "5")
+            mock_xdo.assert_called_once_with(
+                "click", "--repeat", "20", "5", agent_id="computer-use"
+            )
 
 
 # ─── Desktop window list tool ────────────────────────────────────────
