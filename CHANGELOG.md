@@ -1,3 +1,9 @@
+## [1.103.0](https://github.com/Ironsail-llc/genus-os/compare/v1.102.1...v1.103.0) (2026-09-21)
+
+### Features
+
+* **sales:** add native sales intelligence subsystem ([#624](https://github.com/Ironsail-llc/genus-os/issues/624)) ([1e9f132](https://github.com/Ironsail-llc/genus-os/commit/1e9f1321a3e4a4cab21f15cfc7ef582bc56baf0f))
+
 ## [1.102.1](https://github.com/Ironsail-llc/genus-os/compare/v1.102.0...v1.102.1) (2026-09-21)
 
 ### Bug Fixes
