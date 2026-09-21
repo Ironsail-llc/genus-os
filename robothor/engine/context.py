@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 from robothor.engine.reasoning_replay import REASONING_FIELDS
@@ -161,6 +162,44 @@ def _clear_old_tool_results(
     return messages
 
 
+def _pin_active_request(messages: list[dict[str, Any]], request: str) -> list[dict[str, Any]]:
+    """Mark the user turn that carries this run's request so compaction keeps it.
+
+    The pin is a key the ENGINE sets, not a string in the content. Content is
+    model- and tool-controlled: a plain user turn, or a tool result, that merely
+    began with the old ``[ACTIVE REQUEST]`` text was pinned and hoisted into the
+    protected head, which is an unauthenticated promotion.
+
+    The user's OWN turn is marked rather than a copy injected beside it, so the
+    request cannot end up in the head twice. Copy-on-write: the caller's message
+    dicts are never mutated. Idempotent — a history that already carries the pin
+    is returned unchanged, so a second compaction adds nothing.
+    """
+    from robothor.engine.compaction import ACTIVE_REQUEST_PIN, PIN_KEY
+
+    if not messages or any(m.get(PIN_KEY) == ACTIVE_REQUEST_PIN for m in messages):
+        return messages
+    wanted = request.strip()
+    if wanted:
+        for i in range(len(messages) - 1, -1, -1):
+            msg = messages[i]
+            content = msg.get("content")
+            if msg.get("role") == "user" and isinstance(content, str) and wanted in content:
+                return [*messages[:i], {**msg, PIN_KEY: ACTIVE_REQUEST_PIN}, *messages[i + 1 :]]
+    # No surviving user turn to mark (a resumed or already-compacted history):
+    # one pinned developer turn, which the idempotence check above then keeps
+    # from ever being added a second time.
+    return [
+        messages[0],
+        {
+            "role": "developer",
+            "content": "[ACTIVE REQUEST]\n" + request,
+            PIN_KEY: ACTIVE_REQUEST_PIN,
+        },
+        *messages[1:],
+    ]
+
+
 async def maybe_compress(
     messages: list[dict[str, Any]],
     models: list[str] | None = None,
@@ -188,9 +227,21 @@ async def maybe_compress(
     # Offload to a thread: with the real tokenizer enabled this calls
     # litellm.token_counter, a synchronous, potentially CPU-bound call we must
     # not run on the event loop in the compaction hot path.
-    est = await asyncio.to_thread(estimate_tokens, messages, models[0] if models else None)
+    from robothor.engine.context_fit import next_reachable_model
+
+    model = next_reachable_model(models or [], broken_models)
+    est = await asyncio.to_thread(estimate_tokens, messages, model or None)
     if est < compress_at:
         return messages
+
+    from robothor.engine.context_control import control, fingerprint
+
+    state = control.get()
+    if state is not None and state.skip(messages, model, compress_at, est):
+        return messages
+    started = time.monotonic()
+    if state is not None and state.active_request:
+        messages = _pin_active_request(messages, state.active_request)
 
     # The count floor used to live here TOO, and returned before compact()
     # could act — so a 21-message, 225,015-token conversation reduced by 0.0%
@@ -216,11 +267,35 @@ async def maybe_compress(
         messages,
         models=models,
         threshold=compress_at,
-        drain_to=DRAIN_THRESHOLD,
+        drain_to=min(DRAIN_THRESHOLD, max(1, int(compress_at * 0.75))),
         broken_models=broken_models,
     )
 
     compressed = _restore_output_contract(messages, result.messages)
+    # Soft draining preserves the pinned request and recent complete exchanges.
+    # Provider hard-limit enforcement remains a separate preflight operation.
+    from robothor.engine.context_control import drain_history
+
+    target = min(DRAIN_THRESHOLD, max(1, int(compress_at * 0.75)))
+    # Off the loop for the same reason as the two estimates above, and more so:
+    # this one prices every drop candidate. Measured at 2024ms on a real
+    # 121-message history, which is 2s of stalled Telegram, /health and cron.
+    compressed = await asyncio.to_thread(drain_history, compressed, model, target)
+    after = await asyncio.to_thread(estimate_tokens, compressed, model or None)
+    if state is not None:
+        state.fingerprint = fingerprint(compressed)
+        state.model = model
+        state.threshold = compress_at
+        state.stalled_tokens = after if after >= compress_at else 0
+        state.measurements.append(
+            {
+                "duration_ms": int((time.monotonic() - started) * 1000),
+                "tokens_before": est,
+                "tokens_after": after,
+                "target_tokens": target,
+                "target_reached": after <= target,
+            }
+        )
     logger.info(
         "Compaction complete: %d → %d messages, ~%d → ~%d tokens, "
         "%d facts extracted, %d passes used",
