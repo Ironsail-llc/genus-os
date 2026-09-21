@@ -32,11 +32,7 @@ def schemas() -> dict[str, Any]:
         "get_pursuit_goal": (
             "Read goal criteria, current version, evidence, tasks and execution history. "
             "execution_enabled reports whether automatic pursuit is enabled for this tenant; "
-            "when false, a scheduled review cannot advance the goal. Do not offer leaving "
-            "work to that review as an available next step: automatic pursuit must first be "
-            "enabled by an authorized operator. Explain what is finished and still open in "
-            "plain language; omit internal IDs and versions unless requested. "
-            "A waiting goal may wake on its "
+            "do not promise automatic progress when false. A waiting goal may wake on its "
             "scheduled review or a matching event/linked-task change; paused goals do not wake. "
             "wake_conditions explicitly lists those alternatives, conditional on execution_enabled. "
             "These are registered triggers, not evidence that a trigger has fired. Events older "
