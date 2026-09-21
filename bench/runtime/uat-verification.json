@@ -5660,7 +5660,46 @@
       },
       "broad_engine": "pending",
       "live_qualification": "pending",
-      "rollback_backport": "pending; 43b4af63073 predates this correction"
+      "rollback_backport": "7324c4d0313 passes new gate and actual daemon rollback sequence"
+    },
+    "rollback_initial_chat_receipts": {
+      "current_product_revision": "e988eb920b9",
+      "target_revision": "7324c4d031336a9c7145983b77386cabcfe3d9e8",
+      "rejected_prior_target": "43b4af63073",
+      "compatibility_probe": "Fresh process on private canonical storage with a seeded confirmed note receipt and running row; returned failed run recovers receipt without changing durable states; foreign principal denied; no false no-work wording.",
+      "focused": {
+        "passed": 34,
+        "seconds": 1.34
+      },
+      "rollback_canonical": {
+        "passed": 43,
+        "skipped": 1,
+        "warnings": 1,
+        "seconds": 11.33
+      },
+      "old_target_command": {
+        "passed": 79,
+        "skipped": 2,
+        "warnings": 1,
+        "seconds": 35.91,
+        "target_rejected": true
+      },
+      "new_target_command": {
+        "passed": 79,
+        "skipped": 2,
+        "warnings": 1,
+        "seconds": 46.57,
+        "rollback_qualified": true
+      },
+      "same_dependency_environment": true,
+      "cumulative_changed_files": 20,
+      "scope": "Actual private current/rollback/current daemon, HTTP acknowledgement and audit recovery, preserved stopped/effect state; separate seeded receipt race gate and native admission. No container/dependency rollback or production deployment.",
+      "report": "bench/runtime/uat-runtime-rollback-chat-receipts-report.json",
+      "patch": "bench/runtime/rollback-chat-receipts-compatibility.patch",
+      "initial_backport_failures": [
+        "Target lacked chat_delivery module; added initial receipt-delivery integration.",
+        "Collection found absent receipt_result_text helper; added shared projection before focused and canonical verification."
+      ]
     }
   },
   "calendar": {
@@ -5905,7 +5944,7 @@
     "Recheck the supported outcome-recovery inventory and remaining ingress/failure cases against action contracts. Calendar and CRM note/task readbacks, task browser reconnect, saved responses, native checkpoints and daemon goal recovery have evidence; these do not establish arbitrary external-provider recovery.",
     "Normal-chat manual acceptance is recorded for unfinished-work status, duplicate calendar confirmation, audit recovery and parent/child pause. Selective resume remains pending user review; no response has been received. Other required goal-control UAT and overall acceptance remain open.",
     "Retain the current runtime: tested candidates failed mandatory behavior and are not finalists. Any future replacement needs full parity, matched 100-repetition finalist measurements and upgrade qualification. No replacement is selected.",
-    "Rollback 43b4af63073 now passes receipt, task identity, persisted deadline and complete-request reporting gates, plus actual current/rollback/current daemon HTTP admission/audit recovery with stopped/effect state preserved. Container/dependency rollback and hosted CI have not been demonstrated. Production deployment and production ingress certification are outside the authorized local work; nothing is deployed. The latest failed-run receipt race/wording correction still needs rollback compatibility/backport verification; 43b4af63073 predates it."
+    "Rollback 7324c4d0313 now passes saved receipt, task identity, persisted deadline, complete-request reporting and initial receipt-delivery race gates, including foreign-principal denial. Current/rollback/current daemon HTTP admission/audit recovery preserves stopped/effect state. Container/dependency rollback and hosted CI are unverified; production deployment and production ingress certification remain outside authorized local work."
   ],
   "local_model_screening": {
     "artifact": "uat-local-native-summary.json",

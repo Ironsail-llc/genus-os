@@ -1,0 +1,91 @@
+{
+  "target_revision": "43b4af630738cae68850f49192e3082715407202",
+  "status": "rejected_incompatible_runtime_state",
+  "receipt_compatibility": {
+    "current": {
+      "reuses_saved_response": true,
+      "state": "finished",
+      "chat_receipt_delivery_compatible": true,
+      "chat_receipt_probe": {
+        "compatible": true,
+        "receipt_recovered_before_terminal_write": true,
+        "foreign_principal_denied": true,
+        "no_false_no_work_claim": true
+      },
+      "report_boundaries_compatible": true,
+      "report_boundary_probe": {
+        "compatible": true,
+        "finalized": {
+          "standalone": true,
+          "compound": false
+        }
+      },
+      "saved_deadlines_compatible": true,
+      "deadline_probe": {
+        "compatible": true,
+        "cases": {
+          "expired": {
+            "outcome": "expired",
+            "deadline": null
+          },
+          "future": {
+            "outcome": "entered",
+            "deadline": "2026-09-21T16:05:44.681856+00:00"
+          },
+          "malformed": {
+            "outcome": "rejected",
+            "deadline": null
+          }
+        }
+      },
+      "task_report_identity_compatible": true,
+      "task_report_probe": {
+        "reuses_saved_response": true,
+        "state": "confirmed"
+      }
+    },
+    "rollback": {
+      "reuses_saved_response": true,
+      "state": "finished",
+      "chat_receipt_delivery_compatible": false,
+      "chat_receipt_probe": {
+        "compatible": false,
+        "reason": "No initial receipt delivery"
+      },
+      "report_boundaries_compatible": true,
+      "report_boundary_probe": {
+        "compatible": true,
+        "finalized": {
+          "standalone": true,
+          "compound": false
+        }
+      },
+      "saved_deadlines_compatible": true,
+      "deadline_probe": {
+        "compatible": true,
+        "cases": {
+          "expired": {
+            "outcome": "expired",
+            "deadline": null
+          },
+          "future": {
+            "outcome": "entered",
+            "deadline": "2026-09-21T16:05:45.596165+00:00"
+          },
+          "malformed": {
+            "outcome": "rejected",
+            "deadline": null
+          }
+        }
+      },
+      "task_report_identity_compatible": true,
+      "task_report_probe": {
+        "reuses_saved_response": true,
+        "state": "confirmed"
+      }
+    }
+  },
+  "daemon_started": false,
+  "rollback_qualified": false,
+  "reason": "Target cannot preserve saved responses, task identity, checkpoint deadlines, complete-request reporting, or initial chat receipt delivery."
+}

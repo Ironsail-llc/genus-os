@@ -22,7 +22,7 @@ from bench.runtime.restart_state import seed, verify
 # The accepted integration baseline predates those controls and is not a safe
 # rollback target for sessions admitted by the modernization implementation.
 TARGET_BASE = "b1671409892"
-TARGET = "43b4af63073"
+TARGET = "7324c4d0313"
 
 
 def drill(root, env, dsn):
@@ -50,6 +50,12 @@ def drill(root, env, dsn):
         "robothor/engine/tests/test_goal_report_delivery.py",
         "robothor/engine/tests/test_native_goal_report_audit.py",
         "robothor/goals/tests/test_report_handler.py",
+        "robothor/engine/chat.py",
+        "robothor/engine/chat_delivery.py",
+        "robothor/engine/chat_effect_receipts.py",
+        "robothor/engine/chat_result.py",
+        "robothor/engine/last_resort.py",
+        "robothor/engine/tests/test_chat_delivery.py",
     }
     archive = root / "rollback-code.tar"
     subprocess.run(["git", "archive", "--output", str(archive), target], check=True)
@@ -72,6 +78,7 @@ def drill(root, env, dsn):
         "task_report_identity_compatible",
         "saved_deadlines_compatible",
         "report_boundaries_compatible",
+        "chat_receipt_delivery_compatible",
     )
     assert all(compatibility["current"][key] for key in required), compatibility
     if not all(compatibility["rollback"][key] for key in required):
@@ -81,7 +88,7 @@ def drill(root, env, dsn):
             "receipt_compatibility": compatibility,
             "daemon_started": False,
             "rollback_qualified": False,
-            "reason": "Target cannot preserve saved responses, task identity, checkpoint deadlines, or complete-request reporting.",
+            "reason": "Target cannot preserve saved responses, task identity, checkpoint deadlines, complete-request reporting, or initial chat receipt delivery.",
         }
     identifiers = seed(dsn)
     stopped_run = identifiers[0]

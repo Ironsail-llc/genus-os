@@ -1,0 +1,15 @@
+
+==================================== ERRORS ====================================
+_________ ERROR collecting robothor/engine/tests/test_chat_delivery.py _________
+ImportError while importing test module '/home/philip/robothor-runtime-rollback-chat-receipts/robothor/engine/tests/test_chat_delivery.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+robothor/engine/tests/test_chat_delivery.py:10: in <module>
+    from robothor.engine import chat_delivery
+robothor/engine/chat_delivery.py:13: in <module>
+    from robothor.engine.chat_result import receipt_result_text, result_text
+E   ImportError: cannot import name 'receipt_result_text' from 'robothor.engine.chat_result' (/home/philip/robothor-runtime-rollback-chat-receipts/robothor/engine/chat_result.py)
+=========================== short test summary info ============================
+ERROR robothor/engine/tests/test_chat_delivery.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 0.15s
