@@ -30,6 +30,9 @@ def saved(private_database, monkeypatch):  # noqa: F811
         created_at=datetime.now(UTC).isoformat(),
     )
     with connect() as conn, conn.cursor() as cur:
+        cur.execute("""CREATE TABLE IF NOT EXISTS agent_runs (
+            id UUID PRIMARY KEY, tenant_id TEXT, user_id TEXT, parent_run_id UUID,
+            correlation_id UUID, runtime_context JSONB)""")
         cur.execute("""CREATE TABLE IF NOT EXISTS chat_sessions (
             tenant_id TEXT, session_key TEXT, plan_state JSONB,
             last_active_at TIMESTAMPTZ, PRIMARY KEY(tenant_id,session_key))""")
@@ -74,3 +77,32 @@ def test_claim_requires_scoped_exact_execution_intent(saved, mismatch):
     else:
         plan = replace(plan, **{mismatch: True if mismatch == "deep_plan" else "changed"})
     assert not chat_plan_claim.claim(tenant, session, plan, "request")
+
+
+def test_original_admission_survives_plan_clear_without_crossing_identity(saved):
+    from robothor.auth.deps import AuthContext
+    from robothor.engine.runtime.chat_control import request_key
+
+    plan, connect = saved
+    auth = AuthContext(tenant_id="tenant", user_id="operator", role="owner", typ="user")
+    client_id = str(uuid4())
+    identifier = request_key(auth, "session", client_id)
+    assert not chat_plan_claim.already_admitted(auth, "session", client_id)
+    assert chat_plan_claim.claim("tenant", "session", plan, identifier)
+    # Claim committed, but the runner has not created its audit row yet.
+    assert chat_plan_claim.already_admitted(auth, "session", client_id)
+    assert not chat_plan_claim.already_admitted(auth, "session", str(uuid4()))
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO agent_runs(id,tenant_id,user_id,correlation_id) VALUES (%s,%s,%s,%s)",
+            (str(uuid4()), auth.tenant_id, auth.user_id, identifier),
+        )
+        cur.execute("UPDATE chat_sessions SET plan_state=NULL WHERE tenant_id='tenant'")
+    assert chat_plan_claim.already_admitted(auth, "session", client_id)
+    assert not chat_plan_claim.already_admitted(auth, "other-session", client_id)
+    assert not chat_plan_claim.already_admitted(
+        replace(auth, user_id="other"), "session", client_id
+    )
+    assert not chat_plan_claim.already_admitted(
+        replace(auth, tenant_id="other"), "session", client_id
+    )

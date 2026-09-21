@@ -27,13 +27,14 @@ pytestmark = pytest.mark.integration
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(120)
-@pytest.mark.parametrize("approve_twice", [False, True])
+@pytest.mark.parametrize("approval_case", ["none", "distinct", "same"])
 async def test_saved_plan_recovers_through_browser_and_native_engine(
-    engine_config, sample_agent_config, approve_twice
+    engine_config, sample_agent_config, approval_case
 ):
     dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
     if "host=/tmp/runtime-migrated-" not in dsn:
         pytest.skip("requires --chat-browser canonical harness and freshly built app")
+    approve_twice = approval_case != "none"
     tenant = "plan-browser-" + uuid4().hex
     with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("INSERT INTO crm_tenants(id,display_name) VALUES (%s,%s)", (tenant, tenant))
@@ -118,7 +119,7 @@ async def test_saved_plan_recovers_through_browser_and_native_engine(
         "AUTH_OIDC_CLIENT_ID": "test",
         "AUTH_OIDC_CLIENT_SECRET": "test",
         "GENUS_BRIDGE_SSO_SECRET": "test",
-        "RUNTIME_APPROVAL_TEST": "1" if approve_twice else "0",
+        "RUNTIME_APPROVAL_TEST": approval_case,
     }
     try:
         with (
@@ -160,7 +161,9 @@ async def test_saved_plan_recovers_through_browser_and_native_engine(
             )
             report = json.loads(marker.removeprefix("PLAN_BROWSER "))
             assert report["restored"] and report["starts"] == 1
-            assert report["approvals"] == (2 if approve_twice else 0)
+            assert report["approvals"] == (
+                3 if approval_case == "same" else 2 if approve_twice else 0
+            )
             await get_task_registry().drain(timeout=5)
             assert calls == ["draft", "draft", "alignment"] + (
                 ["execution"] if approve_twice else []

@@ -49,7 +49,7 @@ from starlette.responses import StreamingResponse
 from robothor.constants import DEFAULT_TENANT
 from robothor.engine.chat_history import MAX_HISTORY as _MAX_HISTORY
 from robothor.engine.chat_history import ChatHistory, append_turn, as_history
-from robothor.engine.chat_plan_claim import admit_plan, approval_refusal
+from robothor.engine.chat_plan_claim import admit_plan, approval_refusal, approval_retry
 from robothor.engine.chat_result import result_text
 from robothor.engine.chat_session_cache import SessionCache
 from robothor.engine.chat_store import (
@@ -910,11 +910,15 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
 
+    if retry := await approval_retry(auth, session_key, body.get("request_id")):
+        return retry
     if refusal := approval_refusal(session, plan_id):
         return refusal
 
     plan, client_id = await admit_plan(session, auth, session_key, body.get("request_id"))
     if plan is None:
+        if retry := await approval_retry(auth, session_key, client_id):
+            return retry
         return JSONResponse(
             {
                 "error": "That plan was already approved or changed. No new execution was started.",

@@ -81,3 +81,44 @@ def approval_refusal(session, plan_id):
             )
 
     return None
+
+
+def already_admitted(auth, session_key, client_id):
+    from robothor.engine.runtime.chat_control import request_key
+
+    identifier = request_key(auth, session_key, client_id)
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT EXISTS(
+                SELECT 1 FROM agent_runs WHERE tenant_id=%s AND user_id=%s
+                  AND parent_run_id IS NULL
+                  AND (correlation_id=%s::uuid OR runtime_context->>'request_id'=%s)
+            ) OR EXISTS(
+                SELECT 1 FROM chat_sessions WHERE tenant_id=%s AND session_key=%s
+                  AND plan_state->>'approval_request_id'=%s
+            )""",
+            (
+                auth.tenant_id,
+                auth.user_id,
+                identifier,
+                identifier,
+                auth.tenant_id,
+                session_key,
+                identifier,
+            ),
+        )
+        return bool(cur.fetchone()[0])
+
+
+async def approval_retry(auth, session_key, client_id):
+    from fastapi.responses import JSONResponse
+
+    if client_id and await asyncio.to_thread(already_admitted, auth, session_key, client_id):
+        return JSONResponse(
+            {
+                "error": "That approval was already received. Checking its recorded result.",
+                "request_admitted": True,
+            },
+            status_code=409,
+        )
+    return None

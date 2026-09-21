@@ -7,6 +7,7 @@ describe("request admission evidence", () => {
       .toEqual({ text: "Not authorized", rejected: true });
   });
   it.each([
+    [409, { error: "Approval already received", request_admitted: true }],
     [400, { error: "Unknown origin" }],
     [502, { error: "Upstream disconnected" }],
     [403, { error: "Denied", request_admitted: "false" }],

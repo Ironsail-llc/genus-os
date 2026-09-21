@@ -52,19 +52,35 @@ try {
   expect(approvals).toBe(0);
   await expect(page.getByText(/\[PLAN_READY\]/)).toHaveCount(0);
   let approvalStatuses = [];
-  if (process.env.RUNTIME_APPROVAL_TEST === "1") {
+  if (["distinct", "same"].includes(process.env.RUNTIME_APPROVAL_TEST)) {
     const saved = await (await page.request.get(`${base}/api/chat/plan/status`)).json();
-    approvalStatuses = await page.evaluate(async planId => Promise.all([1, 2].map(async () => {
+    const same = process.env.RUNTIME_APPROVAL_TEST === "same";
+    const sharedId = crypto.randomUUID();
+    approvalStatuses = await page.evaluate(async ({ planId, same, sharedId }) => Promise.all([1, 2].map(async () => {
       const response = await fetch("/api/chat/plan/approve", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plan_id: planId, request_id: crypto.randomUUID() }),
+        body: JSON.stringify({ plan_id: planId, request_id: same ? sharedId : crypto.randomUUID() }),
       });
       const body = await response.text();
-      if (!response.ok && JSON.parse(body).request_admitted !== false) throw new Error("Duplicate approval was not reported as refused");
+      if (!response.ok && JSON.parse(body).request_admitted !== same) throw new Error("Duplicate approval was not reported as refused");
       return response.status;
-    })), saved.plan.plan_id);
+    })), { planId: saved.plan.plan_id, same, sharedId });
     expect(approvalStatuses.filter(status => status === 200)).toHaveLength(1);
     expect(approvalStatuses.filter(status => [404, 409].includes(status))).toHaveLength(1);
+    if (same) {
+      const retry = await page.evaluate(async ({ planId, sharedId }) => {
+        const response = await fetch("/api/chat/plan/approve", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ plan_id: planId, request_id: sharedId }),
+        });
+        return { status: response.status, body: await response.json() };
+      }, { planId: saved.plan.plan_id, sharedId });
+      expect(retry.status).toBe(409);
+      expect(retry.body.request_admitted).toBe(true);
+      const outcome = await (await page.request.get(`${base}/api/chat/outcome?request_id=${sharedId}`)).json();
+      expect(outcome.state).toBe("completed");
+      expect(outcome.text).toContain("Synthetic task review complete.");
+    }
   }
   console.log("PLAN_BROWSER " + JSON.stringify({ starts, reads, approvals, request_id: original, restored: true, approval_statuses: approvalStatuses }));
 } finally {

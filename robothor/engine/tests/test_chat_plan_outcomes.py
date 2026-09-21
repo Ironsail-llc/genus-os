@@ -285,3 +285,24 @@ async def test_duplicate_approval_does_not_start_a_second_execution(
     assert response.status_code == 200
     assert second.status_code == 409
     assert calls == 1
+
+
+async def test_retry_reattaches_admission_even_after_pending_plan_is_cleared(
+    client,  # noqa: F811
+    mock_runner,  # noqa: F811
+    monkeypatch,
+):
+    from uuid import uuid4
+
+    monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "enforce")
+    with (
+        patch("robothor.engine.chat._auth_context", return_value=_member_auth("bob")),
+        patch("robothor.engine.chat_plan_claim.already_admitted", return_value=True),
+    ):
+        response = await client.post(
+            "/chat/plan/approve", json={"plan_id": "completed-plan", "request_id": str(uuid4())}
+        )
+    assert response.status_code == 409
+    assert response.json()["request_admitted"] is True
+    assert "Checking its recorded result" in response.json()["error"]
+    mock_runner.execute.assert_not_called()

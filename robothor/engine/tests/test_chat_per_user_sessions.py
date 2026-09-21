@@ -228,6 +228,7 @@ def chat_app(engine_config, mock_runner, monkeypatch):
         "robothor.llm.ollama.get_embeddings_batch_async", AsyncMock(return_value=[])
     )
     monkeypatch.setattr("robothor.engine.chat_plan_claim.claim_plan", AsyncMock(return_value=True))
+    monkeypatch.setattr("robothor.engine.chat_plan_claim.already_admitted", lambda *args: False)
     _sessions.clear()
     app = FastAPI()
     with patch("robothor.engine.chat.load_all_sessions", return_value={}):

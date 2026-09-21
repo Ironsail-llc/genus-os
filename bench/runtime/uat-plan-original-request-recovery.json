@@ -1,0 +1,38 @@
+{
+  "initial_failure": "Real browser/native test with overlapping approvals using the same request ID received request_admitted=false; 1 failed, 28 passed in 16.57s.",
+  "before_log": "/tmp/runtime-plan-same-request-before.log",
+  "fix": "Before plan validation, and again after a racing claim is refused, check the authenticated original request against its run audit or saved approval claim. An existing admission returns 409 with request_admitted=true, preserving automatic outcome recovery rather than starting another execution.",
+  "scope_checks": "Tenant, principal and session-derived request identity; plan claim covers the interval before a run row exists, run record covers recovery after plan clearing.",
+  "focused": {
+    "passed": 152,
+    "seconds": 12.98,
+    "log": "/tmp/runtime-plan-same-request-focused-fixed.log"
+  },
+  "browser_native": {
+    "passed": 29,
+    "skipped": 1,
+    "warnings": 1,
+    "seconds": 16.07,
+    "log": "/tmp/runtime-plan-same-request-after.log",
+    "same_request_case": {
+      "preparations": 1,
+      "approval_requests": 3,
+      "concurrent_statuses": [
+        200,
+        409
+      ],
+      "completed_retry_status": 409,
+      "retry_admitted": true,
+      "recovered_execution_state": "completed",
+      "execution_runs": 1
+    }
+  },
+  "frontend_focused": {
+    "passed": 35,
+    "seconds": 1.0,
+    "scope": "Request admission evidence, chat recovery and proxy routing"
+  },
+  "static_checks": "Ruff lint/format, Node syntax, changed-test ESLint and diff checks passed.",
+  "intermediate_failure": "An in-memory unit approval fixture reached its noncanonical test audit table after admission reads were added. Unit admission-history reads are now explicitly mocked; private SQL and native browser tests retain real reads. Failure log: /tmp/runtime-plan-same-request-focused.log.",
+  "limits": "Synthetic model transport and local test identity. No replay or production action. Claim-before-run process death, concurrent revisions, and broader runtime comparison remain open; no deployment or full acceptance claimed."
+}
