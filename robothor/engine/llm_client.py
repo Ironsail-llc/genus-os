@@ -1572,8 +1572,14 @@ class LLMClient:
         )
         try:
             from robothor.engine.provider_routing import provider_order_scope
+            from robothor.engine.runtime.interactive_routing import prefer_throughput
 
-            with provider_order_scope(getattr(session, "provider_order", {})):
+            with provider_order_scope(
+                getattr(session, "provider_order", {}),
+                prefer_throughput=prefer_throughput(
+                    session, streaming=bool(on_content or on_stream_event)
+                ),
+            ):
                 if on_content or on_stream_event:
                     response = await self._call_llm_streaming(
                         session.messages,
