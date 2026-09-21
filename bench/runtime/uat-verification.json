@@ -1878,6 +1878,31 @@
       "crash_drill": "Owned subprocess is SIGKILLed after finishing its warm-up and starting repetition 1. Journal retains one completed sample plus the unfinished sample identity; final report is absent. A fresh invocation against the same evidence path refuses without modifying the journal.",
       "verification": "All 62 start/finish pairs match the completed report exactly. Injected failure/timeout outcomes remain in the recorder. Ruff, formatting, diff and workflow YAML checks pass; hosted CI not run.",
       "limits": "Offline benchmark evidence durability under process termination, not recovery of production approvals or external actions. This is not a power-loss drill, provider-latency comparison or runtime qualification. No deployment."
+    },
+    "early_stop_native_browser": {
+      "artifact": "bench/runtime/uat-early-stop-native-browser.json",
+      "initial_harness_failure": "Browser integration inherited the unit fixture that disables controls.stopped; explicit real-control restoration is now part of every plan browser case.",
+      "harness_failure_log": "/tmp/runtime-early-stop-browser.log",
+      "product_failure": "With real controls enabled, durable stop denied the provider request but the native runner classified the typed admission denial as failed rather than cancelled.",
+      "product_failure_log": "/tmp/runtime-early-stop-browser-real-controls.log",
+      "fix": "Introduce DurableStopError as a RequestBudgetError subtype. Native failure finalization maps this type to cancellation with Stopped as requested.; ordinary budget/provider failures retain failed status and traceback. No text matching determines cancellation.",
+      "focused": {
+        "passed": 188,
+        "warnings": 1,
+        "seconds": 10.83,
+        "log": "/tmp/runtime-early-stop-focused-final.log"
+      },
+      "canonical_browser": {
+        "passed": 31,
+        "skipped": 1,
+        "warnings": 1,
+        "seconds": 23.89,
+        "log": "/tmp/runtime-early-stop-browser-final.log"
+      },
+      "scenario": "Real browser-originated approval and stop requests through Next proxies/native engine/private canonical PostgreSQL. Pause admission immediately after the durable claim, observe accepted, persist stop, observe stopping, then release admission. The execution audit becomes cancelled; exactly zero execution provider calls and zero business-tool calls occur. Preparation retains its two draft provider calls and alignment check.",
+      "chat_outcome": "Stopped as requested.",
+      "checks": "Ruff lint/format, Node syntax and diff checks pass; no size cap increased.",
+      "limits": "The early-stop requests use browser fetch/API requests, not a dedicated Stop-button rendering assertion. The gate simulates delayed admission, not process death/restart. This covers ordinary native plan approval; deep-engine classification and orphaned approval recovery remain unverified. No production deployment or full acceptance claim."
     }
   },
   "calendar": {

@@ -1,4 +1,5 @@
 /** Actual chat + Next proxy recovery; only unrelated dashboard APIs are fixtures. */
+import { earlyStop } from "./runtime-early-stop.mjs";
 import { chromium, expect } from "@playwright/test";
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
@@ -57,6 +58,7 @@ try {
   expect(approvals).toBe(0);
   await expect(page.getByText(/\[PLAN_READY\]/)).toHaveCount(0);
   let approvalStatuses = [];
+  const earlyStopResult = process.env.RUNTIME_APPROVAL_TEST === "early_stop" ? await earlyStop(page, base) : null;
   if (["distinct", "same"].includes(process.env.RUNTIME_APPROVAL_TEST)) {
     const saved = await (await page.request.get(`${base}/api/chat/plan/status`)).json();
     const same = process.env.RUNTIME_APPROVAL_TEST === "same";
@@ -87,7 +89,7 @@ try {
       expect(outcome.text).toContain("Synthetic task review complete.");
     }
   }
-  console.log("PLAN_BROWSER " + JSON.stringify({ starts, reads, approvals, request_id: original, restored: true, approval_statuses: approvalStatuses }));
+  console.log("PLAN_BROWSER " + JSON.stringify({ starts, reads, approvals, request_id: original, restored: true, approval_statuses: approvalStatuses, early_stop: earlyStopResult }));
 } finally {
   await browser?.close();
   server.kill("SIGTERM");

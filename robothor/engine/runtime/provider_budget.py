@@ -13,6 +13,10 @@ from uuid import uuid4
 from robothor.engine.request_budget import RequestBudgetError
 
 
+class DurableStopError(RequestBudgetError):
+    """A committed operator control denied this provider admission."""
+
+
 def usage_tokens(response):
     usage = (
         response.get("usage") if isinstance(response, dict) else getattr(response, "usage", None)
@@ -140,6 +144,6 @@ async def assert_provider_authorized():
     if activity and activity.sessions:
         session = next(iter(activity.sessions.values()))
         if await asyncio.to_thread(stopped, session.run.tenant_id, session.run_id):
-            raise RequestBudgetError("Durable stop denies another provider request")
+            raise DurableStopError("Durable stop denies another provider request")
     elif context and await asyncio.to_thread(stopped, context.tenant_id, ""):
-        raise RequestBudgetError("Durable stop denies another provider request")
+        raise DurableStopError("Durable stop denies another provider request")

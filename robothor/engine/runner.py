@@ -1411,11 +1411,10 @@ class AgentRunner(
                 raise
             return finished
         except Exception as e:
-            tb = traceback.format_exc()
-            logger.error("Agent %s failed: %s", _sanitize(agent_id), _sanitize(e), exc_info=True)
-            session.record_error(str(e), tb)
+            from robothor.engine.runtime.failure import failed_or_stopped
+
             return self._finish_run(
-                session.fail(str(e), tb),
+                failed_or_stopped(session, e, traceback.format_exc()),
                 trace=trace,
                 agent_config=agent_config,
                 session=session,

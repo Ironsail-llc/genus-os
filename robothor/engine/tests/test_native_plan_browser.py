@@ -20,14 +20,18 @@ from fastapi import FastAPI, Request
 from robothor.auth.deps import AuthContext
 from robothor.engine import chat
 from robothor.engine.runner import AgentRunner
+from robothor.engine.runtime import controls
 from robothor.engine.task_registry import get_task_registry
 
 pytestmark = pytest.mark.integration
+_REAL_STOPPED = controls.stopped
 
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(120)
-@pytest.mark.parametrize("approval_case", ["none", "status_first", "distinct", "same"])
+@pytest.mark.parametrize(
+    "approval_case", ["none", "status_first", "distinct", "same", "early_stop"]
+)
 async def test_saved_plan_recovers_through_browser_and_native_engine(
     engine_config, sample_agent_config, approval_case
 ):
@@ -84,12 +88,22 @@ async def test_saved_plan_recovers_through_browser_and_native_engine(
 
         return chunks()
 
+    release_admission = asyncio.Event()
+    stop_recorded = False
+    admit = chat.admit_plan
+
+    async def gated_admit(*args, **kwargs):
+        result = await admit(*args, **kwargs)
+        if approval_case == "early_stop" and result[0] is not None:
+            await release_admission.wait()
+        return result
+
     app = FastAPI()
     cache_reset = False
 
     @app.middleware("http")
     async def synthetic_identity(request: Request, call_next):
-        nonlocal cache_reset
+        nonlocal cache_reset, stop_recorded
         assert request.client.host == "127.0.0.1"
         request.state.auth = auth
         if (
@@ -101,7 +115,12 @@ async def test_saved_plan_recovers_through_browser_and_native_engine(
             # Simulate lost process-local sessions; the canonical DB remains intact.
             chat._sessions.clear()
             cache_reset = True
-        return await call_next(request)
+        response = await call_next(request)
+        if request.url.path == "/chat/abort" and response.status_code == 200:
+            stop_recorded = True
+        if request.url.path == "/chat/outcome" and stop_recorded:
+            release_admission.set()
+        return response
 
     app.include_router(chat.router)
     engine_socket = socket.socket()
@@ -135,6 +154,8 @@ async def test_saved_plan_recovers_through_browser_and_native_engine(
     try:
         with (
             patch("litellm.acompletion", side_effect=provider),
+            patch.object(chat, "admit_plan", side_effect=gated_admit),
+            patch.object(controls, "stopped", _REAL_STOPPED),
             patch(
                 "robothor.engine.runner.load_agent_config_or_reason",
                 return_value=(sample_agent_config, None),
@@ -174,7 +195,13 @@ async def test_saved_plan_recovers_through_browser_and_native_engine(
             assert report["restored"] and report["starts"] == 1
             assert cache_reset is (approval_case == "status_first")
             assert report["approvals"] == (
-                3 if approval_case == "same" else 2 if approve_twice else 0
+                3
+                if approval_case == "same"
+                else 2
+                if approve_twice
+                else 1
+                if approval_case == "early_stop"
+                else 0
             )
             await get_task_registry().drain(timeout=5)
             assert calls == ["draft", "draft", "alignment"] + (
@@ -184,14 +211,18 @@ async def test_saved_plan_recovers_through_browser_and_native_engine(
             with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
                 cur.execute("SELECT id,status FROM agent_runs WHERE tenant_id=%s", (tenant,))
                 runs = cur.fetchall()
-                assert len(runs) == (2 if approve_twice else 1)
-                assert all(status == "completed" for _, status in runs)
+                assert len(runs) == (2 if approve_twice or approval_case == "early_stop" else 1)
+                if approval_case == "early_stop":
+                    assert sorted(status for _, status in runs) == ["cancelled", "completed"]
+                    assert report["early_stop"]["durable_stop"]
+                else:
+                    assert all(status == "completed" for _, status in runs)
                 cur.execute(
                     "SELECT plan_state FROM chat_sessions WHERE tenant_id=%s AND plan_state IS NOT NULL",
                     (tenant,),
                 )
                 plans = cur.fetchall()
-                if approve_twice:
+                if approve_twice or approval_case == "early_stop":
                     assert not plans or plans[0][0]["status"] == "approved"
                 else:
                     ((plan,),) = plans
