@@ -51,6 +51,7 @@ jobs:
           robothor/engine/tests/test_runtime_profile_http.py
           bench/runtime/test_profile_load.py
           robothor/engine/tests/test_runtime_verified_outcomes.py
+          robothor/engine/tests/test_runtime_fallback_wire.py
           robothor/engine/tests/test_runtime_http_acceptance.py
           robothor/engine/tests/test_runtime_mixed.py
           robothor/engine/tests/test_request_budget.py

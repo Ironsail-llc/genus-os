@@ -314,3 +314,35 @@ async def test_suppressed_acceptance_cancellation_cannot_admit_execution():
     with pytest.raises(RuntimeDeadlineError):
         await CurrentRuntime(execute).run(request(0.02), on_event=stubborn_status)
     execute.assert_not_awaited()
+
+
+@pytest.mark.parametrize("expire", [False, True])
+async def test_native_cancellation_reason_requires_fired_runtime_window(expire):
+    from robothor.engine.runtime.deadlines import enclosing_deadline_reason, execute_before_deadline
+
+    seen = []
+    entered = asyncio.Event()
+
+    async def execute():
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError as exc:
+            seen.append(enclosing_deadline_reason(exc))
+            raise
+
+    context = ExecutionContext(
+        "tenant",
+        "owner",
+        "request",
+        deadline=datetime.now(UTC) + timedelta(seconds=0.02 if expire else 10),
+    )
+    task = asyncio.create_task(execute_before_deadline(context, execute))
+    await entered.wait()
+    if not expire:
+        task.cancel()
+    with pytest.raises(RuntimeDeadlineError if expire else asyncio.CancelledError):
+        await task
+    assert len(seen) == 1
+    assert ("Runtime deadline expired" in seen[0]) is expire
+    assert enclosing_deadline_reason(asyncio.CancelledError()) == ""

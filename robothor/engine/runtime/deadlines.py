@@ -1,9 +1,13 @@
 """Enforce a trusted runtime deadline without owning retries or finalization."""
 
 import time
+from asyncio import Timeout
 from contextvars import ContextVar
 from dataclasses import replace
 from datetime import UTC, datetime
+
+_active_window: ContextVar[Timeout | None] = ContextVar("runtime_deadline_window", default=None)
+
 
 _owned_deadline: ContextVar[tuple[datetime, float] | None] = ContextVar(
     "runtime_deadline_owner", default=None
@@ -62,28 +66,41 @@ async def _execute_window(seconds, execute):
     import asyncio
 
     window = asyncio.timeout(seconds)
+    token = _active_window.set(window)
     try:
-        async with window:
-            result = await execute()
-    except TimeoutError as exc:
-        if not window.expired():
-            raise  # Preserve the cause of an unrelated provider/workflow timeout.
-        raise RuntimeDeadlineError(
-            "Runtime deadline expired; execution cancelled. Reconcile already dispatched effects."
-        ) from exc
-    if window.expired():
-        # A cancellation-resistant callee cannot turn expiry into success.
-        raise RuntimeDeadlineError(
-            "Runtime deadline expired; cancellation was suppressed. Outcome requires reconciliation."
-        )
-    return result
+        try:
+            async with window:
+                result = await execute()
+        except TimeoutError as exc:
+            if not window.expired():
+                raise  # Preserve the cause of an unrelated provider/workflow timeout.
+            raise RuntimeDeadlineError(
+                "Runtime deadline expired; execution cancelled. Reconcile already dispatched effects."
+            ) from exc
+        if window.expired():
+            # A cancellation-resistant callee cannot turn expiry into success.
+            raise RuntimeDeadlineError(
+                "Runtime deadline expired; cancellation was suppressed. Outcome requires reconciliation."
+            )
+        return result
+    finally:
+        _active_window.reset(token)
 
 
 def enclosing_deadline_reason(exc: BaseException) -> str:
     """Preserve a host/workflow deadline instead of claiming the manifest cap fired."""
     from robothor.engine.workflow_budget import WorkflowDeadlineError
 
-    return str(exc) if isinstance(exc, WorkflowDeadlineError | RuntimeDeadlineError) else ""
+    if isinstance(exc, WorkflowDeadlineError | RuntimeDeadlineError):
+        return str(exc)
+    import asyncio
+
+    window = _active_window.get()
+    if isinstance(exc, asyncio.CancelledError) and window is not None and window.expired():
+        return (
+            "Runtime deadline expired; execution cancelled. Reconcile already dispatched effects."
+        )
+    return ""
 
 
 def owns_deadline(context) -> bool:
