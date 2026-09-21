@@ -923,7 +923,7 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
     if retry := await approval_retry(auth, session_key, body.get("request_id")):
         return retry
     if refusal := approval_refusal(session, plan_id):
-        return refusal
+        return await approval_retry(auth, session_key, body.get("request_id")) or refusal
 
     plan, client_id = await admit_plan(session, auth, session_key, body.get("request_id"))
     if plan is None:

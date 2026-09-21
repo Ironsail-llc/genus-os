@@ -70,7 +70,7 @@ try {
         body: JSON.stringify({ plan_id: planId, request_id: same ? sharedId : crypto.randomUUID() }),
       });
       const body = await response.text();
-      if (!response.ok && JSON.parse(body).request_admitted !== same) throw new Error("Duplicate approval was not reported as refused");
+      if (!response.ok && JSON.parse(body).request_admitted !== same) throw new Error(`Unexpected duplicate admission response: ${response.status} ${body}`);
       return response.status;
     })), { planId: saved.plan.plan_id, same, sharedId });
     expect(approvalStatuses.filter(status => status === 200)).toHaveLength(1);

@@ -8,7 +8,13 @@ def execute_deep_checked(*, run, workspace, **kwargs):
 
     if stopped(run.tenant_id, run.id):
         raise DurableStopError("Durable stop denies deep execution")
-    return execute_deep_reason(config=DeepReasonConfig(workspace=workspace), **kwargs)
+    from robothor.engine.runtime.deep_tools import owner
+
+    token = owner.set((run.tenant_id, run.id))
+    try:
+        return execute_deep_reason(config=DeepReasonConfig(workspace=workspace), **kwargs)
+    finally:
+        owner.reset(token)
 
 
 def record_deep(run, create_run):

@@ -466,3 +466,37 @@ async def test_recovery_does_not_replace_session_work_started_during_saved_plan_
         _sessions.pop(key, None)
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_retry_rechecks_admission_after_cached_plan_changes(
+    client,  # noqa: F811
+    mock_runner,  # noqa: F811
+    monkeypatch,
+):
+    from uuid import uuid4
+
+    from fastapi.responses import JSONResponse
+
+    from robothor.engine.chat import _get_session
+    from robothor.engine.models import PlanState
+
+    monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "enforce")
+    session = _get_session("agent:main:user:bob")
+    session.active_plan = PlanState(
+        plan_id="original", plan_text="Task", original_message="Task", status="approved"
+    )
+    recovered = JSONResponse({"request_admitted": True}, status_code=409)
+    with (
+        patch("robothor.engine.chat._auth_context", return_value=_member_auth("bob")),
+        patch(
+            "robothor.engine.chat.approval_retry",
+            new_callable=AsyncMock,
+            side_effect=[None, recovered],
+        ) as retry,
+    ):
+        response = await client.post(
+            "/chat/plan/approve", json={"plan_id": "original", "request_id": str(uuid4())}
+        )
+    assert response.json()["request_admitted"] is True
+    assert retry.await_count == 2
+    mock_runner.execute.assert_not_called()

@@ -4,7 +4,7 @@ import asyncio
 import os
 import threading
 from dataclasses import replace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import psycopg2
@@ -35,15 +35,27 @@ async def test_native_deep_stop_retains_pending_and_late_evidence(engine_config)
     runner = AgentRunner(replace(engine_config, tenant_id=tenant))
     entered, release = threading.Event(), threading.Event()
 
+    late_effect = MagicMock(return_value="Unexpected late effect")
+
     def worker(**kwargs):
+        from robothor.engine.rlm_tool import _build_custom_tools
+        from robothor.engine.runtime.provider_budget import DurableStopError
+
+        execute = _build_custom_tools(str(engine_config.workspace))["exec_shell"]["tool"]
         entered.set()
         assert release.wait(10)
-        return {"response": "Late synthetic result", "cost_usd": 0.12}
+        denied = False
+        try:
+            execute("synthetic command")
+        except DurableStopError:
+            denied = True
+        return {"response": "Late synthetic result", "cost_usd": 0.12, "late_tool_denied": denied}
 
     token = active_context.set(ExecutionContext(tenant, auth.user_id, identifier))
     with (
         patch.object(controls, "stopped", _REAL_STOPPED),
         patch("robothor.engine.rlm_tool.execute_deep_reason", side_effect=worker) as deep,
+        patch("robothor.engine.rlm_tool._make_exec_fn", return_value=late_effect),
     ):
         task = asyncio.create_task(
             runner.execute_deep(
@@ -75,8 +87,11 @@ async def test_native_deep_stop_retains_pending_and_late_evidence(engine_config)
                     "SELECT tool_output FROM agent_run_steps WHERE run_id=%s AND tool_name='deep_reason'",
                     (final["run_id"],),
                 )
-                assert cur.fetchone()[0]["response"] == "Late synthetic result"
+                evidence = cur.fetchone()[0]
+                assert evidence["response"] == "Late synthetic result"
+                assert evidence["late_tool_denied"]
             deep.assert_called_once()
+            late_effect.assert_not_called()
         finally:
             release.set()
             if not task.done():

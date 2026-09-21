@@ -327,7 +327,7 @@ def _make_exec_fn(workspace: str, agent_id: str = "") -> Callable[..., str]:
 
 def _build_custom_tools(workspace: str) -> dict[str, dict[str, Any]]:
     """Build the custom_tools dict for the RLM instance."""
-    return {
+    tools = {
         "search_memory": {
             "tool": _make_search_memory_fn(),
             "description": (
@@ -372,6 +372,10 @@ def _build_custom_tools(workspace: str) -> dict[str, dict[str, Any]]:
             ),
         },
     }
+
+    from robothor.engine.runtime.deep_tools import bind_tools
+
+    return bind_tools(tools)
 
 
 # ─── Main entry point ────────────────────────────────────────────────

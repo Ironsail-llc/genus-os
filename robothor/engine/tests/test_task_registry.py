@@ -160,3 +160,29 @@ async def test_task_factory_rejection_closes_unowned_coroutine(monkeypatch):
         assert inspect.getcoroutinestate(pending) == inspect.CORO_CLOSED
     finally:
         pending.close()
+
+
+@pytest.mark.parametrize("timeout", [False, True])
+async def test_drain_includes_persistence_spawned_by_finishing_work(timeout):
+    registry = TaskRegistry()
+    completed, children = [], []
+
+    async def persist():
+        await asyncio.sleep(999 if timeout else 0.03)
+        completed.append(True)
+
+    async def finish():
+        await asyncio.sleep(0)
+        children.append(registry.spawn(persist(), name="late-persistence"))
+
+    registry.spawn(finish(), name="finishing-worker")
+    try:
+        await registry.drain(timeout=0.04 if timeout else 1)
+        if timeout:
+            assert children[0].cancelled()
+        else:
+            assert completed == [True]
+        assert registry.pending_count == 0
+    finally:
+        registry.cancel_all()
+        await asyncio.gather(*children, return_exceptions=True)

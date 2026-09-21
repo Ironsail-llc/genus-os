@@ -83,7 +83,15 @@ class TaskRegistry:
         logger.info(
             "TaskRegistry: draining %d pending tasks (timeout=%.1fs)", len(self._tasks), timeout
         )
-        done, pending = await asyncio.wait(self._tasks, timeout=timeout)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0, timeout)
+        caller = asyncio.current_task()
+        pending = {task for task in self._tasks if not task.done() and task is not caller}
+        while pending and (remaining := deadline - loop.time()) > 0:
+            await asyncio.wait(pending, timeout=remaining)
+            # Finishing workers can enqueue persistence; include it without
+            # resetting the caller's overall drain deadline.
+            pending = {task for task in self._tasks if not task.done() and task is not caller}
         for task in pending:
             task.cancel()
         if pending:
