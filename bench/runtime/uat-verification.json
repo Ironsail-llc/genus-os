@@ -4047,6 +4047,68 @@
       "backport_patch": "bench/runtime/rollback-saved-responses.patch",
       "branch": "fix/runtime-rollback-saved-responses",
       "note": "Product source on modernization unchanged. Old unmodified target remains incompatible. Local same-dependency code rollback only; no deployment or manual acceptance."
+    },
+    "installation_main_task_screening": {
+      "base_revision": "ddb6fb8f225",
+      "installation_main": {
+        "summary": {
+          "p50_ms": 40.06327800016152,
+          "p95_ms": 55.1375357532379,
+          "p95_ci95_ms": [
+            46.29541499889456,
+            58.20507500175154
+          ],
+          "samples": 30,
+          "warmups": 1,
+          "model_calls": 62,
+          "external_model_calls": 0,
+          "planning_calls": 31,
+          "total_model_calls": 93,
+          "profile": "installation-main",
+          "tools_allowed": 104,
+          "task_protocol": true,
+          "scope": "Authenticated ASGI chat admission through native runner, real private task creation and reply. Scripted immediate model; installation config when selected, isolated workspace without production memory/instruction files. No TCP/browser/provider latency. Audit/event publication and embeddings stubbed. Verification queries and post-response background drain excluded from timing."
+        },
+        "deadlines_assigned": 0,
+        "log": "bench/runtime/uat-runtime-main-profile-screening-final.log",
+        "samples": "bench/runtime/uat-runtime-main-profile-screening-final.jsonl"
+      },
+      "minimal": {
+        "summary": {
+          "p50_ms": 41.272786002082285,
+          "p95_ms": 52.13705675123492,
+          "p95_ci95_ms": [
+            47.802022003452294,
+            53.55917799897725
+          ],
+          "samples": 30,
+          "warmups": 1,
+          "model_calls": 62,
+          "external_model_calls": 0,
+          "planning_calls": 0,
+          "total_model_calls": 62,
+          "profile": "minimal",
+          "tools_allowed": 1,
+          "task_protocol": false,
+          "scope": "Authenticated ASGI chat admission through native runner, real private task creation and reply. Scripted immediate model; installation config when selected, isolated workspace without production memory/instruction files. No TCP/browser/provider latency. Audit/event publication and embeddings stubbed. Verification queries and post-response background drain excluded from timing."
+        },
+        "deadlines_assigned": 31,
+        "log": "bench/runtime/uat-runtime-minimal-profile-screening-final.log",
+        "samples": "bench/runtime/uat-runtime-minimal-profile-screening-final.jsonl"
+      },
+      "canonical_main": {
+        "passed": 57,
+        "skipped": 2,
+        "warnings": 1,
+        "seconds": 32.61
+      },
+      "canonical_minimal": {
+        "passed": 57,
+        "skipped": 2,
+        "warnings": 1,
+        "seconds": 35.03
+      },
+      "note": "Actual installation main manifest settings loaded without profile overrides; execution in isolated workspace with scripted providers and real private task dispatch. Production instruction/memory files not staged. Final independent-DB invocations overlapped; timing is diagnostic, not a controlled profile speed comparison. Original standalone main screening retained. All 31 main-profile runs lack runtime deadlines; this is an unmet bound, not a passing deadline contract."
     }
   },
   "calendar": {
@@ -4245,8 +4307,8 @@
     "deadline_calendar": "uat-deadline-calendar.json"
   },
   "remaining": [
-    "Full representative native-workload reliability and provider latency remain unqualified. Existing configured-model screening uses reduced profiles; 97-field installation parsing parity does not establish full prompt/tool/memory execution parity. Preserve all observed failures and timeouts.",
-    "Eligible simple profiles and deterministic calendar confirmation have bounded deadlines. Classification and enforcement of the 60-second policy across all simple conversational actions remain unproven.",
+    "Full representative native-workload reliability and live provider latency remain unqualified. Installation main settings now pass 30 isolated task-creation repetitions with 104 allowed tools and task protocol enabled; this uses scripted models and an isolated workspace, not production instructions/memory or a live full-profile cohort. Preserve all failures and timeouts.",
+    "Eligible simple profiles and deterministic calendar confirmations are bounded, but all 31 installation-main single-task runs persisted no runtime deadline. Existing routing classifies the large tool set as complex. Classification and enforcement of the 60-second simple-action policy remain unmet for ordinary main-profile requests.",
     "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded. Production ingress, selected-provider p95 across the representative workload, and mixed-load fallback operating limits are not certified. Dispatch-only improvements do not qualify complete request latency.",
     "Retain the current runtime: the tested bounded candidates failed required behavior and are not finalists. Any future replacement still needs behavior parity, matched configurations, 100-repetition finalist measurements and compatible checkpoint upgrades. No replacement is selected.",
     "Calendar and CRM note/task audit recovery, actual task browser reconnection, concurrent native readback, full-daemon goal crash recovery and saved checkpoint continuation are locally verified. Fresh-context recovery after a persisted response, including cleared engine cache, is also verified. Other external-provider readbacks, recovery when both reply persistence and browser request identity are absent, and loaded-fleet performance remain incomplete.",
@@ -4527,5 +4589,14 @@
     "Calendar and CRM note/task audit recovery, actual task browser reconnection, concurrent native readback, full-daemon goal crash recovery and saved checkpoint continuation are locally verified. Fresh-context recovery after a persisted response, including cleared engine cache, is also verified. Other external-provider readbacks, recovery when both reply persistence and browser request identity are absent, and loaded-fleet performance remain incomplete.",
     "The normal-chat unfinished-work/pause case is accepted. Manual acceptance of verified recovery and remaining goal controls is pending; automatic goal continuations do not count as acceptance.",
     "The prior compatible-code rollback result predates saved handler responses. A new behavioral preflight rejects that old target because it reserves a duplicate attempt instead of recovering the saved response. Prepare and verify a compatible rollback build; HTTP admission in its booted daemon, container/dependency rollback and hosted CI remain unverified. No production deployment is authorized."
+  ],
+  "remaining_before_main_profile_screening": [
+    "Full representative native-workload reliability and provider latency remain unqualified. Existing configured-model screening uses reduced profiles; 97-field installation parsing parity does not establish full prompt/tool/memory execution parity. Preserve all observed failures and timeouts.",
+    "Eligible simple profiles and deterministic calendar confirmation have bounded deadlines. Classification and enforcement of the 60-second policy across all simple conversational actions remain unproven.",
+    "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded. Production ingress, selected-provider p95 across the representative workload, and mixed-load fallback operating limits are not certified. Dispatch-only improvements do not qualify complete request latency.",
+    "Retain the current runtime: the tested bounded candidates failed required behavior and are not finalists. Any future replacement still needs behavior parity, matched configurations, 100-repetition finalist measurements and compatible checkpoint upgrades. No replacement is selected.",
+    "Calendar and CRM note/task audit recovery, actual task browser reconnection, concurrent native readback, full-daemon goal crash recovery and saved checkpoint continuation are locally verified. Fresh-context recovery after a persisted response, including cleared engine cache, is also verified. Other external-provider readbacks, recovery when both reply persistence and browser request identity are absent, and loaded-fleet performance remain incomplete.",
+    "The normal-chat unfinished-work/pause case is accepted. Manual acceptance of verified recovery and remaining goal controls is pending; automatic goal continuations do not count as acceptance.",
+    "The prior unmodified rollback target remains incompatible with saved handler responses. Backported target 15cd1835003 passes local current/backport/current daemon, state-preservation and separate native-admission checks. HTTP admission within the booted daemon, container/dependency rollback and hosted CI remain unverified. No production deployment is authorized."
   ]
 }

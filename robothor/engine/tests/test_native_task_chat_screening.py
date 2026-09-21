@@ -34,16 +34,28 @@ async def test_warm_chat_task_screening(engine_config, sample_agent_config, monk
     with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("INSERT INTO crm_tenants(id,display_name) VALUES (%s,%s)", (tenant, tenant))
     config = replace(engine_config, tenant_id=tenant)
-    sample_agent_config.id = "main"
-    sample_agent_config.task_protocol = False
-    sample_agent_config.difficulty_class = "simple"
-    sample_agent_config.model_fallbacks = []
-    sample_agent_config.tools_allowed = ["create_task"]
+    installation = os.environ.get("ROBOTHOR_RUNTIME_SCREENING_INSTALLATION")
+    if installation:
+        from robothor.engine.config import load_agent_config
+
+        workspace = Path(installation)
+        sample_agent_config = load_agent_config(
+            "main", workspace / "docs/agents", workspace=workspace, trigger_type="webchat"
+        )
+        assert sample_agent_config is not None
+        assert "create_task" in sample_agent_config.tools_allowed
+    else:
+        sample_agent_config.id = "main"
+        sample_agent_config.task_protocol = False
+        sample_agent_config.difficulty_class = "simple"
+        sample_agent_config.model_fallbacks = []
+        sample_agent_config.tools_allowed = ["create_task"]
     runner = AgentRunner(config)
     auth = AuthContext(tenant_id=tenant, user_id="service:main", role="owner", typ="service")
     calls = []
     turn_calls = 0
     sample_index = 0
+    planning_calls = 0
 
     async def provider(self, messages, models, tools, on_content=None, **kwargs):
         nonlocal turn_calls
@@ -85,8 +97,41 @@ async def test_warm_chat_task_screening(engine_config, sample_agent_config, monk
 
     monkeypatch.setattr(LLMClient, "_call_llm", provider)
     monkeypatch.setattr(LLMClient, "_call_llm_streaming", provider)
-    forbidden = AsyncMock(side_effect=AssertionError("External models forbidden"))
-    monkeypatch.setattr("litellm.acompletion", forbidden)
+
+    async def planning_provider(**kwargs):
+        nonlocal planning_calls
+        assert installation and not kwargs.get("tools"), "Unexpected auxiliary provider call"
+        assert "Analyze this task" in str(kwargs.get("messages"))
+        planning_calls += 1
+        return litellm.ModelResponse(
+            choices=[
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": json.dumps(
+                            {
+                                "difficulty": "simple",
+                                "estimated_steps": 1,
+                                "plan": [
+                                    {
+                                        "step": 1,
+                                        "action": "Create the synthetic task",
+                                        "tool": "create_task",
+                                    }
+                                ],
+                                "risks": [],
+                                "success_criteria": "The stored task exists",
+                            }
+                        ),
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            usage={"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20},
+        )
+
+    isolated_provider = AsyncMock(side_effect=planning_provider)
+    monkeypatch.setattr("litellm.acompletion", isolated_provider)
     monkeypatch.setattr(
         "robothor.engine.runner.load_agent_config_or_reason",
         lambda *a, **k: (sample_agent_config, None),
@@ -124,6 +169,7 @@ async def test_warm_chat_task_screening(engine_config, sample_agent_config, monk
             ) as http:
                 for sample_index in range(31):
                     turn_calls = 0
+                    planning_before = planning_calls
                     started = time.perf_counter()
                     sample = {"index": sample_index, "warmup": sample_index == 0}
                     try:
@@ -158,6 +204,11 @@ async def test_warm_chat_task_screening(engine_config, sample_agent_config, monk
                                 (tenant,),
                             )
                             assert cur.fetchall() == [("completed", sample_index + 1)]
+                            cur.execute(
+                                "SELECT runtime_context->>'deadline' FROM agent_runs WHERE tenant_id=%s ORDER BY started_at DESC LIMIT 1",
+                                (tenant,),
+                            )
+                            sample["runtime_deadline_assigned"] = cur.fetchone()[0] is not None
                         sample.update(verified=True, run_status="completed", model_calls=turn_calls)
                     except Exception as exc:
                         sample.update(
@@ -165,12 +216,15 @@ async def test_warm_chat_task_screening(engine_config, sample_agent_config, monk
                         )
                         sample.setdefault("duration_ms", (time.perf_counter() - started) * 1000)
                     samples.append(sample)
+                    sample["planning_calls"] = planning_calls - planning_before
+                    sample["total_model_calls"] = turn_calls + sample["planning_calls"]
                     if stream:
                         stream.write(json.dumps({"sample": sample}) + "\n")
                         stream.flush()
                     print("CHAT_TASK_SAMPLE " + json.dumps(sample), flush=True)
             await get_task_registry().drain(timeout=5)
-            forbidden.assert_not_awaited()
+            if not installation:
+                isolated_provider.assert_not_awaited()
             assert all(sample["verified"] for sample in samples), samples
             assert len(calls) == 62
             values = [sample["duration_ms"] for sample in samples if not sample["warmup"]]
@@ -188,7 +242,12 @@ async def test_warm_chat_task_screening(engine_config, sample_agent_config, monk
                 "warmups": 1,
                 "model_calls": len(calls),
                 "external_model_calls": 0,
-                "scope": "Authenticated ASGI chat admission through native runner, real private task creation and reply. Scripted immediate model, minimal profile, no TCP/browser/provider latency. Audit/event publication and embeddings stubbed. Verification queries and post-response background drain excluded from timing.",
+                "planning_calls": planning_calls,
+                "total_model_calls": len(calls) + planning_calls,
+                "profile": "installation-main" if installation else "minimal",
+                "tools_allowed": len(sample_agent_config.tools_allowed),
+                "task_protocol": sample_agent_config.task_protocol,
+                "scope": "Authenticated ASGI chat admission through native runner, real private task creation and reply. Scripted immediate model; installation config when selected, isolated workspace without production memory/instruction files. No TCP/browser/provider latency. Audit/event publication and embeddings stubbed. Verification queries and post-response background drain excluded from timing.",
             }
             if stream:
                 stream.write(json.dumps({"summary": summary}) + "\n")
