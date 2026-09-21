@@ -5258,15 +5258,16 @@
       },
       "scope": "Host admits only a complete quoted title/body task-creation command with matching arguments and TODO status. Extra work or ambiguous wording, loaded skills, consumed steering and prior tool calls keep normal execution. Existing authorization, evidence and late-control guards remain. Native HTTP test forces erroneous finalReport on compound request and confirms calculation survives with one task and two model calls.",
       "broad_engine": {
-        "status": "interrupted_to_fix_related_goal_report_bug",
-        "passed_before_interrupt": 8378,
-        "skipped": 28,
-        "deselected": 229,
-        "warnings": 384,
-        "seconds": 299.96,
-        "log": "bench/runtime/uat-runtime-task-intent-engine-interrupted.log"
+        "revision": "0bad835df29",
+        "passed": 11434,
+        "skipped": 29,
+        "deselected": 230,
+        "warnings": 393,
+        "seconds": 465.72,
+        "log": "bench/runtime/uat-runtime-report-boundaries-engine.log",
+        "scope": "Full engine suite excluding integration and slow; product source unchanged during the run."
       },
-      "live_requalification": "pending",
+      "live_requalification": "Three compound diagnostic requests verified; two exceed 30 seconds. Full live screening remains open.",
       "model_allowance_promoted": false
     },
     "goal_report_request_boundary": {
@@ -5289,8 +5290,49 @@
         "Existing handler fixture omitted request text; corrected to an explicit status question.",
         "Duplicated rendered text plus full goal data crossed persisted tool-output truncation threshold; removed duplicate report_text and retained goal data."
       ],
-      "broad_engine": "pending",
-      "live_requalification": "pending"
+      "broad_engine": {
+        "revision": "0bad835df29",
+        "passed": 11434,
+        "skipped": 29,
+        "deselected": 230,
+        "warnings": 393,
+        "seconds": 465.72,
+        "log": "bench/runtime/uat-runtime-report-boundaries-engine.log",
+        "scope": "Full engine suite excluding integration and slow; product source unchanged during the run."
+      },
+      "live_requalification": "Three compound diagnostic requests verified; two exceed 30 seconds. Full live screening remains open."
+    },
+    "report_boundary_live_diagnostic": {
+      "revision": "0bad835df29",
+      "canonical": {
+        "passed": 76,
+        "skipped": 2,
+        "warnings": 1,
+        "seconds": 130.18
+      },
+      "verified": 3,
+      "samples": 3,
+      "durations_ms": [
+        22250.341082006344,
+        38707.855316999485,
+        37512.14439400064
+      ],
+      "duplicate_actions": 0,
+      "post_return_model_calls": 0,
+      "models_changed": false,
+      "experimental_overrides": false,
+      "qualification_passed": false,
+      "reason": "All three requests created exactly one matching TODO and answered the additional calculation. Two exceeded the 30-second target; only diagnostic sample size.",
+      "report": "bench/runtime/uat-runtime-report-boundaries-live-report.json"
+    },
+    "rollback_report_boundary": {
+      "current_revision": "0bad835df29",
+      "current_compatible": true,
+      "rollback_revision": "53f588cb6bc",
+      "rollback_compatible": false,
+      "promotion_gate_added": true,
+      "reason": "Older target finalizes goal-only reporting even when the user also requested a calculation. Gate rejects that target before starting the rollback daemon.",
+      "report": "bench/runtime/uat-runtime-report-boundary-rollback.json"
     }
   },
   "calendar": {

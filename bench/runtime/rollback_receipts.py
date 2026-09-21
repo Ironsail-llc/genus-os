@@ -14,12 +14,16 @@ from robothor.engine.runtime.effects import fingerprint
 
 def probe(code, env, dsn):
     from bench.runtime.rollback_deadlines import probe as probe_deadlines
+    from bench.runtime.rollback_report_boundaries import probe as probe_reports
 
+    reports = probe_reports(code)
     deadlines = probe_deadlines(code, env, dsn)
     saved = _probe_one(code, env, dsn)
     task = _probe_one(code, env, dsn, task_report=True)
     return {
         **saved,
+        "report_boundaries_compatible": reports["compatible"],
+        "report_boundary_probe": reports,
         "saved_deadlines_compatible": deadlines["compatible"],
         "deadline_probe": deadlines,
         "task_report_identity_compatible": task["reuses_saved_response"],

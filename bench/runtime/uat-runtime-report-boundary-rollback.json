@@ -1,0 +1,16 @@
+{
+  "current": {
+    "compatible": true,
+    "finalized": {
+      "standalone": true,
+      "compound": false
+    }
+  },
+  "rollback": {
+    "compatible": false,
+    "finalized": {
+      "standalone": true,
+      "compound": true
+    }
+  }
+}

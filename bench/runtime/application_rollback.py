@@ -63,6 +63,7 @@ def drill(root, env, dsn):
         "reuses_saved_response",
         "task_report_identity_compatible",
         "saved_deadlines_compatible",
+        "report_boundaries_compatible",
     )
     assert all(compatibility["current"][key] for key in required), compatibility
     if not all(compatibility["rollback"][key] for key in required):
@@ -72,7 +73,7 @@ def drill(root, env, dsn):
             "receipt_compatibility": compatibility,
             "daemon_started": False,
             "rollback_qualified": False,
-            "reason": "Target cannot preserve saved responses, task identity, or checkpoint deadlines.",
+            "reason": "Target cannot preserve saved responses, task identity, checkpoint deadlines, or complete-request reporting.",
         }
     identifiers = seed(dsn)
     stopped_run = identifiers[0]
