@@ -1,0 +1,29 @@
+{
+  "revision": "1714e70dd84",
+  "change": "The shared runtime assigns at most 60 seconds to root webchat/telegram requests with a supplied agent_config explicitly declaring difficulty_class=simple. This does not depend on the calendar feature. Existing shorter deadlines remain shorter. Goals, parented/delegated work, resumes, planning/deep modes and benchmarks retain their existing policy. Deterministic calendar confirmation handling is preserved.",
+  "initial_failure": {
+    "failed": 2,
+    "log": "/tmp/runtime-simple-profile-before.log"
+  },
+  "deadline_admission_contracts": {
+    "passed": 69,
+    "seconds": 9.77,
+    "log": "/tmp/runtime-simple-profile-final-guards.log"
+  },
+  "runner_chat": {
+    "passed": 87,
+    "warnings": 1,
+    "seconds": 6.98,
+    "log": "/tmp/runtime-simple-profile-runner-final.log"
+  },
+  "canonical_browser": {
+    "passed": 33,
+    "skipped": 1,
+    "warnings": 1,
+    "seconds": 21.83,
+    "log": "/tmp/runtime-simple-profile-native.log"
+  },
+  "audit_evidence": "A private-database test uses an automatically assigned shortened test deadline and stalls acceptance delivery. No execution starts; the real tracking DAL persists a timeout with the original request identity and assigned deadline, recoverable through the ordinary outcome reader.",
+  "checks": "Ruff lint/format and diff checks pass; no size cap increased.",
+  "limits": "Only explicitly simple configurations supplied at runtime admission are newly bounded. Normal chat that loads a manifest later, and automatic natural-language classification, remain open. This does not prove the general 60-second simple-action acceptance target. No model selection, production write or deployment. Broad engine regression recorded at the preceding revision remains historical; the listed selections validate this change."
+}

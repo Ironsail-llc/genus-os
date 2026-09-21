@@ -2107,6 +2107,10 @@
       "selection": "not slow and not integration and not llm and not e2e and not smoke",
       "log": "/tmp/runtime-engine-regression-deep-controls.log",
       "note": "Single clean broad invocation after deep callback controls, approval cache-race fix and dynamic registry drain. Source code/tests unchanged during run; committed while it ran. Existing connect_tcp unawaited-coroutine warning remains; its collection location is not evidence of the initiating path."
+    },
+    "explicit_simple_profile_deadline": {
+      "revision": "1714e70dd84",
+      "artifact": "bench/runtime/uat-simple-profile-deadline.json"
     }
   },
   "calendar": {
