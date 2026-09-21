@@ -188,14 +188,19 @@ async def update_goal(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         and not await asyncio.to_thread(store.heartbeat, ctx.tenant_id, goal_id, current.attempt)
     ):
         raise ValueError("goal execution no longer holds its lease")
-    result = await asyncio.to_thread(
-        store.update,
-        ctx.tenant_id,
-        goal_id,
-        change,
-        ctx.user_id or ctx.agent_id,
-        operator=ctx.user_role in {"owner", "admin"},
-    )
+    # Attribute committed controls to trusted dispatch identity, never tool arguments.
+    token = store.control_origin.set((ctx.tenant_id, str(ctx.run_id), ctx.user_id or ctx.agent_id))
+    try:
+        result = await asyncio.to_thread(
+            store.update,
+            ctx.tenant_id,
+            goal_id,
+            change,
+            ctx.user_id or ctx.agent_id,
+            operator=ctx.user_role in {"owner", "admin"},
+        )
+    finally:
+        store.control_origin.reset(token)
     if (
         current
         and goal_id == current.goal_id

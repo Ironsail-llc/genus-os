@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -24,6 +25,10 @@ from robothor.goals.model import (
     transition,
 )
 
+control_origin: ContextVar[tuple[str, str, str] | None] = ContextVar(
+    "goal_control_origin", default=None
+)
+
 
 @contextmanager
 def transaction() -> Iterator[Any]:
@@ -42,6 +47,22 @@ def transaction() -> Iterator[Any]:
 def journal(
     cur: Any, tenant: str, goal: dict[str, Any], action: str, actor: str, detail: dict[str, Any]
 ) -> None:
+    origin = control_origin.get()
+    if (
+        origin
+        and origin[0] == tenant
+        and origin[2] == actor
+        and action in {"pause", "cancel", "resume"}
+    ):
+        detail = {
+            **detail,
+            "control_receipt": {
+                "run_id": origin[1],
+                "principal_id": origin[2],
+                "status": goal["status"],
+                "version": goal["version"],
+            },
+        }
     cur.execute(
         """INSERT INTO pursuit_goal_history(tenant_id,goal_id,action,actor,detail)
                    VALUES (%s,%s,%s,%s,%s)""",

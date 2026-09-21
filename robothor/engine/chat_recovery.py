@@ -7,8 +7,9 @@ from psycopg2.extras import RealDictCursor
 from robothor.db.connection import get_connection
 from robothor.engine.chat_continuation import continuation
 from robothor.engine.chat_effect_receipts import family_effect_receipts
-from robothor.engine.chat_receipts import family_calendar_receipts, receipt_summary
-from robothor.engine.chat_result import result_text
+from robothor.engine.chat_goal_receipts import family_goal_receipts
+from robothor.engine.chat_receipts import family_calendar_receipts
+from robothor.engine.chat_result import receipt_result_text
 from robothor.engine.models import RunStatus
 from robothor.engine.runtime.chat_control import request_key
 
@@ -37,6 +38,7 @@ def read_outcome(auth, session_key: str, client_id: str) -> dict:
             rows = [latest]
             receipts = family_calendar_receipts(cur, root, auth)
             receipts += family_effect_receipts(cur, root, auth)
+            receipts += family_goal_receipts(cur, root, auth)
     if len(rows) != 1:
         return {"state": "ambiguous", "terminal": False}
     row = rows[0]
@@ -53,14 +55,17 @@ def read_outcome(auth, session_key: str, client_id: str) -> dict:
         from robothor.engine.runtime.controls import stopped
 
         stop_requested = stopped(auth.tenant_id, str(row["id"]))
-    text = result_text(SimpleNamespace(**{**row, "status": status})) if terminal else ""
+    text = (
+        receipt_result_text(SimpleNamespace(**{**row, "status": status}), receipts)
+        if terminal
+        else ""
+    )
     if stop_requested:
         text = "Stop is recorded. Waiting for the original worker's final evidence."
-    incomplete = any(not item["verified"] and item["status"] != "draft" for item in receipts)
-    if terminal and receipts:
-        if status == RunStatus.COMPLETED and incomplete:
-            text = "The run ended, but a recorded action is not fully verified."
-        text = "\n\n".join(filter(None, [text, receipt_summary(receipts)]))
+    incomplete = any(
+        not item["verified"] and item["status"] != "draft" and not item.get("superseded_by")
+        for item in receipts
+    )
     return {
         "state": "stopping" if stop_requested else status.value,
         "stop_requested": stop_requested,
@@ -73,7 +78,9 @@ def read_outcome(auth, session_key: str, client_id: str) -> dict:
             item["status"] == "executing" or item.get("reconciliation_pending", False)
             for item in receipts
         ),
-        "verified": row["verified_status"] == "verified" and not incomplete,
+        "verified": status == RunStatus.COMPLETED
+        and row["verified_status"] == "verified"
+        and not incomplete,
         "source": "run_record",
         "plan_exploration": str(row.get("trigger_detail") or "").startswith(
             ("plan:", "plan-revise:")

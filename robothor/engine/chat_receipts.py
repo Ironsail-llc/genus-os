@@ -92,6 +92,13 @@ def calendar_receipts(cur, run, auth):
 def receipt_summary(receipts):
     lines = []
     for receipt in receipts:
+        if receipt["kind"] == "goal_control":
+            lines.append(
+                f"The saved goal history records {receipt['action']} for goal {receipt['goal_id']} "
+                f"(state after that change: {receipt['status']}, version {receipt['version']}). "
+                "This records that control, not completion of the goal or its tasks."
+            )
+            continue
         if receipt["kind"] == "runtime_effect":
             from robothor.engine.chat_effect_receipts import effect_summary
 
