@@ -1121,3 +1121,12 @@ The unchanged cohort at `cd9c7ce68a3` (product `49627a99058`) completed all 30 c
 Raw transcripts, logs and the complete 30-start/30-finish journal are preserved in `bench/runtime/uat-chat-cohort-current/`. Summary and explicit scope are in `uat-chat-cohort-current-summary.json`. The observed per-turn p95 meets the 30-second reference for this isolated workflow, while the pause interval extends above it. This is not full production-profile equivalence, a forced fallback-chain outage test, or a matched replacement comparison.
 
 Language acceptance remains open despite the passing state checks. In inspected examples 1, 19 and 20, the reply acknowledges disabled automatic pursuit but offers leaving the item to a scheduled review, potentially suggesting unavailable automatic progress. Replies also expose fixture IDs/versions and are verbose. This is an implementing-assistant review finding, not independent scoring or user acceptance. The cohort is preserved before any wording change. Full acceptance remains open; no production goal or deployment was changed.
+
+
+## Clarify unavailable scheduled-review options
+
+At `57d0eb02978`, goal-read tool guidance explicitly says that a scheduled review cannot advance the goal while automatic pursuit is disabled. It tells the model not to offer leaving work to that review as an available next step before authorized enablement. It also asks for plain-language finished/open work rather than internal IDs or versions unless requested. Data, permissions, scheduler behavior and execution enablement are unchanged.
+
+Twenty-four goal-tool, scripted chat/control and size checks pass (6.12s, one dependency warning), with Ruff lint/format and diff checks passing. This verifies structured behavior, not live compliance with the wording guidance. The prior 30-conversation cohort remains preserved. A new 30-conversation run has started in `/tmp/runtime-chat-cohort-wording` using the same isolated workflow and configured model chain; its outcome is not assumed. Evidence: `bench/runtime/uat-goal-review-wording.json`.
+
+Prompt guidance is not deterministic enforcement. The repeated live results must be reviewed before claiming the observed wording defect fixed, and human acceptance remains pending. Full acceptance stays open. No production deployment occurred.

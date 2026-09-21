@@ -2685,6 +2685,26 @@
         "scope": "Human-readable inspection by the implementing assistant, not independent judgment scoring or user acceptance."
       },
       "limits": "Observed per-turn p95 meets the 30-second reference in this cohort, but pause p95 uncertainty extends above it. One pause took 34.58 seconds. All returned responses used the selected primary; the full fallback chain was not forced through outages. Correct state alone does not accept the wording. Prior failures remain preserved; full acceptance and remaining normal-chat review stay open. No production deployment."
+    },
+    "goal_review_wording": {
+      "revision": "57d0eb02978",
+      "change": "Goal-read tool guidance explicitly distinguishes a registered review from an available next step when automatic pursuit is disabled. It tells the model not to offer leaving work to that review before authorized enablement, and to explain finished/open work without internal IDs or versions unless requested.",
+      "verification": {
+        "passed": 24,
+        "warnings": 1,
+        "seconds": 6.12,
+        "log": "/tmp/runtime-goal-review-wording.log",
+        "scope": "Goal tools, scripted single-goal/parent-child chat controls and size ratchets. This verifies unchanged structured behavior, not live compliance with wording guidance."
+      },
+      "prior_live_evidence": "bench/runtime/uat-chat-cohort-current-summary.json",
+      "live_repeat": {
+        "state": "started; outcome not yet known",
+        "directory": "/tmp/runtime-chat-cohort-wording",
+        "planned_conversations": 30,
+        "same_workflow_and_selected_model_chain": true
+      },
+      "checks": "Ruff lint/format and diff checks pass. No data-store, permission, scheduler or execution enablement behavior changed.",
+      "limits": "Prompt guidance is not deterministic enforcement. The repeated live cohort must be inspected before claiming the wording defect fixed; human acceptance remains pending. No production deployment; full acceptance stays open."
     }
   },
   "calendar": {
