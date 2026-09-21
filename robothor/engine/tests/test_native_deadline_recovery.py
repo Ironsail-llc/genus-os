@@ -227,8 +227,9 @@ async def test_planner_classified_chat_times_out_and_persists_its_deadline(
         assert 0.49 <= (deadline - before).total_seconds() < 0.7
 
 
+@pytest.mark.parametrize("approved_plan", [False, True])
 async def test_initial_chat_delivers_verified_task_after_reply_deadline(
-    engine_config, sample_agent_config, monkeypatch
+    engine_config, sample_agent_config, monkeypatch, approved_plan
 ):
     import json
 
@@ -308,13 +309,29 @@ async def test_initial_chat_delivers_verified_task_after_reply_deadline(
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
+        payload = {
+            "message": "Create one synthetic task",
+            "session_key": session,
+            "request_id": client_id,
+        }
+        if approved_plan:
+            from robothor.engine.chat_store import save_plan_state_async
+            from robothor.engine.models import PlanState
+
+            plan = PlanState(
+                plan_id=str(uuid4()),
+                plan_text="Create one synthetic task",
+                original_message=payload["message"],
+                status="pending",
+                created_at=datetime.now(UTC).isoformat(),
+            )
+            await save_plan_state_async(
+                session, chat._plan_to_dict(plan), tenant_id=tenant, strict=True
+            )
+            chat._get_session(session).active_plan = plan
+            payload["plan_id"] = plan.plan_id
         response = await client.post(
-            "/chat/send",
-            json={
-                "message": "Create one synthetic task",
-                "session_key": session,
-                "request_id": client_id,
-            },
+            "/chat/plan/approve" if approved_plan else "/chat/send", json=payload
         )
         assert response.status_code == 200
         events = [
@@ -336,6 +353,14 @@ async def test_initial_chat_delivers_verified_task_after_reply_deadline(
         assert recovered["text"] == delivered["text"]
         assert not recovered["verified"] and not recovered["reconciliation_pending"]
         assert chat._get_session(session).history[-1]["content"] == delivered["text"]
+        if approved_plan:
+            assert chat._get_session(session).active_plan is None
+            repeated = await client.post("/chat/plan/approve", json=payload)
+            assert repeated.status_code == 409
+            assert repeated.json()["request_admitted"] is True
+            assert "already received" in repeated.json()["error"]
+            assert len(calls) == 2
+
     await get_task_registry().drain(timeout=5)
     assert len(calls) == 2
     for caller in [

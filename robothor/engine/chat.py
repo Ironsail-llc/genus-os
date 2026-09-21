@@ -47,7 +47,7 @@ from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 
 from robothor.constants import DEFAULT_TENANT
-from robothor.engine.chat_delivery import deliver_interruption
+from robothor.engine.chat_delivery import deliver_interruption, deliver_plan_interruption
 from robothor.engine.chat_delivery import final_result as delivery_result
 from robothor.engine.chat_history import MAX_HISTORY as _MAX_HISTORY
 from robothor.engine.chat_history import ChatHistory, append_turn, as_history
@@ -1137,11 +1137,8 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                         },
                     }
                 )
-        except asyncio.CancelledError:
-            await queue.put({"event": "done", "data": {"text": "", "aborted": True}})
-        except Exception as e:
-            logger.error("Plan execution error: %s", e, exc_info=True)
-            await queue.put({"event": "error", "data": {"error": str(e)}})
+        except (asyncio.CancelledError, Exception) as exc:
+            await deliver_plan_interruption(queue, session, auth, session_key, plan, exc)
         finally:
             await queue.put(None)
             if session.active_task is asyncio.current_task():

@@ -72,7 +72,9 @@ def _saved_request(identifier, auth):
     return _saved_result(str(rows[0][0]), auth) if len(rows) == 1 else None
 
 
-async def deliver_interruption(queue, session, auth, session_key, message, *, aborted=False):
+async def deliver_interruption(
+    queue, session, auth, session_key, message, *, aborted=False, plan=None
+):
     """Recover an exception after the native runner durably recorded interruption."""
     from robothor.engine.chat_history import append_turn
     from robothor.engine.chat_store import save_exchange_async
@@ -89,6 +91,11 @@ async def deliver_interruption(queue, session, auth, session_key, message, *, ab
         return False
     if not saved:
         return False
+    if plan is not None:
+        from robothor.engine.chat_plan_claim import finish_plan
+
+        plan.execution_run_id = saved["run_id"]
+        await finish_plan(session, plan, auth.tenant_id, session_key)
     append_turn(session, user_message=message, assistant_text=saved["text"])
     asyncio.create_task(
         save_exchange_async(
@@ -102,3 +109,21 @@ async def deliver_interruption(queue, session, auth, session_key, message, *, ab
     )
     await queue.put({"event": "done", "data": {**saved, "aborted": aborted}})
     return True
+
+
+async def deliver_plan_interruption(queue, session, auth, session_key, plan, error):
+    """Resolve interrupted approval delivery without admitting the plan again."""
+    aborted = isinstance(error, asyncio.CancelledError)
+    if await deliver_interruption(
+        queue, session, auth, session_key, plan.original_message, aborted=aborted, plan=plan
+    ):
+        return
+    if aborted:
+        await queue.put({"event": "done", "data": {"text": "", "aborted": True}})
+    else:
+        logger.error(
+            "Plan execution error: %s",
+            error,
+            exc_info=(type(error), error, error.__traceback__),
+        )
+        await queue.put({"event": "error", "data": {"error": str(error)}})
