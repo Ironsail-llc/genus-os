@@ -2963,6 +2963,87 @@
       "experiment_accepted": false,
       "decision": "Revert the additional prompt guidance: its target wording defect remains, and the observed status p95 exceeds the 30-second reference. Preserve the full failed experiment. Investigate timing and grounding of available next actions before another change.",
       "limits": "All machine state checks passed, but this is not full acceptance. The status latency target failed; prompt-change causality is not established by sequential cohorts. Provider versus host timing was not retained by this chat fixture. No production deployment."
+    },
+    "chat_timing_attribution": {
+      "revision": "2651401d7ba",
+      "product_revision": "49627a99058",
+      "change": "Chat diagnostic fixture captures native terminal run_measurements and per-step model/tool timing with token counts and failure flags. Successful-turn run identities and measured call counts are checked against actual native provider/registry calls. No prompts or credentials are added to timing records.",
+      "focused": {
+        "passed": 6,
+        "warnings": 1,
+        "seconds": 3.98,
+        "log": "/tmp/runtime-chat-timing-final.log"
+      },
+      "live_diagnostics": [
+        {
+          "passed": 1,
+          "deselected": 1,
+          "warnings": 1,
+          "seconds": 35.04,
+          "log": "/tmp/runtime-chat-timing-diagnostic-0.log",
+          "variant": "Aggregate timing captured before adding per-step detail."
+        },
+        {
+          "passed": 1,
+          "deselected": 1,
+          "warnings": 1,
+          "seconds": 26.83,
+          "log": "/tmp/runtime-chat-timing-diagnostic-1.log",
+          "variant": "Final per-step timing at recorded revision."
+        }
+      ],
+      "measurements": [
+        {
+          "diagnostic": 0,
+          "artifact": "bench/runtime/uat-chat-timing-diagnostic-0.json",
+          "turns": [
+            {
+              "request": "What's finished, and what's still left?",
+              "elapsed_ms": 15520.12665499933,
+              "recorded_model_ms": 15343,
+              "tool_wall_ms": 20,
+              "other_elapsed_ms": 157.12665499933064,
+              "model_calls": 3,
+              "tool_calls": 2
+            },
+            {
+              "request": "Pause that work.",
+              "elapsed_ms": 17388.12254399818,
+              "recorded_model_ms": 17310,
+              "tool_wall_ms": 14,
+              "other_elapsed_ms": 64.12254399817903,
+              "model_calls": 3,
+              "tool_calls": 2
+            }
+          ]
+        },
+        {
+          "diagnostic": 1,
+          "artifact": "bench/runtime/uat-chat-timing-diagnostic-1.json",
+          "turns": [
+            {
+              "request": "What's finished, and what's still left?",
+              "elapsed_ms": 14572.300023995922,
+              "recorded_model_ms": 14427,
+              "tool_wall_ms": 18,
+              "other_elapsed_ms": 127.30002399592195,
+              "model_calls": 3,
+              "tool_calls": 2
+            },
+            {
+              "request": "Pause that work.",
+              "elapsed_ms": 10273.416234995238,
+              "recorded_model_ms": 10203,
+              "tool_wall_ms": 16,
+              "other_elapsed_ms": 54.41623499523848,
+              "model_calls": 3,
+              "tool_calls": 2
+            }
+          ]
+        }
+      ],
+      "finding": "In these four turns, recorded model-call time dominates elapsed time; tool work is 14\u201320 ms and other elapsed time is under 160 ms. In the detailed status turn, list/get decisions take 2.198s and 1.548s, while final answer generation takes 10.681s. The detailed pause final answer takes 5.284s. This directs the next investigation toward model round trips and final-response generation.",
+      "limits": "Two live diagnostic conversations, not a screening cohort or causal explanation of the prior p95 change. Native LLM_CALL timing includes the call/streaming path, not an independent provider-server measurement. Earlier cohort timing cannot be reconstructed from these new observations. Production behavior unchanged; wording defect and full acceptance remain open. No deployment."
     }
   },
   "calendar": {
