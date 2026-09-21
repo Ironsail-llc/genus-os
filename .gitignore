@@ -275,3 +275,12 @@ docs/install.sh
 .test-postgres/
 .test-browsers/
 .test-workspace/
+
+# Benchmark run artefacts. The harness (.py) and the cited .json reports are
+# tracked; the raw logs are 87,630 lines across 560 files, nothing reads them
+# (every runtime read goes to tmp_path or $RUNTIME_DRILL_ROOT), and they were
+# the source of 1,171 of 1,179 instance-data findings.
+bench/runtime/*.log
+bench/runtime/*.jsonl
+bench/runtime/**/*.log
+bench/runtime/**/*.jsonl

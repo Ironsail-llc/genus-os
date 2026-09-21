@@ -12,6 +12,12 @@ if TYPE_CHECKING:
     from robothor.engine.tools.dispatch import ToolContext
 
 
+# Commands that preserve uncertainty rather than dispatch a new business
+# action. The runtime effect ledger lets these through while an earlier
+# action is still unresolved; anything else has to wait for readback.
+RECOVERY_BOOKKEEPING_ACTIONS = frozenset({"progress", "wait", "block", "pause", "cancel"})
+
+
 @dataclass
 class Binding:
     tenant: str

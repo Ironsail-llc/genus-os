@@ -24,6 +24,7 @@ from robothor.goals.model import (
     future,
     new_goal,
     now_iso,
+    token_budget_of,
     transition,
 )
 
@@ -665,3 +666,42 @@ def adopt(tenant: str, task_id: str, actor: str) -> dict[str, Any]:
             {"legacy_task_id": task_id, "evidence": goal["legacy_evidence"]},
         )
     return goal
+
+
+def reserve_provider_usage(tenant: str, goal_id: str, attempt: str, tokens: int) -> None:
+    """Durably retain worst-case attempt usage before a provider request can leave.
+
+    Written BEFORE the call, not after: a crash between dispatch and response
+    must not lose the charge. Ported from the runtime branch, but using this
+    module's `token_budget_of` rather than a bare `g["token_budget"]` truthiness
+    check -- the branch's form treated an unset budget as unlimited, which is
+    exactly the ceiling `token_budget_of` exists to supply.
+    """
+    with transaction() as cur:
+        cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("goals:" + tenant,))
+        cur.execute(
+            """SELECT g.data FROM pursuit_goals g JOIN goal_pursuit_settings s
+                    ON s.tenant_id=g.tenant_id WHERE g.tenant_id=%s AND g.id=%s AND g.lease_id=%s
+                    AND g.lease_until>now() AND s.enabled AND g.status IN ('running','queued')
+                    FOR UPDATE OF g""",
+            (tenant, goal_id, attempt),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise ValueError("goal lease no longer authorizes provider spending")
+        goal = row["data"]
+        budgets = [goal]
+        if goal["parent_goal_id"]:
+            budgets.append(locked(cur, tenant, goal["parent_goal_id"]))
+        if any(
+            g["status"] in INACTIVE or g.get("tokens_used", 0) + tokens > token_budget_of(g)
+            for g in budgets
+        ):
+            raise ValueError("goal family budget or authority exhausted")
+        cur.execute(
+            """UPDATE pursuit_goal_attempts SET tokens=GREATEST(tokens,%s)
+                    WHERE tenant_id=%s AND id=%s AND status='running' RETURNING id""",
+            (tokens, tenant, attempt),
+        )
+        if not cur.fetchone():
+            raise ValueError("goal attempt no longer active")
