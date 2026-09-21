@@ -610,6 +610,10 @@ def _cleanup_stale_runs(tenant_id: str | None = None) -> int:
     except Exception as e:
         logger.warning("Stale run cleanup failed: %s", e)
         return wf_reaped
+    finally:
+        from robothor.engine.runtime.effect_recovery import sweep_terminal
+
+        sweep_terminal(tenant_id)
 
 
 async def _start_federation(config: EngineConfig, runner: Any = None) -> Any:

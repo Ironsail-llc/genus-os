@@ -1218,3 +1218,12 @@ Intermediate failures are retained: prepared-state abandonment SQL, omitted migr
 This is not complete automatic recovery. The abandoned-run operation is not yet wired into startup/reaper recovery, generic trusted readback callbacks are supplied by tests, and the new ledger is not yet projected into the goal workspace or chat outcome endpoint. Uncertainty can currently block internal goal wait/progress bookkeeping, which needs a narrowly authorized path without clearing the business-write fence. Runtime-bound dispatch is required. No production migration, deployment, framework selection or overall manual acceptance is claimed.
 
 Final-source canonical integration was rerun without the optional browser cases: 31 passed, one skipped, in 8.27 seconds. See `uat-runtime-effects-canonical-latest.log`.
+
+
+## Terminal-owner effect recovery
+
+Following `21b085ed031`, daemon startup and periodic stale-run cleanup now invoke a bounded tenant-scoped sweep even when no new stale runs were found. The sweep joins the persisted owning run and processes only completed, failed, timed-out, or cancelled owners. Prepared admissions become `not_applied`, which denies a late worker permission to dispatch. Dispatched effects become `uncertain`, retaining the duplicate fence and requiring provider readback. It neither retries actions nor infers outcomes from elapsed time. Missing or live owners remain untouched. Each sweep locks at most 100 effect rows, skips locked rows, and retries housekeeping on later ticks if storage is unavailable.
+
+The targeted recovery/dispatch/reaper/watchdog/size selection passed 95 tests in 12.57 seconds. Final-source canonical integration passed 32 with one skipped in 10.71 seconds, including a test against the real migrated run schema. An initial command referenced a nonexistent daemon test file and collected no tests; that log is retained alongside the corrected result. Evidence is in `bench/runtime/uat-verification.json`. The earlier broad engine run predates this change.
+
+This supersedes the prior limitation that abandoned-record recovery had no daemon caller. It does not resolve service-specific effects automatically; trusted provider readback, goal bookkeeping during uncertainty, and user-facing recovery reporting remain open. No deployment or overall acceptance is claimed.

@@ -3166,6 +3166,28 @@
         "log": "bench/runtime/uat-runtime-effects-canonical-latest.log",
         "scope": "Final source; default canonical selection without optional browser cases."
       }
+    },
+    "terminal_effect_recovery": {
+      "base_revision": "21b085ed031",
+      "focused": {
+        "passed": 95,
+        "seconds": 12.57,
+        "log": "bench/runtime/uat-runtime-effect-terminal-regression-final.log"
+      },
+      "canonical": {
+        "passed": 32,
+        "skipped": 1,
+        "warnings": 1,
+        "seconds": 10.71,
+        "log": "bench/runtime/uat-runtime-effect-terminal-canonical.log"
+      },
+      "behavior": "Startup/watchdog cleanup sweeps up to 100 effects whose tenant-matched persisted run is terminal. Prepared becomes not_applied; dispatching becomes uncertain. No provider calls or model calls.",
+      "limitations": [
+        "Provider-specific readback is still required to settle dispatched effects.",
+        "Missing run records and nonterminal run records remain fenced; no age-only inference.",
+        "Broad engine result predates this change; targeted regression selection and canonical integration were run."
+      ],
+      "intermediate": "Initial targeted command referenced nonexistent test_daemon.py and collected no tests. Corrected command and original log retained."
     }
   },
   "calendar": {

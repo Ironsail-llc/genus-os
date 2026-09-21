@@ -177,3 +177,29 @@ async def test_new_native_run_recovers_original_effect_without_another_write(
     assert denied.tool_output["effect_id"] == effect_id[0]
     assert denied.tool_output["outcome_unknown"]
     assert "saved once" in recovered.run.output_text
+
+
+def test_terminal_effect_sweep_on_canonical_run_storage():
+    from robothor.engine.runtime.effect_recovery import sweep_terminal
+
+    dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
+    if "host=/tmp/runtime-migrated-" not in dsn:
+        pytest.skip("requires disposable canonical migration harness")
+    tenant = "effect-sweep-" + uuid4().hex
+    run_id = str(uuid4())
+    with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute("INSERT INTO crm_tenants(id,display_name) VALUES (%s,%s)", (tenant, tenant))
+        cur.execute(
+            "INSERT INTO agent_runs(id,tenant_id,agent_id,trigger_type,status) VALUES (%s,%s,'main','manual','failed')",
+            (run_id, tenant),
+        )
+    ctx = ExecutionContext(tenant, "service:main", str(uuid4()))
+    prepared = effects.begin(ctx, run_id, "main", "create_note", {"body": "not dispatched"})
+    sent = effects.begin(ctx, run_id, "main", "create_note", {"body": "response lost"})
+    assert effects.mark_dispatched(ctx, sent["id"], run_id)
+    assert sweep_terminal(tenant) == 2
+    assert effects.read(ctx, prepared["id"])["state"] == "not_applied"
+    assert effects.read(ctx, sent["id"])["state"] == "uncertain"
+    assert not effects.mark_dispatched(ctx, prepared["id"], run_id)
+    assert not effects.finish(ctx, sent["id"], run_id, uncertain=False)
+    assert sweep_terminal(tenant) == 0
