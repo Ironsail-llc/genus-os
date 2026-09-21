@@ -2068,6 +2068,11 @@
     "independent_approval_receipts": {
       "revision": "7168c64a184",
       "artifact": "bench/runtime/uat-approval-receipts.json"
+    },
+    "normal_chat_repeated_confirmation": {
+      "revision": "41faa8f1fa6",
+      "artifact": "bench/runtime/uat-chat-confirmation.json",
+      "manual_acceptance": false
     }
   },
   "calendar": {

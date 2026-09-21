@@ -1,0 +1,38 @@
+{
+  "scope": "Native chat and runner admission, real calendar handler and private operation receipts; fake Calendar transport, mocked run/history persistence. No model calls or production writes.",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "Go ahead",
+      "robothor": "Added sam@example.com to the meeting. Calendar notifications requested.\n\nCalendar operation: 8f0a530b-8608-43c8-a62b-7428e208fee4"
+    },
+    {
+      "user": "Yes",
+      "robothor": "This operation was completed previously. No new calendar changes or invitations were requested.\n\nCalendar operation: 8f0a530b-8608-43c8-a62b-7428e208fee4"
+    }
+  ],
+  "model_calls": 0,
+  "calendar_writes": 1,
+  "operation_status": "completed",
+  "revision": "41faa8f1fa6",
+  "verification": {
+    "single_case": {
+      "passed": 1,
+      "warnings": 1,
+      "seconds": 3.49,
+      "log": "/tmp/runtime-chat-confirmation.log"
+    },
+    "chat_goal_confirmation_and_size": {
+      "passed": 15,
+      "warnings": 1,
+      "seconds": 6.7,
+      "log": "/tmp/runtime-chat-confirmation-regression.log"
+    }
+  },
+  "manual_review": {
+    "status": "requested",
+    "channel": "normal chat",
+    "question": "Does a repeated confirmation returning the saved result without new calendar changes match your expectation?"
+  },
+  "checks": "Ruff lint/format and diff checks pass. Added the case to the existing runtime-contract CI job; no remote CI run is claimed."
+}
