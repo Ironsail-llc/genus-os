@@ -113,6 +113,7 @@ def main():
                     "robothor/engine/tests/test_native_goal_recovery.py",
                     "robothor/engine/tests/test_native_admission_rollback.py",
                     "robothor/engine/tests/test_native_deadline_recovery.py",
+                    "robothor/engine/tests/test_native_goal_report_audit.py",
                     "robothor/engine/tests/test_native_checkpoint_continuation.py",
                     "robothor/engine/tests/test_native_deep_worker_recovery.py",
                     *(

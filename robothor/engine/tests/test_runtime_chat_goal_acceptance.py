@@ -47,6 +47,7 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
     sample_agent_config,
     monkeypatch,
     tmp_path,  # noqa: F811
+    reporting=False,
 ):
     engine = request.getfixturevalue("runner")
     from robothor.engine.performance import run_measurements
@@ -58,6 +59,12 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
         result = finish_run(run, *args, **kwargs)
         measured_runs[result.id] = {
             **run_measurements(result),
+            "factual_goal_report": any(
+                step.step_type == "checkpoint"
+                and step.tool_name == "report_pursuit_goal"
+                and step.tool_output.get("origin") == "trusted_goal_report"
+                for step in result.steps
+            ),
             "steps": [
                 {
                     "type": str(step.step_type),
@@ -81,6 +88,7 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
         lambda *args, **kwargs: "Engine health: unavailable in this isolated test.",
     )
     live = json.loads(os.environ.get("ROBOTHOR_RUNTIME_CHAT_LIVE", "null"))
+    reporting = reporting or (live or {}).get("factual_report", False)
     if live and hierarchy:
         pytest.skip("hierarchy acceptance uses synthetic provider only")
     live_output = None
@@ -101,6 +109,15 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
         "get_pursuit_goal",
         "update_pursuit_goal",
     ]
+    if reporting:
+        sample_agent_config.tools_allowed.append("report_pursuit_goal")
+    if reporting and not live:
+        monkeypatch.setattr(engine, "_should_verify", lambda *args: True)
+        monkeypatch.setattr(
+            engine,
+            "_run_verification",
+            AsyncMock(side_effect=AssertionError("No model verifier after a factual report")),
+        )
     engine.registry.build_for_agent.return_value = [
         schemas()[name] for name in sample_agent_config.tools_allowed
     ]
@@ -134,13 +151,16 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
 
     monkeypatch.setattr("robothor.crm.dal.list_tasks", open_tasks)
 
+    steered = False
+
     async def dispatch(name, arguments, **context):
+        nonlocal steered
         assert name in sample_agent_config.tools_allowed
         if name == "update_pursuit_goal":
             assert active_message in controls
             assert (arguments.get("action"), arguments.get("goal_id")) == controls[active_message]
         calls.append(name)
-        return await HANDLERS[name](
+        result = await HANDLERS[name](
             arguments,
             ToolContext(
                 agent_id=context["agent_id"],
@@ -151,6 +171,14 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
                 identity=context["identity"],
             ),
         )
+        if reporting == "steer" and result.get("report_prepared") and not steered:
+            from robothor.engine.session_registry import lookup
+
+            active_session = lookup(context["run_id"])
+            assert active_session is not None
+            active_session.steer("Also tell me whether automatic pursuit is enabled.")
+            steered = True
+        return result
 
     engine.registry.execute = AsyncMock(side_effect=dispatch)
 
@@ -159,6 +187,8 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
         command = controls.get(active_message)
         target = command[1] if command else goal["id"]
         results = [json.loads(m["content"]) for m in messages[latest:] if m["role"] == "tool"]
+        reports = sum(bool(result.get("report_prepared")) for result in results)
+        assert reports <= (1 if reporting == "steer" else 0), "No model work after a final report"
         name, args, text = None, None, None
         if not results:
             name, args = "get_pursuit_goal", {"goal_id": target}
@@ -175,7 +205,7 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
         elif command and hierarchy and len(results) == 2:
             name, args = "get_pursuit_goal", {"goal_id": target}
         elif command:
-            observed = results[-1]["goal"]
+            observed = next(result["goal"] for result in reversed(results) if "goal" in result)
             assert observed["status"] == ("queued" if command[0] == "resume" else "paused")
             if hierarchy and target == child["id"]:
                 assert "paused_by_parent" not in observed
@@ -203,6 +233,8 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
                 "so the goal isn't complete. It's waiting for that check, and no completion "
                 "evidence has been recorded."
             )
+        if reporting and text:
+            name, args, text = "report_pursuit_goal", {"goal_id": target}, None
         message = {"role": "assistant", "content": text}
         if name:
             message["tool_calls"] = [
@@ -215,6 +247,17 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
                     },
                 }
             ]
+            if reporting == "batch" and name == "update_pursuit_goal":
+                message["tool_calls"].append(
+                    {
+                        "id": f"call-{len(calls)}-report",
+                        "type": "function",
+                        "function": {
+                            "name": "report_pursuit_goal",
+                            "arguments": json.dumps({"goal_id": target}),
+                        },
+                    }
+                )
         elif on_content:
             await on_content(text)
         return ModelResponse(
@@ -349,9 +392,32 @@ async def test_unfinished_goal_review_and_pause_through_normal_chat(
         assert (
             sum(turn["measurements"]["model_calls"] for turn in transcript) == outbound.call_count
         )
-        assert {"get_pursuit_goal", "list_pursuit_goals"}.intersection(calls)
+        assert {"get_pursuit_goal", "list_pursuit_goals", "report_pursuit_goal"}.intersection(calls)
         assert calls.count("update_pursuit_goal") == 1
         assert outbound.call_count > 0
+        if reporting:
+            assert all(turn["measurements"]["factual_goal_report"] for turn in transcript)
+    elif reporting:
+        expected_calls = [
+            "get_pursuit_goal",
+            "report_pursuit_goal",
+            "get_pursuit_goal",
+            "update_pursuit_goal",
+            "report_pursuit_goal",
+        ]
+        if reporting == "batch":
+            expected_calls.append("report_pursuit_goal")
+        if reporting == "steer":
+            expected_calls[2:2] = ["get_pursuit_goal", "report_pursuit_goal"]
+            assert steered
+        assert calls == expected_calls
+        assert "The goal is not complete" in transcript[0]["robothor"]
+        assert "scheduled reviews will not run" in transcript[0]["robothor"]
+        assert "is paused" in transcript[1]["robothor"]
+        assert all("Check the remaining item" in turn["robothor"] for turn in transcript)
+        assert all(turn["measurements"]["factual_goal_report"] for turn in transcript)
+        engine._run_verification.assert_not_awaited()
+        outbound.assert_not_called()
     else:
         assert calls == ["get_pursuit_goal"] + (
             ["get_pursuit_goal", "update_pursuit_goal", "get_pursuit_goal"] * 3

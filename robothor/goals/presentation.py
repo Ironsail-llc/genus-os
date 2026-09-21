@@ -1,7 +1,7 @@
 """Factual goal prose from a trusted, complete store.get snapshot.
 
 This renderer does not choose goals, authorize controls, or finish an agent run.
-It is not yet connected to normal-chat delivery.
+Native chat supplies authorized snapshots through report_pursuit_goal.
 """
 
 from datetime import UTC, datetime

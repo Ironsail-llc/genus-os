@@ -146,7 +146,7 @@ from robothor.engine.toolset_prep import (
 from robothor.engine.tracking import create_run, update_run
 from robothor.engine.warmup_steps import record_warmup_steps
 from robothor.engine.workflow_budget import propagates_to_caller
-from robothor.engine.workflow_completion import finish_after_tools
+from robothor.engine.workflow_completion import finish_after_tools, host_rendered_output
 
 # Per-tool wall-clock caps. The tables and the rule live in
 # robothor/engine/tool_timeouts.py; re-exported under their old private names
@@ -1438,9 +1438,7 @@ class AgentRunner(
 
         # ── [VERIFIER] Self-validation step ──
         output_text = session.get_final_text()
-        if not getattr(session, "routine_operation_id", None) and self._should_verify(
-            agent_config, route, session
-        ):
+        if not host_rendered_output(session) and self._should_verify(agent_config, route, session):
             output_text = await self._run_verification(
                 agent_config,
                 session,
@@ -2079,6 +2077,11 @@ class AgentRunner(
             )
 
             if finish_after_tools(session):
+                return
+
+            from robothor.engine.goal_report_delivery import finish_goal_report
+
+            if finish_goal_report(session):
                 return
 
             # ── [ERROR RECOVERY] Attempt autonomous recovery before escalation ──

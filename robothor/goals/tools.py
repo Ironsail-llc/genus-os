@@ -17,7 +17,13 @@ from robothor.goals.runtime import binding
 Handler = Callable[[dict[str, Any], "ToolContext"], Awaitable[dict[str, Any]]]
 
 TOOL_NAMES = frozenset(
-    {"create_pursuit_goal", "get_pursuit_goal", "list_pursuit_goals", "update_pursuit_goal"}
+    {
+        "create_pursuit_goal",
+        "get_pursuit_goal",
+        "list_pursuit_goals",
+        "report_pursuit_goal",
+        "update_pursuit_goal",
+    }
 )
 
 
@@ -52,6 +58,20 @@ def schemas() -> dict[str, Any]:
             "execution_enabled reports whether automatic pursuit is enabled; goal status "
             "and wake conditions still govern each goal.",
             {"type": "object", "properties": {}},
+        ),
+        "report_pursuit_goal": (
+            "Finish this chat reply with a factual report of one explicitly selected goal. "
+            "Use only when that report answers the user's entire request; finish other requested "
+            "work first. This reads current goal, task and child state; it does not execute work "
+            "or pause/resume anything. Call alone, after any requested controls. The host publishes "
+            "the final report without another model reply. Use ordinary reads and conversation "
+            "for additional questions, multiple goals or requests this report cannot answer.",
+            {
+                "type": "object",
+                "properties": {"goal_id": {"type": "string"}},
+                "required": ["goal_id"],
+                "additionalProperties": False,
+            },
         ),
         "update_pursuit_goal": (
             "Record progress, criterion evidence, a wait, blocker, assessment or completion. "
@@ -127,6 +147,23 @@ async def list_goals(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     }
 
 
+async def report_goal(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+    from uuid import UUID
+
+    from robothor.goals.presentation import render_goal_progress
+    from robothor.goals.report_channel import publish_report, require_report_context
+
+    check_context(ctx)
+    require_report_context(ctx)
+    if set(args) != {"goal_id"} or not isinstance(args["goal_id"], str):
+        raise ValueError("An explicit goal_id is required for the final report")
+    goal_id = str(UUID(args["goal_id"]))
+    goal = await asyncio.to_thread(store.get, ctx.tenant_id, goal_id)
+    enabled = await asyncio.to_thread(store.enabled, ctx.tenant_id)
+    publish_report(ctx, render_goal_progress(goal, execution_enabled=enabled))
+    return {"goal": goal, "execution_enabled": enabled, "report_prepared": True}
+
+
 async def update_goal(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     check_context(ctx)
     args = dict(args)
@@ -172,7 +209,7 @@ def guarded(handler: Handler) -> Handler:
 HANDLERS = dict(
     zip(
         sorted(TOOL_NAMES),
-        map(guarded, [create_goal, get_goal, list_goals, update_goal]),
+        map(guarded, [create_goal, get_goal, list_goals, report_goal, update_goal]),
         strict=True,
     )
 )

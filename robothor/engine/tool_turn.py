@@ -50,12 +50,7 @@ from robothor.engine.repeat_guard import drain_repeat_notes
 from robothor.engine.sanitize import sanitize_log as _sanitize
 from robothor.engine.session import ENGINE_CONTEXT_ROLE
 from robothor.engine.tool_outcome import record_tool_outcome
-from robothor.engine.tool_proxy import (
-    RunToolProxy,
-    clear_tool_proxy,
-    proxy_allow_set,
-    set_tool_proxy,
-)
+from robothor.engine.tool_turn_context import tool_turn_context
 from robothor.engine.tools.read_only import declared_read_only_tools
 
 if TYPE_CHECKING:
@@ -171,6 +166,7 @@ class ToolTurnMixin:
         iteration_errors: list[tuple[str, str, Any]] = []
         calls = list(req.assistant_msg.tool_calls or [])
         names = [tc.function.name for tc in calls]
+        from robothor.engine.goal_report_delivery import record_report_turn
 
         await self._emit_tools_start(req, names)
 
@@ -189,16 +185,13 @@ class ToolTurnMixin:
         # `execute_code` is among the calls: the handler finds it through a
         # ContextVar, and a conditional publish would make "is the proxy
         # there?" depend on parsing the turn twice.
-        proxy_token = set_tool_proxy(
-            RunToolProxy(
-                runner=self,
-                req=req,
-                allowed=proxy_allow_set(req, self.registry),
-                max_calls=execute_code_call_cap(),
-                max_approvals=execute_code_approval_cap(),
-            )
-        )
-        try:
+        with tool_turn_context(
+            self,
+            req,
+            names,
+            max_calls=execute_code_call_cap(),
+            max_approvals=execute_code_approval_cap(),
+        ) as report_state:
             for group in plan:
                 pending = [self._prepare_call(index, calls[index]) for index in group]
                 for call in pending:
@@ -206,14 +199,13 @@ class ToolTurnMixin:
                 await self._execute_group(pending, req)
                 for call in pending:
                     await self._record(call, req, iteration_errors, batch_id=batch_id)
-        finally:
-            clear_tool_proxy(proxy_token)
 
         # ── [REPEAT GUARD] After every tool result, never between them ──
         for note in drain_repeat_notes(req.session):
             req.session.messages.append({"role": ENGINE_CONTEXT_ROLE, "content": note})
 
         await self._emit_tools_done(req)
+        record_report_turn(report_state, req.session, iteration_errors)
         return iteration_errors
 
     # ── phase 0: what the model asked for ──────────────────────────────

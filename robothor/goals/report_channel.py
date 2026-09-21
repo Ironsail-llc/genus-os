@@ -37,7 +37,7 @@ def report_turn(tenant_id: str, agent_id: str, run_id: str, *, enabled: bool):
         _turn.reset(token)
 
 
-def publish_report(ctx, message: str) -> None:
+def require_report_context(ctx) -> ReportTurn:
     state = _turn.get()
     if (
         state is None
@@ -47,6 +47,11 @@ def publish_report(ctx, message: str) -> None:
         != (ctx.tenant_id, ctx.agent_id, ctx.run_id)
     ):
         raise ValueError("Goal reporting is unavailable in this execution context")
+    return state
+
+
+def publish_report(ctx, message: str) -> None:
+    state = require_report_context(ctx)
     if state.message is not None:
         raise ValueError("Only one final goal report is allowed per tool turn")
     if not isinstance(message, str) or not message.strip() or len(message) > 16000:
