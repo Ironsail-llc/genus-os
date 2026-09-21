@@ -5901,12 +5901,20 @@
       "note": "Normal full-tool streaming settings. Six primary calls completed. Requested thinking ceiling8192/max output16384; medium effort. No SDK-exposed usage chunks observed, so no inference about actual thinking-token spend. Goal/cost budget source inspection confirms unknown usage retains conservative reservations. Three fast samples do not overturn failed cohorts."
     },
     "provider_throughput_experiment": {
-      "status": "three-request diagnostic running",
+      "status": "three diagnostics verified; thirty-request screen running",
       "product_revision": "9163df1d1e6",
       "contracts_passed": 13,
       "log": "bench/runtime/uat-runtime-provider-sort-contracts.log",
       "reference": "https://openrouter.ai/docs/guides/routing/provider-selection",
-      "scope": "Test-only OpenRouter provider.sort=throughput; unchanged selected models, full tools, effort and normal timeouts. Preserve allowlists, price limits and fallback flags; reject overriding existing order/sort. No installed change or claimed cost improvement."
+      "scope": "Test-only OpenRouter provider.sort=throughput; unchanged selected models, full tools, effort and normal timeouts. Preserve allowlists, price limits and fallback flags; reject overriding existing order/sort. No installed change or claimed cost improvement.",
+      "diagnostic_report": "bench/runtime/uat-runtime-throughput-streaming-diagnostic-report.json",
+      "durations_seconds": [
+        4.166388355006347,
+        4.514887559998897,
+        5.329199920000974
+      ],
+      "canonical_passed": 84,
+      "canonical_skipped": 2
     }
   },
   "calendar": {
