@@ -296,6 +296,10 @@ class AgentSession:
     def consume_pending_steer(self) -> str | None:
         """Pop and return any pending steer text, or ``None`` if none."""
         text, self._pending_steer = self._pending_steer, None
+        if text:
+            from robothor.engine.task_context import record_steering
+
+            record_steering(self.messages, text)
         return text
 
     def consume_interrupt(self) -> str | None:
@@ -344,6 +348,18 @@ class AgentSession:
         replies_to) are dropped before the envelope reaches the LLM —
         only role + content go on the wire.
         """
+        from robothor.autonomy.intake import protect_payment_text
+
+        user_message = protect_payment_text(user_message)
+        if "browser" in tools_provided:
+            system_prompt += (
+                "\n\nFor account creation, applications and purchases, inspect browser(action='autonomy', "
+                "request={'kind':'status'}). An active standing grant is prior explicit authorization "
+                "for its covered actions; do not ask for it again or impose a blanket stop before submission. "
+                "Use the reference-only broker for credentials and payments. Complete and verify authorized "
+                "work; preserve uncertain submissions for reconciliation. Missing data, unsupported verification "
+                "and absent authority are distinct conditions, not reasons to claim all forms are impossible."
+            )
         self.run.status = RunStatus.RUNNING
         self.run.started_at = datetime.now(UTC)
         # The run has begun — tell anyone watching for it now, not when the
@@ -379,12 +395,49 @@ class AgentSession:
         for msg in conversation_history or []:
             rendered_history.append(_render_history_for_llm(msg))
 
+        import os
+
+        if self.run.agent_id == "main" and os.environ.get("ROBOTHOR_HOST_EXEC_SOCKET"):
+            system_prompt += (
+                "\nHOST COMPUTER: Owner-authorized main-agent exec uses the host execution service. "
+                "Routine dependencies and maintenance are authorized; honor explicit plan-only requests. "
+                "For a deployment use exec command `genus-host deploy <git revision>`; it returns "
+                "a durable job ID, waits for idle, restarts, verifies, and rolls back on failure. "
+                "Check `genus-host status <job ID>` after restart. Editing a checkout is not deployment. "
+                "Keep the original task pending until deployed verification passes. Before retrying "
+                "a booking or purchase, check external state to avoid duplicates."
+            )
+
         self.messages = [
             {"role": "system", "content": system_prompt},
             *rendered_history,
             *([{"role": ENGINE_CONTEXT_ROLE, "content": engine_context}] if engine_context else []),
             {"role": "user", "content": user_message},
         ]
+        from robothor.engine.task_context import install_context, make_context
+
+        install_context(
+            self.messages,
+            make_context(
+                user_message,
+                conversation_history or [],
+                run_id=self.run.id,
+                mode="plan"
+                if str(self.run.trigger_detail or "").startswith("plan:")
+                else "execute",
+            ),
+        )
+        if self.identity is not None:
+            from dataclasses import asdict
+
+            from robothor.engine.task_context import read_context
+
+            record = read_context(self.messages)
+            if record is not None:
+                record["identity"] = asdict(self.identity)
+                record["agent_id"] = self.run.agent_id
+                install_context(self.messages, record)
+
         # Count this user turn for the memory-review nudge (Rip 1). Previously
         # never incremented, so the memory half of the background-review fork
         # could never reach its threshold. Accumulates across turns on a

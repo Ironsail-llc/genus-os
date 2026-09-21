@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from robothor.engine.tools.dispatch import ToolContext
 from robothor.engine.tools.handlers.browser import (
     ElementRef,
     _build_shadow_distilled,
@@ -72,6 +74,197 @@ def empty_aria():
 @pytest.fixture
 def minimal_aria():
     return '- heading "Page Title" [level=1]'
+
+
+# ─── Tests: host browser profile + child env ───────────────────────────
+#
+# The host Chromium launch used to die with EROFS: Chromium puts its product
+# config dir at $XDG_CONFIG_HOME/google-chrome-for-testing, defaulting to
+# $HOME/.config/..., which the engine unit's ProtectHome=read-only and
+# ReadWritePaths= allowlist leave unwritable. It also handed the browser the
+# engine's whole process environment. These tests pin both fixes.
+
+
+@pytest.fixture
+def workspace(tmp_path, monkeypatch):
+    """A ROBOTHOR_WORKSPACE the profile dir can be resolved against."""
+    monkeypatch.setenv("ROBOTHOR_WORKSPACE", str(tmp_path))
+    return tmp_path
+
+
+class TestBrowserProfileDir:
+    def test_lives_under_the_workspace(self, workspace):
+        """The path must be inside the workspace, because that is what the unit
+        grants write access to. Anywhere else reintroduces the EROFS failure."""
+        from robothor.engine.tools.handlers.browser import _browser_profile_dir
+
+        profile = Path(_browser_profile_dir("main"))
+        assert profile.is_relative_to(workspace)
+        assert profile.is_relative_to(workspace / "local" / "browser-profiles")
+        assert profile.is_dir(), "the dir must exist before Chromium is pointed at it"
+
+    def test_is_per_agent(self, workspace):
+        """Per agent, never shared: a shared writable profile lets the first
+        agent to log in log in every other agent (Review R7)."""
+        from robothor.engine.tools.handlers.browser import _browser_profile_dir
+
+        main = _browser_profile_dir("main")
+        scout = _browser_profile_dir("scout")
+        assert main != scout
+        assert Path(main) != Path(scout)
+
+    def test_same_agent_is_stable(self, workspace):
+        """Stable across calls, or cookies would not survive a restart."""
+        from robothor.engine.tools.handlers.browser import _browser_profile_dir
+
+        assert _browser_profile_dir("main") == _browser_profile_dir("main")
+
+    def test_unsafe_agent_id_cannot_escape_the_workspace(self, workspace):
+        from robothor.engine.tools.handlers.browser import _browser_profile_dir
+
+        profile = Path(_browser_profile_dir("../../etc"))
+        assert profile.is_relative_to(workspace)
+        assert ".." not in profile.parts
+
+    def test_empty_agent_id_falls_back_to_default(self, workspace):
+        from robothor.engine.tools.handlers.browser import _browser_profile_dir
+
+        assert Path(_browser_profile_dir("")).name == "default"
+
+
+class TestBrowserEnv:
+    def test_points_chromium_at_the_profile(self, workspace):
+        from robothor.engine.tools.handlers.browser import _browser_env
+
+        profile = str(workspace / "local" / "browser-profiles" / "main")
+        env = _browser_env(profile, "main")
+        assert env["XDG_CONFIG_HOME"] == profile
+        assert env["XDG_CACHE_HOME"].startswith(profile)
+        assert env["XDG_DATA_HOME"].startswith(profile)
+        assert env["DISPLAY"], "DISPLAY must still be injected"
+
+    def test_enforce_withholds_credentials_and_keeps_path(self, workspace, monkeypatch):
+        """The child env is an allowlist. Under `enforce` a credential-shaped
+        name in the base must not reach the browser, and PATH must survive so
+        the launch still works."""
+        from robothor.engine import exec_env as exec_env_mod
+        from robothor.engine.tools.handlers.browser import _browser_env
+
+        monkeypatch.setattr(exec_env_mod, "exec_env_mode", lambda: "enforce")
+        monkeypatch.setitem(__import__("os").environ, "ACME_API_KEY", "placeholder-value-1234567890")
+
+        profile = str(workspace / "local" / "browser-profiles" / "main")
+        env = _browser_env(profile, "main")
+
+        assert "ACME_API_KEY" not in env
+        assert env["PATH"] == __import__("os").environ["PATH"]
+        assert env["XDG_CONFIG_HOME"] == profile
+
+    def test_observe_rung_is_a_passthrough(self, workspace, monkeypatch):
+        """Honest about today's semantics: the default rung changes the child
+        environment not at all. This test exists so that promoting the flag is
+        a deliberate, visible change and not a silent one."""
+        from robothor.engine import exec_env as exec_env_mod
+        from robothor.engine.tools.handlers.browser import _browser_env
+
+        monkeypatch.setattr(exec_env_mod, "exec_env_mode", lambda: "observe")
+        profile = str(workspace / "local" / "browser-profiles" / "main")
+        env = _browser_env(profile, "main")
+        assert env["PATH"] == __import__("os").environ["PATH"]
+
+
+async def test_host_launch_passes_the_workspace_profile(monkeypatch, workspace):
+    """The regression itself: the host launch must point Chromium's config at a
+    profile inside the workspace, via XDG_CONFIG_HOME.
+
+    The args are deliberately NOT asserted to carry --user-data-dir. A real
+    launch on the :99 display proved Playwright rejects that argument outright
+    ("Pass user_data_dir parameter to
+    'browser_type.launch_persistent_context'"), so the env redirect is the whole
+    fix. Asserting its absence stops a future edit re-adding it.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    import robothor.engine.sandbox as sandbox_mod
+    from robothor.engine.tools.handlers import browser as browser_mod
+
+    page = MagicMock()
+    ctx_obj = SimpleNamespace(pages=[page], new_page=AsyncMock(return_value=page))
+    fake_browser = SimpleNamespace(
+        contexts=[ctx_obj], new_context=AsyncMock(return_value=ctx_obj)
+    )
+    chromium = SimpleNamespace(
+        connect_over_cdp=AsyncMock(return_value=fake_browser),
+        launch=AsyncMock(return_value=fake_browser),
+    )
+    pw = SimpleNamespace(chromium=chromium)
+
+    monkeypatch.setattr(browser_mod, "_get_playwright", AsyncMock(return_value=pw))
+    monkeypatch.setattr(sandbox_mod, "get_current_sandbox", lambda: None)
+    browser_mod._sessions.pop(browser_mod._session_key(SimpleNamespace(agent_id="default")), None)
+
+    try:
+        result = await browser_mod._action_start({}, SimpleNamespace(agent_id="default"))
+    finally:
+        browser_mod._sessions.pop(browser_mod._session_key(SimpleNamespace(agent_id="default")), None)
+
+    assert result.get("status") == "started"
+    chromium.launch.assert_awaited_once()
+    kwargs = chromium.launch.await_args.kwargs
+
+    forbidden = [a for a in kwargs["args"] if a.startswith("--user-data-dir")]
+    assert not forbidden, (
+        "Playwright rejects --user-data-dir as a launch arg; XDG_CONFIG_HOME is the fix"
+    )
+
+    profile = Path(kwargs["env"]["XDG_CONFIG_HOME"])
+    assert profile.is_relative_to(workspace)
+    assert profile.is_dir(), "the redirect target must exist before launch"
+    assert len(profile.name) == 32  # tenant/principal/agent state key
+
+    # The display must reach Chromium, or the host launch has no window.
+    assert kwargs["env"]["DISPLAY"]
+
+
+async def test_host_launch_env_has_no_credential_names_under_enforce(monkeypatch, workspace):
+    """A page that escapes the renderer sandbox must not find the fleet's
+    credentials in the browser's environment."""
+    import os
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    import robothor.engine.sandbox as sandbox_mod
+    from robothor.engine import exec_env as exec_env_mod
+    from robothor.engine.exec_env import looks_like_a_credential_name
+    from robothor.engine.tools.handlers import browser as browser_mod
+
+    monkeypatch.setattr(exec_env_mod, "exec_env_mode", lambda: "enforce")
+    monkeypatch.setitem(os.environ, "ACME_API_KEY", "placeholder-value-1234567890")
+
+    page = MagicMock()
+    ctx_obj = SimpleNamespace(pages=[page], new_page=AsyncMock(return_value=page))
+    fake_browser = SimpleNamespace(
+        contexts=[ctx_obj], new_context=AsyncMock(return_value=ctx_obj)
+    )
+    chromium = SimpleNamespace(
+        connect_over_cdp=AsyncMock(return_value=fake_browser),
+        launch=AsyncMock(return_value=fake_browser),
+    )
+    monkeypatch.setattr(
+        browser_mod, "_get_playwright", AsyncMock(return_value=SimpleNamespace(chromium=chromium))
+    )
+    monkeypatch.setattr(sandbox_mod, "get_current_sandbox", lambda: None)
+    browser_mod._sessions.pop(browser_mod._session_key(SimpleNamespace(agent_id="default")), None)
+
+    try:
+        await browser_mod._action_start({}, SimpleNamespace(agent_id="default"))
+    finally:
+        browser_mod._sessions.pop(browser_mod._session_key(SimpleNamespace(agent_id="default")), None)
+
+    env = chromium.launch.await_args.kwargs["env"]
+    leaked = sorted(n for n in env if looks_like_a_credential_name(n))
+    assert leaked == [], f"credential-shaped names reached the browser: {leaked}"
 
 
 # ─── Tests: ARIA Snapshot Parsing ────────────────────────────────────
@@ -744,7 +937,7 @@ def _install_stub_session(agent_id: str, new_page):
         page=agent_page,
     )
     session.element_registry = {1: browser_mod.ElementRef(1, "textbox", "Name", "")}
-    browser_mod._sessions[agent_id] = session
+    browser_mod._sessions[browser_mod._session_key(ToolContext(agent_id=agent_id))] = session
     return session
 
 
@@ -753,7 +946,9 @@ def stub_session_cleanup():
     from robothor.engine.tools.handlers import browser as browser_mod
 
     yield
-    browser_mod._sessions.pop("isolation-test", None)
+    browser_mod._sessions.pop(
+        browser_mod._session_key(ToolContext(agent_id="isolation-test")), None
+    )
 
 
 async def test_isolated_fetch_uses_a_new_tab_and_closes_it(stub_session_cleanup):
@@ -850,4 +1045,7 @@ async def test_isolated_fetch_without_a_session_does_not_start_one():
     )
 
     assert out["error"] == "Browser not started."
-    assert "no-session-here" not in browser_mod._sessions
+    assert (
+        browser_mod._session_key(ToolContext(agent_id="no-session-here"))
+        not in browser_mod._sessions
+    )

@@ -21,6 +21,7 @@ Logs: `journalctl -u <unit> -f`
 | robothor-slo.timer | — | scripts/ | Reliability dead-man: hourly, pages on the AGE of the newest good backup (local dump 26h / offsite 26h / basebackup 8d) plus heartbeat delivery and LLM availability. Level-triggered, so a SKIPPED backup unit cannot go unnoticed (docs/runbooks/SLOS.md) |
 | robothor-restore-drill.timer | — | scripts/ | Monthly restore drill: fetches the newest dump (offsite first), restores into a scratch DB, times and verifies it, drops it. NOT robothor-backup-verify, which only byte-compares (docs/runbooks/RESTORE_DRILL.md) |
 | robothor-app.service | 3004 | app/ | Helm: Next.js 16 + Dockview live dashboard |
+| robothor-autonomy.service | private Unix socket | workspace | Protected persistent browser workflows; independent of engine restarts; optional |
 | robothor-engine.service | 18800 | workspace | Python Agent Engine: agents, channels, scheduler, hooks (Type=notify, WatchdogSec=90) |
 | robothor-nats.service | 4222, 7422 | — | NATS server with JetStream: federation transport |
 | robothor-xvfb.service | — | — | Virtual display server (Xvfb :99, 1280x1024) for computer use |

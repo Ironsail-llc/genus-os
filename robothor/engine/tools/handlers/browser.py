@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import json
 import logging
 import os
 import re as re_mod
@@ -15,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from playwright.async_api import Browser, BrowserContext, Locator, Page
+    from playwright.async_api import Browser, BrowserContext, FilePayload, Locator, Page
 
     from robothor.engine.tools.dispatch import ToolContext
 
@@ -23,10 +24,63 @@ logger = logging.getLogger(__name__)
 
 HANDLERS: dict[str, Any] = {}
 
-# Active browser sessions keyed by agent_id
+
+def _upload_payload(workspace: str, requested: str) -> FilePayload:
+    """Validate the opened file, so a pathname race cannot change the source."""
+    import mimetypes
+    import stat
+    from pathlib import Path
+
+    from robothor.engine.attachments import is_inbox_secret
+    from robothor.engine.secret_paths import is_secret_path
+
+    root = Path(workspace).resolve(strict=True)
+    candidate = Path(requested)
+    candidate = candidate if candidate.is_absolute() else root / candidate
+    path = candidate.resolve(strict=True)
+    if not path.is_relative_to(root) or is_secret_path(candidate) or is_secret_path(path):
+        raise ValueError("upload source is not an allowed workspace file")
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        opened = Path(f"/proc/self/fd/{fd}").resolve(strict=True)
+        metadata = os.fstat(fd)
+        if (
+            not opened.is_relative_to(root)
+            or is_secret_path(opened)
+            or is_inbox_secret(opened, workspace=root)
+            or not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_size > 5_000_000
+        ):
+            raise ValueError("upload requires an allowed regular file under 5 MB")
+        with os.fdopen(fd, "rb", closefd=False) as source:
+            content = source.read(5_000_001)
+        if len(content) > 5_000_000:
+            raise ValueError("upload source grew beyond 5 MB")
+        return {
+            "name": path.name,
+            "mimeType": mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+            "buffer": content,
+        }
+    finally:
+        os.close(fd)
+
+
+# Active browser sessions keyed by tenant, principal, agent and run
 _sessions: dict[str, BrowserSession] = {}
 _playwright_instance: Any = None
 _session_lock = asyncio.Lock()
+
+
+def _session_key(ctx: ToolContext) -> str:
+    """A browser belongs to one tenant, principal, agent and run."""
+    return json.dumps(
+        [
+            str(getattr(ctx, name, "") or "")
+            for name in ("tenant_id", "user_id", "agent_id", "run_id")
+        ]
+    )
+
 
 # Auto-cleanup after 10 minutes of inactivity
 SESSION_TIMEOUT_SECONDS = 600
@@ -269,6 +323,51 @@ def _display() -> str:
     return _cfg().desktop_display
 
 
+#: Writable application state for Chromium configuration and crash reports.
+_PROFILE_DIRNAME = "browser-profiles"
+
+
+def _browser_profile_dir(agent_id: str) -> str:
+    """Writable Chromium crash/config state, not a persistent cookie profile.
+
+    Playwright owns the temporary user-data directory. These XDG paths keep
+    crashpad off read-only HOME. Authentication uses the autonomy session store.
+    """
+    import hashlib
+    from pathlib import Path
+
+    from robothor.settings.sources import workspace_path
+
+    safe = agent_id or "default"
+    if not re_mod.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,100}", safe):
+        safe = hashlib.sha256(safe.encode()).hexdigest()[:32]
+    root = workspace_path()
+    if root is None:
+        # No workspace resolves (no ROBOTHOR_WORKSPACE and no HOME). Fall back
+        # to the tmpdir, which PrivateTmp=yes makes writable for the service.
+        # Writable temporary configuration state for non-service installations.
+        import tempfile
+
+        root = Path(tempfile.gettempdir()) / "robothor-workspace"
+    path = root / "local" / _PROFILE_DIRNAME / safe
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
+
+
+def _browser_env(profile_dir: str, agent_id: str) -> dict[str, str]:
+    """Minimal browser environment with writable XDG state and display access."""
+    from robothor.engine.exec_env import build_exec_env
+
+    env = build_exec_env(agent_id=agent_id, mode="enforce", base=dict(os.environ), grants=()).env
+    env["DISPLAY"] = _display()
+    if os.environ.get("XAUTHORITY"):
+        env["XAUTHORITY"] = os.environ["XAUTHORITY"]
+    env["XDG_CONFIG_HOME"] = profile_dir
+    env["XDG_CACHE_HOME"] = f"{profile_dir}/cache"
+    env["XDG_DATA_HOME"] = f"{profile_dir}/data"
+    return env
+
+
 async def _get_playwright() -> Any:
     """Get or create the global Playwright instance."""
     global _playwright_instance
@@ -339,7 +438,7 @@ async def ensure_session(ctx: ToolContext) -> tuple[bool, str]:
     ``started_here`` is True only when this call launched the browser, so the
     caller knows whether stopping it again is its business.
     """
-    agent_id = ctx.agent_id or "default"
+    agent_id = _session_key(ctx)
     if await _get_session(agent_id) is not None:
         return False, ""
     result = await _action_start({}, ctx)
@@ -350,7 +449,7 @@ async def ensure_session(ctx: ToolContext) -> tuple[bool, str]:
 
 async def close_session(ctx: ToolContext) -> None:
     """Close the agent's session. Only for a caller that started it."""
-    await _close_session(ctx.agent_id or "default")
+    await _close_session(_session_key(ctx))
 
 
 # How long a throwaway tab waits for the content its caller asked for. Long
@@ -383,7 +482,7 @@ async def isolated_fetch(
     Returns ``{status, url, result, html, error}``. ``html`` is populated only
     when ``html_js`` is given and ``js`` returned nothing useful.
     """
-    session = await _get_session(ctx.agent_id or "default")
+    session = await _get_session(_session_key(ctx))
     if session is None:
         return {"error": "Browser not started."}
     try:
@@ -437,6 +536,10 @@ async def isolated_fetch(
 async def _browser(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Full browser automation via Playwright. Dispatches by 'action' parameter."""
     action = args.get("action", "")
+    if action == "autonomy":
+        from robothor.engine.tools.handlers.autonomy import handle
+
+        return await handle(args.get("request", {}), ctx)
     if not action:
         return {
             "error": "No action provided. Use: start, stop, navigate, screenshot, snapshot, click, fill, type, press, scroll, evaluate, tabs, pdf, console, status"
@@ -476,13 +579,22 @@ async def _browser(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
 async def _action_start(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Launch a managed Chromium browser on the virtual display."""
-    agent_id = ctx.agent_id or "default"
+    agent_id = _session_key(ctx)
 
     async with _session_lock:
         from robothor.engine.sandbox import get_current_sandbox
 
         sandbox = get_current_sandbox()
         endpoint = sandbox.browser_endpoint() if sandbox else ""
+        if sandbox is not None and not endpoint:
+            from robothor.engine.sandbox import SandboxMode
+
+            if getattr(sandbox, "mode", SandboxMode.LOCAL) != SandboxMode.LOCAL:
+                return {
+                    "error": "Container browser endpoint is unavailable",
+                    "error_type": "browser_backend_unavailable",
+                    "execution_mode": "container",
+                }
 
         existing = await _get_session(agent_id)
         if existing is not None:
@@ -490,7 +602,7 @@ async def _action_start(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
             # not be reused — its CDP handle points at a torn-down container,
             # potentially from another run/tenant. Drop it and start fresh.
             if existing.sandbox_endpoint == endpoint:
-                return {"status": "already_running", "agent_id": agent_id}
+                return {"status": "already_running", "agent_id": ctx.agent_id or "default"}
             await _close_session(agent_id)
 
         try:
@@ -499,13 +611,33 @@ async def _action_start(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
                 # Per-run Docker sandbox: drive the container's Chromium over CDP
                 # instead of launching one on the host display.
                 browser = await pw.chromium.connect_over_cdp(endpoint)
-                context = (
-                    browser.contexts[0]
-                    if browser.contexts
-                    else await browser.new_context(viewport={"width": 1280, "height": 960})
-                )
-                page = context.pages[0] if context.pages else await context.new_page()
+                context = await browser.new_context(viewport={"width": 1280, "height": 960})
+                page = await context.new_page()
             else:
+                # The env, not the args, is what fixes the launch. Chromium
+                # spawns chrome_crashpad_handler with a --database path derived
+                # from $HOME/.config, which the unit's ProtectHome=read-only
+                # makes unwritable; the handler exits and takes the browser with
+                # it with a missing crashpad database error. Pointing
+                # XDG_CONFIG_HOME at the workspace removes that path entirely.
+                # A user-data-dir launch argument is deliberately omitted: Playwright rejects
+                # it as a launch arg (it manages its own temp profile), and it is
+                # not what fails. See _browser_profile_dir / _browser_env.
+                state_key = json.dumps(
+                    [
+                        getattr(ctx, "tenant_id", ""),
+                        getattr(ctx, "user_id", ""),
+                        ctx.agent_id or "default",
+                    ]
+                )
+                profile_dir = _browser_profile_dir(state_key)
+                import tempfile
+                from pathlib import Path
+
+                for directory in (profile_dir, f"{profile_dir}/cache", f"{profile_dir}/data"):
+                    Path(directory).mkdir(parents=True, exist_ok=True, mode=0o700)
+                    with tempfile.TemporaryFile(dir=directory):
+                        pass
                 browser = await pw.chromium.launch(
                     headless=False,
                     args=[
@@ -515,7 +647,7 @@ async def _action_start(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
                         "--window-size=1280,960",
                         "--window-position=0,0",
                     ],
-                    env={**os.environ, "DISPLAY": _display()},
+                    env=_browser_env(profile_dir, ctx.agent_id or ""),
                 )
                 context = await browser.new_context(
                     viewport={"width": 1280, "height": 960},
@@ -525,27 +657,38 @@ async def _action_start(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any
             _sessions[agent_id] = BrowserSession(
                 browser=browser, context=context, page=page, sandbox_endpoint=endpoint
             )
-            return {"status": "started", "agent_id": agent_id}
+            return {"status": "started", "agent_id": ctx.agent_id or "default"}
         except Exception as e:
-            return {"error": f"Failed to start browser: {e}"}
+            from robothor.secrets.redaction import redact
+
+            detail = redact(str(e))
+            return {
+                "error": f"Failed to start browser: {detail[-5000:]}",
+                "error_type": "browser_launch_failed",
+                "execution_mode": "container" if endpoint else "host",
+                "cause": "crashpad_state_unwritable"
+                if "--database is required" in detail
+                else "browser_startup",
+                "display": _display(),
+            }
 
 
 async def _action_stop(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Close the browser session."""
-    agent_id = ctx.agent_id or "default"
+    agent_id = _session_key(ctx)
     await _close_session(agent_id)
-    return {"status": "stopped", "agent_id": agent_id}
+    return {"status": "stopped", "agent_id": ctx.agent_id or "default"}
 
 
 async def _action_status(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Check browser session status."""
-    agent_id = ctx.agent_id or "default"
+    agent_id = _session_key(ctx)
     session = await _get_session(agent_id)
     if session is None:
-        return {"status": "not_running", "agent_id": agent_id}
+        return {"status": "not_running", "agent_id": ctx.agent_id or "default"}
     return {
         "status": "running",
-        "agent_id": agent_id,
+        "agent_id": ctx.agent_id or "default",
         "url": session.page.url,
         "title": await session.page.title(),
         "age_seconds": int(time.time() - session.created_at),
@@ -559,7 +702,7 @@ async def _action_status(args: dict[str, Any], ctx: ToolContext) -> dict[str, An
 
 async def _action_navigate(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Navigate to a URL."""
-    agent_id = ctx.agent_id or "default"
+    agent_id = _session_key(ctx)
     session = await _get_session(agent_id)
     if session is None:
         return {"error": "Browser not started. Call browser(action='start') first."}
@@ -603,7 +746,7 @@ async def _action_navigate(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
 
 async def _action_screenshot(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Capture a screenshot of the current page."""
-    agent_id = ctx.agent_id or "default"
+    agent_id = _session_key(ctx)
     session = await _get_session(agent_id)
     if session is None:
         return {"error": "Browser not started."}
@@ -630,7 +773,7 @@ async def _action_snapshot(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
     without indexing.  When few interactive elements are detected, a
     screenshot is auto-included as a vision fallback.
     """
-    agent_id = ctx.agent_id or "default"
+    agent_id = _session_key(ctx)
     session = await _get_session(agent_id)
     if session is None:
         return {"error": "Browser not started."}
@@ -701,7 +844,7 @@ async def _action_snapshot(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
 
 async def _action_pdf(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Export the current page as PDF (base64)."""
-    agent_id = ctx.agent_id or "default"
+    agent_id = _session_key(ctx)
     session = await _get_session(agent_id)
     if session is None:
         return {"error": "Browser not started."}
@@ -716,7 +859,7 @@ async def _action_pdf(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
 
 async def _action_console(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Read recent console messages from the page."""
-    agent_id = ctx.agent_id or "default"
+    agent_id = _session_key(ctx)
     session = await _get_session(agent_id)
     if session is None:
         return {"error": "Browser not started."}
@@ -731,7 +874,7 @@ async def _action_console(args: dict[str, Any], ctx: ToolContext) -> dict[str, A
 
 async def _action_evaluate(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """Execute JavaScript on the current page."""
-    agent_id = ctx.agent_id or "default"
+    agent_id = _session_key(ctx)
     session = await _get_session(agent_id)
     if session is None:
         return {"error": "Browser not started."}
@@ -754,7 +897,7 @@ async def _action_evaluate(args: dict[str, Any], ctx: ToolContext) -> dict[str, 
 
 async def _action_tabs(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     """List open browser tabs."""
-    agent_id = ctx.agent_id or "default"
+    agent_id = _session_key(ctx)
     session = await _get_session(agent_id)
     if session is None:
         return {"error": "Browser not started."}
@@ -851,7 +994,7 @@ async def _action_act(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     request.selector: CSS selector (fallback)
     request.x, request.y: pixel coordinates (for click)
     """
-    agent_id = ctx.agent_id or "default"
+    agent_id = _session_key(ctx)
     session = await _get_session(agent_id)
     if session is None:
         return {"error": "Browser not started."}
@@ -882,7 +1025,21 @@ async def _action_act(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         target_desc = selector
 
     try:
-        if kind == "click":
+        if kind == "upload":
+            if not locator or not ctx.workspace:
+                return {"error": "upload requires a target and workspace"}
+            await locator.set_input_files(
+                await asyncio.to_thread(_upload_payload, ctx.workspace, request.get("path", ""))
+            )
+            return {"acted": "upload", "target": target_desc}
+
+        elif kind == "check":
+            if not locator:
+                return {"error": "check requires a target"}
+            await locator.set_checked(bool(request.get("checked", True)), timeout=10000)
+            return {"acted": "check", "target": target_desc}
+
+        elif kind == "click":
             if request.get("x") is not None and request.get("y") is not None:
                 await page.mouse.click(int(request["x"]), int(request["y"]))
                 return {"acted": "click", "target": f"({request['x']}, {request['y']})"}

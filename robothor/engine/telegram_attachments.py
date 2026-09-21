@@ -630,3 +630,25 @@ class TelegramAttachmentsMixin:
             sender_info=user_info,
             attachments=rows,
         )
+
+
+async def _extract_pdf_text(raw_bytes: bytes) -> str:
+    """Best-effort text extraction from a PDF."""
+    try:
+        import io
+
+        import pypdf
+
+        reader = pypdf.PdfReader(io.BytesIO(raw_bytes))
+        pages = []
+        for i, page in enumerate(reader.pages):
+            text = page.extract_text() or ""
+            if text.strip():
+                pages.append(f"[Page {i + 1}]\n{text}")
+        if pages:
+            return "\n\n".join(pages)
+        return "[PDF: no extractable text (may be image-based)]"
+    except ImportError:
+        return "[PDF file — install pypdf for text extraction]"
+    except Exception as e:
+        return f"[PDF text extraction failed: {e}]"

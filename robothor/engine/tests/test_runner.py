@@ -2051,3 +2051,67 @@ class TestInterruptSteerWiring:
 
         assert seen["run_id"] is not None
         assert session_registry.lookup(seen["run_id"]) is None  # unregistered in finally
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tenant_matches,verified", [(True, True), (True, False), (False, True)])
+async def test_checkpoint_resume_reresolves_original_identity(
+    runner, sample_agent_config, tenant_matches, verified
+):
+    from robothor.engine.task_context import install_context
+
+    messages = [{"role": "system", "content": "system"}]
+    install_context(
+        messages,
+        {
+            "agent_id": "test-agent",
+            "request": "Deploy the repair",
+            "mode": "execute",
+            "identity": {
+                "tenant_id": "fixture" if tenant_matches else "another-tenant",
+                "channel": "telegram",
+                "identifier": "123",
+                "role": "owner",
+            },
+        },
+    )
+    current_identity = IdentityContext(
+        tenant_id="fixture",
+        channel="telegram",
+        identifier="123",
+        verified=verified,
+        role="owner",
+        user_account_id="fixture-owner",
+    )
+
+    class IdentityReachedError(Exception):
+        pass
+
+    with (
+        patch(
+            "robothor.engine.checkpoint.CheckpointManager.load_latest",
+            return_value={"messages": messages},
+        ),
+        patch("robothor.identity.resolve_identity", return_value=current_identity) as resolve,
+        patch("robothor.engine.runner.resolve_run_identity", side_effect=IdentityReachedError) as apply,
+    ):
+        with pytest.raises(IdentityReachedError):
+            await runner.execute(
+                "test-agent",
+                "Resume from checkpoint",
+                agent_config=sample_agent_config,
+                trigger_type=TriggerType.EVENT,
+                tenant_id="fixture",
+                resume_from_run_id="prior-run",
+            )
+    if tenant_matches:
+        resolve.assert_called_once_with("telegram", "123", tenant_id="fixture")
+    else:
+        resolve.assert_not_called()
+    if tenant_matches and verified:
+        assert apply.call_args.args[0] is current_identity
+        assert apply.call_args.kwargs["user_id"] == "fixture-owner"
+        assert apply.call_args.kwargs["user_role"] == "owner"
+    else:
+        assert apply.call_args.args[0] is None
+        assert apply.call_args.kwargs["user_role"] != "owner"

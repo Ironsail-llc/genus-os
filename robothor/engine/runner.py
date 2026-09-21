@@ -51,7 +51,7 @@ from robothor.engine.context_budget import keep_context_within_budget
 # Re-exported for existing importers. The `as` form is what marks a name as
 # deliberately re-exported; a plain import reads to mypy as a private detail,
 # which is the right default and the wrong one here.
-from robothor.engine.deliverables import task_text_from  # noqa: E402
+from robothor.engine.deliverable_contract import task_text_for_run  # noqa: E402
 from robothor.engine.error_actions import apply_error_recovery, inject_error_feedback
 from robothor.engine.finalization_budget import FinalizationBudget  # noqa: E402
 from robothor.engine.injection_screen import screen_run_prompt
@@ -100,6 +100,7 @@ from robothor.engine.run_deadline import (
     wrapup_schemas,
 )
 from robothor.engine.run_finalizer import RunFinalizationMixin
+from robothor.engine.run_identity import _is_service_caller as _is_service_caller
 from robothor.engine.run_identity import resolve_run_identity
 from robothor.engine.run_lifecycle import RunLifecycleMixin, spawn_post_stall_autodream
 from robothor.engine.run_llm_calls import LLMCallMixin  # noqa: E402
@@ -406,28 +407,6 @@ _SYSTEM_TRIGGER_TYPES = frozenset(
 )
 
 
-def _is_service_caller(user_role: str, user_id: str) -> bool:
-    """Whether this run's effective caller is a service/automated actor.
-
-    A WEBCHAT run can still arrive from a service-typ auth context (an
-    engine/bridge credential acting on an agent's behalf, not a human — see
-    ``AuthContext.is_service`` at the chat layer). ``chat.py`` already passes
-    ``identity=None`` for those, but the runner can't tell "deliberately
-    None" from "not provided", so the fallback below must re-derive
-    service-ness itself from the same conventions used elsewhere in this
-    module: the manifest's default ``service_role`` value of ``"service"``
-    (``AgentConfig.service_role``, ``issue_service_token``'s default role)
-    and the ``f"service:{agent_id}"`` / ``f"service:workflow:{id}"`` user_id
-    marker convention (``_SYSTEM_TRIGGER_TYPES`` branch above, workflow.py,
-    scheduler.py). Without this gate, a service caller's non-UUID user_id
-    reaches ``resolve_identity("webchat", ...)`` and triggers a DB error on
-    every single call until the negative cache absorbs it (60s TTL).
-    """
-    return (
-        user_role == "service" or user_role.startswith("service:") or user_id.startswith("service:")
-    )
-
-
 # Suppress litellm's verbose logging
 litellm.suppress_debug_info = True
 
@@ -536,7 +515,42 @@ class AgentRunner(
         # Falling through to the config default writes a row the connection's RLS
         # binding refuses, and the refusal arrives as an opaque
         # InsufficientPrivilege at INSERT time. See test_nested_run_tenant.py.
+        from robothor.autonomy.intake import protect_payment_text
+
+        message = protect_payment_text(message)
         resolved_tenant = tenant_id or current_tenant_scope() or self.config.tenant_id
+
+        # Restore the execution mode BEFORE constructing tools. A plan-only
+        # checkpoint must never acquire mutating tools after a daemon restart.
+        if resume_from_run_id:
+            from robothor.engine.checkpoint import CheckpointManager
+            from robothor.engine.task_context import read_context
+
+            saved = await asyncio.to_thread(CheckpointManager.load_latest, resume_from_run_id)
+            saved_context = read_context((saved or {}).get("messages") or [])
+            if saved_context and saved_context.get("mode") == "plan":
+                readonly_mode = True
+                execution_mode = False
+            if (
+                saved_context
+                and trigger_type == TriggerType.EVENT
+                and identity is None
+                and saved_context.get("agent_id") == agent_id
+            ):
+                from robothor.identity import resolve_identity
+
+                original = saved_context.get("identity") or {}
+                if original.get("tenant_id") == resolved_tenant:
+                    restored_identity = await asyncio.to_thread(
+                        resolve_identity,
+                        original.get("channel", ""),
+                        original.get("identifier", ""),
+                        tenant_id=resolved_tenant,
+                    )
+                    if restored_identity and restored_identity.verified:
+                        identity = restored_identity
+                        user_id = identity.user_account_id or identity.tenant_user_id or ""
+                        user_role = identity.role
 
         reason = f"Agent config not found: {agent_id}"
         if agent_config is None:
@@ -608,6 +622,10 @@ class AgentRunner(
             correlation_id=correlation_id,
             tool_offload_threshold=agent_config.tool_offload_threshold,
         )
+
+        from robothor.goals.runtime import attach_run
+
+        await asyncio.to_thread(attach_run, session.run)
 
         # User identity threading
         session.run.user_id = effective_user_id
@@ -989,20 +1007,19 @@ class AgentRunner(
             engine_context=engine_preamble or None,
         )
 
+        session.readonly_mode = readonly_mode
+        from robothor.engine.task_context import install_context, read_context
+
+        task_record = read_context(session.messages)
+        if task_record:
+            task_record["mode"] = "plan" if readonly_mode else "execute"
+            install_context(session.messages, task_record)
+
         watchdog.touch("session_started")
 
-        # Auto-derive token budget for TRACKING ONLY (not enforced as a hard limit)
-        from robothor.engine.model_registry import compute_token_budget
+        from robothor.goals.runtime import initialize_token_budget
 
-        auto_budget = compute_token_budget(agent_config.model_primary, agent_config.max_iterations)
-        session.run.token_budget = auto_budget
-
-        # Sub-agent: cascade parent's remaining token budget (child can never exceed parent)
-        if spawn_context and spawn_context.remaining_token_budget > 0:
-            if auto_budget > 0:
-                session.run.token_budget = min(auto_budget, spawn_context.remaining_token_budget)
-            else:
-                session.run.token_budget = spawn_context.remaining_token_budget
+        initialize_token_budget(session.run, agent_config, spawn_context)
 
         # Stage 5 — propagate the CRM task this run is advancing so the
         # agent_runs row carries it from INSERT time. Previously only the
@@ -1855,7 +1872,7 @@ class AgentRunner(
                     session,
                     _stop.budget,
                     elapsed=_stop.elapsed,
-                    task_text=task_text_from(session.messages),
+                    task_text=task_text_for_run(session.run, session),
                     workspace=_workspace,
                 )
                 return
@@ -1867,7 +1884,7 @@ class AgentRunner(
                     wrapup_note(
                         elapsed=_stop.elapsed,
                         budget_seconds=_stop.budget.seconds,
-                        task_text=task_text_from(session.messages),
+                        task_text=task_text_for_run(session.run, session),
                         workspace=_workspace,
                     ),
                     _workspace,
@@ -1900,7 +1917,7 @@ class AgentRunner(
             _dl_note = _pacer.note_for(
                 self._active_watchdog,
                 iteration=_iteration,
-                task_text=task_text_from(session.messages),
+                task_text=task_text_for_run(session.run, session),
                 workspace=_workspace,
                 run_id=session.run.id,
             )
@@ -1927,7 +1944,7 @@ class AgentRunner(
                 _pacer.mode,
                 run_id=session.run.id,
                 session=session,
-                task_text=task_text_from(session.messages),
+                task_text=task_text_for_run(session.run, session),
                 workspace=_workspace,
                 fraction=_stop.fraction_spent(),
             )
@@ -2034,7 +2051,7 @@ class AgentRunner(
                     session,
                     _stop.budget,
                     elapsed=_stop.elapsed,
-                    task_text=task_text_from(session.messages),
+                    task_text=task_text_for_run(session.run, session),
                     workspace=_workspace,
                 )
                 return
@@ -2078,6 +2095,12 @@ class AgentRunner(
                     )
                     continue
 
+                if readonly_mode:
+                    from robothor.engine.plan_integrity import require_alignment
+
+                    if await require_alignment(self, session, models, assistant_msg.content or ""):
+                        continue
+
                 if nudge_for_missing_deliverable(session, _workspace):  # owes an artifact
                     continue
                 return
@@ -2090,7 +2113,7 @@ class AgentRunner(
                     session,
                     _stop.budget,
                     elapsed=_stop.elapsed,
-                    task_text=task_text_from(session.messages),
+                    task_text=task_text_for_run(session.run, session),
                     workspace=_workspace,
                 )
                 return

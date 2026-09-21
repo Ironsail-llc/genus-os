@@ -41,6 +41,7 @@ from robothor.engine.chat_store import (
     update_model_override_async,
 )
 from robothor.engine.task_registry import get_task_registry
+from robothor.engine.telegram_attachments import _extract_pdf_text as _extract_pdf_text
 
 logger = logging.getLogger(__name__)
 
@@ -110,28 +111,6 @@ AVAILABLE_MODELS: dict[str, str] = {
 
 
 MODEL_DISPLAY_NAMES = {v: k for k, v in AVAILABLE_MODELS.items()}
-
-
-async def _extract_pdf_text(raw_bytes: bytes) -> str:
-    """Best-effort text extraction from a PDF."""
-    try:
-        import io
-
-        import pypdf
-
-        reader = pypdf.PdfReader(io.BytesIO(raw_bytes))
-        pages = []
-        for i, page in enumerate(reader.pages):
-            text = page.extract_text() or ""
-            if text.strip():
-                pages.append(f"[Page {i + 1}]\n{text}")
-        if pages:
-            return "\n\n".join(pages)
-        return "[PDF: no extractable text (may be image-based)]"
-    except ImportError:
-        return "[PDF file — install pypdf for text extraction]"
-    except Exception as e:
-        return f"[PDF text extraction failed: {e}]"
 
 
 async def _analyze_photo_bytes(raw_bytes: bytes, prompt: str = "") -> str:
@@ -619,6 +598,24 @@ class TelegramHandlersMixin:
             return
 
         if action == "approve":
+            if session.active_plan.status != "pending":
+                await callback.answer("Plan is already being executed")
+                return
+            from robothor.engine.plan_integrity import plan_hash
+
+            if session.active_plan.plan_hash and session.active_plan.plan_hash != plan_hash(
+                session.active_plan.plan_text
+            ):
+                await callback.answer("Plan changed; request a new revision")
+                return
+            creator = session.active_plan.creator_sender_info or {}
+            sender_id = str(callback.from_user.id) if callback.from_user else ""
+            if sender_id != str(creator.get("telegram_user_id", "")) and not self._sender_is_owner(
+                sender_id
+            ):
+                await callback.answer("Only the plan author or instance owner can approve")
+                return
+            session.active_plan.status = "approved"
             await callback.answer("Executing plan...")
             # Remove inline keyboard
             try:
@@ -628,7 +625,9 @@ class TelegramHandlersMixin:
             except Exception:
                 pass
             # Fire-and-forget — execute in background so Telegram handler is freed
-            task = asyncio.create_task(self._execute_approved_plan(chat_id, session_key, session))
+            task = asyncio.create_task(
+                self._execute_approved_plan(chat_id, session_key, session, expected_plan_id=plan_id)
+            )
             self._active_tasks[chat_id] = task
         elif action == "revise":
             await callback.answer("Send your feedback and I'll revise the plan.")
@@ -916,20 +915,13 @@ class TelegramHandlersMixin:
 
         chat_id = str(message.chat.id)
         user_text = message.text.strip()
+        from robothor.autonomy.intake import protect_payment_text
 
-        # ── Skill bundles: "/bundle-name" composes a multi-skill prompt ──
-        if user_text.startswith("/"):
-            from robothor.engine.skill_bundles import resolve_slash_command
+        user_text = protect_payment_text(user_text)
 
-            _kind, _bundle = resolve_slash_command(user_text.split()[0])
-            if _kind == "bundle" and _bundle is not None:
-                _parts = user_text.split(maxsplit=1)
-                _extra = _parts[1] if len(_parts) > 1 else ""
-                user_text = (
-                    f"{_bundle.instruction}\n\n"
-                    f"Run these skills in order: {', '.join(_bundle.skills)}."
-                    + (f"\n\nAdditional context: {_extra}" if _extra else "")
-                )
+        from robothor.engine.skill_bundles import expand_slash_command
+
+        user_text = expand_slash_command(user_text)
 
         logger.info(
             "Telegram message from %s (chat %s): %s",

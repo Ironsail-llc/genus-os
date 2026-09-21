@@ -944,6 +944,8 @@ def create_health_app(
     @app.get("/health")
     async def health() -> dict[str, Any]:
         """Health check endpoint."""
+        from robothor.engine import host_execution
+
         try:
             # Get schedule summary
             schedules = []
@@ -972,10 +974,23 @@ def create_health_app(
                 "bot_configured": bool(config.bot_token),
                 "agents": agents,
                 "execution_mode": _execution_mode_block(),
+                "host_execution": await host_execution.health(),
             }
         except Exception:
             logger.exception("Health check failed")
             return {"status": "error", "error": "Internal server error"}
+
+    @app.post("/api/admin/capabilities/probe")
+    async def capability_probe() -> dict[str, Any]:
+        from robothor.engine.capability_probe import probe
+
+        return await probe(str(config.workspace))
+
+    @app.post("/api/admin/repairs/{job_id}/resume")
+    async def resume_repair(job_id: str) -> dict[str, Any]:
+        from robothor.engine.repair_recovery import resume
+
+        return await resume(job_id, runner, config)
 
     # Startup state tracking
     _startup_complete = {"ready": False}

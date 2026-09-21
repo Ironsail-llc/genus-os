@@ -280,3 +280,21 @@ volume guard is a gate that says it did not run, and `nvidia-smi` in
 `tests/test_root_scripts_set_path.py` enforces the first half of this for every
 script an `EnvironmentFile=` unit starts, deriving the list from the units
 themselves so a new one cannot be added without the prelude.
+
+## Protected browser workflows
+
+`robothor-autonomy.service` is optional and requires the API/autonomy Python
+extras, migration 129 and sandbox-capable Chromium. Enable it after installing
+the rendered units. Its private runtime directory is owned by the service user;
+engine and bridge controllers must run as that same user to reach its socket.
+The RPC additionally requires an owner/agent-bound service token. It has no TCP
+listener. Keep it independent of engine/bridge restart dependencies so a
+controller rollout does not erase an in-progress wizard. Restarting this service
+closes its entire browser process group and leaves unfinished operations for
+reconciliation. See [Personal autonomous execution](../../docs/AUTONOMOUS_EXECUTION.md).
+
+For an upgrade, first send `SIGUSR1` to this service's main process and check
+its private `/ready` response: `accepting=false`, `active_workflows=0`, and
+`opening_workflow=false` mean a restart will not destroy a live page. Send
+`SIGUSR2` to resume admission if deferring the upgrade. This drain applies to
+the browser service only; controller restarts remain independent.

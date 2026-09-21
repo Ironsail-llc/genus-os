@@ -6,6 +6,61 @@ from typing import Any
 
 from robothor.engine.prompts import EVIDENCE_OUTRANKS_NAMES
 from robothor.engine.vision_fallback import PROVENANCE_NOTE
+from robothor.goals.legacy_schemas import legacy_goal_schemas
+
+_BROWSER_DESCRIPTION = (
+    "Full browser automation via Playwright. Manages a persistent Chromium session. "
+    "Actions: start (launch browser), stop (close), navigate (go to URL), "
+    "screenshot (capture page), snapshot (ARIA accessibility tree with element refs), "
+    "act (interact: click/fill/type/press/scroll/select/check/upload using refs or selectors), "
+    "tabs (list open tabs), pdf (export page), evaluate (run JavaScript), "
+    "console (read console), status (check session). "
+    "For accounts, applications and purchases use action=autonomy with request.kind=status first. "
+    "This uses native-vault resource references and standing grants: do not request another approval "
+    "when a grant covers the action. request.kind=prepare accepts grant_id and proposal "
+    "{origin,action:account|login|application|purchase|subscription,purpose,idempotency_key,"
+    "amount_minor,currency,recurring_minor,annual_commitment_minor,recurrence?:{interval_months:1|2|3|6|12,next_charge_on:YYYY-MM-DD,ends_on?:YYYY-MM-DD}}. "
+    "Recurring charges require a merchant-verified renewal schedule; the first renewal must be within one year. "
+    "Status resources include descriptor.fields and source, never values. "
+    "procedures {origin,action} finds up to five recent successful plan templates for this owner and agent. "
+    "Templates require fresh inspection, current resources/session, a new proposal and standing authority; "
+    "they never resume the source operation or grant its old spending authority. "
+    "For multi-step forms use workflow_open {operation_id,url,session_resource_id?}; it returns workflow_id and revision. "
+    "workflow_inspect {workflow_id} inspects the same protected page. workflow_execute "
+    "{workflow_id,command_id:UUID,revision,plan,advance?:boolean} uses the execute plan below. "
+    "advance=true permits a verified intermediate step only for account/login/application with no monetary commitment; "
+    "use the returned revision for the next command. Reuse the exact command_id and payload after a transport error, "
+    "never a new ID for the same uncertain action. workflow_status {workflow_id} reports durable state; "
+    "workflow_close {workflow_id} releases the browser and preserves uncertainty. "
+    "Sessions expire after 15 idle minutes or one hour total. Broker loss requires reconciliation. "
+    "Workflow browsers are local; managed challenges and verification-link navigation use the separate one-shot path. "
+    "Then inspect {operation_id,url,session_resource_id?} for field selectors, labels, option labels, "
+    "billing terms and frame authority states; generate_credential "
+    "{operation_id,profile_id}; email_verification {operation_id,profile_id,mode:code|link,source_operation_id?} "
+    "returns a short-lived credential reference (field=password), never the code/link itself. "
+    "execute {operation_id,plan:{url,session_resource_id?,verification_link_id?,"
+    "fields:[{selector,resource_id,kind,field,method:fill|select|upload,frame_selector?,frame_origin?}],"
+    "check_selectors:[],submit_selector,success_selector?,success_text?,amount_selector?,"
+    "recurring_selector?,annual_selector?,recurrence_interval_selector?,next_charge_selector?,recurrence_end_selector?,"
+    "terms_frame_selector?,terms_frame_origin?,challenge?:{selector,kind:card_code|one_time_code,frame_selector?,frame_origin?}}}. "
+    "All price and renewal selectors use the terms frame when declared. Foreign frames require grant authority; "
+    "credentials must match the actual frame origin. "
+    "Profile fields can use answers.<short_name> for enrolled application answers. "
+    "A validation_required result stays reserved and returns field selectors with native constraint flags; "
+    "correct the bindings/checks or enroll missing data, then execute the same operation again. "
+    "In a persistent workflow, server_validation_required also permits correcting bindings; use its new revision "
+    "and a new command_id for the correction. It requires a matching rejected POST plus new associated field errors, "
+    "and is limited to zero-money account/login/application forms. "
+    "These checks precede credential entry; they do not authorize retries of uncertain submissions. "
+    "Omit both success fields to discover a new, explicit English completion message for the requested action; "
+    "welcome, pending and failure messages do not count. Existing confirmation prevents submission. "
+    "Verification links and reconciliation require a specific success_selector and success_text. "
+    "A verification_link_id is used only for a login operation and must be same-origin. "
+    "kind=reconcile checks a receipt-specific confirmation using plan url/success_selector/success_text/session_resource_id without submitting; kind=operation checks progress; kind=cancel "
+    "cancels only before submission. Uncertain submissions require reconciliation, never blind retry. "
+    "Use managed=true only when configured and local preflight fails. Never put card or credential "
+    "values in arguments. Setup is at /account/autonomy."
+)
 
 # Long descriptions live out here: get_engine_schemas is already one of the
 # engine's largest functions and the size ratchet only lets it shrink.
@@ -2014,14 +2069,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         "type": "function",
         "function": {
             "name": "browser",
-            "description": (
-                "Full browser automation via Playwright. Manages a persistent Chromium session. "
-                "Actions: start (launch browser), stop (close), navigate (go to URL), "
-                "screenshot (capture page), snapshot (ARIA accessibility tree with element refs), "
-                "act (interact: click/fill/type/press/scroll/select using refs or selectors), "
-                "tabs (list open tabs), pdf (export page), evaluate (run JavaScript), "
-                "console (read console), status (check session)."
-            ),
+            "description": _BROWSER_DESCRIPTION,
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -2039,6 +2087,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                             "pdf",
                             "console",
                             "evaluate",
+                            "autonomy",
                         ],
                         "description": "Browser action to perform",
                     },
@@ -2062,8 +2111,8 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
                         "type": "object",
                         "description": (
                             "Interaction request for act action. "
-                            "Fields: kind (click/fill/type/press/scroll/select), "
-                            "ref (element ref from snapshot), selector (CSS selector), "
+                            "Fields: kind (click/fill/type/press/scroll/select/check/upload), "
+                            "ref (element ref from snapshot), selector (CSS selector), path (workspace file for upload), checked (boolean for check), "
                             "value/text/key/fields/x/y as needed."
                         ),
                     },
@@ -2873,147 +2922,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
 
     # ── Long-running goal tracking ──
 
-    schemas["create_goal"] = {
-        "type": "function",
-        "function": {
-            "name": "create_goal",
-            "description": (
-                "Create an active long-running session goal. Refuses to overwrite an "
-                "existing active goal in the same scope. Workspace goals (no agent_id) "
-                "auto-inject only into the main agent; agent-scoped goals inject only "
-                "into the named agent."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "objective": {
-                        "type": "string",
-                        "description": "Concrete objective the agent should keep pursuing.",
-                    },
-                    "success_criteria": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional explicit completion contract.",
-                    },
-                    "agent_id": {
-                        "type": "string",
-                        "description": "Optional target agent. Defaults to the current agent.",
-                    },
-                },
-                "required": ["objective"],
-            },
-        },
-    }
-    schemas["get_goal"] = {
-        "type": "function",
-        "function": {
-            "name": "get_goal",
-            "description": (
-                "Return the active long-running session goal for the current scope, "
-                "including objective, evidence count, and remaining completion "
-                "requirements."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "agent_id": {
-                        "type": "string",
-                        "description": "Optional target agent. Defaults to the current agent.",
-                    },
-                },
-            },
-        },
-    }
-    schemas["update_goal"] = {
-        "type": "function",
-        "function": {
-            "name": "update_goal",
-            "description": (
-                "Record typed evidence on a long-running session goal or mark it "
-                "complete. Completion requires at least one validated 'test_run' AND "
-                "one validated 'commit' evidence item. The reference field is verified "
-                "per kind: pytest summary or UUID for test_run; git SHA validated via "
-                "git cat-file for commit; https URL for ci_run."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "status": {
-                        "type": "string",
-                        "enum": ["active", "complete"],
-                        "description": "Set to complete only when the goal is truly finished.",
-                    },
-                    "edit_op": {
-                        "type": "string",
-                        "enum": ["objective", "criterion", "metric_target"],
-                        "description": (
-                            "Edit operation: 'objective' (with objective=<text>), "
-                            "'criterion' (with text=<text>), or 'metric_target' "
-                            "(with metric, target, optional weight/window_days/category)."
-                        ),
-                    },
-                    "objective": {
-                        "type": "string",
-                        "description": "New objective text when edit_op='objective'.",
-                    },
-                    "text": {
-                        "type": "string",
-                        "description": "Criterion text when edit_op='criterion'.",
-                    },
-                    "metric": {
-                        "type": "string",
-                        "description": (
-                            "Metric name when edit_op='metric_target' (e.g. "
-                            "benchmark_pass_rate, error_rate)."
-                        ),
-                    },
-                    "target": {
-                        "type": "string",
-                        "description": (
-                            "Target comparator when edit_op='metric_target' (e.g. '>=0.85')."
-                        ),
-                    },
-                    "weight": {
-                        "type": "number",
-                        "description": "Goal weight (default 1.0).",
-                    },
-                    "window_days": {
-                        "type": "integer",
-                        "description": "Rolling window in days (default 7).",
-                    },
-                    "category": {
-                        "type": "string",
-                        "enum": ["reach", "quality", "efficiency", "correctness"],
-                        "description": "Category for metric_target (default 'correctness').",
-                    },
-                    "kind": {
-                        "type": "string",
-                        "enum": ["test_run", "commit", "ci_run", "note"],
-                        "description": "Evidence kind. Only test_run + commit satisfy completion.",
-                    },
-                    "summary": {
-                        "type": "string",
-                        "description": "Short evidence summary.",
-                    },
-                    "reference": {
-                        "type": "string",
-                        "description": (
-                            "Verifiable reference: pytest:passed:N or run UUID for "
-                            "test_run; 7+ hex SHA for commit; https URL for ci_run."
-                        ),
-                    },
-                    "completion_note": {
-                        "type": "string",
-                        "description": "Required when status is complete.",
-                    },
-                    "agent_id": {
-                        "type": "string",
-                        "description": "Optional target agent. Defaults to the current agent.",
-                    },
-                },
-            },
-        },
-    }
+    schemas.update(legacy_goal_schemas())
 
     # ── Identity mapping tools ──
 
@@ -3959,4 +3868,7 @@ def get_engine_schemas() -> dict[str, dict[str, Any]]:
         },
     }
 
+    from robothor.goals.tools import schemas as pursuit_schemas
+
+    schemas.update(pursuit_schemas())
     return schemas

@@ -923,3 +923,36 @@ destroy.
   touch.
 * `docs/agents/INSTRUCTION_CONTRACT.md` in the repository — what an agent's
   instruction file may say, tools included.
+
+## Personal accounts, applications and purchases
+
+Use `browser(action="autonomy", request={kind:"status"})` for tasks that consume
+personal profile, login, document, authenticator or payment resources. This
+mode uses native-vault references and standing grants; a covered action does
+not need another approval. Use ordinary browser navigation for public research
+and nonsecret interaction. Ordinary `act` also supports `check` and workspace
+file `upload`; protected documents should use resource references.
+
+Status includes available resource field names and enrollment provenance.
+`request={kind:"procedures", origin, action}` finds recent successful templates
+for the same owner and agent. Inspect the current page and prepare a new operation;
+saved procedures do not supply authority or bypass current price/resource checks.
+Inspection discovers fields, narrow billing terms and direct child frame bindings;
+foreign frames require explicit authority and credentials match the frame origin.
+Use `terms_frame_selector` and `terms_frame_origin` when all checkout terms are
+inside an authorized frame. Prepare an operation, inspect its fields, execute the resource-bound plan, and
+check confirmation. A `validation_required` result provides native constraint
+flags before protected input; correct the plan and reuse the reserved operation.
+An uncertain submission must be reconciled before any
+retry. See [Personal autonomous execution](AUTONOMOUS_EXECUTION.md) for setup,
+verification, plan fields, spending limits and current integration boundaries.
+
+An execution plan can omit both success fields to discover a new affirmative
+completion message for its action. Discovery recognizes bounded English phrases;
+welcome/pending/error text does not establish success. Verification links and
+reconciliation require specific confirmation selectors and text.
+
+Recurring `browser(action="autonomy")` proposals require `recurrence` dates and
+intervals, with corresponding visible-term selectors in the execution plan.
+`status.spending` reports calendar-month projections, including future free-trial
+renewals. See [Personal autonomous execution](AUTONOMOUS_EXECUTION.md).

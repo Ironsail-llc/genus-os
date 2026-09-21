@@ -23,6 +23,15 @@ def cmd_vault(args: argparse.Namespace) -> int:
 
     workspace = Path(os.environ.get("ROBOTHOR_WORKSPACE", Path.home() / "robothor"))
 
+    if sub == "rotate-resources":
+        from robothor.autonomy.store import AutonomyStore
+
+        count = AutonomyStore().rotate_resource_keyring()
+        print(
+            f"Rotated {count} personal vault resources. Preserve the vault master key and database backup."
+        )
+        return 0
+
     if sub == "init":
         from robothor.vault.crypto import init_master_key
 

@@ -33,7 +33,6 @@ from robothor.engine.models import (
     AgentConfig,
     SpawnContext,
     StepType,
-    TriggerType,
 )
 
 # ── Log-injection sanitizer ──
@@ -558,38 +557,11 @@ class RunLifecycleMixin:
             return None
 
     def _should_verify(
-        self,
-        agent_config: AgentConfig,
-        route: Any,
-        session: AgentSession | None = None,
+        self, agent_config: AgentConfig, route: Any, session: AgentSession | None = None
     ) -> bool:
-        """Determine if verification step should run."""
-        if agent_config.verification_enabled:
-            return True
-        # Skip verification for interactive sessions (adds latency, Qwen JSON unreliable)
-        if (
-            session
-            and session.run
-            and session.run.trigger_type
-            in (
-                TriggerType.TELEGRAM,
-                TriggerType.WEBCHAT,
-            )
-        ):
-            return False
-        # Skip verification for heartbeat (scout) runs — the scout is a
-        # deterministic scan-and-file beat with a rigid 5-section digest
-        # format. Verification second-guesses the digest, provokes the model
-        # into writing a meta-defense, and that defense overwrites the real
-        # output_text — operator ends up seeing garbage instead of the digest.
-        if (
-            session
-            and session.run
-            and session.run.trigger_detail
-            and session.run.trigger_detail.startswith("heartbeat:")
-        ):
-            return False
-        return bool(route and route.verification is True)
+        from robothor.engine.verifier import should_verify
+
+        return should_verify(agent_config, route, session)
 
     async def _run_verification(
         self,
@@ -667,6 +639,18 @@ class RunLifecycleMixin:
             messages = checkpoint_data.get("messages")
             if messages and isinstance(messages, list):
                 session.messages = messages
+                from robothor.engine.task_context import install_context, make_context, read_context
+
+                record = read_context(messages)
+                if record is None:
+                    record = make_context(
+                        session.run.task_text or session.originating_message, [], run_id=run_id
+                    )
+                    install_context(session.messages, record)
+                session.originating_message = record["request"]
+                from robothor.engine.deliverable_contract import task_text_for_column
+
+                session.run.task_text = task_text_for_column(record["request"])
 
             # Restore scratchpad
             scratchpad_data = checkpoint_data.get("scratchpad")

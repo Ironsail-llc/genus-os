@@ -2736,3 +2736,72 @@ class TestClosedOnboarding:
         message.answer.assert_called_once()
         reply_text = message.answer.call_args.args[0].lower()
         assert "self-registration" in reply_text or "contact" in reply_text
+
+
+class TestPlanRevisionSafety:
+    async def test_stale_revision_button_cannot_execute_current_plan(self, bot):
+        from datetime import UTC, datetime
+
+        from robothor.engine.models import PlanState
+
+        key = bot._session_key("12345")
+        session = get_shared_session(key)
+        session.active_plan = PlanState(
+            plan_id="new-revision",
+            plan_text="Deploy browser",
+            original_message="Get it live",
+            created_at=datetime.now(UTC).isoformat(),
+        )
+        callback = MagicMock()
+        callback.data = "plan:approve:old-revision"
+        callback.message.chat.id = 12345
+        callback.answer = AsyncMock()
+        bot._execute_approved_plan = AsyncMock()
+        await bot.on_plan_decision(callback)
+        bot._execute_approved_plan.assert_not_called()
+        callback.answer.assert_awaited_once_with("Plan no longer active")
+
+    async def test_delayed_execution_cannot_switch_to_new_plan(self, bot):
+        from datetime import UTC, datetime
+
+        from robothor.engine.models import PlanState
+
+        key = bot._session_key("12345")
+        session = get_shared_session(key)
+        session.active_plan = PlanState(
+            plan_id="new-revision",
+            plan_text="Deploy browser",
+            original_message="Get it live",
+            created_at=datetime.now(UTC).isoformat(),
+        )
+        bot.send_message = AsyncMock()
+        bot.runner.execute = AsyncMock()
+        await bot._execute_approved_plan("12345", key, session, expected_plan_id="old-revision")
+        bot.runner.execute.assert_not_called()
+
+    async def test_failed_durable_approval_does_not_execute(self, bot):
+        from datetime import UTC, datetime
+
+        from robothor.engine.models import PlanState
+
+        key = bot._session_key("12345")
+        session = get_shared_session(key)
+        session.active_plan = PlanState(
+            plan_id="current-revision",
+            plan_text="Deploy browser",
+            original_message="Get it live",
+            created_at=datetime.now(UTC).isoformat(),
+        )
+        bot.send_message = AsyncMock()
+        bot.runner.execute = AsyncMock()
+        with patch(
+            "robothor.engine.telegram_plan_mode.save_plan_state_async",
+            AsyncMock(side_effect=OSError("DB unavailable")),
+        ) as save:
+            await bot._execute_approved_plan(
+                "12345", key, session, expected_plan_id="current-revision"
+            )
+        assert save.call_args.kwargs["strict"] is True
+        bot.runner.execute.assert_not_called()
+        assert session.active_plan.status == "pending"
+        assert "execution has not started" in bot.send_message.call_args.args[1]

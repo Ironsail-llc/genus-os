@@ -316,6 +316,10 @@ def _restore_sessions(config: EngineConfig) -> None:
                     created_at=plan_data.get("created_at", ""),
                     exploration_run_id=plan_data.get("exploration_run_id", ""),
                     rejection_feedback=plan_data.get("rejection_feedback", ""),
+                    plan_hash=plan_data.get("plan_hash", ""),
+                    task_context=plan_data.get("task_context", {}),
+                    creator_sender_info=plan_data.get("creator_sender_info"),
+                    deep_plan=plan_data.get("deep_plan", False),
                     revision_count=plan_data.get("revision_count", 0),
                     revision_history=plan_data.get("revision_history", []),
                     execution_run_id=plan_data.get("execution_run_id", ""),
@@ -652,7 +656,7 @@ def _plan_is_expired(plan: PlanState) -> bool:
 
 def _extract_plan_text(output: str) -> str:
     """Extract plan text from agent output, stripping the [PLAN_READY] marker."""
-    if not output:
+    if not output or output.startswith("[PLAN_FAILED]"):
         return ""
     marker = "[PLAN_READY]"
     idx = output.find(marker)
@@ -676,6 +680,7 @@ def _plan_to_dict(plan: PlanState) -> dict[str, Any]:
         "execution_run_id": plan.execution_run_id,
         "deep_plan": plan.deep_plan,
         "plan_hash": plan.plan_hash,
+        "task_context": plan.task_context,
     }
 
 

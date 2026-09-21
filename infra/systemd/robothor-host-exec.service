@@ -1,0 +1,28 @@
+[Unit]
+Description=Genus OS owner host execution
+Requires=robothor-secrets.service
+After=network-online.target postgresql.service robothor-secrets.service
+
+[Service]
+Type=simple
+User=robothor
+Group=robothor
+WorkingDirectory=/opt/robothor
+EnvironmentFile=/etc/robothor/robothor.env
+EnvironmentFile=-/run/robothor/secrets.env
+Environment=ROBOTHOR_HOST_EXEC_SOCKET=/run/robothor-host/exec.sock
+ExecStart=/opt/robothor/venv/bin/python -m robothor.engine.host_execution
+RuntimeDirectory=robothor-host
+RuntimeDirectoryMode=0700
+UMask=0077
+Restart=always
+RestartSec=3
+TimeoutStopSec=15
+KillMode=control-group
+# Deliberately uses the owner's normal host and sudo permissions. Authentication
+# permits verified owner main-agent execution only; the shared engine remains
+# restricted. Do not add ProtectHome/ProtectSystem/NoNewPrivileges here: those
+# would re-create the inaccessible-computer defect this service resolves.
+
+[Install]
+WantedBy=multi-user.target
