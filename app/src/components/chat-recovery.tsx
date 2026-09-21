@@ -4,6 +4,14 @@ import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+export interface RecoveredPlan {
+  plan_id: string;
+  plan_text: string;
+  original_message: string;
+  status: string;
+  deep_plan?: boolean;
+}
+
 export interface ChatRecoveryRequest {
   requestId: string;
   agent: string;
@@ -14,7 +22,7 @@ export interface ChatRecoveryRequest {
 export function ChatRecovery({ request, messageId, onRecovered }: {
   messageId: string;
   request: ChatRecoveryRequest;
-  onRecovered: (id: string, text: string) => void;
+  onRecovered: (id: string, text: string, plan?: RecoveredPlan) => void;
 }) {
   const [status, setStatus] = useState("Connection interrupted. Checking the recorded result…");
   useEffect(() => {
@@ -33,7 +41,13 @@ export function ChatRecovery({ request, messageId, onRecovered }: {
         const record = await response.json();
         if (controller.signal.aborted) return;
         if (record.terminal === true && record.reconciliation_pending !== true && typeof record.text === "string") {
-          onRecovered(messageId, record.text || "The run has finished; no response text was recorded.");
+          const plan = record.plan;
+          const savedPlan = plan?.status === "pending" &&
+            [plan.plan_id, plan.plan_text, plan.original_message].every(value => typeof value === "string")
+            ? plan as RecoveredPlan : undefined;
+          const text = record.text || "The run has finished; no response text was recorded.";
+          if (savedPlan) onRecovered(messageId, text, savedPlan);
+          else onRecovered(messageId, text);
           return;
         }
         setStatus(record.reconciliation_pending === true

@@ -1,0 +1,39 @@
+{
+  "initial_failure": "Original-request outcome recovery omitted its completed saved plan: 1 failed, 20 passed (0.57s).",
+  "implementation": [
+    "Plan preparation journals the original request and recovers after transport errors, HTTP failures or premature EOF without resubmitting.",
+    "Outcome recovery attaches only a matching, pending, unexpired plan; a cache-missing saved draft is read with tenant/session scope and restored for review.",
+    "Delivery remains pending while the matching request saves its draft.",
+    "Draft publication requires strict persistence.",
+    "Recovered text strips internal markers; preparing or recovering never approves the draft."
+  ],
+  "backend_regression": {
+    "passed": 142,
+    "seconds": 5.94,
+    "log": "/tmp/runtime-plan-recovery-after.log"
+  },
+  "final_focused": {
+    "passed": 78,
+    "seconds": 6.28,
+    "log": "/tmp/runtime-plan-recovery-final-focused.log"
+  },
+  "frontend": {
+    "files": 149,
+    "passed": 1654,
+    "seconds": 9.4,
+    "log": "/tmp/runtime-plan-recovery-frontend-final.log"
+  },
+  "canonical_integration": {
+    "passed": 26,
+    "skipped": 1,
+    "warnings": 1,
+    "seconds": 6.33,
+    "log": "/tmp/runtime-plan-recovery-integration.log"
+  },
+  "static_checks": "Ruff lint/format, changed-file ESLint, TypeScript and diff checks passed.",
+  "intermediate_failures": [
+    "Recovery initially populated ordinary session cache; existing cache-loss test caught this and ordinary recovery now leaves the cache alone.",
+    "41 synthetic recovery checks initially lacked the existing canonical trigger_detail column; private fixture schema was aligned before passing."
+  ],
+  "limits": "Backend HTTP tests mock runner and plan persistence; browser component tests mock outcome transport. Canonical integration separately exercises native checkpoint/chat query compatibility, not a complete browser-to-engine draft disconnect. Simultaneous plan revisions and crash between completed exploration and plan persistence remain unqualified. No production deployment, live provider call, or new manual acceptance."
+}

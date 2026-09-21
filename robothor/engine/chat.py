@@ -583,6 +583,10 @@ async def chat_outcome(
     auth = _auth_context(request)
     key = _effective_session_key(auth, session_key)
     result = await asyncio.to_thread(read_outcome, auth, key, request_id)
+    from robothor.engine.chat_plan_recovery import attach_plan
+    from robothor.engine.runtime.chat_control import request_key
+
+    await attach_plan(result, _sessions.get(key), request_key(auth, key, request_id), auth, key)
     if result.get("terminal") and result.get("reconciliation_pending"):
         from robothor.engine.calendar_reconciliation import reconcile_outcome
 
@@ -713,7 +717,9 @@ def _plan_to_dict(plan: PlanState) -> dict[str, Any]:
 async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
     """Start plan mode: run agent with read-only tools, return plan via SSE."""
     if _runner is None or _config is None:
-        return JSONResponse({"error": "Chat not initialized"}, status_code=503)
+        return JSONResponse(
+            {"error": "Chat not initialized", "request_admitted": False}, status_code=503
+        )
     auth = _auth_context(request)
     identity = _resolve_webchat_identity(auth)
 
@@ -723,7 +729,9 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
     deep_plan: bool = body.get("deep_plan", False)
 
     if not message:
-        return JSONResponse({"error": "message required"}, status_code=400)
+        return JSONResponse(
+            {"error": "message required", "request_admitted": False}, status_code=400
+        )
 
     session_key = _effective_session_key(auth, session_key)
     session = _get_session(session_key)
@@ -814,18 +822,11 @@ async def plan_start(request: Request) -> StreamingResponse | JSONResponse:
                     deep_plan=deep_plan,
                     plan_hash=hashlib.sha256(plan_text.encode()).hexdigest()[:16],
                 )
+                # Publish only after the draft can survive a connection loss.
+                await save_plan_state_async(
+                    session_key, _plan_to_dict(plan), tenant_id=auth.tenant_id, strict=True
+                )
                 session.active_plan = plan
-
-                # Persist plan state to DB (awaited — plan state is critical)
-                if _config:
-                    try:
-                        await save_plan_state_async(
-                            session_key,
-                            _plan_to_dict(plan),
-                            tenant_id=auth.tenant_id,
-                        )
-                    except Exception as e:
-                        logger.warning("Failed to persist plan state: %s", e)
 
                 # Send plan event
                 await queue.put(

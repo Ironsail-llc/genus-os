@@ -10,7 +10,7 @@ def continuation(cur, root, auth):
               ON child.runtime_context->>'resume_from_run_id'=parent.id::text
             WHERE child.tenant_id=%s AND child.user_id=%s
         ) SELECT r.id,r.agent_id,r.status,r.output_text,r.error_message,r.verified_status,
-                 r.runtime_context->>'resume_from_run_id' AS resume_origin
+                 r.trigger_detail,r.runtime_context->>'resume_from_run_id' AS resume_origin
           FROM agent_runs r JOIN chain c ON c.id=r.id""",
         (root["id"], auth.tenant_id, auth.user_id, auth.tenant_id, auth.user_id),
     )

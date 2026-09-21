@@ -28,7 +28,7 @@ def records(private_database, monkeypatch):  # noqa: F811
         cur.execute("""CREATE TABLE IF NOT EXISTS agent_runs (
             id UUID PRIMARY KEY,tenant_id TEXT,user_id TEXT,agent_id TEXT DEFAULT 'main',parent_run_id UUID,
             correlation_id UUID,runtime_context JSONB,status TEXT,output_text TEXT,
-            error_message TEXT,verified_status TEXT,started_at TIMESTAMPTZ DEFAULT now())""")
+            error_message TEXT,verified_status TEXT,trigger_detail TEXT,started_at TIMESTAMPTZ DEFAULT now())""")
     with connect() as conn, conn.cursor() as cur:
         cur.execute("""CREATE TABLE IF NOT EXISTS agent_run_steps (
             run_id UUID,step_number INTEGER,tool_name TEXT,tool_input JSONB,tool_output JSONB)""")

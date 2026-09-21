@@ -60,4 +60,5 @@ def read_outcome(auth, session_key: str, client_id: str) -> dict:
         "reconciliation_pending": any(item["status"] == "executing" for item in receipts),
         "verified": row["verified_status"] == "verified" and not incomplete,
         "source": "run_record",
+        "plan_exploration": str(row.get("trigger_detail") or "").startswith("plan:"),
     }

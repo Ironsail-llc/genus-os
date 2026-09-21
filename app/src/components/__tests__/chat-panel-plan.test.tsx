@@ -631,3 +631,40 @@ describe("ChatPanel — Plan Mode", () => {
     });
   });
 });
+
+it.each(["transport", "eof", "http"])("recovers the original saved draft after %s without submitting or approving again", async (failure) => {
+  let requestId = "";
+  let starts = 0;
+  let reads = 0;
+  let approvals = 0;
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    if (url === "/api/chat/plan/start") {
+      starts++;
+      requestId = JSON.parse(init!.body as string).request_id;
+      if (failure === "transport") throw new TypeError("Connection dropped");
+      if (failure === "http") return { ok: false, json: async () => ({ error: "Upstream connection dropped" }) };
+      return { ok: true, body: new ReadableStream({ start(controller) { controller.close(); } }) };
+    }
+    if (url.startsWith("/api/chat/outcome?")) {
+      reads++;
+      expect(new URL(url, "http://test").searchParams.get("request_id")).toBe(requestId);
+      expect(init?.method ?? "GET").toBe("GET");
+      return { ok: true, json: async () => ({ terminal: true, state: "completed", text: "Recovered draft is ready for review[PLAN_READY]", plan: {
+        plan_id: "saved-original-plan", plan_text: "Check the stored task", original_message: "Prepare my task plan", status: "pending",
+      } }) };
+    }
+    if (url === "/api/chat/plan/approve") approvals++;
+    return { ok: true, json: async () => ({ messages: [], active: false, agents: [] }) };
+  }));
+  render(<ChatPanel />);
+  await act(async () => {});
+  fireEvent.click(screen.getByTestId("plan-toggle"));
+  fireEvent.change(screen.getByTestId("chat-input"), { target: { value: "Prepare my task plan" } });
+  fireEvent.click(screen.getByTestId("send-button"));
+  await waitFor(() => expect(screen.getByText("Check the stored task")).toBeVisible());
+  expect(starts).toBe(1);
+  expect(reads).toBe(1);
+  expect(approvals).toBe(0);
+  expect(screen.queryByText(/\[PLAN_READY\]/)).toBeNull();
+  vi.unstubAllGlobals();
+});

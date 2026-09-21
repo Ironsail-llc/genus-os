@@ -83,11 +83,12 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const recoveryScopes = useRef<Record<string, string>>({});
   const requestScopes = useRef<Record<string, string>>({});
-  const recoverMessage = useCallback((id: string, text: string) => {
+  const recoverMessage = useCallback((id: string, text: string, plan?: ActivePlan) => {
+    if (plan) setActivePlan(current => current ?? plan);
     setMessages((prev) => prev.map((item) => {
       if (item.id !== id) return item;
       if (item.recovery?.scope) forgetRequest(item.recovery.scope, item.recovery.requestId);
-      return { ...item, content: text, recovery: undefined };
+      return { ...item, content: stripResidualMarkers(text), recovery: undefined };
     }));
   }, []);
   const [input, setInput] = useState("");
@@ -494,7 +495,13 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
     setIsStopping(false);
     setRuntimeProgress("Submitting request…");
 
+    let submitted = false;
     try {
+      const requestId = requestIdRef.current!;
+      const scope = await journalRequest(agent, requestId, recoveryScopes.current[agent], controller.signal);
+      if (scope) requestScopes.current[requestId] = scope;
+      controller.signal.throwIfAborted();
+      submitted = true;
       const res = await fetch("/api/chat/plan/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -503,14 +510,13 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       });
 
       if (!res.ok || !res.body) {
-        let errorText = OUTCOME_UNKNOWN;
-        try {
-          const errBody = await res.json();
-          if (errBody.error) errorText = errBody.error;
-        } catch { /* ignore */ }
+        const failure = await requestFailure(res);
+        if (failure.rejected && scope) forgetRequest(scope, requestId);
         setMessages((prev) => [
           ...prev,
-          { id: `err-${Date.now()}`, role: "assistant", content: errorText, timestamp: new Date() },
+          { id: `err-${Date.now()}`, role: "assistant", content: failure.text, timestamp: new Date(),
+            ...(!failure.rejected ? { recovery: { requestId, agent, scope } } : {}),
+          },
         ]);
         setIsPlanning(false);
         setStreamingText("");
@@ -524,6 +530,7 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       let sseData = "";
       let fullResponse = "";
       let gotPlanEvent = false;
+      let receivedTerminal = false;
 
       const handleSSEEvent = (eventType: string, data: string) => {
         try {
@@ -548,7 +555,8 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
           } else if (eventType === "tool_end") {
             setActiveToolName(null);
           } else if (eventType === "done") {
-            fullResponse = parsed.text || fullResponse;
+            const terminal = terminalOutcome(parsed, fullResponse);
+            if (terminal !== undefined) { receivedTerminal = true; fullResponse = terminal; }
           }
         } catch { /* skip */ }
       };
@@ -582,6 +590,10 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
       setIsPlanning(false);
       setStreamingText("");
 
+      if (!gotPlanEvent && !receivedTerminal) fullResponse = OUTCOME_UNKNOWN;
+      if (gotPlanEvent || fullResponse !== OUTCOME_UNKNOWN) {
+        if (scope) forgetRequest(scope, requestId);
+      }
       // If no plan event was received, show the response as a regular message
       if (!gotPlanEvent && fullResponse.trim()) {
         setMessages((prev) => [
@@ -595,13 +607,15 @@ export function ChatPanel({ mobile = false }: ChatPanelProps) {
           },
         ]);
       }
-    } catch (err) {
-      if ((err as Error).name !== "AbortError") {
-        setMessages((prev) => [
-          ...prev,
-          { id: `err-${Date.now()}`, role: "assistant", content: `Connection error: ${(err as Error).message}. Please try again.`, timestamp: new Date() },
-        ]);
-      }
+    } catch {
+      const requestId = requestIdRef.current!;
+      const scope = requestScopes.current[requestId];
+      if (!submitted && scope) forgetRequest(scope, requestId);
+      setMessages((prev) => [...prev, {
+        id: `err-${Date.now()}`, role: "assistant", timestamp: new Date(),
+        content: submitted ? OUTCOME_UNKNOWN : "Plan preparation stopped before submission.",
+        ...(submitted ? { recovery: { requestId, agent, scope } } : {}),
+      }]);
     } finally {
       setIsPlanning(false);
       setStreamingText("");

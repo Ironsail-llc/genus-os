@@ -450,3 +450,12 @@ These are synthetic component responses; the backend chat/calendar recovery test
 Inspection of draft interruption recovery reproduced a false-readiness issue: failed, timed-out and cancelled exploration runs could return partial text containing PLAN_READY and publish it as a pending plan. Three new backend cases failed before the fix. Only a completed exploration may now produce a plan; terminal response and chat history use the failure-aware result text, and the stream carries the run status.
 
 The 93 backend chat/session/plan/size checks pass (3.92s), as do all 11 plan-interface component tests (1.05s). The new cases assert no plan event, no active plan, no plan persistence, failure text in response and history, and exactly one exploration execution. Ruff lint/format and diff checks pass. Evidence: `bench/runtime/uat-plan-exploration-outcomes.json`. These use synthetic runner outcomes. Automatic completed-draft recovery after a lost connection, other external providers, and the remaining runtime acceptance gates remain open. Nothing was deployed.
+
+
+## Recover a saved plan without repeating preparation
+
+Planning now journals its request and uses original-request outcome recovery after transport errors, HTTP failures and premature EOF. The endpoint attaches only the matching pending, unexpired plan. It keeps delivery pending while that request saves its draft and can restore a scoped saved plan after session-cache loss. Plan publication now requires strict persistence, and recovery strips internal markers. Recovery does not approve or execute the draft.
+
+The initial matching-plan check failed (1 failed, 20 passed). The expanded backend regression passes 142 tests (5.94s); final focused checks including rejected/expired/foreign-run/failed-run refusal pass 78 tests (6.28s). The full frontend suite passes 1,654 tests in 149 files (9.40s), with the existing jsdom navigation notice. Three new component cases prove one preparation, matching original request and zero approvals. Canonical migration/native integrations pass 26 tests (6.33s, one worker-only skip and one dependency warning). Ruff, ESLint, TypeScript and diff checks pass. Evidence: `bench/runtime/uat-saved-plan-recovery.json`.
+
+Backend HTTP tests mock runner/persistence and component tests mock outcome transport; this is not yet one browser-to-engine disconnection drill. Simultaneous plan revision and a crash between completed exploration and saved draft remain unqualified. No deployment or additional manual acceptance is claimed.
