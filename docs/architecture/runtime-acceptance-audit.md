@@ -499,3 +499,12 @@ The combined browser test reproduced reporting an overlapping retry of the same 
 Private SQL checks cover tenant/principal/session isolation, claim-before-run and run-after-plan-clear stages. All 152 focused plan/deep/session/store/size checks pass (12.98s); 35 frontend admission/recovery/proxy checks pass (1.00s). The canonical browser/native command passes 29 integrations (16.07s, one worker-only skip and one dependency warning). In the same-request case, two concurrent approvals produce 200/409, a third post-completion retry retains admitted=true, and outcome lookup returns the completed execution. Exactly one execution run exists. Ruff, Node syntax, formatting, changed-test ESLint and diff checks pass. Evidence and failed attempts: `bench/runtime/uat-plan-original-request-recovery.json`.
 
 The earlier same-request reattachment gap is now covered. Process death between claim and run admission, concurrent plan revisions, matched runtime comparison and remaining acceptance gates remain open. No production action, deployment or manual acceptance is claimed.
+
+
+## Older completion preserves newer plans
+
+Two failing HTTP cases reproduced normal and deep execution clearing a newer pending plan from the session cache. Their cleanup also used an unconditional session-wide database clear. Completion now carries the durable approval request identity through PlanState serialization/restoration and retires only that matching approved plan. Both cache and SQL checks preserve a newer plan, a pending revision, or a newer approval of the same plan ID. Database retirement is awaited; failure retains the durable consumed claim for duplicate protection and logs only the exception type.
+
+The private SQL/cache suite passes 16 checks (1.12s). The plan/deep/session/store/size selection passes 161 tests (10.96s); 42 persistence/Telegram/deep compatibility checks pass (3.97s). Canonical browser/native integrations pass 29 tests (14.37s), with one worker-only skip and one dependency warning. Helper extraction brought run_approved below the oversized-function threshold, so its old exception was removed; no cap was increased. Ruff, formatting and diff checks pass. Evidence: `bench/runtime/uat-plan-late-completion.json`.
+
+The newer-plan race is tested through mocked-runner HTTP and private SQL layers separately; the browser drill verifies ordinary retirement and original-request recovery. Revision/rejection write races and claim-before-run process death remain open. No production action, deployment, or full acceptance is claimed.

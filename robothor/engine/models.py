@@ -729,6 +729,7 @@ class PlanState:
 
     # Execution tracking
     execution_run_id: str = ""  # Run ID of the execution phase (after approval)
+    approval_request_id: str = ""  # Durable webchat approval identity
 
     # Creator identity (Task 4 Finding 1 fix) — the per-message resolved
     # sender dict (same shape as TelegramBot._resolve_user()'s return value)

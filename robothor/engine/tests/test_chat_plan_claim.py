@@ -106,3 +106,54 @@ def test_original_admission_survives_plan_clear_without_crossing_identity(saved)
     assert not chat_plan_claim.already_admitted(
         replace(auth, tenant_id="other"), "session", client_id
     )
+
+
+@pytest.mark.parametrize(
+    "case", ["own", "new_plan", "new_approval", "pending_revision", "tenant", "session"]
+)
+def test_late_retirement_only_clears_its_own_approved_record(saved, case):
+    plan, connect = saved
+    assert chat_plan_claim.claim("tenant", "session", plan, "old-request")
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT plan_state FROM chat_sessions WHERE tenant_id='tenant' AND session_key='session'"
+        )
+        expected = cur.fetchone()[0]
+        if case == "new_plan":
+            expected.update(plan_id="new-plan", status="pending", approval_request_id="")
+        elif case == "new_approval":
+            expected["approval_request_id"] = "new-request"
+        elif case == "pending_revision":
+            expected.update(status="pending", plan_text="Revised plan")
+        cur.execute(
+            "UPDATE chat_sessions SET plan_state=%s WHERE tenant_id='tenant' AND session_key='session'",
+            (Json(expected),),
+        )
+    chat_plan_claim.clear_claim(
+        "other" if case == "tenant" else "tenant",
+        "other" if case == "session" else "session",
+        plan.plan_id,
+        "old-request",
+    )
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT plan_state FROM chat_sessions WHERE tenant_id='tenant' AND session_key='session'"
+        )
+        assert cur.fetchone()[0] == (None if case == "own" else expected)
+
+
+async def test_cache_retirement_preserves_another_approval_of_same_plan(monkeypatch):
+    from types import SimpleNamespace
+
+    older = PlanState(
+        plan_id="plan",
+        plan_text="Check task",
+        original_message="Check task",
+        status="approved",
+        approval_request_id="old",
+    )
+    newer = replace(older, approval_request_id="new")
+    session = SimpleNamespace(active_plan=newer)
+    monkeypatch.setattr(chat_plan_claim, "clear_claim", lambda *args: None)
+    await chat_plan_claim.finish_plan(session, older, "tenant", "session")
+    assert session.active_plan is newer

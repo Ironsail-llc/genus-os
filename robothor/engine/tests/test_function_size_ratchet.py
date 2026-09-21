@@ -160,7 +160,6 @@ KNOWN_LARGE: dict[str, int] = {
     "telegram.py::_handle_goal_command": 242,
     "managed_agents/runner.py::run_on_managed_agents": 241,
     "runner.py::execute_deep": 224,
-    "chat.py::run_approved": 218,
     # workflow.py::execute is gone from this list: 208 -> 179. The finalization
     # cluster (completion stamp, terminal status, the failed->timeout
     # reclassification) became _finalize_status, which is what paid for the

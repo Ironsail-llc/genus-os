@@ -347,6 +347,7 @@ class TestPlanApproveDeepBranch:
         monkeypatch.setattr(
             "robothor.engine.chat_plan_claim.claim_plan", AsyncMock(return_value=True)
         )
+        monkeypatch.setattr("robothor.engine.chat_plan_claim.clear_claim", lambda *args: None)
         app = FastAPI()
         app.include_router(chat.router)
 

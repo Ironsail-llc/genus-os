@@ -1656,6 +1656,44 @@
       "static_checks": "Ruff lint/format, Node syntax, changed-test ESLint and diff checks passed.",
       "intermediate_failure": "An in-memory unit approval fixture reached its noncanonical test audit table after admission reads were added. Unit admission-history reads are now explicitly mocked; private SQL and native browser tests retain real reads. Failure log: /tmp/runtime-plan-same-request-focused.log.",
       "limits": "Synthetic model transport and local test identity. No replay or production action. Claim-before-run process death, concurrent revisions, and broader runtime comparison remain open; no deployment or full acceptance claimed."
+    },
+    "plan_late_completion": {
+      "initial_failure": "Normal and deep approval completions unconditionally cleared a newer pending plan; both new HTTP cases failed.",
+      "before_log": "/tmp/runtime-plan-late-clear-before.log",
+      "fix": "Carry the durable approval request identity in PlanState and retire only the matching approved plan in cache and database. Await conditional retirement; a database outage leaves the durable approved claim intact.",
+      "database_and_cache": {
+        "passed": 16,
+        "seconds": 1.12,
+        "log": "/tmp/runtime-plan-late-clear-store.log",
+        "cases": [
+          "matching approval clears",
+          "new plan preserved",
+          "new approval of same plan preserved",
+          "pending revision preserved",
+          "foreign tenant/session preserved"
+        ]
+      },
+      "focused": {
+        "passed": 161,
+        "seconds": 10.96,
+        "log": "/tmp/runtime-plan-late-clear-focused-fixed.log"
+      },
+      "compatibility": {
+        "passed": 42,
+        "seconds": 3.97,
+        "log": "/tmp/runtime-plan-late-clear-compat.log",
+        "scope": "Chat persistence, Telegram interactive delivery and deep-plan routing"
+      },
+      "canonical_browser": {
+        "passed": 29,
+        "skipped": 1,
+        "warnings": 1,
+        "seconds": 14.37,
+        "log": "/tmp/runtime-plan-late-clear-native.log"
+      },
+      "ratchet": "Completion helper extraction reduced run_approved below the oversized-function threshold; removed its obsolete exception rather than increasing any cap.",
+      "checks": "Ruff lint/format and diff checks pass.",
+      "limits": "The competing-new-plan case is verified through mocked-runner HTTP tests and actual private SQL separately. Canonical browser cases verify ordinary retirement and original-request recovery. Revision/rejection write races and death between approval claim and native admission remain open; no production deployment or full acceptance claim."
     }
   },
   "calendar": {

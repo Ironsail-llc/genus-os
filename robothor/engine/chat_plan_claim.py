@@ -45,13 +45,16 @@ async def admit_plan(session, auth, session_key, client_id):
 
     plan = copy(session.active_plan)
     client_id = client_id or str(uuid4())
+    identifier = request_key(auth, session_key, client_id)
     if plan.status != "pending" or not await claim_plan(
-        auth.tenant_id, session_key, plan, request_key(auth, session_key, client_id)
+        auth.tenant_id, session_key, plan, identifier
     ):
         return None, client_id
     plan.status = "approved"
+    plan.approval_request_id = identifier
     if session.active_plan and session.active_plan.plan_id == plan.plan_id:
         session.active_plan.status = "approved"
+        session.active_plan.approval_request_id = identifier
     return plan, client_id
 
 
@@ -122,3 +125,36 @@ async def approval_retry(auth, session_key, client_id):
             status_code=409,
         )
     return None
+
+
+def clear_claim(tenant_id, session_key, plan_id, request_id):
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """UPDATE chat_sessions SET plan_state=NULL,last_active_at=now()
+               WHERE tenant_id=%s AND session_key=%s
+                 AND plan_state->>'plan_id'=%s AND plan_state->>'status'='approved'
+                 AND plan_state->>'approval_request_id'=%s""",
+            (tenant_id, session_key, plan_id, request_id),
+        )
+        conn.commit()
+
+
+async def finish_plan(session, plan, tenant_id, session_key):
+    import logging
+
+    current = session.active_plan
+    if (
+        current is not None
+        and current.plan_id == plan.plan_id
+        and current.status == "approved"
+        and current.approval_request_id == plan.approval_request_id
+    ):
+        session.active_plan = None
+    try:
+        await asyncio.to_thread(
+            clear_claim, tenant_id, session_key, plan.plan_id, plan.approval_request_id
+        )
+    except Exception as exc:
+        # Keeping an approved claim prevents a duplicate execution after a store
+        # outage. The run's durable outcome remains available for recovery.
+        logging.getLogger(__name__).warning("Plan retirement deferred (%s)", type(exc).__name__)

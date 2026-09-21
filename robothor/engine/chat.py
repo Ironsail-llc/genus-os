@@ -49,7 +49,12 @@ from starlette.responses import StreamingResponse
 from robothor.constants import DEFAULT_TENANT
 from robothor.engine.chat_history import MAX_HISTORY as _MAX_HISTORY
 from robothor.engine.chat_history import ChatHistory, append_turn, as_history
-from robothor.engine.chat_plan_claim import admit_plan, approval_refusal, approval_retry
+from robothor.engine.chat_plan_claim import (
+    admit_plan,
+    approval_refusal,
+    approval_retry,
+    finish_plan,
+)
 from robothor.engine.chat_result import result_text
 from robothor.engine.chat_session_cache import SessionCache
 from robothor.engine.chat_store import (
@@ -319,6 +324,7 @@ def _restore_sessions(config: EngineConfig) -> None:
                     status=plan_data.get("status", "pending"),
                     created_at=plan_data.get("created_at", ""),
                     exploration_run_id=plan_data.get("exploration_run_id", ""),
+                    approval_request_id=plan_data.get("approval_request_id", ""),
                     rejection_feedback=plan_data.get("rejection_feedback", ""),
                     plan_hash=plan_data.get("plan_hash", ""),
                     task_context=plan_data.get("task_context", {}),
@@ -705,6 +711,7 @@ def _plan_to_dict(plan: PlanState) -> dict[str, Any]:
         "revision_count": plan.revision_count,
         "revision_history": plan.revision_history,
         "execution_run_id": plan.execution_run_id,
+        "approval_request_id": plan.approval_request_id,
         "deep_plan": plan.deep_plan,
         "plan_hash": plan.plan_hash,
         "task_context": plan.task_context,
@@ -995,12 +1002,8 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                         )
                     )
 
-                # Clear plan + persist
-                session.active_plan = None
-                if _config:
-                    asyncio.create_task(
-                        clear_plan_state_async(session_key, tenant_id=auth.tenant_id)
-                    )
+                # Retire only this approval; newer work may already be pending.
+                await finish_plan(session, plan, auth.tenant_id, session_key)
 
                 # Emit deep result + done
                 duration_s = (run.duration_ms or 0) / 1000
@@ -1106,12 +1109,8 @@ async def plan_approve(request: Request) -> StreamingResponse | JSONResponse:
                         )
                     )
 
-                # Clear plan + persist
-                session.active_plan = None
-                if _config:
-                    asyncio.create_task(
-                        clear_plan_state_async(session_key, tenant_id=auth.tenant_id)
-                    )
+                # Retire only this approval; newer work may already be pending.
+                await finish_plan(session, plan, auth.tenant_id, session_key)
 
                 await queue.put(
                     {

@@ -306,3 +306,48 @@ async def test_retry_reattaches_admission_even_after_pending_plan_is_cleared(
     assert response.json()["request_admitted"] is True
     assert "Checking its recorded result" in response.json()["error"]
     mock_runner.execute.assert_not_called()
+
+
+@pytest.mark.parametrize("deep", [False, True])
+async def test_older_execution_cannot_clear_newer_pending_plan(
+    client,  # noqa: F811
+    mock_runner,  # noqa: F811
+    monkeypatch,
+    deep,
+):
+    from datetime import UTC, datetime
+
+    from robothor.engine.chat import _get_session
+    from robothor.engine.models import PlanState
+
+    monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "enforce")
+    session = _get_session("agent:main:user:bob")
+    session.active_plan = PlanState(
+        plan_id="old",
+        plan_text="Old plan",
+        original_message="Old task",
+        deep_plan=deep,
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    newer = PlanState(
+        plan_id="new",
+        plan_text="New plan",
+        original_message="New task",
+        created_at=datetime.now(UTC).isoformat(),
+    )
+
+    async def execute(**kwargs):
+        session.active_plan = newer
+        return AgentRun(status=RunStatus.COMPLETED, output_text="Old task finished")
+
+    mock_runner.execute = AsyncMock(side_effect=execute)
+    mock_runner.execute_deep = AsyncMock(side_effect=execute)
+    with (
+        patch("robothor.engine.chat._auth_context", return_value=_member_auth("bob")),
+        patch("robothor.engine.chat.save_exchange_async", new_callable=AsyncMock),
+        patch("robothor.engine.chat.clear_plan_state_async", new_callable=AsyncMock),
+    ):
+        response = await client.post("/chat/plan/approve", json={"plan_id": "old"})
+    assert response.status_code == 200
+    assert session.active_plan is newer
+    assert newer.status == "pending"
