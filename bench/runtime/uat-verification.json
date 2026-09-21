@@ -4409,6 +4409,52 @@
         "bench/runtime/uat-runtime-task-snapshot-live-diagnostic.log"
       ],
       "note": "No qualifying speed improvement. Stored task body/status returned with snapshot scope; first successful native acknowledgement is not called recovered. Clean live trace still rereads task. Synthetic tenant prefix corrected without changing detector or dropping prior populations; broad regression overlapped both diagnostics."
+    },
+    "task_receipt_description": {
+      "base_revision": "06e12ef8220",
+      "tools": {
+        "passed": 63,
+        "seconds": 1.36
+      },
+      "search_and_registry": {
+        "passed": 166,
+        "seconds": 1.63
+      },
+      "diagnostics": [
+        {
+          "samples": 1,
+          "verified": 1,
+          "milliseconds": 51296.50349599979,
+          "provider_calls": 3,
+          "execution_calls": 2,
+          "create_calls": 1,
+          "extra_reads": 0,
+          "canonical_passed": 66,
+          "canonical_seconds": 89.43
+        },
+        {
+          "samples": 1,
+          "verified": 1,
+          "milliseconds": 30042.0235230049,
+          "provider_calls": 4,
+          "execution_calls": 2,
+          "create_calls": 1,
+          "extra_reads": 0,
+          "planning_ms": 22752.7636080049,
+          "execution_ms": 7214.200594993599,
+          "canonical_passed": 66,
+          "canonical_seconds": 67.75
+        }
+      ],
+      "artifacts": [
+        "bench/runtime/uat-runtime-task-description-diagnostic.jsonl",
+        "bench/runtime/uat-runtime-task-description-diagnostic.log",
+        "bench/runtime/uat-runtime-task-description-search.log",
+        "bench/runtime/uat-runtime-task-description-timed.jsonl",
+        "bench/runtime/uat-runtime-task-description-timed.log",
+        "bench/runtime/uat-runtime-task-description-tools.log"
+      ],
+      "note": "Tool description explains when stored snapshot covers verification, excludes later changes/additional fields/task completion. Two nonqualifying live diagnostics used the snapshot without extra reads. Timed request spent most of its latency in planning including selected fallback. This is evidence for the next investigation, not a p95 or causal speedup claim; retain 30-request failure and remeasure qualifying cohort after justified changes."
     }
   },
   "calendar": {
@@ -4607,7 +4653,7 @@
     "deadline_calendar": "uat-deadline-calendar.json"
   },
   "remaining": [
-    "The 30-request live installation-main task screen FAILED acceptance: 30 exact task records and confirmed actions, but only 27 completed replies; three native deadline cancellations after creation. p95 60.010 seconds (bootstrap interval 52.079\u201360.011), 21 requests over 30 seconds. Improve timely verified-result delivery and remeasure, preserving failures. This used selected models/settings, isolated instructions/memory and private tools, not full production prompt parity or a matched baseline comparison. Stored snapshot receipts and accurate fresh/recovered flags pass local regression checks, but the corrected one-request live diagnostic still used five model invocations and took 30.785 seconds. The old synthetic tenant prefix accidentally triggered credential warnings; use the corrected fixture for future screening, retain prior populations, and do not treat the unmatched diagnostics as a causal performance comparison.",
+    "The 30-request live installation-main task screen FAILED acceptance: 30 exact task records and confirmed actions, but only 27 completed replies; three native deadline cancellations after creation. p95 60.010 seconds (bootstrap interval 52.079\u201360.011), 21 requests over 30 seconds. Improve timely verified-result delivery and remeasure, preserving failures. This used selected models/settings, isolated instructions/memory and private tools, not full production prompt parity or a matched baseline comparison. Stored snapshot receipts and accurate fresh/recovered flags pass local regression checks, but the corrected one-request live diagnostic still used five model invocations and took 30.785 seconds. The old synthetic tenant prefix accidentally triggered credential warnings; use the corrected fixture for future screening, retain prior populations, and do not treat the unmatched diagnostics as a causal performance comparison. Conditional receipt guidance eliminated redundant reads in two later one-request diagnostics, but total times were 51.297 and 30.042 seconds. Per-invocation timing now preserves planning versus execution, including errors/cancellation. The timed request spent 22.753 seconds planning and 7.214 seconds executing/answering; investigate automatically enabled planning without changing explicitly requested plans or goal policy. No qualifying latency pass yet.",
     "The local 60-second policy now covers unclassified interactive setup/planning and unknown classification, then retains the same admission clock for simple execution. Explicit valid non-simple classifications retain their existing limits; exclusions protect goals and delegated/resumed work. Native compressed-clock tests and 31 main-profile synthetic task runs pass. Real-provider classification accuracy, workload-wide deadline behavior and production ingress timing remain unqualified; do not infer those from scripted responses.",
     "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded. Production ingress, selected-provider p95 across the representative workload, and mixed-load fallback operating limits are not certified. Dispatch-only improvements do not qualify complete request latency.",
     "Retain the current runtime: the tested bounded candidates failed required behavior and are not finalists. Any future replacement still needs behavior parity, matched configurations, 100-repetition finalist measurements and compatible checkpoint upgrades. No replacement is selected.",
@@ -4937,6 +4983,15 @@
   ],
   "remaining_before_task_snapshot": [
     "The 30-request live installation-main task screen FAILED acceptance: 30 exact task records and confirmed actions, but only 27 completed replies; three native deadline cancellations after creation. p95 60.010 seconds (bootstrap interval 52.079\u201360.011), 21 requests over 30 seconds. Improve timely verified-result delivery and remeasure, preserving failures. This used selected models/settings, isolated instructions/memory and private tools, not full production prompt parity or a matched baseline comparison.",
+    "The local 60-second policy now covers unclassified interactive setup/planning and unknown classification, then retains the same admission clock for simple execution. Explicit valid non-simple classifications retain their existing limits; exclusions protect goals and delegated/resumed work. Native compressed-clock tests and 31 main-profile synthetic task runs pass. Real-provider classification accuracy, workload-wide deadline behavior and production ingress timing remain unqualified; do not infer those from scripted responses.",
+    "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded. Production ingress, selected-provider p95 across the representative workload, and mixed-load fallback operating limits are not certified. Dispatch-only improvements do not qualify complete request latency.",
+    "Retain the current runtime: the tested bounded candidates failed required behavior and are not finalists. Any future replacement still needs behavior parity, matched configurations, 100-repetition finalist measurements and compatible checkpoint upgrades. No replacement is selected.",
+    "Calendar and CRM note/task audit recovery, actual task browser reconnection, concurrent native readback, full-daemon goal crash recovery and saved checkpoint continuation are locally verified. Fresh-context recovery after a persisted response, including cleared engine cache, is also verified. Other external-provider readbacks, recovery when both reply persistence and browser request identity are absent, and loaded-fleet performance remain incomplete. Initial ordinary HTTP chat now delivers stored verified task evidence after an interruption in a compressed-clock native test, and frontend tests display settled audited outcomes directly. Returned plan interruptions share formatting; plan exception paths, other ingress and live timing still need appropriate qualification. Whole-run completion is not inferred from action receipts.",
+    "The normal-chat unfinished-work/pause case is accepted. Manual acceptance of verified recovery and remaining goal controls is pending; automatic goal continuations do not count as acceptance.",
+    "The prior unmodified rollback target remains incompatible with saved handler responses. Backported target 15cd1835003 passes local current/backport/current daemon, state-preservation and separate native-admission checks. HTTP admission within the booted daemon, container/dependency rollback and hosted CI remain unverified. No production deployment is authorized."
+  ],
+  "remaining_before_task_description": [
+    "The 30-request live installation-main task screen FAILED acceptance: 30 exact task records and confirmed actions, but only 27 completed replies; three native deadline cancellations after creation. p95 60.010 seconds (bootstrap interval 52.079\u201360.011), 21 requests over 30 seconds. Improve timely verified-result delivery and remeasure, preserving failures. This used selected models/settings, isolated instructions/memory and private tools, not full production prompt parity or a matched baseline comparison. Stored snapshot receipts and accurate fresh/recovered flags pass local regression checks, but the corrected one-request live diagnostic still used five model invocations and took 30.785 seconds. The old synthetic tenant prefix accidentally triggered credential warnings; use the corrected fixture for future screening, retain prior populations, and do not treat the unmatched diagnostics as a causal performance comparison.",
     "The local 60-second policy now covers unclassified interactive setup/planning and unknown classification, then retains the same admission clock for simple execution. Explicit valid non-simple classifications retain their existing limits; exclusions protect goals and delegated/resumed work. Native compressed-clock tests and 31 main-profile synthetic task runs pass. Real-provider classification accuracy, workload-wide deadline behavior and production ingress timing remain unqualified; do not infer those from scripted responses.",
     "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded. Production ingress, selected-provider p95 across the representative workload, and mixed-load fallback operating limits are not certified. Dispatch-only improvements do not qualify complete request latency.",
     "Retain the current runtime: the tested bounded candidates failed required behavior and are not finalists. Any future replacement still needs behavior parity, matched configurations, 100-repetition finalist measurements and compatible checkpoint upgrades. No replacement is selected.",

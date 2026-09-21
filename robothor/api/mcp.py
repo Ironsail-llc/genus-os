@@ -542,7 +542,17 @@ def get_tool_definitions() -> list[dict[str, Any]]:
         # CRM Tasks
         {
             "name": "create_task",
-            "description": "Create a task in the CRM, optionally linked to a person or company. Use assignedToAgent for agent-to-agent coordination.",
+            "description": (
+                "Create a task in the CRM, optionally linked to a person or company. "
+                "Use assignedToAgent for agent-to-agent coordination. "
+                "If the response has verification='verified' and "
+                "verification_scope='stored_task_snapshot', the engine has already read "
+                "the stored id, title, body and status. Use those returned fields as "
+                "verification; do not call get_task solely to repeat that check. "
+                "Additional fields or later changes still need verification. "
+                "The snapshot confirms the recorded task, not completion of its work "
+                "or any remaining steps in the user's request."
+            ),
             "inputSchema": {
                 "type": "object",
                 "properties": {

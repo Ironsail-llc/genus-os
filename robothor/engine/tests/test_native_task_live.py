@@ -48,8 +48,27 @@ async def test_configured_live_native_task_requests(engine_config, monkeypatch):
     async def provider(**kwargs):
         assert kwargs["model"] in allowed_models, "Unconfigured model refused"
         assert len(calls) < 12, "Diagnostic provider-call limit reached"
-        calls.append({"model": kwargs["model"], "stream": bool(kwargs.get("stream"))})
-        return await original_provider(**kwargs)
+        planning = any(
+            isinstance(message.get("content"), str)
+            and message["content"].startswith(
+                "Analyze this task and produce a JSON execution plan."
+            )
+            for message in kwargs.get("messages", [])
+        )
+        call = {
+            "model": kwargs["model"],
+            "stream": bool(kwargs.get("stream")),
+            "phase": "planning" if planning else "execution",
+        }
+        calls.append(call)
+        started = time.perf_counter()
+        try:
+            return await original_provider(**kwargs)
+        except BaseException as exc:
+            call["error_type"] = type(exc).__name__
+            raise
+        finally:
+            call["duration_ms"] = (time.perf_counter() - started) * 1000
 
     monkeypatch.setattr("litellm.acompletion", provider)
     monkeypatch.setattr(dal, "get_connection", effects.get_connection)

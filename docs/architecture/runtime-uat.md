@@ -1629,3 +1629,7 @@ This addresses reporting, not the still-failed live latency target. Manual accep
 ## Clearer task receipts; speed still unproven
 
 The task tool now returns the stored body/status with its verified snapshot, and distinguishes fresh success from actual recovery. A corrected live diagnostic still made a redundant task read and took 30.785 seconds, so this is not a speed acceptance pass. An accidental credential-like pattern in synthetic tenant IDs was removed from the fixture; all earlier measurements remain retained. Multi-step work is not automatically ended by one verified task creation. Manual and overall acceptance remain open.
+
+## Avoid duplicate verification; investigate planning delay
+
+The task tool now explains when its stored snapshot already supplies verification. Two local live diagnostics used it without another task read, but took 51.297 and 30.042 seconds, so speed remains unqualified. Per-call timing in the latter found 22.753 seconds in automatic planning and 7.214 seconds in execution/answering. That is the next latency issue to investigate; it does not authorize skipping explicit plans or unfinished goal work. No deployment or manual acceptance occurred.
