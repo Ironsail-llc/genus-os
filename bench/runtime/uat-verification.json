@@ -5412,8 +5412,43 @@
         "Goal ExecutionContext fixture omitted required attempt identity.",
         "Wildcard tool name is unsupported; replaced with registered builtin schema names and kept >20 assertion."
       ],
-      "broad_regression": "running; /tmp/runtime-catalogue-routing-engine.log",
-      "screening_30": "running; /tmp/runtime-catalogue-routing-cohort.jsonl",
+      "broad_regression": {
+        "revision": "c342a50cd74",
+        "passed": 11443,
+        "skipped": 29,
+        "deselected": 231,
+        "warnings": 393,
+        "seconds": 470.31,
+        "log": "bench/runtime/uat-runtime-catalogue-routing-engine.log",
+        "product_unchanged_during_run": true
+      },
+      "screening_30": {
+        "source_revision": "c342a50cd74",
+        "harness_start_revision": "162bc075b9b",
+        "verified": 30,
+        "failed": 0,
+        "p50_ms": 16726.716318997205,
+        "p95_ms": 33871.71743500221,
+        "p95_ci95_ms": [
+          26465.540107004927,
+          36009.39667399507
+        ],
+        "over30": 3,
+        "over60": 0,
+        "planning_calls": 0,
+        "execution_model_calls": 60,
+        "duplicate_actions": 0,
+        "post_return_model_calls": 0,
+        "native_estimated_cost_usd": 0.113221,
+        "canonical": {
+          "passed": 77,
+          "skipped": 2,
+          "warnings": 1,
+          "seconds": 595.26
+        },
+        "screening_passed": false,
+        "report": "bench/runtime/uat-runtime-catalogue-routing-cohort-report.json"
+      },
       "performance_qualified": false,
       "report": "bench/runtime/uat-runtime-catalogue-routing-live-report.json"
     },
@@ -5438,6 +5473,17 @@
       },
       "report": "bench/runtime/uat-runtime-rollback-http-report.json",
       "scope": "Real loopback HTTP and running native daemon, private PostgreSQL/Redis, scripted provider with business handlers denied. Same dependency environment; does not qualify live-provider or container rollback."
+    },
+    "catalogue_deferred_tool_screen": {
+      "product_revision": "c342a50cd74",
+      "harness_start_revision": "ce263e29f88",
+      "samples": 30,
+      "status": "running",
+      "artifact": "/tmp/runtime-catalogue-deferred-cohort.jsonl",
+      "experimental_override": "ROBOTHOR_RIP_16_ENABLED=true inside the private live fixture only",
+      "model_selection_changed": false,
+      "installed_configuration_changed": false,
+      "performance_qualified": false
     }
   },
   "calendar": {
@@ -5676,7 +5722,7 @@
     ]
   },
   "remaining": [
-    "Current product c342a50cd74 changes ordinary interactive catalogue-only planning. Its focused and canonical checks pass; full engine regression and a 30-request selected-model compound screen are still running. Three live diagnostics pass but do not qualify performance. Earlier failed populations and fixed premature-finalization bugs remain in the evidence history.",
+    "Current product c342a50cd74 passes focused, canonical and full engine checks (11,443 engine tests). Its selected-model compound screen verified all 30 requests with no duplicate tasks or post-return calls, but p95 33.872 seconds exceeds the 30-second target (three requests over 30, none over 60). A separate thirty-request deferred-tool experiment is running in the private harness; no installed/default flag has changed. Earlier failed populations remain in the record.",
     "Complete the agreed representative local workload comparison against accepted integration baseline eea3252b1577e3f51e6d6a6216d6f242fd7ac4a1. Existing matched scripted standalone/compound task tests establish narrower behavior and overhead parity; no representative live comparison or general speed claim follows from them. The live task fixture uses selected profile settings but omits production instructions and memory.",
     "Qualify workload-wide selected-provider deadlines and latency, including requests competing with background goals. Local scripted HTTP acknowledgement/stop/progress and synthetic 1/5/20-tenant limits are measured; live-provider mixed-load limits remain unqualified. Preserve failures, unfinished attempts and uncertainty.",
     "Recheck the supported outcome-recovery inventory and remaining ingress/failure cases against action contracts. Calendar and CRM note/task readbacks, task browser reconnect, saved responses, native checkpoints and daemon goal recovery have evidence; these do not establish arbitrary external-provider recovery.",
