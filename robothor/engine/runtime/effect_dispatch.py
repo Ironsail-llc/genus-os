@@ -65,6 +65,10 @@ async def invoke(name, args, ctx, dispatch):
             "retryable": False,
         }
     if record["state"] == "confirmed":
+        if name == "create_task":
+            from robothor.engine.runtime.task_report import publish
+
+            await publish(context, record["id"], args, ctx, replayed=True)
         return {**record["resolution"]["result"], "effect_id": str(record["id"]), "recovered": True}
     if record["state"] == "finished":
         return {
@@ -73,7 +77,12 @@ async def invoke(name, args, ctx, dispatch):
             "recovered": True,
             "verification": "reported",
         }
-    return await _dispatch_reserved(context, record, name, args, ctx, dispatch)
+    result = await _dispatch_reserved(context, record, name, args, ctx, dispatch)
+    if name == "create_task":
+        from robothor.engine.runtime.task_report import publish
+
+        await publish(context, record["id"], args, ctx)
+    return result
 
 
 def _begin_outcome(*args):

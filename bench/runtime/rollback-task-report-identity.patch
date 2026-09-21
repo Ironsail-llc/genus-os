@@ -1,0 +1,107 @@
+diff --git a/robothor/engine/runtime/effect_dispatch.py b/robothor/engine/runtime/effect_dispatch.py
+index b300d51de5a..22a92de7c31 100644
+--- a/robothor/engine/runtime/effect_dispatch.py
++++ b/robothor/engine/runtime/effect_dispatch.py
+@@ -63,6 +63,13 @@ async def invoke(name, args, ctx, dispatch):
+         }
+     if record["state"] == "confirmed":
+         return {**record["resolution"]["result"], "effect_id": str(record["id"]), "recovered": True}
++    if record["state"] == "finished":
++        return {
++            **record["resolution"]["result"],
++            "effect_id": str(record["id"]),
++            "recovered": True,
++            "verification": "reported",
++        }
+     return await _dispatch_reserved(context, record, name, args, ctx, dispatch)
+ 
+ 
+@@ -145,9 +152,20 @@ async def _dispatch_reserved(context, record, name, args, ctx, dispatch):
+         and not result.get("error")
+     )
+     try:
+-        recorded = await asyncio.to_thread(
+-            effects.finish, context, record["id"], ctx.run_id, uncertain=uncertain or verify_success
+-        )
++        from robothor.engine.runtime import effect_results
++
++        if not uncertain and not verify_success and effect_results.cacheable(result):
++            recorded = await asyncio.to_thread(
++                effect_results.record, context, record["id"], ctx.run_id, result
++            )
++        else:
++            recorded = await asyncio.to_thread(
++                effects.finish,
++                context,
++                record["id"],
++                ctx.run_id,
++                uncertain=uncertain or verify_success,
++            )
+         if not recorded:
+             return _unknown(
+                 record["id"],
+diff --git a/robothor/engine/runtime/effect_results.py b/robothor/engine/runtime/effect_results.py
+new file mode 100644
+index 00000000000..05a44b97499
+--- /dev/null
++++ b/robothor/engine/runtime/effect_results.py
+@@ -0,0 +1,35 @@
++"""Retain acknowledged tool results without inventing independent verification."""
++
++from psycopg2.extras import Json
++
++from robothor.engine.runtime import effects
++
++
++def record(context, effect_id, run_id, result):
++    """Only the dispatched owner can atomically store a returned response."""
++    with effects.get_connection() as conn, conn.cursor() as cur:
++        cur.execute(
++            """UPDATE agent_runtime_effects SET state='finished',resolution=%s,
++               version=version+1,updated_at=now()
++               WHERE id=%s AND tenant_id=%s AND principal_id=%s AND request_id=%s
++                 AND run_id=%s AND state='dispatching'""",
++            (
++                Json({"source": "tool_response", "result": result}),
++                effect_id,
++                context.tenant_id,
++                context.principal_id,
++                context.request_id,
++                run_id,
++            ),
++        )
++        return cur.rowcount == 1
++
++
++def cacheable(result):
++    return (
++        isinstance(result, dict)
++        and not result.get("error")
++        and result.get("success") is not False
++        and result.get("ok") is not False
++        and result.get("status") not in ("error", "failed", "rejected")
++    )
+diff --git a/robothor/engine/runtime/effects.py b/robothor/engine/runtime/effects.py
+index 99899edc377..0ef86c96a52 100644
+--- a/robothor/engine/runtime/effects.py
++++ b/robothor/engine/runtime/effects.py
+@@ -36,6 +36,9 @@ class Verification:
+ 
+ 
+ def fingerprint(tool_name, arguments):
++    if tool_name == "create_task" and isinstance(arguments, dict):
++        # Presentation does not change the business action or its retry identity.
++        arguments = {key: value for key, value in arguments.items() if key != "finalReport"}
+     payload = json.dumps(
+         [tool_name, arguments], sort_keys=True, separators=(",", ":"), allow_nan=False
+     )
+@@ -58,7 +61,8 @@ def begin(context, run_id, agent_id, tool_name, arguments):
+         _lock(cur, context)
+         cur.execute(
+             """SELECT * FROM agent_runtime_effects WHERE tenant_id=%s AND principal_id=%s
+-               AND request_id=%s AND fingerprint=%s AND state='confirmed'
++               AND request_id=%s AND fingerprint=%s AND (state='confirmed'
++                 OR state='finished' AND resolution->>'source'='tool_response')
+                ORDER BY created_at DESC LIMIT 1""",
+             (context.tenant_id, context.principal_id, context.request_id, digest),
+         )

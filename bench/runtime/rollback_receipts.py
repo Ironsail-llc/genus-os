@@ -13,20 +13,35 @@ from robothor.engine.runtime.effects import fingerprint
 
 
 def probe(code, env, dsn):
+    saved = _probe_one(code, env, dsn)
+    task = _probe_one(code, env, dsn, task_report=True)
+    return {
+        **saved,
+        "task_report_identity_compatible": task["reuses_saved_response"],
+        "task_report_probe": task,
+    }
+
+
+def _probe_one(code, env, dsn, *, task_report=False):
     if "host=/tmp/runtime-migrated-" not in dsn:
         raise ValueError("Rollback receipt probe requires disposable canonical storage")
     identifier, request, run = (str(uuid4()) for _ in range(3))
     args = {"title": "Synthetic acknowledged action"}
+    tool, state = ("create_task", "confirmed") if task_report else ("synthetic_write", "finished")
+    if task_report:
+        args["finalReport"] = True
     with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute(
             """INSERT INTO agent_runtime_effects
             (id,tenant_id,principal_id,request_id,run_id,agent_id,tool_name,fingerprint,state,resolution)
-            VALUES (%s,'default','rollback-probe',%s,%s,'main','synthetic_write',%s,'finished',%s)""",
+            VALUES (%s,'default','rollback-probe',%s,%s,'main',%s,%s,%s,%s)""",
             (
                 identifier,
                 request,
                 run,
-                fingerprint("synthetic_write", args),
+                tool,
+                fingerprint(tool, args),
+                state,
                 Json({"source": "tool_response", "result": {"id": "synthetic", "ok": True}}),
             ),
         )
@@ -39,7 +54,7 @@ from robothor.engine.runtime import ExecutionContext, effects
 assert Path(effects.__file__).resolve().is_relative_to(Path.cwd())
 settings=json.loads(sys.argv[1])
 ctx=ExecutionContext('default','rollback-probe',settings['request'])
-row=effects.begin(ctx,settings['run'],'main','synthetic_write',settings['args'])
+row=effects.begin(ctx,settings['run'],'main',settings['tool'],settings['args'])
 print(json.dumps({'reuses_saved_response': str(row['id']) == settings['id'],
                   'state': row['state']}))
 """
@@ -48,7 +63,9 @@ print(json.dumps({'reuses_saved_response': str(row['id']) == settings['id'],
             sys.executable,
             "-c",
             script,
-            json.dumps({"request": request, "run": run, "args": args, "id": identifier}),
+            json.dumps(
+                {"request": request, "run": run, "args": args, "id": identifier, "tool": tool}
+            ),
         ],
         cwd=code,
         env=probe_env,

@@ -544,6 +544,10 @@ def get_tool_definitions() -> list[dict[str, Any]]:
             "name": "create_task",
             "description": (
                 "Create a task in the CRM, optionally linked to a person or company. "
+                "For a chat request that ONLY creates one task using title/body/status and reports "
+                "its saved details, prefer finalReport=true and call this tool alone. After durable "
+                "verification the host sends the factual final reply without another model turn. "
+                "Leave finalReport off when any other work, fields, explanation or comparison remains. "
                 "Use assignedToAgent for agent-to-agent coordination. "
                 "If the response has verification='verified' and "
                 "verification_scope='stored_task_snapshot', the engine has already read "
@@ -556,6 +560,11 @@ def get_tool_definitions() -> list[dict[str, Any]]:
             "inputSchema": {
                 "type": "object",
                 "properties": {
+                    "finalReport": {
+                        "type": "boolean",
+                        "description": "Finish this chat reply with the verified saved task details. Use only for a standalone title/body/status task creation that answers the entire request; never for executing the task itself or additional work. Unsupported contexts continue normally.",
+                        "default": False,
+                    },
                     "title": {"type": "string", "description": "Task title"},
                     "body": {"type": "string", "description": "Task description"},
                     "status": {

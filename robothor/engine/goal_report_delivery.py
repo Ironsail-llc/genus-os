@@ -10,9 +10,12 @@ REPORT_TOOL = "report_pursuit_goal"
 
 
 def report_scope(req, names):
+    from robothor.engine.runtime.task_report import requested
+
     run = req.session.run
+    task_report = requested(req, names)
     enabled = (
-        names == [REPORT_TOOL]
+        (names == [REPORT_TOOL] or task_report)
         and run.agent_id == "main"
         and str(run.trigger_type) in {"webchat", "telegram"}
         and not run.parent_run_id
@@ -21,12 +24,19 @@ def report_scope(req, names):
         and binding.get() is None
         and not getattr(req.session, "routine_operation_id", None)
     )
-    return report_turn(run.tenant_id, run.agent_id, run.id, enabled=enabled)
+    return report_turn(
+        run.tenant_id,
+        run.agent_id,
+        run.id,
+        enabled=enabled,
+        tool_name="create_task" if task_report else REPORT_TOOL,
+    )
 
 
 def record_report_turn(state, session, errors):
     message = consume_report(state, session.run)
     session.pending_goal_report = message if not errors else None
+    session.pending_goal_report_tool = state.tool_name
 
 
 def finish_goal_report(session):
@@ -34,6 +44,7 @@ def finish_goal_report(session):
     session.pending_goal_report = None
     if message is None or session.has_pending_control:
         return False
+    tool = getattr(session, "pending_goal_report_tool", REPORT_TOOL)
     now = datetime.now(UTC)
     session._step_counter += 1
     session.run.steps.append(
@@ -41,8 +52,11 @@ def finish_goal_report(session):
             run_id=session.run.id,
             step_number=session._step_counter,
             step_type=StepType.CHECKPOINT,
-            tool_name=REPORT_TOOL,
-            tool_output={"origin": "trusted_goal_report", "output": message},
+            tool_name=tool,
+            tool_output={
+                "origin": "trusted_task_report" if tool == "create_task" else "trusted_goal_report",
+                "output": message,
+            },
             started_at=now,
             completed_at=now,
             duration_ms=0,

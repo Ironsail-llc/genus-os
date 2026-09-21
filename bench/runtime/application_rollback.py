@@ -22,7 +22,7 @@ from bench.runtime.restart_state import seed, verify
 # The accepted integration baseline predates those controls and is not a safe
 # rollback target for sessions admitted by the modernization implementation.
 TARGET_BASE = "b1671409892"
-TARGET = "15cd1835003"
+TARGET = "5a8ce0323d8"
 
 
 def drill(root, env, dsn):
@@ -56,8 +56,9 @@ def drill(root, env, dsn):
         "current": probe(current, env, dsn),
         "rollback": probe(checkout, env, dsn),
     }
-    assert compatibility["current"]["reuses_saved_response"], compatibility
-    if not compatibility["rollback"]["reuses_saved_response"]:
+    required = ("reuses_saved_response", "task_report_identity_compatible")
+    assert all(compatibility["current"][key] for key in required), compatibility
+    if not all(compatibility["rollback"][key] for key in required):
         return {
             "target_revision": target,
             "status": "rejected_incompatible_receipt_recovery",

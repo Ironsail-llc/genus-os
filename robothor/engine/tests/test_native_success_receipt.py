@@ -32,11 +32,15 @@ async def test_successful_creation_returns_same_receipt_to_replacement_worker(
     results = []
     token = active_context.set(ctx)
     try:
-        for _ in range(2):
+        for attempt in range(2):
             results.append(  # noqa: PERF401 — sequential replacement-worker admissions
                 await dispatch._execute_tool(
                     tool,
-                    {"title": "Once", "body": "Synthetic"},
+                    {
+                        "title": "Once",
+                        "body": "Synthetic",
+                        **({"finalReport": True} if tool == "create_task" and attempt == 0 else {}),
+                    },
                     agent_id="main",
                     run_id=str(uuid4()),
                     tenant_id=tenant,

@@ -1,6 +1,6 @@
 {
   "scope": "Native chat route/runner and goal handlers; scripted model, private PostgreSQL, no business connectors or scheduler.",
-  "manual_acceptance": false,
+  "manual_acceptance": true,
   "transcript": [
     {
       "user": "What's finished, and what's still left?",
@@ -42,5 +42,11 @@
     "DONE",
     "TODO"
   ],
-  "final_child_status": "paused"
+  "final_child_status": "paused",
+  "manual_review": {
+    "accepted": true,
+    "date": "2026-09-21",
+    "user_quote": "Yes, that matches",
+    "scope": "Normal-chat pause propagates to parent and unfinished child; remaining task stays TODO and neither goal is marked complete."
+  }
 }

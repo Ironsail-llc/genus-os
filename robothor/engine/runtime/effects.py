@@ -36,6 +36,9 @@ class Verification:
 
 
 def fingerprint(tool_name, arguments):
+    if tool_name == "create_task" and isinstance(arguments, dict):
+        # Presentation does not change the business action or its retry identity.
+        arguments = {key: value for key, value in arguments.items() if key != "finalReport"}
     payload = json.dumps(
         [tool_name, arguments], sort_keys=True, separators=(",", ":"), allow_nan=False
     )
