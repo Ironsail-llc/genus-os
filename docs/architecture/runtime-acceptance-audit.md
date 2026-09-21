@@ -32,7 +32,7 @@ The user need not identify whether an ordinary request became a task or a goal.
 | Tenant isolation / delegated controls / memory | Native engine and goal suites, including RLS and tenant/control tests | Native behavior tested; no equivalent candidate evidence |
 | Provider fallback | Native injected-primary-failure verified-outcome test | One verified write after fallback and no post-success calls; real configured-chain outage/load behavior remains unqualified |
 | Everyday requests competing with goals | `uat-mixed-runtime-final.jsonl` | 1,560 verified synthetic actions across 1/5/20 tenants; local resource limits published, not production capacity |
-| No introduced regressions | At `45ec6dd16d7`: broad engine 11,119 passed, zero failed; goals 85 passed; canonical native/browser 33 passed. Earlier frontend evidence, scopes and failure logs retained in `uat-verification.json` | Current backend suites pass in one broad invocation. Existing network coroutine warning remains; these scopes do not establish full acceptance |
+| No introduced regressions | At `90617b97d52`: broad engine 11,126 passed, zero failed. Latest frontend 1,661 passed; canonical native/browser 33 passed. Prior goal results, scopes and failure logs retained in `uat-verification.json` | The broad engine invocation excludes slow/integration/LLM/e2e/smoke tests; selected canonical integrations are verified separately. Existing network coroutine warning remains; these scopes do not establish full acceptance |
 
 ## Alternative runtimes and rollout
 
@@ -669,3 +669,10 @@ At `ad65df0b14b`, both installed candidate adapters were tested with their own r
 The native new-admission preservation drill now includes the independent approval receipt and early request Stop. A completed synthetic new request makes one model call and zero business calls while leaving those records, the earlier cancelled run/control/checkpoint, paused goal/budget and uncertain calendar operation unchanged. All 33 canonical native/browser integrations pass (24.14s, one worker-only skip and one dependency warning). Evidence is in `bench/runtime/uat-approval-admission-preservation.json`.
 
 This is record preservation under new native admission, not an application routing switch or binary downgrade. An application rollback drill remains a future promotion gate; no candidate is eligible for that promotion now. Product acceptance work continues independently, and the repeated-confirmation normal-chat review remains pending. No production deployment or action occurred.
+
+
+## Broad engine regression after approval recovery
+
+The single broad engine invocation at `90617b97d52` passes 11,126 tests with zero failures, 29 skipped, 185 deselected and 393 warnings (359.83s). Selection excludes slow, integration, LLM, e2e and smoke markers. Product code and selected tests were unchanged during the run. Later edits were documentation, bench adapter tests and the separately verified integration-marked admission-preservation test, which this selection excludes. The existing unawaited connect_tcp warning remains; its collection site is not evidence of its initiating path.
+
+`bench/runtime/uat-engine-approval-recovery-regression.json` and `uat-verification.json` preserve the exact scope and log. This refreshes broad regression evidence after the receipt/recovery changes without claiming live-provider or full product acceptance. The current engine remains selected; manual repeated-confirmation review and remaining product acceptance gates are still open. No production deployment occurred.

@@ -9,16 +9,16 @@
   "replacement_selected": false,
   "checks": {
     "engine": {
-      "revision": "45ec6dd16d7",
-      "passed": 11119,
+      "revision": "90617b97d52",
+      "passed": 11126,
       "failed": 0,
       "skipped": 29,
       "deselected": 185,
       "warnings": 393,
-      "seconds": 352.57,
+      "seconds": 359.83,
       "selection": "not slow and not integration and not llm and not e2e and not smoke",
-      "log": "/tmp/runtime-engine-regression-deep-controls.log",
-      "note": "Single clean broad invocation after deep callback controls, approval cache-race fix and dynamic registry drain. Source code/tests unchanged during run; committed while it ran. Existing connect_tcp unawaited-coroutine warning remains; its collection location is not evidence of the initiating path."
+      "log": "/tmp/runtime-engine-regression-approval-recovery.log",
+      "note": "Single clean invocation after independent approval receipts, delayed evidence reporting and normal-chat confirmation acceptance test. Product source and selected tests were unchanged during the run. Later changes were documentation, bench adapter tests, and the separately tested integration-marked native admission preservation test, which this invocation deselects. Existing connect_tcp unawaited-coroutine warning remains; its collection site does not establish the initiating path."
     },
     "frontend": {
       "revision": "2d5b4c2985d",
@@ -2095,6 +2095,18 @@
     "approval_admission_preservation": {
       "revision": "ad65df0b14b",
       "artifact": "bench/runtime/uat-approval-admission-preservation.json"
+    },
+    "engine_before_approval_recovery": {
+      "revision": "45ec6dd16d7",
+      "passed": 11119,
+      "failed": 0,
+      "skipped": 29,
+      "deselected": 185,
+      "warnings": 393,
+      "seconds": 352.57,
+      "selection": "not slow and not integration and not llm and not e2e and not smoke",
+      "log": "/tmp/runtime-engine-regression-deep-controls.log",
+      "note": "Single clean broad invocation after deep callback controls, approval cache-race fix and dynamic registry drain. Source code/tests unchanged during run; committed while it ran. Existing connect_tcp unawaited-coroutine warning remains; its collection location is not evidence of the initiating path."
     }
   },
   "calendar": {

@@ -1,0 +1,12 @@
+{
+  "revision": "90617b97d52",
+  "passed": 11126,
+  "failed": 0,
+  "skipped": 29,
+  "deselected": 185,
+  "warnings": 393,
+  "seconds": 359.83,
+  "selection": "not slow and not integration and not llm and not e2e and not smoke",
+  "log": "/tmp/runtime-engine-regression-approval-recovery.log",
+  "note": "Single clean invocation after independent approval receipts, delayed evidence reporting and normal-chat confirmation acceptance test. Product source and selected tests were unchanged during the run. Later changes were documentation, bench adapter tests, and the separately tested integration-marked native admission preservation test, which this invocation deselects. Existing connect_tcp unawaited-coroutine warning remains; its collection site does not establish the initiating path."
+}
