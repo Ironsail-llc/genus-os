@@ -13,7 +13,7 @@ def family_effect_receipts(cur, run, auth):
         ) SELECT e.id,e.agent_id,e.tool_name,e.state,e.resolution
           FROM agent_runtime_effects e JOIN family f ON e.run_id=f.id::text
           WHERE e.tenant_id=%s AND e.principal_id=%s
-            AND e.state IN ('prepared','dispatching','uncertain','confirmed')
+            AND e.state IN ('prepared','dispatching','uncertain','confirmed','not_applied')
           ORDER BY e.created_at,e.id""",
         (
             run["id"],
@@ -65,6 +65,8 @@ def effect_summary(receipt):
             text = "The recorded action is confirmed by its saved verification evidence."
     elif receipt["status"] == "prepared":
         text = "The action was recorded for execution; the audit does not show dispatch yet."
+    elif receipt["status"] == "not_applied":
+        text = "The audit confirms that this action was not applied."
     else:
         text = "The audit records an action whose outcome is still unresolved."
     return f"{text} (Operation {receipt['operation_id']})"

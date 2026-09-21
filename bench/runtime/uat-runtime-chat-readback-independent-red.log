@@ -1,0 +1,34 @@
+..........F                                                              [100%]
+=================================== FAILURES ===================================
+________ test_calendar_outage_does_not_prevent_independent_crm_readback ________
+
+crm_records = <function records.<locals>.connect at 0xee5a99b0ef00>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0xee5aa27c7070>
+
+    def test_calendar_outage_does_not_prevent_independent_crm_readback(crm_records, monkeypatch):
+        from robothor.engine import calendar_reconciliation, chat_recovery
+    
+        auth, client = identity(), str(uuid4())
+        run = insert(crm_records, auth, client, status="failed")
+        ctx, row = record(crm_records, auth, run, "create_task", "uncertain")
+        outcome = chat_recovery.read_outcome(auth, "web:main", client)
+        outcome["effects"].insert(0, {"status": "executing", "operation_id": str(uuid4()), "agent_id": "main"})
+        monkeypatch.setattr(chat_recovery, "read_outcome", lambda *a: outcome)
+    
+        def calendar_unavailable(*args):
+            raise OSError("Synthetic provider unavailable")
+    
+        monkeypatch.setattr(calendar_reconciliation, "reconcile_record", calendar_unavailable)
+        calendar_reconciliation.reconcile_outcome(auth, "web:main", client)
+>       assert effects.read(ctx, row["id"])["state"] == "confirmed"
+E       AssertionError: assert 'uncertain' == 'confirmed'
+E         
+E         - confirmed
+E         + uncertain
+
+robothor/engine/tests/test_chat_requested_readback.py:143: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  robothor.engine.calendar_reconciliation:calendar_reconciliation.py:80 Action recovery read deferred (OSError)
+=========================== short test summary info ============================
+FAILED robothor/engine/tests/test_chat_requested_readback.py::test_calendar_outage_does_not_prevent_independent_crm_readback
+1 failed, 10 passed in 3.95s

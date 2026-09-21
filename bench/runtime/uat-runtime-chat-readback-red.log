@@ -1,0 +1,7 @@
+Traceback (most recent call last):
+  File "/tmp/runtime-chat-readback-red.py", line 16, in <module>
+    readback.assert_called_once()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/home/philip/.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/unittest/mock.py", line 964, in assert_called_once
+    raise AssertionError(msg)
+AssertionError: Expected 'recover' to have been called once. Called 0 times.

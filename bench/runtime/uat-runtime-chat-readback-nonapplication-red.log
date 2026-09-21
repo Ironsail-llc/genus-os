@@ -1,0 +1,23 @@
+.........F..                                                             [100%]
+=================================== FAILURES ===================================
+______ test_nonapplication_remains_visible_and_overrides_a_success_claim _______
+
+crm_records = <function records.<locals>.connect at 0xf07bd504a770>
+
+    def test_nonapplication_remains_visible_and_overrides_a_success_claim(crm_records):
+        from robothor.engine import chat_recovery
+        from robothor.engine.runtime.chat_effect_recovery import reconcile_record
+    
+        auth, client = identity(), str(uuid4())
+        run = insert(crm_records, auth, client, output_text="Everything was completed.")
+        ctx, row = record(crm_records, auth, run, "create_task", "prepared", stored=False)
+        reconcile_record(str(row["id"]), auth)
+        result = chat_recovery.read_outcome(auth, "web:main", client)
+        assert effects.read(ctx, row["id"])["state"] == "not_applied"
+>       assert not result["reconciliation_pending"] and not result["verified"]
+E       assert (not False and not True)
+
+robothor/engine/tests/test_chat_requested_readback.py:128: AssertionError
+=========================== short test summary info ============================
+FAILED robothor/engine/tests/test_chat_requested_readback.py::test_nonapplication_remains_visible_and_overrides_a_success_claim
+1 failed, 11 passed in 3.82s

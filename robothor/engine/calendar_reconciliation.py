@@ -58,7 +58,7 @@ def reconcile_record(operation_id, auth, agent_id):
 
 
 def reconcile_outcome(auth, session_key, client_id):
-    """Re-resolve the original scoped run before doing provider reads in background."""
+    """Re-resolve the original scoped run before calendar or CRM readback."""
     from robothor.engine.chat_recovery import read_outcome
 
     try:
@@ -66,9 +66,21 @@ def reconcile_outcome(auth, session_key, client_id):
         if not outcome.get("terminal") or not outcome.get("reconciliation_pending"):
             return
         for effect in outcome.get("effects", []):
-            if effect["status"] == "executing":
-                reconcile_record(effect["operation_id"], auth, effect["agent_id"])
+            try:
+                if effect["status"] == "executing":
+                    reconcile_record(effect["operation_id"], auth, effect["agent_id"])
+                elif effect.get("kind") == "runtime_effect" and effect.get(
+                    "reconciliation_pending"
+                ):
+                    from robothor.engine.runtime.chat_effect_recovery import (
+                        reconcile_record as recover_effect,
+                    )
+
+                    recover_effect(effect["operation_id"], auth)
+            except Exception as exc:
+                # An unavailable provider must not hide independent saved results.
+                logger.warning("Action recovery read deferred (%s)", type(exc).__name__)
     except Exception as exc:
         # Leave the uncertainty barrier intact; the next chat poll can retry a
         # read. Do not expose provider credentials or dispatch a repair action.
-        logger.warning("Calendar recovery read deferred (%s)", type(exc).__name__)
+        logger.warning("Action recovery read deferred (%s)", type(exc).__name__)

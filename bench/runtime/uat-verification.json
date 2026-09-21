@@ -9,16 +9,16 @@
   "replacement_selected": false,
   "checks": {
     "engine": {
-      "revision": "5ccfb199dcb",
-      "passed": 11262,
+      "revision": "d249494d752",
+      "passed": 11272,
       "failed": 0,
       "skipped": 29,
-      "deselected": 206,
+      "deselected": 211,
       "warnings": 393,
-      "seconds": 394.96,
+      "seconds": 392.39,
       "selection": "not slow and not integration and not llm and not e2e and not smoke",
-      "log": "bench/runtime/uat-runtime-engine-classification-regression.log",
-      "note": "Product source and collected tests unchanged throughout run. Includes current task chat receipts and authoritative core-write classification. Existing warnings retained; selected canonical/browser integrations verified separately. No full acceptance claim."
+      "log": "bench/runtime/uat-runtime-unfinished-task-engine-regression.log",
+      "note": "Product source and collected tests unchanged throughout invocation; new uncollected readback tests were added separately while it ran. Verifies unfinished-task finalization. Predates subsequent chat-triggered CRM recovery and nonapplication receipt changes, which have their own focused and canonical evidence. Existing warning/skip counts retained."
     },
     "frontend": {
       "base_revision": "56aa76e6aa0",
@@ -3782,6 +3782,51 @@
       "native_cases": "Actual runner, private CRM, task protocol and todo list enabled; unfinished and completed checklists in default and isolated tenants; scripted provider only.",
       "earlier_failures": "Before: default-tenant task incorrectly DONE; isolated-tenant assertion used wrong DAL projection key, corrected to SQL. Intermediate focused test expected no explicit tenant; expectation and stale persistence mock corrected. Both failure logs retained.",
       "limits": "Latest broad engine run predates this product change. Passing checklist closure retains existing off/observe verification policy, not a new guarantee of independent outcome proof. No live provider calls or production deployment; manual acceptance pending."
+    },
+    "engine_before_unfinished_task": {
+      "revision": "5ccfb199dcb",
+      "passed": 11262,
+      "failed": 0,
+      "skipped": 29,
+      "deselected": 206,
+      "warnings": 393,
+      "seconds": 394.96,
+      "selection": "not slow and not integration and not llm and not e2e and not smoke",
+      "log": "bench/runtime/uat-runtime-engine-classification-regression.log",
+      "note": "Product source and collected tests unchanged throughout run. Includes current task chat receipts and authoritative core-write classification. Existing warnings retained; selected canonical/browser integrations verified separately. No full acceptance claim."
+    },
+    "chat_requested_crm_readback": {
+      "base_revision": "d249494d752",
+      "product_changed": true,
+      "finding": "Chat triggered immediate calendar readback but not CRM readback; unresolved CRM writes could wait for the 20-minute stale-run cleanup cycle. HTTP probes and actual private committed task/note writes reproduced the gap.",
+      "behavior": "Authenticated original-request polling triggers supported CRM evidence readback without business dispatch or model calls. Prepared/dispatched effects are reclassified only if their own tenant/principal-scoped owner is terminal. Unrelated requests and live workers are preserved. An unavailable calendar provider cannot block independent CRM readback. Definitively non-applied effects remain visible and refute stale success prose.",
+      "focused": {
+        "passed": 115,
+        "seconds": 15.15,
+        "log": "bench/runtime/uat-runtime-chat-readback-focused-complete.log"
+      },
+      "canonical": {
+        "passed": 52,
+        "skipped": 2,
+        "warnings": 1,
+        "seconds": 18.35,
+        "log": "bench/runtime/uat-runtime-chat-readback-canonical-complete.log"
+      },
+      "preserved_failures": [
+        "Initial callback probe: expected task readback was never called.",
+        "Initial HTTP unit suite: four real pending-after-poll failures; four additional tests referenced the not-yet-created helper.",
+        "Initial canonical run: two missing auth fixture failures (503); corrected middleware before evaluating behavior.",
+        "Corrected canonical red run: two actual committed CRM outcomes stayed unresolved after authenticated polling; 50 other cases passed.",
+        "Independent outage test: calendar exception skipped valid CRM readback; one failed, ten passed.",
+        "Nonapplication test: dropping not_applied audit entry restored a stale verified success claim; one failed, eleven passed."
+      ],
+      "limits": "Private local SQL/ASGI tests; canonical cases use actual native CRM creation, injected acknowledgement/readback loss and no live model/provider. No loaded recovery polling performance claim or universal external-provider verifier. Broad engine result predates this change; overall/manual acceptance remain open.",
+      "frontend": {
+        "passed": 20,
+        "files": 2,
+        "seconds": 1.36,
+        "log": "bench/runtime/uat-runtime-chat-readback-frontend.log"
+      }
     }
   },
   "calendar": {

@@ -1,0 +1,192 @@
+FFFFFFFF                                                                 [100%]
+=================================== FAILURES ===================================
+_ test_chat_poll_reads_back_original_effect_without_reexecution[uncertain-create_task] _
+
+crm_records = <function records.<locals>.connect at 0xff9c8e25e770>
+chat_app = <fastapi.applications.FastAPI object at 0xff9c8e28c2f0>
+mock_runner = <MagicMock id='281047865715952'>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0xff9c8e349f30>
+tool = 'create_task', state = 'uncertain'
+
+    @pytest.mark.parametrize("tool", ["create_task", "create_note"])
+    @pytest.mark.parametrize("state", ["uncertain", "dispatching"])
+    async def test_chat_poll_reads_back_original_effect_without_reexecution(
+        crm_records, chat_app, mock_runner, monkeypatch, tool, state  # noqa: F811
+    ):
+        auth, client = identity(), str(uuid4())
+        run = insert(crm_records, auth, client, status="failed", verified_status=None)
+        ctx, row = record(crm_records, auth, run, tool, state)
+        # Even another request by this same user must not be reconciled by this poll.
+        unrelated_run = insert(crm_records, auth, str(uuid4()), status="failed")
+        unrelated_ctx, unrelated = record(crm_records, auth, unrelated_run, tool, state)
+        monkeypatch.setattr(chat, "_auth_context", lambda _: auth)
+        monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "off")
+        forbidden = AsyncMock(side_effect=AssertionError("Recovery cannot run a model or tool"))
+        monkeypatch.setattr("litellm.acompletion", forbidden)
+        monkeypatch.setattr("robothor.engine.tools.dispatch._execute_tool", forbidden)
+        async with AsyncClient(transport=ASGITransport(app=chat_app), base_url="http://test") as http:
+            first = await http.get("/chat/outcome", params={"request_id": client, "session_key": "web:main"})
+            assert first.status_code == 200 and first.json()["reconciliation_pending"]
+            second = await http.get("/chat/outcome", params={"request_id": client, "session_key": "web:main"})
+        result = second.json()
+        assert result["state"] == "failed" and result["terminal"]
+>       assert not result["reconciliation_pending"] and not result["verified"]
+E       assert (not True)
+
+robothor/engine/tests/test_chat_requested_readback.py:70: AssertionError
+_ test_chat_poll_reads_back_original_effect_without_reexecution[uncertain-create_note] _
+
+crm_records = <function records.<locals>.connect at 0xff9c8e25dd20>
+chat_app = <fastapi.applications.FastAPI object at 0xff9c86140ec0>
+mock_runner = <MagicMock id='281047865019760'>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0xff9c86098950>
+tool = 'create_note', state = 'uncertain'
+
+    @pytest.mark.parametrize("tool", ["create_task", "create_note"])
+    @pytest.mark.parametrize("state", ["uncertain", "dispatching"])
+    async def test_chat_poll_reads_back_original_effect_without_reexecution(
+        crm_records, chat_app, mock_runner, monkeypatch, tool, state  # noqa: F811
+    ):
+        auth, client = identity(), str(uuid4())
+        run = insert(crm_records, auth, client, status="failed", verified_status=None)
+        ctx, row = record(crm_records, auth, run, tool, state)
+        # Even another request by this same user must not be reconciled by this poll.
+        unrelated_run = insert(crm_records, auth, str(uuid4()), status="failed")
+        unrelated_ctx, unrelated = record(crm_records, auth, unrelated_run, tool, state)
+        monkeypatch.setattr(chat, "_auth_context", lambda _: auth)
+        monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "off")
+        forbidden = AsyncMock(side_effect=AssertionError("Recovery cannot run a model or tool"))
+        monkeypatch.setattr("litellm.acompletion", forbidden)
+        monkeypatch.setattr("robothor.engine.tools.dispatch._execute_tool", forbidden)
+        async with AsyncClient(transport=ASGITransport(app=chat_app), base_url="http://test") as http:
+            first = await http.get("/chat/outcome", params={"request_id": client, "session_key": "web:main"})
+            assert first.status_code == 200 and first.json()["reconciliation_pending"]
+            second = await http.get("/chat/outcome", params={"request_id": client, "session_key": "web:main"})
+        result = second.json()
+        assert result["state"] == "failed" and result["terminal"]
+>       assert not result["reconciliation_pending"] and not result["verified"]
+E       assert (not True)
+
+robothor/engine/tests/test_chat_requested_readback.py:70: AssertionError
+_ test_chat_poll_reads_back_original_effect_without_reexecution[dispatching-create_task] _
+
+crm_records = <function records.<locals>.connect at 0xff9c84d6d2d0>
+chat_app = <fastapi.applications.FastAPI object at 0xff9c86142120>
+mock_runner = <MagicMock id='281047729445520'>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0xff9c856ae360>
+tool = 'create_task', state = 'dispatching'
+
+    @pytest.mark.parametrize("tool", ["create_task", "create_note"])
+    @pytest.mark.parametrize("state", ["uncertain", "dispatching"])
+    async def test_chat_poll_reads_back_original_effect_without_reexecution(
+        crm_records, chat_app, mock_runner, monkeypatch, tool, state  # noqa: F811
+    ):
+        auth, client = identity(), str(uuid4())
+        run = insert(crm_records, auth, client, status="failed", verified_status=None)
+        ctx, row = record(crm_records, auth, run, tool, state)
+        # Even another request by this same user must not be reconciled by this poll.
+        unrelated_run = insert(crm_records, auth, str(uuid4()), status="failed")
+        unrelated_ctx, unrelated = record(crm_records, auth, unrelated_run, tool, state)
+        monkeypatch.setattr(chat, "_auth_context", lambda _: auth)
+        monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "off")
+        forbidden = AsyncMock(side_effect=AssertionError("Recovery cannot run a model or tool"))
+        monkeypatch.setattr("litellm.acompletion", forbidden)
+        monkeypatch.setattr("robothor.engine.tools.dispatch._execute_tool", forbidden)
+        async with AsyncClient(transport=ASGITransport(app=chat_app), base_url="http://test") as http:
+            first = await http.get("/chat/outcome", params={"request_id": client, "session_key": "web:main"})
+            assert first.status_code == 200 and first.json()["reconciliation_pending"]
+            second = await http.get("/chat/outcome", params={"request_id": client, "session_key": "web:main"})
+        result = second.json()
+        assert result["state"] == "failed" and result["terminal"]
+>       assert not result["reconciliation_pending"] and not result["verified"]
+E       assert (not True)
+
+robothor/engine/tests/test_chat_requested_readback.py:70: AssertionError
+_ test_chat_poll_reads_back_original_effect_without_reexecution[dispatching-create_note] _
+
+crm_records = <function records.<locals>.connect at 0xff9c84d6ec40>
+chat_app = <fastapi.applications.FastAPI object at 0xff9c86142f90>
+mock_runner = <MagicMock id='281047729448544'>
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0xff9c84dd8150>
+tool = 'create_note', state = 'dispatching'
+
+    @pytest.mark.parametrize("tool", ["create_task", "create_note"])
+    @pytest.mark.parametrize("state", ["uncertain", "dispatching"])
+    async def test_chat_poll_reads_back_original_effect_without_reexecution(
+        crm_records, chat_app, mock_runner, monkeypatch, tool, state  # noqa: F811
+    ):
+        auth, client = identity(), str(uuid4())
+        run = insert(crm_records, auth, client, status="failed", verified_status=None)
+        ctx, row = record(crm_records, auth, run, tool, state)
+        # Even another request by this same user must not be reconciled by this poll.
+        unrelated_run = insert(crm_records, auth, str(uuid4()), status="failed")
+        unrelated_ctx, unrelated = record(crm_records, auth, unrelated_run, tool, state)
+        monkeypatch.setattr(chat, "_auth_context", lambda _: auth)
+        monkeypatch.setenv("ROBOTHOR_PER_USER_SESSIONS", "off")
+        forbidden = AsyncMock(side_effect=AssertionError("Recovery cannot run a model or tool"))
+        monkeypatch.setattr("litellm.acompletion", forbidden)
+        monkeypatch.setattr("robothor.engine.tools.dispatch._execute_tool", forbidden)
+        async with AsyncClient(transport=ASGITransport(app=chat_app), base_url="http://test") as http:
+            first = await http.get("/chat/outcome", params={"request_id": client, "session_key": "web:main"})
+            assert first.status_code == 200 and first.json()["reconciliation_pending"]
+            second = await http.get("/chat/outcome", params={"request_id": client, "session_key": "web:main"})
+        result = second.json()
+        assert result["state"] == "failed" and result["terminal"]
+>       assert not result["reconciliation_pending"] and not result["verified"]
+E       assert (not True)
+
+robothor/engine/tests/test_chat_requested_readback.py:70: AssertionError
+______ test_readback_preserves_unresolved_or_foreign_effects[live-child] _______
+
+crm_records = <function records.<locals>.connect at 0xff9c84dfdb10>
+case = 'live-child'
+
+    @pytest.mark.parametrize("case", ["live-child", "foreign-tenant", "foreign-user", "missing-record"])
+    def test_readback_preserves_unresolved_or_foreign_effects(crm_records, case):
+>       from robothor.engine.runtime.chat_effect_recovery import reconcile_record
+E       ModuleNotFoundError: No module named 'robothor.engine.runtime.chat_effect_recovery'
+
+robothor/engine/tests/test_chat_requested_readback.py:81: ModuleNotFoundError
+____ test_readback_preserves_unresolved_or_foreign_effects[foreign-tenant] _____
+
+crm_records = <function records.<locals>.connect at 0xff9c84dfcd50>
+case = 'foreign-tenant'
+
+    @pytest.mark.parametrize("case", ["live-child", "foreign-tenant", "foreign-user", "missing-record"])
+    def test_readback_preserves_unresolved_or_foreign_effects(crm_records, case):
+>       from robothor.engine.runtime.chat_effect_recovery import reconcile_record
+E       ModuleNotFoundError: No module named 'robothor.engine.runtime.chat_effect_recovery'
+
+robothor/engine/tests/test_chat_requested_readback.py:81: ModuleNotFoundError
+_____ test_readback_preserves_unresolved_or_foreign_effects[foreign-user] ______
+
+crm_records = <function records.<locals>.connect at 0xff9c84dfd850>
+case = 'foreign-user'
+
+    @pytest.mark.parametrize("case", ["live-child", "foreign-tenant", "foreign-user", "missing-record"])
+    def test_readback_preserves_unresolved_or_foreign_effects(crm_records, case):
+>       from robothor.engine.runtime.chat_effect_recovery import reconcile_record
+E       ModuleNotFoundError: No module named 'robothor.engine.runtime.chat_effect_recovery'
+
+robothor/engine/tests/test_chat_requested_readback.py:81: ModuleNotFoundError
+____ test_readback_preserves_unresolved_or_foreign_effects[missing-record] _____
+
+crm_records = <function records.<locals>.connect at 0xff9c84dfe350>
+case = 'missing-record'
+
+    @pytest.mark.parametrize("case", ["live-child", "foreign-tenant", "foreign-user", "missing-record"])
+    def test_readback_preserves_unresolved_or_foreign_effects(crm_records, case):
+>       from robothor.engine.runtime.chat_effect_recovery import reconcile_record
+E       ModuleNotFoundError: No module named 'robothor.engine.runtime.chat_effect_recovery'
+
+robothor/engine/tests/test_chat_requested_readback.py:81: ModuleNotFoundError
+=========================== short test summary info ============================
+FAILED robothor/engine/tests/test_chat_requested_readback.py::test_chat_poll_reads_back_original_effect_without_reexecution[uncertain-create_task]
+FAILED robothor/engine/tests/test_chat_requested_readback.py::test_chat_poll_reads_back_original_effect_without_reexecution[uncertain-create_note]
+FAILED robothor/engine/tests/test_chat_requested_readback.py::test_chat_poll_reads_back_original_effect_without_reexecution[dispatching-create_task]
+FAILED robothor/engine/tests/test_chat_requested_readback.py::test_chat_poll_reads_back_original_effect_without_reexecution[dispatching-create_note]
+FAILED robothor/engine/tests/test_chat_requested_readback.py::test_readback_preserves_unresolved_or_foreign_effects[live-child]
+FAILED robothor/engine/tests/test_chat_requested_readback.py::test_readback_preserves_unresolved_or_foreign_effects[foreign-tenant]
+FAILED robothor/engine/tests/test_chat_requested_readback.py::test_readback_preserves_unresolved_or_foreign_effects[foreign-user]
+FAILED robothor/engine/tests/test_chat_requested_readback.py::test_readback_preserves_unresolved_or_foreign_effects[missing-record]
+8 failed in 4.76s

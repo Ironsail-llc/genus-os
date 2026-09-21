@@ -1,0 +1,16 @@
+from types import SimpleNamespace
+from unittest.mock import patch
+from robothor.engine.calendar_reconciliation import reconcile_outcome
+
+auth = SimpleNamespace(tenant_id='synthetic-tenant', user_id='synthetic-user')
+outcome = {
+    'terminal': True,
+    'reconciliation_pending': True,
+    'effects': [{'kind': 'runtime_effect', 'status': 'uncertain',
+                 'tool_name': 'create_task', 'operation_id': 'synthetic-effect',
+                 'agent_id': 'main'}],
+}
+with patch('robothor.engine.chat_recovery.read_outcome', return_value=outcome), \
+     patch('robothor.engine.runtime.task_recovery.recover') as readback:
+    reconcile_outcome(auth, 'synthetic-session', 'synthetic-request')
+    readback.assert_called_once()
