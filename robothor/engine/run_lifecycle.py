@@ -392,11 +392,16 @@ class RunLifecycleMixin:
         """Apply difficulty-aware routing. Returns RouteConfig or None."""
         try:
             from robothor.engine.router import get_route_config
+            from robothor.engine.runtime.automatic_planning import context_for
 
             return get_route_config(
                 message,
                 tool_count,
                 manual_override=agent_config.difficulty_class,
+                # A large available catalogue does not mean an ordinary chat
+                # request needs an auxiliary planning call. Keep configured
+                # planning and long/delegated/resumed work on their old policy.
+                catalogue_implies_complexity=context_for(agent_config) is None,
             )
         except Exception as e:
             logger.debug("Routing failed: %s", _sanitize(e))

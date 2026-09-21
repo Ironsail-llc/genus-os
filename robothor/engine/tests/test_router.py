@@ -32,6 +32,24 @@ class TestClassifyDifficulty:
     def test_heuristic_complex_by_tools(self):
         assert classify_difficulty("short", 25) == "complex"
 
+    def test_optional_chat_planning_does_not_infer_work_from_available_tools(self):
+        route = get_route_config(
+            "Create a task and calculate 17 times 19.", 104, catalogue_implies_complexity=False
+        )
+        assert route.difficulty == "moderate"
+        assert route.planning is None
+        assert route.max_iterations_override is None
+        assert route.verification is None
+        assert route.checkpoint is None
+        assert route.scratchpad is None
+        assert classify_difficulty("x" * 600, 104, catalogue_implies_complexity=False) == "complex"
+        assert (
+            classify_difficulty(
+                "short", 104, manual_override="complex", catalogue_implies_complexity=False
+            )
+            == "complex"
+        )
+
 
 class TestGetRouteConfig:
     def test_simple_preset(self):

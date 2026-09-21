@@ -22,9 +22,9 @@ from robothor.engine.task_registry import get_task_registry
 pytestmark = pytest.mark.integration
 
 
-@pytest.mark.parametrize("suppress", [False, True])
+@pytest.mark.parametrize("suppress,large_catalogue", [(False, False), (True, False), (False, True)])
 async def test_expired_automatic_plan_preserves_native_execution(
-    engine_config, sample_agent_config, monkeypatch, suppress
+    engine_config, sample_agent_config, monkeypatch, suppress, large_catalogue
 ):
     dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
     if "host=/tmp/runtime-migrated-" not in dsn:
@@ -36,9 +36,15 @@ async def test_expired_automatic_plan_preserves_native_execution(
     sample_agent_config.planning_model = ""
     sample_agent_config.difficulty_class = ""
     sample_agent_config.task_protocol = False
-    sample_agent_config.tools_allowed = ["create_task"]
+    from robothor.engine.tools.registry import builtin_schema_names
+
+    sample_agent_config.tools_allowed = (
+        sorted(builtin_schema_names()) if large_catalogue else ["create_task"]
+    )
     sample_agent_config.model_fallbacks = ["openrouter/test/fallback"]
     engine = AgentRunner(replace(engine_config, tenant_id=tenant))
+    if large_catalogue:
+        assert len(engine.registry.build_for_agent(sample_agent_config)) > 20
     monkeypatch.setattr("robothor.engine.runtime.automatic_planning.AUTOMATIC_PLAN_SECONDS", 0.02)
     monkeypatch.setattr("robothor.engine.runtime.action_policy.SIMPLE_ACTION_SECONDS", 1)
     monkeypatch.setattr(dal, "get_connection", effects.get_connection)
@@ -118,7 +124,9 @@ async def test_expired_automatic_plan_preserves_native_execution(
     async with asyncio.timeout(3):
         run = await engine.execute(
             sample_agent_config.id,
-            "Create one task. " + "Synthetic context. " * 30,
+            "Create one task."
+            if large_catalogue
+            else "Create one task. " + "Synthetic context. " * 30,
             agent_config=sample_agent_config,
             trigger_type=TriggerType.WEBCHAT,
             tenant_id=tenant,
@@ -127,7 +135,8 @@ async def test_expired_automatic_plan_preserves_native_execution(
         )
     await get_task_registry().drain(timeout=5)
     assert str(run.status) == "completed"
-    assert planning == [sample_agent_config.model_primary] and finished == [True]
+    assert planning == ([] if large_catalogue else [sample_agent_config.model_primary])
+    assert finished == ([] if large_catalogue else [True])
     assert len(execution) == 2
     with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
         cur.execute("SELECT runtime_context FROM agent_runs WHERE id=%s", (run.id,))

@@ -34,6 +34,38 @@ def config(**changes):
     )
 
 
+@pytest.mark.parametrize(
+    "variant",
+    ["chat", "explicit", "goal", "child", "resume", "cron", "approved", "planning_model"],
+)
+def test_catalogue_routing_changes_only_optional_ordinary_chat_planning(variant):
+    from robothor.engine.run_lifecycle import RunLifecycleMixin
+
+    req, cfg = request(), config()
+    if variant == "explicit":
+        cfg.planning_enabled = True
+    elif variant == "planning_model":
+        cfg.planning_model = "selected-planner"
+    elif variant == "goal":
+        req = replace(req, context=replace(req.context, goal_id="goal", attempt_id="attempt"))
+    elif variant == "child":
+        req = replace(req, context=replace(req.context, parent_id="parent"))
+    elif variant == "resume":
+        req = replace(req, resume_from="prior")
+    elif variant == "cron":
+        req = replace(req, options={"trigger_type": "cron"})
+    elif variant == "approved":
+        req = replace(req, options={**req.options, "trigger_detail": "plan-exec:chat"})
+    token = active_context.set(req.context)
+    try:
+        with admission(req):
+            route = RunLifecycleMixin._apply_routing(None, cfg, "Create one task.", 104)
+            assert route.difficulty == ("moderate" if variant == "chat" else "complex")
+            assert RunLifecycleMixin._should_plan(None, cfg, route) is (variant != "chat")
+    finally:
+        active_context.reset(token)
+
+
 @pytest.mark.parametrize("suppress", [False, True])
 async def test_expired_optional_plan_is_not_used_and_execution_can_continue(monkeypatch, suppress):
     monkeypatch.setattr(policy, "AUTOMATIC_PLAN_SECONDS", 0.01)
