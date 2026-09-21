@@ -52,6 +52,7 @@ from robothor.crm.validation import (
     validate_person_input,
 )
 from robothor.db.connection import get_connection as get_connection
+from robothor.goals.compat import task_gate
 from robothor.sanitize import sanitize_log
 
 logger = logging.getLogger(__name__)
@@ -1209,6 +1210,11 @@ def create_task(
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         try:
+            from robothor.goals.runtime import link_created_task, prepare_task
+
+            existing_goal_task = prepare_task(cur, tenant_id, title, body, assigned_to_agent)
+            if existing_goal_task:
+                return existing_goal_task
             cur.execute(
                 """
                 INSERT INTO crm_tasks (id, title, body, status, due_at, person_id, company_id,
@@ -1247,6 +1253,7 @@ def create_task(
                     tenant_id,
                 ),
             )
+            link_created_task(cur, tenant_id, task_id)
             _record_transition(
                 cur,
                 task_id,
@@ -2295,6 +2302,10 @@ def list_agent_tasks(
     with get_connection() as conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         conditions = ["deleted_at IS NULL", "tenant_id = %s"]
+        # Migration 126 is optional; this inbox is not. `task_gate` is the
+        # pursuit predicate when 126 is applied and a constant TRUE when it is
+        # not, probed once per process on this very cursor.
+        conditions.append(task_gate(cur, "crm_tasks.id", "crm_tasks.tenant_id"))
         params: list[Any] = [tenant_id]
         if include_unassigned:
             conditions.append("(assigned_to_agent = %s OR assigned_to_agent IS NULL)")
