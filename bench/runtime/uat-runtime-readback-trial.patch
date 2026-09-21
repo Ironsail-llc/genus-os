@@ -1,0 +1,111 @@
+diff --git a/robothor/engine/runtime/effects.py b/robothor/engine/runtime/effects.py
+index 99899edc377..4575ec3d467 100644
+--- a/robothor/engine/runtime/effects.py
++++ b/robothor/engine/runtime/effects.py
+@@ -164,9 +164,20 @@ def resolve(context, effect_id, verifier):
+     resource, or an in-flight request, does not establish that no effect can occur.
+     This is a host extension interface, not a tool or model-supplied callback.
+     """
+-    record = read(context, effect_id)
++    return bool(resolve_record(context, read(context, effect_id), verifier))
++
++
++def resolve_record(context, record, verifier):
++    """Resolve a host-read snapshot; return the committed row or no winning verdict.
++
++    A snapshot never bypasses scope or version checks. Concurrent losers must
++    reread the journal; they must not return their own uncommitted verdict.
++    """
+     if not record or record["state"] != "uncertain":
+-        return False
++        return None
++    if (record["tenant_id"], record["principal_id"]) != (context.tenant_id, context.principal_id):
++        raise ValueError("Effect snapshot does not belong to the authorized principal")
++    effect_id = record["id"]
+     verdict = verifier(record)
+     if not isinstance(verdict, Verification) or verdict.outcome not in {
+         "applied",
+@@ -175,17 +186,17 @@ def resolve(context, effect_id, verifier):
+     }:
+         raise ValueError("invalid provider verification")
+     if verdict.outcome == "unknown" or verdict.settled is not True:
+-        return False
++        return None
+     if not verdict.reference or not isinstance(verdict.reference, str):
+         raise ValueError("provider evidence reference required")
+     if verdict.outcome == "applied" and (
+         not isinstance(verdict.result, dict) or verdict.result.get("error")
+     ):
+         raise ValueError("verified result required")
+-    with get_connection() as conn, conn.cursor() as cur:
++    with get_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+         cur.execute(
+             """UPDATE agent_runtime_effects SET state=%s,resolution=%s,version=version+1,updated_at=now()
+-               WHERE id=%s AND tenant_id=%s AND principal_id=%s AND version=%s AND state='uncertain'""",
++               WHERE id=%s AND tenant_id=%s AND principal_id=%s AND version=%s AND state='uncertain' RETURNING *""",
+             (
+                 "confirmed" if verdict.outcome == "applied" else "not_applied",
+                 Json({"reference": verdict.reference, "result": verdict.result}),
+@@ -195,4 +206,5 @@ def resolve(context, effect_id, verifier):
+                 record["version"],
+             ),
+         )
+-        return cur.rowcount == 1
++        row = cur.fetchone()
++        return dict(row) if row else None
+diff --git a/robothor/engine/runtime/note_recovery.py b/robothor/engine/runtime/note_recovery.py
+index 6e293fb34dd..e7be31d0a30 100644
+--- a/robothor/engine/runtime/note_recovery.py
++++ b/robothor/engine/runtime/note_recovery.py
+@@ -51,8 +51,9 @@ def recover(context, effect_id):
+         if not record or record["tool_name"] != "create_note":
+             return None
+         if record["state"] == "uncertain":
+-            effects.resolve(context, effect_id, verify)
+-            record = effects.read(context, effect_id)
++            record = effects.resolve_record(context, record, verify) or effects.read(
++                context, effect_id
++            )
+         if record and record["state"] == "confirmed":
+             return {
+                 **record["resolution"]["result"],
+diff --git a/robothor/engine/runtime/task_recovery.py b/robothor/engine/runtime/task_recovery.py
+index cef14c3f4d0..13a24797334 100644
+--- a/robothor/engine/runtime/task_recovery.py
++++ b/robothor/engine/runtime/task_recovery.py
+@@ -52,8 +52,9 @@ def recover(context, effect_id):
+         if not record or record["tool_name"] != "create_task":
+             return None
+         if record["state"] == "uncertain":
+-            effects.resolve(context, effect_id, verify)
+-            record = effects.read(context, effect_id)
++            record = effects.resolve_record(context, record, verify) or effects.read(
++                context, effect_id
++            )
+         if record and record["state"] == "confirmed":
+             return {
+                 **record["resolution"]["result"],
+diff --git a/robothor/engine/tests/test_runtime_effects.py b/robothor/engine/tests/test_runtime_effects.py
+index 349df82c501..52bab090e3f 100644
+--- a/robothor/engine/tests/test_runtime_effects.py
++++ b/robothor/engine/tests/test_runtime_effects.py
+@@ -280,3 +280,19 @@ def test_effect_rows_obey_database_tenant_policy(effect_db):
+         cur.execute("SELECT set_config('app.tenant_id',%s,true)", (ctx.tenant_id,))
+         cur.execute("SELECT id FROM agent_runtime_effects WHERE id=%s", (record["id"],))
+         assert str(cur.fetchone()[0]) == str(record["id"])
++
++
++@pytest.mark.parametrize("field", ["tenant_id", "principal_id"])
++def test_resolution_snapshot_rejects_foreign_scope_before_verification(effect_db, field):
++    from unittest.mock import Mock
++
++    ctx = context()
++    row = begin(ctx)
++    effects.finish(ctx, row["id"], "worker", uncertain=True)
++    saved = effects.read(ctx, row["id"])
++    foreign = replace(ctx, **{field: "foreign"})
++    verifier = Mock(side_effect=AssertionError("Foreign snapshot must not reach verifier"))
++    with pytest.raises(ValueError, match="authorized principal"):
++        effects.resolve_record(foreign, saved, verifier)
++    verifier.assert_not_called()
++    assert effects.read(ctx, row["id"])["state"] == "uncertain"

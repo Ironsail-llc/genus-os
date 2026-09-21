@@ -3695,6 +3695,17 @@
       "canonical_warnings": 1,
       "canonical_seconds": 20.42,
       "scope": "30 warm native create_task dispatch samples per revision plus one retained warmup; sequential baseline/current blocks in one private canonical database. Model, audit publishing and event delivery excluded; permission fixture identical. Includes handler and database overhead, with runtime receipt readback in current. Not complete agent harness overhead, live-provider latency, framework qualification or a causal speed comparison."
+    },
+    "readback_optimization_trial": {
+      "base_revision": "882bfaa2422",
+      "retained_in_product": false,
+      "report": "bench/runtime/uat-runtime-readback-trial.json",
+      "patch": "bench/runtime/uat-runtime-readback-trial.patch",
+      "focused_passed": 41,
+      "canonical_passed": 46,
+      "size_passed": 6,
+      "current_trial_p95_ms": 20.991723155020736,
+      "note": "Reverted: fewer journal reads did not establish measured latency improvement. Sequential screening is not a causal before/after proof; retain prior product code pending profiling."
     }
   },
   "calendar": {
