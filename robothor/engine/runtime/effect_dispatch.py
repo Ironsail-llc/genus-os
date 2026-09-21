@@ -154,9 +154,10 @@ async def _dispatch_reserved(context, record, name, args, ctx, dispatch):
             record["id"], "The action was dispatched, but its outcome could not be recorded"
         )
     if uncertain:
-        from robothor.engine.runtime.note_recovery import recover
+        from robothor.engine.runtime import note_recovery, task_recovery
 
-        recovered = await asyncio.to_thread(recover, context, record["id"])
+        adapter = task_recovery if name == "create_task" else note_recovery
+        recovered = await asyncio.to_thread(adapter.recover, context, record["id"])
         if recovered is not None:
             return recovered
         return {

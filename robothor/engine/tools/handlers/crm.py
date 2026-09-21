@@ -442,6 +442,7 @@ async def _create_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
     import re as _re
 
     from robothor.crm.dal import create_task, find_task_by_dedup_key
+    from robothor.engine.runtime.task_recovery import task_options
 
     # Server-side dedup: check for existing task with any known dedup key
     body_text = args.get("body") or ""
@@ -483,11 +484,14 @@ async def _create_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
         parent_task_id=args.get("parentTaskId"),
         requires_human=args.get("requiresHuman", False),
         tenant_id=ctx.tenant_id,
+        **task_options(ctx, args),
     )
+    if isinstance(task_id, dict):
+        return task_id
     return (
         {"id": task_id, "title": args.get("title", "")}
         if task_id
-        else {"error": "Failed to create task"}
+        else {"error": "Failed to create task", "outcome_unknown": True, "retryable": False}
     )
 
 

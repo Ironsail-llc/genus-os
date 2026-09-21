@@ -30,9 +30,10 @@ def sweep_terminal(tenant_id: str) -> int:
                 (tenant_id,),
             )
             count = cur.rowcount
-        from robothor.engine.runtime.note_recovery import sweep
+        from robothor.engine.runtime import note_recovery, task_recovery
 
-        sweep(tenant_id)
+        note_recovery.sweep(tenant_id)
+        task_recovery.sweep(tenant_id)
         return count
     except Exception:
         logger.warning("Terminal effect recovery deferred", exc_info=True)

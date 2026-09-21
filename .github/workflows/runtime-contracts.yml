@@ -57,6 +57,7 @@ jobs:
           bench/runtime/test_chat_cohort.py
           bench/runtime/test_chat_cohort_report.py
           robothor/engine/tests/test_runtime_effects.py
+          robothor/engine/tests/test_task_recovery.py
           robothor/engine/tests/test_note_recovery.py
           robothor/engine/tests/test_effect_recovery.py
           robothor/engine/tests/test_goal_evidence_history.py

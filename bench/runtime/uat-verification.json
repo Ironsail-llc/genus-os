@@ -3477,6 +3477,34 @@
       },
       "scope": "Fresh built Next app with private canonical migrations, actual browser/native saved-plan recovery, duplicate approval and early-stop cases. Includes the default native integration selection. Does not newly exercise goal action indicators in a real browser.",
       "manual_acceptance": false
+    },
+    "task_creation_acknowledgement_recovery": {
+      "base_revision": "a9428d59d77",
+      "red": {
+        "failed": 1,
+        "passed": 36,
+        "skipped": 1,
+        "log": "bench/runtime/uat-runtime-task-ack-before.log",
+        "finding": "A real isolated CRM commit followed by lost acknowledgement returned an unclassified error; repeating the request created two tasks."
+      },
+      "canonical": {
+        "passed": 38,
+        "skipped": 1,
+        "warnings": 1,
+        "seconds": 15.12,
+        "log": "bench/runtime/uat-runtime-task-ack-after.log"
+      },
+      "focused": {
+        "passed": 220,
+        "seconds": 10.5,
+        "log": "bench/runtime/uat-runtime-task-recovery-focused.log"
+      },
+      "behavior": "New native task creations use the pre-dispatch effect UUID. Failed acknowledgements remain uncertain and fenced; immediate or daemon-sweep positive task readback returns a confirmed receipt without another insert. Validation dictionaries are preserved as errors rather than task IDs.",
+      "limitations": [
+        "Recovery proves task creation, not task completion or event/notification delivery.",
+        "Existing task-dedup branches can reuse a different task ID; their lost-return recovery is not qualified by the new-ID lookup. They remain fenced when uncertain.",
+        "No new broad engine or live-chat task recovery result. Manual acceptance and production deployment remain false."
+      ]
     }
   },
   "calendar": {
