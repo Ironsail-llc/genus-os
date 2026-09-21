@@ -164,6 +164,9 @@ def get(tenant: str, goal_id: str) -> dict[str, Any]:
             (tenant, goal_id),
         )
         g["children"] = [r["data"] for r in cur.fetchall()]
+        from robothor.goals.effect_summary import summary
+
+        g["action_evidence"] = summary(cur, tenant, goal_id)
         return g
 
 
@@ -187,6 +190,10 @@ def update(
     with transaction() as cur:
         cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("goals:" + tenant,))
         before = locked(cur, tenant, goal_id)
+        if change.action in {"complete", "approve", "assess", "reconciled"}:
+            from robothor.goals.effect_summary import require_settled
+
+            require_settled(cur, tenant, goal_id)
         if change.action == "complete":
             cur.execute(
                 """SELECT 1 FROM pursuit_goals WHERE tenant_id=%s

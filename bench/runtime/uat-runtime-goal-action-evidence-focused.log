@@ -1,0 +1,274 @@
+FFFFFFF................................................................. [ 50%]
+......................................................................   [100%]
+=================================== FAILURES ===================================
+________ test_report_reads_child_uncertainty_and_later_verified_receipt ________
+
+family = (ExecutionContext(tenant_id='924e4185-37b8-4c14-842d-64e1b9a0951f', principal_id='operator', request_id='request', par...inite', ...}, {'objective': 'Check delivery', 'success_criteria': ['Checked'], 'kind': 'short', 'mode': 'finite', ...})
+
+    def test_report_reads_child_uncertainty_and_later_verified_receipt(family):
+        ctx, parent, child = family
+>       ctx = replace(ctx, goal_id=child["id"])
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+robothor/engine/tests/test_goal_action_evidence.py:43: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+../.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/dataclasses.py:1770: in replace
+    return _replace(obj, **changes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+../.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/dataclasses.py:1804: in _replace
+    return self.__class__(**changes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+<string>:12: in __init__
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = ExecutionContext(tenant_id='924e4185-37b8-4c14-842d-64e1b9a0951f', principal_id='operator', request_id='request', pare...e, goal_id='57d543d1-8e6d-46ee-8de3-3c515f9119a2', attempt_id=None, budget_id=None, deadline=None, parent_goal_id=None)
+
+    def __post_init__(self) -> None:
+        if not all((self.tenant_id, self.principal_id, self.request_id)):
+            raise ValueError("tenant, principal and request identity are required")
+        if bool(self.goal_id) != bool(self.attempt_id):
+>           raise ValueError("goal and attempt identity must travel together")
+E           ValueError: goal and attempt identity must travel together
+
+robothor/engine/runtime/contracts.py:35: ValueError
+______ test_goal_decisions_cannot_hide_unresolved_child_effects[complete] ______
+
+family = (ExecutionContext(tenant_id='249af459-e39d-4529-ac74-bb76d207f7e7', principal_id='operator', request_id='request', par...inite', ...}, {'objective': 'Check delivery', 'success_criteria': ['Checked'], 'kind': 'short', 'mode': 'finite', ...})
+action = 'complete'
+
+    @pytest.mark.parametrize("action", ["complete", "approve", "assess", "reconciled"])
+    def test_goal_decisions_cannot_hide_unresolved_child_effects(family, action):
+        ctx, parent, child = family
+>       row = begin(replace(ctx, goal_id=child["id"]))
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+robothor/engine/tests/test_goal_action_evidence.py:64: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+../.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/dataclasses.py:1770: in replace
+    return _replace(obj, **changes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+../.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/dataclasses.py:1804: in _replace
+    return self.__class__(**changes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+<string>:12: in __init__
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = ExecutionContext(tenant_id='249af459-e39d-4529-ac74-bb76d207f7e7', principal_id='operator', request_id='request', pare...e, goal_id='16bbd6f4-970f-4177-a2ed-dd3f4dddad88', attempt_id=None, budget_id=None, deadline=None, parent_goal_id=None)
+
+    def __post_init__(self) -> None:
+        if not all((self.tenant_id, self.principal_id, self.request_id)):
+            raise ValueError("tenant, principal and request identity are required")
+        if bool(self.goal_id) != bool(self.attempt_id):
+>           raise ValueError("goal and attempt identity must travel together")
+E           ValueError: goal and attempt identity must travel together
+
+robothor/engine/runtime/contracts.py:35: ValueError
+______ test_goal_decisions_cannot_hide_unresolved_child_effects[approve] _______
+
+family = (ExecutionContext(tenant_id='d4f39f1e-666f-4081-afe1-66293c035761', principal_id='operator', request_id='request', par...inite', ...}, {'objective': 'Check delivery', 'success_criteria': ['Checked'], 'kind': 'short', 'mode': 'finite', ...})
+action = 'approve'
+
+    @pytest.mark.parametrize("action", ["complete", "approve", "assess", "reconciled"])
+    def test_goal_decisions_cannot_hide_unresolved_child_effects(family, action):
+        ctx, parent, child = family
+>       row = begin(replace(ctx, goal_id=child["id"]))
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+robothor/engine/tests/test_goal_action_evidence.py:64: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+../.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/dataclasses.py:1770: in replace
+    return _replace(obj, **changes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+../.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/dataclasses.py:1804: in _replace
+    return self.__class__(**changes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+<string>:12: in __init__
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = ExecutionContext(tenant_id='d4f39f1e-666f-4081-afe1-66293c035761', principal_id='operator', request_id='request', pare...e, goal_id='388ee4b1-aa8a-45c0-b244-75c30738daa2', attempt_id=None, budget_id=None, deadline=None, parent_goal_id=None)
+
+    def __post_init__(self) -> None:
+        if not all((self.tenant_id, self.principal_id, self.request_id)):
+            raise ValueError("tenant, principal and request identity are required")
+        if bool(self.goal_id) != bool(self.attempt_id):
+>           raise ValueError("goal and attempt identity must travel together")
+E           ValueError: goal and attempt identity must travel together
+
+robothor/engine/runtime/contracts.py:35: ValueError
+_______ test_goal_decisions_cannot_hide_unresolved_child_effects[assess] _______
+
+family = (ExecutionContext(tenant_id='2797ffe3-548a-470f-860c-bd568df3b596', principal_id='operator', request_id='request', par...inite', ...}, {'objective': 'Check delivery', 'success_criteria': ['Checked'], 'kind': 'short', 'mode': 'finite', ...})
+action = 'assess'
+
+    @pytest.mark.parametrize("action", ["complete", "approve", "assess", "reconciled"])
+    def test_goal_decisions_cannot_hide_unresolved_child_effects(family, action):
+        ctx, parent, child = family
+>       row = begin(replace(ctx, goal_id=child["id"]))
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+robothor/engine/tests/test_goal_action_evidence.py:64: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+../.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/dataclasses.py:1770: in replace
+    return _replace(obj, **changes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+../.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/dataclasses.py:1804: in _replace
+    return self.__class__(**changes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+<string>:12: in __init__
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = ExecutionContext(tenant_id='2797ffe3-548a-470f-860c-bd568df3b596', principal_id='operator', request_id='request', pare...e, goal_id='47ad4607-4e30-4f17-96a6-a97ebcdd2cb5', attempt_id=None, budget_id=None, deadline=None, parent_goal_id=None)
+
+    def __post_init__(self) -> None:
+        if not all((self.tenant_id, self.principal_id, self.request_id)):
+            raise ValueError("tenant, principal and request identity are required")
+        if bool(self.goal_id) != bool(self.attempt_id):
+>           raise ValueError("goal and attempt identity must travel together")
+E           ValueError: goal and attempt identity must travel together
+
+robothor/engine/runtime/contracts.py:35: ValueError
+_____ test_goal_decisions_cannot_hide_unresolved_child_effects[reconciled] _____
+
+family = (ExecutionContext(tenant_id='2c8aa11f-e180-48ba-8225-f0d9e87d0b39', principal_id='operator', request_id='request', par...inite', ...}, {'objective': 'Check delivery', 'success_criteria': ['Checked'], 'kind': 'short', 'mode': 'finite', ...})
+action = 'reconciled'
+
+    @pytest.mark.parametrize("action", ["complete", "approve", "assess", "reconciled"])
+    def test_goal_decisions_cannot_hide_unresolved_child_effects(family, action):
+        ctx, parent, child = family
+>       row = begin(replace(ctx, goal_id=child["id"]))
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+robothor/engine/tests/test_goal_action_evidence.py:64: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+../.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/dataclasses.py:1770: in replace
+    return _replace(obj, **changes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+../.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/dataclasses.py:1804: in _replace
+    return self.__class__(**changes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+<string>:12: in __init__
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = ExecutionContext(tenant_id='2c8aa11f-e180-48ba-8225-f0d9e87d0b39', principal_id='operator', request_id='request', pare...e, goal_id='36c5f709-d28e-4e2a-9fe6-4c8d4065dfbd', attempt_id=None, budget_id=None, deadline=None, parent_goal_id=None)
+
+    def __post_init__(self) -> None:
+        if not all((self.tenant_id, self.principal_id, self.request_id)):
+            raise ValueError("tenant, principal and request identity are required")
+        if bool(self.goal_id) != bool(self.attempt_id):
+>           raise ValueError("goal and attempt identity must travel together")
+E           ValueError: goal and attempt identity must travel together
+
+robothor/engine/runtime/contracts.py:35: ValueError
+________ test_foreign_tenant_or_unrelated_goal_does_not_pollute_report _________
+
+family = (ExecutionContext(tenant_id='f35fab81-e43d-4a78-a9df-9247c583e1fb', principal_id='operator', request_id='request', par...inite', ...}, {'objective': 'Check delivery', 'success_criteria': ['Checked'], 'kind': 'short', 'mode': 'finite', ...})
+
+    def test_foreign_tenant_or_unrelated_goal_does_not_pollute_report(family):
+        ctx, parent, child = family
+>       begin(replace(context(), goal_id=child["id"]))
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+robothor/engine/tests/test_goal_action_evidence.py:79: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+../.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/dataclasses.py:1770: in replace
+    return _replace(obj, **changes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+../.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/dataclasses.py:1804: in _replace
+    return self.__class__(**changes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+<string>:12: in __init__
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = ExecutionContext(tenant_id='1b7a6f13-6489-4aae-8f7b-b4a7117461e1', principal_id='operator', request_id='request', pare...e, goal_id='e4612bc7-cdd3-4b1f-a6d7-b11c7b818882', attempt_id=None, budget_id=None, deadline=None, parent_goal_id=None)
+
+    def __post_init__(self) -> None:
+        if not all((self.tenant_id, self.principal_id, self.request_id)):
+            raise ValueError("tenant, principal and request identity are required")
+        if bool(self.goal_id) != bool(self.attempt_id):
+>           raise ValueError("goal and attempt identity must travel together")
+E           ValueError: goal and attempt identity must travel together
+
+robothor/engine/runtime/contracts.py:35: ValueError
+______________ test_admission_waits_for_goal_decision_transaction ______________
+
+family = (ExecutionContext(tenant_id='d26a6201-2673-4cad-9c43-78a56cbd2b77', principal_id='operator', request_id='request', par...inite', ...}, {'objective': 'Check delivery', 'success_criteria': ['Checked'], 'kind': 'short', 'mode': 'finite', ...})
+
+    def test_admission_waits_for_goal_decision_transaction(family):
+        ctx, parent, child = family
+        entered = Event()
+    
+        def admit():
+            entered.set()
+            return begin(replace(ctx, goal_id=child["id"]))
+    
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            with store.transaction() as cur:
+                cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("goals:" + ctx.tenant_id,))
+                future = pool.submit(admit)
+                assert entered.wait(2)
+                from concurrent.futures import TimeoutError
+    
+                with pytest.raises(TimeoutError):
+>                   future.result(timeout=0.1)
+
+robothor/engine/tests/test_goal_action_evidence.py:105: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+../.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/concurrent/futures/_base.py:443: in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+../.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/concurrent/futures/_base.py:395: in __get_result
+    raise self._exception
+../.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/concurrent/futures/thread.py:86: in run
+    result = ctx.run(self.task)
+             ^^^^^^^^^^^^^^^^^^
+../.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/concurrent/futures/thread.py:73: in run
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+robothor/engine/tests/test_goal_action_evidence.py:95: in admit
+    return begin(replace(ctx, goal_id=child["id"]))
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/dataclasses.py:1770: in replace
+    return _replace(obj, **changes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+../.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/dataclasses.py:1804: in _replace
+    return self.__class__(**changes)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+<string>:12: in __init__
+    ???
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = ExecutionContext(tenant_id='d26a6201-2673-4cad-9c43-78a56cbd2b77', principal_id='operator', request_id='request', pare...e, goal_id='550df744-7035-4f62-93aa-32241b403533', attempt_id=None, budget_id=None, deadline=None, parent_goal_id=None)
+
+    def __post_init__(self) -> None:
+        if not all((self.tenant_id, self.principal_id, self.request_id)):
+            raise ValueError("tenant, principal and request identity are required")
+        if bool(self.goal_id) != bool(self.attempt_id):
+>           raise ValueError("goal and attempt identity must travel together")
+E           ValueError: goal and attempt identity must travel together
+
+robothor/engine/runtime/contracts.py:35: ValueError
+=============================== warnings summary ===============================
+.venv/lib/python3.14/site-packages/fastapi/testclient.py:1
+  /home/philip/robothor-runtime-modernization/.venv/lib/python3.14/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+.venv/lib/python3.14/site-packages/starlette/testclient.py:53
+  /home/philip/robothor-runtime-modernization/.venv/lib/python3.14/site-packages/starlette/testclient.py:53: DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.
+    _PortalFactoryType = Callable[[], AbstractContextManager[anyio.abc.BlockingPortal]]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED robothor/engine/tests/test_goal_action_evidence.py::test_report_reads_child_uncertainty_and_later_verified_receipt
+FAILED robothor/engine/tests/test_goal_action_evidence.py::test_goal_decisions_cannot_hide_unresolved_child_effects[complete]
+FAILED robothor/engine/tests/test_goal_action_evidence.py::test_goal_decisions_cannot_hide_unresolved_child_effects[approve]
+FAILED robothor/engine/tests/test_goal_action_evidence.py::test_goal_decisions_cannot_hide_unresolved_child_effects[assess]
+FAILED robothor/engine/tests/test_goal_action_evidence.py::test_goal_decisions_cannot_hide_unresolved_child_effects[reconciled]
+FAILED robothor/engine/tests/test_goal_action_evidence.py::test_foreign_tenant_or_unrelated_goal_does_not_pollute_report
+FAILED robothor/engine/tests/test_goal_action_evidence.py::test_admission_waits_for_goal_decision_transaction
+7 failed, 135 passed, 2 warnings in 18.34s

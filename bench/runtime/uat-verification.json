@@ -3282,6 +3282,29 @@
         "Goal workspace projection of generic ledger uncertainty remains incomplete.",
         "Other provider-specific recovery and live conversational UAT remain incomplete."
       ]
+    },
+    "goal_family_action_evidence": {
+      "base_revision": "4b797845bdd",
+      "focused": {
+        "passed": 142,
+        "warnings": 2,
+        "seconds": 21.5,
+        "log": "bench/runtime/uat-runtime-goal-action-evidence-focused-final.log"
+      },
+      "canonical": {
+        "passed": 36,
+        "skipped": 1,
+        "warnings": 1,
+        "seconds": 9.59,
+        "log": "bench/runtime/uat-runtime-goal-action-evidence-canonical.log"
+      },
+      "behavior": "Full goal reads aggregate pending and confirmed runtime effects through tenant-scoped descendants. Factual chat reports pending actions. Store-level completion, approval, assessment and reconciliation require settled family effects; the current control admission is excluded. Goal effect admission shares the tenant goal transaction lock.",
+      "intermediate": "Seven new cases initially omitted the required attempt identity in ExecutionContext; fixed fixture identity, preserved failure log and reran.",
+      "limitations": [
+        "Action counts are in full goal snapshots and factual chat reports; list summaries and dedicated frontend presentation are not expanded in this change.",
+        "Provider readback remains limited to supported operations.",
+        "The broad engine pass predates this change. No live conversational UAT or overall acceptance is claimed."
+      ]
     }
   },
   "calendar": {

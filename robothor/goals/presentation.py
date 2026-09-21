@@ -41,7 +41,14 @@ def _task_facts(tasks: list[dict[str, Any]]) -> list[str]:
 def render_goal_progress(goal: dict[str, Any], *, execution_enabled: bool) -> str:
     status = goal["status"]
     label = {"review": "awaiting review", "running": "in progress"}.get(status, status)
+    pending = (goal.get("action_evidence") or {}).get("pending", 0)
+    if pending and status == "complete":
+        label = "marked complete, but its action outcomes are not fully verified"
     parts = [f"“{_label(goal['objective'])}” is {label}."]
+    if pending:
+        parts.append(
+            f"{pending} recorded action(s) in this goal or its children still need verification."
+        )
     # Missing task/child reads must not become "no unfinished work".
     parts.extend(_task_facts(goal["tasks"]))
     children = [

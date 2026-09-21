@@ -233,6 +233,7 @@ def main():
                     "CREATE TABLE crm_agent_notifications(id UUID,tenant_id TEXT,from_agent TEXT,to_agent TEXT,notification_type TEXT,subject TEXT,body TEXT,metadata JSONB)"
                 )
                 cur.execute((ROOT / "crm/migrations/126_goal_pursuit.sql").read_text())
+                cur.execute((ROOT / "crm/migrations/141_runtime_effects.sql").read_text())
             uvicorn.run(application(dsn, args.ui_port), host="127.0.0.1", port=args.port)
         finally:
             command("pg_ctl", "-D", data, "-m", "immediate", "-w", "stop")

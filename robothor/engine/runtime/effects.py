@@ -43,6 +43,9 @@ def fingerprint(tool_name, arguments):
 
 
 def _lock(cur, context):
+    if context.goal_id:
+        # Serialize admission against family completion/reconciliation checks.
+        cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("goals:" + context.tenant_id,))
     scope = json.dumps([context.tenant_id, context.principal_id]).encode()
     key = int.from_bytes(hashlib.sha256(scope).digest()[:8], "big", signed=True)
     cur.execute("SELECT pg_advisory_xact_lock(%s)", (key,))

@@ -59,6 +59,7 @@ jobs:
           robothor/engine/tests/test_runtime_effects.py
           robothor/engine/tests/test_note_recovery.py
           robothor/engine/tests/test_effect_recovery.py
+          robothor/engine/tests/test_goal_action_evidence.py
           robothor/engine/tests/test_goal_effect_bookkeeping.py
           robothor/engine/tests/test_effect_dispatch.py
           robothor/engine/tests/test_tool_postconditions.py
