@@ -3527,6 +3527,34 @@
         "Recovery establishes a task result, not task completion or downstream notification delivery.",
         "Broad engine, browser and live-chat results predate this change. Manual acceptance remains pending."
       ]
+    },
+    "successful_crm_receipt_replay": {
+      "base_revision": "b1c5834779e",
+      "red": {
+        "failed": 2,
+        "passed": 40,
+        "skipped": 1,
+        "log": "bench/runtime/uat-runtime-success-receipt-before.log",
+        "finding": "A replacement worker within the same request repeated successful note/task creation because only uncertain effects were read back and cached."
+      },
+      "focused": {
+        "passed": 102,
+        "seconds": 7.77,
+        "log": "bench/runtime/uat-runtime-success-receipt-focused.log"
+      },
+      "canonical": {
+        "passed": 42,
+        "skipped": 1,
+        "warnings": 1,
+        "seconds": 11.94,
+        "log": "bench/runtime/uat-runtime-success-receipt-canonical-final.log"
+      },
+      "behavior": "Trusted native CRM creation/dedup handlers opt into positive readback on success. The result is recorded as confirmed before returning; same-request replacement workers receive the saved receipt. Independent new requests may create identical content. Missing positive evidence retains uncertainty and replay protection.",
+      "limitations": [
+        "Only supported native CRM creation paths opt in; generic/synthetic adapters are not assumed to have these semantics.",
+        "Tests use fresh worker IDs and actual private CRM state, not a literal process kill after successful return.",
+        "No new broad engine, browser, or manual UAT result. No deployment."
+      ]
     }
   },
   "calendar": {

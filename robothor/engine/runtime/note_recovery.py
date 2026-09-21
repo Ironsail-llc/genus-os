@@ -21,6 +21,8 @@ def note_options(ctx, args):
         or record["fingerprint"] != effects.fingerprint("create_note", args)
     ):
         raise ValueError("Note effect identity does not match the authorized dispatch")
+    # Host-only opt-in: synthetic or adapter tools with this name are not verifiers.
+    record["_native_readback"] = True
     return {"note_id": str(record["id"])}
 
 

@@ -139,9 +139,14 @@ async def _dispatch_reserved(context, record, name, args, ctx, dispatch):
     uncertain = isinstance(result, dict) and (
         result.get("outcome_unknown") is True or result.get("tool_crashed") is True
     )
+    verify_success = (
+        record.get("_native_readback") is True
+        and isinstance(result, dict)
+        and not result.get("error")
+    )
     try:
         recorded = await asyncio.to_thread(
-            effects.finish, context, record["id"], ctx.run_id, uncertain=uncertain
+            effects.finish, context, record["id"], ctx.run_id, uncertain=uncertain or verify_success
         )
         if not recorded:
             return _unknown(
@@ -153,13 +158,13 @@ async def _dispatch_reserved(context, record, name, args, ctx, dispatch):
         return _unknown(
             record["id"], "The action was dispatched, but its outcome could not be recorded"
         )
-    if uncertain:
+    if uncertain or verify_success:
         from robothor.engine.runtime import note_recovery, task_recovery
 
         adapter = task_recovery if name == "create_task" else note_recovery
         recovered = await asyncio.to_thread(adapter.recover, context, record["id"])
         if recovered is not None:
-            return recovered
+            return {**result, **recovered} if verify_success else recovered
         return {
             **result,
             **_unknown(record["id"], result.get("error") or "Action outcome is unknown"),

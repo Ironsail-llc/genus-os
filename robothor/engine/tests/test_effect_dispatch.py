@@ -233,3 +233,25 @@ async def test_failed_enforced_readback_preserves_uncertainty(gateway, monkeypat
     assert first["outcome_unknown"] and first["verification_failed"]
     assert second["effect_id"] == first["effect_id"] and len(writes) == 1
     assert effects.read(ctx, first["effect_id"])["state"] == "uncertain"
+
+
+async def test_native_success_without_positive_readback_stays_fenced(gateway, monkeypatch):
+    from robothor.engine.runtime.note_recovery import note_options
+
+    ctx, writes, call = gateway
+
+    async def handler(args, tool_context):
+        identifier = note_options(tool_context, args)["note_id"]
+        writes.append(identifier)
+        return {"id": identifier, "title": "Claimed success"}
+
+    monkeypatch.setattr(dispatch, "_get_handlers", lambda: {"create_note": handler})
+    monkeypatch.setattr(
+        "robothor.engine.runtime.note_recovery.verify",
+        lambda record: effects.Verification("unknown"),
+    )
+    first = await call("create_note")
+    second = await call("create_note", run="replacement")
+    assert first["outcome_unknown"] and second["outcome_unknown"]
+    assert first["effect_id"] == second["effect_id"] and len(writes) == 1
+    assert effects.read(ctx, first["effect_id"])["state"] == "uncertain"

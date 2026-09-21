@@ -1010,3 +1010,14 @@ Following `8034c6e3476`, the thread-key handler path records the existing task s
 Task readback now uses that saved target when present, otherwise the reserved new-task ID. Positive recovery returns the existing task and `deduplicated: true`; it does not claim a new task was created. Canonical tests use actual handler and DAL deduplication for both paths, inject response loss after the result, and recover the original ID while leaving exactly one task. They passed as part of 40 canonical tests (one skipped, 12.67 seconds). The focused engine/CRM/goals/size selection passed 329 with two warnings in 24.69 seconds. Foreign/deleted targets, attempted rebinding and stale-owner mutation are covered. Ruff and diff checks passed.
 
 This closes the previously unqualified lost-return case after a deduplication target has been durably recorded. A crash before that binding is durable can still leave an unresolved admission; the code does not replay an action to infer its outcome. Task completion and downstream notification delivery remain separate facts. No new broad engine, browser, live-chat manual acceptance or deployment is claimed.
+
+
+## Verified success receipts survive replacement workers
+
+Following `b1c5834779e`, canonical tests found that a successful `create_note` or `create_task` could be repeated by a different worker in the same request: the prior action was recorded as finished but had no confirmed result. Both red cases created two records and are retained in `uat-runtime-success-receipt-before.log`.
+
+Trusted native CRM creation/dedup handlers now opt into positive readback for ordinary success as well as uncertain responses. The effect is kept unresolved until readback confirms it; the confirmed receipt is saved before the result is returned. Another worker in the same request receives that receipt without dispatching the handler. A distinct authorized request can still deliberately create identical content. Synthetic or adapter tools sharing a name do not acquire this verification capability automatically. Successful original result metadata is retained when adding the verified receipt.
+
+The focused dispatch/CRM-recovery/tools/effects/size selection passed 102 tests in 7.77 seconds. Canonical integration passed 42 with one skipped in 11.94 seconds, including successful note/task replay and distinct-request creation. A negative-readback case confirms that a handler success claim alone cannot clear uncertainty or permit a repeat. Ruff and diff checks passed.
+
+These cases use actual private CRM storage and different worker IDs, not an OS-level kill after successful return. Other providers still need their own readback semantics. The prior broad engine/browser results predate this change, and no manual acceptance or production deployment is claimed.

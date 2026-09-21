@@ -11,9 +11,11 @@ def remember_existing(tenant_id, task_id, *, cursor=None):
         raise ValueError("Task receipt tenant does not match effect admission")
     if cursor is not None:
         _bind(cursor, record, task_id)
+        record["_native_readback"] = True
         return
     with effects.get_connection() as conn, conn.cursor() as cur:
         _bind(cur, record, task_id)
+    record["_native_readback"] = True
 
 
 def _bind(cur, record, task_id):

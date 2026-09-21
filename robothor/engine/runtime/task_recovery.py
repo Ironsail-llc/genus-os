@@ -21,6 +21,8 @@ def task_options(ctx, args):
         or record["fingerprint"] != effects.fingerprint("create_task", args)
     ):
         raise ValueError("Task effect identity does not match the authorized dispatch")
+    # Host-only opt-in: synthetic or adapter tools with this name are not verifiers.
+    record["_native_readback"] = True
     return {"task_id": str(record["id"])}
 
 
