@@ -1,0 +1,330 @@
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+from uuid import uuid4
+
+import pytest
+
+from robothor.engine.models import AgentRun, RunStatus
+from robothor.goals import store
+from robothor.goals.controller import GoalController
+from robothor.goals.model import DEFAULT_MAX_ATTEMPTS, CreateGoal, GoalUpdate
+from robothor.goals.runtime import attach_run, binding, budget_hit, stop_at_budget
+from robothor.goals.tests.test_store import db, private_database  # noqa: F401
+
+
+@pytest.mark.asyncio
+async def test_actual_controller_continues_then_verifies_completion(db):  # noqa: F811
+    g = store.create(
+        db, CreateGoal(objective="Deliver report", success_criteria=["Delivered"]), "operator"
+    )
+    prompts = []
+
+    async def execute(**kwargs):
+        prompts.append(kwargs["message"])
+        run = AgentRun(
+            id=str(uuid4()),
+            agent_id="main",
+            tenant_id=db,
+            trigger_detail=kwargs["trigger_detail"],
+            status=RunStatus.COMPLETED,
+            input_tokens=5,
+            output_tokens=3,
+            output_text="Progress saved",
+        )
+        attach_run(run)
+        current = store.control(db, g["id"])
+        if len(prompts) == 1:
+            store.update(
+                db,
+                g["id"],
+                GoalUpdate(
+                    action="progress",
+                    version=current["version"],
+                    note="Draft saved",
+                    next_action="Deliver it",
+                ),
+                "main",
+            )
+        else:
+            current = store.update(
+                db,
+                g["id"],
+                GoalUpdate(
+                    action="evidence",
+                    version=current["version"],
+                    criterion=0,
+                    reference="receipt:report",
+                    satisfied=True,
+                    note="Checked receipt",
+                ),
+                "main",
+            )
+            store.update(
+                db,
+                g["id"],
+                GoalUpdate(action="complete", version=current["version"], note="Delivered"),
+                "main",
+            )
+        return run
+
+    controller = GoalController(
+        SimpleNamespace(execute=execute), SimpleNamespace(tenant_id=db, manifest_dir="unused")
+    )
+    with (
+        patch("robothor.engine.config.load_agent_config_or_broken", return_value=SimpleNamespace()),
+        patch("robothor.goals.events.capture"),
+        # Continuation, not pacing, is what this test is about: without the
+        # gap the drain loop is the pre-ceiling one.
+        patch("robothor.goals.controller.MIN_RUN_INTERVAL_SECONDS", 0),
+    ):
+        await controller.tick()
+    result = store.get(db, g["id"])
+    assert result["status"] == "complete" and result["tokens_used"] == 16
+    assert len(prompts) == 2 and "Draft saved" in prompts[1]
+    assert binding.get() is None
+
+
+@pytest.mark.asyncio
+async def test_waiting_and_disabled_goals_do_not_call_runner(db):  # noqa: F811
+    g = store.create(
+        db,
+        CreateGoal(
+            objective="Wait for response", success_criteria=["Response received"], kind="long"
+        ),
+        "operator",
+    )
+    store.update(
+        db, g["id"], GoalUpdate(action="wait", version=g["version"], note="Check tomorrow"), "main"
+    )
+    runner = SimpleNamespace(execute=AsyncMock())
+    controller = GoalController(runner, SimpleNamespace(tenant_id=db, manifest_dir="unused"))
+    with patch("robothor.goals.events.capture"):
+        await controller.tick()
+        store.set_enabled(db, False, "operator")
+        await controller.tick()
+    runner.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_explicit_budget_stops_across_spawned_runs(db):  # noqa: F811
+    g = store.create(
+        db,
+        CreateGoal(objective="Deliver report", success_criteria=["Delivered"], token_budget=10),
+        "operator",
+    )
+
+    async def execute(**kwargs):
+        run = AgentRun(
+            agent_id="main",
+            tenant_id=db,
+            trigger_detail=kwargs["trigger_detail"],
+            input_tokens=3,
+            output_tokens=2,
+            status=RunStatus.COMPLETED,
+        )
+        attach_run(run)
+        child = AgentRun(agent_id="worker", tenant_id=db, input_tokens=4, output_tokens=2)
+        attach_run(child)
+        assert budget_hit()
+        session = SimpleNamespace(run=run, record_error=lambda note: None)
+        assert stop_at_budget(session)
+        return run
+
+    controller = GoalController(
+        SimpleNamespace(execute=execute), SimpleNamespace(tenant_id=db, manifest_dir="unused")
+    )
+    with (
+        patch("robothor.engine.config.load_agent_config_or_broken", return_value=SimpleNamespace()),
+        patch("robothor.goals.events.capture"),
+    ):
+        await controller.tick()
+    result = store.get(db, g["id"])
+    assert result["status"] == "blocked" and result["tokens_used"] == 11
+
+
+@pytest.mark.asyncio
+async def test_missing_progress_stops_after_three_runs(db):  # noqa: F811
+    g = store.create(
+        db, CreateGoal(objective="Deliver report", success_criteria=["Delivered"]), "operator"
+    )
+    runner = SimpleNamespace(execute=AsyncMock(return_value=AgentRun(status=RunStatus.COMPLETED)))
+    controller = GoalController(runner, SimpleNamespace(tenant_id=db, manifest_dir="unused"))
+    with (
+        patch("robothor.engine.config.load_agent_config_or_broken", return_value=SimpleNamespace()),
+        patch("robothor.goals.events.capture"),
+        patch("robothor.goals.controller.MIN_RUN_INTERVAL_SECONDS", 0),
+    ):
+        await controller.tick()
+    assert runner.execute.call_count == 3
+    assert store.get(db, g["id"])["status"] == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_a_goal_that_records_progress_every_run_still_stops(db):  # noqa: F811
+    """PURSUIT_INSTRUCTIONS orders a progress note every run, and a differing
+    note resets ``no_progress_runs``. Before the ceilings that was the whole
+    guard: a probe drove 201 agent runs and 6.4M tokens out of a single tick.
+    """
+    g = store.create(
+        db, CreateGoal(objective="Deliver report", success_criteria=["Delivered"]), "operator"
+    )
+    runs = 0
+
+    async def execute(**kwargs):
+        nonlocal runs
+        runs += 1
+        assert runs <= 200, "the controller never stopped a goal that reports progress"
+        current = store.control(db, g["id"])
+        store.update(
+            db,
+            g["id"],
+            GoalUpdate(
+                action="progress",
+                version=current["version"],
+                note=f"Draft revision {runs}",
+                next_action="Keep going",
+            ),
+            "main",
+        )
+        run = AgentRun(
+            id=str(uuid4()),
+            agent_id="main",
+            tenant_id=db,
+            trigger_detail=kwargs["trigger_detail"],
+            status=RunStatus.COMPLETED,
+            input_tokens=1,
+            output_tokens=1,
+        )
+        attach_run(run)
+        return run
+
+    controller = GoalController(
+        SimpleNamespace(execute=execute), SimpleNamespace(tenant_id=db, manifest_dir="unused")
+    )
+    with (
+        patch("robothor.engine.config.load_agent_config_or_broken", return_value=SimpleNamespace()),
+        patch("robothor.goals.events.capture"),
+        patch("robothor.goals.controller.MIN_RUN_INTERVAL_SECONDS", 0),
+    ):
+        await controller.tick()
+    result = store.get(db, g["id"])
+    assert result["status"] == "blocked"
+    assert "attempt" in result["blocker"], result["blocker"]
+    assert runs <= DEFAULT_MAX_ATTEMPTS
+
+
+@pytest.mark.asyncio
+async def test_one_ready_goal_cannot_occupy_the_loop(db):  # noqa: F811
+    """``tick`` used to drain while a goal stayed ready, so ``serve``'s sleep
+    was never reached. One tick is now one run."""
+    store.create(
+        db, CreateGoal(objective="Deliver report", success_criteria=["Delivered"]), "operator"
+    )
+    runner = SimpleNamespace(execute=AsyncMock(return_value=AgentRun(status=RunStatus.COMPLETED)))
+    controller = GoalController(runner, SimpleNamespace(tenant_id=db, manifest_dir="unused"))
+    with (
+        patch("robothor.engine.config.load_agent_config_or_broken", return_value=SimpleNamespace()),
+        patch("robothor.goals.events.capture"),
+    ):
+        await controller.tick()
+        await controller.tick()
+    assert runner.execute.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_the_run_budget_is_capped_by_the_money_not_just_the_tokens(db):  # noqa: F811
+    """A first run could spend the whole 1M-token budget before anything read
+    the $5.00 ceiling — $15 of Opus output, 3x the ceiling, in one run."""
+    store.create(
+        db, CreateGoal(objective="Deliver report", success_criteria=["Delivered"]), "operator"
+    )
+    seen = []
+
+    async def execute(**kwargs):
+        seen.append(binding.get().token_remaining)
+        return AgentRun(status=RunStatus.COMPLETED)
+
+    controller = GoalController(
+        SimpleNamespace(execute=execute), SimpleNamespace(tenant_id=db, manifest_dir="unused")
+    )
+    limits = SimpleNamespace(output_cost_per_token=0.000_015)  # $15/M
+    with (
+        patch(
+            "robothor.engine.config.load_agent_config_or_broken",
+            return_value=SimpleNamespace(model_primary="expensive-model"),
+        ),
+        patch("robothor.engine.model_registry.get_model_limits", return_value=limits),
+        patch("robothor.goals.events.capture"),
+    ):
+        await controller.tick()
+    assert seen == [333_333], seen
+
+
+@pytest.mark.asyncio
+async def test_serve_backs_off_while_pursuit_is_disabled(db):  # noqa: F811
+    """A switched-off feature was opening ~86,400 connections a day to read a
+    flag that changes a handful of times in a tenant's life."""
+    import asyncio
+
+    from robothor.goals.controller import DISABLED_POLL_SECONDS
+
+    controller = GoalController(
+        SimpleNamespace(execute=AsyncMock()), SimpleNamespace(tenant_id=db, manifest_dir="unused")
+    )
+    slept: list[float] = []
+
+    async def sleep(seconds):
+        slept.append(seconds)
+        raise asyncio.CancelledError
+
+    for enabled, expected in ((False, DISABLED_POLL_SECONDS), (True, 1)):
+        slept.clear()
+        store.set_enabled(db, enabled, "operator")
+        with (
+            patch("robothor.goals.controller.asyncio.sleep", sleep),
+            patch("robothor.goals.events.capture"),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await controller.serve()
+        assert slept == [expected]
+
+
+@pytest.mark.asyncio
+async def test_controller_failure_stops_runner_before_releasing_lease(db):  # noqa: F811
+    import asyncio
+
+    g = store.create(
+        db, CreateGoal(objective="Deliver report", success_criteria=["Delivered"]), "operator"
+    )
+    g, attempt = store.claim(db)
+    started = asyncio.Event()
+    stopped = asyncio.Event()
+
+    async def execute(**kwargs):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            stopped.set()
+
+    async def wait_for_heartbeat(*args, **kwargs):
+        await started.wait()
+        return set(), set()
+
+    finish = store.finish
+
+    def finish_after_stop(*args, **kwargs):
+        assert stopped.is_set(), "lease released while agent still running"
+        return finish(*args, **kwargs)
+
+    controller = GoalController(
+        SimpleNamespace(execute=execute), SimpleNamespace(tenant_id=db, manifest_dir="unused")
+    )
+    with (
+        patch("robothor.engine.config.load_agent_config_or_broken", return_value=SimpleNamespace()),
+        patch("robothor.goals.controller.asyncio.wait", side_effect=wait_for_heartbeat),
+        patch("robothor.goals.store.control", side_effect=RuntimeError("database unavailable")),
+        patch("robothor.goals.store.finish", side_effect=finish_after_stop),
+    ):
+        await controller.execute(g, attempt)
+    assert stopped.is_set()

@@ -83,6 +83,7 @@ exclude_docs: |
   !/enterprise/07-operate.md
   !/reference/cli.md
   !/reference/configuration.md
+  !/features/goal-pursuit.md
   !/TOOLS.md
   !/AUTONOMOUS_EXECUTION.md
   !/PLUGINS.md
@@ -136,6 +137,7 @@ nav:
       - CLI: reference/cli.md
       - Settings: reference/configuration.md
   - Operating:
+      - Goals: features/goal-pursuit.md
       - Tools: TOOLS.md
       - Personal autonomy: AUTONOMOUS_EXECUTION.md
       - Plugins: PLUGINS.md

@@ -618,6 +618,11 @@ def build_agent_goal_context(
 
     Returns '' when no goal task exists (e.g. agent not yet seeded).
     """
+    from robothor.goals.runtime import binding
+
+    if binding.get() is not None:
+        # The controller supplies the current pursuit contract in its durable prompt.
+        return ""
     if not agent_id:
         return ""
     row = dal.get_active_session_goal(tenant_id=tenant_id, agent_id=agent_id)

@@ -11,6 +11,11 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from robothor.engine.models import AgentConfig
+    from robothor.engine.session import AgentSession
 
 # Dial through the credential pool. A direct litellm call lets the SDK
 # resolve the provider key from the environment, which on 2026-08-27 meant
@@ -133,3 +138,40 @@ def format_verification_feedback(result: VerificationResult) -> str:
         "recipient receives."
     )
     return "\n".join(lines)
+
+
+def should_verify(
+    agent_config: AgentConfig, route: Any, session: AgentSession | None = None
+) -> bool:
+    """Determine if verification step should run."""
+    from robothor.engine.models import TriggerType
+    from robothor.goals.runtime import pursuit_yielded
+
+    if session and pursuit_yielded(session.run):
+        return False
+    if agent_config.verification_enabled:
+        return True
+    # Skip verification for interactive sessions (adds latency, Qwen JSON unreliable)
+    if (
+        session
+        and session.run
+        and session.run.trigger_type
+        in (
+            TriggerType.TELEGRAM,
+            TriggerType.WEBCHAT,
+        )
+    ):
+        return False
+    # Skip verification for heartbeat (scout) runs — the scout is a
+    # deterministic scan-and-file beat with a rigid 5-section digest
+    # format. Verification second-guesses the digest, provokes the model
+    # into writing a meta-defense, and that defense overwrites the real
+    # output_text — operator ends up seeing garbage instead of the digest.
+    if (
+        session
+        and session.run
+        and session.run.trigger_detail
+        and session.run.trigger_detail.startswith("heartbeat:")
+    ):
+        return False
+    return bool(route and route.verification is True)

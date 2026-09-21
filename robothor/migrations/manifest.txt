@@ -128,7 +128,10 @@ crm/122_trigger_type_channel.sql
 crm/123_agent_run_task_text.sql
 crm/124_guardrail_context_overflow.sql
 crm/125_agent_run_step_batch.sql
+crm/126_goal_pursuit.sql
+crm/127_goal_pursuit_cost.sql
 crm/127_autonomous_execution.sql
+crm/128_goal_pursuit_task_release.sql
 crm/128_autonomy_resource_descriptors.sql
 crm/129_autonomy_workflows.sql
 crm/130_autonomy_request_context.sql

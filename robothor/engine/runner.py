@@ -591,6 +591,10 @@ class AgentRunner(
             tool_offload_threshold=agent_config.tool_offload_threshold,
         )
 
+        from robothor.goals.runtime import attach_run
+
+        await asyncio.to_thread(attach_run, session.run)
+
         # User identity threading
         session.run.user_id = effective_user_id
         session.run.user_role = effective_user_role
@@ -976,18 +980,9 @@ class AgentRunner(
 
         watchdog.touch("session_started")
 
-        # Auto-derive token budget for TRACKING ONLY (not enforced as a hard limit)
-        from robothor.engine.model_registry import compute_token_budget
+        from robothor.goals.runtime import initialize_token_budget
 
-        auto_budget = compute_token_budget(agent_config.model_primary, agent_config.max_iterations)
-        session.run.token_budget = auto_budget
-
-        # Sub-agent: cascade parent's remaining token budget (child can never exceed parent)
-        if spawn_context and spawn_context.remaining_token_budget > 0:
-            if auto_budget > 0:
-                session.run.token_budget = min(auto_budget, spawn_context.remaining_token_budget)
-            else:
-                session.run.token_budget = spawn_context.remaining_token_budget
+        initialize_token_budget(session.run, agent_config, spawn_context)
 
         # Stage 5 — propagate the CRM task this run is advancing so the
         # agent_runs row carries it from INSERT time. Previously only the

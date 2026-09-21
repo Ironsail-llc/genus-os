@@ -642,9 +642,15 @@ def _build_parser() -> argparse.ArgumentParser:
     # mcp
     subparsers.add_parser("mcp", help="Start the MCP server (stdio transport)")
 
+    from robothor.cli.pursuit import add_parser as add_pursuit_parser
+
+    add_pursuit_parser(subparsers)
+
     # goal — long-running session goal (operator objective).
     # Backed by a crm_task with the session_goal tag; see migration 065.
-    goal_parser = subparsers.add_parser("goal", help="Manage the active long-running session goal")
+    goal_parser = subparsers.add_parser(
+        "goal", aliases=["legacy-goal"], help="Manage the active long-running session goal"
+    )
     goal_parser.add_argument(
         "--tenant",
         default=None,
@@ -1356,7 +1362,11 @@ def main(argv: list[str] | None = None) -> int:
         from robothor.cli.admin import cmd_mcp
 
         return cmd_mcp()
-    if args.command == "goal":
+    if args.command == "goals":
+        from robothor.cli.pursuit import cmd_goals
+
+        return cmd_goals(args)
+    if args.command in {"goal", "legacy-goal"}:
         from robothor.cli.goal import cmd_goal
 
         return cmd_goal(args)

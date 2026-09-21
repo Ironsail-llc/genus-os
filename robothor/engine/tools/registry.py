@@ -1031,6 +1031,11 @@ class ToolRegistry:
         else:
             names = list(self._schemas.keys())
 
+        if config.id == "main":
+            from robothor.goals.tools import TOOL_NAMES
+
+            names.extend(n for n in sorted(TOOL_NAMES) if n in self._schemas and n not in names)
+
         if config.tools_denied:
             # Support glob patterns (e.g. "mcp_*", "gws_*") in tools_denied
             has_globs = any(c in p for p in config.tools_denied for c in "*?[")
