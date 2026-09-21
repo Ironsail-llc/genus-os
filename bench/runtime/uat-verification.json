@@ -2455,6 +2455,19 @@
         "business_resources": "Fresh private PostgreSQL goal/task data and synthetic business dispatch; no scheduler or production goal changes."
       },
       "limits": "The live conversations use an isolated minimal agent configuration and selected model chain. State assertions do not substitute for human review of language, and the prior accepted scripted status/pause case remains the only accepted manual result. Full acceptance and broader fallback/representative-workload comparison remain open. No production deployment."
+    },
+    "chat_cohort_report": {
+      "change": "Offline chat cohort report preserves all 30 planned conversations, distinguishing passed, failed, unresolved and not_started. Failed timed turns remain in distributions; missing turn timings are counted explicitly. Machine state results do not imply manual acceptance.",
+      "tests": {
+        "passed": 2,
+        "seconds": 0.21,
+        "log": "/tmp/runtime-chat-cohort-report.log"
+      },
+      "evidence": "Injected 60.005-second timeout remains in status latency; the missing pause, a started-but-unfinished conversation and 28 unstarted conversations all remain visible. Existing failure-retention/overwrite-refusal driver test also passes.",
+      "live_observation": "At the observed checkpoint, 6 conversations passed, none failed, 1 was in flight and 23 were not started. The process was confirmed live; this is not a final cohort result.",
+      "manual_review": "First three completed transcripts accurately retained the open task and paused goal. They are verbose and expose fixture IDs/versions; they are not treated as user-approved language or full production-profile behavior.",
+      "checks": "Ruff lint/format and diff checks pass. Offline report test included in CI; no hosted run claimed.",
+      "limits": "Live run continues unchanged. No production code, production goals or deployment changed in this increment. Full acceptance remains open."
     }
   },
   "calendar": {
