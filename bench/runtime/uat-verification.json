@@ -4995,9 +4995,11 @@
       "warnings": 1,
       "seconds": 2.43,
       "artifact": "bench/runtime/uat-chat-goal-selective-resume-current.json",
-      "manual_acceptance": false,
-      "review_pending": true,
-      "scope": "Native chat route/runner and goal handlers; scripted model, private PostgreSQL, no business connectors or scheduler."
+      "manual_acceptance": true,
+      "review_pending": false,
+      "scope": "Native chat route/runner and goal handlers; scripted model, private PostgreSQL, no business connectors or scheduler.",
+      "accepted_scope": "User accepted in normal chat on 2026-09-21: resume the parent while keeping the separately paused child paused; parent queued, child paused, unfinished task open. This is not authorization to resume any real goal.",
+      "accepted_response": "Yes, that matches"
     },
     "compound_task_live_cohort": {
       "configuration": {
@@ -6101,7 +6103,7 @@
     "Complete representative workload comparison against accepted integration baseline eea3252b1577e3f51e6d6a6216d6f242fd7ac4a1. Matched scripted standalone/compound task checks now pass with both minimal and selected main/full-catalogue profiles; current selected-profile p95 overhead is 54\u201356 ms versus baseline 134\u2013135 ms, with one fewer planning call. These remain two task scenarios with synthetic providers and isolated instructions/memory, not a representative live comparison.",
     "Qualify workload-wide selected-provider deadlines and latency, including requests competing with background goals. Local scripted HTTP acknowledgement/stop/progress and synthetic 1/5/20-tenant limits are measured; live-provider mixed-load limits remain unqualified. Preserve failures, unfinished attempts and uncertainty.",
     "Supported recovery source audit is documented in docs/architecture/runtime-outcome-recovery.md with executable coverage links. CRM task/note readbacks, calendar attendee evidence, saved acknowledgements and committed goal controls have distinct claim boundaries. Continue ingress/failure coverage review; arbitrary external-provider recovery remains unqualified.",
-    "Normal-chat manual acceptance is recorded for unfinished-work status, duplicate calendar confirmation, audit recovery and parent/child pause. Selective resume remains pending user review; no response has been received. Other required goal-control UAT and overall acceptance remain open.",
+    "Normal-chat manual acceptance is recorded for unfinished-work status, duplicate calendar confirmation, audit recovery, parent/child pause, and selective parent resume preserving a separately paused child and open task. Other required goal-control UAT and overall acceptance remain open. This acceptance does not resume any real goal.",
     "Retain the current runtime: tested candidates failed mandatory behavior and are not finalists. Any future replacement needs full parity, matched 100-repetition finalist measurements and upgrade qualification. No replacement is selected.",
     "Rollback 3dc1167c3e7 passes saved response, task identity, checkpoint deadline, complete-request reporting, initial receipt delivery and goal-history reconnect gates. Current/rollback/current daemon HTTP admission preserves stopped/effect state; previous target 7324c4d0313 is rejected for omitting goal receipts. Container/dependency rollback and hosted CI remain unverified; production deployment is outside authorized local work."
   ],

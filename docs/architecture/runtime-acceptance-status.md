@@ -27,9 +27,9 @@ Earlier failed populations remain preserved: full-catalogue default p95 33.872 s
 
 ## Normal-chat user acceptance
 
-Accepted by the user: unfinished-work reporting with the task left open; repeated confirmation without another calendar write; audit-based recovery without repeating an action; parent/child pause leaving unfinished tasks open and neither goal complete.
+Accepted by the user: unfinished-work reporting with the task left open; repeated confirmation without another calendar write; audit-based recovery without repeating an action; parent/child pause leaving unfinished tasks open and neither goal complete; selective parent resume preserving a separately paused child and the unfinished task.
 
-Pending: selective resume. The [current scripted transcript](../../bench/runtime/uat-chat-goal-selective-resume-current.json) confirms that explicitly pausing a child separately, then resuming its parent, leaves that child paused. The parent becomes queued and the task stays TODO. Execution is disabled in the private fixture; the reply says background work has not started. A review question remains unanswered; no acceptance is inferred.
+Selective resume was accepted in normal chat on 2026-09-21: “Yes, that matches.” The [reviewed scripted transcript](../../bench/runtime/uat-chat-goal-selective-resume-current.json) records a queued parent, paused child and TODO task. Execution is disabled in the private fixture; this acceptance does not authorize resuming a real goal. Other required goal-control cases and overall acceptance remain open.
 
 ## Completion boundary
 

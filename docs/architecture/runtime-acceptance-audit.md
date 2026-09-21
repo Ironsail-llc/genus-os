@@ -1687,3 +1687,8 @@ Future harness processes now record first reasoning and first answer/tool-argume
 Extended the native saved-family-pause test to cover both a narrow tool set and a broad tool set with the real deferral flag enabled. It asserts `should_defer` and verifies goal controls remain directly advertised. Both cases passed against private canonical PostgreSQL: two passed, 81 deselected, one warning, 3.24 seconds. Parent and child pause, TODO preservation, initial/reconnect audit recovery, foreign identity denial, later resume and stale-control rejection remain intact with no extra model calls. This is additional automated coverage of accepted behavior, not a new user acceptance response.
 
 The brief focused run overlapped the already latency-failing streaming cohort; retain that local-load qualification when interpreting its final timing. Product source and the cohort's already-loaded test code were unchanged.
+
+
+### Selective parent resume accepted by the user — 2026-09-21
+
+The user explicitly answered “Yes, that matches” to the normal-chat case: separately pause a child, then resume the parent while keeping that child paused. Accepted outcome: parent queued, child paused, unfinished task still open. The current transcript and verification index now record that acceptance; prior test evidence/revision is preserved. This does not approve other unreviewed goal controls, declare overall acceptance, or authorize resuming any real goal.

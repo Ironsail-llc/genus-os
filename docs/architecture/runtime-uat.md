@@ -1948,3 +1948,8 @@ Next performance work should reduce unnecessary request context or otherwise add
 ### Deferred-tool streaming diagnostics passed — 2026-09-21
 
 With existing tool discovery enabled only inside the private fixture, three streaming compound-task diagnostics passed in 11.927, 22.161 and 7.514 seconds. Each created one matching task and answered the additional calculation; no duplicate or post-return calls. Normal timeouts and the selected model chain were preserved. Three samples do not qualify performance. Raw diagnostics and telemetry are retained under `uat-runtime-deferred-streaming-diagnostic*`. A new thirty-request population has started at `/tmp/runtime-deferred-streaming-cohort.jsonl`; installed/default deferral remains off.
+
+
+### Selective parent resume accepted by the user — 2026-09-21
+
+The user explicitly answered “Yes, that matches” to the normal-chat case: separately pause a child, then resume the parent while keeping that child paused. Accepted outcome: parent queued, child paused, unfinished task still open. The current transcript and verification index now record that acceptance; prior test evidence/revision is preserved. This does not approve other unreviewed goal controls, declare overall acceptance, or authorize resuming any real goal.

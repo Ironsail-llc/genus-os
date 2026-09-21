@@ -1,6 +1,6 @@
 {
   "scope": "Native chat route/runner and goal handlers; scripted model, private PostgreSQL, no business connectors or scheduler.",
-  "manual_acceptance": false,
+  "manual_acceptance": true,
   "transcript": [
     {
       "user": "What's finished, and what's still left?",
@@ -366,5 +366,6 @@
   ],
   "final_child_status": "paused",
   "verified_revision": "32cfb4d3f7a",
-  "manual_review_status": "Awaiting user response to selective-resume case; prior parent-child pause acceptance remains accepted."
+  "manual_review_status": "User accepted in normal chat on 2026-09-21: resume the parent while keeping the separately paused child paused; parent queued, child paused, unfinished task open. This is not authorization to resume any real goal.",
+  "accepted_response": "Yes, that matches"
 }
