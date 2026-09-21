@@ -2111,6 +2111,10 @@
     "explicit_simple_profile_deadline": {
       "revision": "1714e70dd84",
       "artifact": "bench/runtime/uat-simple-profile-deadline.json"
+    },
+    "resolved_simple_profile_admission": {
+      "revision": "bad57a53d59",
+      "artifact": "bench/runtime/uat-resolved-profile-admission.json"
     }
   },
   "calendar": {

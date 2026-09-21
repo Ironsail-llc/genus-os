@@ -1,0 +1,41 @@
+{
+  "revision": "bad57a53d59",
+  "change": "Resolve root interactive manifests at the native admission boundary, reuse the successful configuration, and carry failed resolutions into the existing native refusal path without a second read. Apply explicit simple-profile deadlines from boundary entry, before lookup, and preserve shorter limits. Other modes retain their existing policy.",
+  "initial_diagnostics": [
+    {
+      "log": "/tmp/runtime-resolved-profile-initial.log",
+      "failed": 1,
+      "passed": 121,
+      "finding": "Lint removed the externally used runner resolver export; restored its explicit re-export."
+    },
+    {
+      "log": "/tmp/runtime-resolved-profile-focused.log",
+      "failed": 1,
+      "passed": 125,
+      "finding": "A new assertion compared an inside-boundary timestamp to an earlier caller timestamp without call-entry tolerance. Corrected the tolerance; the separate forty-second lookup-time accounting assertion remains exact."
+    }
+  ],
+  "focused": {
+    "passed": 141,
+    "warnings": 1,
+    "seconds": 12.91,
+    "log": "/tmp/runtime-resolved-profile-final-audit.log"
+  },
+  "canonical_browser": {
+    "passed": 33,
+    "skipped": 1,
+    "warnings": 1,
+    "seconds": 28.49,
+    "log": "/tmp/runtime-resolved-profile-native.log"
+  },
+  "http": {
+    "passed": 1,
+    "seconds": 23.87,
+    "samples": 30,
+    "artifact": "bench/runtime/uat-resolved-profile-http.json",
+    "log": "/tmp/runtime-resolved-profile-http.log"
+  },
+  "checks": "Ruff lint/format and diff checks pass; size caps unchanged. New profile, action-policy and admission-audit tests are included in runtime-contract CI; no hosted run is claimed.",
+  "audit_evidence": "The native entrypoint resolves a simple profile with no supplied agent_config, then stalls acceptance under a shortened test deadline. Execution is never called; the real tracking DAL preserves a timeout recoverable by original request identity. Actual native execution also verifies one manifest lookup and the deadline present before its synthetic model call.",
+  "limits": "Only explicit simple manifest declarations establish this new policy. No heuristic classification of arbitrary conversation is claimed. The local manifest lookup remains synchronous; elapsed lookup time is charged when it returns, but this change does not interrupt a blocked filesystem read. HTTP transport/provider fixtures are synthetic; no deployment-ingress or live-provider performance certification. Full product acceptance and manual repeated-confirmation review remain open. No production changes."
+}
