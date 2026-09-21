@@ -5768,6 +5768,22 @@
       "report": "bench/runtime/uat-runtime-rollback-goal-history-final-report.json",
       "patch": "bench/runtime/rollback-goal-history-compatibility.patch",
       "scope": "Application-code current/rollback/current daemon drill, private PG/Redis and scripted provider. Initial and reconnect recovery from seeded committed goal history, foreign-principal denial, stopped/unresolved records preserved, actual HTTP admission. Not container/dependency rollback or live fleet."
+    },
+    "streaming_diagnostic": {
+      "product_revision": "9163df1d1e6",
+      "harness_revision": "8ad8b32053b",
+      "samples": 3,
+      "verified": 3,
+      "screening_qualified": false,
+      "durations_seconds": [
+        13.608358258003136,
+        9.446482365994598,
+        6.448535112998798
+      ],
+      "canonical_passed": 81,
+      "canonical_skipped": 2,
+      "report": "bench/runtime/uat-runtime-cloud10-streaming-diagnostic-report.json",
+      "note": "Explicit streaming callback exercises the native streaming model path with existing selected models, private tools and cloud-only test allowance. Per-provider-call durations cover stream creation only; total request duration includes consumption. Three diagnostics cannot qualify p95. Streaming consumption does not share the experimental creation allowance, so non-streaming cohort cannot qualify normal streaming chat."
     }
   },
   "calendar": {
@@ -6006,13 +6022,13 @@
     ]
   },
   "remaining": [
-    "Current product e988eb920b9 passes 34 focused unit checks, 79 canonical tests and 11,448 full engine tests; rollback 7324c4d0313 preserves its receipt delivery. Current-source live qualification remains open. Prior full-tool, deferred-tool and all-model timeout screens are retained failures/rejections. A 30-request cloud-only ten-second allowance with isolated short-timeout health is running. No timeout/deferred default is promoted; all selected models and local fallback timing are unchanged.",
+    "Product 9163df1d1e6 adds durable goal-control recovery; focused and canonical checks pass and a full engine run is in progress. A test-only cloud allowance/health-isolation non-streaming cohort passed 30/30, p95 22.049 seconds, but is not a production policy. Streaming diagnostics passed 3/3; normal streaming needs a 30-request screen before policy decisions. Earlier failed cohorts remain retained; installed models/defaults unchanged.",
     "Complete representative workload comparison against accepted integration baseline eea3252b1577e3f51e6d6a6216d6f242fd7ac4a1. Matched scripted standalone/compound task checks now pass with both minimal and selected main/full-catalogue profiles; current selected-profile p95 overhead is 54\u201356 ms versus baseline 134\u2013135 ms, with one fewer planning call. These remain two task scenarios with synthetic providers and isolated instructions/memory, not a representative live comparison.",
     "Qualify workload-wide selected-provider deadlines and latency, including requests competing with background goals. Local scripted HTTP acknowledgement/stop/progress and synthetic 1/5/20-tenant limits are measured; live-provider mixed-load limits remain unqualified. Preserve failures, unfinished attempts and uncertainty.",
     "Recheck the supported outcome-recovery inventory and remaining ingress/failure cases against action contracts. Calendar and CRM note/task readbacks, task browser reconnect, saved responses, native checkpoints and daemon goal recovery have evidence; these do not establish arbitrary external-provider recovery.",
     "Normal-chat manual acceptance is recorded for unfinished-work status, duplicate calendar confirmation, audit recovery and parent/child pause. Selective resume remains pending user review; no response has been received. Other required goal-control UAT and overall acceptance remain open.",
     "Retain the current runtime: tested candidates failed mandatory behavior and are not finalists. Any future replacement needs full parity, matched 100-repetition finalist measurements and upgrade qualification. No replacement is selected.",
-    "Rollback 7324c4d0313 now passes saved receipt, task identity, persisted deadline, complete-request reporting and initial receipt-delivery race gates, including foreign-principal denial. Current/rollback/current daemon HTTP admission/audit recovery preserves stopped/effect state. Container/dependency rollback and hosted CI are unverified; production deployment and production ingress certification remain outside authorized local work."
+    "Rollback 3dc1167c3e7 passes saved response, task identity, checkpoint deadline, complete-request reporting, initial receipt delivery and goal-history reconnect gates. Current/rollback/current daemon HTTP admission preserves stopped/effect state; previous target 7324c4d0313 is rejected for omitting goal receipts. Container/dependency rollback and hosted CI remain unverified; production deployment is outside authorized local work."
   ],
   "local_model_screening": {
     "artifact": "uat-local-native-summary.json",

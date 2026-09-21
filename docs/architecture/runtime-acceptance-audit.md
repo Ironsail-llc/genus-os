@@ -1628,3 +1628,10 @@ The expanded compatibility probe rejected rollback `7324c4d0313`: it recovered C
 The final current/rollback/current drill passed with unchanged dependency pins, real daemon boot/shutdown and loopback HTTP admission, isolated PostgreSQL/Redis, and scripted providers. Both revisions recover seeded pause history initially and on reconnect; foreign-principal lookups reveal no receipt. Stopped runs and unresolved action records remain intact. Canonical integration also passed 80 tests with two skips. The exact cumulative 25-file backport is `bench/runtime/rollback-goal-history-compatibility.patch`; logs/reports include the rejected old target and first backport attempt. This qualifies application-code rollback only, not container/dependency rollback, hosted CI, or production expansion.
 
 The full engine suite is running separately against unchanged product `9163df1d1e6`; no result is claimed yet.
+
+
+### Streaming coverage correction — 2026-09-21
+
+The live task harness previously exercised non-streaming calls. Native chat may use `_call_llm_streaming`, where `_per_call_timeout` bounds connection creation but consumption uses chunk timeouts and the enclosing request deadline. Therefore the passing 30-request cloud-allowance experiment does not establish its effectiveness for streaming chat.
+
+The harness now explicitly supports `streaming: true` through the native runner callback, records streamed content-update counts, and labels provider-call timing as stream creation only (whole-request timing still includes consumption). Three private compound-task diagnostics under the cloud-only experimental allowance passed: 13.608, 9.446 and 6.449 seconds, exactly one matching task and the additional calculation each, six primary streaming calls, no post-return calls. Canonical run: 81 passed, two skipped, two warnings. These three requests cannot qualify p95. Next: a 30-request normal-streaming screen without experimental allowance, after the full engine regression run ends to avoid concurrent test load. Product source remains `9163df1d1e6`; no installed configuration changes.
