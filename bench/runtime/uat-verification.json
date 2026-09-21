@@ -1945,6 +1945,29 @@
       "intermediate_failure": "First expanded test invocation had a missing pytest import in the new parametrized test; corrected. Log /tmp/runtime-deep-worker-interface-after.log.",
       "checks": "Ruff lint/format and diff checks pass.",
       "limits": "Framework/provider is simulated; this is boundary compatibility, not live deep-runtime qualification. Cancellation inside an already-running deep worker, orphaned admission recovery, general deadline enforcement and remaining acceptance gates remain open. No production deployment."
+    },
+    "deep_worker_cancellation": {
+      "artifact": "bench/runtime/uat-deep-worker-cancellation.json",
+      "initial_failure": "Cancelling execute_deep discarded its late thread result, never finalized the run, and left progress-loop ownership unresolved.",
+      "before_log": "/tmp/runtime-deep-cancellation-before.log",
+      "audit_failure": "Canonical recovery reported running instead of stopping while the stopped worker was still finishing.",
+      "audit_before_log": "/tmp/runtime-deep-cancellation-native-before.log",
+      "fix": "Shield the deep worker future from delivery cancellation, always stop its progress loop, retain a tracked waiter and record its returned result/cost exactly once as cancelled. A cancelled registry waiter does not cancel the worker future or remove its result callback. Nonterminal recorded runs with durable stop authority are reported as stopping.",
+      "focused": {
+        "passed": 140,
+        "seconds": 9.77,
+        "log": "/tmp/runtime-deep-cancellation-focused-final.log"
+      },
+      "canonical_browser": {
+        "passed": 33,
+        "skipped": 1,
+        "warnings": 1,
+        "seconds": 25.75,
+        "log": "/tmp/runtime-deep-cancellation-native-final.log"
+      },
+      "coverage": "Synthetic thread with deterministic entry/release. Cancellation promptly propagates to its caller, no terminal result is claimed before release, late response and cost are recorded, and progress task exits. This also passes after a registry waiter is cancelled. Native private-canonical-DB test verifies durable Stop, stopping recovery, cancelled final row, saved deep result and cost, and one worker call.",
+      "checks": "Ruff lint/format and diff checks pass; no size cap increased.",
+      "limits": "This preserves ownership and evidence while the process/event loop remains alive. It does not forcibly terminate the OS thread, enforce all provider/tool controls inside the external deep framework, or recover a worker after process death. Loop shutdown may leave the audit open; no claim that absent evidence means no effects. Full acceptance and deployment remain unclaimed."
     }
   },
   "calendar": {

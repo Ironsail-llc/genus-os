@@ -596,3 +596,14 @@ Inspection before testing running-worker cancellation found that the runner pass
 The focused real-worker/deep/admission/size selection passes 79 tests (5.28s). Only the external RLM framework is simulated in the new runner-to-worker test; it verifies a single completion call, output and cost. Direct worker tests verify both connected and disconnected progress callbacks. A missing pytest import in the first expanded test run was corrected and its log retained. Ruff, formatting and diff checks pass. Evidence: `bench/runtime/uat-deep-worker-progress-interface.json`.
 
 This fixes the internal call boundary, not live framework qualification or cancellation of an already-running deep worker. That original cancellation check and other acceptance gates remain open. No deployment or full acceptance is claimed.
+
+
+## Retain late deep-worker results after cancellation
+
+A failing thread-cancellation test reproduced lost finalization: cancelling deep delivery discarded the future's returned result and left the progress task running. Deep worker calls now shield the worker future, clean up progress in a finally block, and retain a tracked waiter plus a one-time result callback after caller cancellation. Returned worker output/cost is recorded as cancelled, never successful completion of the interrupted request. Cancelling the registry waiter still leaves the worker future/result callback intact while the loop is alive.
+
+A new canonical native integration additionally reproduced recovery showing running despite a durable Stop. Nonterminal runs now consult their scoped durable control authority and expose stopping while awaiting final evidence. The integration starts a synthetic worker, records Stop, cancels delivery, verifies nonterminal stopping, releases the worker and reads its cancelled audit row, response evidence and cost. Only one worker call occurs.
+
+The focused deep/worker/recovery/control/size selection passes 140 tests (9.77s). The canonical browser/native command passes 33 integrations (25.75s), with one worker-only skip and one dependency warning. Ruff, formatting and diff checks pass; no size cap increased. Failures and evidence are retained in `bench/runtime/uat-deep-worker-cancellation.json`.
+
+This preserves late results within a live process; it does not forcibly stop an OS thread or prove provider/tool enforcement inside the external deep framework. Process-death recovery and those internal controls remain open, as do other acceptance gates. Loop shutdown leaves unknown evidence open rather than falsely claiming completion. No deployment or full acceptance is claimed.

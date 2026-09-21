@@ -1619,8 +1619,13 @@ class AgentRunner(
 
         try:
             from robothor.engine.runtime.deep_admission import execute_deep_checked
+            from robothor.engine.runtime.deep_worker import owned_deep_call
 
-            result = await asyncio.to_thread(  # type: ignore[call-arg]
+            result = await owned_deep_call(
+                session,
+                self._finish_run,
+                progress_stop,
+                progress_task,
                 execute_deep_checked,
                 run=session.run,
                 query=query,
@@ -1628,11 +1633,6 @@ class AgentRunner(
                 workspace=str(self.config.workspace),
                 on_event=lambda e: event_queue.put_nowait(e),
             )
-
-            progress_stop.set()
-            progress_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await progress_task
 
             elapsed = time.monotonic() - start_time
 
@@ -1687,11 +1687,6 @@ class AgentRunner(
             return self._finish_run(session.complete(response_text))
 
         except Exception as e:
-            progress_stop.set()
-            progress_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await progress_task
-
             from robothor.engine.runtime.failure import failed_or_stopped
 
             return self._finish_run(failed_or_stopped(session, e, traceback.format_exc()))

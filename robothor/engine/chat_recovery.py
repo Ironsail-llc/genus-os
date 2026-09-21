@@ -46,14 +46,22 @@ def read_outcome(auth, session_key: str, client_id: str) -> dict:
         RunStatus.CANCELLED,
         RunStatus.SKIPPED,
     }
+    stop_requested = False
+    if not terminal:
+        from robothor.engine.runtime.controls import stopped
+
+        stop_requested = stopped(auth.tenant_id, str(row["id"]))
     text = result_text(SimpleNamespace(**{**row, "status": status})) if terminal else ""
+    if stop_requested:
+        text = "Stop is recorded. Waiting for the original worker's final evidence."
     incomplete = any(not item["verified"] and item["status"] != "draft" for item in receipts)
     if terminal and receipts:
         if status == RunStatus.COMPLETED and incomplete:
             text = "The run ended, but its recorded calendar action is not fully verified."
         text = "\n\n".join(filter(None, [text, receipt_summary(receipts)]))
     return {
-        "state": status.value,
+        "state": "stopping" if stop_requested else status.value,
+        "stop_requested": stop_requested,
         "terminal": terminal,
         "run_id": str(row["id"]),
         "agent_id": row["agent_id"],
