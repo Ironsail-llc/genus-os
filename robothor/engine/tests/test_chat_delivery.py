@@ -93,6 +93,7 @@ def test_receipts_survive_terminal_row_write_race_without_reinterpreting_other_r
     cursor.fetchone.return_value = None if case == "absent" else row
     monkeypatch.setattr(chat_delivery, "get_connection", lambda: connection)
     monkeypatch.setattr(chat_delivery, "family_calendar_receipts", lambda *args: [])
+    monkeypatch.setattr(chat_delivery, "family_goal_receipts", lambda *args: [])
     read_receipts = Mock(
         return_value=[
             {

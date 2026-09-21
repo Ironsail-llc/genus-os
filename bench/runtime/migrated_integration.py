@@ -140,6 +140,7 @@ def main():
                         else []
                     ),
                     "robothor/engine/tests/test_native_goal_report_audit.py",
+                    "robothor/engine/tests/test_native_goal_control_failure.py",
                     "robothor/engine/tests/test_native_effect_journal.py",
                     "robothor/engine/tests/test_native_note_recovery.py",
                     "robothor/engine/tests/test_native_task_uncertainty.py",

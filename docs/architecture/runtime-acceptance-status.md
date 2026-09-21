@@ -2,6 +2,10 @@
 
 As of 2026-09-21. Current runtime retained; no production deployment or real stopped-goal resumption. The accepted integration baseline is `eea3252b1577e3f51e6d6a6216d6f242fd7ac4a1`. This page summarizes current evidence; the chronological [audit](runtime-acceptance-audit.md) and [machine-readable record](../../bench/runtime/uat-verification.json) preserve earlier failures and scope limits.
 
+Latest local change: saved goal controls now survive failed model replies in both initial chat and reconnect recovery. Native integration: 80 passed, two skipped; focused goal/chat regressions: 203 passed; enhanced reconnect/isolation test: one passed. The broad engine result and rollback qualification below predate this change, so rollback goal-history recovery must be backported and requalified before promotion.
+
+The [cloud-only allowance experiment](../../bench/runtime/uat-runtime-cloud10-health-isolated-report.json) passed 30/30 requests with p95 **22.049 seconds** (95% interval 20.178–24.892). This is test-only policy on product `e988eb920b9`, using unchanged selected models, with no duplicates or post-return calls. Native cost omits unknown interrupted-call usage. The default-policy failure below remains valid; no policy has been promoted.
+
 | Requirement | Current evidence | Remaining qualification |
 |---|---|---|
 | Preserve ordinary task behavior | [Full-catalogue baseline/current comparison](../../bench/runtime/uat-runtime-main-profile-baseline-comparison-report.json): 124 verified requests including warmups under selected main execution settings, one matching TODO each, two scripted execution calls, additional calculation preserved. Baseline adds one planning call; current does not. p95 local overhead 134–135 ms baseline versus 54–56 ms current. | Two task scenarios with synthetic providers and isolated instructions/memory; not representative live-provider workload or full production context. |

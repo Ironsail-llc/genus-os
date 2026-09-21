@@ -7,6 +7,7 @@ from psycopg2.extras import RealDictCursor
 from robothor.db.connection import get_connection
 from robothor.engine.chat_continuation import continuation
 from robothor.engine.chat_effect_receipts import family_effect_receipts
+from robothor.engine.chat_goal_receipts import family_goal_receipts
 from robothor.engine.chat_receipts import family_calendar_receipts
 from robothor.engine.chat_result import receipt_result_text
 from robothor.engine.models import RunStatus
@@ -37,6 +38,7 @@ def read_outcome(auth, session_key: str, client_id: str) -> dict:
             rows = [latest]
             receipts = family_calendar_receipts(cur, root, auth)
             receipts += family_effect_receipts(cur, root, auth)
+            receipts += family_goal_receipts(cur, root, auth)
     if len(rows) != 1:
         return {"state": "ambiguous", "terminal": False}
     row = rows[0]

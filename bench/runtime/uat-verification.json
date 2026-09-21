@@ -5728,6 +5728,34 @@
         "seconds": 3.58
       },
       "scope": "Experimental cloud model allowance only; local native timeout remains unchanged and the outer interactive deadline still applies. Caller-imposed cloud TimeoutError does not open the shared model breaker; other failures retain native policy. Before/after breaker states are journaled per request."
+    },
+    "cloud10_health_isolated_screen": {
+      "product_revision": "e988eb920b9",
+      "verified": 30,
+      "failed": 0,
+      "p95_seconds": 22.048987510002917,
+      "p95_ci95_seconds": [
+        20.17840369899932,
+        24.89154521499586
+      ],
+      "screening_passed": true,
+      "report": "bench/runtime/uat-runtime-cloud10-health-isolated-report.json",
+      "note": "Test-only cloud call allowance and timeout health isolation; installed selected models unchanged. No product policy promoted. Current goal-history change postdates this screen. 11 provider calls returned no result; recorded cost excludes unknown usage."
+    },
+    "goal_control_history_recovery": {
+      "before": "one native failure after both goals durably paused",
+      "canonical_passed": 80,
+      "canonical_skipped": 2,
+      "regression_passed": 203,
+      "chat_unit_passed": 63,
+      "reconnect_native_passed": 1,
+      "note": "Trusted dispatch attribution and committed parent/child history; initial and reconnect recovery, tenant/principal isolation, later resume leaves original receipt unchanged, rejected stale control adds no receipt, no additional model calls. Broad engine result predates this change. Rollback 7324c4d0313 needs goal-history receipt backport and requalification.",
+      "logs": [
+        "bench/runtime/uat-runtime-goal-control-before.log",
+        "bench/runtime/uat-runtime-goal-control-canonical.log",
+        "bench/runtime/uat-runtime-goal-control-reconnect.log",
+        "bench/runtime/uat-runtime-goal-control-regressions.log"
+      ]
     }
   },
   "calendar": {

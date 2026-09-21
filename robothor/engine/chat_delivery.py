@@ -9,6 +9,7 @@ from psycopg2.extras import RealDictCursor
 
 from robothor.db.connection import get_connection
 from robothor.engine.chat_effect_receipts import family_effect_receipts
+from robothor.engine.chat_goal_receipts import family_goal_receipts
 from robothor.engine.chat_receipts import family_calendar_receipts
 from robothor.engine.chat_result import receipt_result_text, result_text
 from robothor.engine.models import RunStatus
@@ -47,6 +48,7 @@ def _saved_result(run_id, auth, observed_run=None):
             return None
         receipts = family_calendar_receipts(cur, row, auth)
         receipts += family_effect_receipts(cur, row, auth)
+        receipts += family_goal_receipts(cur, row, auth)
     return {
         "text": receipt_result_text(
             SimpleNamespace(**{**row, "status": RunStatus(row["status"])}), receipts
