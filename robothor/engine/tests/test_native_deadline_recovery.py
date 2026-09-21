@@ -1,0 +1,130 @@
+"""Persist native interruption causes and recover them through the chat API."""
+
+import asyncio
+import os
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
+from uuid import uuid4
+
+import httpx
+import psycopg2
+import pytest
+from fastapi import FastAPI
+
+from robothor.auth.deps import AuthContext
+from robothor.engine import chat
+from robothor.engine.models import TriggerType
+from robothor.engine.runner import AgentRunner
+from robothor.engine.runtime import CurrentRuntime, ExecutionContext, RunRequest
+from robothor.engine.runtime.chat_control import request_key
+from robothor.engine.runtime.deadlines import RuntimeDeadlineError
+from robothor.engine.task_registry import get_task_registry
+
+pytestmark = pytest.mark.integration
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expire", [False, True])
+async def test_native_interruption_reason_survives_chat_recovery(
+    engine_config, sample_agent_config, monkeypatch, expire
+):
+    dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
+    if "host=/tmp/runtime-migrated-" not in dsn:
+        pytest.skip("requires disposable canonical migration harness")
+    tenant, client_id = "deadline-" + uuid4().hex, str(uuid4())
+    auth = AuthContext(
+        tenant_id=tenant, user_id="service:" + sample_agent_config.id, role="owner", typ="user"
+    )
+    session_key = "web:deadline-" + uuid4().hex
+    with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute("INSERT INTO crm_tenants(id,display_name) VALUES (%s,%s)", (tenant, tenant))
+    engine = AgentRunner(replace(engine_config, tenant_id=tenant))
+    sample_agent_config.task_protocol = False
+    sample_agent_config.model_fallbacks = ["openrouter/test/fallback"]
+    entered, interrupted = asyncio.Event(), asyncio.Event()
+    calls = []
+
+    async def provider(**kwargs):
+        calls.append(kwargs["model"])
+        if kwargs["model"] == sample_agent_config.model_primary:
+            raise ValueError("Synthetic unavailable primary")
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            interrupted.set()
+
+    monkeypatch.setattr("litellm.acompletion", provider)
+    tools = AsyncMock(side_effect=AssertionError("No business calls before provider completion"))
+    monkeypatch.setattr(engine.registry, "execute", tools)
+    deadline = datetime.now(UTC) + timedelta(seconds=2 if expire else 10)
+    context = ExecutionContext(
+        tenant, auth.user_id, request_key(auth, session_key, client_id), deadline=deadline
+    )
+    work = asyncio.create_task(
+        CurrentRuntime(engine.execute).run(
+            RunRequest(
+                context,
+                sample_agent_config.id,
+                "Synthetic interrupted request",
+                options={"agent_config": sample_agent_config, "trigger_type": TriggerType.EVENT},
+            )
+        )
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 1.5)
+        if not expire:
+            work.cancel()
+        with pytest.raises(RuntimeDeadlineError if expire else asyncio.CancelledError):
+            await work
+    finally:
+        if not work.done():
+            work.cancel()
+        await asyncio.gather(work, return_exceptions=True)
+        await get_task_registry().drain(timeout=5)
+    assert interrupted.is_set()
+    assert calls == [sample_agent_config.model_primary, sample_agent_config.model_fallbacks[0]]
+    tools.assert_not_awaited()
+    with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT id,status,error_message,completed_at,runtime_context FROM agent_runs WHERE tenant_id=%s",
+            (tenant,),
+        )
+        rows = cur.fetchall()
+    assert len(rows) == 1
+    run_id, status, reason, completed_at, runtime = rows[0]
+    assert status == "cancelled" and completed_at is not None
+    expected = "Runtime deadline expired" if expire else "Run cancelled externally"
+    assert expected in reason
+    assert ("Runtime deadline expired" in reason) is expire
+    assert (
+        runtime["request_id"] == context.request_id and runtime["deadline"] == deadline.isoformat()
+    )
+    monkeypatch.setattr(chat, "_runner", engine)
+    monkeypatch.setattr(chat, "_config", engine.config)
+    app = FastAPI()
+    app.include_router(chat.router)
+    caller = [auth]
+    monkeypatch.setattr(chat, "_auth_context", lambda _: caller[0])
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        for _ in range(2):
+            response = await client.get(
+                "/chat/outcome", params={"request_id": client_id, "session_key": session_key}
+            )
+            assert response.status_code == 200
+            body = response.json()
+            assert body["terminal"] and body["state"] == "cancelled"
+            assert body["run_id"] == str(run_id) and expected in body["text"]
+            assert not body["verified"] and body["effects"] == []
+        caller[0] = AuthContext(
+            tenant_id="foreign-tenant", user_id=auth.user_id, role="owner", typ="user"
+        )
+        foreign = await client.get(
+            "/chat/outcome", params={"request_id": client_id, "session_key": session_key}
+        )
+        assert foreign.json()["state"] == "not_found"
+    assert calls == [sample_agent_config.model_primary, sample_agent_config.model_fallbacks[0]]
+    tools.assert_not_awaited()
