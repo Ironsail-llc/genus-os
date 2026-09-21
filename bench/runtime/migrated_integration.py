@@ -133,6 +133,7 @@ def main():
                     "robothor/engine/tests/test_native_task_uncertainty.py",
                     "robothor/engine/tests/test_native_task_dedup_recovery.py",
                     "robothor/engine/tests/test_native_success_receipt.py",
+                    "robothor/engine/tests/test_native_unfinished_task.py",
                     "robothor/engine/tests/test_native_checkpoint_continuation.py",
                     "robothor/engine/tests/test_native_deep_worker_recovery.py",
                     *(

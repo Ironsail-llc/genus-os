@@ -1,0 +1,72 @@
+........F..........                                                      [100%]
+=================================== FAILURES ===================================
+_________ TestAutoTaskResolution.test_persist_run_resolves_on_success __________
+
+self = <robothor.engine.tests.test_auto_task.TestAutoTaskResolution object at 0xf657a13cdbd0>
+engine_config = EngineConfig(bot_token='test-token-123', default_chat_id='12345', port=18899, tenant_id='test-tenant', workspace=Posix...t_count=1, required_agent_ids=(), main_session_key='agent:main:primary', operator_name='', instance_id='', nats_url='')
+
+    def test_persist_run_resolves_on_success(self, engine_config):
+        from robothor.engine.runner import AgentRunner
+    
+        runner = AgentRunner(engine_config)
+    
+        run = AgentRun(
+            agent_id="test-agent",
+            status=RunStatus.COMPLETED,
+            task_id="task-uuid-123",
+            output_text="All done!",
+        )
+    
+        mock_resolve = MagicMock(return_value=True)
+        with (
+            patch("robothor.engine.runner.update_run"),
+            patch("robothor.engine.run_finalizer.create_steps_batch"),
+            patch("robothor.crm.dal.resolve_task", mock_resolve),
+        ):
+            runner._persist_run_sync(run)
+>           mock_resolve.assert_called_once_with(
+                "task-uuid-123",
+                resolution="Run completed: All done!",
+                agent_id="test-agent",
+            )
+
+robothor/engine/tests/test_auto_task.py:97: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+../.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/unittest/mock.py:997: in assert_called_once_with
+    return self.assert_called_with(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <MagicMock id='270855905074816'>, args = ('task-uuid-123',)
+kwargs = {'resolution': 'Run completed: All done!', 'agent_id': 'test-agent'}
+
+    def assert_called_with(self, /, *args, **kwargs):
+        """assert that the last call was made with the specified arguments.
+    
+        Raises an AssertionError if the args and keyword args passed in are
+        different to the last call to the mock."""
+        if self.call_args is None:
+            expected = self._format_mock_call_signature(args, kwargs)
+            actual = 'not called.'
+            error_message = ('expected call not found.\nExpected: %s\n  Actual: %s'
+                    % (expected, actual))
+            raise AssertionError(error_message)
+    
+        def _error_message():
+            msg = self._format_mock_failure_message(args, kwargs)
+            return msg
+        expected = self._call_matcher(_Call((args, kwargs), two=True))
+        actual = self._call_matcher(self.call_args)
+        if actual != expected:
+            cause = expected if isinstance(expected, Exception) else None
+>           raise AssertionError(_error_message()) from cause
+E           AssertionError: expected call not found.
+E           Expected: mock('task-uuid-123', resolution='Run completed: All done!', agent_id='test-agent')
+E             Actual: mock('task-uuid-123', resolution='Run completed: All done!', agent_id='test-agent', tenant_id='default')
+
+../.local/share/uv/python/cpython-3.14.2-linux-aarch64-gnu/lib/python3.14/unittest/mock.py:985: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  robothor.engine.run_finalizer:run_finalizer.py:856 Failed to update run in database: invalid input syntax for type uuid: "task-uuid-123"\nLINE 1: ...otes = 'Completed with minimal output', task_id = 'task-uuid...\n                                                             ^\n
+=========================== short test summary info ============================
+FAILED robothor/engine/tests/test_auto_task.py::TestAutoTaskResolution::test_persist_run_resolves_on_success
+1 failed, 18 passed in 3.76s

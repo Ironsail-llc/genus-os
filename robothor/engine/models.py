@@ -622,6 +622,10 @@ class AgentRun:
     verified_status: str | None = None
     verification: dict[str, Any] | None = None
 
+    # Host snapshot for task finalization, including todos restored from a checkpoint.
+    # Durable todo steps/checkpoints and the task's next_action retain the evidence.
+    pending_task_items: list[str] = field(default_factory=list)
+
     # Set when the agent_runs INSERT was rejected deterministically (CHECK/FK/
     # unique violation). The run itself keeps executing — tracking must never
     # break the run — but dependent DB writes (steps, which FK to the missing

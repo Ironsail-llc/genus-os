@@ -3762,6 +3762,26 @@
       "run_statuses_verified": true,
       "local_case_target_passed": true,
       "full_live_cohort_qualified": false
+    },
+    "known_unfinished_task": {
+      "base_revision": "9a03c15ed35",
+      "product_changed": true,
+      "behavior": "Known pending or in-progress checklist items keep originating CRM tasks open after successful worker turns, independently of optional run verification; writes use run tenant.",
+      "focused": {
+        "passed": 82,
+        "seconds": 5.63,
+        "log": "bench/runtime/uat-unfinished-task-focused-final.log"
+      },
+      "canonical": {
+        "passed": 50,
+        "skipped": 2,
+        "warnings": 1,
+        "seconds": 22.39,
+        "log": "bench/runtime/uat-unfinished-task-canonical-final.log"
+      },
+      "native_cases": "Actual runner, private CRM, task protocol and todo list enabled; unfinished and completed checklists in default and isolated tenants; scripted provider only.",
+      "earlier_failures": "Before: default-tenant task incorrectly DONE; isolated-tenant assertion used wrong DAL projection key, corrected to SQL. Intermediate focused test expected no explicit tenant; expectation and stale persistence mock corrected. Both failure logs retained.",
+      "limits": "Latest broad engine run predates this product change. Passing checklist closure retains existing off/observe verification policy, not a new guarantee of independent outcome proof. No live provider calls or production deployment; manual acceptance pending."
     }
   },
   "calendar": {
