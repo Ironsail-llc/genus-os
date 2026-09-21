@@ -1309,3 +1309,12 @@ At `733a77122d4`, a disposable PostgreSQL probe with 20 goals and 100,000 effect
 A deterministic 2,000-resample bootstrap gives conditional 95% p95 intervals of 58.240–58.551 ms before and 2.506–2.677 ms after. These are sequential local SQL measurements, not end-to-end agent speed, framework selection evidence or measured mixed-tenant operating limits. Raw samples and query plans are retained in `uat-runtime-goal-history-before.json` and `uat-runtime-goal-history-after.json`; the summary is `uat-runtime-goal-history-comparison.json`.
 
 The focused goal/effect/history/size selection passed 120 tests in 18.29 seconds, canonical integration and populated upgrade passed 36 with one skipped in 12.35 seconds, and migration packaging passed eight. Migration 142 is registered in the canonical manifest and isolated fixture/upgrade harnesses; production was not migrated. The synthetic history contract is included in compatibility CI. Overall acceptance remains false and the previous normal-chat recovery question still awaits a user response.
+
+
+## Broad regression and fresh-build browser verification
+
+At `f8d9fdf9bca`, the broad engine selection passed **11,247 tests, 29 skipped, 194 deselected, 393 warnings in 390.30 seconds**. Source and collected tests remained unchanged throughout the run. This incorporates safe goal bookkeeping, family effect evidence in decisions and reporting, list aggregation, and the indexed history lookup. It excludes slow/integration/LLM/e2e/smoke markers; warning counts and the complete output are retained.
+
+A fresh `pnpm build` passed. The private canonical harness with `--chat-browser` then passed **42 tests, one skipped, one warning in 30.83 seconds**. Its six real-browser cases cover native saved-plan recovery, repeated approvals and early stops. It includes the default canonical native tests and the fresh/populated migration checks. It does not newly drive goal action indicators in a browser; those have component coverage and the current full frontend suite has 1,666 passing tests.
+
+The audit's opening matrix was refreshed to remove superseded claims that generic action fencing, automatic note recovery and current regression evidence were missing. Historical entries remain for traceability. Other provider readbacks, application rollback qualification and remaining acceptance gates are still open; the normal-chat recovery example has not received user acceptance. No production deployment occurred.

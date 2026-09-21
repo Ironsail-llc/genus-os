@@ -1,0 +1,68 @@
+
+> app@1.100.2 build /home/philip/robothor-runtime-modernization/app
+> next build
+
+▲ Next.js 16.3.3 (Turbopack)
+✓ Running next.config.ts took 11ms
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 758ms
+  Running TypeScript ...
+  Finished TypeScript in 1853ms ...
+  Collecting page data using 19 workers ...
+Service manifest not found
+Service manifest not found
+Service manifest not found
+Service manifest not found
+  Generating static pages using 19 workers (0/24) ...
+Service manifest not found
+  Generating static pages using 19 workers (6/24) 
+  Generating static pages using 19 workers (12/24) 
+  Generating static pages using 19 workers (18/24) 
+✓ Generating static pages using 19 workers (24/24) in 798ms
+  Finalizing page optimization ...
+
+Route (app)
+┌ ƒ /
+├ ○ /_not-found
+├ ƒ /account/autonomy
+├ ƒ /account/security
+├ ƒ /api/account/password
+├ ƒ /api/actions/execute
+├ ƒ /api/auth/[...nextauth]
+├ ƒ /api/bridge/[...path]
+├ ƒ /api/chat/abort
+├ ƒ /api/chat/deep/start
+├ ƒ /api/chat/deep/status
+├ ƒ /api/chat/history
+├ ƒ /api/chat/outcome
+├ ƒ /api/chat/plan/approve
+├ ƒ /api/chat/plan/reject
+├ ƒ /api/chat/plan/start
+├ ƒ /api/chat/plan/status
+├ ƒ /api/chat/send
+├ ƒ /api/dashboard/error
+├ ƒ /api/dashboard/generate
+├ ƒ /api/dashboard/welcome
+├ ƒ /api/events/stats
+├ ƒ /api/events/stream
+├ ƒ /api/health
+├ ƒ /api/live
+├ ƒ /api/orchestrator/[...path]
+├ ƒ /api/ready
+├ ƒ /api/sales/deployment/[[...path]]
+├ ƒ /api/session
+├ ƒ /api/setup/[...path]
+├ ƒ /api/system/services
+├ ƒ /api/system/topology
+├ ƒ /api/vision/[...path]
+├ ƒ /setup
+├ ƒ /signin
+└ ƒ /signin/cloudflare
+
+
+ƒ Proxy (Middleware)
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+

@@ -9,16 +9,16 @@
   "replacement_selected": false,
   "checks": {
     "engine": {
-      "revision": "0323716b21a",
-      "passed": 11229,
+      "revision": "f8d9fdf9bca",
+      "passed": 11247,
       "failed": 0,
       "skipped": 29,
-      "deselected": 192,
-      "warnings": 394,
-      "seconds": 384.02,
+      "deselected": 194,
+      "warnings": 393,
+      "seconds": 390.3,
       "selection": "not slow and not integration and not llm and not e2e and not smoke",
-      "log": "bench/runtime/uat-runtime-engine-audited-recovery-regression.log",
-      "note": "Source and collected tests unchanged during run. Includes journal, terminal-owner sweep, CRM note automatic readback and chat receipt projection. Predates the subsequent goal bookkeeping fix. Warnings include deprecations and unawaited network coroutines; not a warning-free or performance result."
+      "log": "bench/runtime/uat-runtime-engine-goal-evidence-regression.log",
+      "note": "Product source and collected tests unchanged during run. Includes goal bookkeeping, family evidence decisions and list aggregation/index. Existing warnings remain; not latency evidence or full acceptance."
     },
     "frontend": {
       "base_revision": "56aa76e6aa0",
@@ -3449,6 +3449,34 @@
         "No production migration or deployment.",
         "Broad engine pass predates current changes; normal-chat UAT response still pending."
       ]
+    },
+    "engine_before_goal_evidence": {
+      "revision": "0323716b21a",
+      "passed": 11229,
+      "failed": 0,
+      "skipped": 29,
+      "deselected": 192,
+      "warnings": 394,
+      "seconds": 384.02,
+      "selection": "not slow and not integration and not llm and not e2e and not smoke",
+      "log": "bench/runtime/uat-runtime-engine-audited-recovery-regression.log",
+      "note": "Source and collected tests unchanged during run. Includes journal, terminal-owner sweep, CRM note automatic readback and chat receipt projection. Predates the subsequent goal bookkeeping fix. Warnings include deprecations and unawaited network coroutines; not a warning-free or performance result."
+    },
+    "fresh_goal_evidence_browser": {
+      "revision": "f8d9fdf9bca",
+      "build": {
+        "passed": true,
+        "log": "bench/runtime/uat-runtime-goal-evidence-app-build.log"
+      },
+      "canonical_browser": {
+        "passed": 42,
+        "skipped": 1,
+        "warnings": 1,
+        "seconds": 30.83,
+        "log": "bench/runtime/uat-runtime-goal-evidence-browser.log"
+      },
+      "scope": "Fresh built Next app with private canonical migrations, actual browser/native saved-plan recovery, duplicate approval and early-stop cases. Includes the default native integration selection. Does not newly exercise goal action indicators in a real browser.",
+      "manual_acceptance": false
     }
   },
   "calendar": {
