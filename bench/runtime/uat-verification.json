@@ -2335,6 +2335,26 @@
       "evidence": "Actual native runtime and LiteLLM OpenRouter serialization receive synthetic HTTP 503 responses for the first one or two configured cloud models. Exactly one native retry per failed model precedes fallback; all attempts retain the original deadline and temperature. Successful fallback performs one independently verified synthetic write with no later provider work. Stalled fallback expiry performs zero writes, raises the host deadline error, and submits the cancelled run with the accurate deadline reason to mocked persistence. Separate ownership tests verify ordinary cancellation and context reset.",
       "checks": "Ruff lint/format and diff checks pass; no size cap increased. Native fallback wire tests added to runtime-contract CI; no hosted run claimed.",
       "limits": "This verifies synthetic provider transport and finalization arguments, not live-provider outage latency, complete configured-profile parity, local GPU fallback, concurrent fallback load or actual database persistence of this particular deadline reason. Broad engine result 11156 remains attached to preceding product revision 3581b1a9db5. Full acceptance and remaining manual UAT stay open. No production deployment."
+    },
+    "native_deadline_recovery": {
+      "revision": "fd6c67f2b6c",
+      "product_revision": "49627a99058",
+      "canonical_browser": {
+        "passed": 35,
+        "skipped": 1,
+        "warnings": 1,
+        "seconds": 26.63,
+        "log": "/tmp/runtime-native-deadline-recovery-final.log"
+      },
+      "initial_fixture_failure": {
+        "failed": 2,
+        "log": "/tmp/runtime-native-deadline-recovery.log",
+        "reason": "Both new cases passed their database assertions, but the standalone chat router returned 503 because its fixture omitted engine/config initialization."
+      },
+      "evidence": "Real native runner and tracking finalizer write to a disposable canonical PostgreSQL database. Synthetic primary failure advances to a stalled fallback, then either the host deadline expires or the test explicitly cancels the task. One terminal cancelled run retains its original request ID/deadline and accurate cause. Two read-only chat outcome API calls recover that exact row and cause without model or business replay. A foreign tenant sees not_found. Each execution makes two synthetic provider calls and zero business calls.",
+      "identity_scope": "API test supplies a trusted fixture AuthContext; JWT authentication and deployed ingress are not exercised. Deadline recovery uses actual storage and the real chat outcome handler through ASGI.",
+      "checks": "Ruff lint/format and diff checks pass. New integration tests run in the canonical migration harness, including its existing CI invocation. No hosted run claimed.",
+      "limits": "Synthetic model boundary and isolated configuration; no real provider outage or latency claim. Canonical harness also verifies existing native/browser scenarios and fresh/populated schema migrations. Broad engine refresh is running separately; no result assumed. Remaining provider performance, manual UAT and full acceptance remain open. No production deployment."
     }
   },
   "calendar": {
