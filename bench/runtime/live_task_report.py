@@ -37,6 +37,9 @@ def report(path):
         "unfinished": len(starts.keys() - finishes.keys()),
         "not_started": expected - len(starts),
     }
+    incomplete_calls = sum(
+        bool(call.get("error_type")) for row in rows for call in row["provider_calls"]
+    )
     latency_passed = (
         len(rows) == expected
         and latency["p95"] is not None
@@ -55,6 +58,10 @@ def report(path):
         "native_estimated_cost_usd": sum(
             run["estimated_cost_usd"] for row in rows for run in row["runs"]
         ),
+        "provider_calls_without_result": incomplete_calls,
+        "cost_estimate_excludes_unknown_provider_usage": bool(
+            incomplete_calls or counts["unfinished"]
+        ),
         "post_return_model_calls": sum(row["post_return_model_calls"] for row in rows),
         "duplicate_task_samples": sum(row["task_count"] > 1 for row in rows),
         "stored_task_matches": sum(row.get("task_fields_match") is True for row in rows),
@@ -69,7 +76,7 @@ def report(path):
         "latency_passed": latency_passed,
         "screening_passed": expected >= 30 and counts["verified"] == expected and latency_passed,
         "manual_acceptance": False,
-        "note": "All finished attempts contribute timing, including failed/cutoff attempts; missing attempts cannot qualify. Provider invocations count LiteLLM calls, not independently observed HTTP retries. Cost is native recorded estimate, not billing. Direct native admission, not chat ingress/queue timing; no matched baseline or framework-selection claim.",
+        "note": "All finished attempts contribute timing, including failed/cutoff attempts; missing attempts cannot qualify. Provider invocations count LiteLLM calls, not independently observed HTTP retries. Cost is native recorded estimate, not billing; interrupted calls may incur charges absent from this estimate. Direct native admission, not chat ingress/queue timing; no matched baseline or framework-selection claim.",
     }
 
 

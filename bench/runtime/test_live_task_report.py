@@ -68,3 +68,26 @@ def test_confirmed_write_does_not_hide_an_interrupted_request(tmp_path):
     assert result["stored_task_matches"] == result["confirmed_action_samples"] == 1
     assert result["interrupted_after_confirmed_action"] == 1
     assert not result["screening_passed"]
+
+
+def test_successful_fallback_does_not_treat_cancelled_provider_usage_as_free(tmp_path):
+    path = tmp_path / "events.jsonl"
+    identity = {"index": 0, "request_id": "one"}
+    row = {
+        **identity,
+        "verified": True,
+        "duration_ms": 12000,
+        "provider_calls": [
+            {"model": "primary", "error_type": "CancelledError"},
+            {"model": "fallback"},
+        ],
+        "runs": [{"estimated_cost_usd": 0.01, "status": "completed"}],
+        "post_return_model_calls": 0,
+        "task_count": 1,
+    }
+    write(path, [{"configuration": {"samples": 1}}, {"started": identity}, {"sample": row}])
+    result = report(path)
+    assert result["counts"]["verified"] == 1
+    assert result["native_estimated_cost_usd"] == 0.01
+    assert result["provider_calls_without_result"] == 1
+    assert result["cost_estimate_excludes_unknown_provider_usage"]

@@ -1,0 +1,55 @@
+{
+  "configuration": {
+    "primary": "openrouter/deepseek/deepseek-v4.1-flash",
+    "fallbacks": [
+      "openrouter/xiaomi/mimo-v2.5",
+      "openrouter/deepseek/deepseek-v4-flash",
+      "ollama_chat/qwen3.8:27b"
+    ],
+    "temperature": 0.5,
+    "tools_allowed": 104,
+    "tools_advertised": 112,
+    "schema_characters": 74925,
+    "deferred_tools": false,
+    "experimental_model_slice_seconds": 10,
+    "task_protocol": true,
+    "samples": 30,
+    "scenario": "task_and_calculation",
+    "synthetic_tenant_prefix": "runtime-live-",
+    "scope": "Native runner, installation profile settings, isolated workspace and private CRM. Only requested task tools execute. No production instructions/memory staged; 65-second harness cutoff and 12-call diagnostic limit. Provider counts include planning. Native cost estimates are not billing. Not ASGI/browser latency or a matched baseline comparison."
+  },
+  "counts": {
+    "verified": 30,
+    "failed": 0,
+    "unfinished": 0,
+    "not_started": 0
+  },
+  "elapsed_ms": {
+    "samples": 30,
+    "p50": 10710.85377500276,
+    "p95": 30045.946828991873,
+    "p95_ci95": [
+      17815.60157399508,
+      33792.01080399798
+    ]
+  },
+  "over_30_seconds": 2,
+  "over_60_seconds": 0,
+  "provider_invocations": {
+    "openrouter/deepseek/deepseek-v4.1-flash": 9,
+    "openrouter/xiaomi/mimo-v2.5": 52,
+    "openrouter/deepseek/deepseek-v4-flash": 7
+  },
+  "native_estimated_cost_usd": 0.106894,
+  "provider_calls_without_result": 8,
+  "cost_estimate_excludes_unknown_provider_usage": true,
+  "post_return_model_calls": 0,
+  "duplicate_task_samples": 0,
+  "stored_task_matches": 30,
+  "confirmed_action_samples": 30,
+  "interrupted_after_confirmed_action": 0,
+  "latency_passed": false,
+  "screening_passed": false,
+  "manual_acceptance": false,
+  "note": "All finished attempts contribute timing, including failed/cutoff attempts; missing attempts cannot qualify. Provider invocations count LiteLLM calls, not independently observed HTTP retries. Cost is native recorded estimate, not billing; interrupted calls may incur charges absent from this estimate. Direct native admission, not chat ingress/queue timing; no matched baseline or framework-selection claim."
+}

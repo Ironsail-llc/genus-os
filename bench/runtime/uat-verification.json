@@ -5531,13 +5531,36 @@
       "product_revision": "c342a50cd74",
       "harness_start_revision": "c5645694445",
       "samples": 30,
-      "status": "running",
-      "artifact": "/tmp/runtime-catalogue-slice10-cohort.jsonl",
+      "status": "complete",
+      "artifact": "bench/runtime/uat-runtime-catalogue-slice10-cohort.jsonl",
       "model_slice_seconds": 10,
       "deferred_tools": false,
       "model_selection_changed": false,
       "installed_configuration_changed": false,
-      "performance_qualified": false
+      "performance_qualified": false,
+      "verified": 30,
+      "p50_ms": 10710.85377500276,
+      "p95_ms": 30045.946828991873,
+      "p95_ci95_ms": [
+        17815.60157399508,
+        33792.01080399798
+      ],
+      "over30": 2,
+      "over60": 0,
+      "duplicate_actions": 0,
+      "post_return_model_calls": 0,
+      "provider_calls_without_result": 8,
+      "native_estimated_cost_usd": 0.106894,
+      "cost_estimate_excludes_unknown_provider_usage": true,
+      "screening_passed": false,
+      "promoted": false,
+      "canonical": {
+        "passed": 79,
+        "skipped": 2,
+        "warnings": 1,
+        "seconds": 432.97
+      },
+      "report": "bench/runtime/uat-runtime-catalogue-slice10-cohort-report.json"
     },
     "accepted_baseline_main_profile_comparison": {
       "baseline_revision": "eea3252b1577e3f51e6d6a6216d6f242fd7ac4a1",
@@ -5567,6 +5590,24 @@
       },
       "scope": "Full selected main execution settings and 104 allowed tools with private workspace/CRM, scripted execution and planning, network denied. Both revisions create one matching TODO, preserve additional calculation and do no post-return execution. No production instructions/memory, live-provider comparison or general performance claim.",
       "report": "bench/runtime/uat-runtime-main-profile-baseline-comparison-report.json"
+    },
+    "provider_cost_coverage_report": {
+      "tests_passed": 4,
+      "seconds": 0.16,
+      "scope": "Summary counts provider calls that ended without a result and marks missing usage, including when fallback succeeds. Unfinished attempts also mark incomplete estimates. Native cost is not billing.",
+      "log": "bench/runtime/uat-runtime-provider-cost-coverage.log"
+    },
+    "catalogue_model_slice8_screen": {
+      "product_revision": "c342a50cd74",
+      "harness_start_revision": "bf1605ebb57",
+      "samples": 30,
+      "status": "running",
+      "artifact": "/tmp/runtime-catalogue-slice8-cohort.jsonl",
+      "model_slice_seconds": 8,
+      "deferred_tools": false,
+      "model_selection_changed": false,
+      "installed_configuration_changed": false,
+      "performance_qualified": false
     }
   },
   "calendar": {
@@ -5805,7 +5846,7 @@
     ]
   },
   "remaining": [
-    "Current product c342a50cd74 passes focused, canonical and full engine checks (11,443 engine tests). Its selected-model compound screen verified all 30 requests with no duplicates/post-return calls, but p95 33.872 seconds exceeds the 30-second target. A separate 30-request deferred-tool screen also verified all requests but failed latency (p95 39.362 seconds); the installed/default flag stays off. A test-only 10-second per-model allowance screen with full tools and the existing fallback chain is running. No timeout default has changed. Earlier failures remain retained.",
+    "Current product c342a50cd74 passes focused, canonical and full engine checks (11,443 engine tests). Full-tool and deferred-tool compound screens verified all 30 requests but failed latency (p95 33.872 and 39.362 seconds). A test-only 10-second model allowance also verified all 30 but failed at p95 30.046 seconds; eight interrupted provider calls make cost estimates incomplete. An 8-second allowance screen is running. No timeout or deferred-tool default has been promoted; prior failures remain retained.",
     "Complete representative workload comparison against accepted integration baseline eea3252b1577e3f51e6d6a6216d6f242fd7ac4a1. Matched scripted standalone/compound task checks now pass with both minimal and selected main/full-catalogue profiles; current selected-profile p95 overhead is 54\u201356 ms versus baseline 134\u2013135 ms, with one fewer planning call. These remain two task scenarios with synthetic providers and isolated instructions/memory, not a representative live comparison.",
     "Qualify workload-wide selected-provider deadlines and latency, including requests competing with background goals. Local scripted HTTP acknowledgement/stop/progress and synthetic 1/5/20-tenant limits are measured; live-provider mixed-load limits remain unqualified. Preserve failures, unfinished attempts and uncertainty.",
     "Recheck the supported outcome-recovery inventory and remaining ingress/failure cases against action contracts. Calendar and CRM note/task readbacks, task browser reconnect, saved responses, native checkpoints and daemon goal recovery have evidence; these do not establish arbitrary external-provider recovery.",
