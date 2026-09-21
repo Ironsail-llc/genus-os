@@ -1,0 +1,115 @@
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+___ test_committed_write_with_lost_response_is_not_marked_retryable[timeout] ___
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0xf96dfb3a9480>
+failure = 'timeout'
+
+    @pytest.mark.parametrize("failure", ["timeout", "server_error", "invalid_json"])
+    async def test_committed_write_with_lost_response_is_not_marked_retryable(monkeypatch, failure):
+        effects = []
+    
+        async def invoke(method, url, **kwargs):
+            effects.append(kwargs["json"])
+            request = httpx.Request(method, url)
+            if failure == "timeout":
+                raise httpx.ReadTimeout("synthetic response lost", request=request)
+            return httpx.Response(500 if failure == "server_error" else 200,
+                                  content=b"response unavailable", request=request)
+    
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.request.side_effect = invoke
+        monkeypatch.setattr(service_client.httpx, "AsyncClient", lambda **kwargs: client)
+        service_client.reset_circuit_breakers()
+        try:
+            result = await service_client.call_service(
+                "synthetic-write", "POST", "https://synthetic.invalid/action", json={"item": "once"}
+            )
+        finally:
+            service_client.reset_circuit_breakers()
+        assert effects == [{"item": "once"}]
+        assert result.get("error")
+>       assert result["retryable"] is False
+E       assert True is False
+
+robothor/engine/tests/test_runtime_uncertain_write_contract.py:36: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  robothor.engine.tools.service_client:service_client.py:117 synthetic-write service timed out (ReadTimeout)
+_ test_committed_write_with_lost_response_is_not_marked_retryable[server_error] _
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0xf96dfb2cc170>
+failure = 'server_error'
+
+    @pytest.mark.parametrize("failure", ["timeout", "server_error", "invalid_json"])
+    async def test_committed_write_with_lost_response_is_not_marked_retryable(monkeypatch, failure):
+        effects = []
+    
+        async def invoke(method, url, **kwargs):
+            effects.append(kwargs["json"])
+            request = httpx.Request(method, url)
+            if failure == "timeout":
+                raise httpx.ReadTimeout("synthetic response lost", request=request)
+            return httpx.Response(500 if failure == "server_error" else 200,
+                                  content=b"response unavailable", request=request)
+    
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.request.side_effect = invoke
+        monkeypatch.setattr(service_client.httpx, "AsyncClient", lambda **kwargs: client)
+        service_client.reset_circuit_breakers()
+        try:
+            result = await service_client.call_service(
+                "synthetic-write", "POST", "https://synthetic.invalid/action", json={"item": "once"}
+            )
+        finally:
+            service_client.reset_circuit_breakers()
+        assert effects == [{"item": "once"}]
+        assert result.get("error")
+>       assert result["retryable"] is False
+E       assert True is False
+
+robothor/engine/tests/test_runtime_uncertain_write_contract.py:36: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  robothor.engine.tools.service_client:service_client.py:140 synthetic-write service unavailable (HTTP 500)
+_ test_committed_write_with_lost_response_is_not_marked_retryable[invalid_json] _
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0xf96dfb251ae0>
+failure = 'invalid_json'
+
+    @pytest.mark.parametrize("failure", ["timeout", "server_error", "invalid_json"])
+    async def test_committed_write_with_lost_response_is_not_marked_retryable(monkeypatch, failure):
+        effects = []
+    
+        async def invoke(method, url, **kwargs):
+            effects.append(kwargs["json"])
+            request = httpx.Request(method, url)
+            if failure == "timeout":
+                raise httpx.ReadTimeout("synthetic response lost", request=request)
+            return httpx.Response(500 if failure == "server_error" else 200,
+                                  content=b"response unavailable", request=request)
+    
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.request.side_effect = invoke
+        monkeypatch.setattr(service_client.httpx, "AsyncClient", lambda **kwargs: client)
+        service_client.reset_circuit_breakers()
+        try:
+            result = await service_client.call_service(
+                "synthetic-write", "POST", "https://synthetic.invalid/action", json={"item": "once"}
+            )
+        finally:
+            service_client.reset_circuit_breakers()
+        assert effects == [{"item": "once"}]
+        assert result.get("error")
+>       assert result["retryable"] is False
+E       assert True is False
+
+robothor/engine/tests/test_runtime_uncertain_write_contract.py:36: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  robothor.engine.tools.service_client:service_client.py:157 synthetic-write service returned a non-JSON body
+=========================== short test summary info ============================
+FAILED robothor/engine/tests/test_runtime_uncertain_write_contract.py::test_committed_write_with_lost_response_is_not_marked_retryable[timeout]
+FAILED robothor/engine/tests/test_runtime_uncertain_write_contract.py::test_committed_write_with_lost_response_is_not_marked_retryable[server_error]
+FAILED robothor/engine/tests/test_runtime_uncertain_write_contract.py::test_committed_write_with_lost_response_is_not_marked_retryable[invalid_json]
+3 failed in 0.18s

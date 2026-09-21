@@ -1,0 +1,26 @@
+{
+  "change": "A shared-service timeout, server error or unreadable response for a mutating HTTP request is now non-retryable and outcome_unknown. Unhandled handler transport errors use the existing read-only tool classification; reads retain their prior retry behavior.",
+  "red": {
+    "failed": 3,
+    "log": "bench/runtime/uat-uncertain-write-before.log"
+  },
+  "initial_after": {
+    "passed": 32,
+    "failed": 1,
+    "log": "bench/runtime/uat-uncertain-write-initial-after.log",
+    "finding": "Function-size limit exceeded; extracted HTTP-status mapping without raising limits."
+  },
+  "focused": {
+    "passed": 33,
+    "failed": 0,
+    "seconds": 4.91,
+    "log": "bench/runtime/uat-uncertain-write-final.log"
+  },
+  "limitations": [
+    "Classification is not a durable duplicate barrier.",
+    "Generic provider-specific reconciliation and recovery of interrupted goal controls remain open.",
+    "Arbitrary handlers returning their own error dictionaries and external adapters need separate coverage."
+  ],
+  "full_acceptance_passed": false,
+  "production_deployed": false
+}

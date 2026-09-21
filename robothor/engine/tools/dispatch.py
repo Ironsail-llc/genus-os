@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, cast
 import httpx
 
 from robothor.constants import DEFAULT_TENANT
+from robothor.engine.tools.response_failure import http_status_failure, tool_response_failure
 
 if TYPE_CHECKING:
     from robothor.config import Config
@@ -607,7 +608,7 @@ async def _execute_tool(
         err_msg = f"backing service error (HTTP {status})"
         logger.warning("Tool %s: %s", name, err_msg)
         _audit_tool_call(name, agent_id, tenant_id, user_id=user_id, status="error", error=err_msg)
-        return {"error": err_msg, "retryable": status >= 500}
+        return http_status_failure(name, status, err_msg)
     except httpx.HTTPError as e:
         # Transport-level failure (connect refused, timeout, protocol error)
         # from a handler that didn't route through service_client — e.g. the
@@ -616,7 +617,7 @@ async def _execute_tool(
         err_msg = f"backing service unreachable: {type(e).__name__}"
         logger.warning("Tool %s: %s", name, err_msg)
         _audit_tool_call(name, agent_id, tenant_id, user_id=user_id, status="error", error=err_msg)
-        return {"error": err_msg, "retryable": True}
+        return tool_response_failure(name, {"error": err_msg, "retryable": True})
     except Exception as e:
         err_msg, crashed = _describe_exception(e)
         if crashed:

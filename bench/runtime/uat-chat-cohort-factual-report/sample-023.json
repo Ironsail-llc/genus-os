@@ -1,0 +1,175 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "\u201cFinish the requested work\u201d is waiting. 1 of 2 linked tasks are marked done. Still open: \u201cCheck the remaining item\u201d. The goal is not complete. No current criterion evidence has been recorded. Automatic pursuit is disabled, so scheduled reviews will not run.",
+      "run": {
+        "text": "\u201cFinish the requested work\u201d is waiting. 1 of 2 linked tasks are marked done. Still open: \u201cCheck the remaining item\u201d. The goal is not complete. No current criterion evidence has been recorded. Automatic pursuit is disabled, so scheduled reviews will not run.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 9005,
+        "output_tokens": 312,
+        "duration_ms": 3332,
+        "total_cost_usd": 0.0006,
+        "run_id": "17142b2f-546d-4e4a-a1f1-c01cbe49dbc0"
+      },
+      "elapsed_ms": 3412.195327997324,
+      "measurements": {
+        "run_id": "17142b2f-546d-4e4a-a1f1-c01cbe49dbc0",
+        "duration_ms": 3332,
+        "model_calls": 2,
+        "tool_calls": 2,
+        "provider_ms": 3264,
+        "tool_wall_ms": 20,
+        "compaction_ms": 0,
+        "compactions": 0,
+        "input_tokens": 9005,
+        "time_to_first_action_ms": 1464,
+        "time_to_verified_completion_ms": null,
+        "post_completion_tool_calls": null,
+        "factual_goal_report": true,
+        "steps": [
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 1441,
+            "input_tokens": 4152,
+            "output_tokens": 117,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "list_pursuit_goals",
+            "model": null,
+            "duration_ms": 11,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 1823,
+            "input_tokens": 4853,
+            "output_tokens": 195,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "report_pursuit_goal",
+            "model": null,
+            "duration_ms": 9,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          }
+        ]
+      }
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "\u201cFinish the requested work\u201d is paused. 1 of 2 linked tasks are marked done. Still open: \u201cCheck the remaining item\u201d. The goal is not complete. No current criterion evidence has been recorded. Automatic pursuit is disabled, so scheduled reviews will not run.",
+      "run": {
+        "text": "\u201cFinish the requested work\u201d is paused. 1 of 2 linked tasks are marked done. Still open: \u201cCheck the remaining item\u201d. The goal is not complete. No current criterion evidence has been recorded. Automatic pursuit is disabled, so scheduled reviews will not run.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14857,
+        "output_tokens": 483,
+        "duration_ms": 4758,
+        "total_cost_usd": 0.0008,
+        "run_id": "25f9b5ff-bdfd-4752-ac95-90c922626b73"
+      },
+      "elapsed_ms": 4774.86097200017,
+      "measurements": {
+        "run_id": "25f9b5ff-bdfd-4752-ac95-90c922626b73",
+        "duration_ms": 4758,
+        "model_calls": 3,
+        "tool_calls": 3,
+        "provider_ms": 4692,
+        "tool_wall_ms": 27,
+        "compaction_ms": 0,
+        "compactions": 0,
+        "input_tokens": 14857,
+        "time_to_first_action_ms": 1175,
+        "time_to_verified_completion_ms": null,
+        "post_completion_tool_calls": null,
+        "factual_goal_report": true,
+        "steps": [
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 1170,
+            "input_tokens": 4293,
+            "output_tokens": 76,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "list_pursuit_goals",
+            "model": null,
+            "duration_ms": 9,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 2136,
+            "input_tokens": 4938,
+            "output_tokens": 255,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "update_pursuit_goal",
+            "model": null,
+            "duration_ms": 6,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 1386,
+            "input_tokens": 5626,
+            "output_tokens": 152,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "report_pursuit_goal",
+            "model": null,
+            "duration_ms": 12,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          }
+        ]
+      }
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "report_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal",
+    "report_pursuit_goal"
+  ],
+  "provider_attempts": 5,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

@@ -3087,6 +3087,22 @@
       "artifact": "bench/runtime/uat-factual-report-live-diagnostic-1.json",
       "log": "bench/runtime/uat-factual-report-live-diagnostic-1.log",
       "finding": "After tool-description guidance, both turns used trusted factual reports. Status used 2 model calls and pause 3; no model rewrite after report publication. One diagnostic, not a 30-repetition cohort or proof of performance improvement."
+    },
+    "factual_report_live_screening": {
+      "artifact": "bench/runtime/uat-chat-cohort-factual-report-summary.json",
+      "revision": "37d510a4174",
+      "conversations": 30,
+      "passed": 30,
+      "failed": 0,
+      "factual_report_turns": 60,
+      "screening_passed": true,
+      "manual_acceptance": false
+    },
+    "uncertain_write_classification": {
+      "artifact": "bench/runtime/uat-uncertain-write-classification.json",
+      "passed": 33,
+      "failed": 0,
+      "scope": "Error classification only; broader engine regression in progress."
     }
   },
   "calendar": {

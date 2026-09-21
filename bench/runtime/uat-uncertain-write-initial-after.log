@@ -1,0 +1,20 @@
+...........................F.....                                        [100%]
+=================================== FAILURES ===================================
+________________________ test_no_new_oversized_function ________________________
+
+    def test_no_new_oversized_function():
+        """A function over the threshold must be decomposed, not merely moved."""
+        measured = _measure()
+        new = {k: v for k, v in measured.items() if v > MAX_NEW_FUNCTION_LINES and k not in KNOWN_LARGE}
+>       assert not new, (
+            f"new function(s) over {MAX_NEW_FUNCTION_LINES} lines: {new}. Extract a "
+            "cohesive step instead — moving it to another module satisfies the file "
+            "ratchet and changes nothing about the function."
+        )
+E       AssertionError: new function(s) over 200 lines: {'tools/dispatch.py::_execute_tool': 203}. Extract a cohesive step instead — moving it to another module satisfies the file ratchet and changes nothing about the function.
+E       assert not {'tools/dispatch.py::_execute_tool': 203}
+
+robothor/engine/tests/test_function_size_ratchet.py:193: AssertionError
+=========================== short test summary info ============================
+FAILED robothor/engine/tests/test_function_size_ratchet.py::test_no_new_oversized_function
+1 failed, 32 passed in 5.17s

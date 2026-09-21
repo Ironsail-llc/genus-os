@@ -1,0 +1,220 @@
+{
+  "expected_conversations": 30,
+  "counts": {
+    "passed": 30,
+    "failed": 0,
+    "unresolved": 0,
+    "not_started": 0
+  },
+  "conversations": [
+    {
+      "repetition": 0,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 1,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 2,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 3,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 4,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 5,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 6,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 7,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 8,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 9,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 10,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 11,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 12,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 13,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 14,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 15,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 16,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 17,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 18,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 19,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 20,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 21,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 22,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 23,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 24,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 25,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 26,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 27,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 28,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 29,
+      "state": "passed",
+      "exit_code": 0
+    }
+  ],
+  "elapsed_ms": {
+    "status": {
+      "samples": 30,
+      "p50": 5558.562589001667,
+      "p95": 12323.214494994318,
+      "p95_ci95": [
+        9009.19229000283,
+        43528.815344005125
+      ],
+      "missing": 0
+    },
+    "pause": {
+      "samples": 30,
+      "p50": 5335.868550006126,
+      "p95": 22482.635567001125,
+      "p95_ci95": [
+        7580.141067999648,
+        57886.764686998504
+      ],
+      "missing": 0
+    }
+  },
+  "complete_population": true,
+  "manual_acceptance": false,
+  "screening_passed": true,
+  "screening_targets": {
+    "turn_p95_ms": 30000,
+    "turn_deadline_ms": 60000
+  },
+  "latency_note": "Measured distributions include completed failed attempts when timing exists. Missing turns remain counted and cannot qualify the cohort. Status and pause are summarized separately.",
+  "runtime_revision": "37d510a4174",
+  "scope": "Native status/pause chat through configured primary/fallbacks/temperature in a minimal synthetic profile and private databases. Runtime and harness source unchanged throughout collection. No production credentials for business tools, production writes, deployment or model-selection changes.",
+  "factual_reports": 60,
+  "provider_calls": 160,
+  "estimated_cost_usd": 0.0498,
+  "cost_note": "Provider-reported estimates; billing not reconciled.",
+  "model_calls_by_turn": {
+    "status": {
+      "2": 20,
+      "3": 10
+    },
+    "pause": {
+      "3": 30
+    }
+  },
+  "above_30_seconds": [
+    {
+      "sample": 2,
+      "turn": "pause",
+      "seconds": 57.886764686998504
+    },
+    {
+      "sample": 24,
+      "turn": "status",
+      "seconds": 43.528815344005125
+    }
+  ],
+  "full_acceptance_passed": false,
+  "comparison_note": "Both point-estimate p95 values meet screening targets. Bootstrap intervals remain wide. Sequential prior cohorts do not establish a causal performance improvement or finalist qualification."
+}

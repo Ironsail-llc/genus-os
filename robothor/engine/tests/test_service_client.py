@@ -79,10 +79,15 @@ async def test_connect_timeout_maps_to_offline():
     assert result["retryable"] is False
 
 
-async def test_read_timeout_maps_to_timed_out_retryable():
+async def test_write_read_timeout_requires_reconciliation():
     with _patched(_client_raising(httpx.ReadTimeout("read timed out"))):
         result = await call_service("bridge", "POST", URL, json={"a": 1})
-    assert result == {"error": "bridge service timed out", "service": "bridge", "retryable": True}
+    assert result == {
+        "error": "bridge service timed out",
+        "service": "bridge",
+        "retryable": False,
+        "outcome_unknown": True,
+    }
 
 
 async def test_5xx_maps_to_unavailable_with_code():
