@@ -1,0 +1,287 @@
+{
+  "configuration": {
+    "primary": "openrouter/deepseek/deepseek-v4.1-flash",
+    "fallbacks": [
+      "openrouter/xiaomi/mimo-v2.5",
+      "openrouter/deepseek/deepseek-v4-flash",
+      "ollama_chat/qwen3.8:27b"
+    ],
+    "temperature": 0.5,
+    "tools_allowed": 104,
+    "task_protocol": true,
+    "samples": 30,
+    "synthetic_tenant_prefix": "runtime-live-",
+    "scope": "Native runner, installation profile settings, isolated workspace and private CRM. Only requested task tools execute. No production instructions/memory staged; 65-second harness cutoff and 12-call diagnostic limit. Provider counts include planning. Native cost estimates are not billing. Not ASGI/browser latency or a matched baseline comparison."
+  },
+  "counts": {
+    "verified": 30,
+    "failed": 0,
+    "unfinished": 0,
+    "not_started": 0
+  },
+  "elapsed_ms": {
+    "samples": 30,
+    "p50": 16416.772249998758,
+    "p95": 45343.690102003166,
+    "p95_ci95": [
+      30694.220019002387,
+      50873.49213199923
+    ]
+  },
+  "over_30_seconds": 7,
+  "over_60_seconds": 0,
+  "provider_invocations": {
+    "openrouter/deepseek/deepseek-v4.1-flash": 100,
+    "openrouter/xiaomi/mimo-v2.5": 2
+  },
+  "native_estimated_cost_usd": 0.122642,
+  "post_return_model_calls": 0,
+  "duplicate_task_samples": 0,
+  "stored_task_matches": 30,
+  "confirmed_action_samples": 30,
+  "interrupted_after_confirmed_action": 0,
+  "latency_passed": false,
+  "screening_passed": false,
+  "manual_acceptance": false,
+  "note": "All finished attempts contribute timing, including failed/cutoff attempts; missing attempts cannot qualify. Provider invocations count LiteLLM calls, not independently observed HTTP retries. Cost is native recorded estimate, not billing. Direct native admission, not chat ingress/queue timing; no matched baseline or framework-selection claim.",
+  "measured_revision": "7f0007400378eedb6d26d98f350a08961bf996f8",
+  "saved_deadline_samples": 30,
+  "missing_saved_deadline_samples": 0,
+  "overall_acceptance_passed": false,
+  "post_creation_model_ms": {
+    "samples": 30,
+    "p50": 3535,
+    "p95": 31833,
+    "p95_ci95": [
+      15181,
+      40473
+    ]
+  },
+  "post_creation_trace": [
+    {
+      "index": 0,
+      "request_ms": 20288.39027199865,
+      "model_calls_after_create": 2,
+      "recorded_model_ms_after_create": 15763,
+      "tools_after_create": [
+        "list_tasks"
+      ]
+    },
+    {
+      "index": 1,
+      "request_ms": 15787.291375003406,
+      "model_calls_after_create": 1,
+      "recorded_model_ms_after_create": 1813,
+      "tools_after_create": []
+    },
+    {
+      "index": 2,
+      "request_ms": 11593.03180200368,
+      "model_calls_after_create": 1,
+      "recorded_model_ms_after_create": 1662,
+      "tools_after_create": []
+    },
+    {
+      "index": 3,
+      "request_ms": 23882.359128001553,
+      "model_calls_after_create": 2,
+      "recorded_model_ms_after_create": 5075,
+      "tools_after_create": [
+        "list_tasks"
+      ]
+    },
+    {
+      "index": 4,
+      "request_ms": 16468.579142005183,
+      "model_calls_after_create": 1,
+      "recorded_model_ms_after_create": 4443,
+      "tools_after_create": []
+    },
+    {
+      "index": 5,
+      "request_ms": 10586.698762002925,
+      "model_calls_after_create": 1,
+      "recorded_model_ms_after_create": 3624,
+      "tools_after_create": []
+    },
+    {
+      "index": 6,
+      "request_ms": 36579.86639699811,
+      "model_calls_after_create": 3,
+      "recorded_model_ms_after_create": 30692,
+      "tools_after_create": [
+        "list_tasks",
+        "list_tasks"
+      ]
+    },
+    {
+      "index": 7,
+      "request_ms": 11769.679924997035,
+      "model_calls_after_create": 1,
+      "recorded_model_ms_after_create": 2360,
+      "tools_after_create": []
+    },
+    {
+      "index": 8,
+      "request_ms": 9381.842260998383,
+      "model_calls_after_create": 1,
+      "recorded_model_ms_after_create": 2044,
+      "tools_after_create": []
+    },
+    {
+      "index": 9,
+      "request_ms": 16416.772249998758,
+      "model_calls_after_create": 1,
+      "recorded_model_ms_after_create": 3189,
+      "tools_after_create": []
+    },
+    {
+      "index": 10,
+      "request_ms": 9702.130814999691,
+      "model_calls_after_create": 1,
+      "recorded_model_ms_after_create": 1833,
+      "tools_after_create": []
+    },
+    {
+      "index": 11,
+      "request_ms": 14992.540496001311,
+      "model_calls_after_create": 1,
+      "recorded_model_ms_after_create": 2195,
+      "tools_after_create": []
+    },
+    {
+      "index": 12,
+      "request_ms": 9307.66173700249,
+      "model_calls_after_create": 1,
+      "recorded_model_ms_after_create": 3233,
+      "tools_after_create": []
+    },
+    {
+      "index": 13,
+      "request_ms": 8652.766979001171,
+      "model_calls_after_create": 1,
+      "recorded_model_ms_after_create": 2548,
+      "tools_after_create": []
+    },
+    {
+      "index": 14,
+      "request_ms": 30694.220019002387,
+      "model_calls_after_create": 1,
+      "recorded_model_ms_after_create": 4275,
+      "tools_after_create": []
+    },
+    {
+      "index": 15,
+      "request_ms": 17731.69235500245,
+      "model_calls_after_create": 2,
+      "recorded_model_ms_after_create": 7435,
+      "tools_after_create": [
+        "list_tasks"
+      ]
+    },
+    {
+      "index": 16,
+      "request_ms": 12591.870202006248,
+      "model_calls_after_create": 1,
+      "recorded_model_ms_after_create": 2351,
+      "tools_after_create": []
+    },
+    {
+      "index": 17,
+      "request_ms": 13127.56485400314,
+      "model_calls_after_create": 1,
+      "recorded_model_ms_after_create": 8896,
+      "tools_after_create": []
+    },
+    {
+      "index": 18,
+      "request_ms": 23164.632734005863,
+      "model_calls_after_create": 2,
+      "recorded_model_ms_after_create": 18654,
+      "tools_after_create": [
+        "list_tasks"
+      ]
+    },
+    {
+      "index": 19,
+      "request_ms": 30190.577257002587,
+      "model_calls_after_create": 1,
+      "recorded_model_ms_after_create": 12154,
+      "tools_after_create": []
+    },
+    {
+      "index": 20,
+      "request_ms": 45343.690102003166,
+      "model_calls_after_create": 1,
+      "recorded_model_ms_after_create": 40473,
+      "tools_after_create": []
+    },
+    {
+      "index": 21,
+      "request_ms": 34548.829810002644,
+      "model_calls_after_create": 1,
+      "recorded_model_ms_after_create": 2739,
+      "tools_after_create": []
+    },
+    {
+      "index": 22,
+      "request_ms": 50873.49213199923,
+      "model_calls_after_create": 1,
+      "recorded_model_ms_after_create": 15181,
+      "tools_after_create": []
+    },
+    {
+      "index": 23,
+      "request_ms": 29590.20109699486,
+      "model_calls_after_create": 1,
+      "recorded_model_ms_after_create": 14143,
+      "tools_after_create": []
+    },
+    {
+      "index": 24,
+      "request_ms": 22597.84049099835,
+      "model_calls_after_create": 1,
+      "recorded_model_ms_after_create": 14290,
+      "tools_after_create": []
+    },
+    {
+      "index": 25,
+      "request_ms": 40366.23417899682,
+      "model_calls_after_create": 3,
+      "recorded_model_ms_after_create": 31833,
+      "tools_after_create": [
+        "list_tasks",
+        "list_tasks"
+      ]
+    },
+    {
+      "index": 26,
+      "request_ms": 11691.094668996811,
+      "model_calls_after_create": 1,
+      "recorded_model_ms_after_create": 2587,
+      "tools_after_create": []
+    },
+    {
+      "index": 27,
+      "request_ms": 16737.654529999418,
+      "model_calls_after_create": 1,
+      "recorded_model_ms_after_create": 3535,
+      "tools_after_create": []
+    },
+    {
+      "index": 28,
+      "request_ms": 16028.495792998001,
+      "model_calls_after_create": 1,
+      "recorded_model_ms_after_create": 3454,
+      "tools_after_create": []
+    },
+    {
+      "index": 29,
+      "request_ms": 8737.623857996368,
+      "model_calls_after_create": 1,
+      "recorded_model_ms_after_create": 2817,
+      "tools_after_create": []
+    }
+  ],
+  "qualification_limit": "Correctness and persisted deadlines pass for this local native cohort. Performance screening fails the 30-second p95 criterion. The earlier faster population is retained separately, not substituted. Not a matched baseline or causal regression comparison; no production instructions/memory or HTTP/browser ingress parity."
+}
