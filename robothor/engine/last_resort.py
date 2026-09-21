@@ -147,8 +147,8 @@ def all_models_failed_error(
             filter(
                 None,
                 [
-                    "I could not get an answer from any model, so this run "
-                    f"stopped without doing the work. {why}.",
+                    "I could not get a further answer from any model, so this run "
+                    f"stopped before completing the request. {why}.",
                     local,
                 ],
             )
