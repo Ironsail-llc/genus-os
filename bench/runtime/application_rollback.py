@@ -22,7 +22,7 @@ from bench.runtime.restart_state import seed, verify
 # The accepted integration baseline predates those controls and is not a safe
 # rollback target for sessions admitted by the modernization implementation.
 TARGET_BASE = "b1671409892"
-TARGET = "5a8ce0323d8"
+TARGET = "53f588cb6bc"
 
 
 def drill(root, env, dsn):
@@ -39,6 +39,9 @@ def drill(root, env, dsn):
         "robothor/engine/runtime/effects.py",
         "robothor/engine/runtime/effect_dispatch.py",
         "robothor/engine/runtime/effect_results.py",
+        "robothor/engine/checkpoint.py",
+        "robothor/engine/runtime/current.py",
+        "robothor/engine/runtime/resume_deadline.py",
     }
     archive = root / "rollback-code.tar"
     subprocess.run(["git", "archive", "--output", str(archive), target], check=True)
@@ -56,16 +59,20 @@ def drill(root, env, dsn):
         "current": probe(current, env, dsn),
         "rollback": probe(checkout, env, dsn),
     }
-    required = ("reuses_saved_response", "task_report_identity_compatible")
+    required = (
+        "reuses_saved_response",
+        "task_report_identity_compatible",
+        "saved_deadlines_compatible",
+    )
     assert all(compatibility["current"][key] for key in required), compatibility
     if not all(compatibility["rollback"][key] for key in required):
         return {
             "target_revision": target,
-            "status": "rejected_incompatible_receipt_recovery",
+            "status": "rejected_incompatible_runtime_state",
             "receipt_compatibility": compatibility,
             "daemon_started": False,
             "rollback_qualified": False,
-            "reason": "Target would reserve a duplicate attempt instead of recovering a saved response.",
+            "reason": "Target cannot preserve saved responses, task identity, or checkpoint deadlines.",
         }
     identifiers = seed(dsn)
     stopped_run = identifiers[0]

@@ -4746,6 +4746,187 @@
         "seconds": 140.52
       },
       "scope": "Three diagnostic examples preserve a separately requested calculation, correct task body and ordinary model reply. Not representative intent coverage or 30-repetition screening. One response exceeded 30 seconds; none exceeded 60. No product change."
+    },
+    "rollback_checkpoint_deadlines": {
+      "previous_target": {
+        "target_revision": "5a8ce0323d8eb9b751bda4d0635e7105e0f14d6c",
+        "status": "rejected_incompatible_receipt_recovery",
+        "receipt_compatibility": {
+          "current": {
+            "reuses_saved_response": true,
+            "state": "finished",
+            "saved_deadlines_compatible": true,
+            "deadline_probe": {
+              "compatible": true,
+              "cases": {
+                "expired": {
+                  "outcome": "expired",
+                  "deadline": null
+                },
+                "future": {
+                  "outcome": "entered",
+                  "deadline": "2026-09-21T14:05:02.459188+00:00"
+                },
+                "malformed": {
+                  "outcome": "rejected",
+                  "deadline": null
+                }
+              }
+            },
+            "task_report_identity_compatible": true,
+            "task_report_probe": {
+              "reuses_saved_response": true,
+              "state": "confirmed"
+            }
+          },
+          "rollback": {
+            "reuses_saved_response": true,
+            "state": "finished",
+            "saved_deadlines_compatible": false,
+            "deadline_probe": {
+              "compatible": false,
+              "cases": {
+                "expired": {
+                  "outcome": "entered",
+                  "deadline": null
+                },
+                "future": {
+                  "outcome": "entered",
+                  "deadline": null
+                },
+                "malformed": {
+                  "outcome": "entered",
+                  "deadline": null
+                }
+              }
+            },
+            "task_report_identity_compatible": true,
+            "task_report_probe": {
+              "reuses_saved_response": true,
+              "state": "confirmed"
+            }
+          }
+        },
+        "daemon_started": false,
+        "rollback_qualified": false,
+        "reason": "Target cannot preserve saved responses, task identity, or checkpoint deadlines."
+      },
+      "backport": {
+        "target_revision": "53f588cb6bcd89f6f2f86a3cf3cf990b9232d3f6",
+        "target_base_revision": "b1671409892e389684d9267b50c985143f1b9031",
+        "receipt_compatibility": {
+          "current": {
+            "reuses_saved_response": true,
+            "state": "finished",
+            "saved_deadlines_compatible": true,
+            "deadline_probe": {
+              "compatible": true,
+              "cases": {
+                "expired": {
+                  "outcome": "expired",
+                  "deadline": null
+                },
+                "future": {
+                  "outcome": "entered",
+                  "deadline": "2026-09-21T14:06:00.258958+00:00"
+                },
+                "malformed": {
+                  "outcome": "rejected",
+                  "deadline": null
+                }
+              }
+            },
+            "task_report_identity_compatible": true,
+            "task_report_probe": {
+              "reuses_saved_response": true,
+              "state": "confirmed"
+            }
+          },
+          "rollback": {
+            "reuses_saved_response": true,
+            "state": "finished",
+            "saved_deadlines_compatible": true,
+            "deadline_probe": {
+              "compatible": true,
+              "cases": {
+                "expired": {
+                  "outcome": "expired",
+                  "deadline": null
+                },
+                "future": {
+                  "outcome": "entered",
+                  "deadline": "2026-09-21T14:06:00.523380+00:00"
+                },
+                "malformed": {
+                  "outcome": "rejected",
+                  "deadline": null
+                }
+              }
+            },
+            "task_report_identity_compatible": true,
+            "task_report_probe": {
+              "reuses_saved_response": true,
+              "state": "confirmed"
+            }
+          }
+        },
+        "rollback_qualified": true,
+        "current_revision": "4d16f98ea1a7c84fb56e2fe00535e62c412e8cff",
+        "dependency_pins_equal": true,
+        "phases": [
+          {
+            "phase": "current",
+            "health_ready": true,
+            "code_origin": "robothor/engine/daemon.py",
+            "shutdown_exit_code": 0,
+            "shutdown_seconds": 1.0680789409962017,
+            "recovery_worker_spawns": 1,
+            "stopped_state_preserved": true,
+            "unresolved_effect_preserved": true,
+            "reported_response_preserved": true,
+            "new_native_admission_passed": true
+          },
+          {
+            "phase": "rollback",
+            "health_ready": true,
+            "code_origin": "robothor/engine/daemon.py",
+            "shutdown_exit_code": 0,
+            "shutdown_seconds": 1.1173441260034451,
+            "recovery_worker_spawns": 1,
+            "stopped_state_preserved": true,
+            "unresolved_effect_preserved": true,
+            "reported_response_preserved": true,
+            "new_native_admission_passed": true
+          },
+          {
+            "phase": "restore",
+            "health_ready": true,
+            "code_origin": "robothor/engine/daemon.py",
+            "shutdown_exit_code": 0,
+            "shutdown_seconds": 1.3175637829990592,
+            "recovery_worker_spawns": 1,
+            "stopped_state_preserved": true,
+            "unresolved_effect_preserved": true,
+            "reported_response_preserved": true,
+            "new_native_admission_passed": true
+          }
+        ],
+        "scope": "Actual daemon boot, resume scan and shutdown across current/prior/current source checkouts, private database and Redis, no provider access. Each revision also passes its real native new-admission contract in a separate process with a scripted provider. Does not exercise HTTP admission in the booted daemon or container/dependency rollback."
+      },
+      "backport_focused": {
+        "passed": 42,
+        "seconds": 4.74
+      },
+      "canonical": {
+        "passed": 72,
+        "skipped": 2,
+        "warnings": 1,
+        "seconds": 33.35
+      },
+      "initial_harness_failure": "Private probe cleanup compared uuid against a text array; fixed by explicitly casting to uuid[]. Failed log retained.",
+      "scope": "Fresh-process admission probes verify expired denial, exact future deadline restoration and malformed denial in current and backport. Private current/rollback/current daemon boot, state preservation and separate native admission pass. HTTP admission inside booted daemon and dependency/container rollback remain unqualified. No live providers or deployment.",
+      "current_product_changed": false,
+      "backport_patch": "bench/runtime/rollback-deadline-compatibility.patch"
     }
   },
   "calendar": {
@@ -4990,7 +5171,7 @@
     "Retain the current runtime: the tested bounded candidates failed required behavior and are not finalists. Any future replacement still needs behavior parity, matched configurations, 100-repetition finalist measurements and compatible checkpoint upgrades. No replacement is selected.",
     "Calendar and CRM note/task audit recovery, actual task browser reconnection, concurrent native readback, full-daemon goal crash recovery and saved checkpoint continuation are locally verified. Fresh-context recovery after a persisted response, including cleared engine cache, is also verified. Other external-provider readbacks, recovery when both reply persistence and browser request identity are absent, and loaded-fleet performance remain incomplete. Initial ordinary HTTP chat now delivers stored verified task evidence after an interruption in a compressed-clock native test, and frontend tests display settled audited outcomes directly. Approved normal-plan exception delivery now also passes a native private-database HTTP test, with one saved task and no re-execution on duplicate approval. Approved deep-plan stop now also passes a native worker-thread HTTP test: durable stop, pending/stopping response, denied late tool, late result/cost persistence and duplicate-approval denial. The external reasoning function is synthetic; live external-framework failures, other ingress and live timing still need appropriate qualification. Whole-run completion is not inferred from action receipts.",
     "Manually accepted in normal chat: unfinished-work status with pause preserving the open task; repeated calendar confirmation without another write/invitation; saved-evidence recovery without repeating an action; and pause propagation to the unfinished child without marking either goal complete. Other goal controls and overall acceptance remain pending.",
-    "The prior rollback target 15cd1835003 is rejected for task-report fingerprint incompatibility. Backport 5a8ce0323d8 passes saved-response and task-report identity probes plus the local current/rollback/current daemon/state/new-admission drill. HTTP admission in the booted daemon, downgraded checkpoint deadline restoration, container/dependency rollback and hosted CI remain unqualified. No production deployment is authorized."
+    "Previous rollback target 5a8ce0323d8 is rejected before daemon startup because it admits expired and malformed checkpoint deadlines. Separate six-file backport 53f588cb6bc passes saved-response, task-identity and saved-deadline probes, 42 focused tests, and local current/rollback/current daemon/state/separate-native-admission checks. HTTP admission inside the booted daemon, container/dependency rollback and hosted CI remain unqualified. No production deployment is authorized."
   ],
   "local_model_screening": {
     "artifact": "uat-local-native-summary.json",
@@ -5395,6 +5576,15 @@
   ],
   "remaining_before_task_final_cohort": [
     "Current revision 7f000740037 FAILED the 30-request selected-model native task latency screen: all 30 tasks/replies correct, one task each, all saved deadlines present and no post-return model calls; p95 45.344 seconds (bootstrap interval 30.694\u201350.873), seven requests over 30 seconds, none over 60. Investigate verified-result delivery latency and avoid unnecessary model/tool work without truncating requests with remaining obligations. Earlier populations remain preserved; the earlier passing point estimate does not qualify this source. No matched causal baseline, full production prompt/memory parity or fleet operating limits are claimed. A new explicit host task-report option passes native one-model-turn tests and control/receipt guards; its live intent selection and latency still require qualification.",
+    "The local 60-second policy now covers unclassified interactive setup/planning and unknown classification, then retains the same admission clock for simple execution. Explicit valid non-simple classifications retain their existing limits; exclusions protect goals and delegated/resumed work. Native compressed-clock tests and 31 main-profile synthetic task runs pass. Real-provider classification accuracy, workload-wide deadline behavior and production ingress timing remain unqualified; do not infer those from scripted responses.",
+    "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded. Production ingress, selected-provider p95 across the representative workload, and mixed-load fallback operating limits are not certified. Dispatch-only improvements do not qualify complete request latency.",
+    "Retain the current runtime: the tested bounded candidates failed required behavior and are not finalists. Any future replacement still needs behavior parity, matched configurations, 100-repetition finalist measurements and compatible checkpoint upgrades. No replacement is selected.",
+    "Calendar and CRM note/task audit recovery, actual task browser reconnection, concurrent native readback, full-daemon goal crash recovery and saved checkpoint continuation are locally verified. Fresh-context recovery after a persisted response, including cleared engine cache, is also verified. Other external-provider readbacks, recovery when both reply persistence and browser request identity are absent, and loaded-fleet performance remain incomplete. Initial ordinary HTTP chat now delivers stored verified task evidence after an interruption in a compressed-clock native test, and frontend tests display settled audited outcomes directly. Approved normal-plan exception delivery now also passes a native private-database HTTP test, with one saved task and no re-execution on duplicate approval. Approved deep-plan stop now also passes a native worker-thread HTTP test: durable stop, pending/stopping response, denied late tool, late result/cost persistence and duplicate-approval denial. The external reasoning function is synthetic; live external-framework failures, other ingress and live timing still need appropriate qualification. Whole-run completion is not inferred from action receipts.",
+    "Manually accepted in normal chat: unfinished-work status with pause preserving the open task; repeated calendar confirmation without another write/invitation; saved-evidence recovery without repeating an action; and pause propagation to the unfinished child without marking either goal complete. Other goal controls and overall acceptance remain pending.",
+    "The prior rollback target 15cd1835003 is rejected for task-report fingerprint incompatibility. Backport 5a8ce0323d8 passes saved-response and task-report identity probes plus the local current/rollback/current daemon/state/new-admission drill. HTTP admission in the booted daemon, downgraded checkpoint deadline restoration, container/dependency rollback and hosted CI remain unqualified. No production deployment is authorized."
+  ],
+  "remaining_before_rollback_deadlines": [
+    "Current ceb9d85f68d 30-request selected-model native task screen PASSED: 30 verified single tasks and replies, 30 persisted deadlines, no duplicates or post-return model calls; p95 21.046 seconds (bootstrap interval 15.417\u201322.969), none over 30 or 60 seconds. All used the host task report. Prior failed populations are retained. Compound-intent selection, matched accepted-baseline comparison, full production prompt/memory parity and fleet operating limits remain unqualified. Three task-plus-calculation diagnostics preserved both obligations without the task-only finalizer; this is not broad compound-intent qualification. Durations 50.003, 29.834 and 26.225 seconds show remaining response latency outside the standalone path.",
     "The local 60-second policy now covers unclassified interactive setup/planning and unknown classification, then retains the same admission clock for simple execution. Explicit valid non-simple classifications retain their existing limits; exclusions protect goals and delegated/resumed work. Native compressed-clock tests and 31 main-profile synthetic task runs pass. Real-provider classification accuracy, workload-wide deadline behavior and production ingress timing remain unqualified; do not infer those from scripted responses.",
     "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded. Production ingress, selected-provider p95 across the representative workload, and mixed-load fallback operating limits are not certified. Dispatch-only improvements do not qualify complete request latency.",
     "Retain the current runtime: the tested bounded candidates failed required behavior and are not finalists. Any future replacement still needs behavior parity, matched configurations, 100-repetition finalist measurements and compatible checkpoint upgrades. No replacement is selected.",

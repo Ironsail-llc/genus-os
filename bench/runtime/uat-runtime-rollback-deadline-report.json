@@ -1,0 +1,181 @@
+{
+  "previous_target": {
+    "target_revision": "5a8ce0323d8eb9b751bda4d0635e7105e0f14d6c",
+    "status": "rejected_incompatible_receipt_recovery",
+    "receipt_compatibility": {
+      "current": {
+        "reuses_saved_response": true,
+        "state": "finished",
+        "saved_deadlines_compatible": true,
+        "deadline_probe": {
+          "compatible": true,
+          "cases": {
+            "expired": {
+              "outcome": "expired",
+              "deadline": null
+            },
+            "future": {
+              "outcome": "entered",
+              "deadline": "2026-09-21T14:05:02.459188+00:00"
+            },
+            "malformed": {
+              "outcome": "rejected",
+              "deadline": null
+            }
+          }
+        },
+        "task_report_identity_compatible": true,
+        "task_report_probe": {
+          "reuses_saved_response": true,
+          "state": "confirmed"
+        }
+      },
+      "rollback": {
+        "reuses_saved_response": true,
+        "state": "finished",
+        "saved_deadlines_compatible": false,
+        "deadline_probe": {
+          "compatible": false,
+          "cases": {
+            "expired": {
+              "outcome": "entered",
+              "deadline": null
+            },
+            "future": {
+              "outcome": "entered",
+              "deadline": null
+            },
+            "malformed": {
+              "outcome": "entered",
+              "deadline": null
+            }
+          }
+        },
+        "task_report_identity_compatible": true,
+        "task_report_probe": {
+          "reuses_saved_response": true,
+          "state": "confirmed"
+        }
+      }
+    },
+    "daemon_started": false,
+    "rollback_qualified": false,
+    "reason": "Target cannot preserve saved responses, task identity, or checkpoint deadlines."
+  },
+  "backport": {
+    "target_revision": "53f588cb6bcd89f6f2f86a3cf3cf990b9232d3f6",
+    "target_base_revision": "b1671409892e389684d9267b50c985143f1b9031",
+    "receipt_compatibility": {
+      "current": {
+        "reuses_saved_response": true,
+        "state": "finished",
+        "saved_deadlines_compatible": true,
+        "deadline_probe": {
+          "compatible": true,
+          "cases": {
+            "expired": {
+              "outcome": "expired",
+              "deadline": null
+            },
+            "future": {
+              "outcome": "entered",
+              "deadline": "2026-09-21T14:06:00.258958+00:00"
+            },
+            "malformed": {
+              "outcome": "rejected",
+              "deadline": null
+            }
+          }
+        },
+        "task_report_identity_compatible": true,
+        "task_report_probe": {
+          "reuses_saved_response": true,
+          "state": "confirmed"
+        }
+      },
+      "rollback": {
+        "reuses_saved_response": true,
+        "state": "finished",
+        "saved_deadlines_compatible": true,
+        "deadline_probe": {
+          "compatible": true,
+          "cases": {
+            "expired": {
+              "outcome": "expired",
+              "deadline": null
+            },
+            "future": {
+              "outcome": "entered",
+              "deadline": "2026-09-21T14:06:00.523380+00:00"
+            },
+            "malformed": {
+              "outcome": "rejected",
+              "deadline": null
+            }
+          }
+        },
+        "task_report_identity_compatible": true,
+        "task_report_probe": {
+          "reuses_saved_response": true,
+          "state": "confirmed"
+        }
+      }
+    },
+    "rollback_qualified": true,
+    "current_revision": "4d16f98ea1a7c84fb56e2fe00535e62c412e8cff",
+    "dependency_pins_equal": true,
+    "phases": [
+      {
+        "phase": "current",
+        "health_ready": true,
+        "code_origin": "robothor/engine/daemon.py",
+        "shutdown_exit_code": 0,
+        "shutdown_seconds": 1.0680789409962017,
+        "recovery_worker_spawns": 1,
+        "stopped_state_preserved": true,
+        "unresolved_effect_preserved": true,
+        "reported_response_preserved": true,
+        "new_native_admission_passed": true
+      },
+      {
+        "phase": "rollback",
+        "health_ready": true,
+        "code_origin": "robothor/engine/daemon.py",
+        "shutdown_exit_code": 0,
+        "shutdown_seconds": 1.1173441260034451,
+        "recovery_worker_spawns": 1,
+        "stopped_state_preserved": true,
+        "unresolved_effect_preserved": true,
+        "reported_response_preserved": true,
+        "new_native_admission_passed": true
+      },
+      {
+        "phase": "restore",
+        "health_ready": true,
+        "code_origin": "robothor/engine/daemon.py",
+        "shutdown_exit_code": 0,
+        "shutdown_seconds": 1.3175637829990592,
+        "recovery_worker_spawns": 1,
+        "stopped_state_preserved": true,
+        "unresolved_effect_preserved": true,
+        "reported_response_preserved": true,
+        "new_native_admission_passed": true
+      }
+    ],
+    "scope": "Actual daemon boot, resume scan and shutdown across current/prior/current source checkouts, private database and Redis, no provider access. Each revision also passes its real native new-admission contract in a separate process with a scripted provider. Does not exercise HTTP admission in the booted daemon or container/dependency rollback."
+  },
+  "backport_focused": {
+    "passed": 42,
+    "seconds": 4.74
+  },
+  "canonical": {
+    "passed": 72,
+    "skipped": 2,
+    "warnings": 1,
+    "seconds": 33.35
+  },
+  "initial_harness_failure": "Private probe cleanup compared uuid against a text array; fixed by explicitly casting to uuid[]. Failed log retained.",
+  "scope": "Fresh-process admission probes verify expired denial, exact future deadline restoration and malformed denial in current and backport. Private current/rollback/current daemon boot, state preservation and separate native admission pass. HTTP admission inside booted daemon and dependency/container rollback remain unqualified. No live providers or deployment.",
+  "current_product_changed": false,
+  "backport_patch": "bench/runtime/rollback-deadline-compatibility.patch"
+}

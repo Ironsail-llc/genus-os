@@ -1,0 +1,192 @@
+diff --git a/robothor/engine/checkpoint.py b/robothor/engine/checkpoint.py
+index 7fb3427e493..8da822b0e9b 100644
+--- a/robothor/engine/checkpoint.py
++++ b/robothor/engine/checkpoint.py
+@@ -155,10 +155,13 @@ class CheckpointManager:
+                     return None
+                 result = dict(row)
+                 if tenant_id is not None:
+-                    cur.execute("SELECT tenant_id FROM agent_runs WHERE id=%s", (run_id,))
++                    cur.execute(
++                        "SELECT tenant_id,runtime_context FROM agent_runs WHERE id=%s", (run_id,)
++                    )
+                     owner = cur.fetchone()
+                     if not owner or owner["tenant_id"] != tenant_id:
+                         return None
++                    result["runtime_context"] = owner.get("runtime_context") or {}
+                 # Skip resume if schema version doesn't match
+                 saved_version = result.get("schema_version", 0)
+                 if saved_version != CHECKPOINT_SCHEMA_VERSION:
+diff --git a/robothor/engine/runtime/current.py b/robothor/engine/runtime/current.py
+index 34499654182..9ad46a43289 100644
+--- a/robothor/engine/runtime/current.py
++++ b/robothor/engine/runtime/current.py
+@@ -93,6 +93,9 @@ class CurrentRuntime:
+ 
+             if await asyncio.to_thread(stopped, context.tenant_id, request.resume_from):
+                 raise ValueError("stopped runs cannot be resumed implicitly")
++            from robothor.engine.runtime.resume_deadline import restore
++
++            context = restore(context, saved)
+             options["resume_from_run_id"] = request.resume_from
+         elif "resume_from_run_id" in options:
+             raise ValueError("use the explicit resume contract")
+@@ -134,7 +137,14 @@ class CurrentRuntime:
+         try:
+             require_time(context)
+             entered[0] = True
+-            run = await self._execute(agent_id=request.agent_id, message=request.message, **options)
++            from robothor.engine.runtime.deadlines import execute_before_deadline
++
++            run = await execute_before_deadline(
++                context,
++                lambda: self._execute(
++                    agent_id=request.agent_id, message=request.message, **options
++                ),
++            )
+         finally:
+             remove(activity)
+             current.reset(activity_token)
+diff --git a/robothor/engine/runtime/effect_dispatch.py b/robothor/engine/runtime/effect_dispatch.py
+index b300d51de5a..22a92de7c31 100644
+--- a/robothor/engine/runtime/effect_dispatch.py
++++ b/robothor/engine/runtime/effect_dispatch.py
+@@ -63,6 +63,13 @@ async def invoke(name, args, ctx, dispatch):
+         }
+     if record["state"] == "confirmed":
+         return {**record["resolution"]["result"], "effect_id": str(record["id"]), "recovered": True}
++    if record["state"] == "finished":
++        return {
++            **record["resolution"]["result"],
++            "effect_id": str(record["id"]),
++            "recovered": True,
++            "verification": "reported",
++        }
+     return await _dispatch_reserved(context, record, name, args, ctx, dispatch)
+ 
+ 
+@@ -145,9 +152,20 @@ async def _dispatch_reserved(context, record, name, args, ctx, dispatch):
+         and not result.get("error")
+     )
+     try:
+-        recorded = await asyncio.to_thread(
+-            effects.finish, context, record["id"], ctx.run_id, uncertain=uncertain or verify_success
+-        )
++        from robothor.engine.runtime import effect_results
++
++        if not uncertain and not verify_success and effect_results.cacheable(result):
++            recorded = await asyncio.to_thread(
++                effect_results.record, context, record["id"], ctx.run_id, result
++            )
++        else:
++            recorded = await asyncio.to_thread(
++                effects.finish,
++                context,
++                record["id"],
++                ctx.run_id,
++                uncertain=uncertain or verify_success,
++            )
+         if not recorded:
+             return _unknown(
+                 record["id"],
+diff --git a/robothor/engine/runtime/effect_results.py b/robothor/engine/runtime/effect_results.py
+new file mode 100644
+index 00000000000..05a44b97499
+--- /dev/null
++++ b/robothor/engine/runtime/effect_results.py
+@@ -0,0 +1,35 @@
++"""Retain acknowledged tool results without inventing independent verification."""
++
++from psycopg2.extras import Json
++
++from robothor.engine.runtime import effects
++
++
++def record(context, effect_id, run_id, result):
++    """Only the dispatched owner can atomically store a returned response."""
++    with effects.get_connection() as conn, conn.cursor() as cur:
++        cur.execute(
++            """UPDATE agent_runtime_effects SET state='finished',resolution=%s,
++               version=version+1,updated_at=now()
++               WHERE id=%s AND tenant_id=%s AND principal_id=%s AND request_id=%s
++                 AND run_id=%s AND state='dispatching'""",
++            (
++                Json({"source": "tool_response", "result": result}),
++                effect_id,
++                context.tenant_id,
++                context.principal_id,
++                context.request_id,
++                run_id,
++            ),
++        )
++        return cur.rowcount == 1
++
++
++def cacheable(result):
++    return (
++        isinstance(result, dict)
++        and not result.get("error")
++        and result.get("success") is not False
++        and result.get("ok") is not False
++        and result.get("status") not in ("error", "failed", "rejected")
++    )
+diff --git a/robothor/engine/runtime/effects.py b/robothor/engine/runtime/effects.py
+index 99899edc377..0ef86c96a52 100644
+--- a/robothor/engine/runtime/effects.py
++++ b/robothor/engine/runtime/effects.py
+@@ -36,6 +36,9 @@ class Verification:
+ 
+ 
+ def fingerprint(tool_name, arguments):
++    if tool_name == "create_task" and isinstance(arguments, dict):
++        # Presentation does not change the business action or its retry identity.
++        arguments = {key: value for key, value in arguments.items() if key != "finalReport"}
+     payload = json.dumps(
+         [tool_name, arguments], sort_keys=True, separators=(",", ":"), allow_nan=False
+     )
+@@ -58,7 +61,8 @@ def begin(context, run_id, agent_id, tool_name, arguments):
+         _lock(cur, context)
+         cur.execute(
+             """SELECT * FROM agent_runtime_effects WHERE tenant_id=%s AND principal_id=%s
+-               AND request_id=%s AND fingerprint=%s AND state='confirmed'
++               AND request_id=%s AND fingerprint=%s AND (state='confirmed'
++                 OR state='finished' AND resolution->>'source'='tool_response')
+                ORDER BY created_at DESC LIMIT 1""",
+             (context.tenant_id, context.principal_id, context.request_id, digest),
+         )
+diff --git a/robothor/engine/runtime/resume_deadline.py b/robothor/engine/runtime/resume_deadline.py
+new file mode 100644
+index 00000000000..bd23e987864
+--- /dev/null
++++ b/robothor/engine/runtime/resume_deadline.py
+@@ -0,0 +1,30 @@
++"""Restore saved request limits without renewing a checkpoint's authority."""
++
++from dataclasses import replace
++from datetime import datetime
++
++
++def restore(context, checkpoint):
++    saved = checkpoint.get("runtime_context") or {}
++    if not isinstance(saved, dict):
++        raise ValueError("invalid saved runtime context")
++    # A trusted goal controller can grant a new attempt its own deadline.
++    # CurrentRuntime validates the active goal lease before reaching this point.
++    if (
++        context.goal_id
++        and saved.get("goal_id") == context.goal_id
++        and saved.get("attempt_id") != context.attempt_id
++    ):
++        return context
++    value = saved.get("deadline")
++    if value is None:
++        return context  # Legacy checkpoints have no saved runtime bound.
++    try:
++        deadline = datetime.fromisoformat(value)
++        if deadline.tzinfo is None:
++            raise ValueError("missing timezone")
++    except (TypeError, ValueError) as exc:
++        raise ValueError("invalid saved runtime deadline") from exc
++    if context.deadline is not None:
++        deadline = min(deadline, context.deadline)
++    return replace(context, deadline=deadline)
