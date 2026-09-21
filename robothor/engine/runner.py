@@ -477,10 +477,10 @@ class AgentRunner(
         agent_id: str,
         agent_config: Any,
         message: str,
-        trigger_type: Any,
-        trigger_detail: str,
+        trigger_type: TriggerType,
+        trigger_detail: str | None,
         resolved_tenant: str,
-    ) -> tuple[Any, Any]:
+    ) -> tuple[Any, AgentRun | None]:
         """The manifest lookup, and the refused run it produces when there is none.
 
         Extracted from ``execute`` when merging two independently-green branches
@@ -488,8 +488,12 @@ class AgentRunner(
         question — is there a manifest to run — and the refusal has to be a real
         failed run rather than an exception, because callers record it.
 
-        Returns ``(config, None)`` when there is one, ``(None, failed_run)``
-        when there is not.
+        Returns ``(config, None)`` when there is one and ``(None, failed_run)``
+        when there is not. ``agent_config`` stays ``Any`` deliberately: typing
+        it ``AgentConfig | None`` is correct, and doing so surfaces thirty-odd
+        narrowing errors further down ``execute`` that the original inline code
+        masked. That debt is real, and it belongs to the runtime typing pass —
+        not to a merge that only needed this function four lines shorter.
         """
         if agent_config is not None:
             return agent_config, None
