@@ -1943,3 +1943,8 @@ Raw population, summary and failed pytest log are retained under `uat-runtime-de
 Three diagnostics completed with only one verified request. Two hit the native deadline at 60.032 and 60.016 seconds; the successful request took 31.508 seconds. One failed request had already created its task, while the other had no task. The diagnostic preserves that distinction instead of treating a confirmed action as whole-request success. No duplicates or post-return model calls occurred. All three cloud choices timed out during the failed requests; local fallback was allowed its normal timeout but remained subject to the sixty-second request deadline. This is a rejected test-only policy, not a product improvement or a candidate to advance to thirty repetitions. The raw population, failed pytest output and usage uncertainty are retained under `uat-runtime-bounded-streaming-diagnostic*`.
 
 Next performance work should reduce unnecessary request context or otherwise address model latency without globally shortening goal work. The existing selected models and production defaults remain unchanged.
+
+
+### Deferred-tool streaming diagnostics passed — 2026-09-21
+
+With existing tool discovery enabled only inside the private fixture, three streaming compound-task diagnostics passed in 11.927, 22.161 and 7.514 seconds. Each created one matching task and answered the additional calculation; no duplicate or post-return calls. Normal timeouts and the selected model chain were preserved. Three samples do not qualify performance. Raw diagnostics and telemetry are retained under `uat-runtime-deferred-streaming-diagnostic*`. A new thirty-request population has started at `/tmp/runtime-deferred-streaming-cohort.jsonl`; installed/default deferral remains off.

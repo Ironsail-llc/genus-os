@@ -5837,6 +5837,19 @@
       "rejected": true,
       "report": "bench/runtime/uat-runtime-bounded-streaming-diagnostic-report.json",
       "note": "Ten-second cloud opening+consumption allowance, local timeout preserved, selected model chain unchanged. Two native deadline failures (one after a confirmed task), one correct response at31.508s; no duplicates/post-return calls. Not promoted or advanced to thirty-request screening. Stream interruptions and unknown usage retained."
+    },
+    "deferred_streaming_diagnostic": {
+      "product_revision": "9163df1d1e6",
+      "samples": 3,
+      "verified": 3,
+      "durations_seconds": [
+        11.926963764999527,
+        22.160739273997024,
+        7.513526912007364
+      ],
+      "screening_qualified": false,
+      "report": "bench/runtime/uat-runtime-deferred-streaming-diagnostic-report.json",
+      "note": "Existing tool-discovery flag enabled only inside private fixture; normal timeouts and selected models unchanged. One matching task and additional calculation per request; thirty-request screen now running. No installed/default change."
     }
   },
   "calendar": {
