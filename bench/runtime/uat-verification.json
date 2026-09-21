@@ -2119,6 +2119,10 @@
     "profile_lookup_interruption": {
       "revision": "2ffe534bbc0",
       "artifact": "bench/runtime/uat-profile-lookup-interruption.json"
+    },
+    "pre_lookup_acknowledgement": {
+      "revision": "1635530c6c0",
+      "artifact": "bench/runtime/uat-profile-acknowledgement.json"
     }
   },
   "calendar": {

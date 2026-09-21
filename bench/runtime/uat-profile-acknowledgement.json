@@ -1,0 +1,32 @@
+{
+  "revision": "1635530c6c0",
+  "change": "Attempt acknowledgement before root interactive profile lookup, within the existing one-second delivery bound and any shorter inherited deadline. Carry the attempt marker into the current runtime so it does not emit a second acknowledgement. Cancellation during this pre-lookup delivery records an interrupted or expired admission outcome.",
+  "initial_failure": {
+    "failed": 2,
+    "log": "/tmp/runtime-profile-ack-before.log",
+    "finding": "Blocked profile reads began without an acknowledgement; both interruption cases observed zero accepted events."
+  },
+  "focused": {
+    "passed": 162,
+    "warnings": 1,
+    "seconds": 17.86,
+    "log": "/tmp/runtime-profile-ack-final.log"
+  },
+  "canonical_browser": {
+    "passed": 33,
+    "skipped": 1,
+    "warnings": 1,
+    "seconds": 25.46,
+    "log": "/tmp/runtime-profile-ack-native.log"
+  },
+  "http": {
+    "passed": 1,
+    "seconds": 23.88,
+    "samples": 30,
+    "artifact": "bench/runtime/uat-profile-ack-http.json",
+    "log": "/tmp/runtime-profile-ack-http.log"
+  },
+  "evidence": "Blocked-read tests assert acknowledgement occurs before the lookup thread enters, including timeout and cancellation. Native execution sees one accepted event, one configuration lookup and one synthetic model call, even if acknowledgement delivery raises. A private-DAL test cancels stalled acknowledgement delivery and recovers a cancelled original-request record without loading a profile.",
+  "checks": "Ruff lint/format and diff checks pass; no size cap increased.",
+  "limits": "HTTP measurements use loopback TCP, private PostgreSQL and a synthetic provider. Blocked-lookup ordering is verified separately from the HTTP latency cohort. No deployment-ingress certification, guaranteed delivery during disconnection, full product acceptance, or production deployment is claimed. Progress during prolonged pre-execution lookup and remaining acceptance work stay open."
+}
