@@ -1,0 +1,135 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator:\n\n**Goal: \"Finish the requested work\"** \u2014 status **waiting**, version 4, no evidence recorded yet. Success criterion is: *\"The requested work has been checked.\"*\n\n**Finished (1 of 2 tasks)**\n- \u2705 **Prepare the first item** \u2014 DONE\n\n**Still left (1 of 2 tasks)**\n- \u2b1c **Check the remaining item** \u2014 TODO (task `0b5a5a48`)\n\n**Why it's sitting still:** the goal is parked on that last task, with a scheduled wake at **2026-09-22 04:42 UTC** (about 24 hours out). Note that automatic pursuit is **disabled** for this tenant (`execution_enabled: false`), so nothing will advance on its own \u2014 the remaining item needs to be picked up manually, or execution turned on.\n\nSo: one item prepared, one still to check, and the goal itself isn't complete until that check is done and recorded as evidence.",
+      "run": {
+        "text": "Here's where things stand, operator:\n\n**Goal: \"Finish the requested work\"** \u2014 status **waiting**, version 4, no evidence recorded yet. Success criterion is: *\"The requested work has been checked.\"*\n\n**Finished (1 of 2 tasks)**\n- \u2705 **Prepare the first item** \u2014 DONE\n\n**Still left (1 of 2 tasks)**\n- \u2b1c **Check the remaining item** \u2014 TODO (task `0b5a5a48`)\n\n**Why it's sitting still:** the goal is parked on that last task, with a scheduled wake at **2026-09-22 04:42 UTC** (about 24 hours out). Note that automatic pursuit is **disabled** for this tenant (`execution_enabled: false`), so nothing will advance on its own \u2014 the remaining item needs to be picked up manually, or execution turned on.\n\nSo: one item prepared, one still to check, and the goal itself isn't complete until that check is done and recorded as evidence.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 8529,
+        "output_tokens": 529,
+        "duration_ms": 18125,
+        "total_cost_usd": 0.001,
+        "run_id": "08ac7ee6-5905-4b42-b6b4-d2dfcc11bef7"
+      },
+      "elapsed_ms": 18184.09945500025,
+      "measurements": {
+        "run_id": "08ac7ee6-5905-4b42-b6b4-d2dfcc11bef7",
+        "duration_ms": 18125,
+        "model_calls": 2,
+        "tool_calls": 1,
+        "provider_ms": 18047,
+        "tool_wall_ms": 12,
+        "compaction_ms": 0,
+        "compactions": 0,
+        "input_tokens": 8529,
+        "time_to_first_action_ms": 1881,
+        "time_to_verified_completion_ms": null,
+        "post_completion_tool_calls": null,
+        "steps": [
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 1855,
+            "input_tokens": 3944,
+            "output_tokens": 67,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "list_pursuit_goals",
+            "model": null,
+            "duration_ms": 12,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 16192,
+            "input_tokens": 4585,
+            "output_tokens": 462,
+            "failed": false
+          }
+        ]
+      }
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "[Run failed: unsupported Unicode escape sequence\nLINE 2: ...7-8b58-486e-a4a0-4bd16d25914e','pause','operator','{\"action\"...\n                                                             ^\nDETAIL:  Unicode escape value could not be translated to the server's encoding SQL_ASCII.\nCONTEXT:  JSON data, line 1: ...\" (0b5a5a48) still TODO. Paused on request \\u2014...\n]",
+      "run": {
+        "text": "[Run failed: unsupported Unicode escape sequence\nLINE 2: ...7-8b58-486e-a4a0-4bd16d25914e','pause','operator','{\"action\"...\n                                                             ^\nDETAIL:  Unicode escape value could not be translated to the server's encoding SQL_ASCII.\nCONTEXT:  JSON data, line 1: ...\" (0b5a5a48) still TODO. Paused on request \\u2014...\n]",
+        "status": "failed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 9579,
+        "output_tokens": 322,
+        "duration_ms": 8334,
+        "total_cost_usd": 0.001,
+        "run_id": "24eef906-c874-4699-9829-d33043033031"
+      },
+      "elapsed_ms": 8365.114313004597,
+      "measurements": {
+        "run_id": "24eef906-c874-4699-9829-d33043033031",
+        "duration_ms": 8334,
+        "model_calls": 2,
+        "tool_calls": 1,
+        "provider_ms": 8297,
+        "tool_wall_ms": 9,
+        "compaction_ms": 0,
+        "compactions": 0,
+        "input_tokens": 9579,
+        "time_to_first_action_ms": 4303,
+        "time_to_verified_completion_ms": null,
+        "post_completion_tool_calls": null,
+        "steps": [
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 4295,
+            "input_tokens": 4416,
+            "output_tokens": 150,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "list_pursuit_goals",
+            "model": null,
+            "duration_ms": 9,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 4002,
+            "input_tokens": 5163,
+            "output_tokens": 172,
+            "failed": false
+          }
+        ]
+      }
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 4,
+  "goal_status": "waiting",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

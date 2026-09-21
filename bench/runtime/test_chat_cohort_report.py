@@ -26,3 +26,4 @@ def test_failed_and_unfinished_conversations_remain_visible(tmp_path):
     assert result["elapsed_ms"]["status"]["missing"] == 29
     assert result["elapsed_ms"]["pause"]["missing"] == 30
     assert not result["complete_population"] and not result["manual_acceptance"]
+    assert not result["screening_passed"]

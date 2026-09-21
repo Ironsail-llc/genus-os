@@ -5,7 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from bench.runtime.chat_cohort import collect
+from bench.runtime.chat_cohort import collect, main
+from bench.runtime.native_journal import NativeJournal
 
 
 def test_failed_conversation_does_not_disappear_or_stop_later_samples(tmp_path, monkeypatch):
@@ -38,3 +39,40 @@ def test_failed_conversation_does_not_disappear_or_stop_later_samples(tmp_path, 
     with pytest.raises(FileExistsError):
         collect(manifest, directory)
     assert len(calls) == 30
+
+
+@pytest.mark.parametrize("case", ["passed", "child_failed", "missing_turn", "slow", "deadline"])
+def test_command_reports_screening_failure_from_retained_evidence(tmp_path, monkeypatch, case):
+    directory = tmp_path / "cohort"
+    directory.mkdir()
+    journal = NativeJournal(directory / "cohort.jsonl")
+    for index in range(30):
+        journal.record("sample_started", "selected", index)
+        duration = 31000 if case == "slow" else 1000
+        if case == "deadline" and index == 0:
+            duration = 61000  # A single overrun can be hidden by p95.
+        turns = [{"elapsed_ms": duration, "run": {"status": "completed"}}] * 2
+        if case == "missing_turn" and index == 0:
+            turns.pop()
+        artifact = f"sample-{index:03d}.json"
+        (directory / artifact).write_text(
+            json.dumps(
+                {"transcript": turns, "goal_status": "paused", "task_statuses": ["DONE", "TODO"]}
+            )
+        )
+        journal.record(
+            "sample_finished",
+            "selected",
+            index,
+            exit_code=int(case == "child_failed" and index == 0),
+            artifact=artifact,
+        )
+    monkeypatch.setattr("bench.runtime.chat_cohort.collect", lambda *args: directory)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["chat_cohort", "--manifest", "selected.yaml", "--output-directory", str(directory)],
+    )
+    assert main() == (0 if case == "passed" else 1)
+    result = json.loads((directory / "summary.json").read_text())
+    assert result["screening_passed"] is (case == "passed")
+    assert result["manual_acceptance"] is False

@@ -43,7 +43,7 @@ def private_database(tmp_path_factory):
             [str(binary / name), *map(str, args)], check=True, capture_output=True, text=True
         )
 
-    command("initdb", "-D", data, "-U", "goaltest", "--auth=trust", "--no-locale")
+    command("initdb", "-D", data, "-U", "goaltest", "--auth=trust", "--no-locale", "-E", "UTF8")
     command(
         "pg_ctl",
         "-D",

@@ -55,15 +55,25 @@ def report(directory: Path, expected=30):
     metrics = {}
     for turn, values in durations.items():
         metrics[turn] = {**summary(values), "missing": expected - len(values)}
+    counts = {
+        state: sum(row["state"] == state for row in rows)
+        for state in ["passed", "failed", "unresolved", "not_started"]
+    }
+    latency_passed = all(
+        metric["missing"] == 0
+        and metric["p95"] is not None
+        and metric["p95"] <= 30_000
+        and max(durations[turn], default=float("inf")) <= 60_000
+        for turn, metric in metrics.items()
+    )
     return {
         "expected_conversations": expected,
-        "counts": {
-            state: sum(row["state"] == state for row in rows)
-            for state in ["passed", "failed", "unresolved", "not_started"]
-        },
+        "counts": counts,
         "conversations": rows,
         "elapsed_ms": metrics,
         "complete_population": len(finishes) == expected,
         "manual_acceptance": False,
+        "screening_passed": expected >= 30 and counts["passed"] == expected and latency_passed,
+        "screening_targets": {"turn_p95_ms": 30_000, "turn_deadline_ms": 60_000},
         "latency_note": "Measured distributions include completed failed attempts when timing exists. Missing turns remain counted and cannot qualify the cohort. Status and pause are summarized separately.",
     }

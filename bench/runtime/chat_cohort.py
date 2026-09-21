@@ -14,6 +14,7 @@ from pathlib import Path
 
 import yaml
 
+from bench.runtime.chat_cohort_report import report
 from bench.runtime.native_journal import NativeJournal
 
 
@@ -62,8 +63,14 @@ def main():
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--output-directory", required=True, type=Path)
     args = parser.parse_args()
-    collect(args.manifest, args.output_directory)
+    directory = collect(args.manifest, args.output_directory)
+    result = report(directory)
+    with (directory / "summary.json").open("x") as stream:
+        json.dump(result, stream, indent=2)
+        stream.write("\n")
+    print(json.dumps(result))
+    return 0 if result["screening_passed"] else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

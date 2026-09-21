@@ -1,0 +1,153 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator:\n\n**Goal:** \"Finish the requested work\" \u2014 status **waiting**, version 4, no evidence recorded yet.\n\n**Finished (1 of 2):**\n- \u2705 **Prepare the first item** \u2014 DONE\n\n**Still left (1 of 2):**\n- \u2b1c **Check the remaining item** \u2014 TODO (task `38a56032`)\n\nThat open task is exactly what the goal is parked on: it registered a wait on `38a56032` with a scheduled review at **2026-09-22 04:42 UTC** (tomorrow). The success criterion \u2014 \"the requested work has been checked\" \u2014 is **not yet met**, so the goal isn't complete.\n\nTwo caveats worth flagging:\n- Automatic pursuit is **disabled** for this tenant (`execution_enabled: false`), so nothing will advance on its own \u2014 the wait is a registered trigger, not a promise of progress. The remaining item needs someone (or an explicit run) to pick it up.\n- Task counts are just counts; the DONE item doesn't by itself satisfy the goal's criterion.\n\nWant me to take the remaining task now instead of waiting for tomorrow's review?",
+      "run": {
+        "text": "Here's where things stand, operator:\n\n**Goal:** \"Finish the requested work\" \u2014 status **waiting**, version 4, no evidence recorded yet.\n\n**Finished (1 of 2):**\n- \u2705 **Prepare the first item** \u2014 DONE\n\n**Still left (1 of 2):**\n- \u2b1c **Check the remaining item** \u2014 TODO (task `38a56032`)\n\nThat open task is exactly what the goal is parked on: it registered a wait on `38a56032` with a scheduled review at **2026-09-22 04:42 UTC** (tomorrow). The success criterion \u2014 \"the requested work has been checked\" \u2014 is **not yet met**, so the goal isn't complete.\n\nTwo caveats worth flagging:\n- Automatic pursuit is **disabled** for this tenant (`execution_enabled: false`), so nothing will advance on its own \u2014 the wait is a registered trigger, not a promise of progress. The remaining item needs someone (or an explicit run) to pick it up.\n- Task counts are just counts; the DONE item doesn't by itself satisfy the goal's criterion.\n\nWant me to take the remaining task now instead of waiting for tomorrow's review?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 8496,
+        "output_tokens": 495,
+        "duration_ms": 16959,
+        "total_cost_usd": 0.001,
+        "run_id": "838f3948-2398-4f0d-9dd9-ab0045ca1ad6"
+      },
+      "elapsed_ms": 17020.294711001043,
+      "measurements": {
+        "run_id": "838f3948-2398-4f0d-9dd9-ab0045ca1ad6",
+        "duration_ms": 16959,
+        "model_calls": 2,
+        "tool_calls": 1,
+        "provider_ms": 16879,
+        "tool_wall_ms": 9,
+        "compaction_ms": 0,
+        "compactions": 0,
+        "input_tokens": 8496,
+        "time_to_first_action_ms": 2524,
+        "time_to_verified_completion_ms": null,
+        "post_completion_tool_calls": null,
+        "steps": [
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 2500,
+            "input_tokens": 3939,
+            "output_tokens": 55,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "list_pursuit_goals",
+            "model": null,
+            "duration_ms": 9,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 14379,
+            "input_tokens": 4557,
+            "output_tokens": 440,
+            "failed": false
+          }
+        ]
+      }
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the goal is now **paused** (version 5).\n\n**What changed:**\n- **\"Finish the requested work\"** \u2014 status **waiting \u2192 paused**\n\n**What that means:**\n- The scheduled review (2026-09-22 04:42 UTC) will **not** fire while paused \u2014 paused goals don't wake, so nothing advances on its own.\n- The remaining task, **Check the remaining item** (`38a56032`), is still **TODO** and untouched. The success criterion \u2014 \"the requested work has been checked\" \u2014 remains unmet.\n- The wait record is still attached, but it's dormant until you resume.\n\nTo pick this back up later, just say the word and I'll resume it (that needs an explicit go-ahead from you). Want me to leave the open task as-is, or close it out too?",
+      "run": {
+        "text": "Done, operator \u2014 the goal is now **paused** (version 5).\n\n**What changed:**\n- **\"Finish the requested work\"** \u2014 status **waiting \u2192 paused**\n\n**What that means:**\n- The scheduled review (2026-09-22 04:42 UTC) will **not** fire while paused \u2014 paused goals don't wake, so nothing advances on its own.\n- The remaining task, **Check the remaining item** (`38a56032`), is still **TODO** and untouched. The success criterion \u2014 \"the requested work has been checked\" \u2014 remains unmet.\n- The wait record is still attached, but it's dormant until you resume.\n\nTo pick this back up later, just say the word and I'll resume it (that needs an explicit go-ahead from you). Want me to leave the open task as-is, or close it out too?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 15440,
+        "output_tokens": 461,
+        "duration_ms": 9579,
+        "total_cost_usd": 0.0012,
+        "run_id": "be6c061e-5cdd-4008-8912-59a751598d4c"
+      },
+      "elapsed_ms": 9606.659432996821,
+      "measurements": {
+        "run_id": "be6c061e-5cdd-4008-8912-59a751598d4c",
+        "duration_ms": 9579,
+        "model_calls": 3,
+        "tool_calls": 2,
+        "provider_ms": 9530,
+        "tool_wall_ms": 13,
+        "compaction_ms": 0,
+        "compactions": 0,
+        "input_tokens": 15440,
+        "time_to_first_action_ms": 2020,
+        "time_to_verified_completion_ms": null,
+        "post_completion_tool_calls": null,
+        "steps": [
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 2011,
+            "input_tokens": 4500,
+            "output_tokens": 109,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "list_pursuit_goals",
+            "model": null,
+            "duration_ms": 7,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 3009,
+            "input_tokens": 5187,
+            "output_tokens": 151,
+            "failed": false
+          },
+          {
+            "type": "tool_call",
+            "tool": "update_pursuit_goal",
+            "model": null,
+            "duration_ms": 6,
+            "input_tokens": null,
+            "output_tokens": null,
+            "failed": false
+          },
+          {
+            "type": "llm_call",
+            "tool": null,
+            "model": "deepseek/deepseek-v4.1-flash",
+            "duration_ms": 4510,
+            "input_tokens": 5753,
+            "output_tokens": 201,
+            "failed": false
+          }
+        ]
+      }
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 5,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

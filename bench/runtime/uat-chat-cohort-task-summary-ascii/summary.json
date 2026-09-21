@@ -1,0 +1,207 @@
+{
+  "expected_conversations": 30,
+  "counts": {
+    "passed": 4,
+    "failed": 1,
+    "unresolved": 1,
+    "not_started": 24
+  },
+  "conversations": [
+    {
+      "repetition": 0,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 1,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 2,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 3,
+      "state": "failed",
+      "exit_code": 1
+    },
+    {
+      "repetition": 4,
+      "state": "passed",
+      "exit_code": 0
+    },
+    {
+      "repetition": 5,
+      "state": "unresolved",
+      "exit_code": null
+    },
+    {
+      "repetition": 6,
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "repetition": 7,
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "repetition": 8,
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "repetition": 9,
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "repetition": 10,
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "repetition": 11,
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "repetition": 12,
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "repetition": 13,
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "repetition": 14,
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "repetition": 15,
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "repetition": 16,
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "repetition": 17,
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "repetition": 18,
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "repetition": 19,
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "repetition": 20,
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "repetition": 21,
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "repetition": 22,
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "repetition": 23,
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "repetition": 24,
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "repetition": 25,
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "repetition": 26,
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "repetition": 27,
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "repetition": 28,
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "repetition": 29,
+      "state": "not_started",
+      "exit_code": null
+    }
+  ],
+  "elapsed_ms": {
+    "status": {
+      "samples": 5,
+      "p50": 17828.475836999132,
+      "p95": 27713.164376997156,
+      "p95_ci95": [
+        17828.475836999132,
+        27713.164376997156
+      ],
+      "missing": 25
+    },
+    "pause": {
+      "samples": 5,
+      "p50": 12225.792999000987,
+      "p95": 18896.485746998223,
+      "p95_ci95": [
+        12225.792999000987,
+        18896.485746998223
+      ],
+      "missing": 25
+    }
+  },
+  "complete_population": false,
+  "manual_acceptance": false,
+  "screening_passed": false,
+  "screening_targets": {
+    "turn_p95_ms": 30000,
+    "turn_deadline_ms": 60000
+  },
+  "latency_note": "Measured distributions include completed failed attempts when timing exists. Missing turns remain counted and cannot qualify the cohort. Status and pause are summarized separately.",
+  "termination": {
+    "reason": "Stopped after a SQL_ASCII fixture rejected a Unicode model-authored pause note; deterministic reproduction confirmed fixture encoding defect.",
+    "wrapper_exit_code": 130,
+    "completed_child_indices": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "unresolved_child_index": 5,
+    "old_wrapper_and_child_processes_gone": true,
+    "owned_orphan_database_stopped": true
+  },
+  "product_revision": "2488b5322db",
+  "not_a_complete_screening_cohort": true
+}

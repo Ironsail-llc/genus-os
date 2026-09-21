@@ -15,6 +15,15 @@ from robothor.goals.tests.test_store import (  # noqa: F401
 from robothor.goals.tools import HANDLERS
 
 
+def test_unicode_goal_notes_round_trip_in_private_database(db):  # noqa: F811
+    goal = create(db)
+    note = "Paused on request — préparation terminée; révision restante."
+    paused = change(db, goal, "pause", note=note)
+    restored = store.get(db, goal["id"])
+    assert restored["status"] == paused["status"] == "paused"
+    assert restored["history"][0]["detail"]["note"] == note
+
+
 @pytest.mark.asyncio
 async def test_listing_has_bounded_fresh_task_facts_without_claiming_completion(db):  # noqa: F811
     goal = create(db)

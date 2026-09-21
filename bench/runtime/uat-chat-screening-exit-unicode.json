@@ -1,0 +1,26 @@
+{
+  "change": "Chat screening command now saves its report and exits nonzero for failed or missing conversations, p95 over 30 seconds, or any turn over 60 seconds. This is screening only, not manual or full acceptance. Private goal test cluster now explicitly uses UTF8, matching the canonical migration harness.",
+  "initial_reporting_tests": {
+    "failed": 4,
+    "log": "/tmp/runtime-chat-cohort-exit-before.log"
+  },
+  "reporting_tests": {
+    "passed": 7,
+    "seconds": 0.41,
+    "log": "/tmp/runtime-chat-cohort-exit-final.log"
+  },
+  "unicode_reproduction": {
+    "failed": 1,
+    "seconds": 1.08,
+    "log": "/tmp/runtime-goal-unicode-before.log"
+  },
+  "combined_after_fix": {
+    "passed": 96,
+    "warnings": 3,
+    "seconds": 13.11,
+    "log": "/tmp/runtime-goal-unicode-after.log"
+  },
+  "interrupted_cohort": "bench/runtime/uat-chat-cohort-task-summary-ascii/summary.json",
+  "full_acceptance_passed": false,
+  "production_deployed": false
+}
