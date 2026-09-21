@@ -1708,3 +1708,30 @@ robothor/                                 Project root (git repo)
 ---
 
 *Updated 2026-07-13.*
+
+## Personal autonomous execution
+
+The native vault's personal-resource broker (`robothor/autonomy/`) consumes
+owner-scoped references in a separate browser process. The existing browser
+tool exposes preparation, execution and reconciliation under standing grants.
+Migration 127 adds encrypted `vault_resources`, wrapped `autonomy_key_versions`,
+`autonomy_grants`, `autonomy_operations`, `autonomy_events`, and
+`autonomy_settings`; service-secret exports exclude personal resources.
+The account dashboard enrolls information and grants authority through
+authenticated `/api/autonomy` endpoints. Existing organizational treasury stays
+separate. See [Personal autonomous execution](AUTONOMOUS_EXECUTION.md) for
+transaction state, revocation, key rotation and deployment requirements.
+
+Migration 129 adds owner/agent-bound `autonomy_workflows` and durable command
+results. `robothor-autonomy.service` owns persistent protected browser contexts,
+with a private Unix socket and a separate JWT audience and scope. Engine and
+bridge controllers pass resource references and signed identities; secure human
+code entry sends its transient code only through this channel. Controller
+restarts preserve pages, while broker loss preserves reservations for
+reconciliation. See the workflow protocol and lifetime limits in the same guide.
+
+Personal automation migration 131 adds `autonomy_enrollments`, scoped by tenant
+and canonical person owner. It stores only a token hash, resource kind, website
+origin, expiration and the completed vault resource reference. Resource creation
+and consumption of the enrollment intent commit atomically. See
+[private input enrollment](AUTONOMOUS_EXECUTION.md#private-input-enrollment).

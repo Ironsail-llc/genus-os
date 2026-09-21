@@ -134,7 +134,7 @@ async def run_on_managed_agents(
 
     # ── 1. Build tool list ────────────────────────────────────────────
     if tools is None:
-        tools = _build_tools(agent_id, tool_names, enable_builtin_sandbox)
+        tools = await _run_tools(agent_id, tool_names, enable_builtin_sandbox, tenant_id, user_id)
 
     # ── 2. Resolve system prompt ──────────────────────────────────────
     if not system_prompt:
@@ -364,12 +364,56 @@ def _workspace() -> Path:
     return Path(os.environ.get("ROBOTHOR_WORKSPACE", str(Path.home() / "robothor")))
 
 
+async def _run_tools(
+    agent_id: str,
+    tool_names: list[str] | None,
+    enable_builtin_sandbox: bool,
+    tenant_id: str | None,
+    user_id: str | None,
+) -> list[dict[str, Any]]:
+    """This run's MA tool list, widened iff this run holds a standing grant.
+
+    The same question the engine runner answers once per run in
+    ``toolset_prep``. Without it an MA-hosted agent under a live grant was
+    handed the 436-character ``browser`` description while its system prompt
+    told it to call ``browser(action='autonomy', ...)`` — an action the
+    schema it could read never described.
+    """
+    autonomy = await _autonomy_active(tenant_id, user_id, agent_id)
+    return _build_tools(agent_id, tool_names, enable_builtin_sandbox, autonomy=autonomy)
+
+
+async def _autonomy_active(tenant_id: str | None, user_id: str | None, agent_id: str) -> bool:
+    """Off-thread, best-effort, and never a reason a run fails.
+
+    Mirrors ``robothor.engine.toolset_prep._autonomy_active``: the answer only
+    decides how verbose a schema is, and the broker re-checks real authority
+    on every operation, so a wrong answer either way costs tokens or a hint
+    and never authority.
+    """
+    try:
+        from robothor.autonomy.availability import autonomy_active
+
+        return await asyncio.to_thread(autonomy_active, tenant_id, user_id, agent_id)
+    except Exception as e:  # noqa: BLE001 - a schema hint must not fail a run
+        logger.debug("Autonomy availability skipped: %s", type(e).__name__)
+        return False
+
+
 def _build_tools(
     agent_id: str,
     tool_names: list[str] | None,
     enable_builtin_sandbox: bool,
+    *,
+    autonomy: bool = False,
 ) -> list[dict[str, Any]]:
-    """Build MA tools from the engine registry."""
+    """Build MA tools from the engine registry.
+
+    ``autonomy`` is the caller's answer to the one question that changes what
+    a schema says: is this run under a live standing grant? Off by default —
+    an MA agent with no grant gets the same short ``browser`` description as
+    everybody else.
+    """
     from robothor.engine.tools.registry import ToolRegistry
 
     registry = ToolRegistry()
@@ -378,7 +422,10 @@ def _build_tools(
         from robothor.engine.managed_agents.tool_bridge import build_ma_tools_from_names
 
         return build_ma_tools_from_names(
-            registry, tool_names, enable_builtin_sandbox=enable_builtin_sandbox
+            registry,
+            tool_names,
+            enable_builtin_sandbox=enable_builtin_sandbox,
+            autonomy=autonomy,
         )
 
     # Load agent config to get tool filtering
@@ -406,7 +453,10 @@ def _build_tools(
             tools_list.append({"type": "agent_toolset_20260401"})
         return tools_list
     return build_ma_tools_for_agent(
-        registry, agent_config, enable_builtin_sandbox=enable_builtin_sandbox
+        registry,
+        agent_config,
+        enable_builtin_sandbox=enable_builtin_sandbox,
+        autonomy=autonomy,
     )
 
 

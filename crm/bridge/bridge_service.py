@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 import sys
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 # Prevent double-import when run as __main__: ensure 'bridge_service' module
 # name resolves to THIS instance so routers see the same http_client.
@@ -23,7 +23,7 @@ import asyncio
 import logging
 
 import httpx
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 
 from robothor.sales.api import router as sales_router
 from robothor.sales.ingestion import router as sales_ingestion_router
@@ -134,14 +134,24 @@ async def lifespan(app: FastAPI):
     # not use the SSO exchange), so this is a loud log line rather than a raise.
     sso_secret_present()
     http_client = httpx.AsyncClient(timeout=30.0)
+    from robothor.autonomy.handoff_worker import purge_expired_observations, recover_checks
+
     trigger_task = asyncio.create_task(_routine_trigger_loop())
-    yield
-    trigger_task.cancel()
+    recovery_task = asyncio.create_task(recover_checks())
+    # The observation archive kept the owner's name, date of birth, address
+    # and their answers to a website indefinitely. This is what makes
+    # `autonomy.terms_retention_days` an actual window rather than a comment.
+    purge_task = asyncio.create_task(purge_expired_observations())
     try:
-        await trigger_task
-    except asyncio.CancelledError:
-        pass
-    await http_client.aclose()
+        yield
+    finally:
+        trigger_task.cancel()
+        recovery_task.cancel()
+        purge_task.cancel()
+        for task in (trigger_task, recovery_task, purge_task):
+            with suppress(asyncio.CancelledError):
+                await task
+        await http_client.aclose()
 
 
 # ─── App Assembly ────────────────────────────────────────────────────────
@@ -216,6 +226,25 @@ app.include_router(automations_router)
 # ask_user question (a row) and a permission escalation (a proxy to the engine,
 # where the pending request actually lives).
 app.include_router(approvals_router)
+# Personal automation, behind the instance-level switch that governs the rest
+# of the feature. `require_personal_owner` inside the router checks role and
+# identity; it does not ask whether this appliance offers the feature at all,
+# so with ROBOTHOR_AUTONOMY_ENABLED off any authenticated member could still
+# POST an enrollment or a grant -- the endpoints that store a payment card and
+# hand an agent spending authority. Applied at the mount rather than in the
+# router so it covers every route including later ones, and so the routes stay
+# in the assembled app for test_mutations_are_gated.py to enumerate.
+#
+# Both imports are the flat form every other local import in this file uses.
+# `python bridge_service.py` runs with `crm/bridge` as sys.path[0] and no
+# repo root, so `from crm.bridge.autonomy_gate import ...` raised
+# ModuleNotFoundError and the bridge never came up on a fresh install — green
+# everywhere a developer has the repo root on the path, red in the install
+# gate, which is the only place that starts it the way an operator does.
+from autonomy_gate import require_feature_offered
+from routers.autonomy import router as autonomy_router
+
+app.include_router(autonomy_router, dependencies=[Depends(require_feature_offered)])
 # Who may reach this instance over a channel. Beside approvals because both are
 # "a person has to decide something", and one of the decisions here is the only
 # way a pairing code is ever spent over the network -- the channel that issued

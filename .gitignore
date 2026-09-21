@@ -272,3 +272,6 @@ helm/*/charts/*.tgz
 # Build artifact: the docs workflow copies scripts/install.sh here so the
 # site serves it at /install.sh. Never commit the copy.
 docs/install.sh
+.test-postgres/
+.test-browsers/
+.test-workspace/

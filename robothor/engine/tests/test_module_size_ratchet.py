@@ -76,7 +76,16 @@ CAPS = {
     # phase 3b (_setup_handlers closures -> methods), and 3150 -> 2000 as the
     # handler and attachment clusters left for telegram_handlers.py and
     # telegram_attachments.py. The cap follows the file down.
-    "robothor/engine/telegram.py": 2000,
+    # 2000 -> 1980: `_sanitize_preview` left for `robothor/sanitize.py`, the
+    # module that exists for exactly this move -- its own header records
+    # pulling `_sanitize()` out of runner.py, config.py and workflow.py.
+    # Nothing in it was about Telegram: it collapses control characters so
+    # untrusted text cannot forge a line in the notification that quotes it,
+    # which is `sanitize_log`'s defect with a person reading the forged line
+    # instead of a parser. It came back to the cap when the private-input cut
+    # was added to it, and trimming that explanation to fit is the trade this
+    # file has refused before.
+    "robothor/engine/telegram.py": 1980,
     # 1300 -> 1293: the `ask:` callback body and the `handle_text` ask
     # interception moved to channels/telegram_ask.py, beside the binding rules
     # they apply. The ratchet only ever goes down, so the new actual is the new

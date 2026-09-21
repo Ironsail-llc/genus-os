@@ -35,6 +35,7 @@ import litellm
 
 from robothor.db.connection import current_tenant_scope
 from robothor.engine.cancel_outcome import _cancel_outcome, terminal_run
+from robothor.engine.chat_backstop import protect_if_human_chat
 from robothor.engine.checkpoint import save_iteration
 from robothor.engine.config import (
     EngineConfig,
@@ -101,6 +102,7 @@ from robothor.engine.run_deadline import (
     wrapup_schemas,
 )
 from robothor.engine.run_finalizer import RunFinalizationMixin
+from robothor.engine.run_identity import _is_service_caller as _is_service_caller
 from robothor.engine.run_identity import resolve_run_identity
 from robothor.engine.run_lifecycle import RunLifecycleMixin, spawn_post_stall_autodream
 from robothor.engine.run_llm_calls import LLMCallMixin  # noqa: E402
@@ -408,28 +410,6 @@ _SYSTEM_TRIGGER_TYPES = frozenset(
 )
 
 
-def _is_service_caller(user_role: str, user_id: str) -> bool:
-    """Whether this run's effective caller is a service/automated actor.
-
-    A WEBCHAT run can still arrive from a service-typ auth context (an
-    engine/bridge credential acting on an agent's behalf, not a human — see
-    ``AuthContext.is_service`` at the chat layer). ``chat.py`` already passes
-    ``identity=None`` for those, but the runner can't tell "deliberately
-    None" from "not provided", so the fallback below must re-derive
-    service-ness itself from the same conventions used elsewhere in this
-    module: the manifest's default ``service_role`` value of ``"service"``
-    (``AgentConfig.service_role``, ``issue_service_token``'s default role)
-    and the ``f"service:{agent_id}"`` / ``f"service:workflow:{id}"`` user_id
-    marker convention (``_SYSTEM_TRIGGER_TYPES`` branch above, workflow.py,
-    scheduler.py). Without this gate, a service caller's non-UUID user_id
-    reaches ``resolve_identity("webchat", ...)`` and triggers a DB error on
-    every single call until the negative cache absorbs it (60s TTL).
-    """
-    return (
-        user_role == "service" or user_role.startswith("service:") or user_id.startswith("service:")
-    )
-
-
 # Suppress litellm's verbose logging
 litellm.suppress_debug_info = True
 
@@ -492,6 +472,42 @@ class AgentRunner(
         # from this class (Phase A / Slice 1); stateless across runs.
         self._llm = LLMClient()
 
+    def _config_or_refusal(
+        self,
+        agent_id: str,
+        agent_config: Any,
+        message: str,
+        trigger_type: TriggerType,
+        trigger_detail: str | None,
+        resolved_tenant: str,
+    ) -> tuple[Any, AgentRun | None]:
+        """The manifest lookup, and the refused run it produces when there is none.
+
+        Extracted from ``execute`` when merging two independently-green branches
+        pushed it four lines past its pinned size. Both halves answer one
+        question — is there a manifest to run — and the refusal has to be a real
+        failed run rather than an exception, because callers record it.
+
+        Returns ``(config, None)`` when there is one and ``(None, failed_run)``
+        when there is not. ``agent_config`` stays ``Any`` deliberately: typing
+        it ``AgentConfig | None`` is correct, and doing so surfaces thirty-odd
+        narrowing errors further down ``execute`` that the original inline code
+        masked. That debt is real, and it belongs to the runtime typing pass —
+        not to a merge that only needed this function four lines shorter.
+        """
+        if agent_config is not None:
+            return agent_config, None
+        reason = f"Agent config not found: {agent_id}"
+        agent_config, loaded_reason = load_agent_config_or_reason(
+            agent_id, self.config.manifest_dir
+        )
+        if agent_config is not None:
+            return agent_config, None
+        logger.error("Agent run refused: %s", _sanitize(loaded_reason or reason))
+        session = AgentSession(agent_id, trigger_type, trigger_detail, resolved_tenant)
+        session.start("", message, [])
+        return None, session.fail(loaded_reason or reason)
+
     async def execute(
         self,
         agent_id: str,
@@ -534,20 +550,18 @@ class AgentRunner(
                 trigger_type is SUB_AGENT, not an interactive one).
         Returns the completed AgentRun with full metadata.
         """
+        message = protect_if_human_chat(message, trigger_type)
         # A run created inside a ``tenant_scope`` must record under that tenant.
         # Falling through to the config default writes a row the connection's RLS
         # binding refuses, and the refusal arrives as an opaque
         # InsufficientPrivilege at INSERT time. See test_nested_run_tenant.py.
         resolved_tenant = tenant_id or current_tenant_scope() or self.config.tenant_id
 
-        reason = f"Agent config not found: {agent_id}"
-        if agent_config is None:
-            agent_config, reason = load_agent_config_or_reason(agent_id, self.config.manifest_dir)
-        if agent_config is None:
-            logger.error("Agent run refused: %s", _sanitize(reason))
-            session = AgentSession(agent_id, trigger_type, trigger_detail, resolved_tenant)
-            session.start("", message, [])
-            return session.fail(reason)
+        agent_config, refusal = self._config_or_refusal(
+            agent_id, agent_config, message, trigger_type, trigger_detail, resolved_tenant
+        )
+        if refusal is not None:
+            return refusal
 
         # Resolve a concrete execution identity before creating the run.  An
         # empty role used to mean "system" and silently bypass every per-user
@@ -956,6 +970,8 @@ class AgentRunner(
             system_prompt=system_prompt,
             readonly_mode=readonly_mode,
             deep_plan=deep_plan,
+            tenant_id=resolved_tenant,
+            actor_id=effective_user_id,
         )
         tool_schemas = _prepared.tool_schemas
         tool_names = _prepared.tool_names
@@ -996,6 +1012,7 @@ class AgentRunner(
             delivery_mode=agent_config.delivery_mode.value,
             conversation_history=conversation_history,
             engine_context=engine_preamble or None,
+            autonomy_active=_prepared.autonomy_active,
         )
 
         from robothor.engine.routine_request import bind_confirmation

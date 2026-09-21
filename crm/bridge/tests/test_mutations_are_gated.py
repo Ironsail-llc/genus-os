@@ -67,6 +67,13 @@ def test_provider_ingress_justification_does_not_cover_neighbors_or_other_method
 # Each reason cites the middleware clause that actually constrains the route;
 # without such a clause the route must be gated instead of listed here.
 JUSTIFIED_WITHOUT_OPERATOR_GATE: dict[str, str] = {
+    "/api/autonomy": (
+        "Personal resources and grants, not appliance credentials: AuthMiddleware "
+        "requires bridge:write and every route calls require_personal_owner, "
+        "which refuses service/read-only principals and binds tenant plus CRM "
+        "person from verified identity. Payment posture changes additionally "
+        "require owner/admin. The per-router invariant below pins that guard."
+    ),
     "/api/sales": (
         "Tenant-scoped human sales console: _authorization_denial() rejects services "
         "and non-owner/admin callers; require_sales_operator() repeats the human "
@@ -249,6 +256,7 @@ EXPECTED_ROUTER_MODULES = frozenset(
         # so a mount that silently stopped contributing routes would take the
         # gate assertions on them with it and still leave the floor intact.
         "routers.providers",
+        "routers.autonomy",
         # Manifest writes. Same reasoning: these are the only routes that decide
         # which agents exist and what they may do, and a mount that stopped
         # contributing them would leave both this floor and the per-route gate
@@ -274,6 +282,13 @@ EXPECTED_ROUTER_MODULES = frozenset(
         "routers.memory_facts",
     }
 )
+
+
+def test_personal_autonomy_routes_always_bind_the_authenticated_person():
+    routes = [route for route in _all_routes() if _matches(route.path, "/api/autonomy")]
+    assert len(routes) >= 8
+    for route in routes:
+        assert "require_personal_owner(request)" in inspect.getsource(route.endpoint)
 
 
 def test_the_app_actually_exposes_mutation_routes() -> None:

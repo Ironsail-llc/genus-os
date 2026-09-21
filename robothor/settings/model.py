@@ -3031,6 +3031,64 @@ class OpsSettings(SettingsGroup):
 # ---------------------------------------------------------------------------
 
 
+class AutonomySettings(SettingsGroup):
+    """Host paths and secure enrollment for personal automation."""
+
+    enabled: bool = declare(
+        False,
+        "ROBOTHOR_AUTONOMY_ENABLED",
+        "Whether this instance offers personal automation at all: delegated accounts, "
+        "applications and purchases under standing grants. Off by default, and off means "
+        "absent — no dashboard page, no autonomy paragraph on any agent's system prompt, "
+        "no autonomy wording in the browser tool schema, and no database lookup to decide. "
+        "Turning it on only makes the feature reachable; each owner still enrols, switches "
+        "execution on and writes a grant naming the agents it covers.",
+    )
+
+    dashboard_origin: str = declare(
+        "",
+        "ROBOTHOR_AUTONOMY_DASHBOARD_ORIGIN",
+        "Public HTTPS origin of the authenticated dashboard for secure enrollment links. "
+        "Empty returns a relative account path; never use a merchant-provided destination.",
+    )
+
+    restart_units: ClassVar[tuple[str, ...]] = (
+        "robothor-autonomy",
+        "robothor-engine",
+        "robothor-bridge",
+    )
+    chromium_executable: str = declare(
+        "",
+        "ROBOTHOR_AUTONOMY_CHROMIUM_EXECUTABLE",
+        "Sandbox-capable Chromium executable for protected browsing. Empty uses system Chromium, "
+        "then Playwright's installed browser. Requires the host's user-namespace policy.",
+    )
+    socket: str = declare(
+        "/run/robothor-autonomy/broker.sock",
+        "ROBOTHOR_AUTONOMY_SOCKET",
+        "Private Unix socket shared by the protected browser service and its authenticated clients. "
+        "Its parent directory must be owned by the service user with mode 0700.",
+    )
+    terms_retention_days: int = declare(
+        365,
+        "ROBOTHOR_AUTONOMY_TERMS_RETENTION_DAYS",
+        "How long a terms or receipt observation is kept before it is deleted outright. These "
+        "hold the rendered review page — the owner's name, date of birth, address and the "
+        "answers they gave a website — sealed with a key derived from the vault master key. "
+        "The owner can also erase one at any time from the operation's page, which keeps the "
+        "audit fact and drops the content. 0 disables the sweep and keeps them forever.",
+    )
+    payment_event_retention_days: int = declare(
+        2555,
+        "ROBOTHOR_AUTONOMY_PAYMENT_EVENT_RETENTION_DAYS",
+        "How long a payment event is kept. Seven years by default, because these are financial "
+        "records and a jurisdiction may require them for that long. NOT swept automatically: a "
+        "payment position is reconstructed from its whole event log, so deleting part of one "
+        "silently rewrites what was charged. Deleting them is an operator action against a "
+        "closed operation, and the window above is the documented policy for it.",
+    )
+
+
 class GenusSettings(BaseSettings):
     """Every Genus OS setting, grouped.
 
@@ -3046,6 +3104,7 @@ class GenusSettings(BaseSettings):
         populate_by_name=True,
     )
 
+    autonomy: AutonomySettings = Field(default_factory=AutonomySettings)
     paths: PathsSettings = Field(default_factory=PathsSettings)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     redis: RedisSettings = Field(default_factory=RedisSettings)

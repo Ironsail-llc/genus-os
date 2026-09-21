@@ -1,0 +1,53 @@
+[Unit]
+Description=Genus OS protected browser workflows
+Requires=robothor-secrets.service
+After=network-online.target postgresql.service robothor-secrets.service
+Wants=network-online.target
+# Restart=always + RestartSec=5 with no limit turned a PERMANENT
+# misconfiguration — a runtime directory that is not 0700, a socket already
+# bound, no sandbox-capable Chromium — into an endless five-second loop.
+# Unlike robothor-engine (StartLimitIntervalSec=0: for the engine, silence is
+# the worse failure and the crash-loop breaker lives elsewhere), this service
+# is opt-in and nothing else depends on it, so stopping loudly beats grinding
+# quietly. Twelve tries at RestartSec=5 is about a minute of retrying, which
+# rides out a slow Postgres or a socket still held by the old process; the
+# 300s interval is the window systemd measures those twelve against, not how
+# long the retrying lasts. Past twelve the unit enters `failed`, which fires
+# the OnFailure drop-in and pages the operator with the cause the entry point
+# now logs. `systemctl reset-failed robothor-autonomy` re-arms it.
+StartLimitIntervalSec=300
+StartLimitBurst=12
+
+[Service]
+Type=simple
+User=robothor
+Group=robothor
+WorkingDirectory=/opt/robothor
+EnvironmentFile=/etc/robothor/robothor.env
+EnvironmentFile=-/run/robothor/secrets.env
+ExecStart=/opt/robothor/venv/bin/python -m robothor.autonomy.workflows.service
+RuntimeDirectory=robothor-autonomy
+RuntimeDirectoryMode=0700
+UMask=0077
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
+KillMode=control-group
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+LockPersonality=yes
+ReadWritePaths=/run/robothor-autonomy /var/run/postgresql
+# Chromium uses its own sandbox; do not deny user/mount namespaces here.
+
+[Install]
+WantedBy=multi-user.target

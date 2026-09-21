@@ -75,8 +75,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Two names for one dependency, inherited from two branches that each invented
+# it. `browser` came from main and is referenced nowhere; `autonomy` is what CI,
+# the docs and uv.lock actually use. Both are pinned at the locked floor so the
+# resolver cannot pick a version below what the autonomy browser service needs.
+# Consolidating to one name is a follow-up, not a merge resolution.
 browser = [
-    "playwright>=1.58,<2",
+    "playwright>=1.63,<2",
+]
+autonomy = [
+    "playwright>=1.63,<2",
 ]
 api = [
     # This floor also excludes the malicious FastAPI 0.136.3 release and pulls
@@ -132,6 +140,7 @@ channels = [
     "slack-sdk>=3.21",
 ]
 dev = [
+    "playwright>=1.63,<2",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pytest-timeout>=2.3",
@@ -142,7 +151,7 @@ dev = [
     "types-PyYAML>=6.0",
 ]
 all = [
-    "genusos[api,vision,rlm,tui,channels,federation,mcp,browser,dev]",
+    "genusos[api,vision,rlm,tui,channels,federation,mcp,browser,autonomy,dev]",
 ]
 
 [project.scripts]

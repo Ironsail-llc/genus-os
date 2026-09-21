@@ -34,6 +34,12 @@ class PreparedToolset:
     #: One sentence for the engine-context turn, or "" when there is nothing
     #: true to say. See :func:`deferred_toolset_note`.
     discovery_note: str = ""
+    #: Delegated execution is enabled for this run's owner AND a live standing
+    #: grant names this agent. False on every run that has not opted in, which
+    #: is nearly all of them. The runner passes it to ``session.start`` so the
+    #: prompt paragraph and the browser schema wording turn on together — they
+    #: describe one feature, and both used to ship to everyone.
+    autonomy_active: bool = False
 
 
 def deferred_toolset_note(visible: int, reachable: int) -> str:
@@ -202,12 +208,21 @@ async def prepare_toolset(
     system_prompt: str,
     readonly_mode: bool,
     deep_plan: bool,
+    tenant_id: str | None = None,
+    actor_id: str | None = None,
 ) -> PreparedToolset:
-    """Load this agent's adapters, then pick and wrap its toolset."""
+    """Load this agent's adapters, then pick and wrap its toolset.
+
+    ``tenant_id``/``actor_id`` answer exactly one question — is this run under
+    a live autonomy grant? — and it is answered HERE, once, instead of at each
+    of the two places that spend tokens on the answer. Both used to spend them
+    unconditionally, on every instance, enrolled or not.
+    """
     await _load_adapters(registry, agent_config, agent_id)
 
     if not readonly_mode:
-        schemas = registry.build_for_agent(agent_config)
+        autonomy = await _autonomy_active(tenant_id, actor_id, agent_id)
+        schemas = registry.build_for_agent(agent_config, autonomy=autonomy)
         names = registry.get_tool_names(agent_config)
         advertised = {str(schema.get("function", {}).get("name", "")) for schema in schemas}
         reachable = tuple(n for n in names if n not in advertised)
@@ -217,6 +232,7 @@ async def prepare_toolset(
             system_prompt=system_prompt,
             reachable_names=reachable,
             discovery_note=deferred_toolset_note(len(schemas), len(reachable)),
+            autonomy_active=autonomy,
         )
 
     from robothor.engine.prompts import (
@@ -239,6 +255,57 @@ async def prepare_toolset(
         wrapped = preamble + system_prompt + PLAN_MODE_SUFFIX
 
     return PreparedToolset(tool_schemas=tool_schemas, tool_names=tool_names, system_prompt=wrapped)
+
+
+#: How long a run will wait to find out how wordy its own prompt should be.
+#:
+#: The lookup already bounds itself — one connection, one statement timeout —
+#: so reaching this means something the database-side bounds do not cover: a
+#: thread-pool with no free worker, a DNS stall, a connect that hangs past
+#: ``connect_timeout``. One second is far longer than the answer ever takes
+#: and far shorter than anyone would notice.
+_AUTONOMY_LOOKUP_TIMEOUT_S = 1.0
+
+
+async def _autonomy_active(tenant_id: str | None, actor_id: str | None, agent_id: str) -> bool:
+    """Off-thread, time-boxed, best-effort, and never a reason a run fails.
+
+    ``except Exception`` catches errors, not latency, and that is the gap this
+    closes: the lookup used to make three separate connections, each bounded
+    only by ``connect_timeout=5``, so a hanging Postgres could spend fifteen
+    seconds of an agent run on a prompt hint and the swallow below would never
+    fire. Now the wait is bounded here as well as inside.
+
+    ``asyncio.to_thread`` is not cancellable, so a timeout abandons the thread
+    rather than stopping it: the thread finishes into a future nobody reads
+    and its connection closes on its own. What matters is that the RUN stops
+    waiting. Leaking a worker for the rest of a stalled connect is the cheaper
+    of the two failures by a wide margin.
+
+    Plan mode never reaches here: a read-only run cannot submit a form, so
+    the autonomy wording would be tokens spent describing an action the run
+    is forbidden from taking.
+    """
+    import asyncio
+
+    try:
+        from robothor.autonomy.availability import autonomy_active
+
+        return await asyncio.wait_for(
+            asyncio.to_thread(autonomy_active, tenant_id, actor_id, agent_id),
+            timeout=_AUTONOMY_LOOKUP_TIMEOUT_S,
+        )
+    except TimeoutError:
+        # Not a warning: `availability` warns for the cases it can see, and a
+        # slow database is already this box's loudest problem.
+        logger.info(
+            "Autonomy availability timed out after %.1fs; this run assumes no grant",
+            _AUTONOMY_LOOKUP_TIMEOUT_S,
+        )
+        return False
+    except Exception as e:  # noqa: BLE001 - a prompt hint must not fail a run
+        logger.warning("Autonomy availability skipped: %s", _sanitize(e))
+        return False
 
 
 async def _load_adapters(registry: Any, agent_config: Any, agent_id: str) -> None:

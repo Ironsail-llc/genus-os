@@ -1,0 +1,993 @@
+"""Native-vault resources and transactional delegated-operation journal.
+
+No network mutation occurs inside a database transaction. Reserve before
+execution, mark submitting before the first external commitment, then reconcile
+uncertain outcomes. A submitting operation is never automatically retried.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, cast
+from uuid import uuid4
+
+from psycopg2.extras import Json, RealDictCursor
+
+from robothor.autonomy.broker import MAX_LANDED_PAGES, url_origin
+from robothor.autonomy.budget import monthly_projection, proposal_record
+from robothor.autonomy.crypto import open_resource, seal_resource
+from robothor.autonomy.descriptors import Source, describe, refresh_descriptors
+from robothor.autonomy.models import (
+    Delegation,
+    PaymentCard,
+    RequestContext,
+    ResourceInput,
+    RuntimeSettings,
+    Scope,
+    WebOperation,
+)
+from robothor.autonomy.payment_hold import (
+    GATED_ACTIONS,
+    HOLD_CLEARED,
+    HOLD_PLACED,
+    REFUSAL,
+    grant_on_hold,
+)
+from robothor.entity.spend_limits import within_limit
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator
+
+    from robothor.autonomy.procedures import ProcedureQuery
+
+
+#: Keys the BROKER writes into ``execution_plan`` beside the agent's plan.
+#: They are observations, not part of ``ExecutionPlan``, and must be stripped
+#: before that model validates the column.
+OBSERVATION_KEYS = frozenset({"landed_urls"})
+
+
+def declared_plan(execution_plan: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The agent's plan, with the broker's own notes removed."""
+    if execution_plan is None:
+        return None
+    return {key: value for key, value in execution_plan.items() if key not in OBSERVATION_KEYS}
+
+
+def _validated_payload(resource: ResourceInput) -> str:
+    """Validate before encryption without ever echoing an invalid input."""
+    try:
+        value = json.loads(resource.payload.get_secret_value())
+        if not isinstance(value, dict):
+            raise ValueError
+        if resource.kind in {"credential", "totp", "browser_session"} and not resource.origin:
+            raise ValueError
+        if resource.kind == "payment_card":
+            card = PaymentCard.model_validate(value)
+            value = {
+                "number": card.number.get_secret_value(),
+                "name": card.name.get_secret_value(),
+                "expiry_month": card.expiry_month,
+                "expiry_year": card.expiry_year,
+            }
+        elif resource.kind == "credential":
+            if set(value) != {"username", "password"} or not all(
+                isinstance(v, str) and 0 < len(v) <= 4096 for v in value.values()
+            ):
+                raise ValueError
+        elif resource.kind == "totp":
+            if set(value) != {"secret"}:
+                raise ValueError
+            base64.b32decode(value["secret"].upper(), casefold=True)
+        elif resource.kind == "document":
+            if set(value) != {"name", "mime_type", "base64"}:
+                raise ValueError
+            if not isinstance(value["name"], str) or any(c in value["name"] for c in "/\\\0"):
+                raise ValueError
+            if len(base64.b64decode(value["base64"], validate=True)) > 5_000_000:
+                raise ValueError
+        elif resource.kind == "profile":
+            import re
+
+            answers = value.pop("answers", {})
+            if (
+                not isinstance(answers, dict)
+                or len(answers) > 80
+                or any(
+                    not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_]{0,59}", key)
+                    or not isinstance(answer, str)
+                    or len(answer) > 5000
+                    for key, answer in answers.items()
+                )
+            ):
+                raise ValueError
+            allowed = {
+                "first_name",
+                "last_name",
+                "legal_name",
+                "email",
+                "phone",
+                "date_of_birth",
+                "address_line1",
+                "address_line2",
+                "city",
+                "region",
+                "postal_code",
+                "country",
+                "occupation",
+                "employer",
+                "interests",
+                "nationality",
+            }
+            if not set(value) <= allowed or not all(isinstance(v, str) for v in value.values()):
+                raise ValueError
+            if answers:
+                value["answers"] = answers
+        elif resource.kind == "browser_session":
+            if not set(value) <= {"cookies", "origins"}:
+                raise ValueError
+        return json.dumps(value, separators=(",", ":"))
+    except Exception:
+        raise ValueError("invalid_resource_payload") from None
+
+
+def read_settings(cur: Any, scope: Scope) -> RuntimeSettings:
+    """The owner's switch, on a cursor the caller already holds.
+
+    Split out of :meth:`AutonomyStore.settings` so that
+    ``robothor.autonomy.availability`` can read the switch and the grants on
+    ONE connection without holding a second copy of either query. It held
+    copies behind a drift guard, and the guard fired the first time a column
+    landed in the middle of the canonical list rather than at its front.
+    """
+    cur.execute(
+        "SELECT settings FROM autonomy_settings WHERE tenant_id=%s AND owner_id=%s",
+        (scope.tenant_id, scope.owner_id),
+    )
+    row = cur.fetchone()
+    return RuntimeSettings.model_validate(row["settings"]) if row else RuntimeSettings()
+
+
+def read_grants(cur: Any, scope: Scope) -> list[dict[str, Any]]:
+    """This owner's grants, on a cursor the caller already holds.
+
+    The companion to :func:`read_settings`; see its note for why both live
+    here rather than being copied into the availability hint.
+    """
+    cur.execute(
+        "SELECT g.id::text,g.version,g.policy,g.revoked_at IS NOT NULL AS revoked,"
+        " COALESCE((SELECT e.event FROM autonomy_events e"
+        "   WHERE e.tenant_id=g.tenant_id AND e.owner_id=g.owner_id"
+        "     AND e.subject_id=g.id AND e.event IN (%s,%s)"
+        "   ORDER BY e.id DESC LIMIT 1)=%s, false) AS payment_hold "
+        "FROM autonomy_grants g WHERE g.tenant_id=%s AND g.owner_id=%s",
+        (HOLD_PLACED, HOLD_CLEARED, HOLD_PLACED, scope.tenant_id, scope.owner_id),
+    )
+    return [dict(row) for row in cur.fetchall()]
+
+
+class AutonomyStore:
+    def __init__(
+        self,
+        connect: Callable[[], Any] | None = None,
+        *,
+        keys: dict[str, bytes] | None = None,
+        key_id: str | None = None,
+    ) -> None:
+        self._connect = connect
+        self._keys = keys
+        self._key_id = key_id
+
+    def resource_keyring(self) -> tuple[str, dict[str, bytes]]:
+        if self._keys is not None:
+            return self._key_id or "native-v1", self._keys
+        from robothor.vault.crypto import decrypt, get_master_key
+
+        master = get_master_key()
+        keys = {"native-v1": master}
+        active = "native-v1"
+        # Deliberately unbound: the keyring is per-instance, not per-tenant.
+        with self.transaction() as cur:
+            cur.execute("SELECT id,encrypted_key,active FROM autonomy_key_versions")
+            for row in cur.fetchall():
+                keys[row["id"]] = base64.b64decode(decrypt(bytes(row["encrypted_key"]), master))
+                if row["active"]:
+                    active = row["id"]
+        return active, keys
+
+    @property
+    def key_id(self) -> str:
+        return self.resource_keyring()[0]
+
+    @property
+    def keys(self) -> dict[str, bytes]:
+        return self.resource_keyring()[1]
+
+    def rotate_resource_keyring(self) -> int:
+        """Administrative rotation; old keys remain for in-flight writes and recovery."""
+        import secrets
+
+        from robothor.vault.crypto import encrypt, get_master_key
+
+        master = get_master_key()
+        # Deliberately unbound: rotation re-seals EVERY owner's resources.
+        with self.transaction() as cur:
+            cur.execute("SELECT pg_advisory_xact_lock(hashtextextended('autonomy-key-rotation',0))")
+            _, keys = self.resource_keyring()
+            key_id = "resource-" + uuid4().hex
+            keys[key_id] = secrets.token_bytes(32)
+            encrypted_key = encrypt(base64.b64encode(keys[key_id]).decode(), master)
+            cur.execute(
+                "SELECT id::text,tenant_id,owner_id,encrypted_value FROM vault_resources FOR UPDATE"
+            )
+            rows = cur.fetchall()
+            for row in rows:
+                scope = Scope(tenant_id=row["tenant_id"], owner_id=row["owner_id"])
+                value = open_resource(bytes(row["encrypted_value"]), keys, scope, row["id"])
+                cur.execute(
+                    "UPDATE vault_resources SET encrypted_value=%s,updated_at=now() WHERE id=%s",
+                    (seal_resource(value, keys, key_id, scope, row["id"]), row["id"]),
+                )
+                self._event(cur, scope, row["id"], "resource_rotated")
+            cur.execute("UPDATE autonomy_key_versions SET active=false WHERE active")
+            cur.execute(
+                "INSERT INTO autonomy_key_versions(id,encrypted_key,active) VALUES (%s,%s,true)",
+                (key_id, encrypted_key),
+            )
+            return len(rows)
+
+    @contextmanager
+    def transaction(self, scope: Scope | None = None) -> Iterator[Any]:
+        """Open a transaction, bound to ``scope``'s tenant where there is one.
+
+        Every autonomy migration enables row-level security and every policy
+        reads ``app.tenant_id``. Nothing ever set it. Because the policies are
+        permissive when it is unset —
+        ``COALESCE(current_setting('app.tenant_id',true),'') IN ('',tenant_id)``
+        — that made all of them decoration: a non-superuser probe read both
+        tenants' rows through this very method, and `test_enrollment_rls.py`
+        passed only because the test set the GUC itself. This is the binding
+        the CRM already does on every connection (``crm_dal``), applied here.
+
+        ``is_local => true`` ties it to THIS transaction. A binding that
+        outlived the commit would be worse than none, because the next caller
+        would silently inherit somebody else's tenant.
+
+        ``scope`` is optional because four callers are deliberately
+        cross-tenant and must stay that way: ``resource_keyring`` and
+        ``rotate_resource_keyring`` (the keyring is per-instance, and rotation
+        re-seals every owner's resources), ``HandoffChecks.enabled_scopes``
+        (it exists to FIND the scopes) and ``purge_expired`` (retention runs
+        as the platform). Everything else passes one — see the module test
+        that walks the call sites.
+        """
+        if self._connect:
+            conn = self._connect()
+        else:
+            import psycopg2
+
+            from robothor.config import get_config
+            from robothor.db.connection import assert_test_database
+
+            config = get_config().db
+            assert_test_database(config.name)
+            conn = psycopg2.connect(**config.dict, connect_timeout=5)
+        try:
+            with conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    if scope is not None:
+                        cur.execute(
+                            "SELECT set_config('app.tenant_id',%s,true)", (scope.tenant_id,)
+                        )
+                    yield cur
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _lock(cur: Any, scope: Scope) -> None:
+        # All grants for the same owner share one reservation lock. Locking
+        # only grant_id would let parallel grants spend the same budget twice.
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (json.dumps([scope.tenant_id, scope.owner_id]),),
+        )
+
+    @staticmethod
+    def _event(cur: Any, scope: Scope, subject_id: str, event: str) -> None:
+        cur.execute(
+            "INSERT INTO autonomy_events (tenant_id,owner_id,subject_id,event) "
+            "VALUES (%s,%s,%s,%s)",
+            (scope.tenant_id, scope.owner_id, subject_id, event),
+        )
+
+    def record_operation_event(self, scope: Scope, operation_id: str, event: str) -> None:
+        """Append one operation event without reading, spending or changing state.
+
+        For facts that belong in the trail but have no record of their own --
+        a refused observation, for instance. The operation must exist in scope;
+        the event name is a module literal, never caller-supplied text.
+        """
+        with self.transaction(scope) as cur:
+            self._operation(cur, scope, operation_id)
+            self._event(cur, scope, operation_id, event)
+
+    def put_resource(
+        self,
+        scope: Scope,
+        resource: ResourceInput,
+        *,
+        lifetime_seconds: int | None = None,
+        source: Source = "secure_input",
+    ) -> dict[str, Any]:
+        prepared = self.prepare_resource(scope, resource, source=source)
+        with self.transaction(scope) as cur:
+            return self.insert_resource(cur, scope, prepared, lifetime_seconds=lifetime_seconds)
+
+    def prepare_resource(
+        self, scope: Scope, resource: ResourceInput, *, source: Source = "secure_input"
+    ) -> tuple[dict[str, Any], bytes]:
+        """Validate and seal before a caller's transaction; never return plaintext."""
+        from robothor.entity.audit import redact_for_audit
+        from robothor.secrets.redaction import redact
+
+        if (
+            redact_for_audit(resource.label) != resource.label
+            or redact(resource.label) != resource.label
+        ):
+            raise ValueError("resource_label_contains_secret")
+        value = _validated_payload(resource)
+        descriptor = describe(resource.kind, value, source)
+        resource_id = str(uuid4())
+        key_id, keys = self.resource_keyring()
+        sealed = seal_resource(value, keys, key_id, scope, resource_id)
+        return {
+            "id": resource_id,
+            "kind": resource.kind,
+            "label": resource.label,
+            "origin": resource.origin,
+            "descriptor": descriptor,
+        }, sealed
+
+    def insert_resource(
+        self,
+        cur: Any,
+        scope: Scope,
+        prepared: tuple[dict[str, Any], bytes],
+        *,
+        lifetime_seconds: int | None = None,
+    ) -> dict[str, Any]:
+        """Insert a sealed resource in the same transaction as an enrollment receipt."""
+        if lifetime_seconds is not None and not 1 <= lifetime_seconds <= 600:
+            raise ValueError("invalid_verification_lifetime")
+        reference, sealed = prepared
+        cur.execute(
+            "INSERT INTO vault_resources "
+            "(id,tenant_id,owner_id,kind,label,origin,encrypted_value,expires_at,descriptor) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,now() + %s::integer * interval '1 second',%s)",
+            (
+                reference["id"],
+                scope.tenant_id,
+                scope.owner_id,
+                reference["kind"],
+                reference["label"],
+                reference["origin"],
+                sealed,
+                lifetime_seconds,
+                Json(reference["descriptor"]),
+            ),
+        )
+        self._event(cur, scope, reference["id"], "resource_created")
+        return reference
+
+    def resources(self, scope: Scope) -> list[dict[str, Any]]:
+        with self.transaction(scope) as cur:
+            cur.execute(
+                "SELECT id::text,kind,label,origin,descriptor FROM vault_resources "
+                "WHERE tenant_id=%s AND owner_id=%s AND active AND (expires_at IS NULL OR expires_at>now()) ORDER BY created_at",
+                (scope.tenant_id, scope.owner_id),
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+    def refresh_resource_descriptors(self, scope: Scope) -> int:
+        return refresh_descriptors(self, scope)
+
+    def consume_resource(
+        self,
+        scope: Scope,
+        resource_id: str,
+        destination: str,
+        *,
+        kind: str | None = None,
+        one_shot: bool = False,
+    ) -> dict[str, Any]:
+        """Read a sealed resource for one destination.
+
+        ``one_shot`` spends it in the same transaction. Restored browser
+        sessions are consumed this way: a saved session that can be replayed
+        indefinitely turns one owner-requested check into an open-ended right
+        to reopen the person's authenticated merchant account.
+        """
+        with self.transaction(scope) as cur:
+            cur.execute(
+                "SELECT kind,origin,encrypted_value FROM vault_resources "
+                "WHERE id=%s AND tenant_id=%s AND owner_id=%s AND active AND (expires_at IS NULL OR expires_at>now())",
+                (resource_id, scope.tenant_id, scope.owner_id),
+            )
+            row = cur.fetchone()
+            if (
+                not row
+                or (kind and row["kind"] != kind)
+                or (row["origin"] and row["origin"] != destination)
+            ):
+                raise PermissionError("resource_not_authorized")
+            plaintext = open_resource(bytes(row["encrypted_value"]), self.keys, scope, resource_id)
+            if one_shot:
+                cur.execute(
+                    "UPDATE vault_resources SET active=false,updated_at=now() WHERE id=%s",
+                    (resource_id,),
+                )
+                self._event(cur, scope, resource_id, "resource_spent")
+            self._event(cur, scope, resource_id, "resource_consumed")
+            return cast("dict[str, Any]", json.loads(plaintext))
+
+    def purge_expired(self, *, terms_days: int | None = None) -> dict[str, int]:
+        """Delete observations past the retention window, across every tenant.
+
+        This is the first ``DELETE FROM autonomy_*`` in the codebase. Before
+        it, the archive of rendered review pages — the owner's name, date of
+        birth, address and the answers they gave a website — was kept forever,
+        openable with the vault master key, with no expiry and nothing but
+        ``DELETE /resources/{id}`` and ``DELETE /grants/{id}`` on the routes.
+
+        Deliberately NOT swept here: ``autonomy_payment_events``. A payment
+        position is reconstructed from its whole event log, so removing part
+        of one silently rewrites what was charged and what is still owed.
+        ``autonomy.payment_event_retention_days`` documents the window as
+        policy; acting on it is an operator decision against a closed
+        operation, not a background job. See ``docs/AUTONOMOUS_EXECUTION.md``.
+
+        Tenant-wide by design — it runs as the platform, after every owner's
+        own erasure has had its chance, so it takes no ``Scope``.
+        """
+        if terms_days is None:
+            from robothor.settings import get_settings
+
+            terms_days = get_settings().autonomy.terms_retention_days
+        if terms_days <= 0:
+            return {"terms_snapshots": 0}
+        # Deliberately unbound: retention runs as the platform, over every tenant.
+        with self.transaction() as cur:
+            cur.execute(
+                "DELETE FROM autonomy_terms_snapshots "
+                "WHERE created_at < now() - %s * interval '1 day'",
+                (terms_days,),
+            )
+            return {"terms_snapshots": cur.rowcount}
+
+    def revoke_resource(self, scope: Scope, resource_id: str) -> None:
+        with self.transaction(scope) as cur:
+            cur.execute(
+                "UPDATE vault_resources SET active=false,updated_at=now() "
+                "WHERE id=%s AND tenant_id=%s AND owner_id=%s RETURNING id",
+                (resource_id, scope.tenant_id, scope.owner_id),
+            )
+            if not cur.fetchone():
+                raise PermissionError("resource_not_found")
+            self._event(cur, scope, resource_id, "resource_revoked")
+
+    def create_grant(self, scope: Scope, policy: Delegation) -> dict[str, Any]:
+        grant_id = str(uuid4())
+        with self.transaction(scope) as cur:
+            cur.execute(
+                "INSERT INTO autonomy_grants(id,tenant_id,owner_id,policy) VALUES (%s,%s,%s,%s)",
+                (grant_id, scope.tenant_id, scope.owner_id, Json(policy.model_dump(mode="json"))),
+            )
+            self._event(cur, scope, grant_id, "grant_created")
+        return dict(id=grant_id, version=1, **policy.model_dump(mode="json"))
+
+    def grants(self, scope: Scope) -> list[dict[str, Any]]:
+        with self.transaction(scope) as cur:
+            return read_grants(cur, scope)
+
+    def revoke_grant(self, scope: Scope, grant_id: str) -> None:
+        with self.transaction(scope) as cur:
+            self._lock(cur, scope)
+            cur.execute(
+                "UPDATE autonomy_grants SET revoked_at=now(),version=version+1 "
+                "WHERE id=%s AND tenant_id=%s AND owner_id=%s RETURNING id",
+                (grant_id, scope.tenant_id, scope.owner_id),
+            )
+            if not cur.fetchone():
+                raise PermissionError("grant_not_found")
+            self._event(cur, scope, grant_id, "grant_revoked")
+
+    @staticmethod
+    def _assert_no_payment_hold(
+        cur: Any, scope: Scope, grant_id: str, proposal: WebOperation
+    ) -> None:
+        """Refuse new spend on a grant whose money already overshot.
+
+        Crossed by ``reserve``, ``begin_submit`` and ``check_authority`` -- the
+        three paths that authorise money -- and deliberately NOT by
+        ``check_reconcile_authority``: recording and finishing a payment that
+        has already left the account is not new spend, and refusing it would
+        strand the operation the hold exists to surface. Non-payment actions
+        are untouched; a hold is about money, not about access.
+        """
+        if proposal.action in GATED_ACTIONS and grant_on_hold(cur, scope, grant_id):
+            raise PermissionError(REFUSAL)
+
+    def _grant_row(self, cur: Any, scope: Scope, grant_id: str) -> None:
+        """Existence within the caller's scope, without the revocation check.
+
+        A revoked grant can still carry a hold; the owner must be able to see
+        and clear it.
+        """
+        cur.execute(
+            "SELECT 1 FROM autonomy_grants WHERE id=%s AND tenant_id=%s AND owner_id=%s",
+            (grant_id, scope.tenant_id, scope.owner_id),
+        )
+        if not cur.fetchone():
+            raise PermissionError("grant_not_found")
+
+    def payment_hold(self, scope: Scope, grant_id: str) -> bool:
+        """Whether this grant is frozen after evidence of overspend."""
+        with self.transaction(scope) as cur:
+            self._grant_row(cur, scope, grant_id)
+            return grant_on_hold(cur, scope, grant_id)
+
+    def clear_payment_hold(self, scope: Scope, grant_id: str) -> None:
+        """Owner-only: the operator has reviewed the overspend, resume spending.
+
+        No agent, tool or broker path reaches this. Clearing is the operator
+        saying they have looked at the charge -- it is not a correction of the
+        evidence, which stays exactly as the issuer delivered it.
+        """
+        with self.transaction(scope) as cur:
+            self._lock(cur, scope)
+            self._grant_row(cur, scope, grant_id)
+            if grant_on_hold(cur, scope, grant_id):
+                self._event(cur, scope, grant_id, HOLD_CLEARED)
+
+    def _policy(self, cur: Any, scope: Scope, grant_id: str) -> tuple[Delegation, int]:
+        cur.execute(
+            "SELECT policy,version,revoked_at FROM autonomy_grants "
+            "WHERE id=%s AND tenant_id=%s AND owner_id=%s",
+            (grant_id, scope.tenant_id, scope.owner_id),
+        )
+        row = cur.fetchone()
+        if not row or row["revoked_at"]:
+            raise PermissionError("grant_revoked")
+        return Delegation.model_validate(row["policy"]), row["version"]
+
+    @staticmethod
+    def _budget_decision(
+        cur: Any,
+        scope: Scope,
+        policy: Delegation,
+        proposal: WebOperation,
+        agent_id: str,
+        exclude: str | None = None,
+    ) -> str:
+        if proposal.action not in {"purchase", "subscription"}:
+            return policy.decision(proposal, agent_id=agent_id, used_minor=0)
+        if proposal.recurring_minor and not proposal.recurrence:
+            return "renewal_schedule_missing"
+        now = datetime.now(UTC)
+        if (
+            not exclude
+            and proposal.recurrence
+            and not (
+                now.date() <= proposal.recurrence.next_charge_on <= now.date() + timedelta(days=366)
+            )
+        ):
+            return "renewal_date_out_of_range"
+        cur.execute(
+            "SELECT proposal,state,updated_at FROM autonomy_operations "
+            "WHERE tenant_id=%s AND owner_id=%s AND proposal->>'currency'=%s "
+            "AND (%s IS NULL OR id::text<>%s) "
+            "AND state IN ('reserved','submitting','reconciling','awaiting_input','completed')",
+            (scope.tenant_id, scope.owner_id, proposal.currency, exclude, exclude),
+        )
+        try:
+            before = monthly_projection(list(cur.fetchall()), today=now.date())
+            added = monthly_projection(
+                [proposal_record(proposal.model_dump(mode="json"), now=now)], today=now.date()
+            )
+        except ValueError:
+            return "renewal_schedule_missing"
+        month = now.strftime("%Y-%m")
+        decision = policy.decision(
+            proposal,
+            agent_id=agent_id,
+            used_minor=before[month] + added[month] - proposal.amount_minor,
+        )
+        if decision != "allow":
+            return decision
+        if proposal.recurring_minor and any(
+            not within_limit(before[key], amount, policy.monthly_minor)
+            for key, amount in added.items()
+        ):
+            return "monthly_commitment_limit"
+        return "allow"
+
+    def reserve(
+        self,
+        scope: Scope,
+        grant_id: str,
+        agent_id: str,
+        proposal: WebOperation,
+        *,
+        request_context: RequestContext | None = None,
+    ) -> dict[str, Any]:
+        payload = proposal.model_dump(mode="json", exclude_none=True)
+        fingerprint = hashlib.sha256(
+            json.dumps([grant_id, agent_id, payload], sort_keys=True).encode()
+        ).hexdigest()
+        with self.transaction(scope) as cur:
+            self._lock(cur, scope)
+            cur.execute(
+                "SELECT id::text,state,fingerprint FROM autonomy_operations "
+                "WHERE tenant_id=%s AND owner_id=%s AND idempotency_key=%s",
+                (scope.tenant_id, scope.owner_id, proposal.idempotency_key),
+            )
+            existing = cur.fetchone()
+            if existing:
+                if existing["fingerprint"] != fingerprint:
+                    raise PermissionError("idempotency_conflict")
+                return {"id": existing["id"], "state": existing["state"]}
+            policy, version = self._policy(cur, scope, grant_id)
+            self._assert_no_payment_hold(cur, scope, grant_id, proposal)
+            decision = self._budget_decision(cur, scope, policy, proposal, agent_id)
+            if decision != "allow":
+                raise PermissionError(decision)
+            operation_id = str(uuid4())
+            cur.execute(
+                "INSERT INTO autonomy_operations "
+                "(id,tenant_id,owner_id,grant_id,grant_version,agent_id,idempotency_key,"
+                "fingerprint,proposal,request_context,state) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'reserved')",
+                (
+                    operation_id,
+                    scope.tenant_id,
+                    scope.owner_id,
+                    grant_id,
+                    version,
+                    agent_id,
+                    proposal.idempotency_key,
+                    fingerprint,
+                    Json(payload),
+                    Json(request_context.model_dump(mode="json")) if request_context else None,
+                ),
+            )
+            self._event(cur, scope, operation_id, "reserved")
+            return {"id": operation_id, "state": "reserved"}
+
+    def operation(self, scope: Scope, operation_id: str) -> dict[str, Any]:
+        with self.transaction(scope) as cur:
+            return self._operation(cur, scope, operation_id)
+
+    def procedures(
+        self, scope: Scope, agent_id: str, query: ProcedureQuery
+    ) -> list[dict[str, Any]]:
+        from robothor.autonomy.procedures import find_procedures
+
+        return find_procedures(self, scope, agent_id, query)
+
+    @staticmethod
+    def _operation(cur: Any, scope: Scope, operation_id: str) -> dict[str, Any]:
+        cur.execute(
+            "SELECT id::text,grant_id::text,grant_version,agent_id,proposal,request_context,state,evidence,execution_plan,input_reason,workflow_id::text,floor(extract(epoch FROM created_at))::bigint AS created_epoch "
+            "FROM autonomy_operations WHERE id=%s AND tenant_id=%s AND owner_id=%s",
+            (operation_id, scope.tenant_id, scope.owner_id),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise PermissionError("operation_not_found")
+        return dict(row)
+
+    def begin_submit(
+        self, scope: Scope, operation_id: str, agent_id: str, *, workflow_id: str | None = None
+    ) -> None:
+        with self.transaction(scope) as cur:
+            self._lock(cur, scope)
+            row = self._operation(cur, scope, operation_id)
+            if row.get("workflow_id") != workflow_id:
+                raise PermissionError("workflow_required")
+            if row["state"] != "reserved":
+                raise PermissionError("reconciliation_required")
+            if row["agent_id"] != agent_id:
+                raise PermissionError("agent_not_allowed")
+            proposal = WebOperation.model_validate(row["proposal"])
+            self._check_settings(cur, scope, proposal)
+            policy = self._live_policy(cur, scope, row)
+            self._assert_no_payment_hold(cur, scope, row["grant_id"], proposal)
+            decision = self._budget_decision(cur, scope, policy, proposal, agent_id, operation_id)
+            if decision != "allow":
+                raise PermissionError(decision)
+            cur.execute(
+                "UPDATE autonomy_operations SET state='submitting',updated_at=now() WHERE id=%s",
+                (operation_id,),
+            )
+            self._event(cur, scope, operation_id, "submitting")
+
+    def check_authority(self, scope: Scope, operation_id: str, agent_id: str) -> Delegation:
+        with self.transaction(scope) as cur:
+            self._lock(cur, scope)
+            row = self._operation(cur, scope, operation_id)
+            if row["agent_id"] != agent_id or row["state"] not in {"reserved", "submitting"}:
+                raise PermissionError("operation_not_executable")
+            proposal = WebOperation.model_validate(row["proposal"])
+            self._check_settings(cur, scope, proposal)
+            policy = self._live_policy(cur, scope, row)
+            self._assert_no_payment_hold(cur, scope, row["grant_id"], proposal)
+            result = self._budget_decision(cur, scope, policy, proposal, agent_id, operation_id)
+            if result != "allow":
+                raise PermissionError(result)
+            return policy
+
+    def check_reconcile_authority(
+        self, scope: Scope, operation_id: str, agent_id: str
+    ) -> Delegation:
+        """The one gate every completion path crosses, submission or not.
+
+        Reconciliation is not a read: it writes durable completion, a payment
+        fact and a receipt, so it consults the owner's runtime settings first
+        and then the grant, exactly as ``check_authority`` does. The budget is
+        deliberately NOT re-decided -- the reservation this operation is about
+        is already counted, so re-deciding it would refuse every recovery.
+        """
+        with self.transaction(scope) as cur:
+            self._lock(cur, scope)
+            row = self._operation(cur, scope, operation_id)
+            if row["agent_id"] != agent_id:
+                raise PermissionError("agent_not_allowed")
+            if row["state"] in {"completed", "failed", "cancelled"}:
+                # Every caller checks state too, but a gate described as the
+                # one gate every completion path crosses has to refuse an
+                # operation that is already over.
+                raise PermissionError("operation_not_pending")
+            self._check_settings(cur, scope, WebOperation.model_validate(row["proposal"]))
+            return self._live_policy(cur, scope, row)
+
+    def _live_policy(self, cur: Any, scope: Scope, row: dict[str, Any]) -> Delegation:
+        """Existence, version, revocation and expiry, in that order."""
+        policy, version = self._policy(cur, scope, row["grant_id"])
+        if version != row["grant_version"]:
+            raise PermissionError("grant_changed")
+        if not policy.enabled:
+            raise PermissionError("grant_disabled")
+        if policy.expires_at <= datetime.now(UTC):
+            raise PermissionError("grant_expired")
+        return policy
+
+    @staticmethod
+    def _check_settings(cur: Any, scope: Scope, proposal: WebOperation) -> None:
+        cur.execute(
+            "SELECT settings FROM autonomy_settings WHERE tenant_id=%s AND owner_id=%s",
+            (scope.tenant_id, scope.owner_id),
+        )
+        row = cur.fetchone()
+        settings = RuntimeSettings.model_validate(row["settings"]) if row else RuntimeSettings()
+        if not settings.enabled:
+            raise PermissionError("autonomous_execution_not_enabled")
+        if proposal.action in {"purchase", "subscription"} and not settings.payment_processing:
+            raise PermissionError("payment_processing_not_enabled")
+
+    def bind_plan(
+        self, scope: Scope, operation_id: str, agent_id: str, plan: dict[str, Any]
+    ) -> None:
+        with self.transaction(scope) as cur:
+            self._lock(cur, scope)
+            row = self._operation(cur, scope, operation_id)
+            if row["agent_id"] != agent_id or row["state"] != "reserved":
+                raise PermissionError("operation_not_executable")
+            stored = declared_plan(row["execution_plan"])
+            if stored is not None and stored != plan:
+                raise PermissionError("execution_plan_changed")
+            observations = {
+                key: value
+                for key, value in (row["execution_plan"] or {}).items()
+                if key in OBSERVATION_KEYS
+            }
+            cur.execute(
+                "UPDATE autonomy_operations SET execution_plan=%s WHERE id=%s",
+                (Json({**plan, **observations}), operation_id),
+            )
+
+    def record_landed_pages(self, scope: Scope, operation_id: str, urls: list[str]) -> None:
+        """Broker-only: where the browser ACTUALLY went, not where it was told.
+
+        ``bind_plan`` stores the agent's declared plan, so its ``url`` is the
+        agent's own value -- true about when it was written, not about whose
+        claim it is. These are the main-frame landings the broker observed
+        during the submission itself, and they are the only pages a
+        confirmation check may later read. Recording them is what lets the
+        ordinary checkout shape work again: submit on one page, confirm on
+        the page the merchant redirected to.
+        """
+        with self.transaction(scope) as cur:
+            self._lock(cur, scope)
+            row = self._operation(cur, scope, operation_id)
+            plan = dict(row["execution_plan"] or {})
+            destination = row["proposal"]["origin"]
+            known = [item for item in plan.get("landed_urls", []) if isinstance(item, str)]
+            for url in urls:
+                if not isinstance(url, str) or len(url) > 2000 or url in known:
+                    continue
+                try:
+                    if url_origin(url) != destination:
+                        continue
+                except ValueError:
+                    continue
+                known.append(url)
+            if len(known) > MAX_LANDED_PAGES:
+                # Keep the commitment page and the most recent landings.
+                known = [known[0], *known[1 - MAX_LANDED_PAGES :]]
+            plan["landed_urls"] = known
+            cur.execute(
+                "UPDATE autonomy_operations SET execution_plan=%s WHERE id=%s",
+                (Json(plan), operation_id),
+            )
+
+    def wait_for_code(self, scope: Scope, operation_id: str) -> None:
+        with self.transaction(scope) as cur:
+            self._lock(cur, scope)
+            row = self._operation(cur, scope, operation_id)
+            if row["state"] != "reserved" or not row["execution_plan"]:
+                raise PermissionError("operation_not_prepared")
+            cur.execute(
+                "UPDATE autonomy_operations SET state='awaiting_input',input_reason='code_before_submit',updated_at=now() "
+                "WHERE id=%s",
+                (operation_id,),
+            )
+            self._event(cur, scope, operation_id, "code_required_before_submit")
+
+    def resume_with_code(self, scope: Scope, operation_id: str) -> dict[str, Any]:
+        # Called only by the authenticated human endpoint. No code is passed
+        # to this DAL, and uncertain submissions cannot enter this transition.
+        with self.transaction(scope) as cur:
+            self._lock(cur, scope)
+            row = self._operation(cur, scope, operation_id)
+            if row["state"] != "awaiting_input" or row["input_reason"] != "code_before_submit":
+                raise PermissionError("operation_not_waiting_for_code")
+            self._policy(cur, scope, row["grant_id"])
+            cur.execute(
+                "UPDATE autonomy_operations SET state='reserved',input_reason=NULL,updated_at=now() WHERE id=%s",
+                (operation_id,),
+            )
+            self._event(cur, scope, operation_id, "code_resume_requested")
+            return row
+
+    def settings(self, scope: Scope) -> RuntimeSettings:
+        with self.transaction(scope) as cur:
+            return read_settings(cur, scope)
+
+    def configure(self, scope: Scope, settings: RuntimeSettings) -> None:
+        with self.transaction(scope) as cur:
+            self._lock(cur, scope)
+            cur.execute(
+                "INSERT INTO autonomy_settings(tenant_id,owner_id,settings) VALUES (%s,%s,%s) "
+                "ON CONFLICT(tenant_id,owner_id) DO UPDATE SET settings=EXCLUDED.settings,updated_at=now()",
+                (scope.tenant_id, scope.owner_id, Json(settings.model_dump(mode="json"))),
+            )
+            self._event(cur, scope, str(uuid4()), "settings_changed")
+
+    def spending_projection(self, scope: Scope) -> dict[str, Any]:
+        with self.transaction(scope) as cur:
+            cur.execute(
+                "SELECT proposal,state,updated_at FROM autonomy_operations "
+                "WHERE tenant_id=%s AND owner_id=%s "
+                "AND proposal->>'action' IN ('purchase','subscription') "
+                "AND state IN ('reserved','submitting','reconciling','awaiting_input','completed')",
+                (scope.tenant_id, scope.owner_id),
+            )
+            rows = list(cur.fetchall())
+        currencies = sorted({row["proposal"]["currency"] for row in rows})
+        result = {}
+        for currency in currencies:
+            try:
+                result[currency] = monthly_projection(
+                    [row for row in rows if row["proposal"]["currency"] == currency],
+                    today=datetime.now(UTC).date(),
+                )
+            except ValueError:
+                return {"state": "renewal_schedule_missing", "months": {}}
+        return {"state": "ready", "months": result}
+
+    def recent_operations(self, scope: Scope) -> list[dict[str, Any]]:
+        with self.transaction(scope) as cur:
+            cur.execute(
+                "SELECT id::text,state,proposal,evidence,created_at,updated_at FROM autonomy_operations "
+                "WHERE tenant_id=%s AND owner_id=%s ORDER BY created_at DESC LIMIT 100",
+                (scope.tenant_id, scope.owner_id),
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+    #: The only legal moves. Every writer goes through ``_finish``; a direct
+    #: ``UPDATE autonomy_operations SET state=...`` is how #618 reached
+    #: ``reconciling`` from ``reserved``, which this table forbids.
+    TRANSITIONS = {
+        "reserved": {"cancelled", "failed", "awaiting_input"},
+        "submitting": {"reconciling", "completed", "awaiting_input"},
+        "reconciling": {"completed", "failed", "awaiting_input"},
+        "awaiting_input": {"reconciling", "cancelled", "failed"},
+    }
+
+    def abandon(self, scope: Scope, operation_id: str, reason: str = "owner_abandoned") -> None:
+        """The owner's route out of a wedged uncertain operation.
+
+        A handoff that expires without a confirmation leaves money reserved
+        against a result nobody can observe. Only the authenticated owner may
+        declare the attempt failed, which returns the reservation.
+        """
+        with self.transaction(scope) as cur:
+            self._lock(cur, scope)
+            row = self._operation(cur, scope, operation_id)
+            if row["state"] not in {"reconciling", "awaiting_input"}:
+                raise ValueError("invalid_transition")
+            self._finish(cur, scope, operation_id, "failed")
+            self._event(cur, scope, operation_id, reason)
+
+    def finish(
+        self, scope: Scope, operation_id: str, state: str, evidence: dict[str, Any] | None = None
+    ) -> None:
+        with self.transaction(scope) as cur:
+            self._lock(cur, scope)
+            self._finish(cur, scope, operation_id, state, evidence)
+
+    def _finish(
+        self,
+        cur: Any,
+        scope: Scope,
+        operation_id: str,
+        state: str,
+        evidence: dict[str, Any] | None = None,
+        *,
+        input_reason: str | None = None,
+    ) -> None:
+        allowed = self.TRANSITIONS
+        # This method is broker-only. Routes/tools never accept arbitrary
+        # completion evidence from the model or client.
+        if state == "completed" and not evidence:
+            raise ValueError("completion_requires_evidence")
+        if evidence and (
+            set(evidence)
+            - {"origin", "confirmation_sha256", "verified_at", "kind", "confirmation_rule"}
+        ):
+            raise ValueError("unsafe_evidence")
+        if (
+            evidence
+            and "confirmation_rule" in evidence
+            and evidence["confirmation_rule"]
+            not in {
+                "account_created",
+                "application_received",
+                "order_confirmed",
+                "membership_active",
+                "login_confirmed",
+            }
+        ):
+            raise ValueError("unsafe_confirmation_rule")
+        row = self._operation(cur, scope, operation_id)
+        if state not in allowed.get(row["state"], set()):
+            raise ValueError("invalid_transition")
+        cur.execute(
+            "UPDATE autonomy_operations SET state=%s,evidence=%s,updated_at=now(),"
+            "input_reason=CASE WHEN %s THEN %s ELSE input_reason END WHERE id=%s",
+            (state, Json(evidence), input_reason is not None, input_reason, operation_id),
+        )
+        if state == "completed":
+            from robothor.autonomy.payment_journal import record_submission
+
+            record_submission(cur, self, scope, row)
+            cur.execute(
+                "UPDATE autonomy_handoffs SET state='resolved',updated_at=now() "
+                "WHERE tenant_id=%s AND owner_id=%s AND operation_id=%s "
+                "AND state<>'resolved'",
+                (scope.tenant_id, scope.owner_id, operation_id),
+            )
+        self._event(cur, scope, operation_id, state)

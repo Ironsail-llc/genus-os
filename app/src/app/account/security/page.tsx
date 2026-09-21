@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { AccountSecurityPanel } from "@/components/account-security-panel";
+import { personalAutomationEnabled } from "@/lib/autonomy";
 
 /**
  * Account security — the one page an operator on a local-login-only instance
@@ -18,6 +19,13 @@ export default function AccountSecurityPage() {
           </p>
         </div>
         <AccountSecurityPanel />
+        {/* Only on an instance that offers personal automation. The route
+            itself 404s otherwise, and a link to a 404 is worse than no link. */}
+        {personalAutomationEnabled() && (
+          <Link href="/account/autonomy" className="text-sm underline underline-offset-2">
+            Personal information and delegated tasks
+          </Link>
+        )}
         <Link href="/" className="text-sm text-muted-foreground underline underline-offset-2">
           Back to the dashboard
         </Link>

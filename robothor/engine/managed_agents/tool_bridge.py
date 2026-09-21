@@ -59,6 +59,7 @@ def build_ma_tools_for_agent(
     agent_config: AgentConfig,
     *,
     enable_builtin_sandbox: bool = False,
+    autonomy: bool = False,
 ) -> list[dict[str, Any]]:
     """Build the full MA tools list for an agent manifest.
 
@@ -72,6 +73,14 @@ def build_ma_tools_for_agent(
         When *True*, include ``agent_toolset_20260401`` (MA built-in bash,
         read, write, edit, glob, grep, web_fetch, web_search) and omit
         overlapping engine tools from the custom-tool list.
+    autonomy
+        Whether this run is under a live standing grant, answered by the
+        caller. It widens ``browser`` with the delegated account/payment
+        wording — the third way a schema reaches a model, and the one that
+        was left behind when the widening was added to ``build_for_agent``:
+        an MA-hosted agent under a grant executes its browser calls locally
+        through the same broker and read a description that never mentioned
+        ``request``. Off by default, so an agent with no grant pays nothing.
 
     Returns
     -------
@@ -79,7 +88,7 @@ def build_ma_tools_for_agent(
         Tool definitions in MA API format, ready for ``create_agent()``.
     """
     # Read schemas from registry without mutating it
-    schemas = registry.build_for_agent(agent_config)
+    schemas = registry.build_for_agent(agent_config, autonomy=autonomy)
 
     tools: list[dict[str, Any]] = []
     skip_names: set[str] = set()
@@ -108,12 +117,19 @@ def build_ma_tools_from_names(
     tool_names: list[str],
     *,
     enable_builtin_sandbox: bool = False,
+    autonomy: bool = False,
 ) -> list[dict[str, Any]]:
     """Build MA tools from an explicit list of tool names.
 
     Useful when calling ``run_on_managed_agents()`` with a specific
     subset of tools rather than a full ``AgentConfig``.
+
+    ``autonomy`` behaves exactly as in :func:`build_ma_tools_for_agent`: the
+    fourth path a browser schema takes to a model, and the fourth that has to
+    agree about whether this run holds a grant.
     """
+    from robothor.engine.tools.registry import with_autonomy
+
     all_schemas: dict[str, dict[str, Any]] = {}
     for schema in registry._schemas.values():
         func = schema.get("function", schema)
@@ -133,7 +149,7 @@ def build_ma_tools_from_names(
             continue
         tool_schema = all_schemas.get(name)
         if tool_schema:
-            tools.append(engine_schema_to_ma_custom(tool_schema))
+            tools.append(engine_schema_to_ma_custom(with_autonomy(tool_schema, autonomy)))
         else:
             logger.warning("Tool %r not found in registry, skipping", name)
 

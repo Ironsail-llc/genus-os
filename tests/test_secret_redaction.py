@@ -473,3 +473,89 @@ def test_redaction_leaves_legitimate_text_alone(text, why):
 def test_the_real_shapes_are_still_taken(text):
     """The tightening must not buy its precision with a miss."""
     assert redact(text) != text, f"a credential survived: {text[:20]}…"
+
+
+class TestRedactCarriesNoProductProse:
+    """``redact`` is the platform-wide primitive, not a chat feature.
+
+    It runs on logs, audit fields, scrubbed page text and exception messages
+    on every instance, enrolled in autonomy or not. For one release it also
+    ran the autonomy chat backstop, which appended an advisory sentence —
+    ``[Payment details were withheld from chat. Enroll securely at
+    /account/autonomy.]`` — to arbitrary strings. Two consequences, both bad:
+
+    * Every Luhn-valid 12-19 digit run is a "card". Every IMEI is Luhn-valid
+      by construction, and carrier tracking and order numbers hit it too, so
+      the redactor destroyed ordinary operational identifiers in logs.
+    * The appended sentence is ``[...]``-shaped, which is how this platform
+      writes system notes to the model. A merchant page or an inbound message
+      only had to contain a Luhn-valid digit run to get a pseudo-system line
+      into the model's context — prompt injection through the redactor.
+
+    The backstop belongs at the chat-intake boundary that wants it
+    (``robothor.autonomy.intake.protect_payment_text``). ``redact`` returns a
+    redaction and nothing else.
+    """
+
+    #: Valid IMEI (Luhn check digit 8). Every IMEI is Luhn-valid by design.
+    IMEI = "490154203237518"
+
+    #: Luhn-valid, 12 and 15 digits, and deliberately NOT card-shaped: no
+    #: network issues an IIN beginning 8 or 9. The point of these cases is
+    #: that a long Luhn-valid run is not evidence of a card, so using a real
+    #: Visa test PAN to make it — as the first version of this file did —
+    #: teaches the next reader the opposite of the lesson.
+    CONSIGNMENT = "800123456785"
+    ORDER = "900111222333441"
+
+    def test_an_imei_survives_intact(self):
+        text = f"IMEI {self.IMEI} registered"
+        assert redact(text) == text
+
+    def test_a_tracking_number_survives_intact(self):
+        text = f"carrier consignment {self.CONSIGNMENT} delivered"
+        assert redact(text) == text
+
+    def test_no_advisory_text_is_appended_to_any_string(self):
+        for text in (
+            # A real PAN too: even here `redact` must stay a redactor. The
+            # chat boundary is where a card is withheld, and it is the only
+            # place that may say so.
+            "log line: card 4242424242424242 charged ok",
+            f"IMEI {self.IMEI} registered",
+            f"order {self.ORDER} shipped",
+        ):
+            out = redact(text)
+            assert "[" not in out and "]" not in out, out
+            assert "/account/autonomy" not in out, out
+            assert "withheld" not in out, out
+
+    def test_the_trailing_separator_is_not_eaten(self):
+        """``(?:\\d[ -]?){12,19}`` consumed the space after the last digit.
+
+        ``card 4242424242424242 charged`` came back as ``…withheld]charged``:
+        the words either side of a redaction ran together, which is the same
+        class of damage as the ``Bearer <english word>`` bug above.
+        """
+        from robothor.autonomy.intake import protect_payment_text
+
+        out = protect_payment_text("card 4242424242424242 charged ok")
+        assert "withheld] charged ok" in out, out
+
+    def test_the_chat_boundary_still_withholds_a_real_pan(self):
+        from robothor.autonomy.intake import protect_payment_text
+
+        out = protect_payment_text("Use my card 4242 4242 4242 4242 cvv: 123")
+        assert "4242" not in out
+        assert "/account/autonomy" in out
+
+    def test_a_secure_marker_payload_is_still_scrubbed_without_prose(self):
+        """``/secure`` is a real secret marker, so the payload still goes.
+
+        But it goes as a plain redaction. Truncating a log at an attacker's
+        ``/secure`` line and replacing the tail with a ``[...]`` sentence was
+        the same injection surface as the payment advisory.
+        """
+        out = redact('/secure profile\n{"legal_name":"private-person-canary"}')
+        assert "private-person-canary" not in out
+        assert "[" not in out and "]" not in out, out

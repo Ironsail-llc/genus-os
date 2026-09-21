@@ -38,6 +38,7 @@ from typing import Any
 __all__ = [
     "PLACEHOLDER",
     "SECRET_TOOL_ARGUMENTS",
+    "cut_private_input",
     "redact",
     "redact_assistant_turn",
     "redact_message",
@@ -49,6 +50,38 @@ __all__ = [
 #: mangled value, so an operator reading an error knows something was removed
 #: and does not go hunting for a token that "changed".
 PLACEHOLDER = "<redacted>"
+
+#: The line an operator types to hand this platform a private value out of
+#: band: ``/secure`` or ``/secure@botname``, optionally with a kind after it.
+#: Everything from the marker on is the payload, so the whole tail goes.
+#:
+#: It lives here, not in the chat feature that reads it, because ``redact``
+#: has to know the shape too — the marker is a secret marker, and a chat line
+#: carrying one reaches logs, audit rows and exception text like any other
+#: string. ``robothor.autonomy.intake`` imports it from here; the dependency
+#: does not run the other way, because a platform-wide redaction primitive
+#: must not pull a product module in on its hot path.
+SECURE_MARKER = re.compile(r"(?im)^\s*/secure(?:@[a-zA-Z0-9_]+)?(?:\s|$)")
+
+
+def cut_private_input(text: str, replacement: str = PLACEHOLDER) -> str:
+    """Everything from a ``/secure`` marker on, replaced by ``replacement``.
+
+    Three callers make this exact cut and each had written it out: ``redact``
+    for a log line, ``robothor.sanitize.sanitize_preview`` for the operator
+    notification an unregistered sender's text is embedded in, and
+    ``autonomy.intake.protect_payment_text`` for the chat intake itself. They
+    differ only in what they leave behind — a platform placeholder, a short
+    note, or a sentence pointing at secure enrollment — which is the argument,
+    not a reason to copy the search.
+
+    Three copies of a secret boundary is three places to forget when the
+    marker's shape changes, and the shape is a regex a chat sender controls
+    the input to.
+    """
+    marker = SECURE_MARKER.search(text)
+    return text[: marker.start()] + replacement if marker else text
+
 
 #: Credential shapes this platform issues, accepts or forwards.
 #:
@@ -299,11 +332,27 @@ def redact(text: str) -> str:
     Never raises and never returns ``None``: every caller is on a path that is
     already reporting a failure, and a redactor that could fail there would be
     the second bug in one line.
+
+    What it returns is a REDACTION and nothing else. For one release it also
+    ran the autonomy chat backstop, which appended
+    ``[Payment details were withheld from chat. Enroll securely at
+    /account/autonomy.]`` to whatever it touched. That sentence is product
+    prose on a platform-wide primitive: it fired on every Luhn-valid 12-19
+    digit run — every IMEI is Luhn-valid by construction, and tracking and
+    order numbers hit it too — and, being ``[...]``-shaped, let any merchant
+    page or inbound message inject a pseudo-system line into the model's
+    context just by containing a long number. The payment backstop now lives
+    only at the chat-intake boundary that wants it
+    (:func:`robothor.autonomy.intake.protect_payment_text`).
     """
     if not text:
         return text
     try:
-        named = _ASSIGNMENT.sub(_redact_assignment, text)
+        # A ``/secure`` line is an explicit secret marker, so the payload after
+        # it goes — as a plain placeholder. Truncating a log at an attacker's
+        # ``/secure`` and replacing the tail with an advisory sentence was the
+        # same injection surface as the payment prose.
+        named = _ASSIGNMENT.sub(_redact_assignment, cut_private_input(text))
         return _CREDENTIAL_SHAPED.sub(PLACEHOLDER, named)
     except Exception:  # noqa: BLE001 - pragma: no cover - a regex that cannot fail
         # If this ever somehow raises, printing nothing beats printing a token.

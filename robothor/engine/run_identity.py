@@ -69,3 +69,25 @@ def resolve_run_identity(
         )
 
     return None
+
+
+def _is_service_caller(user_role: str, user_id: str) -> bool:
+    """Whether this run's effective caller is a service/automated actor.
+
+    A WEBCHAT run can still arrive from a service-typ auth context (an
+    engine/bridge credential acting on an agent's behalf, not a human — see
+    ``AuthContext.is_service`` at the chat layer). ``chat.py`` already passes
+    ``identity=None`` for those, but the runner can't tell "deliberately
+    None" from "not provided", so the fallback below must re-derive
+    service-ness itself from the same conventions used elsewhere in this
+    module: the manifest's default ``service_role`` value of ``"service"``
+    (``AgentConfig.service_role``, ``issue_service_token``'s default role)
+    and the ``f"service:{agent_id}"`` / ``f"service:workflow:{id}"`` user_id
+    marker convention (``_SYSTEM_TRIGGER_TYPES`` branch above, workflow.py,
+    scheduler.py). Without this gate, a service caller's non-UUID user_id
+    reaches ``resolve_identity("webchat", ...)`` and triggers a DB error on
+    every single call until the negative cache absorbs it (60s TTL).
+    """
+    return (
+        user_role == "service" or user_role.startswith("service:") or user_id.startswith("service:")
+    )

@@ -309,7 +309,17 @@ class TelegramAttachmentsMixin:
             logger.warning("Could not save the attachment %s: %s", media.name, exc)
             return None
         noted = attachments.NotedAttachment(row=row)
-        await self._enrich_attachment(noted, raw, media, chat_id)
+        try:
+            await self._enrich_attachment(noted, raw, media, chat_id)
+        except Exception as exc:  # noqa: BLE001 - the file is already on disk
+            # Enrichment is best-effort by contract, but the CALL was not
+            # guarded: the `describe_image_bytes` import inside it sits outside
+            # its own `try`, so a missing local-vision dependency raised
+            # ImportError straight out of `handle_file`. For a single photo
+            # that lost the operator a reply; inside an album's re-dispatch
+            # loop it used to lose every member after it. The row is already
+            # written, so the answer is the un-enriched attachment, never None.
+            logger.warning("Could not enrich the attachment %s: %s", media.name, exc)
         return noted
 
     async def _enrich_attachment(
@@ -431,7 +441,7 @@ class TelegramAttachmentsMixin:
             "text what you need and I can work from the recording's file."
         )
 
-    async def handle_file(self, message: Message) -> None:
+    async def handle_file(self, message: Message, *, _album_checked: bool = False) -> None:
         """Keep whatever arrived, then hand the agent the caption and the paths."""
         if not message.from_user:
             return
@@ -444,6 +454,13 @@ class TelegramAttachmentsMixin:
             await message.answer(reply)
             return
 
+        from robothor.engine.secure_intake import collect_album, intercept
+
+        if message.media_group_id and not _album_checked:
+            collect_album(self, message)
+            return
+        if await intercept(self, message, attachment=True):
+            return
         caption = (message.caption or "").strip()
         media = media_ref(message)
         if media is None:
@@ -630,3 +647,25 @@ class TelegramAttachmentsMixin:
             sender_info=user_info,
             attachments=rows,
         )
+
+
+async def _extract_pdf_text(raw_bytes: bytes) -> str:
+    """Best-effort text extraction from a PDF."""
+    try:
+        import io
+
+        import pypdf
+
+        reader = pypdf.PdfReader(io.BytesIO(raw_bytes))
+        pages = []
+        for i, page in enumerate(reader.pages):
+            text = page.extract_text() or ""
+            if text.strip():
+                pages.append(f"[Page {i + 1}]\n{text}")
+        if pages:
+            return "\n\n".join(pages)
+        return "[PDF: no extractable text (may be image-based)]"
+    except ImportError:
+        return "[PDF file — install pypdf for text extraction]"
+    except Exception as e:
+        return f"[PDF text extraction failed: {e}]"

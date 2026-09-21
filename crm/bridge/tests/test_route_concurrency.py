@@ -38,6 +38,30 @@ def test_only_genuinely_async_routes_run_on_the_event_loop():
     }
 
     assert async_routes == {
+        # Personal enrollment awaits request bodies; all synchronous vault and
+        # journal calls use asyncio.to_thread. Verification starts an async
+        # broker task, so it must also retain the event-loop context.
+        ("POST", "/api/autonomy/handoffs/{handoff_id}/check"),
+        ("GET", "/api/autonomy/status"),
+        ("GET", "/api/autonomy/operations"),
+        ("GET", "/api/autonomy/operations/{operation_id}/payment"),
+        ("GET", "/api/autonomy/operations/{operation_id}/terms"),
+        ("GET", "/api/autonomy/operations/{operation_id}/terms/{snapshot_id}"),
+        ("DELETE", "/api/autonomy/operations/{operation_id}/terms"),
+        ("POST", "/api/autonomy/resources"),
+        ("POST", "/api/autonomy/enrollments"),
+        ("POST", "/api/autonomy/enrollments/inspect"),
+        ("POST", "/api/autonomy/enrollments/complete"),
+        ("POST", "/api/autonomy/resources/refresh-descriptions"),
+        ("POST", "/api/autonomy/profile-from-contact"),
+        ("DELETE", "/api/autonomy/resources/{resource_id}"),
+        ("POST", "/api/autonomy/grants"),
+        ("DELETE", "/api/autonomy/grants/{grant_id}"),
+        ("DELETE", "/api/autonomy/grants/{grant_id}/payment-hold"),
+        ("PUT", "/api/autonomy/settings"),
+        ("POST", "/api/autonomy/operations/{operation_id}/verification"),
+        # The owner's route out of an operation no check can ever resolve.
+        ("POST", "/api/autonomy/operations/{operation_id}/abandon"),
         ("GET", "/health"),
         ("GET", "/ready"),
         ("GET", "/api/memory/entity/{name}"),

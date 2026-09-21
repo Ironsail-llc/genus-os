@@ -9,7 +9,6 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
-from enum import StrEnum
 from typing import Annotated, Protocol, runtime_checkable
 
 from pydantic import (
@@ -26,6 +25,9 @@ from robothor.entity.payments import (  # noqa: TC001 - Pydantic runtime fields
     Identifier,
     OperationalVirtualCardReference,
 )
+from robothor.entity.spend_limits import DecisionOutcome as DecisionOutcome
+from robothor.entity.spend_limits import DecisionReason as DecisionReason
+from robothor.entity.spend_limits import decide_limits
 
 Category = Annotated[
     str,
@@ -88,33 +90,6 @@ def _positive_money(value: object) -> Decimal:
 
 def _non_negative_money(value: object) -> Decimal:
     return _money(value, allow_zero=True)
-
-
-class DecisionOutcome(StrEnum):
-    ALLOW = "allow"
-    APPROVAL_REQUIRED = "approval_required"
-    DENY = "deny"
-
-
-class DecisionReason(StrEnum):
-    WITHIN_POLICY = "within_policy"
-    APPROVAL_THRESHOLD = "approval_threshold"
-    POLICY_MISSING = "policy_missing"
-    POLICY_DISABLED = "policy_disabled"
-    POLICY_INCOMPLETE = "policy_incomplete"
-    POLICY_TENANT_MISMATCH = "policy_tenant_mismatch"
-    POLICY_ORGANIZATION_MISMATCH = "policy_organization_mismatch"
-    INSTRUMENT_OWNERSHIP_MISMATCH = "instrument_ownership_mismatch"
-    INSTRUMENT_INACTIVE = "instrument_inactive"
-    CATEGORY_NOT_ALLOWED = "category_not_allowed"
-    VENDOR_NOT_ALLOWED = "vendor_not_allowed"
-    CURRENCY_NOT_ALLOWED = "currency_not_allowed"
-    PER_TRANSACTION_LIMIT = "per_transaction_limit"
-    USAGE_UNAVAILABLE = "usage_unavailable"
-    USAGE_SNAPSHOT_MISMATCH = "usage_snapshot_mismatch"
-    DAILY_LIMIT = "daily_limit"
-    MONTHLY_LIMIT = "monthly_limit"
-    IDEMPOTENCY_CONFLICT = "idempotency_conflict"
 
 
 class SpendProposal(BaseModel):
@@ -384,23 +359,21 @@ class SpendPolicyEngine:
             return DecisionOutcome.DENY, DecisionReason.VENDOR_NOT_ALLOWED
         if proposal.currency not in policy.allowed_currencies:
             return DecisionOutcome.DENY, DecisionReason.CURRENCY_NOT_ALLOWED
-        if proposal.amount > policy.per_transaction_limit:
-            return DecisionOutcome.DENY, DecisionReason.PER_TRANSACTION_LIMIT
-        if usage is None:
-            return DecisionOutcome.DENY, DecisionReason.USAGE_UNAVAILABLE
-        if (
-            usage.tenant_id != proposal.tenant_id
-            or usage.organization_id != proposal.organization_id
-            or usage.usage_date != proposal.requested_at.date()
-        ):
-            return DecisionOutcome.DENY, DecisionReason.USAGE_SNAPSHOT_MISMATCH
-        if usage.daily_committed + proposal.amount > policy.daily_limit:
-            return DecisionOutcome.DENY, DecisionReason.DAILY_LIMIT
-        if usage.monthly_committed + proposal.amount > policy.monthly_limit:
-            return DecisionOutcome.DENY, DecisionReason.MONTHLY_LIMIT
-        if proposal.amount >= policy.approval_threshold:
-            return DecisionOutcome.APPROVAL_REQUIRED, DecisionReason.APPROVAL_THRESHOLD
-        return DecisionOutcome.ALLOW, DecisionReason.WITHIN_POLICY
+        return decide_limits(
+            amount=proposal.amount,
+            per_transaction_limit=policy.per_transaction_limit,
+            monthly_limit=policy.monthly_limit,
+            monthly_used=usage.monthly_committed if usage else None,
+            daily_limit=policy.daily_limit,
+            daily_used=usage.daily_committed if usage else None,
+            usage_matches=bool(
+                usage
+                and usage.tenant_id == proposal.tenant_id
+                and usage.organization_id == proposal.organization_id
+                and usage.usage_date == proposal.requested_at.date()
+            ),
+            approval_threshold=policy.approval_threshold,
+        )
 
     @staticmethod
     def _decision(

@@ -1,7 +1,7 @@
 # Payment-data boundary
 
-Version: 1.0
-Last updated: 2026-07-13
+Version: 1.1
+Last updated: 2026-09-19
 
 This document defines the intended technical boundary; it is not a PCI DSS
 attestation, scope determination, or legal opinion. Outsourcing payment capture
@@ -9,9 +9,10 @@ can reduce scope, but it does not automatically remove Genus OS or its operator
 from PCI DSS obligations. Validate the implemented data flow with the acquirer,
 payment provider, and a qualified assessor.
 
-## Non-negotiable rule
+## Customer and organizational treasury boundary
 
-Genus OS does not accept, persist, log, embed, back up, or transmit raw primary
+The customer/organizational treasury interfaces do not accept, persist, log,
+embed, back up, or transmit raw primary
 account numbers (PAN), full track data, PIN/PIN blocks, card-verification codes
 (CVC/CVV/CID), or cryptograms.
 
@@ -116,3 +117,27 @@ Required before live use:
 - independent security testing and actual PCI scope determination;
 - operator policies, training, monitoring, incident response, contracts, and
   evidence.
+
+## Separate personal-card browser boundary
+
+The optional personal-autonomy broker intentionally has a different data flow:
+its authenticated enrollment page accepts an individual's card number, name
+and expiry into encrypted owner-scoped native-vault resources. The isolated
+broker consumes those references for merchant checkout under a standing grant.
+PAN is processed by Genus OS in this flow; the token-only scope statements above
+do not apply to it. Payment execution defaults off and requires an owner/admin
+to record the deployment-specific assessment before enabling it.
+
+CVV/CVC cannot be enrolled or persisted with a card. If needed for one checkout,
+it enters through a dedicated authenticated transient resume endpoint, bypasses
+the model and journal, and is discarded with the worker. Browser storage is not
+saved after payment or transient-code entry, because merchant scripts can copy
+input into storage. Proxy/APM/body logging and remote browser retention must
+be reviewed in the deployed environment; source-level redaction cannot control
+external infrastructure.
+
+This browser adapter observes merchant confirmation, not settlement. It does not
+provide issuing, refunds, disputes or bank reconciliation and makes no PCI
+attestation. The existing customer and organizational token models continue to
+reject raw card data. See [Personal autonomous execution](../AUTONOMOUS_EXECUTION.md)
+for isolation, key rotation, revocation, testing and deployment requirements.

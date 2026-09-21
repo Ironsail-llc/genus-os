@@ -41,6 +41,7 @@ from robothor.engine.chat_store import (
     update_model_override_async,
 )
 from robothor.engine.task_registry import get_task_registry
+from robothor.engine.telegram_attachments import _extract_pdf_text as _extract_pdf_text
 
 logger = logging.getLogger(__name__)
 
@@ -110,28 +111,6 @@ AVAILABLE_MODELS: dict[str, str] = {
 
 
 MODEL_DISPLAY_NAMES = {v: k for k, v in AVAILABLE_MODELS.items()}
-
-
-async def _extract_pdf_text(raw_bytes: bytes) -> str:
-    """Best-effort text extraction from a PDF."""
-    try:
-        import io
-
-        import pypdf
-
-        reader = pypdf.PdfReader(io.BytesIO(raw_bytes))
-        pages = []
-        for i, page in enumerate(reader.pages):
-            text = page.extract_text() or ""
-            if text.strip():
-                pages.append(f"[Page {i + 1}]\n{text}")
-        if pages:
-            return "\n\n".join(pages)
-        return "[PDF: no extractable text (may be image-based)]"
-    except ImportError:
-        return "[PDF file — install pypdf for text extraction]"
-    except Exception as e:
-        return f"[PDF text extraction failed: {e}]"
 
 
 async def _analyze_photo_bytes(raw_bytes: bytes, prompt: str = "") -> str:
@@ -914,8 +893,29 @@ class TelegramHandlersMixin:
         if not message.text or not message.from_user:
             return
 
+        from robothor.engine.secure_intake import intercept
+
+        if await intercept(self, message):
+            return
         chat_id = str(message.chat.id)
         user_text = message.text.strip()
+        from robothor.autonomy.intake import marker_truncated, protect_payment_text
+
+        # The backstop's marker matches at any LINE start, while `intercept`
+        # above consumes only a message that STARTS with /secure. So an
+        # ordinary multi-line message whose second line happens to begin
+        # "/secure the loading bay doors" reaches the model with everything
+        # from that line on removed. Keeping the cut is right; making it
+        # silent was not — the advisory sentence it leaves behind is addressed
+        # to the model, and the person who typed the message saw nothing.
+        docked = marker_truncated(user_text)
+        user_text = protect_payment_text(user_text)
+        if docked:
+            await message.answer(
+                "I stopped reading that message at the line starting with /secure and "
+                "dropped the rest, in case it was private. Send the remainder in a new "
+                "message, or use /secure on its own line to enroll something."
+            )
 
         # ── Skill bundles: "/bundle-name" composes a multi-skill prompt ──
         if user_text.startswith("/"):

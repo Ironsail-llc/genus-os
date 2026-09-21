@@ -572,7 +572,7 @@ code, or the channel to the engine is gone.
 | Transport | A unix socket in a 0700 directory, authenticated by a token in a 0600 file. The wire carries a tool name and arguments — there is no `tool_call_id` field, so there is nothing for a snippet to forge. One call at a time, so two writes cannot race. |
 | Environment | The scrubbed child environment at **`enforce`**, always — whatever `ROBOTHOR_EXEC_ENV_MODE` the instance is on. The snippet gets the process essentials, the declared non-secret `ROBOTHOR_*` settings and this agent's own `secrets:` grants: no database password, no provider key, no channel token. Scrubbing removes INHERITANCE, though, not the credentials from the engine — and the snippet's parent IS the engine, whose `/proc/<pid>/environ` a same-uid process may read. So the handler also calls `harden_process()` (`PR_SET_DUMPABLE=0`) before spawning, which makes those entries root-only. That is a **mitigation, not a boundary**: the remedy is the engine's environment ceasing to hold application credentials at all (see the SOPS bootstrap runbook), after which procfs leaks only bootstrap values. `exec` has the same exposure and the same mitigation. |
 | Interpreter | Isolated (`-I`: no `PYTHONPATH`, no user site) with an import guard that refuses `robothor`, `crm`, `psycopg2`, `litellm` and `redis`. The guard is defence in depth, not the boundary — the boundary is that the environment holds nothing worth importing the engine for. |
-| Lifetime | Its own process group **and a census of its descendants**, killed when the call returns — whether it finished, timed out, or was cancelled. Two kills, because neither alone is enough: the snippet reaps its own children on the way out (where the parent chain is intact, so a `setsid` child or a double-forked daemon is still reachable), and the engine kills the group plus everything its census saw (which is what catches a timeout, a cancellation, or a snippet that skipped its own cleanup). **A snippet can defeat both deliberately**, and this is reproducible rather than a race: start a child with `start_new_session=True` (outside the process group) and then call `os._exit` (skipping the snippet's own reaper), and it survives every time. So treat this as a budget for honest work, not a containment boundary for hostile code — which is the same footing `exec` is on, and why `execute_code` requires it. The closure is a cgroup the engine can kill as a unit, which needs `Delegate=yes` on the engine's unit: an operator change. |
+| Lifetime | Its own process group **and a census of its descendants**, killed when the call returns — whether it finished, timed out, or was cancelled. Two kills, because neither alone is enough: the snippet reaps its own children on the way out (where the parent chain is intact, so a `setsid` child or a double-forked daemon is still reachable), and the engine kills the group plus everything its census saw (which is what catches a timeout, a cancellation, or a snippet that skipped its own cleanup). **A snippet can defeat both deliberately**: start a child with `start_new_session=True` (outside the process group) and call `os._exit` (skipping its own reaper) before the census observes it. A favorable sample can catch that child, so survival is not guaranteed on every run; there is still no complete containment. The regression pins an unobserved sampling window with real subprocesses rather than relying on host scheduling; production cadence and cleanup are unchanged. So treat this as a budget for honest work, not a containment boundary for hostile code — which is the same footing `exec` is on, and why `execute_code` requires it. The closure is a cgroup the engine can kill as a unit, which needs `Delegate=yes` on the engine's unit: an operator change. |
 | Iterations | One. A snippet that makes two hundred proxied calls still costs the run a single turn — while each proxied call is still seen by the repeat guard and still earns its own step row. |
 | Result fields | `stdout`, `stderr`, `returncode`, `timed_out`, `tool_call_count`, `stdout_truncated`/`stderr_truncated` (+ `stdout_file`, `note` when cut), `error` (timeout), `tool_call_limit_reached`; the HTTP evidence fields `http_calls` (each `{method, url, status, count}`, plus `via`, `returncode`, `refused`, `outcome`, `unobserved` for a spawned CLI), `http_recorder`, `spawn_recorder`, `spawned`, `egress_unobserved`, `unread_responses` / `unread_response_tools` / `unread_response_note`, `lost_responses` / `lost_responses_note` — see [Calling an API from code](#calling-an-api-from-code-genus_tools-not-curl). |
 
@@ -993,3 +993,68 @@ destroy.
   touch.
 * `docs/agents/INSTRUCTION_CONTRACT.md` in the repository — what an agent's
   instruction file may say, tools included.
+
+## Personal accounts, applications and purchases
+
+Use `browser(action="autonomy", request={kind:"status"})` for tasks that consume
+personal profile, login, document, authenticator or payment resources. This
+mode uses native-vault references and standing grants; a covered action does
+not need another approval. Use ordinary browser navigation for public research
+and nonsecret interaction. Ordinary `act` also supports `check` and workspace
+file `upload`; protected documents should use resource references.
+
+Status includes available resource field names and enrollment provenance.
+`request={kind:"procedures", origin, action}` finds recent successful templates
+for the same owner and agent. Inspect the current page and prepare a new operation;
+saved procedures do not supply authority or bypass current price/resource checks.
+Inspection discovers fields, narrow billing terms and direct child frame bindings;
+foreign frames require explicit authority and credentials match the frame origin.
+Use `terms_frame_selector` and `terms_frame_origin` when all checkout terms are
+inside an authorized frame. Prepare an operation, inspect its fields, execute the resource-bound plan, and
+check confirmation. A `validation_required` result provides native constraint
+flags before protected input; correct the plan and reuse the reserved operation.
+An uncertain submission must be reconciled before any
+retry. See [Personal autonomous execution](AUTONOMOUS_EXECUTION.md) for setup,
+verification, plan fields, spending limits and current integration boundaries.
+
+An execution plan can omit both success fields to discover a new affirmative
+completion message for its action. Discovery recognizes bounded English phrases;
+welcome/pending/error text does not establish success. Verification links and
+reconciliation require specific confirmation selectors and text.
+
+Recurring `browser(action="autonomy")` proposals require `recurrence` dates and
+intervals, with corresponding visible-term selectors in the execution plan.
+`status.spending` reports calendar-month projections, including future free-trial
+renewals. See [Personal autonomous execution](AUTONOMOUS_EXECUTION.md).
+
+For a missing private input during a delegated browser task, request
+`browser(action="autonomy", request={"kind":"enrollment_link", "enrollment":{"kind":"credential", "origin":"https://example.com"}})`.
+Return its `setup_url` (or relative `setup_path`) to the user. The authenticated,
+owner-bound link expires in 15 minutes; passwords, documents and card values
+belong on that enrollment page and must not be placed in tool arguments.
+See [private input enrollment](AUTONOMOUS_EXECUTION.md#private-input-enrollment).
+
+A personal grant may contain `allowed_purposes`. When it is nonempty, use the
+matching granted purpose verbatim in the browser autonomy proposal. Purpose
+matching is whole-text, case-insensitive matching; a website cannot change the
+prepared purpose or expand the grant. Empty purpose lists preserve broad standing
+authority. See [purposes and shared spending decisions](AUTONOMOUS_EXECUTION.md#purposes-and-shared-spending-decisions).
+
+The protected autonomous browser now stores encrypted submission observations
+for the linked owner to inspect on Account → Personal automation. They are
+visible-text observations with explicit coverage, not a signature or a substitute
+for inspecting linked legal documents. Agent results remain reference-only;
+private snapshot retrieval rejects service identities. Capture stops after
+transient verification-code entry. See
+[Private submission observations](AUTONOMOUS_EXECUTION.md#private-submission-observations).
+
+Protected inspection exposes `terms_links` with selectors and labels. Include
+relevant public conditions in `plan.material_terms` (selector plus optional frame
+binding). The broker captures selected HTML/plain-text documents without applicant
+cookies or scripts, keeps their contents encrypted for the owner, and reads them
+only from the grant's listed websites, its authorized frames or the operation's
+own website -- any-website authority does not widen that, and an oversized
+document is refused before it is parsed. A required selection that cannot be
+captured returns `material_terms_unavailable` before filling; correct that selection on the same
+operation rather than inventing consent or claiming to have read it. Unselected
+links, authenticated documents and PDFs are not implicitly captured.
