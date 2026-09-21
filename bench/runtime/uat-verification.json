@@ -5784,6 +5784,17 @@
       "canonical_skipped": 2,
       "report": "bench/runtime/uat-runtime-cloud10-streaming-diagnostic-report.json",
       "note": "Explicit streaming callback exercises the native streaming model path with existing selected models, private tools and cloud-only test allowance. Per-provider-call durations cover stream creation only; total request duration includes consumption. Three diagnostics cannot qualify p95. Streaming consumption does not share the experimental creation allowance, so non-streaming cohort cannot qualify normal streaming chat."
+    },
+    "goal_history_engine": {
+      "product_revision": "9163df1d1e6",
+      "passed": 11440,
+      "skipped": 29,
+      "deselected": 243,
+      "warnings": 393,
+      "seconds": 395.46,
+      "selection": "not slow and not integration and not llm and not e2e and not smoke",
+      "log": "bench/runtime/uat-runtime-goal-history-engine.log",
+      "note": "Product source stayed fixed. Integration and live harness edits were excluded from this run. This invocation also excludes smoke; retain exact selection when comparing counts with earlier runs."
     }
   },
   "calendar": {
@@ -6022,7 +6033,7 @@
     ]
   },
   "remaining": [
-    "Product 9163df1d1e6 adds durable goal-control recovery; focused and canonical checks pass and a full engine run is in progress. A test-only cloud allowance/health-isolation non-streaming cohort passed 30/30, p95 22.049 seconds, but is not a production policy. Streaming diagnostics passed 3/3; normal streaming needs a 30-request screen before policy decisions. Earlier failed cohorts remain retained; installed models/defaults unchanged.",
+    "Product 9163df1d1e6 adds durable goal-control recovery; focused and canonical checks pass and the full engine selection passed 11,440 tests (29 skipped, 243 deselected). A test-only cloud allowance/health-isolation non-streaming cohort passed 30/30, p95 22.049 seconds, but is not a production policy. Streaming diagnostics passed 3/3; a 30-request normal-streaming screen is now running before policy decisions. Earlier failed cohorts remain retained; installed models/defaults unchanged.",
     "Complete representative workload comparison against accepted integration baseline eea3252b1577e3f51e6d6a6216d6f242fd7ac4a1. Matched scripted standalone/compound task checks now pass with both minimal and selected main/full-catalogue profiles; current selected-profile p95 overhead is 54\u201356 ms versus baseline 134\u2013135 ms, with one fewer planning call. These remain two task scenarios with synthetic providers and isolated instructions/memory, not a representative live comparison.",
     "Qualify workload-wide selected-provider deadlines and latency, including requests competing with background goals. Local scripted HTTP acknowledgement/stop/progress and synthetic 1/5/20-tenant limits are measured; live-provider mixed-load limits remain unqualified. Preserve failures, unfinished attempts and uncertainty.",
     "Recheck the supported outcome-recovery inventory and remaining ingress/failure cases against action contracts. Calendar and CRM note/task readbacks, task browser reconnect, saved responses, native checkpoints and daemon goal recovery have evidence; these do not establish arbitrary external-provider recovery.",
