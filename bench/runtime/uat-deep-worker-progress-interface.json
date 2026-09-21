@@ -1,0 +1,14 @@
+{
+  "initial_failure": "Runner-to-real-worker test failed with TypeError: execute_deep_reason() got an unexpected keyword argument on_event. Prior deep runner tests replaced the whole worker and hid the interface mismatch.",
+  "before_log": "/tmp/runtime-deep-worker-interface-before.log",
+  "fix": "Accept the optional synchronous progress callback in execute_deep_reason, report running/completed/failed milestones, and keep callback delivery exceptions observational so they do not change or repeat execution.",
+  "focused": {
+    "passed": 79,
+    "seconds": 5.28,
+    "log": "/tmp/runtime-deep-worker-interface-final.log"
+  },
+  "coverage": "Actual AgentRunner.execute_deep -> checked admission -> real execute_deep_reason with only the external RLM library simulated. Verifies result, one completion call and recorded cost. Direct real-worker checks exercise connected/disconnected progress callbacks and unchanged outcome. Existing deep progress/error/context and size checks pass.",
+  "intermediate_failure": "First expanded test invocation had a missing pytest import in the new parametrized test; corrected. Log /tmp/runtime-deep-worker-interface-after.log.",
+  "checks": "Ruff lint/format and diff checks pass.",
+  "limits": "Framework/provider is simulated; this is boundary compatibility, not live deep-runtime qualification. Cancellation inside an already-running deep worker, orphaned admission recovery, general deadline enforcement and remaining acceptance gates remain open. No production deployment."
+}

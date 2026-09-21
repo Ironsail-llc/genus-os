@@ -9,6 +9,8 @@ import inspect
 import json
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from robothor.engine.rlm_tool import (
     _READ_FILE_LIMIT,
     DeepReasonConfig,
@@ -482,3 +484,23 @@ class TestToolRegistration:
         assert "query" in params["required"]
         assert "context" in params["properties"]
         assert "context_sources" in params["properties"]
+
+
+@pytest.mark.parametrize("broken_callback", [False, True])
+def test_real_worker_progress_is_observational(tmp_path, broken_callback):
+    model = MagicMock()
+    model.return_value.completion.return_value = _make_mock_result("Verified fixture", cost=0.25)
+    events = []
+
+    def progress(event):
+        events.append(event)
+        if broken_callback:
+            raise ConnectionError("Progress disconnected")
+
+    with _mock_rlm_modules(model):
+        result = execute_deep_reason(
+            "Synthetic analysis", config=DeepReasonConfig(log_dir=str(tmp_path)), on_event=progress
+        )
+    assert result["response"] == "Verified fixture" and result["cost_usd"] == 0.25
+    assert [event["status"] for event in events] == ["running", "completed"]
+    model.return_value.completion.assert_called_once()

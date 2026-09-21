@@ -587,3 +587,12 @@ The added deep-plan browser scenario reproduced worker launch despite an already
 The focused deep mode/plan, controls, outcome and size selection passes 52 tests (8.94s). The canonical browser/native suite passes 32 integrations (22.49s), with one worker-only skip and one dependency warning. The new case uses actual browser-originated requests, Next proxies, native engine and private canonical PostgreSQL, holds approval after the durable claim, records Stop and releases admission. It verifies cancelled execution and zero deep-worker, execution-model and business-tool calls. The audit-write failure is injected separately in a unit test. Existing successful deep context/progress/error behavior still passes.
 
 The initial function-size check found execute_deep one line over its cap; moving configuration construction into the admission helper fixed this without increasing any cap. Ruff, formatting, Node syntax and diff checks pass. All failures and evidence are recorded in `bench/runtime/uat-deep-admission-stop.json`. This verifies admission, not enforcement inside an already-running deep worker or recovery after process death. Those and the remaining acceptance gates stay open. No deployment or full acceptance is claimed.
+
+
+## Real deep-worker progress boundary
+
+Inspection before testing running-worker cancellation found that the runner passed on_event to a real worker function that did not accept it. A new test calling AgentRunner through checked admission into the actual execute_deep_reason reproduced TypeError; earlier runner tests replaced the whole worker. The worker now accepts the optional synchronous callback and reports running/completed/failed milestones. Callback delivery exceptions are logged without changing the reasoning result or repeating execution.
+
+The focused real-worker/deep/admission/size selection passes 79 tests (5.28s). Only the external RLM framework is simulated in the new runner-to-worker test; it verifies a single completion call, output and cost. Direct worker tests verify both connected and disconnected progress callbacks. A missing pytest import in the first expanded test run was corrected and its log retained. Ruff, formatting and diff checks pass. Evidence: `bench/runtime/uat-deep-worker-progress-interface.json`.
+
+This fixes the internal call boundary, not live framework qualification or cancellation of an already-running deep worker. That original cancellation check and other acceptance gates remain open. No deployment or full acceptance is claimed.

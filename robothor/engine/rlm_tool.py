@@ -377,11 +377,20 @@ def _build_custom_tools(workspace: str) -> dict[str, dict[str, Any]]:
 # ─── Main entry point ────────────────────────────────────────────────
 
 
+def _notify_progress(callback, status, elapsed_s=0):
+    if callback is not None:
+        try:
+            callback({"event": "deep_progress", "status": status, "elapsed_s": elapsed_s})
+        except Exception as error:
+            logger.debug("Deep progress delivery failed (%s)", type(error).__name__)
+
+
 def execute_deep_reason(
     query: str,
     context: str = "",
     context_sources: list[dict[str, Any]] | None = None,
     config: DeepReasonConfig | None = None,
+    on_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Run a deep reasoning session using the RLM library.
 
@@ -442,6 +451,7 @@ def execute_deep_reason(
             logger=rlm_logger,
         )
 
+        _notify_progress(on_event, "running")
         result = rlm.completion({"context": full_context, "query": query})
 
         elapsed = time.monotonic() - start_time
@@ -454,6 +464,7 @@ def execute_deep_reason(
         # Extract trajectory file path from logger
         trajectory_file = getattr(rlm_logger, "log_file_path", None)
 
+        _notify_progress(on_event, "completed", round(elapsed, 1))
         return {
             "response": result.response,
             "execution_time_s": round(elapsed, 1),
@@ -463,10 +474,12 @@ def execute_deep_reason(
         }
 
     except ImportError:
+        _notify_progress(on_event, "failed")
         return {"error": ("rlms package not installed. Install with: pip install rlms")}
     except Exception as e:
         elapsed = time.monotonic() - start_time
         error_type = type(e).__name__
+        _notify_progress(on_event, "failed", round(elapsed, 1))
         # Handle known RLM exceptions by type name (avoids importing them)
         if error_type == "BudgetExceededError":
             return {
