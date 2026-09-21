@@ -1892,3 +1892,10 @@ Backport results: 34 focused tests passed in 1.34 seconds; 43 canonical tests pa
 Evidence: `bench/runtime/uat-runtime-rollback-chat-receipts-*`, including separate rejected-target and successful-target JSON reports. Current product `e988eb920b9` remains unchanged while its broad engine suite runs. Live qualification and broader performance work remain open.
 
 The full engine regression for `e988eb920b9` completed: **11,448 passed, 29 skipped, 234 deselected, 393 warnings in 468.95 seconds**. Product source stayed fixed while separate rollback harness/backport work ran. Integration/slow tests were excluded and are recorded separately. Raw output: `bench/runtime/uat-runtime-provider-exhaustion-engine.log`. No live provider test is currently running; isolated-health performance evaluation and current-source live qualification remain open.
+
+
+### Cloud-only allowance with isolated timeout health (2026-09-21)
+
+Harness revision `229c7bd99e8` adds a cloud-only experimental allowance: `uses_ollama_timeout` models retain exactly their native timeout policy. The optional short-timeout health isolation applies only to models whose allowance is limited; genuine local timeouts and other provider failures still follow the normal breaker policy. Both mechanisms are process-local fixture patches and restore afterward. Seven model-allowance/reporting tests passed in 3.58 seconds. Log: `bench/runtime/uat-runtime-cloud-allowance-contracts.log`.
+
+Started a separate thirty-request task-plus-calculation screen against unchanged product `e988eb920b9`: ten seconds per cloud model, full tool context, selected model order unchanged, local timing unchanged, short cloud TimeoutError excluded from shared health failures. The ordinary total deadline remains authoritative, including local fallback. Each journal sample records breaker state before/after. This is an experiment, not a production policy, and must preserve correctness plus the latency and cost-coverage gates. Events: `/tmp/runtime-cloud10-health-isolated-cohort.jsonl`; command output: `/tmp/runtime-cloud10-health-isolated-cohort.log`. No production configuration or business data is changed.

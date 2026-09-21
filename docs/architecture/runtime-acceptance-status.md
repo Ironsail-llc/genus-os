@@ -30,3 +30,5 @@ Latest local candidate: `c342a50cd74` removes catalogue-only auxiliary planning 
 Short-timeout promotion also requires checking shared provider health: caller-imposed timeouts can open the common breaker and affect longer goal work. Test-only health isolation now passes unit checks but has not been evaluated live; the rejected eight-second population retained the original breaker behavior.
 
 Latest product correction: failed-run chat delivery now uses saved action receipts even when terminal run persistence lags; model-exhaustion wording no longer claims no work occurred. It passes 34 unit and 79 canonical tests. Rollback compatibility for this correction now passes on `7324c4d0313`. Broad regression passed (11,448 tests); live qualification remains pending.
+
+Current live experiment: thirty compound requests under a test-only ten-second cloud allowance with short-timeout health isolated; local fallback timing, selected models and full tools are unchanged. The experiment is running and unqualified; no production setting is changed.

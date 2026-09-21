@@ -5709,6 +5709,25 @@
         "Target lacked chat_delivery module; added initial receipt-delivery integration.",
         "Collection found absent receipt_result_text helper; added shared projection before focused and canonical verification."
       ]
+    },
+    "cloud_allowance_health_isolated_screen": {
+      "product_revision": "e988eb920b9",
+      "harness_revision": "229c7bd99e8",
+      "samples": 30,
+      "status": "running",
+      "artifact": "/tmp/runtime-cloud10-health-isolated-cohort.jsonl",
+      "model_slice_seconds": 10,
+      "cloud_only": true,
+      "isolate_short_timeout_health": true,
+      "deferred_tools": false,
+      "model_selection_changed": false,
+      "installed_configuration_changed": false,
+      "performance_qualified": false,
+      "contract_tests": {
+        "passed": 7,
+        "seconds": 3.58
+      },
+      "scope": "Experimental cloud model allowance only; local native timeout remains unchanged and the outer interactive deadline still applies. Caller-imposed cloud TimeoutError does not open the shared model breaker; other failures retain native policy. Before/after breaker states are journaled per request."
     }
   },
   "calendar": {
@@ -5947,7 +5966,7 @@
     ]
   },
   "remaining": [
-    "Latest local product additionally fixes a confirmed-action delivery race and misleading no-work wording after model exhaustion. It passes 34 focused unit checks, 79 canonical tests and 11,448 full engine tests; changed-source live qualification remains pending. Eight-second shared-breaker screening was rejected/interrupted (12 verified, three failed, one unfinished, 14 not started). No short-timeout or deferred-tool default is promoted. Isolated-health timeout evaluation has not run.",
+    "Current product e988eb920b9 passes 34 focused unit checks, 79 canonical tests and 11,448 full engine tests; rollback 7324c4d0313 preserves its receipt delivery. Current-source live qualification remains open. Prior full-tool, deferred-tool and all-model timeout screens are retained failures/rejections. A 30-request cloud-only ten-second allowance with isolated short-timeout health is running. No timeout/deferred default is promoted; all selected models and local fallback timing are unchanged.",
     "Complete representative workload comparison against accepted integration baseline eea3252b1577e3f51e6d6a6216d6f242fd7ac4a1. Matched scripted standalone/compound task checks now pass with both minimal and selected main/full-catalogue profiles; current selected-profile p95 overhead is 54\u201356 ms versus baseline 134\u2013135 ms, with one fewer planning call. These remain two task scenarios with synthetic providers and isolated instructions/memory, not a representative live comparison.",
     "Qualify workload-wide selected-provider deadlines and latency, including requests competing with background goals. Local scripted HTTP acknowledgement/stop/progress and synthetic 1/5/20-tenant limits are measured; live-provider mixed-load limits remain unqualified. Preserve failures, unfinished attempts and uncertainty.",
     "Recheck the supported outcome-recovery inventory and remaining ingress/failure cases against action contracts. Calendar and CRM note/task readbacks, task browser reconnect, saved responses, native checkpoints and daemon goal recovery have evidence; these do not establish arbitrary external-provider recovery.",
