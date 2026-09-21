@@ -1,0 +1,704 @@
+diff --git a/robothor/engine/checkpoint.py b/robothor/engine/checkpoint.py
+index 7fb3427e493..8da822b0e9b 100644
+--- a/robothor/engine/checkpoint.py
++++ b/robothor/engine/checkpoint.py
+@@ -155,10 +155,13 @@ class CheckpointManager:
+                     return None
+                 result = dict(row)
+                 if tenant_id is not None:
+-                    cur.execute("SELECT tenant_id FROM agent_runs WHERE id=%s", (run_id,))
++                    cur.execute(
++                        "SELECT tenant_id,runtime_context FROM agent_runs WHERE id=%s", (run_id,)
++                    )
+                     owner = cur.fetchone()
+                     if not owner or owner["tenant_id"] != tenant_id:
+                         return None
++                    result["runtime_context"] = owner.get("runtime_context") or {}
+                 # Skip resume if schema version doesn't match
+                 saved_version = result.get("schema_version", 0)
+                 if saved_version != CHECKPOINT_SCHEMA_VERSION:
+diff --git a/robothor/engine/goal_report_delivery.py b/robothor/engine/goal_report_delivery.py
+index 521d48da5e3..b72e1d82813 100644
+--- a/robothor/engine/goal_report_delivery.py
++++ b/robothor/engine/goal_report_delivery.py
+@@ -10,6 +10,9 @@ REPORT_TOOL = "report_pursuit_goal"
+ 
+ 
+ def report_scope(req, names):
++    from robothor.engine.goal_report_intent import admission
++
++    finalizes, statuses = admission(req) if names == [REPORT_TOOL] else (False, None)
+     run = req.session.run
+     enabled = (
+         names == [REPORT_TOOL]
+@@ -21,12 +24,19 @@ def report_scope(req, names):
+         and binding.get() is None
+         and not getattr(req.session, "routine_operation_id", None)
+     )
+-    return report_turn(run.tenant_id, run.agent_id, run.id, enabled=enabled)
++    return report_turn(
++        run.tenant_id,
++        run.agent_id,
++        run.id,
++        enabled=enabled,
++        finalizes=finalizes,
++        allowed_goal_statuses=statuses,
++    )
+ 
+ 
+ def record_report_turn(state, session, errors):
+     message = consume_report(state, session.run)
+-    session.pending_goal_report = message if not errors else None
++    session.pending_goal_report = message if not errors and state.finalizes else None
+ 
+ 
+ def finish_goal_report(session):
+diff --git a/robothor/engine/goal_report_intent.py b/robothor/engine/goal_report_intent.py
+new file mode 100644
+index 00000000000..90b4ef02456
+--- /dev/null
++++ b/robothor/engine/goal_report_intent.py
+@@ -0,0 +1,104 @@
++"""Recognize requests whose whole answer can be a single factual goal report."""
++
++import json
++import re
++
++_UUID = r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
++_REFERENCE = rf"(?:this goal|the goal|my goal|that goal|that work|goal (?P<goal>{_UUID}))"
++_STATUS = re.compile(
++    rf"(?:(?:report|show)(?: me)? (?:the )?(?:progress|status)(?: for| of)?"
++    rf"|(?:what is|what's) (?:the )?(?:status|progress) of) {_REFERENCE}"
++)
++_CONTROL = re.compile(rf"(?P<action>pause|resume|cancel) {_REFERENCE}")
++_STATUS_QUESTIONS = {
++    "what's finished, and what's still left",
++    "what is finished, and what is still left",
++    "what's finished and what's still left",
++    "what remains to finish this goal",
++    "what is the status of this goal",
++    "what's the status",
++    "what is the status",
++    "show goal progress",
++    "report goal progress",
++    "tell me whether automatic pursuit is enabled",
++    "is automatic pursuit enabled",
++    "how is this goal doing",
++    "how is this goal going",
++}
++_STATUSES = {
++    "pause": ("paused",),
++    "resume": ("queued", "running"),
++    "cancel": ("canceled",),
++}
++_GOAL_TOOLS = {
++    "get_pursuit_goal",
++    "list_pursuit_goals",
++    "update_pursuit_goal",
++    "report_pursuit_goal",
++}
++
++
++def _parse(text, *, supplemental=False):
++    if not isinstance(text, str) or len(text) > 1000:
++        return None
++    text = " ".join(text.strip().lower().replace("’", "'").split()).rstrip(".!?")
++    text = re.sub(r"^please ", "", text)
++    if supplemental:
++        text = re.sub(r"^also ", "", text)
++    if text in _STATUS_QUESTIONS:
++        return "status", None
++    match = _STATUS.fullmatch(text)
++    if match:
++        return "status", match.groupdict().get("goal")
++    match = _CONTROL.fullmatch(text)
++    if match:
++        return match["action"], match["goal"]
++    return None
++
++
++def admission(req):
++    from robothor.engine.skill_contract import loaded_skill_text
++    from robothor.engine.task_context import read_context
++
++    session, run = req.session, req.session.run
++    if (
++        run.resume_from_run_id
++        or str(run.trigger_detail or "").startswith("plan")
++        or loaded_skill_text(session)
++        or any(
++            str(step.step_type) == "tool_call" and step.tool_name not in _GOAL_TOOLS
++            for step in run.steps
++        )
++    ):
++        return False, None
++    intent = _parse(getattr(session, "originating_message", None) or run.task_text)
++    if intent is None:
++        return False, None
++    action, goal_id = intent
++    context = read_context(session.messages)
++    for steering in (context or {}).get("steering", []):
++        extra = _parse(steering, supplemental=True)
++        if extra != ("status", None):
++            return False, None
++    todos = getattr(session, "todo_list", None)
++    if todos and any(item.status != "completed" for item in todos.items):
++        return False, None
++    if goal_id or action != "status":
++        try:
++            args = json.loads(req.assistant_msg.tool_calls[0].function.arguments)
++            selected = args.get("goal_id", "").lower()
++            if goal_id and selected != goal_id:
++                return False, None
++        except (AttributeError, IndexError, TypeError, ValueError):
++            return False, None
++        if action != "status" and not any(
++            step.tool_name == "update_pursuit_goal"
++            and not step.error_message
++            and (step.tool_input or {}).get("action") == action
++            and (step.tool_input or {}).get("goal_id") == selected
++            and (step.tool_output or {}).get("goal", {}).get("id") == selected
++            and not (step.tool_output or {}).get("error")
++            for step in run.steps
++        ):
++            return False, None
++    return True, _STATUSES.get(action)
+diff --git a/robothor/engine/runtime/current.py b/robothor/engine/runtime/current.py
+index 34499654182..9ad46a43289 100644
+--- a/robothor/engine/runtime/current.py
++++ b/robothor/engine/runtime/current.py
+@@ -93,6 +93,9 @@ class CurrentRuntime:
+ 
+             if await asyncio.to_thread(stopped, context.tenant_id, request.resume_from):
+                 raise ValueError("stopped runs cannot be resumed implicitly")
++            from robothor.engine.runtime.resume_deadline import restore
++
++            context = restore(context, saved)
+             options["resume_from_run_id"] = request.resume_from
+         elif "resume_from_run_id" in options:
+             raise ValueError("use the explicit resume contract")
+@@ -134,7 +137,14 @@ class CurrentRuntime:
+         try:
+             require_time(context)
+             entered[0] = True
+-            run = await self._execute(agent_id=request.agent_id, message=request.message, **options)
++            from robothor.engine.runtime.deadlines import execute_before_deadline
++
++            run = await execute_before_deadline(
++                context,
++                lambda: self._execute(
++                    agent_id=request.agent_id, message=request.message, **options
++                ),
++            )
+         finally:
+             remove(activity)
+             current.reset(activity_token)
+diff --git a/robothor/engine/runtime/effect_dispatch.py b/robothor/engine/runtime/effect_dispatch.py
+index b300d51de5a..22a92de7c31 100644
+--- a/robothor/engine/runtime/effect_dispatch.py
++++ b/robothor/engine/runtime/effect_dispatch.py
+@@ -63,6 +63,13 @@ async def invoke(name, args, ctx, dispatch):
+         }
+     if record["state"] == "confirmed":
+         return {**record["resolution"]["result"], "effect_id": str(record["id"]), "recovered": True}
++    if record["state"] == "finished":
++        return {
++            **record["resolution"]["result"],
++            "effect_id": str(record["id"]),
++            "recovered": True,
++            "verification": "reported",
++        }
+     return await _dispatch_reserved(context, record, name, args, ctx, dispatch)
+ 
+ 
+@@ -145,9 +152,20 @@ async def _dispatch_reserved(context, record, name, args, ctx, dispatch):
+         and not result.get("error")
+     )
+     try:
+-        recorded = await asyncio.to_thread(
+-            effects.finish, context, record["id"], ctx.run_id, uncertain=uncertain or verify_success
+-        )
++        from robothor.engine.runtime import effect_results
++
++        if not uncertain and not verify_success and effect_results.cacheable(result):
++            recorded = await asyncio.to_thread(
++                effect_results.record, context, record["id"], ctx.run_id, result
++            )
++        else:
++            recorded = await asyncio.to_thread(
++                effects.finish,
++                context,
++                record["id"],
++                ctx.run_id,
++                uncertain=uncertain or verify_success,
++            )
+         if not recorded:
+             return _unknown(
+                 record["id"],
+diff --git a/robothor/engine/runtime/effect_results.py b/robothor/engine/runtime/effect_results.py
+new file mode 100644
+index 00000000000..05a44b97499
+--- /dev/null
++++ b/robothor/engine/runtime/effect_results.py
+@@ -0,0 +1,35 @@
++"""Retain acknowledged tool results without inventing independent verification."""
++
++from psycopg2.extras import Json
++
++from robothor.engine.runtime import effects
++
++
++def record(context, effect_id, run_id, result):
++    """Only the dispatched owner can atomically store a returned response."""
++    with effects.get_connection() as conn, conn.cursor() as cur:
++        cur.execute(
++            """UPDATE agent_runtime_effects SET state='finished',resolution=%s,
++               version=version+1,updated_at=now()
++               WHERE id=%s AND tenant_id=%s AND principal_id=%s AND request_id=%s
++                 AND run_id=%s AND state='dispatching'""",
++            (
++                Json({"source": "tool_response", "result": result}),
++                effect_id,
++                context.tenant_id,
++                context.principal_id,
++                context.request_id,
++                run_id,
++            ),
++        )
++        return cur.rowcount == 1
++
++
++def cacheable(result):
++    return (
++        isinstance(result, dict)
++        and not result.get("error")
++        and result.get("success") is not False
++        and result.get("ok") is not False
++        and result.get("status") not in ("error", "failed", "rejected")
++    )
+diff --git a/robothor/engine/runtime/effects.py b/robothor/engine/runtime/effects.py
+index 99899edc377..0ef86c96a52 100644
+--- a/robothor/engine/runtime/effects.py
++++ b/robothor/engine/runtime/effects.py
+@@ -36,6 +36,9 @@ class Verification:
+ 
+ 
+ def fingerprint(tool_name, arguments):
++    if tool_name == "create_task" and isinstance(arguments, dict):
++        # Presentation does not change the business action or its retry identity.
++        arguments = {key: value for key, value in arguments.items() if key != "finalReport"}
+     payload = json.dumps(
+         [tool_name, arguments], sort_keys=True, separators=(",", ":"), allow_nan=False
+     )
+@@ -58,7 +61,8 @@ def begin(context, run_id, agent_id, tool_name, arguments):
+         _lock(cur, context)
+         cur.execute(
+             """SELECT * FROM agent_runtime_effects WHERE tenant_id=%s AND principal_id=%s
+-               AND request_id=%s AND fingerprint=%s AND state='confirmed'
++               AND request_id=%s AND fingerprint=%s AND (state='confirmed'
++                 OR state='finished' AND resolution->>'source'='tool_response')
+                ORDER BY created_at DESC LIMIT 1""",
+             (context.tenant_id, context.principal_id, context.request_id, digest),
+         )
+diff --git a/robothor/engine/runtime/resume_deadline.py b/robothor/engine/runtime/resume_deadline.py
+new file mode 100644
+index 00000000000..bd23e987864
+--- /dev/null
++++ b/robothor/engine/runtime/resume_deadline.py
+@@ -0,0 +1,30 @@
++"""Restore saved request limits without renewing a checkpoint's authority."""
++
++from dataclasses import replace
++from datetime import datetime
++
++
++def restore(context, checkpoint):
++    saved = checkpoint.get("runtime_context") or {}
++    if not isinstance(saved, dict):
++        raise ValueError("invalid saved runtime context")
++    # A trusted goal controller can grant a new attempt its own deadline.
++    # CurrentRuntime validates the active goal lease before reaching this point.
++    if (
++        context.goal_id
++        and saved.get("goal_id") == context.goal_id
++        and saved.get("attempt_id") != context.attempt_id
++    ):
++        return context
++    value = saved.get("deadline")
++    if value is None:
++        return context  # Legacy checkpoints have no saved runtime bound.
++    try:
++        deadline = datetime.fromisoformat(value)
++        if deadline.tzinfo is None:
++            raise ValueError("missing timezone")
++    except (TypeError, ValueError) as exc:
++        raise ValueError("invalid saved runtime deadline") from exc
++    if context.deadline is not None:
++        deadline = min(deadline, context.deadline)
++    return replace(context, deadline=deadline)
+diff --git a/robothor/engine/tests/test_goal_report_delivery.py b/robothor/engine/tests/test_goal_report_delivery.py
+index 8da5691a6b4..b481e3665f5 100644
+--- a/robothor/engine/tests/test_goal_report_delivery.py
++++ b/robothor/engine/tests/test_goal_report_delivery.py
+@@ -18,6 +18,7 @@ from robothor.goals.report_channel import publish_report
+ 
+ def setup_turn():
+     session = AgentSession("main", TriggerType.WEBCHAT, tenant_id="tenant")
++    session.run.task_text = "What's finished, and what's still left?"
+     req = SimpleNamespace(session=session, readonly_mode=False)
+     ctx = ToolContext(agent_id="main", tenant_id="tenant", run_id=session.run.id)
+     return session, req, ctx
+diff --git a/robothor/engine/tests/test_goal_report_intent.py b/robothor/engine/tests/test_goal_report_intent.py
+new file mode 100644
+index 00000000000..60b02592575
+--- /dev/null
++++ b/robothor/engine/tests/test_goal_report_intent.py
+@@ -0,0 +1,114 @@
++"""Final goal reports must cover the whole recognized request."""
++
++import json
++from types import SimpleNamespace
++from uuid import uuid4
++
++import pytest
++
++from robothor.engine.goal_report_delivery import (
++    finish_goal_report,
++    record_report_turn,
++    report_scope,
++)
++from robothor.engine.goal_report_intent import admission
++from robothor.engine.tests.test_goal_report_delivery import setup_turn
++from robothor.goals.report_channel import publish_report
++
++
++@pytest.mark.parametrize(
++    "text",
++    [
++        "What's finished, and what's still left? Also calculate 17 times 19.",
++        "Pause that work. Then email Sam.",
++        "Report goal progress in Spanish.",
++        "Tell me everything about all goals.",
++        "",
++    ],
++)
++def test_extra_or_ambiguous_work_gets_facts_without_early_completion(text):
++    session, req, ctx = setup_turn()
++    session.run.task_text = text
++    with report_scope(req, ["report_pursuit_goal"]) as state:
++        assert state.enabled  # The read/report tool remains available.
++        publish_report(ctx, "The goal is waiting. One task remains open.")
++    record_report_turn(state, session, [])
++    assert not finish_goal_report(session)
++    assert session.messages == []
++
++
++@pytest.mark.parametrize(
++    "text,statuses",
++    [
++        ("What's finished, and what's still left?", None),
++        ("Pause that work.", ("paused",)),
++        ("Resume this goal.", ("queued", "running")),
++        ("Cancel my goal.", ("canceled",)),
++    ],
++)
++def test_recognized_scope_records_required_control_result(text, statuses):
++    session, req, _ = setup_turn()
++    session.run.task_text = text
++    if statuses:
++        from robothor.engine.models import RunStep, StepType
++
++        goal = str(uuid4())
++        action = text.split()[0].lower()
++        req.assistant_msg = SimpleNamespace(
++            tool_calls=[
++                SimpleNamespace(function=SimpleNamespace(arguments=json.dumps({"goal_id": goal})))
++            ]
++        )
++        assert admission(req) == (False, None)
++        session.run.steps.append(
++            RunStep(
++                step_type=StepType.TOOL_CALL,
++                tool_name="update_pursuit_goal",
++                tool_input={"action": action, "goal_id": goal},
++                tool_output={"goal": {"id": goal}},
++            )
++        )
++    assert admission(req) == (True, statuses)
++
++
++@pytest.mark.parametrize("prefix", ["Report progress for goal", "What is the status of goal"])
++def test_explicit_goal_identity_must_match(prefix):
++    session, req, _ = setup_turn()
++    goal = str(uuid4())
++    session.run.task_text = f"{prefix} {goal}."
++    function = SimpleNamespace(arguments=json.dumps({"goal_id": str(uuid4())}))
++    req.assistant_msg = SimpleNamespace(tool_calls=[SimpleNamespace(function=function)])
++    assert admission(req) == (False, None)
++    function.arguments = json.dumps({"goal_id": goal})
++    assert admission(req) == (True, None)
++
++
++def test_consumed_extra_steering_still_prevents_early_completion():
++    from robothor.engine.task_context import install_context, make_context
++
++    session, req, _ = setup_turn()
++    session.messages = [{"role": "system", "content": "Synthetic"}]
++    install_context(session.messages, make_context(session.run.task_text, []))
++    session.steer("Also calculate 17 times 19")
++    session.consume_pending_steer()
++    assert not session.has_pending_control
++    assert admission(req) == (False, None)
++
++
++@pytest.mark.parametrize("case", ["resumed", "approved", "skill", "prior_tool", "todo"])
++def test_other_work_cannot_be_hidden_by_a_goal_report(case):
++    from robothor.engine.models import RunStep, StepType
++    from robothor.engine.skill_contract import SKILL_TEXT_ATTR
++
++    session, req, _ = setup_turn()
++    if case == "resumed":
++        session.run.resume_from_run_id = "prior"
++    elif case == "approved":
++        session.run.trigger_detail = "plan-exec:chat"
++    elif case == "skill":
++        setattr(session, SKILL_TEXT_ATTR, {"skill": "Also perform another action"})
++    elif case == "prior_tool":
++        session.run.steps.append(RunStep(step_type=StepType.TOOL_CALL, tool_name="create_task"))
++    else:
++        session.todo_list = SimpleNamespace(items=[SimpleNamespace(status="pending")])
++    assert admission(req) == (False, None)
+diff --git a/robothor/engine/tests/test_native_goal_report_audit.py b/robothor/engine/tests/test_native_goal_report_audit.py
+index f1e5a1a3b51..bf21be0e9a9 100644
+--- a/robothor/engine/tests/test_native_goal_report_audit.py
++++ b/robothor/engine/tests/test_native_goal_report_audit.py
+@@ -28,9 +28,10 @@ from robothor.identity import IdentityContext
+ pytestmark = pytest.mark.integration
+ 
+ 
++@pytest.mark.parametrize("compound", [False, True])
+ @pytest.mark.asyncio
+ async def test_native_goal_report_is_audited_and_recovered_without_reexecution(
+-    engine_config, sample_agent_config, monkeypatch
++    engine_config, sample_agent_config, monkeypatch, compound
+ ):
+     dsn = os.environ.get("ROBOTHOR_TEST_DB_DSN", "")
+     if "host=/tmp/runtime-migrated-" not in dsn:
+@@ -71,7 +72,35 @@ async def test_native_goal_report_is_audited_and_recovered_without_reexecution(
+         ],
+         usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+     )
+-    provider = AsyncMock(return_value=response)
++
++    async def produce(**kwargs):
++        if provider.await_count == 1:
++            return response
++        assert compound and provider.await_count == 2
++        facts = json.loads(
++            next(m["content"] for m in reversed(kwargs["messages"]) if m["role"] == "tool")
++        )
++        assert facts["report_prepared"] is False
++        from robothor.goals.presentation import render_goal_progress
++
++        factual_text = render_goal_progress(
++            facts["goal"], execution_enabled=facts["execution_enabled"]
++        )
++        return ModelResponse(
++            model=config.model_primary,
++            choices=[
++                {
++                    "message": {
++                        "role": "assistant",
++                        "content": factual_text + "\nSeparately, 17 × 19 = 323.",
++                    },
++                    "finish_reason": "stop",
++                }
++            ],
++            usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
++        )
++
++    provider = AsyncMock(side_effect=produce)
+     monkeypatch.setattr("litellm.acompletion", provider)
+     context = ExecutionContext(
+         tenant,
+@@ -83,7 +112,8 @@ async def test_native_goal_report_is_audited_and_recovered_without_reexecution(
+         RunRequest(
+             context,
+             "main",
+-            f"Report progress for goal {goal['id']}.",
++            f"Report progress for goal {goal['id']}."
++            + (" Also calculate 17 times 19 separately." if compound else ""),
+             options={
+                 "agent_config": config,
+                 "trigger_type": TriggerType.WEBCHAT,
+@@ -97,7 +127,7 @@ async def test_native_goal_report_is_audited_and_recovered_without_reexecution(
+     assert str(result.run.status) == "completed"
+     text = result.run.output_text
+     assert "The goal is not complete" in text and "scheduled reviews will not run" in text
+-    assert provider.await_count == 1
++    assert provider.await_count == (2 if compound else 1)
+     with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
+         cur.execute(
+             "SELECT status,output_text FROM agent_runs WHERE tenant_id=%s AND id=%s",
+@@ -110,10 +140,12 @@ async def test_native_goal_report_is_audited_and_recovered_without_reexecution(
+         )
+         rows = cur.fetchall()
+     tool = next(output for kind, output in rows if kind == "tool_call")
+-    checkpoint = next(output for kind, output in rows if kind == "checkpoint")
++    checkpoints = [output for kind, output in rows if kind == "checkpoint"]
+     assert tool["goal"]["id"] == goal["id"] and tool["goal"]["status"] == "waiting"
+     assert sorted(task["status"] for task in tool["goal"]["tasks"]) == ["DONE", "TODO"]
+-    assert checkpoint == {"origin": "trusted_goal_report", "output": text}
++    assert checkpoints == ([] if compound else [{"origin": "trusted_goal_report", "output": text}])
++    if compound:
++        assert "323" in text
+     # Later state must not replace the historical report or cause its action to repeat.
+     store.update(
+         tenant,
+@@ -144,5 +176,5 @@ async def test_native_goal_report_is_audited_and_recovered_without_reexecution(
+             "/chat/outcome", params={"request_id": client_id, "session_key": session_key}
+         )
+         assert foreign.json()["state"] == "not_found"
+-    assert provider.await_count == 1
++    assert provider.await_count == (2 if compound else 1)
+     assert store.get(tenant, goal["id"])["status"] == "paused"
+diff --git a/robothor/goals/report_channel.py b/robothor/goals/report_channel.py
+index d64fe03ba88..a435a273d1f 100644
+--- a/robothor/goals/report_channel.py
++++ b/robothor/goals/report_channel.py
+@@ -18,14 +18,26 @@ class ReportTurn:
+     active: bool = True
+     consumed: bool = False
+     message: str | None = None
++    finalizes: bool = True
++    allowed_goal_statuses: tuple[str, ...] | None = None
+ 
+ 
+ _turn: ContextVar[ReportTurn | None] = ContextVar("goal_report_turn", default=None)
+ 
+ 
+ @contextmanager
+-def report_turn(tenant_id: str, agent_id: str, run_id: str, *, enabled: bool):
++def report_turn(
++    tenant_id: str,
++    agent_id: str,
++    run_id: str,
++    *,
++    enabled: bool,
++    finalizes=True,
++    allowed_goal_statuses=None,
++):
+     state = ReportTurn(tenant_id, agent_id, run_id, enabled)
++    state.finalizes = finalizes
++    state.allowed_goal_statuses = allowed_goal_statuses
+     token = _turn.set(state)
+     try:
+         yield state
+diff --git a/robothor/goals/tests/test_report_handler.py b/robothor/goals/tests/test_report_handler.py
+index b0041820dd6..923bee1281a 100644
+--- a/robothor/goals/tests/test_report_handler.py
++++ b/robothor/goals/tests/test_report_handler.py
+@@ -20,7 +20,18 @@ from robothor.identity import IdentityContext
+ 
+ @pytest.mark.asyncio
+ @pytest.mark.parametrize(
+-    "case", ["missing_id", "foreign_goal", "viewer", "extra_facts", "noninteractive", "valid"]
++    "case",
++    [
++        "missing_id",
++        "foreign_goal",
++        "viewer",
++        "extra_facts",
++        "noninteractive",
++        "valid",
++        "compound",
++        "unperformed_control",
++        "stale_control",
++    ],
+ )
+ async def test_report_reads_authorized_goal_facts_only(db, case):  # noqa: F811
+     goal = create(str(uuid4()) if case == "foreign_goal" else db)
+@@ -28,6 +39,11 @@ async def test_report_reads_authorized_goal_facts_only(db, case):  # noqa: F811
+     session = AgentSession(
+         "main", TriggerType.CRON if case == "noninteractive" else TriggerType.WEBCHAT, tenant_id=db
+     )
++    session.run.task_text = "What's finished, and what's still left?"
++    if case == "compound":
++        session.run.task_text += " Also calculate 17 times 19."
++    elif case in {"unperformed_control", "stale_control"}:
++        session.run.task_text = "Pause that work."
+     ctx = ToolContext(
+         agent_id="main",
+         run_id=session.run.id,
+@@ -40,6 +56,22 @@ async def test_report_reads_authorized_goal_facts_only(db, case):  # noqa: F811
+     if case == "extra_facts":
+         args["message"] = "Everything is complete"
+     req = SimpleNamespace(session=session, readonly_mode=False)
++    if case == "stale_control":
++        import json
++
++        from robothor.engine.models import RunStep, StepType
++
++        req.assistant_msg = SimpleNamespace(
++            tool_calls=[SimpleNamespace(function=SimpleNamespace(arguments=json.dumps(args)))]
++        )
++        session.run.steps.append(
++            RunStep(
++                step_type=StepType.TOOL_CALL,
++                tool_name="update_pursuit_goal",
++                tool_input={"action": "pause", "goal_id": goal["id"]},
++                tool_output={"goal": {"id": goal["id"], "status": "paused"}},
++            )
++        )
+     with report_scope(req, ["report_pursuit_goal"]) as state:
+         result = await HANDLERS["report_pursuit_goal"](args, ctx)
+     record_report_turn(state, session, [])
+@@ -48,6 +80,11 @@ async def test_report_reads_authorized_goal_facts_only(db, case):  # noqa: F811
+         assert result["goal"]["version"] == goal["version"]
+         assert finish_goal_report(session)
+         assert "The goal is not complete" in session.get_final_text()
++    elif case in {"compound", "unperformed_control", "stale_control"}:
++        assert result["goal"]["id"] == goal["id"]
++        assert result["report_prepared"] is False
++        assert result["goal"]["status"] == "queued"
++        assert not finish_goal_report(session)
+     else:
+         assert "error" in result and "goal" not in result
+         assert not finish_goal_report(session)
+diff --git a/robothor/goals/tools.py b/robothor/goals/tools.py
+index 1b70af6c431..5a6d8af29d4 100644
+--- a/robothor/goals/tools.py
++++ b/robothor/goals/tools.py
+@@ -67,7 +67,9 @@ def schemas() -> dict[str, Any]:
+             "Use only when that report answers the user's entire request; finish other requested "
+             "work first. This reads current goal, task and child state; it does not execute work "
+             "or pause/resume anything. Call alone, after any requested controls. The host publishes "
+-            "the final report without another model reply. Use ordinary reads and conversation "
++            "the final report without another model reply only for a recognized standalone request. "
++            "Otherwise report_prepared is false and the returned goal data supplies facts for your complete reply. "
++            "Use ordinary reads and conversation "
+             "for additional questions, multiple goals or requests this report cannot answer.",
+             {
+                 "type": "object",
+@@ -157,14 +159,18 @@ async def report_goal(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+     from robothor.goals.report_channel import publish_report, require_report_context
+ 
+     check_context(ctx)
+-    require_report_context(ctx)
++    channel = require_report_context(ctx)
+     if set(args) != {"goal_id"} or not isinstance(args["goal_id"], str):
+         raise ValueError("An explicit goal_id is required for the final report")
+     goal_id = str(UUID(args["goal_id"]))
+     goal = await asyncio.to_thread(store.get, ctx.tenant_id, goal_id)
+     enabled = await asyncio.to_thread(store.enabled, ctx.tenant_id)
+-    publish_report(ctx, render_goal_progress(goal, execution_enabled=enabled))
+-    return {"goal": goal, "execution_enabled": enabled, "report_prepared": True}
++    report = render_goal_progress(goal, execution_enabled=enabled)
++    if channel.allowed_goal_statuses and goal["status"] not in channel.allowed_goal_statuses:
++        channel.finalizes = False
++    publish_report(ctx, report)
++    result = {"goal": goal, "execution_enabled": enabled, "report_prepared": channel.finalizes}
++    return result
+ 
+ 
+ async def update_goal(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:

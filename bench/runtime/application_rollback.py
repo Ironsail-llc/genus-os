@@ -22,7 +22,7 @@ from bench.runtime.restart_state import seed, verify
 # The accepted integration baseline predates those controls and is not a safe
 # rollback target for sessions admitted by the modernization implementation.
 TARGET_BASE = "b1671409892"
-TARGET = "53f588cb6bc"
+TARGET = "43b4af63073"
 
 
 def drill(root, env, dsn):
@@ -30,7 +30,7 @@ def drill(root, env, dsn):
     target = subprocess.check_output(["git", "rev-parse", TARGET + "^{commit}"], text=True).strip()
     base = subprocess.check_output(["git", "rev-parse", TARGET_BASE], text=True).strip()
     subprocess.run(["git", "merge-base", "--is-ancestor", base, "HEAD"], check=True)
-    assert subprocess.check_output(["git", "rev-parse", target + "^"], text=True).strip() == base
+    subprocess.run(["git", "merge-base", "--is-ancestor", base, target], check=True)
     assert set(
         subprocess.check_output(
             ["git", "diff", "--name-only", base, target], text=True
@@ -42,6 +42,14 @@ def drill(root, env, dsn):
         "robothor/engine/checkpoint.py",
         "robothor/engine/runtime/current.py",
         "robothor/engine/runtime/resume_deadline.py",
+        "robothor/engine/goal_report_intent.py",
+        "robothor/engine/goal_report_delivery.py",
+        "robothor/goals/report_channel.py",
+        "robothor/goals/tools.py",
+        "robothor/engine/tests/test_goal_report_intent.py",
+        "robothor/engine/tests/test_goal_report_delivery.py",
+        "robothor/engine/tests/test_native_goal_report_audit.py",
+        "robothor/goals/tests/test_report_handler.py",
     }
     archive = root / "rollback-code.tar"
     subprocess.run(["git", "archive", "--output", str(archive), target], check=True)

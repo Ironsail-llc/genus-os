@@ -5333,6 +5333,50 @@
       "promotion_gate_added": true,
       "reason": "Older target finalizes goal-only reporting even when the user also requested a calculation. Gate rejects that target before starting the rollback daemon.",
       "report": "bench/runtime/uat-runtime-report-boundary-rollback.json"
+    },
+    "rollback_report_boundary_backport": {
+      "current_revision": "66ccf0fa713",
+      "target_revision": "43b4af630738cae68850f49192e3082715407202",
+      "target_base": "b1671409892",
+      "prior_target": "53f588cb6bc",
+      "prior_target_still_rejected": true,
+      "rollback_focused": {
+        "passed": 46,
+        "warnings": 1,
+        "seconds": 5.08
+      },
+      "rollback_canonical": {
+        "passed": 43,
+        "skipped": 1,
+        "warnings": 1,
+        "seconds": 12.75
+      },
+      "current_canonical": {
+        "passed": 75,
+        "skipped": 2,
+        "warnings": 1,
+        "seconds": 36.23
+      },
+      "actual_daemon_phases": [
+        "current",
+        "rollback",
+        "restore"
+      ],
+      "preserves": [
+        "saved_responses",
+        "task_identity",
+        "checkpoint_deadlines",
+        "complete_goal_request_reporting",
+        "durable_stops",
+        "unresolved_effects"
+      ],
+      "same_dependency_environment": true,
+      "remaining": [
+        "HTTP admission in the booted daemon",
+        "container/dependency rollback"
+      ],
+      "report": "bench/runtime/uat-runtime-rollback-reporting-report.json",
+      "patch": "bench/runtime/rollback-reporting-compatibility.patch"
     }
   },
   "calendar": {
