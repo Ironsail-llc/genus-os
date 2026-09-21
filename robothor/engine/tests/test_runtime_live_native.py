@@ -18,6 +18,7 @@ import pytest
 import yaml
 
 from bench.runtime.candidates import PROMPT, SCHEMA, FixtureGateway
+from bench.runtime.native_journal import NativeJournal, failed_sample
 from robothor.engine.performance import run_measurements
 from robothor.engine.tests.test_runner import runner  # noqa: F401
 
@@ -74,8 +75,11 @@ async def test_configured_native_provider_cohort(request, sample_agent_config):
 
     engine.registry.execute = AsyncMock(side_effect=dispatch)
     rows = []
+    journal = NativeJournal(output)
 
     async def sample(model, index):
+        journal.record("sample_started", model, index)
+        interrupted = None
         gateway = FixtureGateway("fixture")
         token = current.set(gateway)
         trace_token = traces.set([])
@@ -176,14 +180,10 @@ async def test_configured_native_provider_cohort(request, sample_agent_config):
                         for step in run.steps
                     ],
                 )
-        except Exception as exc:
-            row = {
-                "model": model,
-                "repetition": index,
-                "status": "failed",
-                "error_type": type(exc).__name__,
-                "duration_ms": (time.perf_counter() - started) * 1000,
-            }
+        except (Exception, asyncio.CancelledError) as exc:
+            row = failed_sample(model, index, exc, (time.perf_counter() - started) * 1000)
+            if isinstance(exc, asyncio.CancelledError):
+                interrupted = exc
         finally:
             counters.reset(counter_token)
             traces.reset(trace_token)
@@ -199,6 +199,11 @@ async def test_configured_native_provider_cohort(request, sample_agent_config):
         rows.append(row)
         with output.open("a") as file:
             file.write(json.dumps(row) + "\n")
+            file.flush()
+            os.fsync(file.fileno())
+        journal.record("sample_finished", model, index, sample=row)
+        if interrupted is not None:
+            raise interrupted
 
     with (
         patch("litellm.acompletion", side_effect=completion),
