@@ -324,7 +324,7 @@ def test_backup_log_defaults_outside_the_git_tree():
     """scripts/backup.log was being written INSIDE the checkout, where it is one
     `git add -A` away from being committed — and no logrotate glob covers it."""
     body = BACKUP.read_text()
-    assert 'ROBOTHOR_LOG_DIR:-/var/log/robothor' in body, (
+    assert "ROBOTHOR_LOG_DIR:-/var/log/robothor" in body, (
         "backup-ssd.sh must default its log directory to /var/log/robothor/, "
         "which the logrotate config covers"
     )

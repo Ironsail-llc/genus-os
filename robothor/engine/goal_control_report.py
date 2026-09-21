@@ -32,8 +32,7 @@ async def prepare_control_report(req, names, errors, recorded_steps):
         return
     step = steps[0]
     if (
-        step is None
-        or step.tool_name != "update_pursuit_goal"
+        step.tool_name != "update_pursuit_goal"
         or step.error_message
         or step.tool_input != args
         or not isinstance(step.tool_output, dict)
@@ -41,7 +40,14 @@ async def prepare_control_report(req, names, errors, recorded_steps):
     ):
         return
     receipt = step.tool_output.get("goal") or {}
-    if receipt.get("id") != args.get("goal_id") or not isinstance(receipt.get("version"), int):
+    if (
+        receipt.get("id") != args.get("goal_id")
+        or not isinstance(receipt.get("version"), int)
+        # `status` is compared against the fresh read below; without this it
+        # was the one receipt field with no presence check, so a missing one
+        # raised KeyError into the blanket handler and read as a store outage.
+        or not isinstance(receipt.get("status"), str)
+    ):
         return
     with report_scope(req, [REPORT_TOOL]) as state:
         if not state.enabled or not state.finalizes or not state.allowed_goal_statuses:
@@ -49,25 +55,29 @@ async def prepare_control_report(req, names, errors, recorded_steps):
         try:
             goal = await asyncio.to_thread(store.get, session.run.tenant_id, receipt["id"])
             enabled = await asyncio.to_thread(store.enabled, session.run.tenant_id)
-            if (
-                goal["id"] != receipt["id"]
-                or goal["version"] != receipt["version"]
-                or goal["status"] != receipt["status"]
-                or goal["status"] not in state.allowed_goal_statuses
-                or session.has_pending_control
-            ):
-                return
-            publish_report(
-                ToolContext(
-                    tenant_id=session.run.tenant_id,
-                    agent_id=session.run.agent_id,
-                    run_id=session.run.id,
-                ),
-                render_goal_progress(goal, execution_enabled=enabled),
-            )
         except Exception:
             # The control is already committed. Leave its receipt intact and let
-            # ordinary delivery/recovery handle a failed read; never retry the write.
-            logger.warning("Could not prepare committed goal control report", exc_info=True)
+            # ordinary delivery/recovery handle a failed read; never retry the
+            # write. Scoped to the two reads on purpose: the wider handler this
+            # replaces also swallowed `publish_report`'s own validation, so an
+            # over-long or empty report degraded to a model-written answer with
+            # nothing but a warning that looked like a store outage.
+            logger.warning("Could not read back the committed goal control", exc_info=True)
             return
+        if (
+            goal["id"] != receipt["id"]
+            or goal["version"] != receipt["version"]
+            or goal["status"] != receipt["status"]
+            or goal["status"] not in state.allowed_goal_statuses
+            or session.has_pending_control
+        ):
+            return
+        publish_report(
+            ToolContext(
+                tenant_id=session.run.tenant_id,
+                agent_id=session.run.agent_id,
+                run_id=session.run.id,
+            ),
+            render_goal_progress(goal, execution_enabled=enabled),
+        )
     record_report_turn(state, session, [])

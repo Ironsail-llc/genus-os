@@ -175,7 +175,9 @@ def install_fake_getent(tmp_path: Path, *known: str) -> Path:
     """
     fake = tmp_path / "bin" / "getent"
     fake.parent.mkdir(parents=True, exist_ok=True)
-    arms = "".join(f'    {name}) echo "{name}:x:1000:1000::/home/{name}:/bin/bash" ;;\n' for name in known)
+    arms = "".join(
+        f'    {name}) echo "{name}:x:1000:1000::/home/{name}:/bin/bash" ;;\n' for name in known
+    )
     fake.write_text(
         "#!/usr/bin/env bash\n"
         '[ "${1:-}" = passwd ] || exit 2\n'
@@ -323,7 +325,6 @@ def healthy_tree(tmp_path: Path, age_hours: float = 1) -> None:
 FIXED_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 
-
 def _pinned_cooldown_dir(tmp_path: Path) -> Path:
     """Pre-create the pinned cooldown dir. If it does not exist when the sender
     runs, send_failure_alert.sh falls back to $XDG_RUNTIME_DIR/robothor-alert-cooldown
@@ -391,9 +392,7 @@ def base_env(tmp_path: Path, **extra: str) -> dict[str, str]:
             "ROBOTHOR_ALERT_SPOOL_DIR": str(_pinned_dir(tmp_path, "alert-spool")),
             # And where the cooldown stamp lands when the primary state dir is
             # not writable, which is every cron-driven page on this box.
-            "ROBOTHOR_ALERT_FALLBACK_STATE_DIR": str(
-                _pinned_dir(tmp_path, "alert-fallback")
-            ),
+            "ROBOTHOR_ALERT_FALLBACK_STATE_DIR": str(_pinned_dir(tmp_path, "alert-fallback")),
             "ROBOTHOR_SECRETS_FILE": str(tmp_path / "no-such-secrets.env"),
             "ROBOTHOR_ALERT_MAX_ATTEMPTS": "1",
             "ROBOTHOR_ALERT_RETRY_DELAY": "0",
@@ -1311,8 +1310,7 @@ class TestTheHopTargetsAnOsAccountNeverTheRole:
             f"the reason must name the account that is missing, not just fail: {output}"
         )
         assert not runuser_log.exists(), (
-            "hopping to an account that does not exist buys nothing but a "
-            "confusing error"
+            "hopping to an account that does not exist buys nothing but a confusing error"
         )
         assert not log.exists(), "an unevaluated SLO is not a breach — it must not page"
         assert result.returncode != 0, "an unmeasurable SLO must fail its own unit"
@@ -1401,9 +1399,7 @@ class TestTheToolsAreResolvedBeforeAnythingIsMeasured:
     misidentify its own mapper by losing `dmsetup`.
     """
 
-    def test_the_path_is_the_fixed_system_one_and_drops_what_it_inherited(
-        self, tmp_path: Path
-    ):
+    def test_the_path_is_the_fixed_system_one_and_drops_what_it_inherited(self, tmp_path: Path):
         """The unit's inherited PATH begins with a user-writable
         ``~/.local/bin``. This runs hourly AS ROOT, so anything on that PATH
         that shadows `date`, `find`, `grep` or `psql` runs as root — the probe
@@ -1440,11 +1436,7 @@ class TestTheToolsAreResolvedBeforeAnythingIsMeasured:
         planted.mkdir()
         sentinel = tmp_path / "planted-ran.txt"
         shim = planted / "date"
-        shim.write_text(
-            "#!/usr/bin/env bash\n"
-            f'echo ran >> "{sentinel}"\n'
-            'exec /usr/bin/date "$@"\n'
-        )
+        shim.write_text(f'#!/usr/bin/env bash\necho ran >> "{sentinel}"\nexec /usr/bin/date "$@"\n')
         shim.chmod(shim.stat().st_mode | stat.S_IEXEC)
         env = base_env(tmp_path)
         env["PATH"] = f"{planted}:{os.environ['PATH']}"
@@ -1468,11 +1460,7 @@ class TestTheToolsAreResolvedBeforeAnythingIsMeasured:
         seams.mkdir()
         fake_id = seams / "id"
         fake_id.write_text(
-            "#!/usr/bin/env bash\n"
-            'case "${1:-}" in\n'
-            "    -u) echo 0 ;;\n"
-            "    *) echo root ;;\n"
-            "esac\n"
+            '#!/usr/bin/env bash\ncase "${1:-}" in\n    -u) echo 0 ;;\n    *) echo root ;;\nesac\n'
         )
         fake_id.chmod(fake_id.stat().st_mode | stat.S_IEXEC)
         # `seams` is on no PATH the probe builds; only the seam can reach it.
@@ -1512,8 +1500,7 @@ class TestTheToolsAreResolvedBeforeAnythingIsMeasured:
         )
         assert result.returncode != 0, "a probe that cannot run must fail its own unit"
         assert not log.exists(), (
-            "a missing binary is a misconfiguration, not an SLO breach — it "
-            "must not page as one"
+            "a missing binary is a misconfiguration, not an SLO breach — it must not page as one"
         )
 
     def test_a_probe_that_cannot_find_its_own_directory_says_so(self, tmp_path: Path):

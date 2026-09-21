@@ -38,7 +38,7 @@ def test_importing_crm_dal_does_not_import_engine_or_memory() -> None:
         text=True,
         cwd=_REPO_ROOT,
     )
-    assert result.returncode == 0, (result.stdout + result.stderr)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_no_engine_or_memory_imports_in_crm_layer() -> None:

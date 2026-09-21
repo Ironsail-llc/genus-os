@@ -37,7 +37,7 @@ SERVICE = REPO_ROOT / "infra" / "systemd" / "robothor-guardrail-watch.service"
 TIMER = REPO_ROOT / "infra" / "systemd" / "robothor-guardrail-watch.timer"
 
 
-def _stub_sibling_checks(monkeypatch: "pytest.MonkeyPatch", gw) -> None:
+def _stub_sibling_checks(monkeypatch: pytest.MonkeyPatch, gw) -> None:
     """Default every check `main()` calls to a safe pass, matching each
     check's real signature, so a test driving `main()` for the DB-outage
     ordering does not also run its siblings for real. `check_instance_doctor`
@@ -65,7 +65,7 @@ def _pin_the_slo_marker_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
 
 
 @pytest.fixture(autouse=True)
-def _the_real_slo_probe_never_runs(monkeypatch: "pytest.MonkeyPatch", tmp_path: Path):
+def _the_real_slo_probe_never_runs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Sentinel, not trust: point `gw.SLO_PROBE` at a stand-in that records
     every invocation, and fail the test if anything ran it.
 
@@ -162,9 +162,7 @@ class TestDBFreeChecksSurviveADatabaseOutage:
             "check_host_script_drift",
             lambda pairs=None: (calls.append("host_script"), print("SENTINEL-HOST-OK"))[1],
         )
-        monkeypatch.setattr(
-            "robothor.db.connection.get_connection", self._raising_get_connection
-        )
+        monkeypatch.setattr("robothor.db.connection.get_connection", self._raising_get_connection)
 
         exit_code = gw.main()
 
@@ -191,17 +189,14 @@ class TestDBFreeChecksSurviveADatabaseOutage:
         monkeypatch.setattr(
             gw, "check_host_script_drift", lambda pairs=None: print("SENTINEL-HOST-OK")
         )
-        monkeypatch.setattr(
-            "robothor.db.connection.get_connection", self._raising_get_connection
-        )
+        monkeypatch.setattr("robothor.db.connection.get_connection", self._raising_get_connection)
 
         gw.main()
 
         out = capsys.readouterr().out
         assert "SENTINEL-DROPIN-OK" in out and "DATABASE" in out
         assert out.index("SENTINEL-DROPIN-OK") < out.index("DATABASE"), (
-            "the drift results must be printed before the DB-failure notice, "
-            "not swallowed by it"
+            "the drift results must be printed before the DB-failure notice, not swallowed by it"
         )
 
     def test_report_says_clearly_that_it_is_partial(
@@ -210,9 +205,7 @@ class TestDBFreeChecksSurviveADatabaseOutage:
         _stub_sibling_checks(monkeypatch, gw)
         monkeypatch.setattr(gw, "check_dropin_drift", lambda: None)
         monkeypatch.setattr(gw, "check_host_script_drift", lambda pairs=None: None)
-        monkeypatch.setattr(
-            "robothor.db.connection.get_connection", self._raising_get_connection
-        )
+        monkeypatch.setattr("robothor.db.connection.get_connection", self._raising_get_connection)
 
         gw.main()
 

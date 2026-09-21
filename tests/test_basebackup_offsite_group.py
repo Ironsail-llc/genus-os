@@ -29,10 +29,7 @@ SCRIPT = REPO_ROOT / "scripts" / "pg-basebackup.sh"
 # (`chmod 2775 $DEST`); pg-basebackup.sh's later `chmod -R g+rX "$OUT"` and
 # `chmod g+r ...backup_label` calls pass through untouched.
 STRIPPING_CHMOD = (
-    'if [[ "$1" == "2775" ]]; then\n'
-    '    exec /bin/chmod 0775 "${@:2}"\n'
-    "fi\n"
-    'exec /bin/chmod "$@"\n'
+    'if [[ "$1" == "2775" ]]; then\n    exec /bin/chmod 0775 "${@:2}"\nfi\nexec /bin/chmod "$@"\n'
 )
 
 

@@ -56,8 +56,13 @@ def test_default_pairs_cover_the_repo_conf_mirrors():
     """Real repo state: hardening.conf and zz-sandbox.conf are both mirrored."""
     pairs = gw.dropin_conf_pairs()
     mirrors = {Path(mirror).name: live for live, mirror in pairs}
-    assert mirrors["hardening.conf"] == "/etc/systemd/system/robothor-engine.service.d/hardening.conf"
-    assert mirrors["zz-sandbox.conf"] == "/etc/systemd/system/robothor-engine.service.d/zz-sandbox.conf"
+    assert (
+        mirrors["hardening.conf"] == "/etc/systemd/system/robothor-engine.service.d/hardening.conf"
+    )
+    assert (
+        mirrors["zz-sandbox.conf"]
+        == "/etc/systemd/system/robothor-engine.service.d/zz-sandbox.conf"
+    )
     assert (
         mirrors["upgrade-rip-flags.conf"]
         == "/etc/systemd/system/robothor-engine.service.d/upgrade-rip-flags.conf"

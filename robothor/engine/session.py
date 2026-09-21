@@ -313,7 +313,16 @@ class AgentSession:
     def consume_pending_steer(self) -> str | None:
         """Pop and return any pending steer text, or ``None`` if none."""
         text, self._pending_steer = self._pending_steer, None
+        if text:
+            from robothor.engine.task_context import record_steering
+
+            record_steering(self.messages, text)
         return text
+
+    @property
+    def has_pending_control(self) -> bool:
+        """A final tool report must not discard steering or an interruption."""
+        return bool(self._pending_steer) or self._interrupt_requested
 
     def consume_interrupt(self) -> str | None:
         """Pop and return the pending interrupt message if requested.

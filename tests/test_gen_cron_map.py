@@ -188,9 +188,7 @@ def test_agent_schedules_section_says_when_it_was_skipped(tmp_path: Path):
     """`--no-db` must produce a section that says the rows were NOT read, not
     an empty table that reads as "no agents are scheduled"."""
     ws = workspace(tmp_path)
-    out = gcm.render(
-        crontab_text=crontab_for(ws), timers_text=TIMERS, schedules=None, workspace=ws
-    )
+    out = gcm.render(crontab_text=crontab_for(ws), timers_text=TIMERS, schedules=None, workspace=ws)
     section = out.split("## Agent schedules", 1)[1]
     assert "not read" in section.lower() or "skipped" in section.lower(), section
 
@@ -273,8 +271,14 @@ def test_cli_writes_nothing_to_disk(tmp_path: Path):
     before = sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*"))
 
     result = run_cli(
-        tmp_path, "--crontab-file", str(cron_file), "--timers-file", "/dev/null",
-        "--workspace", str(ws), "--no-db",
+        tmp_path,
+        "--crontab-file",
+        str(cron_file),
+        "--timers-file",
+        "/dev/null",
+        "--workspace",
+        str(ws),
+        "--no-db",
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
@@ -288,7 +292,12 @@ def test_cli_exits_nonzero_when_the_crontab_cannot_be_read(tmp_path: Path):
     The exit code is the only thing the redirecting caller can check."""
     ws = workspace(tmp_path)
     result = run_cli(
-        tmp_path, "--timers-file", "/dev/null", "--workspace", str(ws), "--no-db",
+        tmp_path,
+        "--timers-file",
+        "/dev/null",
+        "--workspace",
+        str(ws),
+        "--no-db",
         env=failing_stub(tmp_path, "crontab"),
     )
     assert result.returncode != 0, result.stdout + result.stderr
@@ -301,7 +310,12 @@ def test_cli_exits_nonzero_when_the_timers_cannot_be_read(tmp_path: Path):
     cron_file = tmp_path / "crontab.txt"
     cron_file.write_text(crontab_for(ws))
     result = run_cli(
-        tmp_path, "--crontab-file", str(cron_file), "--workspace", str(ws), "--no-db",
+        tmp_path,
+        "--crontab-file",
+        str(cron_file),
+        "--workspace",
+        str(ws),
+        "--no-db",
         env=failing_stub(tmp_path, "systemctl"),
     )
     assert result.returncode != 0, result.stdout + result.stderr

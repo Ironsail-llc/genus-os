@@ -698,9 +698,7 @@ class TestAStuckSpoolPagesOnItsOwnKey:
     def test_a_stale_marker_pages_on_its_own_key(self, tmp_path: Path):
         alert_log = install_recording_alert(tmp_path)
         install_fake_curl(tmp_path)
-        write_stuck_marker(
-            tmp_path, age_seconds=40 * 60, reason="401 on every attempt"
-        )
+        write_stuck_marker(tmp_path, age_seconds=40 * 60, reason="401 on every attempt")
         env = base_env(
             tmp_path,
             ROBOTHOR_LIVENESS_FAILURE_THRESHOLD="1",
@@ -714,8 +712,7 @@ class TestAStuckSpoolPagesOnItsOwnKey:
             f"status cannot report it:\n{args}\n{result.stdout}{result.stderr}"
         )
         assert result.returncode == 0, (
-            "the engine is healthy and the page went out; the tick has nothing "
-            "to fail about"
+            "the engine is healthy and the page went out; the tick has nothing to fail about"
         )
 
     def test_the_stuck_page_is_short_and_says_why(self, tmp_path: Path):
@@ -724,9 +721,7 @@ class TestAStuckSpoolPagesOnItsOwnKey:
         what is left of it."""
         alert_log = install_recording_alert(tmp_path)
         install_fake_curl(tmp_path)
-        write_stuck_marker(
-            tmp_path, age_seconds=40 * 60, reason="401 on every attempt"
-        )
+        write_stuck_marker(tmp_path, age_seconds=40 * 60, reason="401 on every attempt")
         run_probe(
             base_env(
                 tmp_path,

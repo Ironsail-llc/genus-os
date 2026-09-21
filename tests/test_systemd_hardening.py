@@ -113,9 +113,7 @@ def test_dropin_hardening_mirror_keeps_the_core_posture():
     text = _dropin_mirrors().get("hardening.conf", "")
     assert text, "infra/systemd/robothor-engine.service.d/hardening.conf mirror missing"
     for directive in ("NoNewPrivileges=yes", "ProtectSystem=strict"):
-        assert directive in text, (
-            f"hardening.conf mirror regressed: missing {directive!r}"
-        )
+        assert directive in text, f"hardening.conf mirror regressed: missing {directive!r}"
 
 
 def test_dropin_sandbox_mirror_exists_and_documents_why_paths_are_absolute():

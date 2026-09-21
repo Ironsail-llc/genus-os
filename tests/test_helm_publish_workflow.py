@@ -69,11 +69,12 @@ def test_the_publish_job_exists_in_the_release_pipeline(release_workflow) -> Non
     )
 
 
-def test_no_workflow_publishes_the_chart_from_a_tag_push(
-    release_workflow, helm_workflow
-) -> None:
+def test_no_workflow_publishes_the_chart_from_a_tag_push(release_workflow, helm_workflow) -> None:
     """The release commit carries `[skip ci]`, so its tag's push event is skipped."""
-    for name, workflow in (("release-and-build.yml", release_workflow), ("helm.yml", helm_workflow)):
+    for name, workflow in (
+        ("release-and-build.yml", release_workflow),
+        ("helm.yml", helm_workflow),
+    ):
         push = _triggers(workflow).get("push") or {}
         assert "tags" not in push, (
             f"{name} triggers on a tag push; every tag in this repo is created by a "

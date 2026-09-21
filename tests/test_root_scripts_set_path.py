@@ -151,7 +151,7 @@ def _statements(script: Path) -> list[str]:
 
 
 def missing_prelude(script: Path) -> str:
-    """"" when the script sets its PATH first, else why it does not.
+    """ "" when the script sets its PATH first, else why it does not.
 
     A checker that can only ever return "" is the inert control this repo has
     shipped before, so it is exercised against fixtures below.
@@ -161,10 +161,7 @@ def missing_prelude(script: Path) -> str:
     if head == PRELUDE:
         return ""
     if PRELUDE[0] in statements:
-        return (
-            f"{script.name} sets its PATH, but only after "
-            f"{statements[0]!r} has already run"
-        )
+        return f"{script.name} sets its PATH, but only after {statements[0]!r} has already run"
     inheriting = [s for s in statements if s.startswith("PATH=") or s.startswith("export PATH=")]
     if inheriting:
         return (

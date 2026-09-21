@@ -197,9 +197,7 @@ def test_masked_unit_is_not_a_finding(installed_root: Path):
     assert "robothor-vnc.service" not in result.stdout
 
 
-def test_untemplated_unit_reports_enabled_and_active_state(
-    installed_root: Path, tmp_path: Path
-):
+def test_untemplated_unit_reports_enabled_and_active_state(installed_root: Path, tmp_path: Path):
     """Whether a template-less unit is RUNNING decides how urgent it is."""
     sysd = system_dir(installed_root)
     (sysd / "robothor-orphan.service").write_text("[Service]\nExecStart=/bin/true\n")
@@ -214,16 +212,12 @@ def test_untemplated_unit_reports_enabled_and_active_state(
     result = run_doctor(installed_root, base_env(ROBOTHOR_SYSTEMCTL=str(stub)))
 
     assert result.returncode == 1, result.stdout
-    line = next(
-        line for line in result.stdout.splitlines() if "robothor-orphan.service" in line
-    )
+    line = next(line for line in result.stdout.splitlines() if "robothor-orphan.service" in line)
     assert "enabled=enabled" in line, line
     assert "active=active" in line, line
 
 
-def test_allow_file_suppresses_a_known_untemplated_unit(
-    installed_root: Path, tmp_path: Path
-):
+def test_allow_file_suppresses_a_known_untemplated_unit(installed_root: Path, tmp_path: Path):
     sysd = system_dir(installed_root)
     (sysd / "robothor-orphan.service").write_text("[Service]\nExecStart=/bin/true\n")
     allow = tmp_path / "instance-units.allow"
@@ -304,9 +298,7 @@ def test_a_workspace_template_that_matches_live_is_not_a_finding(
     assert "robothor-instance-only.service" not in result.stdout, result.stdout
 
 
-def test_this_checkouts_template_wins_over_the_workspaces(
-    installed_root: Path, tmp_path: Path
-):
+def test_this_checkouts_template_wins_over_the_workspaces(installed_root: Path, tmp_path: Path):
     """The overlay exists for units the checkout does not carry. Where both do,
     the tracked platform template is the authority — otherwise a stale
     workspace copy would decide whether a reviewed change looks like drift."""
@@ -343,9 +335,7 @@ def test_an_unreadable_allow_file_is_reported(installed_root: Path, tmp_path: Pa
     assert "robothor-orphan.service" in result.stdout, result.stdout
 
 
-def test_an_allow_entry_that_matched_nothing_is_reported(
-    installed_root: Path, tmp_path: Path
-):
+def test_an_allow_entry_that_matched_nothing_is_reported(installed_root: Path, tmp_path: Path):
     """A stale entry suppresses nothing and looks like coverage. The unit was
     removed, or it finally got a template — either way the operator should
     delete the line rather than carry it forever."""
@@ -486,11 +476,7 @@ def test_env_file_shadowing_a_dropin_environment_is_reported(installed_root: Pat
     env_dir = installed_root / "etc" / "robothor"
     env_dir.mkdir(parents=True, exist_ok=True)
     (env_dir / "robothor.env").write_text("ROBOTHOR_RIP_7_ENABLED=false\n")
-    dropin = (
-        system_dir(installed_root)
-        / "robothor-engine.service.d"
-        / "upgrade-rip-flags.conf"
-    )
+    dropin = system_dir(installed_root) / "robothor-engine.service.d" / "upgrade-rip-flags.conf"
     dropin.write_text(dropin.read_text() + "Environment=ROBOTHOR_RIP_7_ENABLED=true\n")
 
     result = run_doctor(installed_root)

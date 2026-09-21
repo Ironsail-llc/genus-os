@@ -50,9 +50,7 @@ def test_requires_an_explicit_tenant(churn_tenant):
         dechurn("", dry_run=False)
 
 
-def test_observe_writes_evidence_and_changes_nothing(
-    churn_tenant, db_cursor, mock_get_connection
-):
+def test_observe_writes_evidence_and_changes_nothing(churn_tenant, db_cursor, mock_get_connection):
     from robothor.memory.dechurn import dechurn
 
     t = churn_tenant["tenant"]
@@ -85,9 +83,7 @@ def test_enforce_deactivates_and_leaves_a_restorable_manifest(
     losers = rep["deactivated_ids"]
     assert losers and rep["deactivated"] == len(losers)
 
-    db_cursor.execute(
-        "SELECT id FROM memory_facts WHERE tenant_id=%s AND NOT is_active", (t,)
-    )
+    db_cursor.execute("SELECT id FROM memory_facts WHERE tenant_id=%s AND NOT is_active", (t,))
     assert {r["id"] for r in db_cursor.fetchall()} == set(losers)
 
     # The newest of a duplicate cluster must survive, and the distinct fact too.
@@ -115,9 +111,7 @@ def test_enforce_deactivates_and_leaves_a_restorable_manifest(
     assert db_cursor.fetchone()["n"] == 4, "restore from the manifest did not recover every row"
 
 
-def test_cap_refuses_rather_than_doing_partial_damage(
-    churn_tenant, db_cursor, mock_get_connection
-):
+def test_cap_refuses_rather_than_doing_partial_damage(churn_tenant, db_cursor, mock_get_connection):
     """A mis-tuned jaccard must not deactivate a subset and call it progress."""
     from robothor.memory.dechurn import dechurn
 

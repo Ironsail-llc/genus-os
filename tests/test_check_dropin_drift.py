@@ -99,10 +99,7 @@ TEMPLATE = (
 )
 
 RENDERED = (
-    "[Service]\n"
-    "User=alice\n"
-    "WorkingDirectory=/srv/workspace\n"
-    "ReadWritePaths=/srv/alice/.cache\n"
+    "[Service]\nUser=alice\nWorkingDirectory=/srv/workspace\nReadWritePaths=/srv/alice/.cache\n"
 )
 
 
@@ -207,9 +204,7 @@ def test_a_mirror_whose_only_placeholder_is_rendered_is_not_reported_as_drift(
     result = run(live, mirror, env=env)
     assert result.returncode == 0, (
         f"{mirror_line!r} was not recognised as a placeholder, so the mirror "
-        "was diffed raw against the rendered live file\n"
-        + result.stdout
-        + result.stderr
+        "was diffed raw against the rendered live file\n" + result.stdout + result.stderr
     )
 
 
