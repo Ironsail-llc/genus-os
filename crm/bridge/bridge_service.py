@@ -226,17 +226,23 @@ app.include_router(automations_router)
 # ask_user question (a row) and a permission escalation (a proxy to the engine,
 # where the pending request actually lives).
 app.include_router(approvals_router)
-from routers.autonomy import router as autonomy_router
-
 # Personal automation, behind the instance-level switch that governs the rest
 # of the feature. `require_personal_owner` inside the router checks role and
 # identity; it does not ask whether this appliance offers the feature at all,
 # so with ROBOTHOR_AUTONOMY_ENABLED off any authenticated member could still
 # POST an enrollment or a grant -- the endpoints that store a payment card and
-# hand an agent spending authority. Applied here rather than in the router so
-# it covers every route including later ones, and so the routes stay in the
-# assembled app for test_mutations_are_gated.py to enumerate.
-from crm.bridge.autonomy_gate import require_feature_offered
+# hand an agent spending authority. Applied at the mount rather than in the
+# router so it covers every route including later ones, and so the routes stay
+# in the assembled app for test_mutations_are_gated.py to enumerate.
+#
+# Both imports are the flat form every other local import in this file uses.
+# `python bridge_service.py` runs with `crm/bridge` as sys.path[0] and no
+# repo root, so `from crm.bridge.autonomy_gate import ...` raised
+# ModuleNotFoundError and the bridge never came up on a fresh install — green
+# everywhere a developer has the repo root on the path, red in the install
+# gate, which is the only place that starts it the way an operator does.
+from autonomy_gate import require_feature_offered
+from routers.autonomy import router as autonomy_router
 
 app.include_router(autonomy_router, dependencies=[Depends(require_feature_offered)])
 # Who may reach this instance over a channel. Beside approvals because both are

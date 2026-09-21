@@ -90,7 +90,12 @@ class TestOverTheWire:
             return await call_next(request)
 
         app.include_router(autonomy.router, dependencies=[Depends(require_feature_offered)])
-        return TestClient(app)
+        # `raise_server_exceptions=False` because this class asks one question:
+        # does the gate answer 404, or does it let the request through. What
+        # the handler then does with a database is a different test's business,
+        # and the `test-bridge` lane has no database — so raising the handler's
+        # psycopg2 error here made a passing gate look like a failing one.
+        return TestClient(app, raise_server_exceptions=False)
 
     def test_an_authenticated_owner_still_gets_404_with_the_feature_off(self, not_offered):
         """Role and identity were the ONLY checks in front of this route, so

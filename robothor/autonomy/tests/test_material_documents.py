@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 from types import SimpleNamespace
+from urllib.parse import urlsplit
 
 import pytest
 from playwright.async_api import async_playwright
@@ -352,7 +353,12 @@ async def test_allow_any_website_does_not_widen_a_document_redirect(store, ident
         )
         await browser.close()
     assert result["state"] == "reserved" and result["reason"] == "material_terms_unavailable"
-    assert not any(url.startswith("https://foreign.example") for url in requests)
+    # Host equality, not a prefix: `startswith("https://foreign.example")`
+    # also matches `https://foreign.example.attacker.test`, which is the
+    # substring-sanitization shape CodeQL flags. The claim here is that no
+    # request reached that origin, so compare the parsed host.
+    hosts = {urlsplit(url).hostname for url in requests}
+    assert "foreign.example" not in hosts
 
 
 @pytest.mark.timeout(60)
