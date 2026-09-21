@@ -73,19 +73,6 @@ logger = logging.getLogger(__name__)
 #: the run it is protecting.
 _STATEMENT_TIMEOUT_MS = 800
 
-#: The owner's switch and their grants, read together.
-#:
-#: These duplicate ``AutonomyStore.settings`` and ``AutonomyStore.grants``,
-#: which are one transaction each. Read here so the pair costs one connection
-#: instead of two; ``tests/test_autonomy_availability_cost.py`` fails if
-#: either text drifts from the method it copies. Both are plain reads of two
-#: columns — unlike identity resolution, there is no logic to get wrong.
-_SETTINGS_SQL = "SELECT settings FROM autonomy_settings WHERE tenant_id=%s AND owner_id=%s"
-_GRANTS_SQL = (
-    "SELECT policy,revoked_at IS NOT NULL AS revoked "
-    "FROM autonomy_grants WHERE tenant_id=%s AND owner_id=%s"
-)
-
 
 def feature_offered() -> bool:
     """Does this INSTANCE offer personal automation? Off unless configured on.
@@ -140,22 +127,22 @@ def autonomy_active(tenant_id: str | None, actor_id: str | None, agent_id: str |
 def _lookup(tenant_id: str, actor_id: str, agent_id: str) -> bool:
     """Resolve the owner, then read their switch and grants on one connection."""
     from robothor.autonomy.identity import scope_for_actor
-    from robothor.autonomy.store import AutonomyStore
+    from robothor.autonomy.store import AutonomyStore, read_grants, read_settings
 
     scope = scope_for_actor(tenant_id, actor_id)
-    with AutonomyStore().transaction() as cur:
+    # Scoped, like every other read of these tables: the autonomy policies
+    # read `app.tenant_id` and are permissive when it is unset, so an unbound
+    # transaction here would be the one call site that walks past them.
+    with AutonomyStore().transaction(scope) as cur:
         # Bounds a server that completed the handshake and then stopped
         # answering — lock contention, a saturated pool. `connect_timeout`
         # never sees that case, and it is the likelier one.
         cur.execute(f"SET LOCAL statement_timeout = {_STATEMENT_TIMEOUT_MS}")
 
-        cur.execute(_SETTINGS_SQL, (scope.tenant_id, scope.owner_id))
-        row = cur.fetchone()
-        if not row or not (row["settings"] or {}).get("enabled"):
+        if not read_settings(cur, scope).enabled:
             return False
 
-        cur.execute(_GRANTS_SQL, (scope.tenant_id, scope.owner_id))
-        return any(_covers(dict(grant), agent_id) for grant in cur.fetchall())
+        return any(_covers(grant, agent_id) for grant in read_grants(cur, scope))
 
 
 def _covers(grant: dict[str, Any], agent_id: str) -> bool:

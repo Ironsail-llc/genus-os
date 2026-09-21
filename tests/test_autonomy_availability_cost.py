@@ -55,10 +55,13 @@ class _CountingStore:
     def __init__(self, rows=None):
         self.transactions = 0
         self.statements: list[str] = []
+        self.scopes: list[object] = []
         self._rows = rows or {}
 
-    def transaction(self):
+    def transaction(self, scope=None):
         from contextlib import contextmanager
+
+        self.scopes.append(scope)
 
         @contextmanager
         def _txn():
@@ -120,39 +123,32 @@ class TestItStopsOpeningAConnectionPerQuestion:
         autonomy_active("tenant", "actor", "main")
         assert any("statement_timeout" in s for s in store.statements), store.statements
 
+    def test_the_one_transaction_binds_its_tenant(self, monkeypatch):
+        """The autonomy policies read `app.tenant_id` and are permissive when
+        it is unset, so an unbound transaction walks straight past them. This
+        used to be the only autonomy read that did not bind."""
+        store = _CountingStore()
+        self._patched(monkeypatch, store)
+        autonomy_active("tenant", "actor", "main")
+        assert [getattr(s, "tenant_id", None) for s in store.scopes] == ["tenant"], store.scopes
 
-def _normalise(text: str) -> str:
-    # Drop the quote characters too: the canonical copies are written as
-    # adjacent string literals, so their source carries a `" "` seam in the
-    # middle of the SQL that the runtime string does not have.
-    return " ".join(text.replace('"', "").split())
+    def test_the_hint_reads_through_the_store_s_own_queries(self, monkeypatch):
+        """It used to hold a copy of each query behind a text-comparison drift
+        guard. The guard fired the first time a column landed in the middle of
+        the canonical SELECT rather than at its front -- a substring match
+        cannot express "the columns I read, unchanged". There is now one
+        definition of each, in `store`, taking a cursor."""
+        import inspect
 
+        from robothor.autonomy import availability
+        from robothor.autonomy.store import read_grants, read_settings
 
-@pytest.mark.parametrize(
-    ("copied", "canonical"),
-    [("_SETTINGS_SQL", "settings"), ("_GRANTS_SQL", "grants")],
-)
-def test_the_copied_store_queries_have_not_drifted(copied, canonical):
-    """``availability`` reads these two itself, to pay one connection for both.
-
-    ``AutonomyStore.settings`` and ``.grants`` remain the canonical
-    definitions. A copy needs a guard, or the day somebody adds a column or a
-    scoping clause there, the prompt hint keeps answering the old way.
-    """
-    import inspect
-
-    from robothor.autonomy import availability
-    from robothor.autonomy.store import AutonomyStore
-
-    source = _normalise(inspect.getsource(getattr(AutonomyStore, canonical)))
-    # Compare from the first column onward. The store selects columns this
-    # hint has no use for (a grant's id and version); what must not drift is
-    # the columns it DOES read, the table, and the scoping clause.
-    projection = _normalise(getattr(availability, copied)).split("SELECT ", 1)[1]
-    assert projection in source, (
-        f"availability.{copied} no longer appears in AutonomyStore.{canonical}; "
-        "one of the two was changed without the other"
-    )
+        source = inspect.getsource(availability._lookup)
+        assert "read_settings(cur, scope)" in source
+        assert "read_grants(cur, scope)" in source
+        assert "SELECT" not in source, "the hint is holding SQL of its own again"
+        for reader in (read_settings, read_grants):
+            assert "cur" in inspect.signature(reader).parameters
 
 
 class TestItCannotOutlastItsWelcome:

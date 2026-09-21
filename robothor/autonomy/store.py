@@ -135,6 +135,41 @@ def _validated_payload(resource: ResourceInput) -> str:
         raise ValueError("invalid_resource_payload") from None
 
 
+def read_settings(cur: Any, scope: Scope) -> RuntimeSettings:
+    """The owner's switch, on a cursor the caller already holds.
+
+    Split out of :meth:`AutonomyStore.settings` so that
+    ``robothor.autonomy.availability`` can read the switch and the grants on
+    ONE connection without holding a second copy of either query. It held
+    copies behind a drift guard, and the guard fired the first time a column
+    landed in the middle of the canonical list rather than at its front.
+    """
+    cur.execute(
+        "SELECT settings FROM autonomy_settings WHERE tenant_id=%s AND owner_id=%s",
+        (scope.tenant_id, scope.owner_id),
+    )
+    row = cur.fetchone()
+    return RuntimeSettings.model_validate(row["settings"]) if row else RuntimeSettings()
+
+
+def read_grants(cur: Any, scope: Scope) -> list[dict[str, Any]]:
+    """This owner's grants, on a cursor the caller already holds.
+
+    The companion to :func:`read_settings`; see its note for why both live
+    here rather than being copied into the availability hint.
+    """
+    cur.execute(
+        "SELECT g.id::text,g.version,g.policy,g.revoked_at IS NOT NULL AS revoked,"
+        " COALESCE((SELECT e.event FROM autonomy_events e"
+        "   WHERE e.tenant_id=g.tenant_id AND e.owner_id=g.owner_id"
+        "     AND e.subject_id=g.id AND e.event IN (%s,%s)"
+        "   ORDER BY e.id DESC LIMIT 1)=%s, false) AS payment_hold "
+        "FROM autonomy_grants g WHERE g.tenant_id=%s AND g.owner_id=%s",
+        (HOLD_PLACED, HOLD_CLEARED, HOLD_PLACED, scope.tenant_id, scope.owner_id),
+    )
+    return [dict(row) for row in cur.fetchall()]
+
+
 class AutonomyStore:
     def __init__(
         self,
@@ -456,16 +491,7 @@ class AutonomyStore:
 
     def grants(self, scope: Scope) -> list[dict[str, Any]]:
         with self.transaction(scope) as cur:
-            cur.execute(
-                "SELECT g.id::text,g.version,g.policy,g.revoked_at IS NOT NULL AS revoked,"
-                " COALESCE((SELECT e.event FROM autonomy_events e"
-                "   WHERE e.tenant_id=g.tenant_id AND e.owner_id=g.owner_id"
-                "     AND e.subject_id=g.id AND e.event IN (%s,%s)"
-                "   ORDER BY e.id DESC LIMIT 1)=%s, false) AS payment_hold "
-                "FROM autonomy_grants g WHERE g.tenant_id=%s AND g.owner_id=%s",
-                (HOLD_PLACED, HOLD_CLEARED, HOLD_PLACED, scope.tenant_id, scope.owner_id),
-            )
-            return [dict(row) for row in cur.fetchall()]
+            return read_grants(cur, scope)
 
     def revoke_grant(self, scope: Scope, grant_id: str) -> None:
         with self.transaction(scope) as cur:
@@ -838,12 +864,7 @@ class AutonomyStore:
 
     def settings(self, scope: Scope) -> RuntimeSettings:
         with self.transaction(scope) as cur:
-            cur.execute(
-                "SELECT settings FROM autonomy_settings WHERE tenant_id=%s AND owner_id=%s",
-                (scope.tenant_id, scope.owner_id),
-            )
-            row = cur.fetchone()
-            return RuntimeSettings.model_validate(row["settings"]) if row else RuntimeSettings()
+            return read_settings(cur, scope)
 
     def configure(self, scope: Scope, settings: RuntimeSettings) -> None:
         with self.transaction(scope) as cur:
