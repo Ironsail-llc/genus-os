@@ -56,6 +56,7 @@ def create_run(run: AgentRun) -> str:
     Retries up to 3 times on transient DB errors (connection drops, pool exhaustion).
     """
     from robothor.engine.retry import retry_sync
+    from robothor.engine.runtime.current import run_identity
 
     def _insert() -> str:
         with get_connection() as conn:
@@ -67,10 +68,11 @@ def create_run(run: AgentRun) -> str:
                     trigger_detail, correlation_id, status, started_at,
                     model_used, system_prompt_chars, user_prompt_chars,
                     task_text, tools_provided, delivery_mode, parent_run_id,
-                    nesting_depth, task_id, person_id
+                    nesting_depth, task_id, person_id, runtime_context,
+                    completed_at, error_message
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 """,
                 (
@@ -108,6 +110,9 @@ def create_run(run: AgentRun) -> str:
                     run.nesting_depth,
                     run.task_id,
                     getattr(run, "person_id", None),
+                    json.dumps(run_identity(run)),
+                    run.completed_at,
+                    run.error_message,
                 ),
             )
         return run.id
@@ -149,6 +154,7 @@ def update_run(
     verified_status: str | None = None,
     verification: dict[str, Any] | None = None,
     task_id: str | None = None,
+    task_text: str | None = None,
 ) -> bool:
     """Update an existing run with new fields.
 
@@ -184,6 +190,7 @@ def update_run(
         "verified_status": verified_status,
         "verification": json.dumps(verification, default=str) if verification else None,
         "task_id": task_id,
+        "task_text": task_text,
     }
 
     for col, val in field_map.items():

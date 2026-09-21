@@ -322,6 +322,9 @@ async def _delete_company(args: dict[str, Any], ctx: ToolContext) -> dict[str, A
 @_handler("create_note")
 async def _create_note(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
     from robothor.crm.dal import create_note
+    from robothor.engine.runtime.note_recovery import note_options
+
+    options = note_options(ctx, args)
 
     note_id = await asyncio.to_thread(
         create_note,
@@ -330,11 +333,12 @@ async def _create_note(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
         person_id=args.get("personId"),
         company_id=args.get("companyId"),
         tenant_id=ctx.tenant_id,
+        **options,
     )
     return (
         {"id": note_id, "title": args.get("title", "")}
         if note_id
-        else {"error": "Failed to create note"}
+        else {"error": "Failed to create note", "outcome_unknown": True, "retryable": False}
     )
 
 
@@ -438,6 +442,7 @@ async def _create_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
     import re as _re
 
     from robothor.crm.dal import create_task, find_task_by_dedup_key
+    from robothor.engine.runtime.task_recovery import task_options
 
     # Server-side dedup: check for existing task with any known dedup key
     body_text = args.get("body") or ""
@@ -453,6 +458,9 @@ async def _create_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
                 tenant_id=ctx.tenant_id,
             )
             if existing:
+                from robothor.engine.runtime.task_receipts import remember_existing
+
+                await asyncio.to_thread(remember_existing, ctx.tenant_id, existing["id"])
                 return {
                     "id": existing["id"],
                     "title": existing["title"],
@@ -479,11 +487,14 @@ async def _create_task(args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]
         parent_task_id=args.get("parentTaskId"),
         requires_human=args.get("requiresHuman", False),
         tenant_id=ctx.tenant_id,
+        **task_options(ctx, args),
     )
+    if isinstance(task_id, dict):
+        return task_id
     return (
         {"id": task_id, "title": args.get("title", "")}
         if task_id
-        else {"error": "Failed to create task"}
+        else {"error": "Failed to create task", "outcome_unknown": True, "retryable": False}
     )
 
 
