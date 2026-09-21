@@ -514,7 +514,7 @@ for (const deep of [false, true]) {
       }));
       const explanation = ["disconnected", "transport_error"].includes(status)
         ? "Recovered from the original run record."
-        : `[Run ${status}: Outcome unresolved; reconcile the dispatched action before retrying]`;
+        : `Recorded ${status}; checking dispatched action evidence is finished.`;
       let approvals = 0;
       let originalRequestId = "";
       let lookups = 0;
@@ -523,7 +523,7 @@ for (const deep of [false, true]) {
         lookups += 1;
         return route.fulfill({ json: lookups === 1
           ? { state: "running", terminal: false }
-          : { state: "completed", terminal: true, text: "Recovered from the original run record." } });
+          : { state: ["disconnected", "transport_error"].includes(status) ? "completed" : status, terminal: true, text: explanation } });
       });
       await page.route("**/api/chat/plan/approve", (route) => {
         approvals += 1;
@@ -551,7 +551,7 @@ for (const deep of [false, true]) {
       await expect(page.getByTestId("plan-card")).toHaveCount(0);
       await expect(page.getByTestId("chat-input")).toBeEnabled();
       expect(approvals).toBe(1);
-      expect(lookups).toBe(["disconnected", "transport_error"].includes(status) ? 2 : 0);
+      expect(lookups).toBe(2);
     });
   }
 }
@@ -752,4 +752,50 @@ for (const approved of [false, true]) {
       expect(submissions).toBe(1);
     });
   }
+}
+
+
+for (const reload of [false, true]) {
+  test(`recovering approval can be stopped ${reload ? "after reload" : "after connection loss"}`, async ({ page }) => {
+    await setupMocks(page);
+    const scope = "30000000-0000-4000-8000-000000000005";
+    let requestId = "", approvals = 0, stops = 0, phase = "accepted";
+    await page.route("**/api/chat/history", route => route.fulfill({ json: { messages: [], recoveryScope: scope } }));
+    await page.route("**/api/chat/plan/start", route => route.fulfill({
+      status: 200, contentType: "text/event-stream", body: mockPlanSSE("Requested work", "stop-recovery", false),
+    }));
+    await page.route("**/api/chat/plan/approve", route => {
+      approvals++;
+      requestId = route.request().postDataJSON().request_id;
+      return route.abort("connectionfailed");
+    });
+    await page.route("**/api/chat/outcome?*", route => {
+      expect(new URL(route.request().url()).searchParams.get("request_id")).toBe(requestId);
+      return route.fulfill({ json: phase === "cancelled"
+        ? { state: phase, terminal: true, text: "Stopped as requested." }
+        : { state: phase, terminal: false, stop_requested: phase === "stopping" } });
+    });
+    await page.route("**/api/chat/abort", route => {
+      expect(route.request().postDataJSON().request_id).toBe(requestId);
+      stops++;
+      phase = "stopping";
+      return route.fulfill({ json: { ok: true, durable_stopped: true } });
+    });
+    await page.goto(BASE_URL, { waitUntil: "networkidle" });
+    await page.getByTestId("plan-toggle").click();
+    await page.getByTestId("chat-input").fill("Do the requested work");
+    await page.getByTestId("send-button").click();
+    await page.getByTestId("plan-approve").click();
+    await expect(page.getByTestId("message-assistant").last()).toContainText("Your approval is recorded");
+    if (reload) await page.reload({ waitUntil: "networkidle" });
+    await page.getByTestId("recovery-stop").click();
+    await expect(page.getByText("Stop recorded.", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("message-assistant").last()).toContainText("Stop is recorded");
+    phase = "cancelled";
+    await expect(page.getByTestId("message-assistant").last()).toContainText("Stopped as requested.");
+    await expect(page.getByTestId("recovery-stop")).toHaveCount(0);
+    await expect(page.getByTestId("chat-input")).toBeEnabled();
+    expect(approvals).toBe(1);
+    expect(stops).toBe(1);
+  });
 }

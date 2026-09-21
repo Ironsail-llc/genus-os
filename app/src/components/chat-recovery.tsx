@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { RecoveryStop } from "./recovery-stop";
 
 export interface RecoveredPlan {
   plan_id: string;
@@ -25,6 +26,8 @@ export function ChatRecovery({ request, messageId, onRecovered }: {
   onRecovered: (id: string, text: string, plan?: RecoveredPlan) => void;
 }) {
   const [status, setStatus] = useState("Connection interrupted. Checking the recorded result…");
+  const [canStop, setCanStop] = useState(true);
+  const [stopRecorded, setStopRecorded] = useState(false);
   useEffect(() => {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -40,6 +43,8 @@ export function ChatRecovery({ request, messageId, onRecovered }: {
         if (!response.ok) throw new Error("Audit record unavailable");
         const record = await response.json();
         if (controller.signal.aborted) return;
+        setCanStop(record.terminal !== true);
+        setStopRecorded(record.stop_requested === true || ["stopping", "cancelled"].includes(record.state));
         if (record.terminal === true && record.reconciliation_pending !== true && typeof record.text === "string") {
           const plan = record.plan;
           const savedPlan = plan?.status === "pending" &&
@@ -70,5 +75,8 @@ export function ChatRecovery({ request, messageId, onRecovered }: {
     void check();
     return () => { controller.abort(); clearTimeout(timer); };
   }, [request, messageId, onRecovered]);
-  return <ReactMarkdown remarkPlugins={[remarkGfm]}>{status}</ReactMarkdown>;
+  return <>
+    <ReactMarkdown remarkPlugins={[remarkGfm]}>{status}</ReactMarkdown>
+    {canStop && <RecoveryStop key={`${request.scope}:${request.agent}:${request.requestId}`} request={request} recorded={stopRecorded} />}
+  </>;
 }
