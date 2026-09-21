@@ -12,8 +12,10 @@ ADDITIONS = {
     "127_runtime_contract",
     "138_goal_provider_reservations",
     "139_goal_task_family_controls",
+    "140_chat_approval_receipts",
 }
 TABLES = (
+    "chat_sessions",
     "crm_tasks",
     "goal_pursuit_settings",
     "pursuit_goals",
@@ -56,7 +58,17 @@ def upgrade(conn, directory):
         migrate._MIGRATION_MANIFEST = original
 
     parent, child, linked, ordinary, run, attempt, operation = [str(uuid4()) for _ in range(7)]
+    approved = {
+        "status": "approved",
+        "plan_id": str(uuid4()),
+        "approval_request_id": str(uuid4()),
+        "plan_text": "Existing approved synthetic work",
+    }
     with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO chat_sessions(tenant_id,session_key,plan_state) VALUES ('default','web:upgrade',%s)",
+            (Json(approved),),
+        )
         cur.execute(
             "INSERT INTO goal_pursuit_settings(tenant_id,enabled,updated_by) VALUES ('default',true,'fixture')"
         )
@@ -126,6 +138,10 @@ def upgrade(conn, directory):
             "runtime_version": "1",
             "checkpoint_version": 1,
         }
+        cur.execute(
+            "SELECT plan_state FROM chat_approval_receipts WHERE tenant_id='default' AND session_key='web:upgrade'"
+        )
+        assert cur.fetchall() == [(approved,)]
         cur.execute("SELECT count(*) FROM pursuit_goal_provider_reservations")
         assert cur.fetchone()[0] == 0
     return {
@@ -135,4 +151,5 @@ def upgrade(conn, directory):
         "blocked_ancestor_denies_linked_task": True,
         "ordinary_task_runnable": True,
         "legacy_runtime_identity_added": True,
+        "existing_approval_receipt_preserved": True,
     }

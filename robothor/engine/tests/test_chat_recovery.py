@@ -40,6 +40,15 @@ def records(private_database, monkeypatch):  # noqa: F811
         cur.execute("""CREATE TABLE IF NOT EXISTS calendar_operations (
             id UUID PRIMARY KEY,tenant_id TEXT,user_id TEXT,agent_id TEXT,status TEXT,result JSONB,
             created_at TIMESTAMPTZ DEFAULT now())""")
+    from pathlib import Path
+
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            (
+                Path(__file__).resolve().parents[3]
+                / "crm/migrations/140_chat_approval_receipts.sql"
+            ).read_text()
+        )
     monkeypatch.setattr(chat_recovery, "get_connection", connect)
     return connect
 
@@ -698,3 +707,34 @@ def test_stop_remains_visible_before_run_and_late_run_evidence_takes_precedence(
     assert completed["run_id"] == run and completed["terminal"]
     assert completed["state"] == final_status
     assert completed["source"] == "run_record"
+
+
+def test_durable_approval_recovery_survives_session_deletion(records, monkeypatch):
+    from dataclasses import asdict
+
+    from robothor.engine import chat_plan_claim
+    from robothor.engine.models import PlanState
+
+    auth, client = identity(), str(uuid4())
+    plan = PlanState(
+        plan_id=str(uuid4()),
+        plan_text="Synthetic work",
+        original_message="Do it",
+        created_at="today",
+    )
+    with records() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO chat_sessions(tenant_id,session_key,plan_state) VALUES (%s,%s,%s)",
+            (auth.tenant_id, "web:main", Json(asdict(plan))),
+        )
+    monkeypatch.setattr(chat_plan_claim, "get_connection", records)
+    assert chat_plan_claim.claim(
+        auth.tenant_id, "web:main", plan, request_key(auth, "web:main", client)
+    )
+    with records() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM chat_sessions WHERE tenant_id=%s", (auth.tenant_id,))
+    result = chat_recovery.read_outcome(auth, "web:main", client)
+    assert result["state"] == "accepted" and not result["terminal"]
+    assert chat_recovery.read_outcome(auth, "other", client)["state"] == "not_found"
+    run = insert(records, auth, client)
+    assert chat_recovery.read_outcome(auth, "web:main", client)["run_id"] == run

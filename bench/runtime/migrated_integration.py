@@ -61,6 +61,7 @@ def main():
                     "127_runtime_contract",
                     "138_goal_provider_reservations",
                     "139_goal_task_family_controls",
+                    "140_chat_approval_receipts",
                 } <= set(applied)
                 assert apply(connection=conn) == []
             pg("createdb", "-h", socket, "-U", "runtime_test", "runtime_upgrade_test")

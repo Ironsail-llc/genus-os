@@ -3,6 +3,7 @@
 import asyncio
 
 from robothor.db.connection import get_connection
+from robothor.engine.chat_approval_receipt import record_claim
 
 
 def claim(tenant_id, session_key, plan, request_id):
@@ -29,6 +30,8 @@ def claim(tenant_id, session_key, plan, request_id):
             ),
         )
         claimed = cur.rowcount == 1
+        if claimed:
+            claimed = record_claim(conn, cur, tenant_id, session_key, request_id)
         conn.commit()
         return claimed
 
@@ -104,11 +107,17 @@ def already_admitted(auth, session_key, client_id):
             ) OR EXISTS(
                 SELECT 1 FROM chat_sessions WHERE tenant_id=%s AND session_key=%s
                   AND plan_state->>'approval_request_id'=%s
+            ) OR EXISTS(
+                SELECT 1 FROM chat_approval_receipts WHERE tenant_id=%s
+                  AND session_key=%s AND request_id=%s
             )""",
             (
                 auth.tenant_id,
                 auth.user_id,
                 identifier,
+                identifier,
+                auth.tenant_id,
+                session_key,
                 identifier,
                 auth.tenant_id,
                 session_key,

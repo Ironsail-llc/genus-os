@@ -22,8 +22,10 @@ def pending_outcome(cur, auth, session_key, identifier):
     cur.execute(
         """SELECT 1 FROM chat_sessions WHERE tenant_id=%s AND session_key=%s
            AND plan_state->>'status'='approved'
-           AND plan_state->>'approval_request_id'=%s""",
-        (auth.tenant_id, session_key, identifier),
+           AND plan_state->>'approval_request_id'=%s
+           UNION ALL SELECT 1 FROM chat_approval_receipts
+           WHERE tenant_id=%s AND session_key=%s AND request_id=%s LIMIT 1""",
+        (auth.tenant_id, session_key, identifier, auth.tenant_id, session_key, identifier),
     )
     if cur.fetchone():
         return {

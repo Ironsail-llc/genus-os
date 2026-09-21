@@ -40,6 +40,17 @@ def saved(private_database, monkeypatch):  # noqa: F811
             "INSERT INTO chat_sessions(tenant_id,session_key,plan_state) VALUES ('tenant','session',%s) ON CONFLICT(tenant_id,session_key) DO UPDATE SET plan_state=EXCLUDED.plan_state",
             (Json(asdict(plan)),),
         )
+    from pathlib import Path
+
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            (
+                Path(__file__).resolve().parents[3]
+                / "crm/migrations/140_chat_approval_receipts.sql"
+            ).read_text()
+        )
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM chat_approval_receipts")
     monkeypatch.setattr(chat_plan_claim, "get_connection", connect)
     return plan, connect
 
@@ -261,3 +272,71 @@ async def test_revision_publishes_only_durable_fresh_draft(saved, monkeypatch, r
         assert revised.revision_history[0]["plan_text"] == plan.plan_text
         assert not chat_plan_claim.claim("tenant", "session", plan, "stale")
         assert chat_plan_claim.claim("tenant", "session", revised, "fresh")
+
+
+def test_approval_receipt_survives_new_plan_before_worker_record(saved):
+    from robothor.auth.deps import AuthContext
+    from robothor.engine.runtime.chat_control import request_key
+
+    plan, connect = saved
+    auth = AuthContext(tenant_id="tenant", user_id="operator", role="owner", typ="user")
+    client = str(uuid4())
+    identifier = request_key(auth, "session", client)
+    assert chat_plan_claim.claim("tenant", "session", plan, identifier)
+    replacement = replace(plan, plan_id=str(uuid4()), plan_text="A different task")
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute("UPDATE chat_sessions SET plan_state=%s", (Json(asdict(replacement)),))
+    assert chat_plan_claim.already_admitted(auth, "session", client)
+    # Reusing an old request cannot consume a different pending plan.
+    assert not chat_plan_claim.claim("tenant", "session", replacement, identifier)
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute("SELECT plan_state FROM chat_sessions")
+        assert cur.fetchone()[0]["status"] == "pending"
+        cur.execute(
+            "SELECT plan_state FROM chat_approval_receipts WHERE request_id=%s", (identifier,)
+        )
+        assert cur.fetchone()[0]["plan_text"] == plan.plan_text
+    assert chat_plan_claim.claim("tenant", "session", replacement, str(uuid4()))
+
+
+def test_receipt_write_failure_rolls_back_plan_admission(saved):
+    plan, connect = saved
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "ALTER TABLE chat_approval_receipts ADD CONSTRAINT reject_test_receipt CHECK (false) NOT VALID"
+        )
+    try:
+        with pytest.raises(psycopg2.errors.CheckViolation):
+            chat_plan_claim.claim("tenant", "session", plan, str(uuid4()))
+        with connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT plan_state FROM chat_sessions WHERE tenant_id='tenant' AND session_key='session'"
+            )
+            assert cur.fetchone()[0]["status"] == "pending"
+            cur.execute("SELECT count(*) FROM chat_approval_receipts")
+            assert cur.fetchone()[0] == 0
+    finally:
+        with connect() as conn, conn.cursor() as cur:
+            cur.execute("ALTER TABLE chat_approval_receipts DROP CONSTRAINT reject_test_receipt")
+
+
+def test_receipt_upgrade_backfills_existing_approval_once(saved):
+    from pathlib import Path
+
+    plan, connect = saved
+    approved = replace(plan, status="approved", approval_request_id=str(uuid4()))
+    migration = (
+        Path(__file__).resolve().parents[3] / "crm/migrations/140_chat_approval_receipts.sql"
+    ).read_text()
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE chat_sessions SET plan_state=%s WHERE tenant_id='tenant' AND session_key='session'",
+            (Json(asdict(approved)),),
+        )
+        cur.execute(migration)
+        cur.execute(migration)
+        cur.execute(
+            "SELECT plan_state FROM chat_approval_receipts WHERE tenant_id='tenant' AND request_id=%s",
+            (approved.approval_request_id,),
+        )
+        assert cur.fetchall() == [(asdict(approved),)]

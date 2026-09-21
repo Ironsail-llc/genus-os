@@ -154,3 +154,4 @@ crm/126_calendar_operations.sql
 crm/127_runtime_contract.sql
 crm/138_goal_provider_reservations.sql
 crm/139_goal_task_family_controls.sql
+crm/140_chat_approval_receipts.sql
