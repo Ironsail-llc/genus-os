@@ -2,9 +2,10 @@
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -12,7 +13,34 @@ from robothor.operations.store import Conflict
 from robothor.sales.models import QualificationPolicy
 from robothor.sales.queue import DiscoveryPlanner, QueueDriver
 
-NOW = datetime(2026, 9, 21, 7, tzinfo=UTC)  # Monday 03:00 New York
+NY = ZoneInfo("America/New_York")
+
+
+def _next_monday_at_0300() -> datetime:
+    """A weekday inside the discovery window that is always still ahead of us.
+
+    `DiscoveryPlanner` stamps each queued job's deadline from THIS clock — that
+    local day's `discovery_end_hour` — but `OperationStore.claim` compares the
+    deadline against the DATABASE's `now()`. A hard-coded calendar date is
+    therefore a fuse, not a fixture: `datetime(2026, 9, 21, 7)` made every job
+    this module queues expire at 07:00 New York on 2026-09-21, and
+    `test_request_allocates_only_target_slots_and_pause_prevents_commit` began
+    failing the moment that hour passed — on a branch whose only change was
+    being merged a day later. Anchoring to the NEXT Monday keeps the weekday
+    deterministic (the planner refuses Saturday and Sunday) and keeps the
+    deadline in the future on every day the suite is ever run.
+    """
+    today = datetime.now(NY).date()
+    monday = today + timedelta(days=(7 - today.weekday()) % 7 or 7)
+    return datetime.combine(monday, time(3), tzinfo=NY).astimezone(UTC)
+
+
+NOW = _next_monday_at_0300()  # Monday 03:00 New York, always in the future
+
+#: Where the planner puts a job's deadline: local midnight plus the default
+#: `discovery_end_hour` (7). Derived rather than written as a UTC hour so the
+#: assertion survives the EDT/EST boundary.
+WINDOW_END = (NOW.astimezone(NY).replace(hour=7) + timedelta(0)).astimezone(UTC)
 
 
 def configure(sales, **changes):
@@ -70,7 +98,7 @@ def test_concurrent_planners_queue_one_bounded_daily_plan(sales):
     jobs = scouts(sales)
     assert [j["payload"]["max_companies"] for j in jobs] == [20, 10]
     assert {j["payload"]["segment"]["id"] for j in jobs} == {"clinic", "wellness"}
-    assert all(j["deadline"] <= NOW.replace(hour=11) for j in jobs)
+    assert all(j["deadline"] <= WINDOW_END for j in jobs)
     assert not planner.plan()
 
 
@@ -83,7 +111,13 @@ def test_planner_respects_backlog_and_does_not_renew_daily_plan_after_restart(sa
     assert len(scouts(sales)) == 1
 
 
-@pytest.mark.parametrize("at", [NOW.replace(hour=18), NOW.replace(day=20)])
+@pytest.mark.parametrize(
+    "at",
+    [
+        NOW.astimezone(NY).replace(hour=14).astimezone(UTC),  # past the window
+        NOW - timedelta(days=1),  # the Sunday before it
+    ],
+)
 def test_discovery_is_not_queued_outside_weekday_research_window(sales, at):
     configure(sales)
     assert not DiscoveryPlanner(sales, clock=lambda: at).plan()
