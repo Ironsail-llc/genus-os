@@ -4,7 +4,26 @@ from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import contextmanager
 from datetime import UTC, datetime
+
+
+@contextmanager
+def watchdog_scope():
+    """Also clean up a watchdog when setup exits before the run-loop finally."""
+    from robothor.engine.stall_watchdog import _active_watchdog_var
+
+    previous = _active_watchdog_var.get()
+    token = _active_watchdog_var.set(previous)
+    try:
+        yield
+    finally:
+        current = _active_watchdog_var.get()
+        try:
+            if current is not None and current is not previous:
+                current.stop()
+        finally:
+            _active_watchdog_var.reset(token)
 
 
 async def restored_context(

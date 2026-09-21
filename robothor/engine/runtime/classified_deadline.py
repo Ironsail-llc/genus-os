@@ -20,15 +20,11 @@ def admission(request, admitted_at=None):
         _admission.reset(token)
 
 
-def _deadline(config, route, plan):
-    scope = _admission.get()
-    if scope is None:
-        return None
-    request, started = scope
+def eligible(request, config):
     options, context = request.options, request.context
     from robothor.engine.run_context import in_benchmark_run
 
-    if (
+    return not (
         request.resume_from
         or context.goal_id
         or context.parent_id
@@ -38,7 +34,16 @@ def _deadline(config, route, plan):
         or options.get("deep_plan")
         or getattr(config, "is_benchmark", False)
         or in_benchmark_run()
-    ):
+    )
+
+
+def _deadline(config, route, plan):
+    scope = _admission.get()
+    if scope is None:
+        return None
+    request, started = scope
+    context = request.context
+    if not eligible(request, config):
         return None
     difficulty = getattr(config, "difficulty_class", "")
     if not difficulty:
@@ -64,14 +69,24 @@ def _persist(run, context):
 
 
 async def apply(session, window, config, route, plan):
+    from robothor.engine.runtime import classification_window
     from robothor.engine.runtime.current import active_context
     from robothor.engine.runtime.deadlines import require_time
 
     deadline = _deadline(config, route, plan)
     context = active_context.get()
     if deadline is None or context is None:
+        if (
+            plan
+            and plan.success
+            and plan.difficulty in ("moderate", "complex")
+            and isinstance(getattr(plan, "raw", None), dict)
+            and getattr(plan, "raw", {}).get("difficulty") == plan.difficulty
+        ):
+            classification_window.release()
         return
     if context.deadline is not None and context.deadline <= deadline:
+        classification_window.release()
         return
     context = replace(context, deadline=deadline)
     active_context.set(context)  # Restored by the enclosing runtime admission.
@@ -79,4 +94,5 @@ async def apply(session, window, config, route, plan):
     when = asyncio.get_running_loop().time() + max(0, remaining)
     window.reschedule(min(window.when(), when) if window.when() is not None else when)
     require_time(context)
+    classification_window.release()
     await asyncio.to_thread(_persist, session.run, context)

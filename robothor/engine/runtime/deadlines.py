@@ -40,6 +40,11 @@ def constrain_context(context):
 
 
 def require_time(context=None):
+    from robothor.engine.runtime.classification_window import (
+        require_time as require_classification_time,
+    )
+
+    require_classification_time()
     seconds = remaining(context)
     if seconds is not None and seconds <= 0:
         raise RuntimeDeadlineError(
@@ -93,6 +98,10 @@ def enclosing_deadline_reason(exc: BaseException) -> str:
 
     if isinstance(exc, WorkflowDeadlineError | RuntimeDeadlineError):
         return str(exc)
+    from robothor.engine.runtime.classification_window import REASON, expired
+
+    if expired():
+        return REASON
     if isinstance(exc, TimeoutError):
         seconds = remaining()
         if seconds is not None and seconds <= 0:

@@ -9,16 +9,16 @@
   "replacement_selected": false,
   "checks": {
     "engine": {
-      "base_revision": "03730405686",
-      "passed": 11314,
+      "base_revision": "a1fbf899941",
+      "passed": 11321,
       "failed": 0,
       "skipped": 29,
-      "deselected": 220,
+      "deselected": 226,
       "warnings": 393,
-      "seconds": 397.68,
+      "seconds": 392.75,
       "selection": "not slow and not integration and not llm and not e2e and not smoke",
-      "log": "bench/runtime/uat-runtime-classified-deadline-engine-final.log",
-      "note": "Final product source and selected tests unchanged throughout rerun. Initial broad failures retained and fixed; canonical native tests separate. Includes classified simple-action deadlines, correct interruption and mocked-persistence isolation. No full acceptance claim."
+      "log": "bench/runtime/uat-runtime-classification-window-engine-final.log",
+      "note": "Final implementation and selected tests unchanged for full invocation. Includes setup/classification bound, guarded release, early audit recovery and watchdog cleanup. Native integration separately passed 65 tests. No full acceptance or live provider performance claim."
     },
     "frontend": {
       "base_revision": "56aa76e6aa0",
@@ -4169,6 +4169,68 @@
       "selection": "not slow and not integration and not llm and not e2e and not smoke",
       "log": "bench/runtime/uat-runtime-reported-result-engine.log",
       "note": "Includes saved successful response recovery and chat projection. Product source and collected tests unchanged throughout this invocation. Canonical integrations reported separately; no overall acceptance claim."
+    },
+    "interactive_classification_window": {
+      "base_revision": "a1fbf899941",
+      "canonical": {
+        "passed": 65,
+        "skipped": 2,
+        "warnings": 1,
+        "seconds": 37.75,
+        "log": "bench/runtime/uat-runtime-classification-window-canonical-complete.log"
+      },
+      "focused": {
+        "passed": 69,
+        "seconds": 7.49,
+        "log": "bench/runtime/uat-runtime-classification-window-focused-final.log"
+      },
+      "screening": {
+        "p50_ms": 46.381658503378276,
+        "p95_ms": 56.756898552703205,
+        "p95_ci95_ms": [
+          53.28025899507338,
+          59.464732999913394
+        ],
+        "samples": 30,
+        "warmups": 1,
+        "model_calls": 62,
+        "external_model_calls": 0,
+        "planning_calls": 31,
+        "total_model_calls": 93,
+        "profile": "installation-main",
+        "tools_allowed": 104,
+        "task_protocol": true,
+        "scope": "Authenticated ASGI chat admission through native runner, real private task creation and reply. Scripted immediate model; installation config when selected, isolated workspace without production memory/instruction files. No TCP/browser/provider latency. Audit/event publication and embeddings stubbed. Verification queries and post-response background drain excluded from timing."
+      },
+      "deadline_samples": 31,
+      "initial_native_failure": {
+        "failed": 2,
+        "passed": 58,
+        "reason": "watchdog cleanup after setup/planning interruption",
+        "log": "bench/runtime/uat-runtime-classification-window-canonical-initial.log"
+      },
+      "interrupted_broad": {
+        "passed": 2010,
+        "skipped": 15,
+        "deselected": 224,
+        "seconds": 58.21,
+        "complete": false,
+        "reason": "Deliberately interrupted before adding explicit raw difficulty validation",
+        "log": "bench/runtime/uat-runtime-classification-window-engine.log"
+      },
+      "scope": "Admission-based temporary cap around unclassified interactive setup/planning and unknown classification; explicit validated non-simple result releases only this cap. Transfers simple work to the existing native timeout. Bounded recoverable audit for pre-row expiry; watchdog cleanup on all native exits. No additional classification model call. Native tests use compressed clocks and synthetic providers/private storage."
+    },
+    "engine_before_classification_window": {
+      "base_revision": "03730405686",
+      "passed": 11314,
+      "failed": 0,
+      "skipped": 29,
+      "deselected": 220,
+      "warnings": 393,
+      "seconds": 397.68,
+      "selection": "not slow and not integration and not llm and not e2e and not smoke",
+      "log": "bench/runtime/uat-runtime-classified-deadline-engine-final.log",
+      "note": "Final product source and selected tests unchanged throughout rerun. Initial broad failures retained and fixed; canonical native tests separate. Includes classified simple-action deadlines, correct interruption and mocked-persistence isolation. No full acceptance claim."
     }
   },
   "calendar": {
@@ -4368,7 +4430,7 @@
   },
   "remaining": [
     "Full representative native-workload reliability and live provider latency remain unqualified. Installation main settings now pass 30 isolated task-creation repetitions with 104 allowed tools and task protocol enabled; this uses scripted models and an isolated workspace, not production instructions/memory or a live full-profile cohort. Preserve all failures and timeouts.",
-    "Simple interactive work now receives a persisted admission-based deadline after the existing planner/router classifies it, including all 31 main-profile task screening runs; native stall and cancellation-resistant provider cases preserve cancellation. Setup/planning can still stall before classification, and failed/unknown classification remains unbounded by this policy. Therefore the complete 60-second simple-action guarantee is not yet qualified.",
+    "The local 60-second policy now covers unclassified interactive setup/planning and unknown classification, then retains the same admission clock for simple execution. Explicit valid non-simple classifications retain their existing limits; exclusions protect goals and delegated/resumed work. Native compressed-clock tests and 31 main-profile synthetic task runs pass. Real-provider classification accuracy, workload-wide deadline behavior and production ingress timing remain unqualified; do not infer those from scripted responses.",
     "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded. Production ingress, selected-provider p95 across the representative workload, and mixed-load fallback operating limits are not certified. Dispatch-only improvements do not qualify complete request latency.",
     "Retain the current runtime: the tested bounded candidates failed required behavior and are not finalists. Any future replacement still needs behavior parity, matched configurations, 100-repetition finalist measurements and compatible checkpoint upgrades. No replacement is selected.",
     "Calendar and CRM note/task audit recovery, actual task browser reconnection, concurrent native readback, full-daemon goal crash recovery and saved checkpoint continuation are locally verified. Fresh-context recovery after a persisted response, including cleared engine cache, is also verified. Other external-provider readbacks, recovery when both reply persistence and browser request identity are absent, and loaded-fleet performance remain incomplete.",
@@ -4662,6 +4724,15 @@
   "remaining_before_classified_deadline": [
     "Full representative native-workload reliability and live provider latency remain unqualified. Installation main settings now pass 30 isolated task-creation repetitions with 104 allowed tools and task protocol enabled; this uses scripted models and an isolated workspace, not production instructions/memory or a live full-profile cohort. Preserve all failures and timeouts.",
     "Eligible simple profiles and deterministic calendar confirmations are bounded, but all 31 installation-main single-task runs persisted no runtime deadline. Existing routing classifies the large tool set as complex. Classification and enforcement of the 60-second simple-action policy remain unmet for ordinary main-profile requests.",
+    "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded. Production ingress, selected-provider p95 across the representative workload, and mixed-load fallback operating limits are not certified. Dispatch-only improvements do not qualify complete request latency.",
+    "Retain the current runtime: the tested bounded candidates failed required behavior and are not finalists. Any future replacement still needs behavior parity, matched configurations, 100-repetition finalist measurements and compatible checkpoint upgrades. No replacement is selected.",
+    "Calendar and CRM note/task audit recovery, actual task browser reconnection, concurrent native readback, full-daemon goal crash recovery and saved checkpoint continuation are locally verified. Fresh-context recovery after a persisted response, including cleared engine cache, is also verified. Other external-provider readbacks, recovery when both reply persistence and browser request identity are absent, and loaded-fleet performance remain incomplete.",
+    "The normal-chat unfinished-work/pause case is accepted. Manual acceptance of verified recovery and remaining goal controls is pending; automatic goal continuations do not count as acceptance.",
+    "The prior unmodified rollback target remains incompatible with saved handler responses. Backported target 15cd1835003 passes local current/backport/current daemon, state-preservation and separate native-admission checks. HTTP admission within the booted daemon, container/dependency rollback and hosted CI remain unverified. No production deployment is authorized."
+  ],
+  "remaining_before_classification_window": [
+    "Full representative native-workload reliability and live provider latency remain unqualified. Installation main settings now pass 30 isolated task-creation repetitions with 104 allowed tools and task protocol enabled; this uses scripted models and an isolated workspace, not production instructions/memory or a live full-profile cohort. Preserve all failures and timeouts.",
+    "Simple interactive work now receives a persisted admission-based deadline after the existing planner/router classifies it, including all 31 main-profile task screening runs; native stall and cancellation-resistant provider cases preserve cancellation. Setup/planning can still stall before classification, and failed/unknown classification remains unbounded by this policy. Therefore the complete 60-second simple-action guarantee is not yet qualified.",
     "Local HTTP acknowledgement/stop/progress and synthetic mixed-load results are recorded. Production ingress, selected-provider p95 across the representative workload, and mixed-load fallback operating limits are not certified. Dispatch-only improvements do not qualify complete request latency.",
     "Retain the current runtime: the tested bounded candidates failed required behavior and are not finalists. Any future replacement still needs behavior parity, matched configurations, 100-repetition finalist measurements and compatible checkpoint upgrades. No replacement is selected.",
     "Calendar and CRM note/task audit recovery, actual task browser reconnection, concurrent native readback, full-daemon goal crash recovery and saved checkpoint continuation are locally verified. Fresh-context recovery after a persisted response, including cleared engine cache, is also verified. Other external-provider readbacks, recovery when both reply persistence and browser request identity are absent, and loaded-fleet performance remain incomplete.",

@@ -50,16 +50,24 @@ class CurrentRuntime:
         # execution; a stalled checkpoint must not defer the start of the clock.
         entered = [False]
         try:
+            from robothor.engine.runtime.classification_window import guard
             from robothor.engine.runtime.classified_deadline import admission
 
             with admission(request, self._admitted_at):
-                return await execute_before_deadline(
-                    constrain_context(request.context),
-                    lambda: self._run(request, on_event, entered),
-                )
-        except (TimeoutError, asyncio.CancelledError):
+                async with guard(request, self._admitted_at):
+                    return await execute_before_deadline(
+                        constrain_context(request.context),
+                        lambda: self._run(request, on_event, entered),
+                    )
+        except (TimeoutError, asyncio.CancelledError) as exc:
+            from robothor.engine.runtime.classification_window import ClassificationDeadlineError
             from robothor.engine.runtime.deadlines import remaining
 
+            if self._audit_admission and isinstance(exc, ClassificationDeadlineError):
+                from robothor.engine.runtime.classification_audit import record_timeout
+
+                await record_timeout(request, exc.deadline)
+                raise
             left = remaining(request.context)
             if self._audit_admission and not entered[0] and left is not None and left <= 0:
                 from robothor.engine.runtime.admission_audit import record_timeout
@@ -238,7 +246,9 @@ def runtime_entrypoint(execute):
         request, resolution = await prepare(self, request, admitted_at)
 
         async def native(**options):
-            with resolved_profile(resolution):
+            from robothor.engine.runtime.setup import watchdog_scope
+
+            with resolved_profile(resolution), watchdog_scope():
                 return await execute(self, **options)
 
         runtime = CurrentRuntime(

@@ -1,0 +1,79 @@
+........................................................................ [  0%]
+........................................................................ [  1%]
+........................................................................ [  1%]
+..............................................ssssssssssssss............ [  2%]
+........................................................................ [  3%]
+........................................................................ [  3%]
+........................................................................ [  4%]
+........................................................................ [  5%]
+........................................................................ [  5%]
+........................................................................ [  6%]
+........................................................................ [  6%]
+........................................................................ [  7%]
+........................................................................ [  8%]
+........................................................................ [  8%]
+........................................................................ [  9%]
+........................................................................ [ 10%]
+........................................................................ [ 10%]
+........................................................................ [ 11%]
+........................................................................ [ 12%]
+........................................................................ [ 12%]
+........................................................................ [ 13%]
+........................................................................ [ 13%]
+........................................................................ [ 14%]
+........................................................................ [ 15%]
+........................................................................ [ 15%]
+........................................................................ [ 16%]
+........................................................................ [ 17%]
+........................................................................ [ 17%]
+........
+=============================== warnings summary ===============================
+robothor/engine/tests/test_admin_approvals.py:17
+  /home/philip/robothor-runtime-modernization/robothor/engine/tests/test_admin_approvals.py:17: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient
+
+.venv/lib/python3.14/site-packages/starlette/testclient.py:53
+  /home/philip/robothor-runtime-modernization/.venv/lib/python3.14/site-packages/starlette/testclient.py:53: DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.
+    _PortalFactoryType = Callable[[], AbstractContextManager[anyio.abc.BlockingPortal]]
+
+robothor/engine/tests/test_admin_approvals.py: 7 warnings
+robothor/engine/tests/test_admin_plugins.py: 25 warnings
+robothor/engine/tests/test_admin_plugins_install.py: 25 warnings
+robothor/engine/tests/test_admin_plugins_offloop.py: 16 warnings
+robothor/engine/tests/test_admin_providers.py: 45 warnings
+robothor/engine/tests/test_admin_providers_defaults_read.py: 3 warnings
+robothor/engine/tests/test_admin_scheduler.py: 11 warnings
+robothor/engine/tests/test_benchmark_decontamination.py: 4 warnings
+  /home/philip/robothor-runtime-modernization/robothor/engine/health.py:1210: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+robothor/engine/tests/test_admin_approvals.py: 7 warnings
+robothor/engine/tests/test_admin_plugins.py: 25 warnings
+robothor/engine/tests/test_admin_plugins_install.py: 25 warnings
+robothor/engine/tests/test_admin_plugins_offloop.py: 16 warnings
+robothor/engine/tests/test_admin_providers.py: 45 warnings
+robothor/engine/tests/test_admin_providers_defaults_read.py: 3 warnings
+robothor/engine/tests/test_admin_scheduler.py: 11 warnings
+robothor/engine/tests/test_benchmark_decontamination.py: 4 warnings
+  /home/philip/robothor-runtime-modernization/.venv/lib/python3.14/site-packages/fastapi/applications.py:4681: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+robothor/engine/tests/test_bounded_model_fallback.py::test_shared_worker_route_exclusion_reaches_funded_fallback[main]
+  /home/philip/robothor-runtime-modernization/.venv/lib/python3.14/site-packages/pydantic/_internal/_generate_schema.py:1480: UserWarning: Item 'summary' on TypedDict class 'ChatCompletionReasoningItem' is using the `ReadOnly` qualifier. Pydantic will not protect items from any mutation on dictionary instances.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! KeyboardInterrupt !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+/home/philip/robothor-runtime-modernization/.venv/lib/python3.14/site-packages/psycopg2/__init__.py:122: KeyboardInterrupt
+(to show a full traceback on KeyboardInterrupt use --full-trace)
+2010 passed, 15 skipped, 224 deselected, 275 warnings in 58.21s
