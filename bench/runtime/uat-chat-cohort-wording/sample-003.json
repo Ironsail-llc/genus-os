@@ -1,0 +1,50 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator.\n\n**Goal: \"Finish the requested work\"** \u2014 status: *waiting* (not complete).\n\n**Finished**\n- \u2705 **Prepare the first item** \u2014 done.\n\n**Still left**\n- \u2b1c **Check the remaining item** \u2014 still open (TODO). This is the one thing holding the goal back; the goal is parked on it and won't close until it's checked.\n\n**What happens next**\n- The goal is set to wake for a scheduled review tomorrow (Sep 22, ~04:04 UTC), and it will also wake if that linked task changes.\n- One caveat: automatic pursuit is currently **disabled** for this tenant. So even when the review comes due, the goal won't advance on its own \u2014 an authorized operator would need to enable execution first.\n\nWant me to take the open item now, or leave it parked for the review?",
+      "run": {
+        "text": "Here's where things stand, operator.\n\n**Goal: \"Finish the requested work\"** \u2014 status: *waiting* (not complete).\n\n**Finished**\n- \u2705 **Prepare the first item** \u2014 done.\n\n**Still left**\n- \u2b1c **Check the remaining item** \u2014 still open (TODO). This is the one thing holding the goal back; the goal is parked on it and won't close until it's checked.\n\n**What happens next**\n- The goal is set to wake for a scheduled review tomorrow (Sep 22, ~04:04 UTC), and it will also wake if that linked task changes.\n- One caveat: automatic pursuit is currently **disabled** for this tenant. So even when the review comes due, the goal won't advance on its own \u2014 an authorized operator would need to enable execution first.\n\nWant me to take the open item now, or leave it parked for the review?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14288,
+        "output_tokens": 394,
+        "duration_ms": 15166,
+        "total_cost_usd": 0.0012,
+        "run_id": "92133514-10e2-47e0-b16b-c9f12aaa9af0"
+      },
+      "elapsed_ms": 15224.883900002169
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the work is paused.\n\n**Goal: \"Finish the requested work\"** \u2014 status: *paused*.\n\n- \u2705 **Prepare the first item** \u2014 finished.\n- \u2b1c **Check the remaining item** \u2014 still open, now parked.\n\nWhile it's paused it won't wake on its own \u2014 not on the scheduled review, and not on changes to the linked task. Nothing further will happen until you ask me to resume it.\n\nWant me to resume it later, or leave it parked for now?",
+      "run": {
+        "text": "Done, operator \u2014 the work is paused.\n\n**Goal: \"Finish the requested work\"** \u2014 status: *paused*.\n\n- \u2705 **Prepare the first item** \u2014 finished.\n- \u2b1c **Check the remaining item** \u2014 still open, now parked.\n\nWhile it's paused it won't wake on its own \u2014 not on the scheduled review, and not on changes to the linked task. Nothing further will happen until you ask me to resume it.\n\nWant me to resume it later, or leave it parked for now?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14621,
+        "output_tokens": 363,
+        "duration_ms": 10263,
+        "total_cost_usd": 0.0011,
+        "run_id": "e161a2a1-2ae5-41af-80d7-90695be2c485"
+      },
+      "elapsed_ms": 10297.084433001146
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 6,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

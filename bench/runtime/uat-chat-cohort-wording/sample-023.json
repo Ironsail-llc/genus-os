@@ -1,0 +1,50 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator:\n\n**Finished**\n- **Prepare the first item** \u2014 done.\n\n**Still left**\n- **Check the remaining item** \u2014 still open (TODO). This is the one thing the goal is waiting on.\n\n**Goal status:** \"Finish the requested work\" is **waiting** on that remaining check. Its success criterion is simply that the requested work has been checked, and no evidence has been recorded against it yet.\n\nTwo things worth flagging:\n- The goal is set to wake on a **scheduled review tomorrow (Sep 22, ~04:16 UTC)**, or sooner if that task changes.\n- However, **automatic pursuit is currently disabled** for this tenant. That means the scheduled review won't actually advance the goal on its own \u2014 an authorized operator would need to enable execution first. So as it stands, the remaining item won't get picked up automatically.\n\nWant me to do anything about the open item, or is this just a status check?",
+      "run": {
+        "text": "Here's where things stand, operator:\n\n**Finished**\n- **Prepare the first item** \u2014 done.\n\n**Still left**\n- **Check the remaining item** \u2014 still open (TODO). This is the one thing the goal is waiting on.\n\n**Goal status:** \"Finish the requested work\" is **waiting** on that remaining check. Its success criterion is simply that the requested work has been checked, and no evidence has been recorded against it yet.\n\nTwo things worth flagging:\n- The goal is set to wake on a **scheduled review tomorrow (Sep 22, ~04:16 UTC)**, or sooner if that task changes.\n- However, **automatic pursuit is currently disabled** for this tenant. That means the scheduled review won't actually advance the goal on its own \u2014 an authorized operator would need to enable execution first. So as it stands, the remaining item won't get picked up automatically.\n\nWant me to do anything about the open item, or is this just a status check?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14331,
+        "output_tokens": 469,
+        "duration_ms": 13418,
+        "total_cost_usd": 0.0012,
+        "run_id": "d0141dab-cedf-4769-8a82-8ac9ae9d382e"
+      },
+      "elapsed_ms": 13493.538414000795
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the work is paused.\n\n**What changed**\n- The goal **\"Finish the requested work\"** is now **paused** (was waiting).\n\n**What this means**\n- While paused, it will **not** wake on its scheduled review (Sep 22, ~04:16 UTC) or on any linked-task change. The open item \u2014 **\"Check the remaining item\"** \u2014 stays as-is, untouched.\n- No work will be picked up automatically. (Automatic pursuit was already disabled for this tenant, so nothing was running anyway.)\n\n**To pick it back up later**, just say the word and I'll resume it \u2014 resuming requires an operator, which you are.\n\nAnything else?",
+      "run": {
+        "text": "Done, operator \u2014 the work is paused.\n\n**What changed**\n- The goal **\"Finish the requested work\"** is now **paused** (was waiting).\n\n**What this means**\n- While paused, it will **not** wake on its scheduled review (Sep 22, ~04:16 UTC) or on any linked-task change. The open item \u2014 **\"Check the remaining item\"** \u2014 stays as-is, untouched.\n- No work will be picked up automatically. (Automatic pursuit was already disabled for this tenant, so nothing was running anyway.)\n\n**To pick it back up later**, just say the word and I'll resume it \u2014 resuming requires an operator, which you are.\n\nAnything else?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14641,
+        "output_tokens": 384,
+        "duration_ms": 21783,
+        "total_cost_usd": 0.0011,
+        "run_id": "630eb327-5258-459e-a984-289074ed5c11"
+      },
+      "elapsed_ms": 21810.812445997726
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 6,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

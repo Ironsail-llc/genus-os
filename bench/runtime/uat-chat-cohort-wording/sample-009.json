@@ -1,0 +1,50 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator.\n\n**The goal:** \"Finish the requested work\" \u2014 a finite goal with one success criterion: *the requested work has been checked.*\n\n**Finished:**\n- **Prepare the first item** \u2014 done.\n\n**Still left:**\n- **Check the remaining item** \u2014 still open (TODO). This is the one thing standing between the goal and completion.\n\n**Current state:** The goal is *waiting*, parked on that open task. It won't move on its own right now \u2014 automatic pursuit is **disabled** for this tenant, so the scheduled review tomorrow won't advance it, and neither will a change to the linked task until execution is turned back on. Waking on a trigger isn't permission to run anyway; parent controls and budgets still apply.\n\n**What that means for you:** nothing is actively in flight. To finish, either you (or an authorized operator) enable automatic pursuit so the linked task can be worked, or the remaining item gets checked directly. Want me to take either of those steps?",
+      "run": {
+        "text": "Here's where things stand, operator.\n\n**The goal:** \"Finish the requested work\" \u2014 a finite goal with one success criterion: *the requested work has been checked.*\n\n**Finished:**\n- **Prepare the first item** \u2014 done.\n\n**Still left:**\n- **Check the remaining item** \u2014 still open (TODO). This is the one thing standing between the goal and completion.\n\n**Current state:** The goal is *waiting*, parked on that open task. It won't move on its own right now \u2014 automatic pursuit is **disabled** for this tenant, so the scheduled review tomorrow won't advance it, and neither will a change to the linked task until execution is turned back on. Waking on a trigger isn't permission to run anyway; parent controls and budgets still apply.\n\n**What that means for you:** nothing is actively in flight. To finish, either you (or an authorized operator) enable automatic pursuit so the linked task can be worked, or the remaining item gets checked directly. Want me to take either of those steps?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14393,
+        "output_tokens": 493,
+        "duration_ms": 13493,
+        "total_cost_usd": 0.0013,
+        "run_id": "0f528cdb-b489-47a3-ad0b-a5b9c2b85b70"
+      },
+      "elapsed_ms": 13569.523376998404
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the goal is now **paused**.\n\n**What changed:** It was *waiting* on the open task \"Check the remaining item.\" As a paused goal it will no longer wake on its scheduled review or on a change to the linked task.\n\n**Where things stand:**\n- **Finished:** Prepare the first item.\n- **Still left:** Check the remaining item (still TODO \u2014 untouched).\n- **Goal status:** Paused. Nothing is in flight, and it won't resume on its own.\n\n**To pick it back up:** a pause is only lifted by an operator \u2014 say the word and I'll resume it. Note that resuming returns it to *waiting*, and since automatic pursuit is disabled for this tenant, it still wouldn't advance until that's enabled or the remaining item is checked directly.",
+      "run": {
+        "text": "Done, operator \u2014 the goal is now **paused**.\n\n**What changed:** It was *waiting* on the open task \"Check the remaining item.\" As a paused goal it will no longer wake on its scheduled review or on a change to the linked task.\n\n**Where things stand:**\n- **Finished:** Prepare the first item.\n- **Still left:** Check the remaining item (still TODO \u2014 untouched).\n- **Goal status:** Paused. Nothing is in flight, and it won't resume on its own.\n\n**To pick it back up:** a pause is only lifted by an operator \u2014 say the word and I'll resume it. Note that resuming returns it to *waiting*, and since automatic pursuit is disabled for this tenant, it still wouldn't advance until that's enabled or the remaining item is checked directly.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14723,
+        "output_tokens": 420,
+        "duration_ms": 10249,
+        "total_cost_usd": 0.0011,
+        "run_id": "4d820725-62b4-4706-aff6-d0b8a6dc7fe4"
+      },
+      "elapsed_ms": 10270.008254999993
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 6,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

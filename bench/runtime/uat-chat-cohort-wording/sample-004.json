@@ -1,0 +1,50 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator:\n\n**Finished**\n- **Prepare the first item** \u2014 done. \u2705\n\n**Still left**\n- **Check the remaining item** \u2014 not started yet (still open). \u23f3\n\n**Overall goal:** \"Finish the requested work\" \u2014 currently **waiting**, parked on that one remaining task. It's set to wake for a scheduled review tomorrow (Sept 22, ~04:05 UTC), and it's also registered to wake if that task changes.\n\nOne thing worth flagging: **automatic pursuit is currently disabled** for this tenant. So that scheduled review won't actually advance the goal on its own \u2014 the remaining item stays put until an authorized operator enables execution (or the task itself is updated). Nothing is blocked or broken; it's just paused at the gate.\n\nWant me to enable pursuit so the review can run, or is there something specific you'd like done on the remaining item now?",
+      "run": {
+        "text": "Here's where things stand, operator:\n\n**Finished**\n- **Prepare the first item** \u2014 done. \u2705\n\n**Still left**\n- **Check the remaining item** \u2014 not started yet (still open). \u23f3\n\n**Overall goal:** \"Finish the requested work\" \u2014 currently **waiting**, parked on that one remaining task. It's set to wake for a scheduled review tomorrow (Sept 22, ~04:05 UTC), and it's also registered to wake if that task changes.\n\nOne thing worth flagging: **automatic pursuit is currently disabled** for this tenant. So that scheduled review won't actually advance the goal on its own \u2014 the remaining item stays put until an authorized operator enables execution (or the task itself is updated). Nothing is blocked or broken; it's just paused at the gate.\n\nWant me to enable pursuit so the review can run, or is there something specific you'd like done on the remaining item now?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14363,
+        "output_tokens": 487,
+        "duration_ms": 25784,
+        "total_cost_usd": 0.0012,
+        "run_id": "c649c3ce-c936-45c7-b513-dfa699ac1857"
+      },
+      "elapsed_ms": 25847.021164998296
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the work is now **paused**. \u23f8\ufe0f\n\n- **Goal:** \"Finish the requested work\" \u2192 status changed from *waiting* to **paused**.\n- **Finished:** Prepare the first item \u2705\n- **Still left:** Check the remaining item \u2014 untouched, still open.\n\nA paused goal doesn't wake on its own \u2014 the scheduled review and the task-change trigger are both now inactive. Nothing else was changed, and the remaining task is still sitting there for whenever you want to pick it back up.\n\nJust say the word if you'd like me to resume it later.",
+      "run": {
+        "text": "Done, operator \u2014 the work is now **paused**. \u23f8\ufe0f\n\n- **Goal:** \"Finish the requested work\" \u2192 status changed from *waiting* to **paused**.\n- **Finished:** Prepare the first item \u2705\n- **Still left:** Check the remaining item \u2014 untouched, still open.\n\nA paused goal doesn't wake on its own \u2014 the scheduled review and the task-change trigger are both now inactive. Nothing else was changed, and the remaining task is still sitting there for whenever you want to pick it back up.\n\nJust say the word if you'd like me to resume it later.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14666,
+        "output_tokens": 380,
+        "duration_ms": 13535,
+        "total_cost_usd": 0.0011,
+        "run_id": "10cff661-5da0-4b62-a6df-02cca5a74628"
+      },
+      "elapsed_ms": 13560.319991000142
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 6,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

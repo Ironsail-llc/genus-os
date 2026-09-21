@@ -1,0 +1,50 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator:\n\n**Finished**\n- **Prepare the first item** \u2014 done.\n\n**Still left**\n- **Check the remaining item** \u2014 still open (TODO). This is the one piece of the objective (\"Finish the requested work\") that hasn't been completed.\n\n**Why it's sitting still**\nThe goal is in a *waiting* state, parked on that remaining task. It's set to wake on a scheduled review tomorrow (Sep 22, ~04:10 UTC), or sooner if that task changes.\n\nOne important caveat: **automatic pursuit is currently disabled for this tenant.** That means the scheduled review won't actually advance the goal on its own \u2014 a review can't run while execution is off. So the remaining item won't get picked up automatically; it needs either that task to be completed/changed, or an authorized operator to enable automatic pursuit.\n\nWant me to take a look at the remaining item now, or would you rather enable pursuit so it can be handled on the next review?",
+      "run": {
+        "text": "Here's where things stand, operator:\n\n**Finished**\n- **Prepare the first item** \u2014 done.\n\n**Still left**\n- **Check the remaining item** \u2014 still open (TODO). This is the one piece of the objective (\"Finish the requested work\") that hasn't been completed.\n\n**Why it's sitting still**\nThe goal is in a *waiting* state, parked on that remaining task. It's set to wake on a scheduled review tomorrow (Sep 22, ~04:10 UTC), or sooner if that task changes.\n\nOne important caveat: **automatic pursuit is currently disabled for this tenant.** That means the scheduled review won't actually advance the goal on its own \u2014 a review can't run while execution is off. So the remaining item won't get picked up automatically; it needs either that task to be completed/changed, or an authorized operator to enable automatic pursuit.\n\nWant me to take a look at the remaining item now, or would you rather enable pursuit so it can be handled on the next review?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14305,
+        "output_tokens": 446,
+        "duration_ms": 31665,
+        "total_cost_usd": 0.0012,
+        "run_id": "81ad26de-55f5-4d12-909b-1872f0ffabc5"
+      },
+      "elapsed_ms": 31727.94556399822
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the work is paused.\n\n**What that means**\n- The goal (\"Finish the requested work\") is now **paused**. It will no longer wake on its scheduled review or on any linked-task change.\n- The one remaining item, **Check the remaining item**, is untouched and still open (TODO) \u2014 pausing the goal doesn't change the task itself.\n- Nothing was lost: the finished piece stays finished, and the open item can be picked up again whenever you want.\n\n**To resume**\nJust say the word and I'll resume the goal \u2014 though note that automatic pursuit is still disabled for this tenant, so even after resuming, the remaining item won't advance on its own until an authorized operator enables execution (or the task is completed/changed directly).\n\nWant me to leave it parked here, or also take a look at the open item while it's paused?",
+      "run": {
+        "text": "Done, operator \u2014 the work is paused.\n\n**What that means**\n- The goal (\"Finish the requested work\") is now **paused**. It will no longer wake on its scheduled review or on any linked-task change.\n- The one remaining item, **Check the remaining item**, is untouched and still open (TODO) \u2014 pausing the goal doesn't change the task itself.\n- Nothing was lost: the finished piece stays finished, and the open item can be picked up again whenever you want.\n\n**To resume**\nJust say the word and I'll resume the goal \u2014 though note that automatic pursuit is still disabled for this tenant, so even after resuming, the remaining item won't advance on its own until an authorized operator enables execution (or the task is completed/changed directly).\n\nWant me to leave it parked here, or also take a look at the open item while it's paused?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14623,
+        "output_tokens": 371,
+        "duration_ms": 14184,
+        "total_cost_usd": 0.0011,
+        "run_id": "5ff08eaf-26de-425f-bb17-f0d06aa6d247"
+      },
+      "elapsed_ms": 14212.526242998138
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 6,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

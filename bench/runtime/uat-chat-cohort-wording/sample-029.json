@@ -1,0 +1,50 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand on your goal (\"Finish the requested work\"):\n\n**Finished**\n- **Prepare the first item** \u2014 done.\n\n**Still left**\n- **Check the remaining item** \u2014 still open (TODO). This is the one thing holding the goal up.\n- The goal's success criterion \u2014 *\"the requested work has been checked\"* \u2014 is therefore **not yet met**, and no evidence has been recorded against it.\n\n**Status of the goal itself**\n- It's **waiting**, parked on that remaining task. It has a scheduled review set for **tomorrow, Sept 22 at 04:20 UTC**, and it's also set to wake if that task changes.\n- One important caveat: **automatic pursuit is currently disabled** for this tenant (`execution_enabled: false`). So that scheduled review won't actually advance the goal on its own \u2014 an authorized operator needs to enable execution first. Until then, the goal will sit waiting even after the review time passes.\n\nSo in short: one item done, one item left to check, and the goal is paused on that last item \u2014 with the automatic follow-up currently switched off.\n\nWant me to do anything about the remaining item, or is this just a status check?",
+      "run": {
+        "text": "Here's where things stand on your goal (\"Finish the requested work\"):\n\n**Finished**\n- **Prepare the first item** \u2014 done.\n\n**Still left**\n- **Check the remaining item** \u2014 still open (TODO). This is the one thing holding the goal up.\n- The goal's success criterion \u2014 *\"the requested work has been checked\"* \u2014 is therefore **not yet met**, and no evidence has been recorded against it.\n\n**Status of the goal itself**\n- It's **waiting**, parked on that remaining task. It has a scheduled review set for **tomorrow, Sept 22 at 04:20 UTC**, and it's also set to wake if that task changes.\n- One important caveat: **automatic pursuit is currently disabled** for this tenant (`execution_enabled: false`). So that scheduled review won't actually advance the goal on its own \u2014 an authorized operator needs to enable execution first. Until then, the goal will sit waiting even after the review time passes.\n\nSo in short: one item done, one item left to check, and the goal is paused on that last item \u2014 with the automatic follow-up currently switched off.\n\nWant me to do anything about the remaining item, or is this just a status check?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14307,
+        "output_tokens": 508,
+        "duration_ms": 35537,
+        "total_cost_usd": 0.0012,
+        "run_id": "7be5a567-6424-4996-ad72-ec2ed1e8b6be"
+      },
+      "elapsed_ms": 35616.536312998505
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the goal is now **paused**.\n\n- **Status:** paused (was waiting)\n- **What that means:** it will no longer wake on its own \u2014 the scheduled review for Sept 22 and the \"wake if the task changes\" trigger are both off while paused.\n- **Still open:** the one remaining item, *Check the remaining item* (TODO). It's untouched by the pause.\n\nNote that automatic pursuit was already disabled for this tenant, so nothing was going to advance it anyway. To pick this back up later, just say so \u2014 resuming is an operator action, and I can walk you through it.",
+      "run": {
+        "text": "Done, operator \u2014 the goal is now **paused**.\n\n- **Status:** paused (was waiting)\n- **What that means:** it will no longer wake on its own \u2014 the scheduled review for Sept 22 and the \"wake if the task changes\" trigger are both off while paused.\n- **Still open:** the one remaining item, *Check the remaining item* (TODO). It's untouched by the pause.\n\nNote that automatic pursuit was already disabled for this tenant, so nothing was going to advance it anyway. To pick this back up later, just say so \u2014 resuming is an operator action, and I can walk you through it.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14966,
+        "output_tokens": 335,
+        "duration_ms": 10937,
+        "total_cost_usd": 0.001,
+        "run_id": "474ca5f3-db14-4f4f-8bac-30c059fb63ae"
+      },
+      "elapsed_ms": 10962.43022300041
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 6,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

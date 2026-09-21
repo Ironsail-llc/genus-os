@@ -1,0 +1,50 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator:\n\n**Finished**\n- **Prepare the first item** \u2014 done.\n\n**Still left**\n- **Check the remaining item** \u2014 not started yet. This is the one open task, and it's what the overall goal (\"Finish the requested work\") is waiting on. Its success criterion \u2014 that the requested work has been checked \u2014 is not met yet, and no evidence has been recorded against it.\n\n**One thing worth flagging:** automatic pursuit is currently **disabled** for this tenant. The goal is in a *waiting* state with a scheduled review set for tomorrow (Sep 22, 04:15 UTC), but because execution is off, that review can't actually advance the goal on its own \u2014 it would just wake and find it can't proceed. The goal could also wake earlier if the linked task changes, again subject to execution being enabled.\n\nSo: one item done, one item open. To get the open item moving, an authorized operator needs to enable automatic pursuit (or have it worked directly) \u2014 I can't treat the scheduled review as a way to finish it while execution is off.",
+      "run": {
+        "text": "Here's where things stand, operator:\n\n**Finished**\n- **Prepare the first item** \u2014 done.\n\n**Still left**\n- **Check the remaining item** \u2014 not started yet. This is the one open task, and it's what the overall goal (\"Finish the requested work\") is waiting on. Its success criterion \u2014 that the requested work has been checked \u2014 is not met yet, and no evidence has been recorded against it.\n\n**One thing worth flagging:** automatic pursuit is currently **disabled** for this tenant. The goal is in a *waiting* state with a scheduled review set for tomorrow (Sep 22, 04:15 UTC), but because execution is off, that review can't actually advance the goal on its own \u2014 it would just wake and find it can't proceed. The goal could also wake earlier if the linked task changes, again subject to execution being enabled.\n\nSo: one item done, one item open. To get the open item moving, an authorized operator needs to enable automatic pursuit (or have it worked directly) \u2014 I can't treat the scheduled review as a way to finish it while execution is off.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14324,
+        "output_tokens": 504,
+        "duration_ms": 27250,
+        "total_cost_usd": 0.0012,
+        "run_id": "8f463407-560b-4131-ba0b-e43dd80931b8"
+      },
+      "elapsed_ms": 27304.93898200075
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the goal is now **paused**.\n\nWhat that means:\n- It will **not** wake on tomorrow's scheduled review (Sep 22, 04:15 UTC), and it won't wake on a linked-task change either. Paused goals don't wake on their own.\n- The work itself is unchanged: **Prepare the first item** is done, **Check the remaining item** (task `f012e33a`) is still open and untouched.\n- Note that automatic pursuit was already disabled for this tenant, so nothing was running in the background regardless.\n\nTo pick this back up later, an authorized operator can resume the goal \u2014 at that point it would return to its waiting state with the same open item. Just say the word if you'd like it resumed or the open task worked directly.",
+      "run": {
+        "text": "Done, operator \u2014 the goal is now **paused**.\n\nWhat that means:\n- It will **not** wake on tomorrow's scheduled review (Sep 22, 04:15 UTC), and it won't wake on a linked-task change either. Paused goals don't wake on their own.\n- The work itself is unchanged: **Prepare the first item** is done, **Check the remaining item** (task `f012e33a`) is still open and untouched.\n- Note that automatic pursuit was already disabled for this tenant, so nothing was running in the background regardless.\n\nTo pick this back up later, an authorized operator can resume the goal \u2014 at that point it would return to its waiting state with the same open item. Just say the word if you'd like it resumed or the open task worked directly.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14824,
+        "output_tokens": 405,
+        "duration_ms": 11474,
+        "total_cost_usd": 0.0011,
+        "run_id": "f3bf0691-f115-4401-b7ed-abc0a031f23e"
+      },
+      "elapsed_ms": 11499.48363400108
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 6,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

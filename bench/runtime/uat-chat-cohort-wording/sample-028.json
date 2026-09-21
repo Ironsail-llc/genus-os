@@ -1,0 +1,50 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator.\n\n**Goal: \"Finish the requested work\"** \u2014 status: **waiting** (not complete).\n\n**Finished**\n- **Prepare the first item** \u2014 done. \u2705\n\n**Still left**\n- **Check the remaining item** \u2014 still open (TODO). This is the one outstanding piece, and the goal is explicitly parked on it.\n\n**Why it's waiting, and what happens next**\n- The goal is waiting on that remaining task. It's set to wake on a scheduled review **tomorrow, Sep 22 at 04:20 UTC**, and it will also wake early if that task changes.\n- One important caveat: **automatic pursuit is currently disabled** for this tenant. That means the scheduled review cannot actually advance the goal on its own \u2014 the wake will fire, but nothing will move until execution is enabled by an authorized operator.\n\nSo the short version: **one item prepared, one item still to check, and the goal can't progress automatically until pursuit is turned back on.** If you'd like, I can enable execution (or you can), and/or I can go ahead and check that remaining item now rather than waiting for the review.",
+      "run": {
+        "text": "Here's where things stand, operator.\n\n**Goal: \"Finish the requested work\"** \u2014 status: **waiting** (not complete).\n\n**Finished**\n- **Prepare the first item** \u2014 done. \u2705\n\n**Still left**\n- **Check the remaining item** \u2014 still open (TODO). This is the one outstanding piece, and the goal is explicitly parked on it.\n\n**Why it's waiting, and what happens next**\n- The goal is waiting on that remaining task. It's set to wake on a scheduled review **tomorrow, Sep 22 at 04:20 UTC**, and it will also wake early if that task changes.\n- One important caveat: **automatic pursuit is currently disabled** for this tenant. That means the scheduled review cannot actually advance the goal on its own \u2014 the wake will fire, but nothing will move until execution is enabled by an authorized operator.\n\nSo the short version: **one item prepared, one item still to check, and the goal can't progress automatically until pursuit is turned back on.** If you'd like, I can enable execution (or you can), and/or I can go ahead and check that remaining item now rather than waiting for the review.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14358,
+        "output_tokens": 539,
+        "duration_ms": 25992,
+        "total_cost_usd": 0.0012,
+        "run_id": "b658c79c-1d8d-4a8c-8ad0-8ef7078374a6"
+      },
+      "elapsed_ms": 26070.280480998917
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the work is now **paused**.\n\n**What changed**\n- Goal \"Finish the requested work\" moved from **waiting \u2192 paused**.\n- A paused goal **does not wake** \u2014 the scheduled review for Sep 22 and the early-wake on the linked task are both now inactive, so nothing will fire on its own.\n\n**Where it stands**\n- **Prepare the first item** \u2014 still done. \u2705\n- **Check the remaining item** \u2014 still open (TODO), untouched.\n\n**To pick it back up**\n- Resuming requires an operator action (that's you). Just say the word and I'll resume it \u2014 note that automatic pursuit is still disabled for this tenant, so even after resuming, the goal won't advance on its own until execution is enabled.\n\nNothing else was changed, and the open task is left exactly as it was.",
+      "run": {
+        "text": "Done, operator \u2014 the work is now **paused**.\n\n**What changed**\n- Goal \"Finish the requested work\" moved from **waiting \u2192 paused**.\n- A paused goal **does not wake** \u2014 the scheduled review for Sep 22 and the early-wake on the linked task are both now inactive, so nothing will fire on its own.\n\n**Where it stands**\n- **Prepare the first item** \u2014 still done. \u2705\n- **Check the remaining item** \u2014 still open (TODO), untouched.\n\n**To pick it back up**\n- Resuming requires an operator action (that's you). Just say the word and I'll resume it \u2014 note that automatic pursuit is still disabled for this tenant, so even after resuming, the goal won't advance on its own until execution is enabled.\n\nNothing else was changed, and the open task is left exactly as it was.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14912,
+        "output_tokens": 404,
+        "duration_ms": 10602,
+        "total_cost_usd": 0.001,
+        "run_id": "2fb12d83-3150-4402-87d2-71acedf47e2c"
+      },
+      "elapsed_ms": 10631.418384000426
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 6,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

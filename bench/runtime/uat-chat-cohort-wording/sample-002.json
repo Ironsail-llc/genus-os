@@ -1,0 +1,50 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator:\n\n**Finished**\n- **Prepare the first item** \u2014 done.\n\n**Still left**\n- **Check the remaining item** \u2014 still open (the only outstanding task).\n\n**Overall goal:** \"Finish the requested work\" is currently *waiting* on that remaining task. Its success criterion (\"the requested work has been checked\") isn't met yet.\n\nOne thing worth flagging: automatic pursuit is **disabled** for this tenant, so the goal won't advance on its own \u2014 a scheduled review is set for **Sep 22, 04:04 UTC**, but it can't move the goal forward unless execution is first enabled by an authorized operator. Until then, the remaining item needs to be handled directly.\n\nWant me to take on the remaining item now?",
+      "run": {
+        "text": "Here's where things stand, operator:\n\n**Finished**\n- **Prepare the first item** \u2014 done.\n\n**Still left**\n- **Check the remaining item** \u2014 still open (the only outstanding task).\n\n**Overall goal:** \"Finish the requested work\" is currently *waiting* on that remaining task. Its success criterion (\"the requested work has been checked\") isn't met yet.\n\nOne thing worth flagging: automatic pursuit is **disabled** for this tenant, so the goal won't advance on its own \u2014 a scheduled review is set for **Sep 22, 04:04 UTC**, but it can't move the goal forward unless execution is first enabled by an authorized operator. Until then, the remaining item needs to be handled directly.\n\nWant me to take on the remaining item now?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14265,
+        "output_tokens": 382,
+        "duration_ms": 13216,
+        "total_cost_usd": 0.0012,
+        "run_id": "8bf5f921-b242-4676-b1bb-16edea2f5225"
+      },
+      "elapsed_ms": 13293.667705002008
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the work is paused.\n\n**What changed**\n- **\"Finish the requested work\"** \u2014 moved from *waiting* to **paused**.\n- The scheduled review (Sep 22, 04:04 UTC) will no longer wake it. Paused goals don't wake on their own.\n\n**State as it stands**\n- **Prepare the first item** \u2014 finished.\n- **Check the remaining item** \u2014 still open (TODO), untouched.\n- Success criterion (\"the requested work has been checked\") \u2014 not met.\n\nNothing further will run on this until you ask. When you want to pick it back up, just say so and I'll resume it \u2014 note that resuming requires an operator, which you are.",
+      "run": {
+        "text": "Done, operator \u2014 the work is paused.\n\n**What changed**\n- **\"Finish the requested work\"** \u2014 moved from *waiting* to **paused**.\n- The scheduled review (Sep 22, 04:04 UTC) will no longer wake it. Paused goals don't wake on their own.\n\n**State as it stands**\n- **Prepare the first item** \u2014 finished.\n- **Check the remaining item** \u2014 still open (TODO), untouched.\n- Success criterion (\"the requested work has been checked\") \u2014 not met.\n\nNothing further will run on this until you ask. When you want to pick it back up, just say so and I'll resume it \u2014 note that resuming requires an operator, which you are.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14345,
+        "output_tokens": 361,
+        "duration_ms": 21328,
+        "total_cost_usd": 0.0011,
+        "run_id": "8683cc39-5145-42cc-bc8a-d377c03cedce"
+      },
+      "elapsed_ms": 21354.7787000025
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 6,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

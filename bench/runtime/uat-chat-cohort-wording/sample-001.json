@@ -1,0 +1,50 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator:\n\n**Finished**\n- **Prepare the first item** \u2014 done.\n\n**Still left**\n- **Check the remaining item** \u2014 still open (TODO). This is the one thing holding the goal from completing.\n\n**Goal status:** *Finish the requested work* is **waiting**, not complete. It's parked on that remaining task, with no evidence recorded yet against its success criterion (\"the requested work has been checked\") \u2014 so nothing is verified as done from the goal's own standpoint.\n\n**What happens next:** the goal is registered to wake on a scheduled review tomorrow (Sep 22, 04:03 UTC) or sooner if the linked task changes. One caveat: **automatic pursuit is currently disabled** for this tenant, so a scheduled review can't advance the goal on its own \u2014 an authorized operator has to enable execution first. Until then, the remaining item only moves if it's worked directly.\n\nWant me to take on the remaining check now, or leave it for the review?",
+      "run": {
+        "text": "Here's where things stand, operator:\n\n**Finished**\n- **Prepare the first item** \u2014 done.\n\n**Still left**\n- **Check the remaining item** \u2014 still open (TODO). This is the one thing holding the goal from completing.\n\n**Goal status:** *Finish the requested work* is **waiting**, not complete. It's parked on that remaining task, with no evidence recorded yet against its success criterion (\"the requested work has been checked\") \u2014 so nothing is verified as done from the goal's own standpoint.\n\n**What happens next:** the goal is registered to wake on a scheduled review tomorrow (Sep 22, 04:03 UTC) or sooner if the linked task changes. One caveat: **automatic pursuit is currently disabled** for this tenant, so a scheduled review can't advance the goal on its own \u2014 an authorized operator has to enable execution first. Until then, the remaining item only moves if it's worked directly.\n\nWant me to take on the remaining check now, or leave it for the review?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14362,
+        "output_tokens": 480,
+        "duration_ms": 35750,
+        "total_cost_usd": 0.0012,
+        "run_id": "9b5380f0-822b-49d8-815a-6bcf66be1c6a"
+      },
+      "elapsed_ms": 35808.06927099911
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the goal **Finish the requested work** is now **paused**.\n\n**What that means:**\n- It will **not** wake on its scheduled review (Sep 22, 04:03 UTC) or on any linked-task change. Paused goals stay put until you resume them.\n- The remaining task, **Check the remaining item** (TODO), is untouched \u2014 it's still open, just no longer driving the goal.\n- Nothing was completed or verified in the process; the success criterion (\"the requested work has been checked\") remains unmet.\n\n**To pick this back up:** say the word and I'll resume the goal \u2014 that's an operator action, so it needs your go-ahead. Note that automatic pursuit is still disabled for this tenant, so even after resuming, the goal won't advance on its own until execution is enabled.",
+      "run": {
+        "text": "Done, operator \u2014 the goal **Finish the requested work** is now **paused**.\n\n**What that means:**\n- It will **not** wake on its scheduled review (Sep 22, 04:03 UTC) or on any linked-task change. Paused goals stay put until you resume them.\n- The remaining task, **Check the remaining item** (TODO), is untouched \u2014 it's still open, just no longer driving the goal.\n- Nothing was completed or verified in the process; the success criterion (\"the requested work has been checked\") remains unmet.\n\n**To pick this back up:** say the word and I'll resume the goal \u2014 that's an operator action, so it needs your go-ahead. Note that automatic pursuit is still disabled for this tenant, so even after resuming, the goal won't advance on its own until execution is enabled.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14788,
+        "output_tokens": 437,
+        "duration_ms": 15938,
+        "total_cost_usd": 0.0011,
+        "run_id": "7276fc46-c52c-4969-be1a-4bbcd3efb906"
+      },
+      "elapsed_ms": 15967.202488998737
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 6,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

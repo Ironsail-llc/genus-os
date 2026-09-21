@@ -1,0 +1,50 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand on the requested work, operator:\n\n**Finished**\n- **Prepare the first item** \u2014 done.\n\n**Still left**\n- **Check the remaining item** \u2014 still open (marked TODO). This is the one piece of the request that hasn't been completed, and the overall goal is currently parked waiting on it.\n\n**What that means for next steps**\nThe goal is in a *waiting* state, with a scheduled review set for tomorrow (Tue, Sep 22, ~04:18 UTC) and a wake condition tied to that open task changing. One important caveat: **automatic pursuit is currently disabled for this tenant**, so that scheduled review won't actually advance the goal on its own \u2014 an authorized operator would need to enable execution first.\n\nSo practically: the only thing between you and \"done\" is checking that remaining item. If you'd like, I can take that on now \u2014 just say the word, and note that enabling automatic pursuit is a separate step only you (as owner) can authorize.",
+      "run": {
+        "text": "Here's where things stand on the requested work, operator:\n\n**Finished**\n- **Prepare the first item** \u2014 done.\n\n**Still left**\n- **Check the remaining item** \u2014 still open (marked TODO). This is the one piece of the request that hasn't been completed, and the overall goal is currently parked waiting on it.\n\n**What that means for next steps**\nThe goal is in a *waiting* state, with a scheduled review set for tomorrow (Tue, Sep 22, ~04:18 UTC) and a wake condition tied to that open task changing. One important caveat: **automatic pursuit is currently disabled for this tenant**, so that scheduled review won't actually advance the goal on its own \u2014 an authorized operator would need to enable execution first.\n\nSo practically: the only thing between you and \"done\" is checking that remaining item. If you'd like, I can take that on now \u2014 just say the word, and note that enabling automatic pursuit is a separate step only you (as owner) can authorize.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14456,
+        "output_tokens": 551,
+        "duration_ms": 18499,
+        "total_cost_usd": 0.0013,
+        "run_id": "acc1ca03-c080-4508-9d71-ec93bb6ae9d2"
+      },
+      "elapsed_ms": 18575.731692999398
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the work is paused.\n\n**What changed**\n- The goal (\"Finish the requested work\") is now **paused** rather than waiting.\n\n**What that means**\n- A paused goal does **not** wake on its own \u2014 the scheduled review for tomorrow (Tue, Sep 22) and the wake condition tied to the open task are both inert while it's paused.\n- Nothing will advance on this until you resume it. Resuming is an operator action, so just say the word when you want it picked back up.\n\n**Still open (unchanged)**\n- **Check the remaining item** (TODO) \u2014 the one unfinished piece. It stays open; pausing the goal doesn't close it.\n\nWant me to resume it later, or leave it parked?",
+      "run": {
+        "text": "Done, operator \u2014 the work is paused.\n\n**What changed**\n- The goal (\"Finish the requested work\") is now **paused** rather than waiting.\n\n**What that means**\n- A paused goal does **not** wake on its own \u2014 the scheduled review for tomorrow (Tue, Sep 22) and the wake condition tied to the open task are both inert while it's paused.\n- Nothing will advance on this until you resume it. Resuming is an operator action, so just say the word when you want it picked back up.\n\n**Still open (unchanged)**\n- **Check the remaining item** (TODO) \u2014 the one unfinished piece. It stays open; pausing the goal doesn't close it.\n\nWant me to resume it later, or leave it parked?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14647,
+        "output_tokens": 354,
+        "duration_ms": 16539,
+        "total_cost_usd": 0.0011,
+        "run_id": "5932688b-3658-48db-945b-19b0b554d961"
+      },
+      "elapsed_ms": 16563.556008000887
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 6,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

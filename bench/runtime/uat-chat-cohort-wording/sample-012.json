@@ -1,0 +1,50 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator:\n\n**Finished**\n- **Prepare the first item** \u2014 done.\n- That's the only completed piece so far.\n\n**Still left**\n- **Check the remaining item** \u2014 still open (TODO). This is the one thing blocking the goal.\n- The goal itself, **\"Finish the requested work\"**, is not complete. Its only success criterion \u2014 *the requested work has been checked* \u2014 has no evidence recorded against it yet, so nothing is satisfied.\n\n**State of the goal**\n- It's in a **waiting** state, parked on that one open task, with a scheduled review set for **Tue, Sep 22, 04:10 UTC** (tomorrow). It can also wake earlier if that task changes.\n- One caveat worth flagging: **automatic pursuit is currently disabled** for this tenant. So even when that review comes due, the goal won't advance on its own \u2014 an authorized operator would need to enable execution first. I'm not able to turn that on myself.\n\nSo: one item done, one item left, and the goal stays open until that last item is checked.",
+      "run": {
+        "text": "Here's where things stand, operator:\n\n**Finished**\n- **Prepare the first item** \u2014 done.\n- That's the only completed piece so far.\n\n**Still left**\n- **Check the remaining item** \u2014 still open (TODO). This is the one thing blocking the goal.\n- The goal itself, **\"Finish the requested work\"**, is not complete. Its only success criterion \u2014 *the requested work has been checked* \u2014 has no evidence recorded against it yet, so nothing is satisfied.\n\n**State of the goal**\n- It's in a **waiting** state, parked on that one open task, with a scheduled review set for **Tue, Sep 22, 04:10 UTC** (tomorrow). It can also wake earlier if that task changes.\n- One caveat worth flagging: **automatic pursuit is currently disabled** for this tenant. So even when that review comes due, the goal won't advance on its own \u2014 an authorized operator would need to enable execution first. I'm not able to turn that on myself.\n\nSo: one item done, one item left, and the goal stays open until that last item is checked.",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14318,
+        "output_tokens": 497,
+        "duration_ms": 13214,
+        "total_cost_usd": 0.0012,
+        "run_id": "2df8942e-6b04-4ecf-849b-96d2027e1067"
+      },
+      "elapsed_ms": 13290.32856699996
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the goal **\"Finish the requested work\"** is now **paused**.\n\nWhat that means:\n- It will **not** wake on its scheduled review (Tue, Sep 22, 04:10 UTC) or on any linked-task change while paused. Paused goals don't wake.\n- Nothing was lost: the open task **\"Check the remaining item\"** is still there as TODO, and the goal's one success criterion is still unmet.\n- To pick it back up, just say the word and I'll resume it. Note that automatic pursuit is still **disabled** for this tenant, so even after resuming, the goal won't advance on its own until an authorized operator enables execution.\n\nWant me to leave it paused, or resume it later?",
+      "run": {
+        "text": "Done, operator \u2014 the goal **\"Finish the requested work\"** is now **paused**.\n\nWhat that means:\n- It will **not** wake on its scheduled review (Tue, Sep 22, 04:10 UTC) or on any linked-task change while paused. Paused goals don't wake.\n- Nothing was lost: the open task **\"Check the remaining item\"** is still there as TODO, and the goal's one success criterion is still unmet.\n- To pick it back up, just say the word and I'll resume it. Note that automatic pursuit is still **disabled** for this tenant, so even after resuming, the goal won't advance on its own until an authorized operator enables execution.\n\nWant me to leave it paused, or resume it later?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 15002,
+        "output_tokens": 457,
+        "duration_ms": 11114,
+        "total_cost_usd": 0.0012,
+        "run_id": "47459d23-85a8-4353-b56a-4f52b38f2824"
+      },
+      "elapsed_ms": 11140.559860999929
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 6,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

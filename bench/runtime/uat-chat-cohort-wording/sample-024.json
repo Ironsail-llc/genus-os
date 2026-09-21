@@ -1,0 +1,50 @@
+{
+  "scope": "Two-turn diagnostic through native chat; configured model chain, isolated minimal manifest/workspace, private goal data; not a performance cohort or full production configuration.",
+  "configured_primary": "openrouter/deepseek/deepseek-v4.1-flash",
+  "manual_acceptance": false,
+  "transcript": [
+    {
+      "user": "What's finished, and what's still left?",
+      "robothor": "Here's where things stand, operator:\n\n**Finished**\n- **Prepare the first item** \u2014 done.\n\n**Still left**\n- **Check the remaining item** \u2014 still open (TODO). This is the one thing holding the goal back.\n\n**Goal status:** \"Finish the requested work\" is *waiting* \u2014 it's parked on that remaining task, with a scheduled review set for **Tue, Sep 22, 04:17 UTC**. Its success criterion (\"the requested work has been checked\") is not yet met, and no evidence has been recorded against it yet.\n\nOne thing worth flagging: **automatic pursuit is currently disabled** for this tenant. That means the scheduled review won't actually advance the goal on its own \u2014 the goal can only move again once an authorized operator enables execution, or the linked task changes. So if you want that last item checked, it needs to be picked up directly rather than left to the review.\n\nWant me to take on the remaining check now?",
+      "run": {
+        "text": "Here's where things stand, operator:\n\n**Finished**\n- **Prepare the first item** \u2014 done.\n\n**Still left**\n- **Check the remaining item** \u2014 still open (TODO). This is the one thing holding the goal back.\n\n**Goal status:** \"Finish the requested work\" is *waiting* \u2014 it's parked on that remaining task, with a scheduled review set for **Tue, Sep 22, 04:17 UTC**. Its success criterion (\"the requested work has been checked\") is not yet met, and no evidence has been recorded against it yet.\n\nOne thing worth flagging: **automatic pursuit is currently disabled** for this tenant. That means the scheduled review won't actually advance the goal on its own \u2014 the goal can only move again once an authorized operator enables execution, or the linked task changes. So if you want that last item checked, it needs to be picked up directly rather than left to the review.\n\nWant me to take on the remaining check now?",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14292,
+        "output_tokens": 450,
+        "duration_ms": 15143,
+        "total_cost_usd": 0.0012,
+        "run_id": "cae6cf69-441a-45e3-a997-e7f1e9cc24c4"
+      },
+      "elapsed_ms": 15213.916937998874
+    },
+    {
+      "user": "Pause that work.",
+      "robothor": "Done, operator \u2014 the goal **\"Finish the requested work\"** is now **paused**.\n\nWhat that means:\n- No automatic pursuit will run against it. A paused goal does not wake on its scheduled review or on linked-task changes, so the Sep 22 review is effectively off the table while it stays paused.\n- The underlying task **\"Check the remaining item\"** (f6075964) is still open (TODO) \u2014 pausing the goal doesn't cancel or close it. It just sits there untouched.\n\nState recap: **\"Prepare the first item\"** finished; **\"Check the remaining item\"** still open; goal paused at your request.\n\nWhenever you want it moving again, say the word and I'll resume it (or pick up that last check directly).",
+      "run": {
+        "text": "Done, operator \u2014 the goal **\"Finish the requested work\"** is now **paused**.\n\nWhat that means:\n- No automatic pursuit will run against it. A paused goal does not wake on its scheduled review or on linked-task changes, so the Sep 22 review is effectively off the table while it stays paused.\n- The underlying task **\"Check the remaining item\"** (f6075964) is still open (TODO) \u2014 pausing the goal doesn't cancel or close it. It just sits there untouched.\n\nState recap: **\"Prepare the first item\"** finished; **\"Check the remaining item\"** still open; goal paused at your request.\n\nWhenever you want it moving again, say the word and I'll resume it (or pick up that last check directly).",
+        "status": "completed",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "input_tokens": 14800,
+        "output_tokens": 494,
+        "duration_ms": 16742,
+        "total_cost_usd": 0.0012,
+        "run_id": "74856513-d21e-437b-883d-3b64fc31e913"
+      },
+      "elapsed_ms": 16762.88081199891
+    }
+  ],
+  "tool_calls": [
+    "list_pursuit_goals",
+    "get_pursuit_goal",
+    "list_pursuit_goals",
+    "update_pursuit_goal"
+  ],
+  "provider_attempts": 6,
+  "goal_status": "paused",
+  "execution_enabled": false,
+  "task_statuses": [
+    "DONE",
+    "TODO"
+  ]
+}

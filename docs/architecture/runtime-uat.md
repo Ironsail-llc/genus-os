@@ -1130,3 +1130,12 @@ At `57d0eb02978`, goal-read tool guidance explicitly says that a scheduled revie
 Twenty-four goal-tool, scripted chat/control and size checks pass (6.12s, one dependency warning), with Ruff lint/format and diff checks passing. This verifies structured behavior, not live compliance with the wording guidance. The prior 30-conversation cohort remains preserved. A new 30-conversation run has started in `/tmp/runtime-chat-cohort-wording` using the same isolated workflow and configured model chain; its outcome is not assumed. Evidence: `bench/runtime/uat-goal-review-wording.json`.
 
 Prompt guidance is not deterministic enforcement. The repeated live results must be reviewed before claiming the observed wording defect fixed, and human acceptance remains pending. Full acceptance stays open. No production deployment occurred.
+
+
+## Reject and revert the wording-only experiment
+
+The 30-conversation repeat at `57d0eb02978` completed with all 60 turns and all machine state checks passing, but **the experiment did not pass acceptance**. Status elapsed-time p95 was **35.617s** (bootstrap 95% interval **27.007–35.808s**), exceeding the 30-second reference and the preceding cohort's observed 19.563s. Pause p95 was **21.811s** (interval **16.763–23.007s**). Three status turns exceeded 30 seconds; none exceeded 60 seconds. The cohort made 180 provider attempts, and estimated engine-accounting cost was $0.07, without billing reconciliation.
+
+Inspection of all 30 status replies found that examples 1 and 3 still acknowledge disabled pursuit and then offer leaving the item to the review. The additional guidance therefore did not reliably remove the target defect. Some replies also differ on who can enable pursuit in this limited fixture. Machine state success is not treated as language acceptance. The two sequential cohorts were not interleaved or randomized, and provider-versus-host timing was not retained; the elapsed-time increase does not establish its cause.
+
+The added guidance was reverted at `91e7e63e7b6`; `robothor/goals/tools.py` again matches product revision `49627a99058`. Raw transcripts/logs/journal and the explicit rejection are preserved in `bench/runtime/uat-chat-cohort-wording/` and `uat-chat-cohort-wording-summary.json`. The prior wording defect remains open. The next work is timing attribution and grounding of available next actions, not treating the prompt edit as successful. No production deployment occurred; full acceptance remains open.
